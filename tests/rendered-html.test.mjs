@@ -9,8 +9,8 @@ test("DyorHQ serves the screen playground from the production Worker", async () 
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /DyorHQ/);
-  assert.match(html, /UI playground/);
+  assert.match(html, /The RWA HQ for social trading/);
   assert.match(html, /Preview screens/);
-  assert.match(html, /Sample data\. No real transactions\./);
+  assert.match(html, /Sample data, no real transactions/);
   assert.doesNotMatch(html, /Your site is taking shape|codex-preview/);
 });

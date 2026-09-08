@@ -10,22 +10,16 @@ profile or machine). Read this first.
 Tailwind 4, built/deployed with **vinext** on Cloudflare (Wrangler). A separate **Expo /
 React Native** app lives in `mainstreet-app/` as its own git repo (not tracked here).
 
-## What was built in the last session
-An **interactive preview** of the app — a self-contained, phone-frame prototype of every
-screen, so we can *see* what we're building.
-
-- **Source of truth for the preview:** the web app screens in `app/` — `app/page.tsx`
-  (feed / markets / launchpad / swap / profile + side menu + bottom nav + studio panel),
-  `app/perps-screen.tsx`, `app/preview-controls.tsx`, `app/globals.css`.
-- **The deliverable:** [`public/preview.html`](public/preview.html) — one standalone HTML
-  file (vanilla JS, inline SVG charts, Geist via Google Fonts; no build step, no deps).
-  It reproduces all 6 screens faithfully and **elevates** the original:
-  - real SVG **candlestick** chart on Perps (bodies + wicks + gridlines + last-price tag),
-    smooth **sparklines** in the feed, an **area chart** for the portfolio & swap price panel;
-  - **tabular monospaced numerics** everywhere prices/PnL/amounts align;
-  - tightened Geist type scale, refined glass/orbs/spacing;
-  - the signature **studio panel** preserved: accent color + swatches, corner radius, text
-    size, motion toggle — persisted to `localStorage`.
+## What was built
+- **The design system** lives in `public/preview.html` (standalone prototype, published as the
+  Claude Artifact for review) and in the React web app under `app/`: `app/page.tsx` (shell:
+  device frame, floating glass top bar and tab bar, side menu, order review sheet, toast),
+  `app/ui/screens.tsx` (Home, Markets, Launchpad, Swap, Portfolio), `app/perps-screen.tsx`,
+  `app/preview-controls.tsx` (studio + preferences store), `app/ui/{data,icons,charts,components,liquid-glass}`,
+  and `app/globals.css` (generated from the preview's stylesheet with fonts switched to `next/font` variables).
+- Light and dark themes on the DyorHQ palette, liquid-glass navigation (SVG displacement in
+  Chromium, frosted blur elsewhere), SVG candlestick/area/sparkline charts, an order book, a
+  review sheet, and the studio (theme, accent, typeface, corners, text size, glass strength, motion).
 
 ## How to view the preview
 - Open `public/preview.html` directly in a browser, **or**
@@ -44,11 +38,11 @@ the studio), Ink `#0C100D` / Graphite `#1B211D` for dark, Paper `#F2F5EE` for li
 Negative `#FF507A`. Geist + Geist Mono. Liquid-glass navigation layer, borderless cards, light and dark themes.
 
 ## Good next steps
-1. **Fold the preview's upgrades back into the real React app** (`app/page.tsx`,
-   `app/perps-screen.tsx`): the SVG candlestick/sparkline/area charts and tabular numerics
-   are the highest-value diffs.
-2. Wire screens to real data (markets, feed, launches) instead of the in-file sample arrays.
-3. Keep `public/preview.html` in sync if the React screens change (it's a static mirror).
+1. Wire screens to real data (markets, feed, launches, perps book) instead of the sample arrays
+   in `app/ui/data.ts` and `public/preview.html`.
+2. Keep `public/preview.html` and `app/` in sync: the preview is the design source the artifact is
+   published from, and `app/globals.css` is generated from its stylesheet.
+3. Decide whether the Expo app in `mainstreet-app/` adopts the same system (its code still says Mainstreet).
 
 ## Repo notes
 - `~/Hackathon` had **no git history** before this session; the first commit captures the
