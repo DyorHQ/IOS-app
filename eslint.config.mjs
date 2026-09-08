@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // The Expo app is its own repository with its own lint setup.
+    "mainstreet-app/**",
   ]),
 ]);
 

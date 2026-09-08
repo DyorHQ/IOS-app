@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 export type ScreenName = "feed" | "markets" | "launch" | "trade" | "perps" | "profile";
 export const screenOptions: { id: ScreenName; title: string; note: string }[] = [
@@ -16,22 +16,45 @@ type Preferences = { accent: string; radius: number; motion: boolean; textScale:
 const defaults: Preferences = { accent: "#b9f26b", radius: 24, motion: true, textScale: 1 };
 const storageKey = "dyorhq-preview-preferences-v1";
 
+// Preferences live in a tiny external store read through useSyncExternalStore: the server and the
+// hydration render see the defaults, the first client read hydrates from localStorage, and edits
+// notify subscribers. `ready` is false only for the server snapshot, so effects can wait for it.
+type Snapshot = { prefs: Preferences; ready: boolean };
+const serverSnapshot: Snapshot = { prefs: defaults, ready: false };
+const listeners = new Set<() => void>();
+let snapshot: Snapshot | null = null;
+
+function sanitize(stored: Partial<Record<keyof Preferences, unknown>>): Preferences {
+  return {
+    accent: typeof stored.accent === "string" && /^#[0-9a-f]{6}$/i.test(stored.accent) ? stored.accent : defaults.accent,
+    radius: Math.max(8, Math.min(32, Number(stored.radius) || 24)),
+    motion: typeof stored.motion === "boolean" ? stored.motion : true,
+    textScale: Math.max(1, Math.min(1.2, Number(stored.textScale) || 1)),
+  };
+}
+function readStored(): Preferences {
+  try {
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null");
+    return stored ? sanitize(stored) : defaults;
+  } catch { return defaults; /* Invalid or unavailable local preferences use the defaults. */ }
+}
+function getSnapshot(): Snapshot {
+  if (!snapshot) snapshot = { prefs: readStored(), ready: true };
+  return snapshot;
+}
+function getServerSnapshot(): Snapshot { return serverSnapshot; }
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+function setPrefs(prefs: Preferences) {
+  snapshot = { prefs, ready: true };
+  listeners.forEach(listener => listener());
+}
+
 export default function PreviewControls({ screen, onScreen }: { screen: ScreenName; onScreen: (screen: ScreenName) => void }) {
   const [open, setOpen] = useState(false);
-  const [prefs, setPrefs] = useState(defaults);
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null");
-      if (stored) setPrefs({
-        accent: /^#[0-9a-f]{6}$/i.test(stored.accent) ? stored.accent : defaults.accent,
-        radius: Math.max(8, Math.min(32, Number(stored.radius) || 24)),
-        motion: typeof stored.motion === "boolean" ? stored.motion : true,
-        textScale: Math.max(1, Math.min(1.2, Number(stored.textScale) || 1)),
-      });
-    } catch { /* Invalid or unavailable local preferences use the defaults. */ }
-    setReady(true);
-  }, []);
+  const { prefs, ready } = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   useEffect(() => {
     if (!ready) return;
     const root = document.documentElement;
