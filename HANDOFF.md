@@ -37,12 +37,37 @@ DyorHQ palette (see `public/brand/dyorhq-brand-guide.md`): Signal `#B9F26B` acce
 the studio), Ink `#0C100D` / Graphite `#1B211D` for dark, Paper `#F2F5EE` for light, Positive `#27DB91`,
 Negative `#FF507A`. Geist + Geist Mono. Liquid-glass navigation layer, borderless cards, light and dark themes.
 
+## Launchpad backend (Monad mainnet + Uniswap v4) — built, NOT deployed
+- `contracts/` is a Foundry project (solc 0.8.26, via-IR) with the Pons-style launchpad re-implemented for
+  Monad's canonical Uniswap v4 PoolManager: `LaunchpadFactory`, `LaunchDeployer` (+`CurveDeployer`),
+  `BondingCurve`, `LaunchToken`, `MemeHook`, `FeeEscrow`, `HolderFeeSharing`, `LaunchLocker`,
+  `GraduationExecutor`, `LaunchAndBuyRouter`. 25 tests (`forge test`), all contracts under 24 KB.
+- Read `docs/launchpad-spec.md` for mechanics, the Pons → DyorHQ module map, parameters, owner powers and
+  what is not built yet. `contracts/script/README.md` is the deploy runbook (dry run, deploy, verify, fork rehearsal).
+- **Nothing is deployed on any public chain.** The owner wallet runs `forge script script/Deploy.s.sol:Deploy
+  --rpc-url monad --broadcast --private-key …`, then `npm run sync:deployment` copies the addresses into
+  `app/lib/deployment.json` (or use the `NEXT_PUBLIC_*` variables in `.env.example`). Until then the launchpad
+  pages show an empty state with a "contracts not configured" notice.
+- The integration was rehearsed on a local `anvil --fork-url https://rpc.monad.xyz` fork (deploy + `scripts/dev/seed-fork.mjs`):
+  launches, buys, sells and one graduation into the real PoolManager bytecode all succeeded.
+
+## Launchpad web app
+- Routes: `/launchpad` (explore), `/launchpad/create` (Pons-style create form with the "Your token" card),
+  `/launchpad/[token]` (curve trading, graduation/refund states, claims). Shell with wallet + network + theme
+  controls in `app/launchpad/shell.tsx`, shared pieces in `app/launchpad/ui.tsx`, styles in `app/launchpad/launchpad.css`.
+- Library: `app/lib/chain.ts` (viem public client, addresses), `app/lib/wallet.tsx` (EIP-6963 discovery, no wagmi),
+  `app/lib/launchpad.ts` (reads), `app/lib/actions.ts` (writes, simulate-then-send), `app/lib/abi.ts` (generated:
+  `npm run abis` after `forge build`), `app/lib/use-async.ts`, `app/lib/use-tx.ts`, `app/lib/errors.ts`, `app/lib/format.ts`.
+- Checks: `npm run typecheck`, `npm run lint` (0 errors; `<img>` warnings are accepted), `npm run build`, `npm test`.
+
 ## Good next steps
-1. Wire screens to real data (markets, feed, launches, perps book) instead of the sample arrays
-   in `app/ui/data.ts` and `public/preview.html`.
-2. Keep `public/preview.html` and `app/` in sync: the preview is the design source the artifact is
-   published from, and `app/globals.css` is generated from its stylesheet.
-3. Decide whether the Expo app in `mainstreet-app/` adopts the same system (its code still says Mainstreet).
+1. Owner deploys the contracts (runbook above), syncs the addresses, and approves tokenised-stock pairs with
+   `script/AddPairToken.s.sol` + `NEXT_PUBLIC_PAIR_TOKENS`.
+2. In-app swaps for graduated tokens through the Uniswap v4 Universal Router (`0xbc2a036e5027b9ae57bba847ef88e1b14823f7b1`)
+   and Permit2; today the token page shows pool state and lets anyone distribute hook fees.
+3. An indexer (holders, trades, charts) and image hosting (R2 upload route) for the create form.
+4. Wire the prototype screens (`app/page.tsx`, `public/preview.html`) to the same data; the Launchpad screen links to `/launchpad`.
+5. Keep `public/preview.html` and `app/` in sync: the preview is the design source the artifact is published from.
 
 ## Repo notes
 - `~/Hackathon` had **no git history** before this session; the first commit captures the
@@ -50,3 +75,5 @@ Negative `#FF507A`. Geist + Geist Mono. Liquid-glass navigation layer, borderles
   and push if you're moving to another machine (see the chat for the exact steps).
 - `mainstreet-app/` and `mainstreet-repo.tar.gz` are `.gitignore`d here (the Expo app is its
   own repo; the tarball is a redundant snapshot).
+- `contracts/lib/forge-std` and `contracts/lib/v4-core` are git submodules (`git submodule update --init --recursive`).
+- `.env.local` is ignored; never commit RPC URLs with keys or fork addresses.

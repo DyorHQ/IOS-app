@@ -1,5 +1,6 @@
 "use client";
 // Home, Markets, Launchpad, Swap, and Portfolio screens. Each keeps its own UI state; navigation goes through `go`.
+import Link from "next/link";
 import { useState } from "react";
 import { Icon, type IconName } from "./icons";
 import { Chip, Coin, Empty, Range, Seg, Subtabs, Switch, TokenRow, opts, type SegOpt } from "./components";
@@ -126,6 +127,7 @@ export function LaunchScreen({ go, toast }: ScreenProps) {
             <h1>Launch a meme.<br />Pair it with Wall Street.</h1>
             <p>Fair-launch tokens paired with real tokenized stocks. Liquidity locks automatically at graduation.</p>
             <button type="button" className="btn primary" onClick={() => switchMode("create")}>Create your token <Icon name="arrow-ur" /></button>
+            <Link className="btn ghost sm" href="/launchpad" style={{ marginLeft: 6 }}>Live launchpad <Icon name="chev-right" /></Link>
             <div className="stack-art" aria-hidden="true"><span>N</span><i>+</i><span>M</span></div>
           </section>
           <div className="sec"><h2>Trending launches</h2><button type="button" className="link" onClick={() => toast("All launches · sample preview")}>View all <Icon name="chev-right" /></button></div>
