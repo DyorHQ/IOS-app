@@ -1,10 +1,10 @@
-# HANDOFF — Mainstreet
+# HANDOFF — DyorHQ
 
 Context for continuing this work in a new Claude Code session (e.g. a different Claude
 profile or machine). Read this first.
 
 ## What this repo is
-**Mainstreet** — a mobile-first **social trading app on Monad**. Four pillars: a
+**DyorHQ** — "The RWA HQ for social trading": a self-custodial mobile app on Monad for launching stock-backed memecoins, copying on-chain traders, and trading perps and swaps. Four pillars: a
 **Launchpad** (launch a memecoin paired with a tokenized RWA stock), **Copy Trading**,
 **Perps**, and **Swap**. This repo (`~/Hackathon`) is the **web app**: Next 16 + React 19 +
 Tailwind 4, built/deployed with **vinext** on Cloudflare (Wrangler). A separate **Expo /
@@ -38,10 +38,10 @@ screen, so we can *see* what we're building.
   To get a fresh shareable link on the new profile, ask Claude to **publish
   `public/preview.html` as an artifact**; the file is self-contained and re-publishes as-is.
 
-## Design system (from `app/globals.css`)
-Dark, premium "trading terminal" look. Accent **Monad violet `#8b5cf6`** (user-swappable in
-the studio), ground `#020203`/`#050506`, panels `#111114`/`#18181d`, text `#f7f6fb`,
-gain `#27db91`, loss `#ff507a`. Geist + Geist Mono. Glassmorphism, orbs, particles.
+## Design system
+DyorHQ palette (see `public/brand/dyorhq-brand-guide.md`): Signal `#B9F26B` accent (user-swappable in
+the studio), Ink `#0C100D` / Graphite `#1B211D` for dark, Paper `#F2F5EE` for light, Positive `#27DB91`,
+Negative `#FF507A`. Geist + Geist Mono. Liquid-glass navigation layer, borderless cards, light and dark themes.
 
 ## Good next steps
 1. **Fold the preview's upgrades back into the real React app** (`app/page.tsx`,
