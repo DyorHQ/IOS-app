@@ -11,6 +11,6 @@ test("DyorHQ serves the screen playground from the production Worker", async () 
   assert.match(html, /DyorHQ/);
   assert.match(html, /The RWA HQ for social trading/);
   assert.match(html, /Preview screens/);
-  assert.match(html, /Sample data, no real transactions/);
+  assert.match(html, /Live on Monad/);
   assert.doesNotMatch(html, /Your site is taking shape|codex-preview/);
 });

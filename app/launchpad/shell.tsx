@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { Icon, Sprite } from "../ui/icons";
 import { setPrefs, useApplyPrefs, type Theme } from "../preview-controls";
 import { NetworkPill, WalletButton } from "./ui";
+import { Wordmark } from "../ui/wordmark";
 
 const NEXT_THEME: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
 const THEME_ICON = { system: "settings", light: "sun", dark: "moon" } as const;
@@ -19,10 +20,11 @@ export default function Shell({ children }: { children: ReactNode }) {
       <Sprite />
       <header className="site-head">
         <div className="bar glass">
-          <Link href="/launchpad" className="brand"><img src="/brand/dyorhq-mark-small.png" alt="" /><span>Dyor<b>HQ</b></span></Link>
+          <Link href="/launchpad" className="brand" aria-label="DyorHQ launchpad"><Wordmark /></Link>
           <nav className="site-nav" aria-label="Launchpad">
             <Link href="/launchpad" aria-current={current("/launchpad", true)}>Explore</Link>
             <Link href="/launchpad/create" aria-current={current("/launchpad/create")}>Create</Link>
+            <Link href="/swap" aria-current={current("/swap")}>Swap</Link>
             <Link href="/">App preview</Link>
           </nav>
           <span className="spacer" />

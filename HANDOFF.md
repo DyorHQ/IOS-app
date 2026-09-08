@@ -60,11 +60,25 @@ Negative `#FF507A`. Geist + Geist Mono. Liquid-glass navigation layer, borderles
   `npm run abis` after `forge build`), `app/lib/use-async.ts`, `app/lib/use-tx.ts`, `app/lib/errors.ts`, `app/lib/format.ts`.
 - Checks: `npm run typecheck`, `npm run lint` (0 errors; `<img>` warnings are accepted), `npm run build`, `npm test`.
 
+## In-app swap (spot) — built, fork-tested
+- `/swap` compares live quotes from **Kuru Flow** (aggregator API → KuruFlowEntrypoint), **Uniswap** (v3 via
+  QuoterV2/SwapRouter02 and v4 via V4Quoter/Universal Router + Permit2, including graduated launchpad pools) and
+  **Monday Trade** (Uniswap-v3-style QuoterV2/SwapRouter), ranks them, and executes the chosen route from the user's
+  wallet. MON ↔ WMON wraps directly. Read `docs/swap-spec.md` for every address, ABI decision and behaviour.
+- Code: `app/swap/`, `app/lib/swap/` (engine, per-venue adapters, tokens, config, abis), `scripts/dev/pool-inventory.mjs`.
+- Verified on a local anvil fork of Monad mainnet with a test wallet: quotes from all three venues and swaps
+  executed through their routers. Kuru quotes hit the live API (1 request/second per address).
+
+## App wired to live data (2026-09-08)
+- The phone-frame app at `/` now reads everything from Monad mainnet: pool prices with 24h change, wallet
+  balances, launchpad state and events, Perpl perps (book, tape, positions, orders, collateral) and TradingView
+  charts. See `docs/app-wiring.md` for the per-screen map, chart choices and the Perpl integration.
+- Perps venue is **Perpl** (Monday's perps are paused per its docs). Its WebSocket is bridged by `worker/index.ts`.
+
 ## Good next steps
 1. Owner deploys the contracts (runbook above), syncs the addresses, and approves tokenised-stock pairs with
    `script/AddPairToken.s.sol` + `NEXT_PUBLIC_PAIR_TOKENS`.
-2. In-app swaps for graduated tokens through the Uniswap v4 Universal Router (`0xbc2a036e5027b9ae57bba847ef88e1b14823f7b1`)
-   and Permit2; today the token page shows pool state and lets anyone distribute hook fees.
+2. Exact-output swaps, limit orders on the Kuru/Monday order books, and a Kuru Flow referrer fee once a fee wallet is chosen.
 3. An indexer (holders, trades, charts) and image hosting (R2 upload route) for the create form.
 4. Wire the prototype screens (`app/page.tsx`, `public/preview.html`) to the same data; the Launchpad screen links to `/launchpad`.
 5. Keep `public/preview.html` and `app/` in sync: the preview is the design source the artifact is published from.

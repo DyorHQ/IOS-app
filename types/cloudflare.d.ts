@@ -17,3 +17,8 @@ interface D1Database {
 declare module "cloudflare:workers" {
   export const env: { DB?: D1Database; ASSETS?: Fetcher } & Record<string, unknown>;
 }
+
+declare class WebSocketPair {
+  0: WebSocket;
+  1: WebSocket;
+}

@@ -101,7 +101,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return <div className="review-row"><span>{label}</span><b>{value}</b></div>;
 }
 
-export default function Create() {
+export default function Create({ embedded = false, onLaunched }: { embedded?: boolean; onLaunched?: (token: Address) => void } = {}) {
   const router = useRouter();
   const wallet = useWallet();
   const account = wallet.account;
@@ -136,13 +136,16 @@ export default function Create() {
     const client = wallet.client;
     if (!client || !input) return;
     const result = await run(`Launch $${input.symbol}`, (onSent) => launchAction(client, input, onSent));
-    if (result?.token) router.push(`/launchpad/${result.token}`);
+    if (result?.token) {
+      if (onLaunched) onLaunched(result.token);
+      else router.push(`/launchpad/${result.token}`);
+    }
   };
 
   return (
     <>
       {!DEPLOYED && <DeployNotice />}
-      <div className="create-layout">
+      <div className={`create-layout ${embedded ? "embedded" : ""}`}>
         <form className="card form" onSubmit={(e) => { e.preventDefault(); void submit(); }} noValidate>
           <div className="step-head"><div><span className="eyebrow">New launch · Monad</span><h1>Create a token</h1></div></div>
 
@@ -165,7 +168,7 @@ export default function Create() {
             <div className="pair-pick">
               {pairs.map((p) => (
                 <button key={p.address} type="button" aria-pressed={pair?.address === p.address} onClick={() => set({ pair: p.address })}>
-                  <span className="coin sm" style={{ background: p.native ? "#7C5CFF" : toneFor(p.address) }} aria-hidden="true">{p.symbol[0]}</span>
+                  <span className="coin sm" style={{ background: p.native ? "var(--asset-violet)" : toneFor(p.address) }} aria-hidden="true">{p.symbol[0]}</span>
                   <span><b>{p.symbol}</b><small>graduates at {fmtAmount(p.graduationThreshold, p.decimals, p.symbol, { compact: true })}</small></span>
                 </button>
               ))}

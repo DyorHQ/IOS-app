@@ -157,9 +157,9 @@ export function WalletButton({ className = "btn primary sm" }: { className?: str
 
 /** The primary call to action for anything that writes: it walks the user through connecting and switching to
     Monad before it ever shows the real label. */
-export function ActionButton({ ready, busy, label, onClick, className = "btn primary big", type = "button" }: { ready: boolean; busy: boolean; label: ReactNode; onClick: () => void; className?: string; type?: "button" | "submit" }) {
+export function ActionButton({ ready, busy, label, onClick, className = "btn primary big", type = "button", requireLaunchpad = true }: { ready: boolean; busy: boolean; label: ReactNode; onClick: () => void; className?: string; type?: "button" | "submit"; requireLaunchpad?: boolean }) {
   const wallet = useWallet();
-  if (!DEPLOYED) return <button type="button" className={className} disabled>Contracts not deployed</button>;
+  if (requireLaunchpad && !DEPLOYED) return <button type="button" className={className} disabled>Contracts not deployed</button>;
   if (!wallet.account) return <WalletButton className={className} />;
   if (!wallet.onMonad) return <button type="button" className={className} onClick={() => wallet.switchToMonad().catch(() => undefined)}>Switch to Monad</button>;
   return <button type={type} className={className} disabled={!ready || busy} onClick={type === "button" ? onClick : undefined}>{busy && <span className="spinner" />}{label}</button>;
