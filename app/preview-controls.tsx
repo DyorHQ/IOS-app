@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 export type ScreenName = "feed" | "markets" | "launch" | "trade" | "perps" | "profile";
 export const screenOptions: { id: ScreenName; title: string; note: string }[] = [
-  { id: "feed", title: "Social feed", note: "Discovery & copy trading" },
+  { id: "feed", title: "Home", note: "Feed, discovery & copy trading" },
   { id: "markets", title: "Markets", note: "Tokens & prices" },
   { id: "launch", title: "Launchpad", note: "Discover & create a token" },
   { id: "trade", title: "Swap", note: "Quote & review" },

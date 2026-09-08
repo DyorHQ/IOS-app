@@ -185,7 +185,7 @@ function SideMenu({ open, close, setTab }: { open: boolean; close: () => void; s
 }
 
 function BottomNav({ tab, setTab }: { tab: Tab; setTab: (tab: Tab) => void }) {
-  const tabs: [Tab,string,string][] = [["feed","⌂","Feed"],["markets","▥","Markets"],["launch","✦","Launch"],["trade","↗","Trade"],["profile","◎","Profile"]];
+  const tabs: [Tab,string,string][] = [["feed","⌂","Home"],["markets","▥","Markets"],["launch","✦","Launch"],["trade","↗","Trade"],["profile","◎","Profile"]];
   return <nav className="bottom-nav">{tabs.map(([id,icon,label])=><button key={id} className={`${tab === id ? "active" : ""} ${id === "launch" ? "launch-tab" : ""}`} onClick={() => setTab(id)}><span>{icon}</span><small>{label}</small></button>)}</nav>;
 }
 

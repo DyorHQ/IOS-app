@@ -538,7 +538,7 @@ const feed = [
     pnl:"+9.2%", copies:11, tone:"green", badge:"VERIFIED", spark:[16,18,15,19,17,21,20,23,22,25,27] },
 ];
 const screenOptions = [
-  { id:"feed", title:"Social feed", note:"Discovery & copy trading" },
+  { id:"feed", title:"Home", note:"Feed, discovery & copy trading" },
   { id:"markets", title:"Markets", note:"Tokens & prices" },
   { id:"launch", title:"Launchpad", note:"Discover & create a token" },
   { id:"trade", title:"Swap", note:"Quote & review" },
@@ -896,7 +896,7 @@ const SCREENS={ feed:feedScreen, markets:marketsScreen, launch:launchScreen, tra
 /* ===================== chrome ===================== */
 function bottomNav(){
   const active = state.tab==="perps" ? "trade" : state.tab;
-  const tabs=[["feed","⌂","Feed"],["markets","▥","Markets"],["launch","✦","Launch"],["trade","↗","Trade"],["profile","◎","Profile"]];
+  const tabs=[["feed","⌂","Home"],["markets","▥","Markets"],["launch","✦","Launch"],["trade","↗","Trade"],["profile","◎","Profile"]];
   return tabs.map(([id,icon,label])=>`<button class="${active===id?"active":""} ${id==="launch"?"launch-tab":""}" data-tab="${id}"><span>${icon}</span><small>${label}</small></button>`).join("");
 }
 function sideMenu(){
