@@ -17,9 +17,11 @@ final class AppEnvironment {
     let session: Session
     let settings = AppSettings()
     let perplTrading = PerplTrading()
+    let social: SocialSession
 
     init(config: AppConfig) {
         self.config = config
+        social = SocialSession(config: config)
         rpc = RPCClient(url: config.rpcURL)
         multicall = Multicall(rpc: rpc)
         sender = TransactionSender(rpc: rpc)

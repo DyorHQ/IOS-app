@@ -12,6 +12,7 @@ struct DyorHQApp: App {
                 .environment(environment.session)
                 .environment(environment.settings)
                 .environment(environment.perplTrading)
+                .environment(environment.social)
                 .environment(router)
                 .tint(.accent)
                 .preferredColorScheme(environment.settings.appearance.colorScheme)

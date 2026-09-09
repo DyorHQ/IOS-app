@@ -11,6 +11,7 @@ struct ProfileView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
     @Environment(PerplTrading.self) private var perplTrading
+    @Environment(SocialSession.self) private var social
     @State private var showReceive = false
     @State private var showSend = false
     @State private var showAppearance = false
@@ -36,6 +37,13 @@ struct ProfileView: View {
                 }
 
                 Section("Settings") {
+                    NavigationLink { SocialProfileView() } label: {
+                        HStack {
+                            SettingsRow("DyorHQ Social", symbol: "person.2.circle", tint: .accent)
+                            Spacer()
+                            if social.isSignedIn { Text(social.profile?.handle.map { "@\($0)" } ?? "Connected").font(.footnote).foregroundStyle(.secondary) }
+                        }
+                    }
                     NavigationLink { ManageWalletsView() } label: { SettingsRow("Manage Wallets", symbol: "wallet.bifold", tint: .accent) }
                     NavigationLink { SecurityView() } label: { SettingsRow("Security", symbol: "lock.shield", tint: .accent) }
                     NavigationLink { NotificationsView() } label: { SettingsRow("Notifications", symbol: "bell.badge", tint: .accent) }

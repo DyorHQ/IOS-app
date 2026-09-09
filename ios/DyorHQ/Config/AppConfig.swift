@@ -10,9 +10,14 @@ struct AppConfig: Sendable {
     let passkeyRelyingParty: String
     let perplBuilderID: Int
     let launchpad: LaunchpadAddresses
+    /// DyorHQ's Supabase backend (social, alerts, copy trading, launch index). The publishable key is safe to
+    /// embed — row-level security protects the data — so these have working defaults.
+    let supabaseURL: URL
+    let supabaseKey: String
 
     var hasPrivy: Bool { !privyAppID.isEmpty && !privyClientID.isEmpty }
     var hasPasskeys: Bool { hasPrivy && !passkeyRelyingParty.isEmpty }
+    var hasSupabase: Bool { !supabaseKey.isEmpty }
 
     static let current: AppConfig = {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -23,6 +28,8 @@ struct AppConfig: Sendable {
         }
         func address(_ key: String) -> Address { Address(string(key)) ?? .zero }
         let rpc = URL(string: string("MonadRPCURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil } ?? Monad.defaultRPC
+        let supabaseURL = URL(string: string("SupabaseURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil } ?? URL(string: "https://fmnjqrguvopusfufmirs.supabase.co")!
+        let supabaseKey = { let key = string("SupabaseKey"); return key.isEmpty ? "sb_publishable_s1G3ns-jmzTfnFs7rTvdbQ_8FJYODhT" : key }()
         return AppConfig(
             privyAppID: string("PrivyAppID"),
             privyClientID: string("PrivyClientID"),
@@ -36,7 +43,9 @@ struct AppConfig: Sendable {
                 holderFeeSharing: address("HolderFeeSharing"),
                 hook: address("MemeHook"),
                 poolManager: Uniswap.poolManager
-            )
+            ),
+            supabaseURL: supabaseURL,
+            supabaseKey: supabaseKey
         )
     }()
 }
