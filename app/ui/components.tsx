@@ -1,20 +1,24 @@
 "use client";
 // Shared building blocks: segmented control, chips, coins, rows, empty states, switches, ranges.
-import type { CSSProperties, ReactNode } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
 import { Icon, type IconName } from "./icons";
 import { TONES, fmtPct, fmtUSD, type Token, type Tone } from "./data";
 
 export const cssVars = (o: Record<string, string | number>) => o as CSSProperties;
 
+export function Button({ variant = "primary", size = "regular", busy = false, className = "", children, disabled, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "tone-up" | "tone-down"; size?: "regular" | "sm" | "big"; busy?: boolean }) {
+  return <button type="button" {...props} className={`btn ${variant} ${size === "regular" ? "" : size} ${className}`} disabled={disabled || busy} aria-busy={busy || undefined}>{children}</button>;
+}
+
 export type SegOpt<T extends string> = { v: T; l: string; i?: IconName };
 export const opts = <T extends string>(vals: readonly T[]): SegOpt<T>[] => vals.map((v) => ({ v, l: v }));
-export function Seg<T extends string>({ options, value, onChange, tone = "", small = false, className = "" }: { options: SegOpt<T>[]; value: T; onChange: (v: T) => void; tone?: "" | "dir"; small?: boolean; className?: string }) {
+export function Seg<T extends string>({ options, value, onChange, tone = "", small = false, className = "", label = "Options" }: { options: SegOpt<T>[]; value: T; onChange: (v: T) => void; tone?: "" | "dir"; small?: boolean; className?: string; label?: string }) {
   const i = Math.max(0, options.findIndex((o) => o.v === value));
   const toneCls = tone === "dir" ? (i === 0 ? "tone-up" : "tone-down") : "";
   return (
-    <div className={`seg ${toneCls} ${small ? "small" : ""} ${className}`} role="tablist" style={cssVars({ "--n": options.length })}>
+    <div className={`seg ${toneCls} ${small ? "small" : ""} ${className}`} role="group" aria-label={label} style={cssVars({ "--n": options.length })}>
       <span className="seg-thumb" style={cssVars({ "--i": i })} />
-      {options.map((o) => <button key={o.v} type="button" role="tab" aria-selected={o.v === value} onClick={() => onChange(o.v)}>{o.i && <Icon name={o.i} />}{o.l}</button>)}
+      {options.map((o) => <button key={o.v} type="button" aria-pressed={o.v === value} onClick={() => onChange(o.v)}>{o.i && <Icon name={o.i} />}{o.l}</button>)}
     </div>
   );
 }

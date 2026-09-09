@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // The Expo app is its own repository with its own lint setup.
     "mainstreet-app/**",
+    // Foundry project: Solidity plus vendored JS test helpers inside git submodules.
+    "contracts/**",
   ]),
 ]);
 

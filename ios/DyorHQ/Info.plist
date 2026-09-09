@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>DyorHQ</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>DyorHQ</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>xyz.dyorhq.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>dyorhq</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>FeeEscrow</key>
+	<string>$(FEE_ESCROW)</string>
+	<key>HolderFeeSharing</key>
+	<string>$(HOLDER_FEE_SHARING)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>https</string>
+	</array>
+	<key>LaunchRouter</key>
+	<string>$(LAUNCH_ROUTER)</string>
+	<key>LaunchpadFactory</key>
+	<string>$(LAUNCHPAD_FACTORY)</string>
+	<key>MemeHook</key>
+	<string>$(MEME_HOOK)</string>
+	<key>MonadRPCURL</key>
+	<string>$(MONAD_RPC_URL)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>DyorHQ uses the camera to scan wallet addresses and QR codes.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>DyorHQ uses Face ID to unlock your wallet on this device.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>DyorHQ uses your photos to add a token image when you launch a coin.</string>
+	<key>PasskeyRelyingParty</key>
+	<string>$(PASSKEY_RP_ID)</string>
+	<key>PerplBuilderID</key>
+	<string>$(PERPL_BUILDER_ID)</string>
+	<key>PrivyAppID</key>
+	<string>$(PRIVY_APP_ID)</string>
+	<key>PrivyClientID</key>
+	<string>$(PRIVY_CLIENT_ID)</string>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UIUserInterfaceStyle</key>
+	<string>Automatic</string>
+</dict>
+</plist>

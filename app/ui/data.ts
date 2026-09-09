@@ -1,7 +1,7 @@
 // Sample data and formatting helpers shared by the DyorHQ screens. Illustrative only, no real quotes.
 import type { IconName } from "./icons";
 
-export const TONES = { violet: "#7C5CFF", blue: "#3B82F6", orange: "#F7931A", eth: "#627EEA", pink: "#EC4899", teal: "#00A98F", nvidia: "#76B900", tesla: "#E31937", avax: "#E84142", sui: "#4DA2FF", arb: "#28A0F0", doge: "#B8973A", usdc: "#2775CA" } as const;
+export const TONES = { violet: "var(--asset-violet)", blue: "var(--asset-blue)", orange: "var(--asset-orange)", eth: "var(--asset-eth)", pink: "var(--asset-pink)", teal: "var(--asset-teal)", nvidia: "var(--asset-nvidia)", tesla: "var(--asset-tesla)", avax: "var(--asset-avax)", sui: "var(--asset-sui)", arb: "var(--asset-arb)", doge: "var(--asset-doge)", usdc: "var(--asset-usdc)" } as const;
 export type Tone = keyof typeof TONES;
 
 export type Token = { sym: string; name: string; price: number; chg: number; tone: Tone; perp: boolean; vol: number; hot?: boolean; launch?: boolean; rwa?: boolean };

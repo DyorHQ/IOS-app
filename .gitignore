@@ -45,3 +45,6 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# example env is safe to commit
+!.env.example

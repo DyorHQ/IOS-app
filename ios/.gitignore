@@ -1,0 +1,7 @@
+Secrets.xcconfig
+*.xcodeproj
+DerivedData/
+.build/
+.build-launchtests/
+.build*/
+DerivedData*/

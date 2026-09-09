@@ -1,0 +1,61 @@
+/* DyorHQ foundation. The only source for interface colors, fonts and scales.
+   Asset identity colors are a separate namespace and never style actions. */
+@font-face{font-family:"Manrope";src:url("/fonts/manrope.ttf") format("truetype");font-weight:200 800;font-style:normal;font-display:swap}
+@font-face{font-family:"Bodoni Moda";src:url("/fonts/bodoni-moda.ttf") format("truetype");font-weight:400 900;font-style:normal;font-display:swap}
+@font-face{font-family:"IBM Plex Mono";src:url("/fonts/ibm-plex-mono.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"IBM Plex Mono";src:url("/fonts/ibm-plex-mono-medium.ttf") format("truetype");font-weight:500 700;font-style:normal;font-display:swap}
+:root{
+  --font-display:"Bodoni Moda",Didot,"Times New Roman",serif;
+  --sans:"Manrope",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+  --font:var(--sans);
+  --space-1:.25rem;--space-2:.5rem;--space-3:.75rem;--space-4:1rem;--space-5:1.25rem;--space-6:1.5rem;--space-8:2rem;--space-10:2.5rem;--space-12:3rem;--space-16:4rem;
+  --type-meta:.75rem;--type-label:.875rem;--type-body:1rem;--type-lead:1.125rem;--type-title:1.5rem;--type-display:clamp(2.5rem,5vw,4.5rem);
+  --r-small:6px;--r-row:8px;--r-input:12px;--r-card:16px;--r-sheet:24px;--r-pill:999px;--r-frame:54px;
+  --duration-fast:140ms;--duration-normal:220ms;--duration-panel:320ms;--ease:cubic-bezier(.2,.8,.2,1);
+  --z-chrome:20;--z-menu:40;--z-sheet:50;--z-toast:60;--z-studio:90;
+  --text-scale:1;--glass-blur:18px;--safe-top:0px;
+  --asset-violet:#6650B8;--asset-blue:#315EB0;--asset-orange:#A85A0B;--asset-eth:#5268A3;--asset-pink:#A52D70;--asset-teal:#087D6C;--asset-nvidia:#4A7300;--asset-tesla:#B52438;--asset-avax:#B3343A;--asset-sui:#2166AD;--asset-arb:#206C9B;--asset-doge:#84691B;--asset-usdc:#275DAD;
+  --porcelain:#F7F7F5;--chalk:#FCFCFA;--silver:#E8E8E5;--charcoal:#18191B;--graphite:#242528;
+  --ink-fixed:#18191B;--paper-fixed:#F7F7F5;
+  --bezel:linear-gradient(145deg,#DCDDE0,#96989D 28%,#505258 72%,#CBCDD1);
+  --device-keys:linear-gradient(#6B7079,#2B2F36,#6B7079);--mask-opaque:#000;
+  --venue-kuru:#1B3A2E;--venue-uniswap:#FF007A;--venue-monday:#2E52F5;--venue-wmon:#7C5CFF;
+  color-scheme:light;
+  --ground:#E8E8E5;--bg:#F7F7F5;--card:#FCFCFA;--inner:#EFEFED;--inner2:#E0E0DD;--track:#D7D7D3;
+  --text:#18191B;--strong:#37383B;--muted:#606165;--faint:#6B6C70;--control-border:#85868B;
+  --accent:#18191B;--accent-ink:#18191B;--accent-fill:#18191B;--on-accent:#F7F7F5;--accent-soft:#E8E8E5;
+  --up:#126A4B;--up-text:#126A4B;--up-soft:#E5F2EA;--up-fill:#126A4B;--on-up:#F7F7F5;
+  --down:#AD3047;--down-text:#AD3047;--down-soft:#F8E9ED;--down-fill:#AD3047;--on-down:#F7F7F5;
+  --warning:#775812;--warning-soft:#F4EDD9;
+  --ring:rgb(24 25 27 / .10);--card-hi:rgb(252 252 250 / .3);--mark-filter:brightness(0);
+  --glass-bg:rgb(252 252 250 / .86);--glass-rim:rgb(252 252 250 / .95);--glass-ring:rgb(24 25 27 / .14);--glass-sheen:.3;
+  --glass-shadow:0 8px 24px -12px rgb(24 25 27 / .22);
+  --shadow-card:0 1px 2px rgb(24 25 27 / .04);
+  --shadow-float:0 16px 40px -18px rgb(24 25 27 / .28);
+  --thumb-shadow:0 1px 3px rgb(24 25 27 / .12);
+}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;
+  --ground:#101113;--bg:#18191B;--card:#242528;--inner:#2D2E32;--inner2:#3D3E43;--track:#45464B;
+  --text:#F7F7F5;--strong:#D8D8D5;--muted:#B0B1B6;--faint:#A3A4AA;--control-border:#878990;
+  --accent:#F7F7F5;--accent-ink:#F7F7F5;--accent-fill:#F7F7F5;--on-accent:#18191B;--accent-soft:#36373B;
+  --up:#77D8AC;--up-text:#77D8AC;--up-soft:#233B30;--up-fill:#77D8AC;--on-up:#18191B;
+  --down:#F496AA;--down-text:#F496AA;--down-soft:#422C34;--down-fill:#F496AA;--on-down:#18191B;
+  --warning:#E4C67D;--warning-soft:#3B3425;
+  --ring:rgb(247 247 245 / .12);--card-hi:rgb(247 247 245 / .04);--mark-filter:brightness(0) invert(1);
+  --glass-bg:rgb(36 37 40 / .88);--glass-rim:rgb(247 247 245 / .2);--glass-ring:rgb(247 247 245 / .12);--glass-sheen:.15;
+  --glass-shadow:0 8px 24px -12px rgb(16 17 19 / .7);--shadow-card:0 1px 2px rgb(16 17 19 / .2);--shadow-float:0 16px 40px -18px rgb(16 17 19 / .7);--thumb-shadow:0 1px 3px rgb(16 17 19 / .4);
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#101113;--bg:#18191B;--card:#242528;--inner:#2D2E32;--inner2:#3D3E43;--track:#45464B;
+  --text:#F7F7F5;--strong:#D8D8D5;--muted:#B0B1B6;--faint:#A3A4AA;--control-border:#878990;
+  --accent:#F7F7F5;--accent-ink:#F7F7F5;--accent-fill:#F7F7F5;--on-accent:#18191B;--accent-soft:#36373B;
+  --up:#77D8AC;--up-text:#77D8AC;--up-soft:#233B30;--up-fill:#77D8AC;--on-up:#18191B;
+  --down:#F496AA;--down-text:#F496AA;--down-soft:#422C34;--down-fill:#F496AA;--on-down:#18191B;
+  --warning:#E4C67D;--warning-soft:#3B3425;
+  --ring:rgb(247 247 245 / .12);--card-hi:rgb(247 247 245 / .04);--mark-filter:brightness(0) invert(1);
+  --glass-bg:rgb(36 37 40 / .88);--glass-rim:rgb(247 247 245 / .2);--glass-ring:rgb(247 247 245 / .12);--glass-sheen:.15;
+  --glass-shadow:0 8px 24px -12px rgb(16 17 19 / .7);--shadow-card:0 1px 2px rgb(16 17 19 / .2);--shadow-float:0 16px 40px -18px rgb(16 17 19 / .7);--thumb-shadow:0 1px 3px rgb(16 17 19 / .4);
+}

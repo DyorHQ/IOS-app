@@ -1,0 +1,42 @@
+import DyorKit
+import Foundation
+
+/// Build-time configuration, injected through Secrets.xcconfig → Info.plist. Missing values degrade features
+/// (sign-in methods, launchpad) instead of crashing, and the UI says what is missing.
+struct AppConfig: Sendable {
+    let privyAppID: String
+    let privyClientID: String
+    let rpcURL: URL
+    let passkeyRelyingParty: String
+    let perplBuilderID: Int
+    let launchpad: LaunchpadAddresses
+
+    var hasPrivy: Bool { !privyAppID.isEmpty && !privyClientID.isEmpty }
+    var hasPasskeys: Bool { hasPrivy && !passkeyRelyingParty.isEmpty }
+
+    static let current: AppConfig = {
+        let info = Bundle.main.infoDictionary ?? [:]
+        func string(_ key: String) -> String {
+            let raw = (info[key] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            // Unset xcconfig variables come through as empty or as the literal "$(NAME)".
+            return raw.hasPrefix("$(") ? "" : raw
+        }
+        func address(_ key: String) -> Address { Address(string(key)) ?? .zero }
+        let rpc = URL(string: string("MonadRPCURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil } ?? Monad.defaultRPC
+        return AppConfig(
+            privyAppID: string("PrivyAppID"),
+            privyClientID: string("PrivyClientID"),
+            rpcURL: rpc,
+            passkeyRelyingParty: string("PasskeyRelyingParty"),
+            perplBuilderID: Int(string("PerplBuilderID")) ?? 0,
+            launchpad: LaunchpadAddresses(
+                factory: address("LaunchpadFactory"),
+                router: address("LaunchRouter"),
+                escrow: address("FeeEscrow"),
+                holderFeeSharing: address("HolderFeeSharing"),
+                hook: address("MemeHook"),
+                poolManager: Uniswap.poolManager
+            )
+        )
+    }()
+}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useSyncExternalStore } from "react";
+import { Wordmark } from "./ui/wordmark";
 import { Icon } from "./ui/icons";
 import { Range, Seg, Switch, type SegOpt } from "./ui/components";
 import * as Glass from "./ui/liquid-glass";
@@ -16,12 +17,10 @@ export const screenOptions: { id: ScreenName; title: string; note: string }[] = 
 ];
 
 export type Theme = "system" | "light" | "dark";
-export type Preferences = { theme: Theme; accent: string; font: "geist" | "inter"; radius: number; textScale: number; glass: number; motion: boolean };
-export const DEFAULT_PREFS: Preferences = { theme: "system", accent: "#B9F26B", font: "geist", radius: 20, textScale: 1, glass: 60, motion: true };
+export type Preferences = { theme: Theme; textScale: number; glass: number; motion: boolean };
+export const DEFAULT_PREFS: Preferences = { theme: "system", textScale: 1, glass: 30, motion: true };
 export const THEME_OPTS: SegOpt<Theme>[] = [{ v: "system", l: "System" }, { v: "light", l: "Light", i: "sun" }, { v: "dark", l: "Dark", i: "moon" }];
-const FONT_OPTS: SegOpt<"geist" | "inter">[] = [{ v: "geist", l: "Geist" }, { v: "inter", l: "Inter Tight" }];
-const SWATCHES: [string, string][] = [["#B9F26B", "Signal"], ["#7C5CFF", "Monad violet"], ["#2E9BF5", "Miracle blue"], ["#3866D6", "Studio blue"]];
-const storageKey = "dyorhq-preview-preferences-v2";
+const storageKey = "dyorhq-preview-preferences-v3";
 
 /* Preferences live in a tiny external store read through useSyncExternalStore: the server and the hydration
    render see the defaults, the first client read hydrates from localStorage, and edits notify subscribers. */
@@ -33,17 +32,14 @@ let snapshot: Snapshot | null = null;
 function sanitize(s: Partial<Record<keyof Preferences, unknown>>): Preferences {
   return {
     theme: s.theme === "light" || s.theme === "dark" ? s.theme : "system",
-    accent: typeof s.accent === "string" && /^#[0-9a-f]{6}$/i.test(s.accent) ? s.accent : DEFAULT_PREFS.accent,
-    font: s.font === "inter" ? "inter" : "geist",
-    radius: Math.max(12, Math.min(28, Number(s.radius) || 20)),
     textScale: Math.max(1, Math.min(1.2, Number(s.textScale) || 1)),
-    glass: typeof s.glass === "number" && Number.isFinite(s.glass) ? Math.max(0, Math.min(100, s.glass)) : 60,
+    glass: typeof s.glass === "number" && Number.isFinite(s.glass) ? Math.max(0, Math.min(100, s.glass)) : 30,
     motion: typeof s.motion === "boolean" ? s.motion : true,
   };
 }
 function readStored(): Preferences {
   try {
-    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null");
+    const stored = JSON.parse(localStorage.getItem(storageKey) ?? localStorage.getItem("dyorhq-preview-preferences-v2") ?? "null");
     return stored ? sanitize(stored) : DEFAULT_PREFS;
   } catch { return DEFAULT_PREFS; /* Invalid or unavailable local preferences use the defaults. */ }
 }
@@ -53,36 +49,15 @@ function subscribe(listener: () => void) { listeners.add(listener); return () =>
 export function setPrefs(prefs: Preferences) { snapshot = { prefs, ready: true }; listeners.forEach((l) => l()); }
 export function usePrefs() { return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot); }
 
-/* Text-safe variants for any accent: an ink-leaning tint for light surfaces and a paper-leaning tint for dark
-   surfaces that both clear 4.6:1, plus the fill/on-fill pair (light accents stay pure under ink text; dark
-   accents darken under white text). */
-const hex2rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-const rgb2hex = (c: number[]) => "#" + c.map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0")).join("");
-const lum = (c: number[]) => { const [r, g, b] = c.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
-const contrast = (a: number[], b: number[]) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
-const mixRgb = (a: number[], b: number[], t: number) => a.map((v, i) => v + (b[i] - v) * t);
-function toward(from: number[], to: number[], surface: number[], min: number) { let c = from; for (let t = 0; t <= 1; t += 0.02) { c = mixRgb(from, to, t); if (contrast(c, surface) >= min) break; } return c; }
-export function deriveAccent(hex: string) {
-  const a = hex2rgb(hex), ink = [12, 16, 13], paper = [242, 245, 238], white = [255, 255, 255], graphite = [27, 33, 29], onInk = lum(a) > 0.35;
-  return { inkL: rgb2hex(toward(a, ink, paper, 4.6)), inkD: rgb2hex(toward(a, paper, graphite, 4.6)), on: onInk ? "#0C100D" : "#FFFFFF", fill: onInk ? hex : rgb2hex(toward(a, ink, white, 4.6)) };
-}
-
 /* Writes the preferences to the document: theme attribute, CSS variables, motion flag, glass strength. */
 export function useApplyPrefs() {
   const { prefs, ready } = usePrefs();
   useEffect(() => {
     if (!ready) return;
-    const root = document.documentElement, d = deriveAccent(prefs.accent);
+    const root = document.documentElement;
     if (prefs.theme === "system") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", prefs.theme);
-    root.style.setProperty("--accent", prefs.accent);
-    root.style.setProperty("--accent-ink-light", d.inkL);
-    root.style.setProperty("--accent-ink-dark", d.inkD);
-    root.style.setProperty("--accent-fill-js", d.fill);
-    root.style.setProperty("--on-accent-js", d.on);
-    root.style.setProperty("--font", prefs.font === "inter" ? "var(--alt)" : "var(--sans)");
-    root.style.setProperty("--r-card", `${prefs.radius}px`);
-    root.style.setProperty("--r-row", `${Math.round(prefs.radius * 0.6)}px`);
-    root.style.setProperty("--r-input", `${Math.round(prefs.radius * 0.7)}px`);
+    // The identity is fixed; only theme and accessibility preferences vary.
+    ["--accent", "--accent-ink-light", "--accent-ink-dark", "--accent-fill-js", "--on-accent-js", "--font", "--r-card", "--r-row", "--r-input"].forEach(key => root.style.removeProperty(key));
     root.style.setProperty("--text-scale", String(prefs.textScale));
     root.dataset.motion = prefs.motion ? "on" : "off";
     Glass.setIntensity(prefs.glass);
@@ -99,26 +74,22 @@ export default function PreviewControls({ screen, onScreen, open, onClose }: { s
   return (
     <aside className={`studio ${open ? "open" : ""}`} id="preview-studio" aria-label="Preview studio">
       <button type="button" className="studio-close" onClick={onClose} aria-label="Close studio"><Icon name="x" /></button>
-      <div className="studio-brand"><img className="markimg" src="/brand/dyorhq-mark-small.png" alt="" /><div><strong>Dyor<span className="hq">HQ</span></strong><small>The RWA HQ for social trading</small></div></div>
-      <p className="studio-intro">Six screens of the DyorHQ app with liquid glass navigation. Try both themes and tune the look.</p>
+      <div className="studio-brand"><Wordmark /><small>The RWA HQ for social trading</small></div>
+      <p className="studio-intro">Explore the app in light or dark. Typography and colors follow the DyorHQ design system.</p>
+      <a className="studio-system-link" href="/brand">Design system <Icon name="chev-right" /></a>
       <nav aria-label="Preview screens" className="studio-screens">
         {screenOptions.map((item, i) => <button key={item.id} type="button" aria-current={screen === item.id ? "page" : undefined} onClick={() => onScreen(item.id)}><span>0{i + 1}</span><div><b>{item.title}</b><small>{item.note}</small></div><Icon name="chev-right" className="chev" /></button>)}
       </nav>
       <div className="studio-sec"><h2>Appearance</h2>
         <div><span className="lbl">Theme</span><div style={{ marginTop: 8 }}><Seg options={THEME_OPTS} value={prefs.theme} onChange={(v) => set({ theme: v })} small /></div></div>
-        <div><span className="lbl">Accent</span><div className="swatches" style={{ marginTop: 8 }}>
-          {SWATCHES.map(([c, l]) => <button key={c} type="button" aria-label={l} title={l} aria-pressed={prefs.accent.toLowerCase() === c.toLowerCase()} style={{ background: c }} onClick={() => set({ accent: c })} />)}
-          <input type="color" className="colorpick" value={prefs.accent} aria-label="Custom accent" title="Custom accent" onChange={(e) => set({ accent: e.target.value })} />
-        </div></div>
-        <div><span className="lbl">Typeface</span><div style={{ marginTop: 8 }}><Seg options={FONT_OPTS} value={prefs.font} onChange={(v) => set({ font: v })} small /></div></div>
-        <div><div className="opt"><span className="lbl">Corners</span><output>{prefs.radius}px</output></div><Range value={prefs.radius} min={12} max={28} onChange={(v) => set({ radius: v })} label="Corner radius" /></div>
+        <dl className="studio-fonts"><div><dt>Headings</dt><dd>Bodoni Moda</dd></div><div><dt>Interface</dt><dd>Manrope</dd></div><div><dt>Numbers</dt><dd>IBM Plex Mono</dd></div></dl>
         <div><div className="opt"><span className="lbl">Text size</span><output>{Math.round(prefs.textScale * 100)}%</output></div><Range value={prefs.textScale} min={1} max={1.2} step={0.05} onChange={(v) => set({ textScale: v })} label="Text size" /></div>
         <div><div className="opt"><span className="lbl">Liquid glass</span><output>{prefs.glass}%</output></div><Range value={prefs.glass} min={0} max={100} onChange={(v) => set({ glass: v })} label="Glass refraction strength" />
           <p className="studio-note" style={{ marginTop: 6 }}>{refract === null ? "Refraction bends what scrolls under the bars in Chromium browsers." : refract ? "Refraction bends what scrolls under the bars. Other browsers get frosted blur." : "This browser can't refract backdrops, so the glass falls back to frosted blur."}</p></div>
         <div className="opt"><span className="lbl">Motion</span><Switch checked={prefs.motion} onChange={(v) => set({ motion: v })} label="Motion" /></div>
         <button type="button" className="btn secondary sm" style={{ alignSelf: "flex-start" }} onClick={() => setPrefs({ ...DEFAULT_PREFS })}>Reset appearance</button>
       </div>
-      <p className="studio-foot">Interactive UI prototype. Sample data, no real transactions. Appearance is saved in this browser.</p>
+      <p className="studio-foot">Live on Monad. Every action is a transaction from your wallet. Appearance is saved in this browser.</p>
     </aside>
   );
 }
