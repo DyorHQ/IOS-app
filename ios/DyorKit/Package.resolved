@@ -1,0 +1,23 @@
+{
+  "pins" : [
+    {
+      "identity" : "bigint",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/attaswift/BigInt.git",
+      "state" : {
+        "revision" : "63feef7820abb1a8fb08587d7da56bb0b7db8751",
+        "version" : "6.0.1"
+      }
+    },
+    {
+      "identity" : "privy-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/privy-io/privy-ios",
+      "state" : {
+        "revision" : "eba79d609c251bb9ace1b892500f2a26863e83d6",
+        "version" : "2.15.0"
+      }
+    }
+  ],
+  "version" : 2
+}
