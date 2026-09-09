@@ -15,7 +15,7 @@ final class Session {
     }
 
     enum Method: String, Codable, Equatable {
-        case apple, google, email, passkey, watchOnly
+        case apple, google, email, passkey, imported, watchOnly
 
         var title: String {
             switch self {
@@ -23,6 +23,7 @@ final class Session {
             case .google: return "Google"
             case .email: return "Email"
             case .passkey: return "Passkey"
+            case .imported: return "Imported wallet"
             case .watchOnly: return "Watch only"
             }
         }
@@ -56,9 +57,8 @@ final class Session {
     func start() {
         guard !observing else { return }
         observing = true
-        if let watched = WatchOnlyStore.load() {
-            state = .signedIn(watched)
-        }
+        // An imported (local) wallet or a watch-only address take effect before Privy is even asked.
+        _ = loadStoredSession()
         guard let privy else {
             if case .loading = state { state = .signedOut }
             return
@@ -77,10 +77,27 @@ final class Session {
             state = .loading
         case .unauthenticated, .authenticatedUnverified:
             wallet = nil
-            if let watched = WatchOnlyStore.load() { state = .signedIn(watched) } else { state = .signedOut }
+            if !loadStoredSession() { state = .signedOut }
         case .authenticated(let user):
             await adopt(user)
         }
+    }
+
+    /// Restores an imported wallet (preferred) or a watch-only address into the session. Returns whether one was
+    /// found, so Privy's unauthenticated state doesn't clobber a locally-held wallet.
+    @discardableResult
+    private func loadStoredSession() -> Bool {
+        if let account = ImportedWalletStore.loadAccount() {
+            wallet = LocalWallet(account: account)
+            state = .signedIn(Account(address: account.address, method: .imported, label: nil))
+            return true
+        }
+        if let watched = WatchOnlyStore.load() {
+            wallet = nil
+            state = .signedIn(watched)
+            return true
+        }
+        return false
     }
 
     /// Makes sure the user has an embedded wallet, then exposes it as the app's signer.
@@ -97,6 +114,7 @@ final class Session {
             let (method, label) = Self.describe(user)
             wallet = PrivyWallet(address: address, provider: embedded.provider)
             WatchOnlyStore.clear()
+            ImportedWalletStore.clear() // a fresh Privy sign-in supersedes any imported wallet
             state = .signedIn(Account(address: address, method: method, label: label))
         } catch {
             lastError = error.localizedDescription
@@ -157,8 +175,22 @@ final class Session {
         state = .signedIn(account)
     }
 
+    /// Imports the user's own wallet: the key is stored in this device's Keychain, becomes the app's signer, and
+    /// supersedes any Privy or watch-only session. The raw key never leaves the device.
+    func importWallet(_ account: Secp256k1Account) async {
+        ImportedWalletStore.save(privateKey: account.privateKey)
+        WatchOnlyStore.clear()
+        // If a Privy session is lingering, end it so it can't override the imported wallet on the next auth event.
+        if let privy, case .authenticated(let user) = await privy.getAuthState() {
+            await user.logout()
+        }
+        wallet = LocalWallet(account: account)
+        state = .signedIn(Account(address: account.address, method: .imported, label: nil))
+    }
+
     func signOut() async {
         WatchOnlyStore.clear()
+        ImportedWalletStore.clear()
         wallet = nil
         if let privy, case .authenticated(let user) = await privy.getAuthState() {
             await user.logout()

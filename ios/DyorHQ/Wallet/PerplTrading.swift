@@ -33,7 +33,8 @@ final class PerplTrading {
     }
 
     /// Full one-time enrollment: generate a key, sign the server's typed data with the wallet, store, and connect.
-    func enroll(wallet: PrivyWallet, address: Address) async throws {
+    /// Any wallet that can sign a digest (Privy embedded or an imported local wallet) can enroll.
+    func enroll(wallet: any DigestSigner, address: Address) async throws {
         status = .connecting
         do {
             let secret = PerplAuth.newSecret()

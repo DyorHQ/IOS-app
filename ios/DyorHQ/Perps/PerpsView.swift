@@ -63,10 +63,14 @@ struct PerpsView: View {
                 }
                 .padding(.vertical, 4)
             } else if session.address != nil {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("No Trading Account Yet").font(.headline)
-                    Text("Deposit at least 10 AUSD to open one. Collateral stays in the Perpl Exchange contract under your address.")
+                    Text("New to Perpl? Create your account on the web first, then deposit at least 10 AUSD to open a trading account. Collateral stays in the Perpl Exchange contract under your address.")
                         .font(.subheadline).foregroundStyle(.secondary)
+                    Link(destination: PerplLinks.signup) {
+                        Label("Create a Perpl Account", systemImage: "arrow.up.forward.square").font(.subheadline.weight(.medium))
+                    }
+                    .padding(.top, 2)
                 }
                 .padding(.vertical, 4)
             }

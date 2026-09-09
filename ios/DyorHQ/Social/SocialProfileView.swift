@@ -1,4 +1,5 @@
 import DyorKit
+import PhotosUI
 import SwiftUI
 
 /// Connect to DyorHQ social (sign a nonce with the wallet) and edit the public profile — the first end-to-end
@@ -12,6 +13,8 @@ struct SocialProfileView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var savedNote: String?
+    @State private var photoItem: PhotosPickerItem?
+    @State private var avatarBusy = false
 
     var body: some View {
         List {
@@ -37,6 +40,26 @@ struct SocialProfileView: View {
                     else { Text("You'll sign a short message with your wallet to prove it's you — no transaction, no fees.") }
                 }
             } else {
+                Section {
+                    HStack(spacing: 16) {
+                        Avatar(url: avatarURL, initials: initials, size: 68)
+                        VStack(alignment: .leading, spacing: 4) {
+                            PhotosPicker(selection: $photoItem, matching: .images) {
+                                Label(avatarURL == nil ? "Add Photo" : "Change Photo", systemImage: "camera")
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            .disabled(avatarBusy)
+                            if avatarBusy {
+                                HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Uploading…").font(.caption).foregroundStyle(.secondary) }
+                            } else {
+                                Text("A square image works best.").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                }
+
                 Section("Your Profile") {
                     LabeledContent("Wallet") {
                         Text(shortWallet(social.profile?.wallet ?? "")).font(.body.monospaced()).foregroundStyle(.secondary)
@@ -68,6 +91,39 @@ struct SocialProfileView: View {
         .task { social.restore(address: session.address); sync() }
         .onChange(of: social.isSignedIn) { _, _ in sync() }
         .onChange(of: social.profile) { _, _ in sync() }
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task { await uploadAvatar(item) }
+        }
+    }
+
+    private var avatarURL: URL? {
+        guard let raw = social.profile?.avatar_url, !raw.isEmpty else { return nil }
+        return URL(string: raw)
+    }
+
+    private var initials: String {
+        let source = displayName.isEmpty ? handle : displayName
+        let letters = source.split(whereSeparator: { $0 == " " || $0 == "@" }).prefix(2).compactMap { $0.first }
+        return letters.isEmpty ? "" : String(letters).uppercased()
+    }
+
+    private func uploadAvatar(_ item: PhotosPickerItem) async {
+        avatarBusy = true; error = nil; savedNote = nil
+        defer { avatarBusy = false; photoItem = nil }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data),
+                  let jpeg = image.avatarJPEG() else {
+                error = "That image could not be read. Try another."
+                return
+            }
+            try await social.uploadAvatar(jpeg: jpeg)
+            savedNote = "Photo updated."
+            Haptics.success()
+        } catch {
+            self.error = describe(error)
+        }
     }
 
     private func sync() {

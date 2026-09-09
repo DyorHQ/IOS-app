@@ -84,6 +84,18 @@ final class SocialSession {
         let updated: SocialProfile = try await client.upsert("profiles", Row(wallet: wallet, handle: clean(handle)?.lowercased(), display_name: clean(displayName), bio: clean(bio)), onConflict: "wallet")
         profile = updated
     }
+
+    /// Uploads a new profile picture (JPEG bytes) to the wallet's own folder in the public `avatars` bucket, then
+    /// records its URL on the profile. A cache-busting query is appended so the new image shows immediately.
+    func uploadAvatar(jpeg: Data) async throws {
+        guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
+        let stamp = Int(Date().timeIntervalSince1970)
+        let url = try await client.uploadPublic(bucket: "avatars", path: "\(wallet)/avatar.jpg", data: jpeg, contentType: "image/jpeg")
+        let cacheBusted = "\(url.absoluteString)?v=\(stamp)"
+        struct Row: Encodable { let wallet: String; let avatar_url: String }
+        let updated: SocialProfile = try await client.upsert("profiles", Row(wallet: wallet, avatar_url: cacheBusted), onConflict: "wallet")
+        profile = updated
+    }
 }
 
 /// A public DyorHQ profile row.

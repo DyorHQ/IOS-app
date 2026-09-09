@@ -15,6 +15,7 @@ struct OnboardingView: View {
                     case .signIn: SignInView(path: $path)
                     case .email: EmailSignInView(path: $path)
                     case .watch: WatchAddressView(path: $path)
+                    case .importWallet: ImportWalletView()
                     }
                 }
         }
@@ -22,7 +23,7 @@ struct OnboardingView: View {
 }
 
 enum OnboardingStep: Hashable {
-    case signIn, email, watch
+    case signIn, email, watch, importWallet
 }
 
 struct WelcomeView: View {
@@ -125,6 +126,12 @@ struct SignInView: View {
                 }
             } footer: {
                 if let error { InlineError(message: error) }
+            }
+
+            Section {
+                MethodButton(title: "Import an Existing Wallet", symbol: "square.and.arrow.down", busy: false) { path.append(.importWallet) }
+            } footer: {
+                Text("Already have a wallet (MetaMask, Rabby, OKX…)? Import it with your recovery phrase or private key. The key stays on this device.")
             }
 
             Section {

@@ -25,7 +25,9 @@ public enum Keccak {
 
     public static func hash256(_ message: Data) -> Data {
         var state = [UInt64](repeating: 0, count: 25)
-        var padded = message
+        // Re-base into a fresh 0-indexed buffer: a `Data` slice (e.g. from `suffix`) keeps its parent's indices,
+        // and the integer subscripting below assumes 0-based, so a slice would be padded and read incorrectly.
+        var padded = Data(message)
         padded.append(0x01)
         while padded.count % rate != 0 { padded.append(0) }
         padded[padded.count - 1] |= 0x80

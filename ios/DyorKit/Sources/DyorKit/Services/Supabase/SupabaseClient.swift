@@ -93,6 +93,31 @@ public actor SupabaseClient {
         _ = try await send(method: "DELETE", path: "rest/v1/\(table)", query: query, body: nil, prefer: "return=minimal", authed: true)
     }
 
+    // MARK: Storage
+
+    /// Uploads bytes to a public Storage bucket (upserting) and returns the public URL. Requires a session; RLS on
+    /// `storage.objects` decides whether the wallet may write to that path. Only the resulting public URL is stored
+    /// in a row — never the bytes.
+    @discardableResult
+    public func uploadPublic(bucket: String, path: String, data: Data, contentType: String) async throws -> URL {
+        guard let token = currentSession?.accessToken else { throw SupabaseError.notSignedIn }
+        var request = URLRequest(url: baseURL.appending(path: "storage/v1/object/\(bucket)/\(path)"))
+        request.httpMethod = "POST"
+        request.httpBody = data
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.setValue("true", forHTTPHeaderField: "x-upsert")
+        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 30
+
+        let (respData, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw SupabaseError.http(http.statusCode, String(data: respData, encoding: .utf8) ?? "")
+        }
+        return baseURL.appending(path: "storage/v1/object/public/\(bucket)/\(path)")
+    }
+
     // MARK: Transport
 
     private func send(method: String, path: String, query: [URLQueryItem], body: Data?, prefer: String?, authed: Bool) async throws -> Data {

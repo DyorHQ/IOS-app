@@ -4,6 +4,12 @@ import SwiftUI
 // The settings screens reached from Profile: wallets, security (passkeys + app lock), notifications, trading
 // defaults, language, and the appearance sheet. Plain grouped lists in DyorHQ's system, each doing one real thing.
 
+/// Perpl web links. New users open a Perpl account on the web app first (the on-chain Exchange needs an account
+/// before it will report positions or accept the authenticated trading enrollment); this carries the DyorHQ referral.
+enum PerplLinks {
+    static let signup = URL(string: "https://app.perpl.xyz/trade?ref=H3ehW3FCqoj")!
+}
+
 /// Manage the signed-in wallet: its address, how it is secured, and the network it is on.
 struct ManageWalletsView: View {
     @Environment(Session.self) private var session
@@ -27,6 +33,14 @@ struct ManageWalletsView: View {
                 Section {
                     Link(destination: Monad.explorerAddress(account.address)) { Label("View on Monadscan", systemImage: "safari") }
                     Button("Copy Address", systemImage: "doc.on.doc") { UIPasteboard.general.string = account.address.checksummed }
+                }
+
+                if account.method == .watchOnly {
+                    Section {
+                        NavigationLink { ImportWalletView() } label: { Label("Import an Existing Wallet", systemImage: "square.and.arrow.down") }
+                    } footer: {
+                        Text("Bring in your own wallet (MetaMask, Rabby, OKX…) with its recovery phrase or private key to trade. The key is stored only on this device.")
+                    }
                 }
             }
             Section("Network") {
@@ -165,6 +179,20 @@ struct PerplTradingView: View {
             }
 
             Section {
+                Link(destination: PerplLinks.signup) {
+                    HStack {
+                        Label("Create a Perpl Account", systemImage: "arrow.up.forward.square")
+                        Spacer()
+                        Image(systemName: "safari").foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("New to Perpl?")
+            } footer: {
+                Text("Open a Perpl account on the web first — your wallet needs one before it can enroll trading or hold a position. Opens app.perpl.xyz; come back and connect here afterwards.")
+            }
+
+            Section {
                 switch trading.status {
                 case .notEnrolled:
                     Button("Connect Perpl Trading") { run { try await enroll() } }
@@ -213,7 +241,7 @@ struct PerplTradingView: View {
     }
 
     private func enroll() async throws {
-        guard let wallet = session.wallet as? PrivyWallet, let address = session.address else { throw SessionError.readOnly }
+        guard let wallet = session.wallet as? DigestSigner, let address = session.address else { throw SessionError.readOnly }
         try await trading.enroll(wallet: wallet, address: address)
     }
 

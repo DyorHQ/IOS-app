@@ -100,15 +100,30 @@ struct ProfileView: View {
         }
     }
 
+    private var avatarURL: URL? {
+        guard let raw = social.profile?.avatar_url, !raw.isEmpty else { return nil }
+        return URL(string: raw)
+    }
+
+    private func initials(_ account: Session.Account) -> String {
+        let source = social.profile?.display_name ?? social.profile?.handle ?? account.label ?? ""
+        let letters = source.split(whereSeparator: { $0 == " " || $0 == "@" }).prefix(2).compactMap { $0.first }
+        return letters.isEmpty ? "" : String(letters).uppercased()
+    }
+
     private func header(_ account: Session.Account) -> some View {
         Section {
             HStack(spacing: 14) {
-                ZStack {
-                    Circle().fill(Color(.tertiarySystemFill)).frame(width: 56, height: 56)
-                    Image(systemName: account.method == .watchOnly ? "eye" : "person.fill").font(.title2).foregroundStyle(.secondary)
+                if account.method == .watchOnly {
+                    ZStack {
+                        Circle().fill(Color(.tertiarySystemFill)).frame(width: 56, height: 56)
+                        Image(systemName: "eye").font(.title2).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Avatar(url: avatarURL, initials: initials(account), size: 56)
                 }
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(account.label ?? account.address.short).font(.title3.weight(.semibold))
+                    Text(social.profile?.display_name ?? account.label ?? account.address.short).font(.title3.weight(.semibold))
                     Text(account.method == .watchOnly ? "Watching this address" : "Signed in with \(account.method.title)")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }

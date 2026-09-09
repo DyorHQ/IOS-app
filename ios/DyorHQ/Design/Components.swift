@@ -39,6 +39,59 @@ struct TokenLogo: View {
     }
 }
 
+/// A circular profile avatar: the uploaded image when there is one, otherwise the wallet's initials on a neutral
+/// fill. Used in the Profile header and the DyorHQ Social screens.
+struct Avatar: View {
+    let url: URL?
+    var initials: String = ""
+    var size: CGFloat = 44
+
+    var body: some View {
+        Group {
+            if let url {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image { image.resizable().scaledToFill() }
+                    else if phase.error != nil { placeholder }
+                    else { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } }
+                }
+            } else {
+                placeholder
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color(.separator).opacity(0.6), lineWidth: 0.5))
+        .accessibilityHidden(true)
+    }
+
+    private var placeholder: some View {
+        ZStack {
+            Color(.tertiarySystemFill)
+            if initials.isEmpty {
+                Image(systemName: "person.fill").font(.system(size: size * 0.46)).foregroundStyle(.secondary)
+            } else {
+                Text(initials).font(.system(size: size * 0.4, weight: .semibold, design: .rounded)).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+extension UIImage {
+    /// Downscales to fit `maxDimension` and returns JPEG bytes — a small, square-ish avatar rather than a
+    /// multi-megabyte camera image.
+    func avatarJPEG(maxDimension: CGFloat = 512, quality: CGFloat = 0.85) -> Data? {
+        let longest = max(size.width, size.height)
+        let scale = longest > maxDimension ? maxDimension / longest : 1
+        let target = CGSize(width: size.width * scale, height: size.height * scale)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let resized = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            draw(in: CGRect(origin: .zero, size: target))
+        }
+        return resized.jpegData(compressionQuality: quality)
+    }
+}
+
 /// Signed percentage in the semantic color, with a text sign so color is never the only cue.
 struct ChangeText: View {
     let value: Double?

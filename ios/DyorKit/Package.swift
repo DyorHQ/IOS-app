@@ -11,9 +11,14 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/attaswift/BigInt.git", "5.7.0"..<"7.0.0"),
+        // ECDSA secp256k1 (libsecp256k1) for importing and signing with a user's own wallet, on-device.
+        .package(url: "https://github.com/21-DOT-DEV/swift-secp256k1", exact: "0.21.1"),
     ],
     targets: [
-        .target(name: "DyorKit", dependencies: [.product(name: "BigInt", package: "BigInt")]),
+        .target(name: "DyorKit", dependencies: [
+            .product(name: "BigInt", package: "BigInt"),
+            .product(name: "P256K", package: "swift-secp256k1"),
+        ]),
         .testTarget(name: "DyorKitTests", dependencies: ["DyorKit"], resources: [.copy("Fixtures")]),
     ]
 )
