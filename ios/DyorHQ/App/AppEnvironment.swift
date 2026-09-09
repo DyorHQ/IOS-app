@@ -16,6 +16,7 @@ final class AppEnvironment {
     let launchpad: LaunchpadService
     let session: Session
     let settings = AppSettings()
+    let perplTrading = PerplTrading()
 
     init(config: AppConfig) {
         self.config = config

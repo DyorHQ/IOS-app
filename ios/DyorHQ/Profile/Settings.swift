@@ -147,6 +147,87 @@ struct TradingPreferencesView: View {
     }
 }
 
+/// Connect to Perpl's authenticated trading API (the route to real TP/SL). One-time enrollment signs a payload
+/// with the wallet; the Ed25519 key lives in the Keychain.
+struct PerplTradingView: View {
+    @Environment(PerplTrading.self) private var trading
+    @Environment(Session.self) private var session
+    @Environment(AppEnvironment.self) private var env
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent("Status") { statusLabel }
+            } footer: {
+                Text("Perpl's trading connection lets you place market, limit, and take-profit / stop-loss orders. Your Ed25519 key is generated on this device and authorized once by your wallet — it never leaves the device.")
+            }
+
+            Section {
+                switch trading.status {
+                case .notEnrolled:
+                    Button("Connect Perpl Trading") { run { try await enroll() } }
+                        .disabled(busy || !session.canSign)
+                case .enrolled:
+                    Button("Reconnect") { run { try await trading.connect() } }.disabled(busy)
+                case .connecting:
+                    HStack { ProgressView().controlSize(.small); Text("Connecting…").foregroundStyle(.secondary) }
+                case .needsForwarding:
+                    Button("Enable One-Click Trading") { run { try await enableForwarding() } }.disabled(busy)
+                case .connected:
+                    Label("Ready to trade", systemImage: "checkmark.seal.fill").foregroundStyle(Color.positive)
+                    Button("Disconnect") { trading.disconnect() }.disabled(busy)
+                case .failed:
+                    Button("Try Again") { run { try await trading.connect() } }.disabled(busy)
+                }
+            } header: {
+                Text("Connection")
+            } footer: {
+                if let error { InlineError(message: error) }
+                else if trading.status == .needsForwarding { Text("One-click trading lets Perpl's keeper forward your signed orders and fire triggers. It is a single on-chain transaction from your wallet.") }
+            }
+
+            if trading.key != nil {
+                Section {
+                    Button("Remove API Key", role: .destructive) { if let address = session.address { trading.forget(address: address) } }.disabled(busy)
+                } footer: {
+                    Text("Deletes the key from this device. You can reconnect any time; revoke it fully in Perpl's web app.")
+                }
+            }
+        }
+        .navigationTitle("Perpl Trading")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { trading.refresh(address: session.address) }
+    }
+
+    @ViewBuilder private var statusLabel: some View {
+        switch trading.status {
+        case .notEnrolled: Text("Not connected").foregroundStyle(.secondary)
+        case .enrolled: Text("Enrolled").foregroundStyle(.secondary)
+        case .connecting: Text("Connecting…").foregroundStyle(.secondary)
+        case .needsForwarding: Text("Enable one-click").foregroundStyle(Color.attention)
+        case .connected: Text("Ready").foregroundStyle(Color.positive)
+        case .failed: Text("Error").foregroundStyle(Color.attention)
+        }
+    }
+
+    private func enroll() async throws {
+        guard let wallet = session.wallet as? PrivyWallet, let address = session.address else { throw SessionError.readOnly }
+        try await trading.enroll(wallet: wallet, address: address)
+    }
+
+    private func enableForwarding() async throws {
+        guard let wallet = session.wallet else { throw SessionError.readOnly }
+        try await trading.enableForwarding(env: env, wallet: wallet)
+    }
+
+    private func run(_ work: @escaping () async throws -> Void) {
+        busy = true; error = nil
+        Task { do { try await work() } catch { self.error = describe(error) }; busy = false }
+    }
+}
+
 struct LanguageView: View {
     var body: some View {
         List {

@@ -40,4 +40,14 @@ struct PrivyWallet: Wallet {
         guard let bytes = Data(hex: signature) else { throw TransactionError.rejected("The wallet returned an unreadable signature.") }
         return bytes
     }
+
+    /// Signs a raw 32-byte hash with the wallet's secp256k1 key and returns a `0x`-hex 65-byte EIP-712 signature
+    /// (v normalised to 27/28). Used to authorize Perpl API-key enrollment over the same EIP-712 digest the
+    /// Ed25519 proof-of-possession covers.
+    func signDigest(_ digest: Data) async throws -> String {
+        let signature = try await provider.request(.secp256k1Sign(hash: digest.hexString))
+        guard var bytes = Data(hex: signature) else { throw TransactionError.rejected("The wallet returned an unreadable signature.") }
+        if bytes.count == 65, bytes[64] < 27 { bytes[64] += 27 }
+        return bytes.hexString
+    }
 }

@@ -10,6 +10,7 @@ struct ProfileView: View {
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
+    @Environment(PerplTrading.self) private var perplTrading
     @State private var showReceive = false
     @State private var showSend = false
     @State private var showAppearance = false
@@ -46,6 +47,13 @@ struct ProfileView: View {
                         }
                     }
                     NavigationLink { TradingPreferencesView() } label: { SettingsRow("Trading Preferences", symbol: "slider.horizontal.3", tint: .accent) }
+                    NavigationLink { PerplTradingView() } label: {
+                        HStack {
+                            SettingsRow("Perpl Trading", symbol: "bolt.horizontal", tint: .accent)
+                            Spacer()
+                            if perplTrading.isReady { Text("Connected").font(.footnote).foregroundStyle(.secondary) }
+                        }
+                    }
                     NavigationLink { LanguageView() } label: {
                         HStack { SettingsRow("Language", symbol: "globe", tint: .accent); Spacer(); Text("English").foregroundStyle(.secondary) }
                     }

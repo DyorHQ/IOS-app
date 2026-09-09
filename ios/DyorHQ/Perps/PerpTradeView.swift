@@ -12,6 +12,7 @@ struct PerpTradeView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
     @Environment(AppSettings.self) private var settings
+    @Environment(PerplTrading.self) private var perplTrading
 
     @State private var feed = PerplFeed()
     @State private var candles: [PerpCandle] = []
@@ -56,8 +57,21 @@ struct PerpTradeView: View {
         }
         .onDisappear { feed.stop(); candleTask?.cancel() }
         .onChange(of: resolution) { _, _ in Task { await loadCandles() } }
-        .sheet(isPresented: $showConfirm) { confirmSheet }
+        .task(id: session.address) { perplTrading.refresh(address: session.address) }
+        .sheet(isPresented: $showConfirm) {
+            if perplTrading.isReady, let accountId = model.account?.accountId {
+                AuthedOrderSheet(market: market, input: ticket.input(market: market), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1)) {
+                    ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""
+                    Task { await model.load(env: env, address: session.address) }
+                }
+            } else {
+                confirmSheet
+            }
+        }
     }
+
+    private var tpValue: Double? { ticket.tpslEnabled ? Double(ticket.takeProfitText) : nil }
+    private var slValue: Double? { ticket.tpslEnabled ? Double(ticket.stopLossText) : nil }
 
     // MARK: Header
 
@@ -201,8 +215,10 @@ struct PerpTradeView: View {
             if ticket.tpslEnabled {
                 fieldRow("Take profit", text: $ticket.takeProfitText, unit: "USD", placeholder: "Optional")
                 fieldRow("Stop loss", text: $ticket.stopLossText, unit: "USD", placeholder: "Optional")
-                Text("Placed as reduce-only trigger orders on Perpl once your position opens.")
-                    .font(.caption2).foregroundStyle(.secondary)
+                Text(perplTrading.isReady
+                     ? "Placed on Perpl as keeper-managed trigger orders linked to this position."
+                     : "Connect Perpl trading in Profile to place take-profit and stop-loss.")
+                    .font(.caption2).foregroundStyle(perplTrading.isReady ? Color.secondary : Color.attention)
             }
 
             DetailRows {
@@ -558,6 +574,86 @@ private struct OrderCard: View {
             Button("Cancel", action: onCancel).buttonStyle(.bordered).controlSize(.small).tint(.negative)
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// Confirms and places an order through the authenticated Perpl trading connection (entry + optional TP/SL).
+struct AuthedOrderSheet: View {
+    let market: PerpMarket
+    let input: OrderInput
+    let takeProfit: Double?
+    let stopLoss: Double?
+    let accountId: Int
+    let sideColor: Color
+    let summaryMargin: Double
+    let onDone: () -> Void
+
+    @Environment(PerplTrading.self) private var perplTrading
+    @Environment(AppEnvironment.self) private var env
+    @Environment(\.dismiss) private var dismiss
+    @State private var phase: Phase = .review
+
+    enum Phase: Equatable { case review, placing, done, failed(String) }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    DetailRow("Market", "\(market.symbol)-PERP")
+                    DetailRow("Side", input.side == .long ? "Long" : "Short", tint: sideColor)
+                    DetailRow("Type", input.kind == .market ? "Market · \(NumberStyle.basisPoints(input.slippageBps)) slippage" : "Limit at \(NumberStyle.number(input.price ?? market.mark))")
+                    DetailRow("Size", "\(NumberStyle.number(input.size)) \(market.symbol)")
+                    DetailRow("Leverage", "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
+                    DetailRow("Margin", summaryMargin.formatted(.currency(code: "USD")))
+                    if let takeProfit { DetailRow("Take profit", NumberStyle.number(takeProfit), tint: .positive) }
+                    if let stopLoss { DetailRow("Stop loss", NumberStyle.number(stopLoss), tint: .negative) }
+                } header: {
+                    Text("Review Order · Perpl")
+                } footer: {
+                    Text("Signed and forwarded by your Perpl API key over the trading connection.")
+                }
+                if case .failed(let message) = phase {
+                    Section { InlineError(message: message) }.listRowBackground(Color.clear)
+                }
+                if phase == .done {
+                    Section { Label("Order sent to Perpl.", systemImage: "checkmark.circle.fill").foregroundStyle(Color.positive) }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Place Order")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(phase == .done ? "Done" : "Cancel") { let done = phase == .done; dismiss(); if done { onDone() } }
+                        .disabled(phase == .placing)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if phase != .done {
+                    PrimaryButton(title: input.side == .long ? "Long \(market.symbol)" : "Short \(market.symbol)", isBusy: phase == .placing) {
+                        Task { await place() }
+                    }
+                    .tint(sideColor)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(.bar)
+                }
+            }
+            .interactiveDismissDisabled(phase == .placing)
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(Color(.systemGroupedBackground))
+        .sensoryFeedback(.success, trigger: phase == .done)
+    }
+
+    private func place() async {
+        phase = .placing
+        do {
+            let ack = try await perplTrading.submit(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env)
+            phase = ack.accepted ? .done : .failed(ack.error ?? "Perpl rejected the order.")
+        } catch {
+            phase = .failed(describe(error))
+        }
     }
 }
 
