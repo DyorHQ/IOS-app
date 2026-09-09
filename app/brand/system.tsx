@@ -32,7 +32,7 @@ export default function BrandSystem() {
         <section id="identity" className="system-intro">
           <h1>DyorHQ design system</h1><p className="system-lead">An editorial identity for a precise trading experience. Shared typography, surfaces, and controls across every screen.</p>
           <div className="logo-specimen"><Wordmark /><p>The RWA HQ for social trading</p></div>
-          <div className="system-note"><p>The wordmark is artwork, not a font setting. Use the supplied file; do not reconstruct it with live text.</p><a href="/brand/dyorhq-serif-v2-transparent.png" download>Download wordmark <Icon name="deposit" /></a></div>
+          <div className="system-note"><p>The wordmark is artwork, not a font setting. Use the supplied file; do not reconstruct it with live text.</p><a href="/brand/dyorhq-wordmark.png" download>Download wordmark <Icon name="deposit" /></a><a href="/brand/dyorhq-identity.png" download>Download identity board <Icon name="deposit" /></a></div>
         </section>
         <section id="palette"><h2>Color has a job.</h2><p className="section-intro">Neutral surfaces carry the interface. Green and red communicate financial direction, never decoration. Switch themes to inspect the same tokens.</p>
           <div className="system-palette">{colors.map(([name, token, role]) => <article key={token}><div className="color-sample" style={{ background: `var(${token})` }} /><h3>{name}</h3><code>{token}</code><p>{role}</p></article>)}</div>

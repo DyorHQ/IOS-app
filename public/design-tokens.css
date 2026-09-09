@@ -19,6 +19,8 @@
   --porcelain:#F7F7F5;--chalk:#FCFCFA;--silver:#E8E8E5;--charcoal:#18191B;--graphite:#242528;
   --ink-fixed:#18191B;--paper-fixed:#F7F7F5;
   --bezel:linear-gradient(145deg,#DCDDE0,#96989D 28%,#505258 72%,#CBCDD1);
+  --device-keys:linear-gradient(#6B7079,#2B2F36,#6B7079);--mask-opaque:#000;
+  --venue-kuru:#1B3A2E;--venue-uniswap:#FF007A;--venue-monday:#2E52F5;--venue-wmon:#7C5CFF;
   color-scheme:light;
   --ground:#E8E8E5;--bg:#F7F7F5;--card:#FCFCFA;--inner:#EFEFED;--inner2:#E0E0DD;--track:#D7D7D3;
   --text:#18191B;--strong:#37383B;--muted:#606165;--faint:#6B6C70;--control-border:#85868B;

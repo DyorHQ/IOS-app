@@ -20,6 +20,8 @@ export const CORE_TOKENS: TokenInfo[] = [
   { address: "0x0c65A0BC65a5D819235B71F554D210D3F80E0852", symbol: "aprMON", name: "aPriori Monad LST", decimals: 18, logo: LOGO("aprMON") },
   { address: "0x1B68626dCa36c7fE922fD2d55E4f631d962dE19c", symbol: "shMON", name: "ShMonad", decimals: 18, logo: LOGO("shMON", "png") },
   { address: "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a", symbol: "AUSD", name: "AUSD", decimals: 6, logo: LOGO("AUSD") },
+  // aBIL — Anchored tokenized SPDR 1-3M T-Bill (aStock). Transferable ERC-20 in Monday's spot AMM; the RWA-flavored launchpad pair, no partner key.
+  { address: "0x4fc5b9f8933597d3ecf84d0611687e1dc8dd576f", symbol: "aBIL", name: "SPDR 1-3M T-Bill aStock", decimals: 18, logo: "" },
   { address: "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34", symbol: "USDe", name: "USDe", decimals: 18, logo: LOGO("USDe") },
   { address: "0x111111d2bf19e43C34263401e0CAd979eD1cdb61", symbol: "USD1", name: "World Liberty Financial USD", decimals: 6, logo: LOGO("USD1") },
   { address: "0xacA92E438df0B2401fF60dA7E4337B687a2435DA", symbol: "mUSD", name: "MetaMask USD", decimals: 6, logo: LOGO("mUSD") },

@@ -1,5 +1,12 @@
 # vinext-starter
 
+## DyorHQ branding
+
+The only current branding is the editorial identity selected on 2026-09-09.
+Start with [the brand guide](public/brand/dyorhq-brand-guide.md) and
+[asset inventory](public/brand/README.md). Use those assets for all new work;
+older logos in git history or cached build output are superseded.
+
 A clean full-stack starter running on
 [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
 Drizzle support.

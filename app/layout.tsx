@@ -7,7 +7,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: "DyorHQ | The RWA HQ for social trading",
     description,
-    icons: { icon: "/brand/dyorhq-mark.png", shortcut: "/brand/dyorhq-mark.png" },
+    icons: { icon: "/brand/dyorhq-monogram.png", shortcut: "/brand/dyorhq-monogram.png" },
     metadataBase: new URL(origin),
     openGraph: { title: "DyorHQ", description },
     twitter: { card: "summary", title: "DyorHQ", description },

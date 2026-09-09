@@ -3,6 +3,12 @@
 Context for continuing this work in a new Claude Code session (e.g. a different Claude
 profile or machine). Read this first.
 
+## Branding source of truth
+Use only the editorial identity selected on 2026-09-09. Read `public/brand/dyorhq-brand-guide.md`
+and `public/brand/dyorhq-design-system.md`. The approved board is `public/brand/dyorhq-identity.png`;
+runtime assets are `dyorhq-wordmark.png` and `dyorhq-monogram.png` in the same folder.
+Earlier logos and directions are removed. Do not recover them from git history, build output or old prompts.
+
 ## What this repo is
 **DyorHQ** — "The RWA HQ for social trading": a self-custodial mobile app on Monad for launching stock-backed memecoins, copying on-chain traders, and trading perps and swaps. Four pillars: a
 **Launchpad** (launch a memecoin paired with a tokenized RWA stock), **Copy Trading**,
@@ -11,31 +17,28 @@ Tailwind 4, built/deployed with **vinext** on Cloudflare (Wrangler). A separate 
 React Native** app lives in `mainstreet-app/` as its own git repo (not tracked here).
 
 ## What was built
-- **The design system** lives in `public/preview.html` (standalone prototype, published as the
-  Claude Artifact for review) and in the React web app under `app/`: `app/page.tsx` (shell:
+- **The design system** lives at `/brand`, with guidelines in `public/brand/` and tokens in
+  `public/design-tokens.css`. The React web app under `app/` includes `app/page.tsx` (shell:
   device frame, floating glass top bar and tab bar, side menu, order review sheet, toast),
   `app/ui/screens.tsx` (Home, Markets, Launchpad, Swap, Portfolio), `app/perps-screen.tsx`,
   `app/preview-controls.tsx` (studio + preferences store), `app/ui/{data,icons,charts,components,liquid-glass}`,
-  and `app/globals.css` (generated from the preview's stylesheet with fonts switched to `next/font` variables).
+  and `app/globals.css`. Fonts are bundled locally in `public/fonts`.
 - Light and dark themes on the DyorHQ palette, liquid-glass navigation (SVG displacement in
   Chromium, frosted blur elsewhere), SVG candlestick/area/sparkline charts, an order book, a
-  review sheet, and the studio (theme, accent, typeface, corners, text size, glass strength, motion).
+  review sheet, and the studio (theme, text size, glass strength, motion).
 
 ## How to view the preview
-- Open `public/preview.html` directly in a browser, **or**
-- Run the dev server and browse to `/preview.html`:
+- Run the dev server and browse to `/` for the app or `/brand` for the design system:
   ```
   npm install && npm run dev
   ```
-- It was also published as a Claude **Artifact**. ⚠️ That link is tied to the claude.ai
-  account it was published from — on a different profile it won't appear in your gallery.
-  To get a fresh shareable link on the new profile, ask Claude to **publish
-  `public/preview.html` as an artifact**; the file is self-contained and re-publishes as-is.
+- `public/preview.html` redirects to the app. Older external artifacts are not the current branding reference.
 
 ## Design system
-DyorHQ palette (see `public/brand/dyorhq-brand-guide.md`): Signal `#B9F26B` accent (user-swappable in
-the studio), Ink `#0C100D` / Graphite `#1B211D` for dark, Paper `#F2F5EE` for light, Positive `#27DB91`,
-Negative `#FF507A`. Geist + Geist Mono. Liquid-glass navigation layer, borderless cards, light and dark themes.
+DyorHQ uses Ink `#18191B`, Paper `#F7F7F5`, Surface `#FCFCFA`, and Muted `#606165`.
+Bodoni Moda is editorial, Manrope is interface text, and IBM Plex Mono is financial data.
+`public/design-tokens.css` defines implementation tokens; `/brand` is the live reference.
+Primary actions invert text and canvas. Theme, readability, glass and motion preferences remain supported.
 
 ## Launchpad backend (Monad mainnet + Uniswap v4) — built, NOT deployed
 - `contracts/` is a Foundry project (solc 0.8.26, via-IR) with the Pons-style launchpad re-implemented for

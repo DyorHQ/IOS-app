@@ -6,7 +6,7 @@ The RWA HQ for social trading
 
 DyorHQ combines an editorial wordmark with a precise, restrained trading interface. The serif logo is the identifying element. Prices, forms, and navigation remain functional rather than decorative.
 
-This system follows the user's Dior-inspired wordmark direction. Taste Skill's redesign, palette, typography, shape, and state checks inform the work. Its marketing-only patterns are not applied to dense trading views or wallet workflows. Design variance: 3 for product views, 5 for the reference page. Motion intensity: 3. Visual density: 6 for product views, 4 for the reference page.
+The sole approved identity is the editorial wordmark and interlocking D/Q monogram selected on 2026-09-09. The visual reference is `dyorhq-identity.png`. Older logos, prompts and palette directions are superseded and must not be restored from git history or build output.
 
 ## Sources of truth
 
@@ -20,9 +20,9 @@ Do not declare new brand colors or font stacks in feature stylesheets. Extend th
 
 ## Identity
 
-Use `dyorhq-serif-v2-transparent.png`. The asset contains the approved direction's wordmark and tagline; the shared component frames the wordmark without redrawing its letters. Black on light, near-white on dark. Do not recolor individual letters, distort proportions, add a glow, or use the retired chartreuse symbol.
+Use `dyorhq-wordmark.png` for the wordmark and `dyorhq-monogram.png` for the D/Q app icon. Both derive from the approved board. The shared component displays the wordmark without redrawing its letters. Black on light, near-white on dark. Do not recolor individual letters, distort proportions or add a glow. iOS mirrors these assets in its asset catalog; the wordmark uses template rendering for theme adaptation.
 
-Keep at least one lowercase letter-height of surrounding clear space. Use the wordmark at 104px wide or above in the interface. The tagline is separate live Manrope text, at least 12px, and omitted where space is insufficient. Do not reduce the complete lockup to favicon size. A dedicated small-size identity and outlined vector master are future production assets; the supplied logo remains a raster concept.
+Keep at least one lowercase letter-height of surrounding clear space. Use the wordmark at 104px wide or above in the interface. The tagline is separate live Manrope text, at least 12px, and omitted where space is insufficient. Use the D/Q monogram at favicon size. An outlined vector master and optical small-size refinement remain future production assets; the supplied assets are raster artwork. The board's sample watchlist values are illustrative, not live data; its typography specimens are visual approximations. Use the bundled font files and exact CSS tokens for implementation.
 
 ## Typography
 

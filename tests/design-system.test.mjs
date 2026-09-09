@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import test from 'node:test';
 
 const css = readFileSync('public/design-tokens.css', 'utf8');
-const blocks = [...css.matchAll(/(?:^|\n)(?::root|\s*:root:not\([^\n]+?)?[^{}]*\{([^{}]*)\}/g)];
 const parse = text => Object.fromEntries([...text.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
 const light = parse(css.slice(css.indexOf(':root{'), css.indexOf('@media')));
 const dark = { ...light, ...parse(css.slice(css.lastIndexOf(':root[data-theme="dark"]'))) };
@@ -33,10 +32,15 @@ test('active typography cannot switch back to retired fonts or colors', () => {
   assert.match(readFileSync('app/globals.css','utf8'),/public\/design-tokens\.css/);
 });
 test('component and brand styles do not define new hex colors', () => {
-  for(const file of ['app/globals.css','app/brand/brand.css','app/launchpad/launchpad.css']) assert.doesNotMatch(readFileSync(file,'utf8'),/#[0-9a-f]{3,8}\b/i,file);
+  for(const file of ['app/globals.css','app/brand/brand.css','app/launchpad/launchpad.css']) assert.deepEqual(readFileSync(file,'utf8').match(/#[0-9a-f]{3,8}\b/gi) ?? [], [], file);
 });
 test('design-system downloads and current logo are available', () => {
   assert.ok(readFileSync('public/brand/dyorhq-design-system.md').length>1000);
-  assert.ok(readFileSync('public/brand/dyorhq-serif-v2-transparent.png').length>1000);
+  assert.ok(readFileSync('public/brand/dyorhq-wordmark.png').length>1000);
+  assert.ok(readFileSync('public/brand/dyorhq-monogram.png').length>1000);
+  assert.ok(readFileSync('public/brand/dyorhq-identity.png').length>1000);
+  for (const file of ['dyorhq-serif-v2-transparent.png', 'dyorhq-serif-v2-preview.png', 'dyorhq-serif-v2-prompt.txt', 'dyorhq-mark.png', 'dyorhq-mark-small.png']) {
+    assert.equal(existsSync(`public/brand/${file}`), false, `Superseded branding: ${file}`);
+  }
   assert.doesNotMatch(readFileSync('app/brand/system.tsx','utf8'),/[—–]/);
 });
