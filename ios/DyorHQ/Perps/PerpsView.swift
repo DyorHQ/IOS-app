@@ -137,8 +137,9 @@ struct PerpsView: View {
             ForEach(model.markets) { market in
                 NavigationLink(value: market.id) {
                     HStack(spacing: 12) {
+                        TokenLogo(symbol: market.asset, url: nil, size: 34)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(market.symbol).font(.headline)
+                            Text(market.asset).font(.headline)
                             Text(market.name).font(.footnote).foregroundStyle(.secondary)
                         }
                         Spacer()

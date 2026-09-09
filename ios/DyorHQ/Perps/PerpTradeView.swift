@@ -3,6 +3,14 @@ import Charts
 import DyorKit
 import SwiftUI
 
+extension PerpMarket {
+    /// The bare asset symbol for display and logo lookup — e.g. "SOL" from a contract symbol like "SOL_v2".
+    var asset: String {
+        let letters = String(symbol.prefix { $0.isLetter })
+        return letters.isEmpty ? symbol : letters.uppercased()
+    }
+}
+
 /// The pro perpetuals screen: a live Perpl candlestick chart, the live order book and trade tape from Perpl's
 /// market-data feed, and an order ticket that switches green/red with the side. Positions, orders and the account
 /// come from the Exchange contract. Everything here — symbols, prices, chart, book — is Perpl's own data.
@@ -47,13 +55,18 @@ struct PerpTradeView: View {
             .padding(.vertical, 10)
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle("\(market.symbol)-PERP")
+        .navigationTitle("\(market.asset)-PERP")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             ticket.leverage = min(settings.defaultLeverage, maxLeverage)
             ticket.slippageBps = settings.slippageBps
             feed.focus(market)
             await loadCandles()
+            // Keep the chart live: re-fetch the window every 15s without flashing the spinner.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                await loadCandles(showSpinner: false)
+            }
         }
         .onDisappear { feed.stop(); candleTask?.cancel() }
         .onChange(of: resolution) { _, _ in Task { await loadCandles() } }
@@ -78,9 +91,9 @@ struct PerpTradeView: View {
     private var header: some View {
         VStack(spacing: 10) {
             HStack(alignment: .center, spacing: 10) {
-                TokenLogo(symbol: market.symbol, url: nil, size: 34)
+                TokenLogo(symbol: market.asset, url: nil, size: 34)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("\(market.symbol)-PERP").font(.headline)
+                    Text("\(market.asset)-PERP").font(.headline)
                     Text(market.name).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -136,10 +149,10 @@ struct PerpTradeView: View {
                     timeframePicker
                 }
             case .book:
-                OrderBookPanel(book: feed.book, priceDecimals: market.priceDecimals, sizeDecimals: market.lotDecimals, symbol: market.symbol)
+                OrderBookPanel(book: feed.book, priceDecimals: market.priceDecimals, sizeDecimals: market.lotDecimals, symbol: market.asset)
                     .frame(minHeight: 300)
             case .trades:
-                TradesTape(trades: feed.trades, symbol: market.symbol)
+                TradesTape(trades: feed.trades, symbol: market.asset)
                     .frame(minHeight: 300)
             }
         }
@@ -197,7 +210,7 @@ struct PerpTradeView: View {
             if ticket.kind == .limit {
                 fieldRow("Limit price", text: $ticket.priceText, unit: "USD", placeholder: NumberStyle.number(mark))
             }
-            fieldRow("Amount", text: $ticket.sizeText, unit: market.symbol, placeholder: NumberStyle.number(minSize))
+            fieldRow("Amount", text: $ticket.sizeText, unit: market.asset, placeholder: NumberStyle.number(minSize))
 
             // Percent presets of available margin.
             HStack(spacing: 8) {
@@ -233,7 +246,7 @@ struct PerpTradeView: View {
             }
 
             PrimaryButton(
-                title: ticket.side == .long ? "Long \(market.symbol)" : "Short \(market.symbol)",
+                title: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)",
                 isDisabled: ticket.problem(market: market, account: model.account, available: availableMargin) != nil || !session.canSign
             ) { showConfirm = true }
                 .tint(sideColor)
@@ -302,11 +315,11 @@ struct PerpTradeView: View {
     // MARK: Confirmation sheets
 
     private var confirmSheet: some View {
-        ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.symbol)" : "Short \(market.symbol)", build: { env.perpl.orderPlan(ticket.input(market: market)) }, onDone: { ticket.sizeText = ""; Task { await model.load(env: env, address: session.address) } }) {
-            DetailRow("Market", "\(market.symbol)-PERP")
+        ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { env.perpl.orderPlan(ticket.input(market: market)) }, onDone: { ticket.sizeText = ""; Task { await model.load(env: env, address: session.address) } }) {
+            DetailRow("Market", "\(market.asset)-PERP")
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
             DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(ticket.priceText)")
-            DetailRow("Size", "\(ticket.sizeText) \(market.symbol)")
+            DetailRow("Size", "\(ticket.sizeText) \(market.asset)")
             DetailRow("Leverage", "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
             DetailRow("Margin", (notional / max(ticket.leverage, 1)).formatted(.currency(code: "USD")))
             if ticket.tpslEnabled, !ticket.takeProfitText.isEmpty { DetailRow("Take profit", ticket.takeProfitText) }
@@ -357,11 +370,12 @@ struct PerpTradeView: View {
         ticket.sizeText = stepped > 0 ? NumberStyle.number(stepped, maximumFractionDigits: market.lotDecimals) : ""
     }
 
-    private func loadCandles() async {
-        loadingCandles = true
+    private func loadCandles(showSpinner: Bool = true) async {
+        if showSpinner { loadingCandles = true }
         let to = Date()
         let from = to.addingTimeInterval(-Double(resolution) * 150)
-        candles = (try? await env.perpl.candles(marketId: market.id, resolution: resolution, from: from, to: to, priceDecimals: market.priceDecimals)) ?? []
+        let fetched = (try? await env.perpl.candles(marketId: market.id, resolution: resolution, from: from, to: to, priceDecimals: market.priceDecimals)) ?? []
+        if !fetched.isEmpty { candles = fetched }
         loadingCandles = false
     }
 }
@@ -371,6 +385,7 @@ struct PerpTradeView: View {
 struct CandleChart: View {
     let candles: [PerpCandle]
     let isLoading: Bool
+    @State private var selected: PerpCandle?
 
     private var domain: ClosedRange<Double> {
         let lows = candles.map(\.low), highs = candles.map(\.high)
@@ -383,22 +398,45 @@ struct CandleChart: View {
         if candles.count >= 2 {
             GeometryReader { geo in
                 let width = max(1.5, min(9, geo.size.width * 0.6 / Double(candles.count)))
-                Chart(candles) { candle in
-                    let up = candle.close >= candle.open
-                    RuleMark(x: .value("Time", candle.time), yStart: .value("Low", candle.low), yEnd: .value("High", candle.high))
-                        .lineStyle(StrokeStyle(lineWidth: 1))
+                Chart {
+                    ForEach(candles) { candle in
+                        let up = candle.close >= candle.open
+                        RuleMark(x: .value("Time", candle.time), yStart: .value("Low", candle.low), yEnd: .value("High", candle.high))
+                            .lineStyle(StrokeStyle(lineWidth: 1))
+                            .foregroundStyle(up ? Color.positive : Color.negative)
+                        RectangleMark(
+                            x: .value("Time", candle.time),
+                            yStart: .value("Open", min(candle.open, candle.close)),
+                            yEnd: .value("Close", max(candle.open, candle.close) + domainEpsilon),
+                            width: .fixed(width)
+                        )
                         .foregroundStyle(up ? Color.positive : Color.negative)
-                    RectangleMark(
-                        x: .value("Time", candle.time),
-                        yStart: .value("Open", min(candle.open, candle.close)),
-                        yEnd: .value("Close", max(candle.open, candle.close) + domainEpsilon),
-                        width: .fixed(width)
-                    )
-                    .foregroundStyle(up ? Color.positive : Color.negative)
+                    }
+                    if let selected {
+                        RuleMark(x: .value("Time", selected.time))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                            .foregroundStyle(Color.secondary)
+                    }
                 }
                 .chartYScale(domain: domain)
                 .chartYAxis { AxisMarks(position: .trailing) { _ in AxisGridLine(); AxisValueLabel() } }
                 .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisGridLine(); AxisValueLabel() } }
+                .chartOverlay { proxy in
+                    GeometryReader { inner in
+                        Rectangle().fill(Color.clear).contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { value in
+                                        guard let frame = proxy.plotFrame else { return }
+                                        let x = value.location.x - inner[frame].origin.x
+                                        guard let date: Date = proxy.value(atX: x) else { return }
+                                        selected = candles.min { abs($0.time.timeIntervalSince(date)) < abs($1.time.timeIntervalSince(date)) }
+                                    }
+                                    .onEnded { _ in selected = nil }
+                            )
+                    }
+                }
+                .overlay(alignment: .topLeading) { if let selected { readout(selected) } }
             }
             .accessibilityLabel("Candlestick chart")
         } else if isLoading {
@@ -406,6 +444,22 @@ struct CandleChart: View {
         } else {
             ContentUnavailableView("No Candles", systemImage: "chart.bar.xaxis", description: Text("Perpl has no candle history for this market yet."))
         }
+    }
+
+    /// The OHLC read-out shown while scrubbing.
+    private func readout(_ candle: PerpCandle) -> some View {
+        HStack(spacing: 8) {
+            Text(candle.time, format: .dateTime.month().day().hour().minute()).foregroundStyle(.secondary)
+            ohlc("O", candle.open); ohlc("H", candle.high); ohlc("L", candle.low); ohlc("C", candle.close)
+        }
+        .font(.caption2.monospacedDigit())
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(.regularMaterial, in: Capsule())
+        .padding(4)
+    }
+
+    private func ohlc(_ key: String, _ value: Double) -> some View {
+        HStack(spacing: 2) { Text(key).foregroundStyle(.secondary); Text(NumberStyle.number(value)) }
     }
 
     /// Keeps a doji (open == close) from collapsing to an invisible zero-height bar.
@@ -599,10 +653,10 @@ struct AuthedOrderSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Market", "\(market.symbol)-PERP")
+                    DetailRow("Market", "\(market.asset)-PERP")
                     DetailRow("Side", input.side == .long ? "Long" : "Short", tint: sideColor)
                     DetailRow("Type", input.kind == .market ? "Market · \(NumberStyle.basisPoints(input.slippageBps)) slippage" : "Limit at \(NumberStyle.number(input.price ?? market.mark))")
-                    DetailRow("Size", "\(NumberStyle.number(input.size)) \(market.symbol)")
+                    DetailRow("Size", "\(NumberStyle.number(input.size)) \(market.asset)")
                     DetailRow("Leverage", "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
                     DetailRow("Margin", summaryMargin.formatted(.currency(code: "USD")))
                     if let takeProfit { DetailRow("Take profit", NumberStyle.number(takeProfit), tint: .positive) }
@@ -630,7 +684,7 @@ struct AuthedOrderSheet: View {
             }
             .safeAreaInset(edge: .bottom) {
                 if phase != .done {
-                    PrimaryButton(title: input.side == .long ? "Long \(market.symbol)" : "Short \(market.symbol)", isBusy: phase == .placing) {
+                    PrimaryButton(title: input.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", isBusy: phase == .placing) {
                         Task { await place() }
                     }
                     .tint(sideColor)
@@ -672,7 +726,7 @@ struct OrderTicket {
     var stopLossText = ""
 
     func problem(market: PerpMarket, account: PerpAccount?, available: Double) -> String? {
-        guard let size = Double(sizeText), size > 0 else { return "Enter a size in \(market.symbol)." }
+        guard let size = Double(sizeText), size > 0 else { return "Enter a size in \(market.asset)." }
         if kind == .limit, (Double(priceText) ?? 0) <= 0 { return "Enter a limit price." }
         if account == nil, !reduceOnly { return "Deposit AUSD to open a trading account first." }
         if account != nil, !reduceOnly {
