@@ -5,3 +5,6 @@ DerivedData/
 .build-launchtests/
 .build*/
 DerivedData*/
+# Per-user Xcode state written into the package when it is opened in Xcode.
+xcuserdata/
+.swiftpm/

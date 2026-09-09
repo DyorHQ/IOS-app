@@ -30,7 +30,8 @@ Copy `Secrets.example.xcconfig` to `Secrets.xcconfig` and fill in:
 | `MONAD_RPC_URL` | Optional | A dedicated Monad mainnet RPC (Alchemy, QuickNode, …). Defaults to `https://rpc.monad.xyz`. |
 | `PERPL_BUILDER_ID` | Optional | Same as above |
 | `LAUNCHPAD_FACTORY`, `LAUNCH_ROUTER`, `FEE_ESCROW`, `HOLDER_FEE_SHARING`, `MEME_HOOK` | After you deploy | `contracts/deployments/143.json` |
-| `PASSKEY_RP_ID` | For passkey wallets | Same domain as `MERA_RP_ID`; add `webcredentials:<domain>` to the app's Associated Domains |
+| `DEVELOPMENT_TEAM` | For device builds | Xcode → Settings → Accounts → your team's **Team ID** (Personal Team while the paid enrollment is pending). Read at build time, survives `xcodegen generate`. |
+| `PASSKEY_RP_ID` | Paid team only | `accounts.dyorhq.fun`, once the AASA is hosted at `https://accounts.dyorhq.fun/.well-known/apple-app-site-association`. Leave empty on a Personal Team (Associated Domains can't be signed) and keep the entitlement block in `ios/project.yml` commented out. |
 
 ## 3. Web app — `.env.local`
 

@@ -75,9 +75,14 @@ targets:
         MemeHook: "$(MEME_HOOK)"
     entitlements:
       path: DyorHQ/DyorHQ.entitlements
-      properties:
-        com.apple.developer.applesignin: [Default]
-        com.apple.developer.associated-domains: ["webcredentials:$(PASSKEY_RP_ID)"]
+      # Sign in with Apple + Associated Domains (passkeys) need a paid Apple Developer team; a Personal team
+      # cannot sign them, so they are disabled until enrollment completes. To restore, uncomment `properties`
+      # below, set PASSKEY_RP_ID = accounts.dyorhq.fun in Secrets.xcconfig, host the AASA at
+      # https://accounts.dyorhq.fun/.well-known/apple-app-site-association, then `xcodegen generate`.
+      # properties:
+      #   com.apple.developer.applesignin: [Default]
+      #   com.apple.developer.associated-domains: ["webcredentials:$(PASSKEY_RP_ID)"]
+      properties: {}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: xyz.dyorhq.app
