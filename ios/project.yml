@@ -1,7 +1,7 @@
 # XcodeGen spec for the native DyorHQ app. Regenerate the project with `xcodegen generate` from this folder.
 name: DyorHQ
 options:
-  bundleIdPrefix: xyz.dyorhq
+  bundleIdPrefix: fun.dyorhq
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "26.0"
@@ -59,7 +59,7 @@ targets:
         NSCameraUsageDescription: DyorHQ uses the camera to scan wallet addresses and QR codes.
         NSPhotoLibraryUsageDescription: DyorHQ uses your photos to add a token image when you launch a coin.
         CFBundleURLTypes:
-          - CFBundleURLName: xyz.dyorhq.app
+          - CFBundleURLName: fun.dyorhq.app
             CFBundleURLSchemes: [dyorhq]
         LSApplicationQueriesSchemes: [https]
         # Values below are filled from Secrets.xcconfig at build time and read by Config.swift.
@@ -85,7 +85,7 @@ targets:
       properties: {}
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: xyz.dyorhq.app
+        PRODUCT_BUNDLE_IDENTIFIER: fun.dyorhq.app
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES

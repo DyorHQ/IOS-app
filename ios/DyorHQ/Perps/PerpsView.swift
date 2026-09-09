@@ -278,7 +278,7 @@ struct CollateralSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    AmountField(title: "0", text: $amountText, token: .ausd) { amountText = Amount.exact(limit, decimals: 6) }
+                    AmountField(title: "0", text: $amountText, token: .ausd) { Haptics.selection(); amountText = Amount.exact(limit, decimals: 6) }
                 } header: {
                     Text(kind == .deposit ? "Deposit AUSD" : "Withdraw AUSD")
                 } footer: {
@@ -287,6 +287,7 @@ struct CollateralSheet: View {
             }
             .navigationTitle(kind == .deposit ? "Deposit" : "Withdraw")
             .navigationBarTitleDisplayMode(.inline)
+            .keyboardDoneButton()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("Review") { showConfirm = true }.disabled(raw == 0 || problem != nil) }

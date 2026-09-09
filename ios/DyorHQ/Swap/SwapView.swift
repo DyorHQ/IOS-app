@@ -10,6 +10,7 @@ struct SwapView: View {
     @State private var model = SwapModel()
     @State private var picking: SwapModel.Side?
     @State private var showConfirm = false
+    @State private var showSlippage = false
 
     var body: some View {
         NavigationStack {
@@ -17,13 +18,21 @@ struct SwapView: View {
                 paySection
                 flipRow
                 receiveSection
+                chartSection
                 quotesSection
             }
             .listStyle(.insetGrouped)
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Swap")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { slippageMenu }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { Haptics.selection(); showSlippage = true } label: {
+                        Label("Slippage \(NumberStyle.basisPoints(model.slippageBps))", systemImage: "slider.horizontal.3")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
             }
+            .keyboardDoneButton()
             .safeAreaInset(edge: .bottom) {
                 PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil) { showConfirm = true }
                     .padding()
@@ -35,6 +44,7 @@ struct SwapView: View {
                 }
             }
             .sheet(isPresented: $showConfirm) { confirmation }
+            .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
             .task(id: session.address) { await model.refreshBalances(env: env, address: session.address) }
             .task(id: model.quoteKey) { await model.quote(env: env, account: session.address) }
             .onChange(of: router.pendingSwap?.tokenOut) { _, _ in applyPending() }
@@ -42,12 +52,26 @@ struct SwapView: View {
         }
     }
 
+    /// A live, Perpl-sourced chart for the asset being traded, shown whenever the pair maps to a Perpl market.
+    @ViewBuilder private var chartSection: some View {
+        if let id = PerpMarketRef.marketId(pay: model.tokenIn, receive: model.tokenOut) {
+            Section {
+                AssetChartCard(marketId: id, symbol: PerpMarketRef.symbol(for: id))
+                    .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
+                    .id(id)
+            } header: {
+                Text("Chart")
+            }
+        }
+    }
+
     private var paySection: some View {
         Section {
             tokenRow(side: .pay, token: model.tokenIn)
             AmountField(title: "0", text: $model.amountText, token: nil) {
-                if let balance = model.balances[model.tokenIn.address] { model.amountText = Amount.exact(balance, decimals: model.tokenIn.decimals) }
+                Haptics.selection(); model.applyPercent(100)
             }
+            percentRow
         } header: {
             Text("You Pay")
         } footer: {
@@ -61,11 +85,29 @@ struct SwapView: View {
         }
     }
 
+    /// Quick-size the pay amount to a share of the wallet balance — 25 / 50 / 75 / 100%. On a full send of native
+    /// MON a little is kept back for gas.
+    private var percentRow: some View {
+        HStack(spacing: 8) {
+            ForEach([25, 50, 75, 100], id: \.self) { pct in
+                Button("\(pct)%") { Haptics.selection(); model.applyPercent(Double(pct)) }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled((model.balances[model.tokenIn.address] ?? 0) == 0)
+        .listRowSeparator(.hidden)
+    }
+
     private var flipRow: some View {
         Section {
             HStack {
                 Spacer()
-                Button { model.flip() } label: {
+                Button { Haptics.selection(); model.flip() } label: {
                     Image(systemName: "arrow.up.arrow.down")
                         .font(.body.weight(.semibold))
                         .padding(10)
@@ -110,7 +152,7 @@ struct SwapView: View {
         if let result = model.result, model.amountIn > 0 {
             Section {
                 ForEach(result.quotes) { quote in
-                    Button { model.selectedVenue = quote.venue; model.userPickedVenue = true } label: {
+                    Button { Haptics.selection(); model.selectedVenue = quote.venue; model.userPickedVenue = true } label: {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 6) {
@@ -158,7 +200,7 @@ struct SwapView: View {
     }
 
     private func tokenRow(side: SwapModel.Side, token: Token) -> some View {
-        Button { picking = side } label: {
+        Button { Haptics.selection(); picking = side } label: {
             HStack(spacing: 12) {
                 TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
                 VStack(alignment: .leading, spacing: 1) {
@@ -172,19 +214,6 @@ struct SwapView: View {
         .foregroundStyle(.primary)
         .accessibilityLabel("\(side == .pay ? "Pay with" : "Receive") \(token.symbol)")
         .accessibilityHint("Choose a different token")
-    }
-
-    private var slippageMenu: some View {
-        Menu {
-            Picker("Slippage", selection: $model.slippageBps) {
-                Text("0.1%").tag(10)
-                Text("0.5%").tag(50)
-                Text("1%").tag(100)
-                Text("3%").tag(300)
-            }
-        } label: {
-            Label("Slippage \(NumberStyle.basisPoints(model.slippageBps))", systemImage: "slider.horizontal.3")
-        }
     }
 
     @ViewBuilder private var confirmation: some View {
@@ -282,6 +311,19 @@ final class SwapModel {
         userPickedVenue = false
     }
 
+    /// Set the pay amount to `pct`% of the wallet balance. A full send of native MON keeps ~0.02 MON back for gas.
+    func applyPercent(_ pct: Double) {
+        guard let balance = balances[tokenIn.address], balance > 0 else { return }
+        var amount = balance
+        if pct < 100 {
+            amount = balance * BigUInt(UInt(pct)) / 100
+        } else if tokenIn.isNative {
+            let gasBuffer = BigUInt(2) * BigUInt(10).power(16) // ~0.02 MON
+            amount = balance > gasBuffer ? balance - gasBuffer : balance
+        }
+        amountText = Amount.exact(amount, decimals: tokenIn.decimals)
+    }
+
     func refreshBalances(env: AppEnvironment, address: Address?) async {
         async let priceTask = env.prices.prices(for: Token.core)
         if let address { balances = (try? await ERC20.balances(of: Token.core, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:] }
@@ -306,6 +348,80 @@ final class SwapModel {
             if !userPickedVenue || selectedVenue == nil || !outcome.quotes.contains(where: { $0.venue == selectedVenue }) { selectedVenue = outcome.quotes.first?.venue }
             quoting = false
             try? await Task.sleep(for: .seconds(15))
+        }
+    }
+}
+
+/// Explains slippage in plain language, then lets the person pick a tolerance — presets with a one-line hint each,
+/// or a custom percentage. The old control was a bare menu of numbers with no explanation.
+struct SlippageSheet: View {
+    @Binding var slippageBps: Int
+    @Environment(\.dismiss) private var dismiss
+    @State private var customText = ""
+    private let presets = [10, 50, 100, 300]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Slippage is how far the price may move between the moment you tap Swap and the moment it settles on-chain. If the market moves against you by more than this, the swap is cancelled instead of filling at a worse price.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Section("Tolerance") {
+                    ForEach(presets, id: \.self) { bps in
+                        Button {
+                            Haptics.selection(); slippageBps = bps; customText = ""
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(NumberStyle.basisPoints(bps)).foregroundStyle(.primary)
+                                    Text(hint(bps)).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if slippageBps == bps { Image(systemName: "checkmark").foregroundStyle(Color.brand).fontWeight(.semibold) }
+                            }
+                        }
+                    }
+                }
+                Section {
+                    HStack {
+                        Text("Custom")
+                        Spacer()
+                        TextField("0.5", text: $customText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .monospacedDigit()
+                            .frame(maxWidth: 80)
+                            .onChange(of: customText) { _, value in
+                                if let pct = Double(value), pct > 0, pct <= 50 { slippageBps = Int((pct * 100).rounded()) }
+                            }
+                        Text("%").foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    if slippageBps >= 500 {
+                        Label("A high tolerance can fill at a much worse price. Use it only for volatile or thin pairs.", systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(Color.attention)
+                    } else if slippageBps <= 10 {
+                        Text("A tight tolerance protects your price, but a swap can fail in a fast-moving market.").font(.caption)
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Slippage")
+            .navigationBarTitleDisplayMode(.inline)
+            .keyboardDoneButton()
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func hint(_ bps: Int) -> String {
+        switch bps {
+        case ...10: "Tightest price. Best for stable pairs."
+        case 11...50: "Balanced — recommended for most swaps."
+        case 51...100: "More forgiving when the market is moving."
+        default: "For volatile or low-liquidity pairs."
         }
     }
 }
@@ -358,6 +474,7 @@ struct TokenPickerSheet: View {
 
     private func row(_ token: Token) -> some View {
         Button {
+            Haptics.selection()
             onPick(token)
             dismiss()
         } label: {

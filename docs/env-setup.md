@@ -26,7 +26,7 @@ Copy `Secrets.example.xcconfig` to `Secrets.xcconfig` and fill in:
 | Variable | Required | Where it comes from |
 | --- | --- | --- |
 | `PRIVY_APP_ID` | Yes | Same Privy app as above |
-| `PRIVY_CLIENT_ID` | Yes | Privy dashboard → **Clients** → add a *mobile* client for bundle id `xyz.dyorhq.app`, URL scheme `dyorhq` |
+| `PRIVY_CLIENT_ID` | Yes | Privy dashboard → **Clients** → add a *mobile* client for bundle id `fun.dyorhq.app`, URL scheme `dyorhq` |
 | `MONAD_RPC_URL` | Optional | A dedicated Monad mainnet RPC (Alchemy, QuickNode, …). Defaults to `https://rpc.monad.xyz`. |
 | `PERPL_BUILDER_ID` | Optional | Same as above |
 | `LAUNCHPAD_FACTORY`, `LAUNCH_ROUTER`, `FEE_ESCROW`, `HOLDER_FEE_SHARING`, `MEME_HOOK` | After you deploy | `contracts/deployments/143.json` |

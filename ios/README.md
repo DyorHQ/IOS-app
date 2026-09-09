@@ -28,7 +28,7 @@ ios/
 
 1. Install XcodeGen once: `brew install xcodegen`.
 2. `cp DyorHQ/Config/Secrets.example.xcconfig DyorHQ/Config/Secrets.xcconfig` and fill in the Privy app id and the
-   mobile client id created for bundle id `xyz.dyorhq.app` with URL scheme `dyorhq` (see `docs/env-setup.md`).
+   mobile client id created for bundle id `fun.dyorhq.app` with URL scheme `dyorhq` (see `docs/env-setup.md`).
    Without them the app still runs: sign-in shows what is missing and **Watch an Address** works.
 3. `xcodegen generate`, open `DyorHQ.xcodeproj`, pick a simulator or device, run.
 
@@ -55,7 +55,7 @@ implementation and decoders against live contract output.
 
 ## What needs the owner
 
-- Privy keys (and a Privy mobile client for `xyz.dyorhq.app`), Sign in with Apple capability on that App ID, and
+- Privy keys (and a Privy mobile client for `fun.dyorhq.app`), Sign in with Apple capability on that App ID, and
   Google credentials configured in the Privy dashboard.
-- A passkey relying-party domain serving the AASA file for `xyz.dyorhq.app` (`PASSKEY_RP_ID`).
+- A passkey relying-party domain serving the AASA file for `fun.dyorhq.app` (`PASSKEY_RP_ID`).
 - Launchpad contract addresses after deployment (`LAUNCHPAD_FACTORY` and friends).

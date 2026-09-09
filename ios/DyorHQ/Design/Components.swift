@@ -173,14 +173,20 @@ struct PrimaryButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            Haptics.commit()
+            action()
+        } label: {
             HStack(spacing: 8) {
-                if isBusy { ProgressView().controlSize(.small).tint(Color(.systemBackground)) }
+                if isBusy { ProgressView().controlSize(.small).tint(.white) }
                 else if let systemImage { Image(systemName: systemImage) }
                 Text(title).fontWeight(.semibold)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
+            // The prominent fill is the brand purple (or a Long/Short tint); white reads on all of them in both
+            // themes. The old default let the label take the Paper accent, which vanished on the dark-mode fill.
+            .foregroundStyle(.white)
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
@@ -251,6 +257,25 @@ extension View {
         overlay {
             if isLoading {
                 ProgressView().controlSize(.large)
+            }
+        }
+    }
+}
+
+/// Resigns the first responder, dismissing the keyboard. The decimal pad has no return key, so screens that use it
+/// pair this with a "Done" key-accessory button and interactive scroll-to-dismiss — otherwise the keyboard hides
+/// the tab bar with no way back.
+@MainActor func dismissKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+}
+
+extension View {
+    /// A "Done" button above the keyboard that dismisses it — the standard escape hatch for decimal-pad fields.
+    func keyboardDoneButton() -> some View {
+        toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { Haptics.selection(); dismissKeyboard() }.fontWeight(.semibold)
             }
         }
     }

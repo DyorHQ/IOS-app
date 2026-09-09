@@ -98,7 +98,7 @@ struct SocialProfile: Codable, Identifiable, Equatable {
 
 /// Keychain storage for the short-lived Supabase session token (a bearer token, never a key).
 enum SupabaseSessionStore {
-    private static let service = "xyz.dyorhq.supabase"
+    private static let service = "fun.dyorhq.supabase"
     private static let account = "session"
 
     static func save(_ session: SupabaseSession) {

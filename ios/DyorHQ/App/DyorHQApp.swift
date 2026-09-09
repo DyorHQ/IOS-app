@@ -14,7 +14,7 @@ struct DyorHQApp: App {
                 .environment(environment.perplTrading)
                 .environment(environment.social)
                 .environment(router)
-                .tint(.accent)
+                .tint(.brand)
                 .preferredColorScheme(environment.settings.appearance.colorScheme)
         }
     }

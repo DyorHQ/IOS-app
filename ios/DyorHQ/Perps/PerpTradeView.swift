@@ -1,5 +1,4 @@
 import BigInt
-import Charts
 import DyorKit
 import SwiftUI
 
@@ -54,9 +53,11 @@ struct PerpTradeView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
+        .scrollDismissesKeyboard(.interactively)
         .background(Color(.systemGroupedBackground))
         .navigationTitle("\(market.asset)-PERP")
         .navigationBarTitleDisplayMode(.inline)
+        .keyboardDoneButton()
         .task {
             ticket.leverage = min(settings.defaultLeverage, maxLeverage)
             ticket.slippageBps = settings.slippageBps
@@ -144,8 +145,15 @@ struct PerpTradeView: View {
             switch dataTab {
             case .chart:
                 VStack(spacing: 8) {
-                    CandleChart(candles: candles, isLoading: loadingCandles)
-                        .frame(height: 260)
+                    TradingViewChart(candles: candles)
+                        .frame(height: 280)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay {
+                            if candles.isEmpty {
+                                if loadingCandles { ProgressView() }
+                                else { ContentUnavailableView("No Candles", systemImage: "chart.bar.xaxis", description: Text("Perpl has no candle history for this market yet.")) }
+                            }
+                        }
                     timeframePicker
                 }
             case .book:
@@ -163,7 +171,7 @@ struct PerpTradeView: View {
     private var timeframePicker: some View {
         HStack(spacing: 8) {
             ForEach(Self.resolutions, id: \.0) { seconds, label in
-                Button(label) { resolution = seconds }
+                Button(label) { if resolution != seconds { Haptics.selection(); resolution = seconds } }
                     .font(.caption.weight(resolution == seconds ? .bold : .regular))
                     .foregroundStyle(resolution == seconds ? Color.primary : Color.secondary)
                     .frame(maxWidth: .infinity)
@@ -179,13 +187,8 @@ struct PerpTradeView: View {
 
     private var orderTicket: some View {
         VStack(spacing: 14) {
-            // Side — the whole ticket takes its colour from here.
-            Picker("Side", selection: $ticket.side) {
-                Text("Long").tag(PositionSide.long)
-                Text("Short").tag(PositionSide.short)
-            }
-            .pickerStyle(.segmented)
-            .tint(sideColor)
+            // Side — the whole ticket takes its colour from here: green for Long, red for Short.
+            sideSelector
 
             HStack(spacing: 10) {
                 chip("Isolated", system: "lock")
@@ -215,7 +218,7 @@ struct PerpTradeView: View {
             // Percent presets of available margin.
             HStack(spacing: 8) {
                 ForEach([25, 50, 75, 100], id: \.self) { pct in
-                    Button("\(pct)%") { applyPercent(Double(pct)) }
+                    Button("\(pct)%") { Haptics.selection(); applyPercent(Double(pct)) }
                         .font(.caption.weight(.medium)).foregroundStyle(.primary)
                         .frame(maxWidth: .infinity).padding(.vertical, 7)
                         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -224,7 +227,7 @@ struct PerpTradeView: View {
             .disabled(model.account == nil)
 
             Toggle(isOn: $ticket.tpslEnabled) { Text("Take Profit / Stop Loss").font(.subheadline) }
-                .tint(.accent)
+                .tint(.brand)
             if ticket.tpslEnabled {
                 fieldRow("Take profit", text: $ticket.takeProfitText, unit: "USD", placeholder: "Optional")
                 fieldRow("Stop loss", text: $ticket.stopLossText, unit: "USD", placeholder: "Optional")
@@ -255,6 +258,32 @@ struct PerpTradeView: View {
         }
         .padding(14)
         .cardBackground()
+    }
+
+    /// Long / Short as two filled segments that turn solid green or red the moment they are selected — the whole
+    /// ticket (CTA, liquidation price) follows the same `sideColor`, so switching side visibly recolours the screen.
+    private var sideSelector: some View {
+        HStack(spacing: 8) {
+            sideButton(.long, "Long", .positive)
+            sideButton(.short, "Short", .negative)
+        }
+    }
+
+    private func sideButton(_ side: PositionSide, _ label: String, _ color: Color) -> some View {
+        let selected = ticket.side == side
+        return Button {
+            if ticket.side != side { Haptics.selection(); ticket.side = side }
+        } label: {
+            Text(label)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+                .foregroundStyle(selected ? .white : color)
+                .background(selected ? color : color.opacity(0.12), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.15), value: selected)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     private func chip(_ text: String, system: String) -> some View {
@@ -378,92 +407,6 @@ struct PerpTradeView: View {
         if !fetched.isEmpty { candles = fetched }
         loadingCandles = false
     }
-}
-
-// MARK: - Candlestick chart
-
-struct CandleChart: View {
-    let candles: [PerpCandle]
-    let isLoading: Bool
-    @State private var selected: PerpCandle?
-
-    private var domain: ClosedRange<Double> {
-        let lows = candles.map(\.low), highs = candles.map(\.high)
-        let lo = lows.min() ?? 0, hi = highs.max() ?? 1
-        let pad = max((hi - lo) * 0.06, hi * 0.0004, 1e-9)
-        return (lo - pad)...(hi + pad)
-    }
-
-    var body: some View {
-        if candles.count >= 2 {
-            GeometryReader { geo in
-                let width = max(1.5, min(9, geo.size.width * 0.6 / Double(candles.count)))
-                Chart {
-                    ForEach(candles) { candle in
-                        let up = candle.close >= candle.open
-                        RuleMark(x: .value("Time", candle.time), yStart: .value("Low", candle.low), yEnd: .value("High", candle.high))
-                            .lineStyle(StrokeStyle(lineWidth: 1))
-                            .foregroundStyle(up ? Color.positive : Color.negative)
-                        RectangleMark(
-                            x: .value("Time", candle.time),
-                            yStart: .value("Open", min(candle.open, candle.close)),
-                            yEnd: .value("Close", max(candle.open, candle.close) + domainEpsilon),
-                            width: .fixed(width)
-                        )
-                        .foregroundStyle(up ? Color.positive : Color.negative)
-                    }
-                    if let selected {
-                        RuleMark(x: .value("Time", selected.time))
-                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                            .foregroundStyle(Color.secondary)
-                    }
-                }
-                .chartYScale(domain: domain)
-                .chartYAxis { AxisMarks(position: .trailing) { _ in AxisGridLine(); AxisValueLabel() } }
-                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisGridLine(); AxisValueLabel() } }
-                .chartOverlay { proxy in
-                    GeometryReader { inner in
-                        Rectangle().fill(Color.clear).contentShape(Rectangle())
-                            .gesture(
-                                DragGesture(minimumDistance: 0)
-                                    .onChanged { value in
-                                        guard let frame = proxy.plotFrame else { return }
-                                        let x = value.location.x - inner[frame].origin.x
-                                        guard let date: Date = proxy.value(atX: x) else { return }
-                                        selected = candles.min { abs($0.time.timeIntervalSince(date)) < abs($1.time.timeIntervalSince(date)) }
-                                    }
-                                    .onEnded { _ in selected = nil }
-                            )
-                    }
-                }
-                .overlay(alignment: .topLeading) { if let selected { readout(selected) } }
-            }
-            .accessibilityLabel("Candlestick chart")
-        } else if isLoading {
-            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ContentUnavailableView("No Candles", systemImage: "chart.bar.xaxis", description: Text("Perpl has no candle history for this market yet."))
-        }
-    }
-
-    /// The OHLC read-out shown while scrubbing.
-    private func readout(_ candle: PerpCandle) -> some View {
-        HStack(spacing: 8) {
-            Text(candle.time, format: .dateTime.month().day().hour().minute()).foregroundStyle(.secondary)
-            ohlc("O", candle.open); ohlc("H", candle.high); ohlc("L", candle.low); ohlc("C", candle.close)
-        }
-        .font(.caption2.monospacedDigit())
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(.regularMaterial, in: Capsule())
-        .padding(4)
-    }
-
-    private func ohlc(_ key: String, _ value: Double) -> some View {
-        HStack(spacing: 2) { Text(key).foregroundStyle(.secondary); Text(NumberStyle.number(value)) }
-    }
-
-    /// Keeps a doji (open == close) from collapsing to an invisible zero-height bar.
-    private var domainEpsilon: Double { (domain.upperBound - domain.lowerBound) * 0.002 }
 }
 
 // MARK: - Order book

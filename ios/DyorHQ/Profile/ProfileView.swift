@@ -65,8 +65,8 @@ struct ProfileView: View {
                     NavigationLink { LanguageView() } label: {
                         HStack { SettingsRow("Language", symbol: "globe", tint: .accent); Spacer(); Text("English").foregroundStyle(.secondary) }
                     }
-                    Link(destination: URL(string: "https://dyorhq.xyz/support")!) { SettingsRow("Support", symbol: "questionmark.circle", tint: .accent) }
-                    Link(destination: URL(string: "https://dyorhq.xyz/terms")!) { SettingsRow("Terms of Use", symbol: "doc.text", tint: .accent) }
+                    Link(destination: URL(string: "https://dyorhq.fun/support")!) { SettingsRow("Support", symbol: "questionmark.circle", tint: .accent) }
+                    Link(destination: URL(string: "https://dyorhq.fun/terms")!) { SettingsRow("Terms of Use", symbol: "doc.text", tint: .accent) }
                 }
 
                 Section("Network") {

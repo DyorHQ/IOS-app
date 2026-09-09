@@ -82,6 +82,7 @@ private struct FeatureRow: View {
 
 struct SignInView: View {
     @Environment(Session.self) private var session
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var path: [OnboardingStep]
     @State private var busy: String?
     @State private var error: String?
@@ -103,11 +104,11 @@ struct SignInView: View {
             Section {
                 if session.hasPrivy {
                     SignInWithAppleButton(.continue) { _ in } onCompletion: { _ in }
-                        .signInWithAppleButtonStyle(.black)
+                        .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
                         .frame(height: 50)
                         .overlay {
                             // Privy drives the native Apple flow itself; the button is the affordance Apple requires.
-                            Color.clear.contentShape(Rectangle()).onTapGesture { run("apple") { try await session.signInWithApple() } }
+                            Color.clear.contentShape(Rectangle()).onTapGesture { Haptics.tap(); run("apple") { try await session.signInWithApple() } }
                         }
                         .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
                         .listRowBackground(Color.clear)
@@ -154,7 +155,7 @@ private struct MethodButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button { Haptics.tap(); action() } label: {
             HStack {
                 Label(title, systemImage: symbol)
                 Spacer()

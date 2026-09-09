@@ -38,5 +38,6 @@ struct MainTabView: View {
             Tab("Perps", systemImage: "chart.line.uptrend.xyaxis", value: .perps) { PerpsView() }
             Tab("Profile", systemImage: "person.crop.circle", value: .profile) { ProfileView() }
         }
+        .sensoryFeedback(.selection, trigger: router.tab)
     }
 }

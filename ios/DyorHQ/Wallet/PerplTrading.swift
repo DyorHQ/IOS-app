@@ -115,7 +115,7 @@ final class PerplTrading {
 
 /// Keychain storage for the Perpl API key (opaque token + 32-byte Ed25519 secret), one per wallet address.
 enum PerplKeychain {
-    private static let service = "xyz.dyorhq.perpl"
+    private static let service = "fun.dyorhq.perpl"
 
     static func save(_ key: PerplApiKey, address: String) {
         guard let data = try? JSONEncoder().encode(key) else { return }

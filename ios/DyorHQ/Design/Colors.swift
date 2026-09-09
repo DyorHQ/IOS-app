@@ -8,6 +8,11 @@ extension Color {
     static let positive = Color("Positive")
     static let negative = Color("Negative")
     static let attention = Color("Attention")
+    /// Monad brand purple (#836EF9). The single interactive accent: prominent buttons, selection, links and the
+    /// app tint. White text stays legible on it in both light and dark, which is why the prominent CTA is readable
+    /// in dark mode where the old Paper-on-Paper accent was not. Text and the wordmark stay Ink/Paper — only the
+    /// accent is purple, so the monochrome identity holds.
+    static let brand = Color("Brand")
 }
 
 extension ShapeStyle where Self == Color {
