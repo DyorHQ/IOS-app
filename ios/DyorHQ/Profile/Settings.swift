@@ -127,6 +127,7 @@ struct NotificationsView: View {
             Section {
                 Toggle("Swaps & Fills", isOn: $settings.notifyFills)
                 Toggle("Price Alerts", isOn: $settings.notifyPriceAlerts)
+                Toggle("Copy Trade Signals", isOn: $settings.notifyCopyTrades)
                 NavigationLink { PriceAlertsView() } label: {
                     HStack {
                         Label("Manage Price Alerts", systemImage: "bell.badge")
@@ -137,7 +138,7 @@ struct NotificationsView: View {
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("“Swaps & Fills” notifies you when a spot swap or a perps order completes. Price alerts notify you when a token crosses a price you set.")
+                Text("“Swaps & Fills” notifies you when a spot swap or a perps order completes. Price alerts notify you when a token crosses a price you set. Copy trade signals alert you when a trader you copy makes a move.")
             }
             .disabled(!settings.notificationsEnabled)
         }

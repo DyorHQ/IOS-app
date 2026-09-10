@@ -11,6 +11,8 @@ final class AppSettings {
     /// Notify on fills and liquidations (a preference; delivery needs the system permission).
     var notifyFills: Bool { didSet { store(notifyFills, "settings.notifyFills") } }
     var notifyPriceAlerts: Bool { didSet { store(notifyPriceAlerts, "settings.notifyPrice") } }
+    /// Notify when a copied trader makes a trade, so the user can confirm or decline copying it.
+    var notifyCopyTrades: Bool { didSet { store(notifyCopyTrades, "settings.notifyCopy") } }
     /// Require Face ID / Touch ID before signing a transaction — a device-side second factor for a self-custodial
     /// wallet, enforced in the confirmation sheet.
     var requireBiometrics: Bool { didSet { store(requireBiometrics, "settings.biometrics") } }
@@ -27,6 +29,7 @@ final class AppSettings {
         notificationsEnabled = defaults.object(forKey: "settings.notifications") as? Bool ?? true
         notifyFills = defaults.object(forKey: "settings.notifyFills") as? Bool ?? true
         notifyPriceAlerts = defaults.object(forKey: "settings.notifyPrice") as? Bool ?? false
+        notifyCopyTrades = defaults.object(forKey: "settings.notifyCopy") as? Bool ?? true
         requireBiometrics = defaults.object(forKey: "settings.biometrics") as? Bool ?? false
         defaultLeverage = defaults.object(forKey: "settings.leverage") as? Double ?? 2
         slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? 50

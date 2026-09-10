@@ -27,12 +27,14 @@ struct SwapView: View {
             }
             .listStyle(.insetGrouped)
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Swap")
+            .navigationTitle("Trade")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .top, spacing: 0) { TradeModeSwitcher() }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Haptics.selection(); showSlippage = true } label: {
                         Label("Slippage \(NumberStyle.basisPoints(model.slippageBps))", systemImage: "slider.horizontal.3")
-                            .labelStyle(.titleAndIcon)
+                            .labelStyle(.iconOnly)
                     }
                 }
             }

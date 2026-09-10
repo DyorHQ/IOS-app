@@ -190,7 +190,7 @@ struct HomeView: View {
                     }
                 }
             case .perps:
-                if model.positions.isEmpty { holdingsEmpty("No open positions", "Open a perp on the Perps tab.") }
+                if model.positions.isEmpty { holdingsEmpty("No open positions", "Open a perp from the Trade tab.") }
                 else {
                     VStack(spacing: 0) {
                         ForEach(Array(model.positions.enumerated()), id: \.element.id) { index, position in

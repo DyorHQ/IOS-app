@@ -24,6 +24,8 @@ final class PerplTrading {
     private var client: PerplTradeClient?
 
     var isReady: Bool { status == .connected }
+    /// The signed-in account id from the trading WS (same value the on-chain account reports).
+    var accountId: Int? { client?.accountId }
 
     /// Load any stored key for this address so the UI shows "enrolled" without a network call.
     func refresh(address: Address?) {
@@ -83,10 +85,10 @@ final class PerplTrading {
 
     /// Places the entry order (market/limit) with optional take-profit / stop-loss triggers linked to it. Returns
     /// the entry's gateway acknowledgement.
-    func submit(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment) async throws -> PerplOrderAck {
+    func submit(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int = 100) async throws -> PerplOrderAck {
         guard let client, status == .connected else { throw PerplTradeError.notSignedIn }
         let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
-        var entry = PerplOrders.entry(input, accountId: accountId, head: head)
+        var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
         let entryRq = client.nextRequestId()
         entry.requestId = entryRq
 
@@ -104,6 +106,63 @@ final class PerplTrading {
             frames.append(frame)
         }
         return try await client.place(frames)
+    }
+
+    /// Cancels a resting order over the authenticated path (no wallet signature) — for recycling / stopping a strategy.
+    @discardableResult
+    func cancel(perpId: Int, orderId: Int, env: AppEnvironment) async throws -> PerplOrderAck {
+        guard let client, status == .connected, let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
+        let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
+        return try await client.place([PerplOrders.cancel(perpId: perpId, orderId: orderId, accountId: accountId, head: head)])
+    }
+
+    /// Reduce-only market close of a position over the authenticated path. `side` is the POSITION's side; the close
+    /// order is submitted on the opposite side (matches PerplService.closePositionPlan) so it actually reduces.
+    @discardableResult
+    func closePosition(market: PerpMarket, side: PositionSide, size: Double, slippageBps: Int, env: AppEnvironment) async throws -> PerplOrderAck {
+        guard let accountId = client?.accountId else { throw PerplTradeError.notSignedIn }
+        let input = OrderInput(market: market, side: side.opposite, kind: .market, size: size, leverage: 1, reduceOnly: true, slippageBps: slippageBps)
+        return try await submit(input: input, accountId: accountId, takeProfit: nil, stopLoss: nil, env: env)
+    }
+
+    /// The per-frame acceptance of a bracket placement, so an automated caller can refuse to record a level whose
+    /// take-profit or stop-loss trigger was rejected (which would leave a position unprotected).
+    struct BracketResult: Sendable { var entry: Bool; var takeProfit: Bool?; var stopLoss: Bool? }
+
+    /// Places a bracket (entry + linked TP/SL) and reports whether the entry AND each requested trigger were
+    /// individually accepted — unlike `submit`, which returns only the entry ack.
+    func submitBracket(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int) async throws -> BracketResult {
+        guard let client, status == .connected else { throw PerplTradeError.notSignedIn }
+        let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
+        var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
+        let entryRq = client.nextRequestId()
+        entry.requestId = entryRq
+        var frames = [entry]
+        var labels = ["entry"]
+        if let takeProfit {
+            var frame = PerplOrders.takeProfit(side: input.side, price: takeProfit, size: input.size, market: input.market, accountId: accountId, linkedPositionId: nil)
+            frame.linkedRequestId = entryRq; frame.requestId = client.nextRequestId()
+            frames.append(frame); labels.append("tp")
+        }
+        if let stopLoss {
+            var frame = PerplOrders.stopLoss(side: input.side, price: stopLoss, size: input.size, market: input.market, accountId: accountId, linkedPositionId: nil)
+            frame.linkedRequestId = entryRq; frame.requestId = client.nextRequestId()
+            frames.append(frame); labels.append("sl")
+        }
+        let acks = try await client.placeAll(frames)
+        func accepted(_ label: String) -> Bool {
+            guard let i = labels.firstIndex(of: label), i < acks.count else { return false }
+            return acks[i].accepted
+        }
+        return BracketResult(entry: accepted("entry"),
+                             takeProfit: takeProfit != nil ? accepted("tp") : nil,
+                             stopLoss: stopLoss != nil ? accepted("sl") : nil)
+    }
+
+    /// Reconnects the trading socket if a running strategy dropped it (the socket has no reconnect of its own).
+    func ensureConnected() async {
+        guard status != .connected, key != nil else { return }
+        try? await connect()
     }
 
     func forget(address: Address) {

@@ -21,12 +21,14 @@ struct RootView: View {
         .animation(.default, value: session.state)
         .task { session.start() }
         .task { env.alertWatcher.start(env: env, settings: settings) }
+        .task { env.copyWatcher.start(env: env, settings: settings) }
+        .task { env.mmWatcher.start(env: env) }
         .task { await env.refreshVenueTokens() }
     }
 }
 
 enum AppTab: String, CaseIterable, Identifiable {
-    case home, launch, swap, perps, profile
+    case home, launch, trade, strategy, profile
     var id: String { rawValue }
 }
 
@@ -38,8 +40,8 @@ struct MainTabView: View {
         TabView(selection: $router.tab) {
             Tab("Home", systemImage: "house", value: .home) { HomeView() }
             Tab("Launch", systemImage: "flame", value: .launch) { LaunchpadView() }
-            Tab("Swap", systemImage: "arrow.left.arrow.right", value: .swap) { SwapView() }
-            Tab("Perps", systemImage: "chart.line.uptrend.xyaxis", value: .perps) { PerpsView() }
+            Tab("Trade", systemImage: "arrow.left.arrow.right", value: .trade) { TradeView() }
+            Tab("Strategy", systemImage: "wand.and.stars", value: .strategy) { StrategyView() }
             Tab("Profile", systemImage: "person.crop.circle", value: .profile) { ProfileView() }
         }
         .sensoryFeedback(.selection, trigger: router.tab)

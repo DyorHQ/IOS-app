@@ -66,10 +66,23 @@ public struct SwapHistoryService: Sendable {
         }
     }
 
+    /// The current chain head, for a poller to checkpoint from (so it only picks up swaps made after a trader is copied).
+    public func head() async -> UInt64? { try? await rpc.block(.latest).number }
+
     public func swaps(wallet: Address, window: Window, decimals: [Address: Int] = [:], limit: Int = 100) async -> [SwapRecord] {
         guard let anchor = try? await rpc.block(.latest) else { return [] }
         let latest = anchor.number
         let from = latest > window.blocks ? latest - window.blocks : 0
+        return await scan(wallet: wallet, from: from, to: latest, anchor: anchor, decimals: decimals, limit: limit)
+    }
+
+    /// Swaps in an explicit block range — used by the copy-trade watcher to scan only blocks since its last checkpoint.
+    public func swaps(wallet: Address, fromBlock: UInt64, toBlock: UInt64, decimals: [Address: Int] = [:], limit: Int = 100) async -> [SwapRecord] {
+        guard toBlock >= fromBlock, let anchor = try? await rpc.block(.latest) else { return [] }
+        return await scan(wallet: wallet, from: fromBlock, to: toBlock, anchor: anchor, decimals: decimals, limit: limit)
+    }
+
+    private func scan(wallet: Address, from: UInt64, to latest: UInt64, anchor: BlockHeader, decimals: [Address: Int], limit: Int) async -> [SwapRecord] {
         let topic = ABI.eventTopic(Self.transferSig)
         let walletWord = wallet.data.leftPadded(to: 32)
         // No address filter: one scan for everything the wallet sent, one for everything it received.

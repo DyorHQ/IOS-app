@@ -23,6 +23,8 @@ final class AppEnvironment {
     let settings = AppSettings()
     let perplTrading = PerplTrading()
     let alertWatcher = AlertWatcher()
+    let copyWatcher = CopyTradeWatcher()
+    let mmWatcher = MMWatcher()
     let social: SocialSession
 
     init(config: AppConfig) {

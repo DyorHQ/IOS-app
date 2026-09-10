@@ -21,7 +21,9 @@ struct PerpsView: View {
                 marketsSection
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Perps")
+            .navigationTitle("Trade")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .top, spacing: 0) { TradeModeSwitcher() }
             .navigationDestination(for: Int.self) { id in
                 if let market = model.markets.first(where: { $0.id == id }) {
                     PerpTradeView(market: market, model: model)
@@ -38,6 +40,12 @@ struct PerpsView: View {
             }
             .onChange(of: router.pendingPerpMarket) { _, id in
                 if let id { path = [id]; router.pendingPerpMarket = nil }
+            }
+            // Fallback for when this view is created *after* the deep link is set — e.g. opening a perp from Home
+            // while the Trade tab is in Swap mode, which builds PerpsView fresh with pendingPerpMarket already set,
+            // so `.onChange` never fires. Mirrors SwapView's `applyPending()` on appear.
+            .onAppear {
+                if let id = router.pendingPerpMarket { path = [id]; router.pendingPerpMarket = nil }
             }
         }
     }

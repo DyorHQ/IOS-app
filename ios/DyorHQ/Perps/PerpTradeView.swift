@@ -20,6 +20,7 @@ struct PerpTradeView: View {
     @Environment(Session.self) private var session
     @Environment(AppSettings.self) private var settings
     @Environment(PerplTrading.self) private var perplTrading
+    @Environment(Router.self) private var router
 
     @State private var feed = PerplFeed()
     @State private var candles: [PerpCandle] = []
@@ -61,6 +62,11 @@ struct PerpTradeView: View {
         .task {
             ticket.leverage = min(settings.defaultLeverage, maxLeverage)
             ticket.slippageBps = settings.slippageBps
+            // Copy-trade hand-off: preset the ticket to the copied trader's direction/leverage so the user doesn't
+            // accidentally place the opposite side.
+            if let side = router.pendingPerpSide { ticket.side = side; router.pendingPerpSide = nil }
+            if let leverage = router.pendingPerpLeverage { ticket.leverage = min(leverage, maxLeverage); router.pendingPerpLeverage = nil }
+            if let size = router.pendingPerpSize, size > 0 { ticket.sizeText = plainSize(size); router.pendingPerpSize = nil }
             feed.focus(market)
             await loadCandles()
             // Keep the chart live: re-fetch the window every 15s without flashing the spinner.
@@ -398,7 +404,20 @@ struct PerpTradeView: View {
         guard refPrice > 0 else { return }
         let size = availableMargin * (pct / 100) * ticket.leverage / refPrice
         let stepped = (size * pow(10, Double(market.lotDecimals))).rounded(.down) / pow(10, Double(market.lotDecimals))
-        ticket.sizeText = stepped > 0 ? NumberStyle.number(stepped, maximumFractionDigits: market.lotDecimals) : ""
+        ticket.sizeText = stepped > 0 ? plainSize(stepped) : ""
+    }
+
+    /// Formats a size into the amount field as a plain, ungrouped decimal. `NumberStyle.number` inserts the locale's
+    /// grouping separator for values ≥ 1000 ("2,000"), which `Double(sizeText)` — used to validate and place the
+    /// order — cannot parse (or, in dot-grouping locales, mis-parses as 2.0). This keeps the round-trip exact.
+    private func plainSize(_ value: Double) -> String {
+        let f = NumberFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.numberStyle = .decimal
+        f.usesGroupingSeparator = false
+        f.maximumFractionDigits = max(market.lotDecimals, 2)
+        f.minimumFractionDigits = 0
+        return f.string(from: value as NSNumber) ?? String(value)
     }
 
     private func loadCandles(showSpinner: Bool = true) async {

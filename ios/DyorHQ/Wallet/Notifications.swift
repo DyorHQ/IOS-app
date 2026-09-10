@@ -36,6 +36,11 @@ enum Notifications {
              body: "\(symbol) is now \(NumberStyle.number(price)) — \(above ? "above" : "below") your \(NumberStyle.number(target)) target.")
     }
 
+    /// A copied trader made a trade. The body prompts the user to open Strategy → Copy Trading to confirm or decline.
+    static func copyTrade(trader: String, action: String) {
+        post(title: "Copy signal: \(trader)", body: "\(action) — open Copy Trading to confirm or decline.")
+    }
+
     /// Posts immediately (no trigger). Silently no-ops unless the user has granted permission.
     private static func post(title: String, body: String) {
         let center = UNUserNotificationCenter.current()

@@ -185,6 +185,21 @@ public final class PerplTradeClient {
         return firstAck ?? PerplOrderAck(code: -1, error: "No frames")
     }
 
+    /// Places the frames in order and returns EVERY frame's ack (stopping after the first rejection). Lets a caller
+    /// verify that a linked take-profit / stop-loss actually landed, not just the entry — critical for a bracket that
+    /// must never leave a position unprotected.
+    public func placeAll(_ frames: [PerplOrderFrame]) async throws -> [PerplOrderAck] {
+        guard signedIn, accountId != nil else { throw PerplTradeError.notSignedIn }
+        guard forwardingEnabled else { throw PerplTradeError.forwardingDisabled }
+        var acks: [PerplOrderAck] = []
+        for frame in frames {
+            let ack = try await send(frame)
+            acks.append(ack)
+            if !ack.accepted { break }
+        }
+        return acks
+    }
+
     /// The next strictly-increasing request id, seeded from the account's last-forwarded id.
     public func nextRequestId() -> Int { lastForwardedRq += 1; return lastForwardedRq }
 
