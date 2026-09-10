@@ -46,6 +46,7 @@ struct HomeView: View {
             }
             .refreshable { await model.load(env: env, address: session.address) }
             .task(id: session.address) { await model.poll(env: env, address: session.address) }
+            .task(id: session.address) { await model.discoverHeldTokens(env: env, address: session.address) }
             .overlay { if model.rows.isEmpty, model.loading { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showReceive) { if let address = session.address { ReceiveSheet(address: address) } }
             .sheet(isPresented: $showSend) { SendSheet() }
@@ -482,11 +483,26 @@ final class HomeModel {
         }
     }
 
+    private var discoveredFor: Address?
+
     func poll(env: AppEnvironment, address: Address?) async {
         while !Task.isCancelled {
             await load(env: env, address: address)
             try? await Task.sleep(for: .seconds(30))
         }
+    }
+
+    /// Finds ERC-20s the wallet holds on-chain that aren't in its universe yet (received outside the app, airdropped,
+    /// bridged), persists them to the shared token store, and reloads — so every held token appears in holdings and
+    /// the swap picker. Runs once per wallet; the persisted tokens then price and balance like any curated asset.
+    func discoverHeldTokens(env: AppEnvironment, address: Address?) async {
+        guard let address, discoveredFor != address else { return }
+        discoveredFor = address
+        let known = Set(KnownTokenStore.universe(owner: address).map(\.address))
+        let found = await env.walletDiscovery.heldTokens(wallet: address, known: known)
+        guard !found.isEmpty else { return }
+        for token in found { KnownTokenStore.add(token, owner: address) }
+        await load(env: env, address: address)
     }
 
     func load(env: AppEnvironment, address: Address?) async {

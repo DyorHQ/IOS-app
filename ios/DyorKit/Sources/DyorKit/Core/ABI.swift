@@ -104,6 +104,9 @@ public indirect enum ABIValue: Equatable, Sendable {
         if case .string(let v) = self { return v }
         preconditionFailure("ABI value is not a string: \(self)")
     }
+    /// Non-trapping accessors, for decoding tokens whose reads may not conform to the expected type.
+    public var stringOrNil: String? { if case .string(let v) = self { return v } else { return nil } }
+    public var uintOrNil: BigUInt? { if case .uint(let v) = self { return v } else { return nil } }
     public var elements: [ABIValue] {
         switch self {
         case .array(let v), .tuple(let v): return v
@@ -266,14 +269,14 @@ public enum ABI {
         case .fixedBytes(let n):
             return .bytes(try slice(data, position, n))
         case .bytes:
-            let length = Int(try readWord(data, at: position))
+            let length = try readLength(data, at: position)
             return .bytes(try slice(data, position + 32, length))
         case .string:
-            let length = Int(try readWord(data, at: position))
+            let length = try readLength(data, at: position)
             guard let s = String(data: try slice(data, position + 32, length), encoding: .utf8) else { throw ABIError.invalidUTF8 }
             return .string(s)
         case .array(let inner):
-            let count = Int(try readWord(data, at: position))
+            let count = try readLength(data, at: position)
             guard count <= data.count / 32 else { throw ABIError.truncated }
             return .array(try decodeTuple(data, Array(repeating: inner, count: count), base: position + 32))
         case .fixedArray(let inner, let n):
@@ -285,6 +288,15 @@ public enum ABI {
 
     private static func readWord(_ data: Data, at position: Int) throws -> BigUInt {
         BigUInt(try slice(data, position, 32))
+    }
+
+    /// Reads a dynamic length/count word and bounds-checks it before narrowing to `Int`. A valid length can never
+    /// exceed the payload size, so this rejects a malformed return (e.g. a `bytes32` symbol misdecoded as a dynamic
+    /// `string`) by throwing rather than trapping on `Int(BigUInt)` overflow — which previously could crash the app.
+    private static func readLength(_ data: Data, at position: Int) throws -> Int {
+        let word = try readWord(data, at: position)
+        guard word <= BigUInt(data.count) else { throw ABIError.truncated }
+        return Int(word)
     }
 
     private static func slice(_ data: Data, _ position: Int, _ length: Int) throws -> Data {

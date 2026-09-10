@@ -46,6 +46,8 @@ public enum MondayTrade {
 
 public enum Kuru {
     public static let api = URL(string: "https://ws.kuru.io")!
+    /// Kuru's public, unauthenticated token/market data host (distinct from the Flow quote host `api`).
+    public static let dataApi = URL(string: "https://api.kuru.io")!
     public static let entrypoint = Address(literal: "0xb3e6778480b2E488385E8205eA05E20060B813cb")
 }
 

@@ -23,11 +23,17 @@ public enum ERC20 {
         try ABI.encodeCall("transfer(address,uint256)", [.address(to), .uint(amount)])
     }
 
-    /// Reads symbol, name and decimals so any Monad token can be added by address.
+    /// Reads symbol, name and decimals so any Monad token can be added by address. Only a readable `symbol()` is
+    /// required — `name()` falls back to the symbol and `decimals()` to 18 — so a token that merely omits an optional
+    /// field (or returns a non-standard value) is still surfaced instead of being dropped.
     public static func metadata(_ token: Address, multicall: Multicall) async throws -> Token? {
         let results = try await multicall.read([try symbol(token), try name(token), try decimals(token)])
-        guard case .success(let s) = results[0], case .success(let n) = results[1], case .success(let d) = results[2] else { return nil }
-        return Token(address: token, symbol: s[0].string, name: n[0].string, decimals: Int(d[0].uint))
+        guard case .success(let s) = results[0], let symbol = s.first.flatMap(\.stringOrNil), !symbol.isEmpty else { return nil }
+        var name = symbol
+        if case .success(let n) = results[1], let value = n.first.flatMap(\.stringOrNil), !value.isEmpty { name = value }
+        var decimals = 18
+        if case .success(let d) = results[2], let value = d.first.flatMap(\.uintOrNil), value <= 36 { decimals = Int(value) }
+        return Token(address: token, symbol: symbol, name: name, decimals: decimals)
     }
 
     /// Native and ERC-20 balances for a list of tokens, keyed by address. Missing entries mean the read failed.

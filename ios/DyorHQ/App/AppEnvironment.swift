@@ -16,6 +16,8 @@ final class AppEnvironment {
     let launchpad: LaunchpadService
     let activity: TokenActivityService
     let swapHistory: SwapHistoryService
+    let walletDiscovery: WalletTokenDiscovery
+    let kuruTokens: KuruTokenListClient
     let session: Session
     let settings = AppSettings()
     let perplTrading = PerplTrading()
@@ -35,6 +37,9 @@ final class AppEnvironment {
         // History reads want the larger log-chunk RPC, like the launchpad does.
         activity = TokenActivityService(rpc: RPCClient(url: LaunchpadService.defaultLogsRPC))
         swapHistory = SwapHistoryService(rpc: RPCClient(url: LaunchpadService.defaultLogsRPC))
+        // Wallet discovery scans logs on rpc1 and reads balances/metadata on the primary multicall.
+        walletDiscovery = WalletTokenDiscovery(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
+        kuruTokens = KuruTokenListClient()
         session = Session(config: config)
     }
 }

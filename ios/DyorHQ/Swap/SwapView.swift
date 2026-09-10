@@ -540,11 +540,19 @@ struct TokenPickerSheet: View {
     @State private var query = ""
     @State private var custom: Token?
     @State private var lookingUp = false
+    @State private var remoteResults: [Token] = []
 
     private var tokens: [Token] {
         let base = universe
         guard !query.isEmpty else { return base }
         return base.filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
+    /// Kuru search hits that aren't already shown locally — the broad Monad token list for anything not curated.
+    private var remoteMatches: [Token] {
+        var shown = Set(tokens.map(\.address))
+        if let custom { shown.insert(custom.address) }
+        return remoteResults.filter { !shown.contains($0.address) }
     }
 
     var body: some View {
@@ -556,9 +564,12 @@ struct TokenPickerSheet: View {
                 Section {
                     ForEach(tokens) { row($0) }
                 } footer: {
-                    if tokens.isEmpty, custom == nil {
-                        Text(lookingUp ? "Looking up this address" : "No token matches. Paste a contract address to add any Monad token.")
+                    if tokens.isEmpty, custom == nil, remoteMatches.isEmpty {
+                        Text(lookingUp ? "Looking up this token…" : "No token matches. Paste a contract address to add any Monad token.")
                     }
+                }
+                if !remoteMatches.isEmpty {
+                    Section("More Monad tokens") { ForEach(remoteMatches) { row($0) } }
                 }
             }
             .listStyle(.insetGrouped)
@@ -572,6 +583,14 @@ struct TokenPickerSheet: View {
                 lookingUp = true
                 custom = try? await ERC20.metadata(address, multicall: env.multicall)
                 lookingUp = false
+            }
+            .task(id: query) {
+                // Search the broad Kuru token directory, debounced. Empty/short queries clear it.
+                let q = query.trimmingCharacters(in: .whitespaces)
+                guard q.count >= 2 else { remoteResults = []; return }
+                try? await Task.sleep(for: .milliseconds(250))
+                if Task.isCancelled { return }
+                remoteResults = await env.kuruTokens.search(q)
             }
         }
     }
