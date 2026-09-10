@@ -94,12 +94,14 @@ public extension RPCClient {
     static func eventTopic(_ signature: String) -> Data { ABI.eventTopic(signature) }
 
     /// The block-range cap Monad's public endpoints enforce per `eth_getLogs` request: 100 blocks on
-    /// rpc.monad.xyz, 1 000 on rpc1/rpc3, and effectively unlimited on a local fork. Mirrors the web app's
-    /// `CHUNK` selection, which matches on the URL text rather than the host.
+    /// rpc.monad.xyz, effectively unlimited on rpc1/rpc3 (they answer a full day's range in one ~2 s call, so the
+    /// web app's cautious 1 000 was leaving ~50× the round trips on the table), and unlimited on a local fork.
+    /// Every caller here filters by a specific address or the viewer's own wallet, so a wide range returns a small,
+    /// un-truncated result set. Matches on the URL text rather than the host, like the web app's `CHUNK`.
     static func logChunkSize(for url: URL) -> UInt64 {
         let text = url.absoluteString
         if text.contains("127.0.0.1") || text.contains("localhost") { return 50_000 }
-        if text.contains("rpc1") || text.contains("rpc3") { return 1_000 }
+        if text.contains("rpc1") || text.contains("rpc3") { return 100_000 }
         return 100
     }
 

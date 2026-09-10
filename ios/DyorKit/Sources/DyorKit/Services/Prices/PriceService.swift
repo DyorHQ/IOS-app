@@ -161,15 +161,18 @@ public actor PriceService {
         }
         guard !todo.isEmpty else { return }
         let v4Ids = Uniswap.v4Tiers.map { PoolKey.canonical(Monad.native, Monad.usdc, fee: $0.fee, tickSpacing: $0.tickSpacing).id }
-        var pairs: [(token: Address, quote: Address, fee: Int)] = []
+        // Discover on both the Uniswap v3 factory and Monday Trade's (a v3-style factory). RWAs like aBIL only have
+        // liquidity on Monday, so without it they'd never get a price.
+        var pairs: [(token: Address, quote: Address, fee: Int, factory: Address)] = []
         for token in todo {
             let base = token.isNative ? Monad.wmon : token.address
             for quote in [Monad.usdc, Monad.wmon] where base != quote {
-                for fee in Uniswap.v3FeeTiers { pairs.append((base, quote, fee)) }
+                for fee in Uniswap.v3FeeTiers { pairs.append((base, quote, fee, Uniswap.v3Factory)) }
+                for fee in MondayTrade.feeTiers { pairs.append((base, quote, fee, MondayTrade.factory)) }
             }
         }
         let v4Calls = try v4Ids.map { try SwapCalldata.stateViewLiquidity(poolId: $0) }
-        let poolCalls = try pairs.map { try SwapCalldata.v3GetPool(factory: Uniswap.v3Factory, $0.token, $0.quote, fee: $0.fee) }
+        let poolCalls = try pairs.map { try SwapCalldata.v3GetPool(factory: $0.factory, $0.token, $0.quote, fee: $0.fee) }
         async let v4Read = multicall.read(v4Calls)
         async let poolRead = multicall.readAll(poolCalls)
         let (v4Liquidity, pools) = try await (v4Read, poolRead)

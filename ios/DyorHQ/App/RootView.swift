@@ -3,6 +3,8 @@ import SwiftUI
 /// Chooses between onboarding and the app, following the session state.
 struct RootView: View {
     @Environment(Session.self) private var session
+    @Environment(AppEnvironment.self) private var env
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         Group {
@@ -18,6 +20,7 @@ struct RootView: View {
         }
         .animation(.default, value: session.state)
         .task { session.start() }
+        .task { env.alertWatcher.start(env: env, settings: settings) }
     }
 }
 

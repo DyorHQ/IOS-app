@@ -7,6 +7,7 @@ struct SwapView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
     @Environment(Router.self) private var router
+    @Environment(AppSettings.self) private var settings
     @State private var model = SwapModel()
     @State private var picking: SwapModel.Side?
     @State private var showConfirm = false
@@ -18,8 +19,8 @@ struct SwapView: View {
                 paySection
                 flipRow
                 receiveSection
-                chartSection
                 quotesSection
+                activitySection
             }
             .listStyle(.insetGrouped)
             .scrollDismissesKeyboard(.interactively)
@@ -39,7 +40,7 @@ struct SwapView: View {
                     .background(.bar)
             }
             .sheet(item: $picking) { side in
-                TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances) { token in
+                TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: KnownTokenStore.universe(owner: session.address)) { token in
                     model.select(token, for: side)
                 }
             }
@@ -52,15 +53,13 @@ struct SwapView: View {
         }
     }
 
-    /// A live, Perpl-sourced chart for the asset being traded, shown whenever the pair maps to a Perpl market.
-    @ViewBuilder private var chartSection: some View {
-        if let id = PerpMarketRef.marketId(pay: model.tokenIn, receive: model.tokenOut) {
+    /// Your recent on-chain movements of the asset you're paying with — read from its Transfer events, per wallet.
+    @ViewBuilder private var activitySection: some View {
+        if session.canSign {
             Section {
-                AssetChartCard(marketId: id, symbol: PerpMarketRef.symbol(for: id))
-                    .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
-                    .id(id)
+                RecentActivityList(token: model.tokenIn, owner: session.address)
             } header: {
-                Text("Chart")
+                Text("\(model.tokenIn.symbol) Activity")
             }
         }
     }
@@ -220,6 +219,13 @@ struct SwapView: View {
         if let quote = model.selectedQuote {
             SwapConfirmation(model: model, quote: quote) {
                 model.amountText = ""
+                // Remember both sides so they show in holdings and the picker even if they aren't curated: the token
+                // just acquired, and the one paid with (a partial swap leaves a balance still worth showing).
+                KnownTokenStore.add(model.tokenOut, owner: session.address)
+                KnownTokenStore.add(model.tokenIn, owner: session.address)
+                if settings.notificationsEnabled, settings.notifyFills {
+                    Notifications.swapped(model.amountIn, model.tokenIn, quote.amountOut, model.tokenOut)
+                }
                 Task { await model.refreshBalances(env: env, address: session.address) }
             }
         }
@@ -325,8 +331,9 @@ final class SwapModel {
     }
 
     func refreshBalances(env: AppEnvironment, address: Address?) async {
-        async let priceTask = env.prices.prices(for: Token.core)
-        if let address { balances = (try? await ERC20.balances(of: Token.core, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:] }
+        let universe = KnownTokenStore.universe(owner: address)
+        async let priceTask = env.prices.prices(for: universe)
+        if let address { balances = (try? await ERC20.balances(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:] }
         prices = (try? await priceTask) ?? prices
     }
 
@@ -426,10 +433,70 @@ struct SlippageSheet: View {
     }
 }
 
+/// The wallet's recent transfers of one token, newest first, each linking to the explorer. Loaded on demand when the
+/// selected asset changes.
+struct RecentActivityList: View {
+    let token: Token
+    let owner: Address?
+    @Environment(AppEnvironment.self) private var env
+    @State private var items: [TokenActivity] = []
+    @State private var loading = true
+
+    var body: some View {
+        Group {
+            if loading, items.isEmpty {
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading activity…").font(.subheadline).foregroundStyle(.secondary) }
+            } else if items.isEmpty {
+                Text("No recent \(token.symbol) activity for this wallet.").font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                ForEach(items) { ActivityRow(item: $0, token: token) }
+            }
+        }
+        .task(id: "\(token.address.hex)-\(owner?.hex ?? "")") {
+            guard let owner else { items = []; loading = false; return }
+            loading = true
+            items = await env.activity.recent(token: token.address, wallet: owner)
+            loading = false
+        }
+    }
+}
+
+private struct ActivityRow: View {
+    let item: TokenActivity
+    let token: Token
+
+    private var incoming: Bool { item.direction == .incoming }
+
+    var body: some View {
+        Link(destination: Monad.explorerTransaction(item.hash)) {
+            HStack(spacing: 12) {
+                Image(systemName: incoming ? "arrow.down.left" : "arrow.up.right")
+                    .font(.footnote.weight(.bold))
+                    .frame(width: 34, height: 34)
+                    .background((incoming ? Color.positive : Color.negative).opacity(0.14), in: Circle())
+                    .foregroundStyle(incoming ? Color.positive : Color.negative)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(incoming ? "Received" : "Sent").font(.subheadline.weight(.medium))
+                    Text("\(incoming ? "from" : "to") \(item.counterparty.short)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(incoming ? "+" : "−")\(NumberStyle.units(item.amount, decimals: token.decimals, compact: true)) \(token.symbol)")
+                        .font(.subheadline.weight(.medium)).monospacedDigit()
+                        .foregroundStyle(incoming ? Color.positive : Color.primary)
+                    Text("\(RelativeTime.short(Int(item.time.timeIntervalSince1970))) ago").font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .foregroundStyle(.primary)
+    }
+}
+
 /// Searchable token list. Any Monad token can be added by pasting its address.
 struct TokenPickerSheet: View {
     let selected: Token
     let balances: [Address: BigUInt]
+    var universe: [Token] = Token.core
     let onPick: (Token) -> Void
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
@@ -438,7 +505,7 @@ struct TokenPickerSheet: View {
     @State private var lookingUp = false
 
     private var tokens: [Token] {
-        let base = Token.core
+        let base = universe
         guard !query.isEmpty else { return base }
         return base.filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
     }

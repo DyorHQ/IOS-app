@@ -109,9 +109,11 @@ struct SecurityView: View {
     }
 }
 
-/// Notification preferences. Delivery still needs the system permission; these choose what DyorHQ would send.
+/// Notification preferences. Turning them on requests the system permission; local notifications then fire on swap
+/// and perp-order completion and when a price alert triggers.
 struct NotificationsView: View {
     @Environment(AppSettings.self) private var settings
+    @State private var denied = false
 
     var body: some View {
         @Bindable var settings = settings
@@ -119,16 +121,37 @@ struct NotificationsView: View {
             Section {
                 Toggle("Enable Notifications", isOn: $settings.notificationsEnabled)
             } footer: {
-                Text("Turn on to receive alerts. You can also allow or mute DyorHQ in the iOS Settings app.")
+                if denied { Text("Notifications are turned off for DyorHQ in iOS Settings. Enable them there to receive alerts.").foregroundStyle(Color.attention) }
+                else { Text("Get notified when a swap or perp order completes, or when a price alert triggers.") }
             }
-            Section("Alerts") {
-                Toggle("Fills & Liquidations", isOn: $settings.notifyFills)
+            Section {
+                Toggle("Swaps & Fills", isOn: $settings.notifyFills)
                 Toggle("Price Alerts", isOn: $settings.notifyPriceAlerts)
+                NavigationLink { PriceAlertsView() } label: {
+                    HStack {
+                        Label("Manage Price Alerts", systemImage: "bell.badge")
+                        Spacer()
+                        Text("\(PriceAlertStore.all().count)").foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Alerts")
+            } footer: {
+                Text("“Swaps & Fills” notifies you when a spot swap or a perps order completes. Price alerts notify you when a token crosses a price you set.")
             }
             .disabled(!settings.notificationsEnabled)
         }
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
+        .task { denied = await Notifications.authorizationStatus() == .denied }
+        .onChange(of: settings.notificationsEnabled) { _, on in
+            guard on else { return }
+            Task {
+                let granted = await Notifications.requestAuthorization()
+                denied = !granted
+                if !granted { settings.notificationsEnabled = false }
+            }
+        }
     }
 }
 

@@ -457,7 +457,9 @@ final class HomeModel {
     func load(env: AppEnvironment, address: Address?) async {
         loading = true
         defer { loading = false }
-        let tokens = Token.core.filter { $0.symbol != "WMON" }
+        // The curated list plus anything the wallet has acquired (swapped into, launched), so held tokens like an
+        // RWA or a launched coin still show up with a balance and a price.
+        let tokens = KnownTokenStore.universe(owner: address).filter { $0.symbol != "WMON" }
         async let prices = env.prices.prices(for: tokens)
         async let balances = walletBalances(env: env, address: address, tokens: tokens)
         async let launches = env.launchpad.launches(limit: 10)

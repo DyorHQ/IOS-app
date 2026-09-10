@@ -587,6 +587,7 @@ struct AuthedOrderSheet: View {
 
     @Environment(PerplTrading.self) private var perplTrading
     @Environment(AppEnvironment.self) private var env
+    @Environment(AppSettings.self) private var settings
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .review
 
@@ -648,6 +649,9 @@ struct AuthedOrderSheet: View {
         do {
             let ack = try await perplTrading.submit(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env)
             phase = ack.accepted ? .done : .failed(ack.error ?? "Perpl rejected the order.")
+            if ack.accepted, settings.notificationsEnabled, settings.notifyFills {
+                Notifications.perpOrder(side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP", filled: input.kind == .market)
+            }
         } catch {
             phase = .failed(describe(error))
         }

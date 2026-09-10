@@ -32,10 +32,18 @@ struct TokenLogo: View {
         .accessibilityHidden(true)
     }
 
+    // A token with no image gets a filled monogram in a colour derived from its symbol, so it reads as a real
+    // avatar (and each token keeps a consistent, distinct colour across launches) rather than a grey placeholder.
     private var monogram: some View {
-        Text(symbol.prefix(2).uppercased())
-            .font(.system(size: size * 0.36, weight: .semibold, design: .rounded))
-            .foregroundStyle(.secondary)
+        let seed = symbol.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        let hue = Double(seed % 360) / 360
+        let tint = Color(hue: hue, saturation: 0.5, brightness: 0.62)
+        return ZStack {
+            LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            Text(symbol.prefix(2).uppercased())
+                .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+        }
     }
 }
 
