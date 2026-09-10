@@ -13,6 +13,7 @@ struct LaunchpadView: View {
     @Environment(Router.self) private var router
     @State private var model = LaunchpadModel()
     @State private var showCreate = false
+    @State private var showProfile = false
     @State private var query = ""
     @State private var sort: LaunchSort = .newest
     @State private var path: [Launch] = []
@@ -35,6 +36,10 @@ struct LaunchpadView: View {
             .navigationTitle("Launch")
             .navigationDestination(for: Launch.self) { launch in LaunchDetailView(launch: launch) }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { Haptics.tap(); showProfile = true } label: { Label("My Launchpad", systemImage: "person.crop.circle") }
+                        .disabled(!env.config.launchpad.isDeployed || session.address == nil)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Haptics.tap(); showCreate = true } label: { Label("New Launch", systemImage: "plus.circle.fill") }
                         .disabled(!env.config.launchpad.isDeployed || !session.canSign)
@@ -45,6 +50,7 @@ struct LaunchpadView: View {
             .task { await model.poll(env: env) }
             .overlay { if model.launches.isEmpty, model.loading, env.config.launchpad.isDeployed { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showCreate) { CreateLaunchView(protocolInfo: model.protocolInfo) { Task { await model.load(env: env) } } }
+            .sheet(isPresented: $showProfile) { LaunchpadProfileView() }
             .onChange(of: router.pendingLaunch) { _, launch in
                 guard let launch else { return }
                 if path.last != launch { path.append(launch) }
@@ -355,6 +361,9 @@ struct LaunchDetailView: View {
     @State private var sellQuote: SellQuote?
     @State private var showConfirm = false
     @State private var showClaim = false
+    @State private var showCreatorClaim = false
+
+    private var isCreator: Bool { session.address != nil && session.address == launch.deployer }
 
     /// The coin's price and market cap in USD, when the pair asset has a known dollar price.
     private var priceUSD: Double? { pairUSD.map { LaunchpadService.priceNumber(launch) * $0 } }
@@ -375,6 +384,7 @@ struct LaunchDetailView: View {
             chartSection
             if launch.phase == .bonding { ticketSection } else { graduatedSection }
             if let account, account.tokenBalance > 0 || account.pendingRewards > 0 { holdingsSection(account) }
+            feesSection
             if !trades.isEmpty { tradesSection }
             aboutSection
         }
@@ -388,6 +398,39 @@ struct LaunchDetailView: View {
             ConfirmationSheet(title: "Claim Rewards", confirmTitle: "Claim", build: { await env.launchpad.claimRewardsPlan(launch: launch, view: account) }, onDone: { Task { await load() } }) {
                 if let account { DetailRow("Pending rewards", "\(NumberStyle.units(account.pendingRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
+        }
+        .sheet(isPresented: $showCreatorClaim) {
+            ConfirmationSheet(title: "Claim Creator Fees", confirmTitle: "Claim Fees", build: { env.launchpad.claimEscrowPlan(launch: launch) }, onDone: { Task { await load() } }) {
+                if let account { DetailRow("Claimable", "\(NumberStyle.units(account.escrowBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
+                DetailRow("To", session.address?.short ?? "—")
+            }
+        }
+    }
+
+    /// Creator fees and holder-fee-sharing transparency, mirroring Pons: everyone sees the fee mode, the creator can
+    /// claim their escrowed fees here. Fee-sharing coins route creator fees to holders instead.
+    private var feesSection: some View {
+        Section {
+            LabeledContent("Fee mode", value: launch.holderFeeSharing ? "Shared with holders" : "To creator")
+            if launch.creatorTaxBps > 0 { LabeledContent("Creator tax", value: NumberStyle.basisPoints(launch.creatorTaxBps)) }
+            AddressRow(title: "Fee recipient", address: launch.creatorFeeRecipient.isZero ? launch.deployer : launch.creatorFeeRecipient)
+            if isCreator, !launch.holderFeeSharing {
+                if let account, account.escrowBalance > 0 {
+                    LabeledContent("Your claimable fees") {
+                        Text("\(NumberStyle.units(account.escrowBalance, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)")
+                            .monospacedDigit().fontWeight(.semibold).foregroundStyle(Color.brand)
+                    }
+                    Button("Claim Creator Fees", systemImage: "banknote") { Haptics.tap(); showCreatorClaim = true }.disabled(!session.canSign)
+                } else {
+                    Text("Nothing to claim yet — fees accrue as people trade your coin.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Creator Fees")
+        } footer: {
+            Text(launch.holderFeeSharing
+                ? "This coin routes its creator fees to holders — each holder claims their pro-rata share (see Your Holdings, or My Launchpad)."
+                : "The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset.")
         }
     }
 

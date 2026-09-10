@@ -384,6 +384,31 @@ public actor LaunchpadService {
         return [.call(TransactionRequest(to: addresses.escrow, data: data), label: "Claim creator fees")]
     }
 
+    /// The caller's claimable fee-escrow balances — native MON plus each queried pair token. Creator fees (and, for
+    /// the treasury address, protocol fees) accrue here per recipient across ALL of that wallet's launches, so this
+    /// is the true "claimable creator fees" figure, keyed by pair asset rather than by coin.
+    public func escrowBalances(account: Address, pairTokens: [Address]) async throws -> EscrowBalances {
+        guard addresses.isDeployed, !addresses.escrow.isZero else { return EscrowBalances(native: 0, tokens: [:]) }
+        let tokens = Array(Set(pairTokens.filter { !$0.isZero }))
+        var calls: [ContractCall] = [LaunchpadABI.call(addresses.escrow, LaunchpadABI.Escrow.balanceOf, [.address(account)], returns: "uint256")]
+        for token in tokens { calls.append(LaunchpadABI.call(addresses.escrow, LaunchpadABI.Escrow.balanceOfToken, [.address(account), .address(token)], returns: "uint256")) }
+        let r = try await multicall.readAll(calls)
+        var byToken: [Address: BigUInt] = [:]
+        for (i, token) in tokens.enumerated() { byToken[token] = r[i + 1][0].uint }
+        return EscrowBalances(native: r[0][0].uint, tokens: byToken)
+    }
+
+    /// Sweeps the caller's escrow: the native balance (when `native` is true) and each listed token, in one plan —
+    /// so a creator withdraws their fees across every launch in a single confirmation.
+    public func claimEscrowPlan(native: Bool, tokens: [Address]) -> [TransactionStep] {
+        var steps: [TransactionStep] = []
+        if native { steps.append(.call(TransactionRequest(to: addresses.escrow, data: LaunchpadABI.calldata(LaunchpadABI.Escrow.claim)), label: "Claim MON fees")) }
+        for token in tokens where !token.isZero {
+            steps.append(.call(TransactionRequest(to: addresses.escrow, data: LaunchpadABI.calldata(LaunchpadABI.Escrow.claimToken, [.address(token)])), label: "Claim fees"))
+        }
+        return steps
+    }
+
     /// `LaunchpadFactory.graduate(token)`: retries a stuck migration. Anyone may call it.
     public func graduatePlan(launch: Launch) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduate, [.address(launch.token)])

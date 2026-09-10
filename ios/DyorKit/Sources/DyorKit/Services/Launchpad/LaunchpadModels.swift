@@ -254,6 +254,23 @@ public struct LaunchDetail: Identifiable, Hashable, Sendable {
     }
 }
 
+/// A wallet's claimable fee-escrow balances, by pair asset. `native` is MON; `tokens` maps each ERC-20 pair asset
+/// (USDC, AUSD, …) to its claimable amount. This is a creator's withdrawable fees, aggregated across their launches.
+public struct EscrowBalances: Hashable, Sendable {
+    public let native: BigUInt
+    public let tokens: [Address: BigUInt]
+
+    public init(native: BigUInt, tokens: [Address: BigUInt]) {
+        self.native = native
+        self.tokens = tokens
+    }
+
+    /// The pair tokens (excluding native) that currently hold a claimable balance.
+    public var claimableTokens: [Address] { tokens.filter { $0.value > 0 }.map(\.key) }
+    public var hasNative: Bool { native > 0 }
+    public var isEmpty: Bool { native == 0 && tokens.values.allSatisfy { $0 == 0 } }
+}
+
 /// What one wallet holds and can claim for a launch.
 public struct LaunchAccountView: Hashable, Sendable {
     public let tokenBalance: BigUInt
