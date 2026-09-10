@@ -544,8 +544,13 @@ struct TokenPickerSheet: View {
 
     private var tokens: [Token] {
         let base = universe
-        guard !query.isEmpty else { return base }
-        return base.filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
+        let filtered = query.isEmpty ? base : base.filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
+        // Assets the wallet holds float to the top, keeping the curated order within each group.
+        return filtered.enumerated().sorted { a, b in
+            let heldA = (balances[a.element.address] ?? 0) > 0
+            let heldB = (balances[b.element.address] ?? 0) > 0
+            return heldA != heldB ? heldA : a.offset < b.offset
+        }.map(\.element)
     }
 
     /// Kuru search hits that aren't already shown locally — the broad Monad token list for anything not curated.
