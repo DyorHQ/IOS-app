@@ -612,7 +612,9 @@ struct CreateLaunchView: View {
             }
             .sheet(isPresented: $showConfirm) {
                 if let address = session.address, let info = protocolInfo {
-                    ConfirmationSheet(title: "Launch \(symbol)", confirmTitle: "Launch \(symbol)", build: { await env.launchpad.launchPlan(input, launchFee: info.launchFee, from: address) }, onDone: { dismiss(); onLaunched() }) {
+                    // Use the async plan: it reads the launch fee and the on-chain economics hash the factory
+                    // requires (`expectedEconomics`). The sync overload leaves that hash zero → LaunchEconomicsMismatch.
+                    ConfirmationSheet(title: "Launch \(symbol)", confirmTitle: "Launch \(symbol)", build: { try await env.launchpad.launchPlan(input, from: address) }, onDone: { dismiss(); onLaunched() }) {
                         DetailRow("Coin", "\(name) ($\(symbol))")
                         DetailRow("Paired with", pairInfo?.symbol ?? "MON")
                         DetailRow("Graduation", pairInfo.map { "\(NumberStyle.units(pairGraduation, decimals: $0.decimals, compact: true)) \($0.symbol)" } ?? "—")
