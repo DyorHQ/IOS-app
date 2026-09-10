@@ -37,6 +37,12 @@ public enum Uniswap {
     public static let v4Tiers: [(fee: Int, tickSpacing: Int)] = [(100, 1), (500, 10), (3000, 60), (10000, 200)]
 }
 
+/// Nad.fun's DEX — a Uniswap v2 fork where graduated Nad.fun memecoins (e.g. JAMES) hold their liquidity. Their
+/// pairs are always against WMON, and prices come from the pair reserves rather than a v3 sqrt price.
+public enum NadFun {
+    public static let factory = Address(literal: "0xA25b13127e63ddae6d0b35570FF3D39dBD621001")
+}
+
 public enum MondayTrade {
     public static let factory = Address(literal: "0xC1e98D0A2a58fB8aBd10ccc30a58efff4080Aa21")
     public static let quoterV2 = Address(literal: "0xB97eCD41Aef0F842E773C8F9905919cDE49880C9")

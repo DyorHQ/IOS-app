@@ -43,7 +43,7 @@ struct SwapView: View {
                     .background(.bar)
             }
             .sheet(item: $picking) { side in
-                TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: pickerUniverse) { token in
+                TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: KnownTokenStore.universe(owner: session.address)) { token in
                     // Remember any token the user picks (a pasted ERC-20 included) so it shows a balance and price in
                     // holdings and the picker from now on, not only after a completed swap.
                     KnownTokenStore.add(token, owner: session.address)
@@ -274,16 +274,6 @@ struct SwapView: View {
                 ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash), owner: session.address)
             })
         }
-    }
-
-    /// The picker's browse list: the wallet's curated + held tokens first, then the broad Uniswap/Monday venue list.
-    private var pickerUniverse: [Token] {
-        var seen = Set<Address>()
-        var out: [Token] = []
-        for token in KnownTokenStore.universe(owner: session.address) + VenueTokenStore.all() where seen.insert(token.address).inserted {
-            out.append(token)
-        }
-        return out
     }
 
     private func applyPending() {
@@ -563,11 +553,16 @@ struct TokenPickerSheet: View {
         }.map(\.element)
     }
 
-    /// Kuru search hits that aren't already shown locally — the broad Monad token list for anything not curated.
+    /// Search hits for tokens not in the popular default list: the Uniswap/Monday venue list (accurate symbols +
+    /// logos, matched locally) plus Kuru's directory. Only while searching — the default list stays popular-only.
     private var remoteMatches: [Token] {
-        var shown = Set(tokens.map(\.address))
-        if let custom { shown.insert(custom.address) }
-        return remoteResults.filter { !shown.contains($0.address) }
+        guard !query.isEmpty else { return [] }
+        var seen = Set(tokens.map(\.address))
+        if let custom { seen.insert(custom.address) }
+        let venueHits = VenueTokenStore.all().filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
+        var out: [Token] = []
+        for token in venueHits + remoteResults where seen.insert(token.address).inserted { out.append(token) }
+        return out
     }
 
     var body: some View {

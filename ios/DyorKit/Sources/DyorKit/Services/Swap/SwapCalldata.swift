@@ -119,6 +119,15 @@ public enum SwapCalldata {
         try ContractCall(to: pool, "token0()", returns: "address")
     }
 
+    // Uniswap v2-style reads (Nad.fun's DEX, where graduated Nad.fun memecoins keep their liquidity).
+    public static func v2GetPair(factory: Address, _ a: Address, _ b: Address) throws -> ContractCall {
+        try ContractCall(to: factory, "getPair(address,address)", [.address(a), .address(b)], returns: "address")
+    }
+
+    public static func v2GetReserves(pool: Address) throws -> ContractCall {
+        try ContractCall(to: pool, "getReserves()", returns: "uint112,uint112,uint32")
+    }
+
     /// QuoterV2 `quoteExactInputSingle` → (amountOut, sqrtPriceX96After, initializedTicksCrossed, gasEstimate).
     public static func quoteExactInputSingle(quoter: Address, tokenIn: Address, tokenOut: Address, amountIn: BigUInt, fee: Int) throws -> ContractCall {
         try ContractCall(to: quoter, "quoteExactInputSingle((address,address,uint256,uint24,uint160))",

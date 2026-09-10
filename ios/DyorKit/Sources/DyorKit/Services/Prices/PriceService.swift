@@ -37,27 +37,33 @@ public actor PriceService {
     enum Source: Hashable, Sendable {
         case v4(poolId: Data)
         case v3(pool: Address, token: Address, quote: Address, token0: Address)
+        /// A Uniswap v2-style pair (Nad.fun's DEX): priced from reserves, not a sqrt price.
+        case v2(pool: Address, token: Address, quote: Address, token0: Address)
 
         var label: String {
             switch self {
             case .v4: return "Uniswap v4"
             case .v3: return "Uniswap v3"
+            case .v2: return "Nad.fun"
             }
         }
 
-        /// The read whose first return value is `sqrtPriceX96`.
-        var slot0Call: ContractCall {
+        /// The read that returns this source's price inputs: slot0's `sqrtPriceX96` for v3/v4, `getReserves` for v2.
+        var priceCall: ContractCall {
             get throws {
                 switch self {
                 case .v4(let poolId): return try SwapCalldata.stateViewSlot0(poolId: poolId)
                 case .v3(let pool, _, _, _): return try SwapCalldata.v3Slot0(pool: pool)
+                case .v2(let pool, _, _, _): return try SwapCalldata.v2GetReserves(pool: pool)
                 }
             }
         }
 
         var isWMONQuoted: Bool {
-            if case .v3(_, _, let quote, _) = self { return quote == Monad.wmon }
-            return false
+            switch self {
+            case .v3(_, _, let quote, _), .v2(_, _, let quote, _): return quote == Monad.wmon
+            case .v4: return false
+            }
         }
     }
 
@@ -122,8 +128,8 @@ public actor PriceService {
             guard let mon = discovered[Monad.native] else { return [] }
             monSource = mon
         }
-        let call = try source.slot0Call
-        let monCall = try monSource?.slot0Call
+        let call = try source.priceCall
+        let monCall = try monSource?.priceCall
         var requests: [(CallRequest, BlockTag)] = []
         for block in blocks {
             requests.append((CallRequest(to: call.to, data: call.data), .number(block)))
@@ -134,8 +140,8 @@ public actor PriceService {
         let stride = monCall == nil ? 1 : 2
         var out: [PricePoint] = []
         for (i, block) in blocks.enumerated() {
-            guard case .success(let data) = results[i * stride], let sqrt = Self.sqrtPrice(data) else { continue }
-            var usd = Self.usd(sqrtPriceX96: sqrt, source: source, tokenDecimals: token.decimals)
+            guard case .success(let data) = results[i * stride], let base = Self.priceFromData(data, source: source, tokenDecimals: token.decimals) else { continue }
+            var usd = base
             if let monSource {
                 guard case .success(let monData) = results[i * stride + 1], let monSqrt = Self.sqrtPrice(monData) else { continue }
                 usd *= Self.usd(sqrtPriceX96: monSqrt, source: monSource, tokenDecimals: 18)
@@ -205,12 +211,35 @@ public actor PriceService {
             let liquidity = values[0].uint
             if liquidity > 0, v4Best.map({ liquidity > $0.liquidity }) ?? true { v4Best = (liquidity, v4Ids[i]) }
         }
+
+        // Fallback: tokens with no v3/v4 pool may be graduated Nad.fun coins on its v2 DEX (paired vs WMON).
+        let needV2 = todo.filter { !($0.isNative || $0.address == Monad.wmon) && bestV3[$0.address] == nil }
+        var v2Best: [Address: Source] = [:]
+        if !needV2.isEmpty {
+            let pairCalls = try needV2.map { try SwapCalldata.v2GetPair(factory: NadFun.factory, $0.address, Monad.wmon) }
+            let pairResults = try await multicall.readAll(pairCalls)
+            let v2Pairs = pairResults.enumerated().compactMap { entry -> (token: Address, pool: Address)? in
+                let pool = entry.element[0].address
+                return pool.isZero ? nil : (needV2[entry.offset].address, pool)
+            }
+            if !v2Pairs.isEmpty {
+                async let reserveRead = multicall.read(try v2Pairs.map { try SwapCalldata.v2GetReserves(pool: $0.pool) })
+                async let token0Read = multicall.read(try v2Pairs.map { try SwapCalldata.v3Token0(pool: $0.pool) })
+                let (reserves, token0s) = try await (reserveRead, token0Read)
+                for (k, pair) in v2Pairs.enumerated() {
+                    guard case .success(let r) = reserves[k], r.count >= 2, r[0].uint > 0, r[1].uint > 0,
+                          case .success(let t0) = token0s[k] else { continue }
+                    v2Best[pair.token] = .v2(pool: pair.pool, token: pair.token, quote: Monad.wmon, token0: t0[0].address)
+                }
+            }
+        }
+
         for token in todo {
             let source: Source?
             if token.isNative || token.address == Monad.wmon {
                 source = v4Best.map { .v4(poolId: $0.id) } ?? bestV3[Monad.wmon]?.source
             } else {
-                source = bestV3[token.address]?.source
+                source = bestV3[token.address]?.source ?? v2Best[token.address]
             }
             if let source { discovered[token.address] = source } else { misses.insert(token.address) }
         }
@@ -235,11 +264,11 @@ public actor PriceService {
     private static func readPrices(multicall: Multicall, _ sources: [(token: Token, source: Source)], block: BlockTag) async throws -> [Address: Double] {
         var out: [Address: Double] = [:]
         guard !sources.isEmpty else { return out }
-        let results = try await multicall.read(try sources.map { try $0.source.slot0Call }, block: block)
+        let results = try await multicall.read(try sources.map { try $0.source.priceCall }, block: block)
         for (i, result) in results.enumerated() {
             guard case .success(let values) = result else { continue }
             let (token, source) = sources[i]
-            out[token.address] = usd(sqrtPriceX96: values[0].uint, source: source, tokenDecimals: token.decimals)
+            out[token.address] = priceFromValues(values, source: source, tokenDecimals: token.decimals)
         }
         for (token, source) in sources where source.isWMONQuoted {
             let mon = out[Monad.native] ?? out[Monad.wmon]
@@ -266,6 +295,42 @@ public actor PriceService {
             // USDC and AUSD are 6-decimal dollar stables; a WMON quote is 18-decimal and converted to USD via MON.
             let quoteDecimals = (quote == Monad.usdc || quote == Monad.ausd) ? 6 : 18
             return price(sqrtPriceX96: sqrtPriceX96, token: token, token0: token0, tokenDecimals: tokenDecimals, quoteDecimals: quoteDecimals)
+        case .v2:
+            return 0 // v2 is priced from reserves, not a sqrt price — see priceFromValues/priceFromData.
+        }
+    }
+
+    private static func quoteDecimals(_ quote: Address) -> Int { (quote == Monad.usdc || quote == Monad.ausd) ? 6 : 18 }
+
+    /// Quote units per whole token from a v2 pair's reserves; the WMON→USD step happens in the caller (isWMONQuoted).
+    static func priceFromReserves(reserve0: BigUInt, reserve1: BigUInt, token: Address, quote: Address, token0: Address, tokenDecimals: Int) -> Double? {
+        let (reserveToken, reserveQuote) = token == token0 ? (reserve0, reserve1) : (reserve1, reserve0)
+        guard reserveToken > 0 else { return nil }
+        return Double(reserveQuote) / Double(reserveToken) * pow(10, Double(tokenDecimals - quoteDecimals(quote)))
+    }
+
+    /// Price from a source's decoded read values (sqrtPriceX96 for v3/v4, reserve0/reserve1 for v2).
+    static func priceFromValues(_ values: [ABIValue], source: Source, tokenDecimals: Int) -> Double? {
+        switch source {
+        case .v4, .v3:
+            guard let sqrt = values.first?.uintOrNil else { return nil }
+            return usd(sqrtPriceX96: sqrt, source: source, tokenDecimals: tokenDecimals)
+        case .v2(_, let token, let quote, let token0):
+            guard let r0 = values.first?.uintOrNil, values.count >= 2, let r1 = values[1].uintOrNil else { return nil }
+            return priceFromReserves(reserve0: r0, reserve1: r1, token: token, quote: quote, token0: token0, tokenDecimals: tokenDecimals)
+        }
+    }
+
+    /// Price from a source's raw return data (used by history, which reads raw bytes per block).
+    static func priceFromData(_ data: Data, source: Source, tokenDecimals: Int) -> Double? {
+        switch source {
+        case .v4, .v3:
+            guard let sqrt = sqrtPrice(data) else { return nil }
+            return usd(sqrtPriceX96: sqrt, source: source, tokenDecimals: tokenDecimals)
+        case .v2(_, let token, let quote, let token0):
+            guard let decoded = try? ABI.decode(data, "uint112,uint112,uint32"), decoded.count >= 2,
+                  let r0 = decoded[0].uintOrNil, let r1 = decoded[1].uintOrNil else { return nil }
+            return priceFromReserves(reserve0: r0, reserve1: r1, token: token, quote: quote, token0: token0, tokenDecimals: tokenDecimals)
         }
     }
 

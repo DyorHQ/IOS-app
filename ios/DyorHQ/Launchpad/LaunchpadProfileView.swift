@@ -10,8 +10,28 @@ struct LaunchpadProfileView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
     @Environment(Router.self) private var router
+    @Environment(SocialSession.self) private var social
     @Environment(\.dismiss) private var dismiss
     @State private var model = LaunchpadProfileModel()
+
+    // Same identity as the user Profile screen, so the two feel like one profile.
+    private var avatarURL: URL? {
+        guard let raw = social.profile?.avatar_url, !raw.isEmpty else { return nil }
+        return URL(string: raw)
+    }
+    private var displayName: String {
+        social.profile?.display_name ?? session.account?.label ?? session.address?.short ?? "My Launchpad"
+    }
+    private var initials: String {
+        let source = social.profile?.display_name ?? social.profile?.handle ?? session.account?.label ?? ""
+        let letters = source.split(whereSeparator: { $0 == " " || $0 == "@" }).prefix(2).compactMap { $0.first }
+        return letters.isEmpty ? "" : String(letters).uppercased()
+    }
+    private var subtitle: String {
+        if let handle = social.profile?.handle { return "@\(handle)" }
+        if let method = session.account?.method { return method == .watchOnly ? "Watching this address" : "Signed in with \(method.title)" }
+        return "Launchpad profile"
+    }
     @State private var tab: Tab = .positions
     @State private var claimTarget: ClaimTarget?
 
@@ -65,24 +85,24 @@ struct LaunchpadProfileView: View {
 
     private var headerSection: some View {
         Section {
-            VStack(spacing: 14) {
-                HStack(spacing: 12) {
-                    Avatar(url: nil, initials: session.address.map { String($0.hex.dropFirst(2).prefix(2)).uppercased() } ?? "", size: 44)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(session.address?.short ?? "Not signed in").font(.headline).monospacedDigit()
-                        Text("Launchpad profile").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
+            HStack(spacing: 14) {
+                Avatar(url: avatarURL, initials: initials, size: 56)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(displayName).font(.title3.weight(.semibold)).lineLimit(1)
+                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 }
-                HStack {
-                    stat("Portfolio", model.portfolioValueUSD.formatted(.currency(code: "USD")))
-                    Divider().frame(height: 34)
-                    stat("Launched", "\(model.created.count)")
-                    Divider().frame(height: 34)
-                    stat("Holdings", "\(model.positions.count)")
-                }
+                Spacer()
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
+            if let address = session.address { AddressRow(title: "Address", address: address) }
+            HStack {
+                stat("Portfolio", model.portfolioValueUSD.formatted(.currency(code: "USD")))
+                Divider().frame(height: 34)
+                stat("Launched", "\(model.created.count)")
+                Divider().frame(height: 34)
+                stat("Holdings", "\(model.positions.count)")
+            }
+            .padding(.vertical, 2)
         }
     }
 
