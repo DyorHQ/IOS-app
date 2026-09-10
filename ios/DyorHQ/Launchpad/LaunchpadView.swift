@@ -563,7 +563,7 @@ struct LaunchDetailView: View {
         } header: {
             Text(launch.phase == .graduated ? "Graduated" : launch.phase.title)
         } footer: {
-            Text(launch.phase == .graduated ? "The curve's liquidity is locked in a Uniswap v4 pool. Trades now route through the swap screen." : "This launch is between phases. Trading resumes when migration completes.")
+            Text(launch.phase == .graduated ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. Ongoing pool swap fees stay with the locked liquidity and aren't distributed to holders or the creator." : "This launch is between phases. Trading resumes when migration completes.")
         }
     }
 
