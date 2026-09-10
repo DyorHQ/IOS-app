@@ -45,17 +45,30 @@ final class AppEnvironment {
         session = Session(config: config)
     }
 
-    /// Refreshes the global venue token list (Uniswap + Monday Trade) at most once a day: scans the venues' pools for
-    /// the tradeable set, enriches each with an accurate Kuru logo, and caches it for the swap picker's browse list.
+    /// Builds/refreshes the global venue token list (Uniswap + Monday Trade). The first run scans the FULL history
+    /// from genesis in checkpointed segments (rpc1 serves old logs even though it prunes old state), so progress
+    /// survives the app backgrounding; later runs resume from the checkpoint and only read the new tail. Each new
+    /// token is enriched with its accurate Kuru logo and appended to the cache the swap picker browses.
     func refreshVenueTokens() async {
-        guard VenueTokenStore.isStale() else { return }
-        let tokens = await venueTokens.tokens(exclude: Set(Token.core.map(\.address)))
-        guard !tokens.isEmpty else { return }
+        let head = await venueTokens.head()
+        let start = VenueTokenStore.lastBlock()
+        guard head > 0, start < head else { return }
         let logos = await kuruTokens.logos()
-        let enriched = tokens.map { token -> Token in
-            guard token.logoURL == nil, let logo = logos[token.address] else { return token }
-            return Token(address: token.address, symbol: token.symbol, name: token.name, decimals: token.decimals, logoURL: logo, isLaunchpad: token.isLaunchpad)
+        let segment: UInt64 = 5_000_000
+        var from = start
+        while from <= head, !Task.isCancelled {
+            let to = min(from + segment, head)
+            let existing = VenueTokenStore.all()
+            let exclude = Set(Token.core.map(\.address)).union(existing.map(\.address))
+            let found = await venueTokens.tokens(fromBlock: from, toBlock: to, exclude: exclude)
+            let enriched = found.map { token -> Token in
+                guard token.logoURL == nil, let logo = logos[token.address] else { return token }
+                return Token(address: token.address, symbol: token.symbol, name: token.name, decimals: token.decimals, logoURL: logo, isLaunchpad: token.isLaunchpad)
+            }
+            // Advance the checkpoint every segment — even an empty one — so an interruption never re-scans it.
+            VenueTokenStore.save(existing + enriched, lastBlock: to)
+            if to >= head { break }
+            from = to + 1
         }
-        VenueTokenStore.save(enriched)
     }
 }

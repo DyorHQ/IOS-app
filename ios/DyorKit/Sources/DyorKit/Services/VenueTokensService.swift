@@ -18,18 +18,21 @@ public struct VenueTokensService: Sendable {
     private static let poolCreated = "PoolCreated(address,address,uint24,int24,address)"
     private static let initialize = "Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)"
 
-    /// Tokens that gained a pool on any venue in the recent `window`, resolved to on-chain metadata. Quote/stable/hop
-    /// assets and anything in `exclude` are dropped; the result is capped at `limit` to bound the metadata reads.
-    public func tokens(window: UInt64 = Monad.blocksPerDay * 45, exclude: Set<Address> = [], limit: Int = 400) async -> [Token] {
-        guard let anchor = try? await logsRPC.block(.latest) else { return [] }
-        let latest = anchor.number
-        let from = latest > window ? latest - window : 0
+    /// Chain head, for a caller that scans the full history in checkpointed segments.
+    public func head() async -> UInt64 { (try? await logsRPC.block(.latest))?.number ?? 0 }
+
+    /// Tokens that gained a pool on any venue between `fromBlock` and `toBlock`, resolved to on-chain metadata.
+    /// Quote/stable/hop assets and anything in `exclude` are dropped; the result is capped at `limit`. Callers scan
+    /// the full history from genesis in segments (rpc1 serves old logs even though it prunes old state), checkpointing
+    /// each so progress survives an interruption.
+    public func tokens(fromBlock: UInt64, toBlock: UInt64, exclude: Set<Address> = [], limit: Int = 3000) async -> [Token] {
+        guard fromBlock <= toBlock else { return [] }
         let created = ABI.eventTopic(Self.poolCreated)
         let initialized = ABI.eventTopic(Self.initialize)
 
-        async let v3 = logsRPC.chunkedLogs(address: Uniswap.v3Factory, topics: [created], fromBlock: from, toBlock: latest)
-        async let monday = logsRPC.chunkedLogs(address: MondayTrade.factory, topics: [created], fromBlock: from, toBlock: latest)
-        async let v4 = logsRPC.chunkedLogs(address: Uniswap.poolManager, topics: [initialized], fromBlock: from, toBlock: latest)
+        async let v3 = logsRPC.chunkedLogs(address: Uniswap.v3Factory, topics: [created], fromBlock: fromBlock, toBlock: toBlock)
+        async let monday = logsRPC.chunkedLogs(address: MondayTrade.factory, topics: [created], fromBlock: fromBlock, toBlock: toBlock)
+        async let v4 = logsRPC.chunkedLogs(address: Uniswap.poolManager, topics: [initialized], fromBlock: fromBlock, toBlock: toBlock)
         let (v3Logs, mondayLogs, v4Logs) = await (v3, monday, v4)
 
         // Exclude the quote/stable/hop assets (they're already curated) so the list is the tradeable long tail.

@@ -7,6 +7,7 @@ import Foundation
 enum VenueTokenStore {
     private static let key = "venueTokens.v1"
     private static let stampKey = "venueTokens.v1.updatedAt"
+    private static let blockKey = "venueTokens.v1.lastBlock"
     private static let ttl: TimeInterval = 86_400
 
     static func all() -> [Token] {
@@ -14,14 +15,17 @@ enum VenueTokenStore {
         return (try? JSONDecoder().decode([Token].self, from: data)) ?? []
     }
 
-    /// True when the cache is empty or older than a day, so the caller refreshes it.
+    /// The last chain block scanned, so the next refresh only reads the new tail (0 = never scanned → full history).
+    static func lastBlock() -> UInt64 { UInt64(UserDefaults.standard.string(forKey: blockKey) ?? "") ?? 0 }
+
+    /// True when the cache is older than a day, so the caller scans the new tail.
     static func isStale() -> Bool {
-        guard UserDefaults.standard.data(forKey: key) != nil else { return true }
-        return Date().timeIntervalSince1970 - UserDefaults.standard.double(forKey: stampKey) > ttl
+        Date().timeIntervalSince1970 - UserDefaults.standard.double(forKey: stampKey) > ttl
     }
 
-    static func save(_ tokens: [Token]) {
+    static func save(_ tokens: [Token], lastBlock: UInt64) {
         UserDefaults.standard.set(try? JSONEncoder().encode(tokens), forKey: key)
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: stampKey)
+        UserDefaults.standard.set(String(lastBlock), forKey: blockKey)
     }
 }
