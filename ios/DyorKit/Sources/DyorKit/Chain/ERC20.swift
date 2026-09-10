@@ -36,6 +36,30 @@ public enum ERC20 {
         return Token(address: token, symbol: symbol, name: name, decimals: decimals)
     }
 
+    /// Resolves symbol/name/decimals for many tokens at once, batching the reads through the multicall (50 tokens =
+    /// 150 reads per round trip). Drops only tokens with no readable symbol; name/decimals fall back like `metadata`.
+    public static func metadataBatch(_ addresses: [Address], multicall: Multicall) async -> [Token] {
+        var out: [Token] = []
+        var index = 0
+        while index < addresses.count {
+            let batch = Array(addresses[index ..< min(index + 50, addresses.count)])
+            index += batch.count
+            guard let calls = try? batch.flatMap({ try [symbol($0), name($0), decimals($0)] }),
+                  let results = try? await multicall.read(calls) else { continue }
+            for (offset, address) in batch.enumerated() {
+                let base = offset * 3
+                guard base + 2 < results.count, case .success(let s) = results[base],
+                      let sym = s.first.flatMap(\.stringOrNil), !sym.isEmpty else { continue }
+                var name = sym
+                if case .success(let n) = results[base + 1], let value = n.first.flatMap(\.stringOrNil), !value.isEmpty { name = value }
+                var decimals = 18
+                if case .success(let d) = results[base + 2], let value = d.first.flatMap(\.uintOrNil), value <= 36 { decimals = Int(value) }
+                out.append(Token(address: address, symbol: sym, name: name, decimals: decimals))
+            }
+        }
+        return out
+    }
+
     /// Native and ERC-20 balances for a list of tokens, keyed by address. Missing entries mean the read failed.
     public static func balances(of tokens: [Token], owner: Address, rpc: RPCClient, multicall: Multicall) async throws -> [Address: BigUInt] {
         let erc20s = tokens.filter { !$0.isNative }

@@ -21,6 +21,7 @@ struct RootView: View {
         .animation(.default, value: session.state)
         .task { session.start() }
         .task { env.alertWatcher.start(env: env, settings: settings) }
+        .task { await env.refreshVenueTokens() }
     }
 }
 

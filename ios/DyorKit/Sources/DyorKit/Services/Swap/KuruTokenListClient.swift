@@ -9,8 +9,39 @@ import Foundation
 public actor KuruTokenListClient {
     private let session: URLSession
     private var cache: [String: [Token]] = [:]
+    private var logoCache: [Address: URL]?
 
     public init(session: URLSession = .shared) { self.session = session }
+
+    /// A bulk address → logo map from Kuru's markets (hundreds of Monad tokens with real CDN icons), for enriching
+    /// tokens discovered on-chain or from venue pools — the practical renderable logo source (the canonical Monad
+    /// token-list ships SVGs, which the app can't draw). Fetched once per session.
+    public func logos() async -> [Address: URL] {
+        if let logoCache { return logoCache }
+        var map: [Address: URL] = [:]
+        if var components = URLComponents(url: Kuru.dataApi.appending(path: "api/v1/markets"), resolvingAgainstBaseURL: false) {
+            components.queryItems = [URLQueryItem(name: "limit", value: "500")]
+            if let url = components.url {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 10
+                if let (data, response) = try? await session.data(for: request),
+                   let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode),
+                   let json = try? JSONDecoder().decode(JSON.self, from: data) {
+                    for market in json["data"]["data"].array ?? [] {
+                        for side in ["basetoken", "quotetoken"] {
+                            let token = market[side]
+                            if let addressString = token["address"].string, let address = Address(addressString),
+                               let logoString = token["imageurl"].string, let logo = URL(string: logoString) {
+                                map[address] = logo
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        logoCache = map
+        return map
+    }
 
     /// Tokens matching `query` — a symbol, a name, or a pasted 0x address. An empty query returns Kuru's default
     /// top list. Returns an empty array on any network/parse failure (the picker falls back to its local universe).

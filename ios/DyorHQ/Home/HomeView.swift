@@ -348,7 +348,11 @@ private struct HoldingRow: View {
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
                 USDText(value: row.value, font: .subheadline.weight(.medium))
-                ChangeText(value: row.change24h, style: .caption)
+                // Always surface the per-unit price next to the 24h change, even for tokens with a small balance.
+                HStack(spacing: 5) {
+                    USDText(value: row.usd, font: .caption2).foregroundStyle(.secondary)
+                    ChangeText(value: row.change24h, style: .caption2)
+                }
             }
         }
         .padding(.vertical, 8)
@@ -501,7 +505,14 @@ final class HomeModel {
         let known = Set(KnownTokenStore.universe(owner: address).map(\.address))
         let found = await env.walletDiscovery.heldTokens(wallet: address, known: known)
         guard !found.isEmpty else { return }
-        for token in found { KnownTokenStore.add(token, owner: address) }
+        // Give each discovered token an accurate logo from Kuru's directory (the venues don't serve icons).
+        let logos = await env.kuruTokens.logos()
+        for token in found {
+            let enriched = token.logoURL == nil && logos[token.address] != nil
+                ? Token(address: token.address, symbol: token.symbol, name: token.name, decimals: token.decimals, logoURL: logos[token.address], isLaunchpad: token.isLaunchpad)
+                : token
+            KnownTokenStore.add(enriched, owner: address)
+        }
         await load(env: env, address: address)
     }
 

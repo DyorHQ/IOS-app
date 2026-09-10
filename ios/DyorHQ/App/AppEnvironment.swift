@@ -18,6 +18,7 @@ final class AppEnvironment {
     let swapHistory: SwapHistoryService
     let walletDiscovery: WalletTokenDiscovery
     let kuruTokens: KuruTokenListClient
+    let venueTokens: VenueTokensService
     let session: Session
     let settings = AppSettings()
     let perplTrading = PerplTrading()
@@ -40,6 +41,21 @@ final class AppEnvironment {
         // Wallet discovery scans logs on rpc1 and reads balances/metadata on the primary multicall.
         walletDiscovery = WalletTokenDiscovery(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
         kuruTokens = KuruTokenListClient()
+        venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
         session = Session(config: config)
+    }
+
+    /// Refreshes the global venue token list (Uniswap + Monday Trade) at most once a day: scans the venues' pools for
+    /// the tradeable set, enriches each with an accurate Kuru logo, and caches it for the swap picker's browse list.
+    func refreshVenueTokens() async {
+        guard VenueTokenStore.isStale() else { return }
+        let tokens = await venueTokens.tokens(exclude: Set(Token.core.map(\.address)))
+        guard !tokens.isEmpty else { return }
+        let logos = await kuruTokens.logos()
+        let enriched = tokens.map { token -> Token in
+            guard token.logoURL == nil, let logo = logos[token.address] else { return token }
+            return Token(address: token.address, symbol: token.symbol, name: token.name, decimals: token.decimals, logoURL: logo, isLaunchpad: token.isLaunchpad)
+        }
+        VenueTokenStore.save(enriched)
     }
 }

@@ -43,7 +43,7 @@ struct SwapView: View {
                     .background(.bar)
             }
             .sheet(item: $picking) { side in
-                TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: KnownTokenStore.universe(owner: session.address)) { token in
+                TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: pickerUniverse) { token in
                     // Remember any token the user picks (a pasted ERC-20 included) so it shows a balance and price in
                     // holdings and the picker from now on, not only after a completed swap.
                     KnownTokenStore.add(token, owner: session.address)
@@ -274,6 +274,16 @@ struct SwapView: View {
                 ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash), owner: session.address)
             })
         }
+    }
+
+    /// The picker's browse list: the wallet's curated + held tokens first, then the broad Uniswap/Monday venue list.
+    private var pickerUniverse: [Token] {
+        var seen = Set<Address>()
+        var out: [Token] = []
+        for token in KnownTokenStore.universe(owner: session.address) + VenueTokenStore.all() where seen.insert(token.address).inserted {
+            out.append(token)
+        }
+        return out
     }
 
     private func applyPending() {
