@@ -85,6 +85,15 @@ final class SocialSession {
         profile = updated
     }
 
+    /// Uploads a launchpad coin image to the wallet's folder in the public `launch-media` bucket and returns its
+    /// public URL — which the caller writes on-chain as the token's logo. Requires a DyorHQ Social session.
+    func uploadLaunchImage(jpeg: Data) async throws -> URL {
+        guard await client.signedInWallet != nil else { throw SupabaseError.notSignedIn }
+        let wallet = await client.signedInWallet!
+        let name = UUID().uuidString.lowercased()
+        return try await client.uploadPublic(bucket: "launch-media", path: "\(wallet)/\(name).jpg", data: jpeg, contentType: "image/jpeg")
+    }
+
     /// Uploads a new profile picture (JPEG bytes) to the wallet's own folder in the public `avatars` bucket, then
     /// records its URL on the profile. A cache-busting query is appended so the new image shows immediately.
     func uploadAvatar(jpeg: Data) async throws {

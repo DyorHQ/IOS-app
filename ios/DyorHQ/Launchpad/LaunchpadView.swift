@@ -1,15 +1,21 @@
 import BigInt
 import Charts
 import DyorKit
+import PhotosUI
 import SwiftUI
 
-/// The launchpad: coins on their bonding curves, graduated pools, and the form to launch a new one.
+/// The launchpad: a discovery board of coins — graduated pools and coins still climbing their bonding curve — as an
+/// image-forward two-column grid, plus the flow to launch a new one. Modeled on the Ponsfamily launchpad, rebuilt in
+/// DyorHQ's serif / monochrome system with the Monad-purple accent.
 struct LaunchpadView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
     @State private var model = LaunchpadModel()
     @State private var showCreate = false
-    @State private var filter: LaunchFilter = .all
+    @State private var query = ""
+    @State private var sort: LaunchSort = .newest
+
+    private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
     var body: some View {
         NavigationStack {
@@ -20,46 +26,19 @@ struct LaunchpadView: View {
                     } description: {
                         Text("Launches appear here once the DyorHQ launchpad contracts are deployed on Monad.")
                     }
-                } else if model.launches.isEmpty, !model.loading {
-                    ContentUnavailableView {
-                        Label("No Launches Yet", systemImage: "flame")
-                    } description: {
-                        Text("Be the first to launch a coin paired with a tokenized stock.")
-                    } actions: {
-                        Button("New Launch") { showCreate = true }.buttonStyle(.borderedProminent).disabled(!session.canSign)
-                    }
                 } else {
-                    List {
-                        if let info = model.protocolInfo {
-                            Section {
-                                LabeledContent("Launches", value: String(info.launchCount))
-                                LabeledContent("Launch fee") { AmountText(amount: info.launchFee, token: .mon) }
-                            }
-                        }
-                        Section {
-                            ForEach(filtered) { launch in
-                                NavigationLink(value: launch) { LaunchRow(launch: launch) }
-                            }
-                        } header: {
-                            Picker("Filter", selection: $filter) {
-                                ForEach(LaunchFilter.allCases) { Text($0.title).tag($0) }
-                            }
-                            .pickerStyle(.segmented)
-                            .textCase(nil)
-                            .padding(.vertical, 4)
-                        }
-                    }
-                    .listStyle(.insetGrouped)
+                    board
                 }
             }
             .navigationTitle("Launch")
             .navigationDestination(for: Launch.self) { launch in LaunchDetailView(launch: launch) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("New Launch", systemImage: "plus") { showCreate = true }
+                    Button { Haptics.tap(); showCreate = true } label: { Label("New Launch", systemImage: "plus.circle.fill") }
                         .disabled(!env.config.launchpad.isDeployed || !session.canSign)
                 }
             }
+            .searchable(text: $query, prompt: "Search coins")
             .refreshable { await model.load(env: env) }
             .task { await model.poll(env: env) }
             .overlay { if model.launches.isEmpty, model.loading, env.config.launchpad.isDeployed { ProgressView().controlSize(.large) } }
@@ -67,56 +46,255 @@ struct LaunchpadView: View {
         }
     }
 
-    private var filtered: [Launch] {
-        switch filter {
-        case .all: return model.launches
-        case .live: return model.launches.filter { $0.phase == .bonding }
-        case .graduated: return model.launches.filter { $0.phase == .graduated }
+    private var board: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 22) {
+                if graduated.isEmpty, climbing.isEmpty, !model.loading {
+                    emptyState
+                } else {
+                    if !graduated.isEmpty { section(title: "Graduated", count: graduated.count, subtitle: "Cleared the graduation threshold", coins: graduated) }
+                    exploreSection
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private func section(title: String, count: Int, subtitle: String, coins: [Launch]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader(title, count: count, subtitle: subtitle)
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(coins) { launch in
+                    NavigationLink(value: launch) { LaunchCard(launch: launch) }
+                        .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var exploreSection: some View {
+        if !climbing.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeader("Explore", count: climbing.count, subtitle: "Coins still climbing toward graduation")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(LaunchSort.allCases) { option in
+                            let selected = sort == option
+                            Button { if sort != option { Haptics.selection(); sort = option } } label: {
+                                Text(option.title)
+                                    .font(.footnote.weight(selected ? .semibold : .regular))
+                                    .foregroundStyle(selected ? Color.white : Color.primary)
+                                    .padding(.horizontal, 12).padding(.vertical, 6)
+                                    .background(selected ? Color.brand : Color(.secondarySystemGroupedBackground), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(climbing) { launch in
+                        NavigationLink(value: launch) { LaunchCard(launch: launch) }
+                            .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String, count: Int, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Text(title).font(.title3.weight(.semibold))
+                Text("\(count)").font(.caption.weight(.semibold)).monospacedDigit()
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Color.brand.opacity(0.14), in: Capsule()).foregroundStyle(Color.brand)
+            }
+            Text(subtitle).font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "flame").font(.largeTitle).foregroundStyle(Color.brand)
+            Text("No Launches Yet").font(.headline)
+            Text("Be the first to launch a coin on DyorHQ.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Button { Haptics.tap(); showCreate = true } label: { Text("Launch a Coin").fontWeight(.semibold) }
+                .buttonStyle(.borderedProminent).controlSize(.large).disabled(!session.canSign)
+        }
+        .frame(maxWidth: .infinity).padding(.top, 60)
+    }
+
+    private var matching: [Launch] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return model.launches }
+        return model.launches.filter { $0.name.localizedCaseInsensitiveContains(q) || $0.symbol.localizedCaseInsensitiveContains(q) }
+    }
+
+    private var graduated: [Launch] {
+        matching.filter { $0.phase == .graduated }.sorted { $0.launchedAt > $1.launchedAt }
+    }
+
+    private var climbing: [Launch] {
+        let live = matching.filter { $0.phase == .bonding }
+        switch sort {
+        case .newest: return live.sorted { $0.launchedAt > $1.launchedAt }
+        case .marketCap: return live.sorted { $0.marketCap > $1.marketCap }
+        case .progress: return live.sorted { $0.progressBps > $1.progressBps }
         }
     }
 }
 
-enum LaunchFilter: String, CaseIterable, Identifiable {
-    case all, live, graduated
+enum LaunchSort: String, CaseIterable, Identifiable {
+    case newest, marketCap, progress
     var id: Self { self }
     var title: String {
         switch self {
-        case .all: return "All"
-        case .live: return "On Curve"
-        case .graduated: return "Graduated"
+        case .newest: return "Newest"
+        case .marketCap: return "Market Cap"
+        case .progress: return "Near Graduation"
         }
     }
 }
 
+/// One coin in the discovery grid: an image-forward card with its badge, name, market cap and — while on the curve —
+/// its progress toward graduation.
+struct LaunchCard: View {
+    let launch: Launch
+
+    private var isGraduated: Bool { launch.phase == .graduated }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                LaunchArtwork(symbol: launch.symbol, logo: launch.logo)
+                    .aspectRatio(1, contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
+                badge
+                    .padding(8)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(launch.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text("$\(launch.symbol)").font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Market cap").font(.caption2).foregroundStyle(.secondary)
+                        Text("\(NumberStyle.units(launch.marketCap, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)")
+                            .font(.footnote.weight(.semibold)).monospacedDigit()
+                    }
+                    Spacer()
+                    Text(RelativeTime.short(launch.launchedAt)).font(.caption2).foregroundStyle(.tertiary)
+                }
+                if launch.phase == .bonding {
+                    progress
+                }
+            }
+            .padding(10)
+        }
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color(.separator).opacity(0.4), lineWidth: 0.5))
+    }
+
+    @ViewBuilder private var badge: some View {
+        if isGraduated {
+            Label("Graduated", systemImage: "checkmark.seal.fill")
+                .font(.caption2.weight(.bold))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .foregroundStyle(Color.positive)
+        } else if launch.progressBps >= 8000 {
+            Text("\(launch.progressBps / 100)%")
+                .font(.caption2.weight(.bold))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .foregroundStyle(Color.brand)
+        }
+    }
+
+    private var progress: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color(.tertiarySystemFill)).frame(height: 5)
+                    Capsule().fill(Color.brand).frame(width: geo.size.width * min(1, Double(launch.progressBps) / 10_000), height: 5)
+                }
+            }
+            .frame(height: 5)
+            Text("\(launch.progressBps / 100)% to graduation").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+}
+
+/// A compact launch row for lists (the Home page's launchpad holdings), as opposed to the discovery-grid card.
 struct LaunchRow: View {
     let launch: Launch
 
     var body: some View {
         HStack(spacing: 12) {
-            TokenLogo(symbol: launch.symbol, url: URL(string: launch.logo), size: 40)
-            VStack(alignment: .leading, spacing: 4) {
+            LaunchArtwork(symbol: launch.symbol, logo: launch.logo)
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(launch.name).font(.headline).lineLimit(1)
-                    Text(launch.symbol).font(.subheadline).foregroundStyle(.secondary)
+                    Text(launch.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text("$\(launch.symbol)").font(.caption).foregroundStyle(.secondary)
                 }
                 if launch.phase == .bonding {
-                    Gauge(value: Double(launch.progressBps) / 10_000) { EmptyView() }
-                        .gaugeStyle(.accessoryLinearCapacity)
-                        .tint(Color.accentColor)
-                        .accessibilityLabel("Graduation progress")
-                        .accessibilityValue("\(launch.progressBps / 100) percent")
+                    Text("\(launch.progressBps / 100)% to graduation").font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 } else {
-                    Text(launch.phase.title).font(.footnote).foregroundStyle(.secondary)
+                    Text(launch.phase.title).font(.caption).foregroundStyle(launch.phase == .graduated ? Color.positive : .secondary)
                 }
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("\(NumberStyle.units(launch.marketCap, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)")
-                    .font(.subheadline.weight(.medium)).monospacedDigit()
-                Text("Market cap").font(.caption).foregroundStyle(.secondary)
-            }
+            Text("\(NumberStyle.units(launch.marketCap, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)")
+                .font(.subheadline.weight(.medium)).monospacedDigit()
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 8)
+    }
+}
+
+/// A coin's artwork: its uploaded image, or a monogram on a tinted ground when it has none.
+struct LaunchArtwork: View {
+    let symbol: String
+    let logo: String
+
+    var body: some View {
+        if let url = URL(string: logo), url.scheme != nil {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image { image.resizable().scaledToFill() }
+                else if phase.error != nil { placeholder }
+                else { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } }
+            }
+        } else {
+            placeholder
+        }
+    }
+
+    private var placeholder: some View {
+        ZStack {
+            LinearGradient(colors: [Color.brand.opacity(0.30), Color.brand.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            Text(symbol.prefix(2).uppercased())
+                .font(.system(size: 40, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.brand)
+        }
+    }
+}
+
+/// Compact relative age like "3h" / "2d" for the coin cards.
+enum RelativeTime {
+    static func short(_ unix: Int) -> String {
+        guard unix > 0 else { return "" }
+        let seconds = max(0, Int(Date().timeIntervalSince1970) - unix)
+        if seconds < 60 { return "\(seconds)s" }
+        if seconds < 3600 { return "\(seconds / 60)m" }
+        if seconds < 86400 { return "\(seconds / 3600)h" }
+        return "\(seconds / 86400)d"
     }
 }
 
@@ -354,12 +532,15 @@ struct LaunchDetailView: View {
     }
 }
 
-/// Launch a coin: name it, describe it, pick the pairing asset and economics, optionally buy first.
+/// Launch a coin: pick its image, name and ticker, describe it, choose the pairing asset and economics, optionally
+/// buy first. A live "Your coin" card mirrors the discovery grid as you fill it in — the Ponsfamily create flow in
+/// DyorHQ's system.
 struct CreateLaunchView: View {
     let protocolInfo: ProtocolInfo?
     let onLaunched: () -> Void
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
+    @Environment(SocialSession.self) private var social
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var symbol = ""
@@ -372,7 +553,11 @@ struct CreateLaunchView: View {
     @State private var creatorTaxBps = 0
     @State private var holderFeeSharing = true
     @State private var initialBuyText = ""
+    @State private var showAdvanced = false
     @State private var showConfirm = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var uploadingImage = false
+    @State private var imageError: String?
 
     private var symbolValid: Bool { symbol.count >= 2 && symbol.count <= 10 && symbol.allSatisfy { $0.isLetter || $0.isNumber } }
     private var valid: Bool { name.trimmingCharacters(in: .whitespaces).count >= 2 && symbolValid }
@@ -382,6 +567,9 @@ struct CreateLaunchView: View {
     var body: some View {
         NavigationStack {
             Form {
+                imageSection
+                previewSection
+
                 Section("Coin") {
                     TextField("Name", text: $name)
                     TextField("Ticker", text: $symbol)
@@ -389,7 +577,6 @@ struct CreateLaunchView: View {
                         .autocorrectionDisabled()
                         .onChange(of: symbol) { _, v in symbol = String(v.uppercased().filter { $0.isLetter || $0.isNumber }.prefix(10)) }
                     TextField("Description", text: $description, axis: .vertical).lineLimit(2...5)
-                    TextField("Image URL", text: $logo).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
                 Section("Links") {
                     TextField("Website", text: $website).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -400,43 +587,156 @@ struct CreateLaunchView: View {
                     Picker("Paired with", selection: $pair) {
                         ForEach(protocolInfo?.pairs.filter(\.approved) ?? [], id: \.pair.address) { Text($0.pair.symbol).tag($0.pair.address) }
                     }
-                    Stepper("Creator tax \(NumberStyle.basisPoints(creatorTaxBps))", value: $creatorTaxBps, in: 0...(protocolInfo?.maxCreatorTaxBps ?? 0), step: 25)
-                    Toggle("Share fees with holders", isOn: $holderFeeSharing)
                 } header: {
-                    Text("Economics")
+                    Text("Pairing")
                 } footer: {
-                    Text("The creator tax is charged on curve trades. Fee sharing splits pool fees with everyone who holds the coin after graduation.")
+                    if let info = protocolInfo, let pi = pairInfo {
+                        Text("Graduates to a locked Monday Trade pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol). Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                    }
                 }
                 Section {
                     AmountField(title: "0", text: $initialBuyText, token: pairInfo.map { Token(address: $0.address, symbol: $0.symbol, name: $0.symbol, decimals: $0.decimals) })
                 } header: {
-                    Text("Initial Buy (Optional)")
+                    Text("Developer Buy (Optional)")
                 } footer: {
-                    if let info = protocolInfo { Text("Launch fee: \(NumberStyle.units(info.launchFee, decimals: 18)) MON. Supply: \(NumberStyle.units(info.supply, decimals: 18, compact: true)) \(symbol.isEmpty ? "tokens" : symbol).") }
+                    Text("Buy your own coin in the same transaction — snipe-tax exempt.")
                 }
+                advancedSection
             }
-            .navigationTitle("New Launch")
+            .navigationTitle("Launch a Coin")
             .navigationBarTitleDisplayMode(.inline)
+            .keyboardDoneButton()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Review") { showConfirm = true }.disabled(!valid) }
+                ToolbarItem(placement: .confirmationAction) { Button("Review") { Haptics.tap(); showConfirm = true }.fontWeight(.semibold).disabled(!valid) }
             }
             .sheet(isPresented: $showConfirm) {
                 if let address = session.address, let info = protocolInfo {
-                    ConfirmationSheet(title: "Review Launch", confirmTitle: "Launch \(symbol)", build: { await env.launchpad.launchPlan(input, launchFee: info.launchFee, from: address) }, onDone: { dismiss(); onLaunched() }) {
-                        DetailRow("Coin", "\(name) (\(symbol))")
+                    ConfirmationSheet(title: "Launch \(symbol)", confirmTitle: "Launch \(symbol)", build: { await env.launchpad.launchPlan(input, launchFee: info.launchFee, from: address) }, onDone: { dismiss(); onLaunched() }) {
+                        DetailRow("Coin", "\(name) ($\(symbol))")
                         DetailRow("Paired with", pairInfo?.symbol ?? "MON")
+                        DetailRow("Graduation", pairInfo.map { "\(NumberStyle.units(pairGraduation, decimals: $0.decimals, compact: true)) \($0.symbol)" } ?? "—")
                         DetailRow("Creator tax", NumberStyle.basisPoints(creatorTaxBps))
+                        DetailRow("Fee sharing", holderFeeSharing ? "On" : "Off")
                         DetailRow("Launch fee", "\(NumberStyle.units(info.launchFee, decimals: 18)) MON")
-                        if initialBuy > 0 { DetailRow("Initial buy", "\(initialBuyText) \(pairInfo?.symbol ?? "MON")") }
+                        if initialBuy > 0 { DetailRow("Developer buy", "\(initialBuyText) \(pairInfo?.symbol ?? "MON")") }
                     }
                 }
             }
-            .onAppear { if let first = protocolInfo?.pairs.first(where: \.approved) { pair = first.pair.address } }
+            .onChange(of: photoItem) { _, item in if let item { Task { await uploadImage(item) } } }
+            .onAppear { if pair.isZero, let first = protocolInfo?.pairs.first(where: \.approved) { pair = first.pair.address } }
+        }
+    }
+
+    private var imageSection: some View {
+        Section {
+            HStack(spacing: 16) {
+                LaunchArtwork(symbol: symbol.isEmpty ? "?" : symbol, logo: logo)
+                    .frame(width: 72, height: 72)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Label(logo.isEmpty ? "Choose Image" : "Change Image", systemImage: "photo")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .disabled(uploadingImage)
+                    if uploadingImage {
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Uploading…").font(.caption).foregroundStyle(.secondary) }
+                    } else if let imageError {
+                        Text(imageError).font(.caption).foregroundStyle(Color.attention)
+                    } else {
+                        Text("Square images look best.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder private var previewSection: some View {
+        if valid {
+            Section {
+                LaunchPreviewCard(name: name, symbol: symbol, logo: logo, pairSymbol: pairInfo?.symbol ?? "MON")
+                    .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+            } header: {
+                Text("Your Coin")
+            }
+        }
+    }
+
+    private var advancedSection: some View {
+        Section {
+            DisclosureGroup(isExpanded: $showAdvanced) {
+                Stepper("Creator tax \(NumberStyle.basisPoints(creatorTaxBps))", value: $creatorTaxBps, in: 0...(protocolInfo?.maxCreatorTaxBps ?? 0), step: 25)
+                Toggle("Share fees with holders", isOn: $holderFeeSharing).tint(.brand)
+            } label: {
+                Label("Advanced", systemImage: "slider.horizontal.3")
+            }
+        } footer: {
+            Text("Creator tax is charged on curve trades and paid to you. Fee sharing splits post-graduation pool fees with everyone who holds the coin.")
+        }
+    }
+
+    private var pairGraduation: BigUInt {
+        protocolInfo?.pairs.first { $0.pair.address == pair }?.graduationThreshold ?? 0
+    }
+
+    private func uploadImage(_ item: PhotosPickerItem) async {
+        uploadingImage = true; imageError = nil
+        defer { uploadingImage = false; photoItem = nil }
+        do {
+            // Uploading needs a DyorHQ Social session (same wallet); connect on demand.
+            if !social.isSignedIn { await social.signIn(session: session) }
+            guard social.isSignedIn else { imageError = "Connect DyorHQ Social to upload an image."; return }
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data),
+                  let jpeg = image.avatarJPEG(maxDimension: 640) else {
+                imageError = "That image could not be read."
+                return
+            }
+            logo = try await social.uploadLaunchImage(jpeg: jpeg).absoluteString
+            Haptics.success()
+        } catch {
+            imageError = describe(error)
         }
     }
 
     private var input: LaunchInput {
         LaunchInput(name: name.trimmingCharacters(in: .whitespaces), symbol: symbol, description: description, logo: logo, socials: Socials(twitter: twitter, telegram: telegram, discord: "", website: website, farcaster: ""), creatorTaxBps: creatorTaxBps, holderFeeSharing: holderFeeSharing, pairToken: pair, initialBuy: initialBuy)
+    }
+}
+
+/// The live preview shown while creating a coin — the same shape as a discovery-grid card.
+private struct LaunchPreviewCard: View {
+    let name: String
+    let symbol: String
+    let logo: String
+    let pairSymbol: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            LaunchArtwork(symbol: symbol.isEmpty ? "?" : symbol, logo: logo)
+                .aspectRatio(1, contentMode: .fill)
+                .frame(maxWidth: .infinity)
+                .frame(height: 150)
+                .clipped()
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(name.isEmpty ? "Your coin" : name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text("$\(symbol.isEmpty ? "TICKER" : symbol)").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                HStack {
+                    Text("New").font(.caption2.weight(.semibold)).foregroundStyle(Color.brand)
+                        .padding(.horizontal, 7).padding(.vertical, 2).background(Color.brand.opacity(0.14), in: Capsule())
+                    Spacer()
+                    Text("Pairs with \(pairSymbol)").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .padding(10)
+        }
+        .background(Color(.tertiarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
