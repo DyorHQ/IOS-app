@@ -166,7 +166,9 @@ public actor PriceService {
         var pairs: [(token: Address, quote: Address, fee: Int, factory: Address)] = []
         for token in todo {
             let base = token.isNative ? Monad.wmon : token.address
-            for quote in [Monad.usdc, Monad.wmon] where base != quote {
+            // Quote against USDC, AUSD (both dollar stables) and WMON. AUSD covers RWAs and launch assets whose only
+            // deep pool is against Perpl's AUSD collateral rather than USDC.
+            for quote in [Monad.usdc, Monad.ausd, Monad.wmon] where base != quote {
                 for fee in Uniswap.v3FeeTiers { pairs.append((base, quote, fee, Uniswap.v3Factory)) }
                 for fee in MondayTrade.feeTiers { pairs.append((base, quote, fee, MondayTrade.factory)) }
             }
@@ -191,8 +193,9 @@ public actor PriceService {
         for (k, entry) in existing.enumerated() {
             guard case .success(let liquidity) = liquidities[k], liquidity[0].uint > 0, case .success(let token0) = token0s[k] else { continue }
             let pair = pairs[entry.index]
-            // Prefer USDC-quoted pools; a WMON-quoted pool only wins when no USDC pool has liquidity.
-            let weight = pair.quote == Monad.usdc ? liquidity[0].uint * 1_000_000 : liquidity[0].uint
+            // Prefer dollar-quoted pools: USDC first, then AUSD, then a WMON pool only when no stable pool has depth.
+            let weight: BigUInt = pair.quote == Monad.usdc ? liquidity[0].uint * 1_000_000
+                : (pair.quote == Monad.ausd ? liquidity[0].uint * 1_000 : liquidity[0].uint)
             if let previous = bestV3[pair.token], weight <= previous.weight { continue }
             bestV3[pair.token] = (weight, .v3(pool: entry.pool, token: pair.token, quote: pair.quote, token0: token0[0].address))
         }
@@ -260,7 +263,9 @@ public actor PriceService {
         case .v4:
             return price(sqrtPriceX96: sqrtPriceX96, token: Monad.native, token0: Monad.native, tokenDecimals: 18, quoteDecimals: 6)
         case .v3(_, let token, let quote, let token0):
-            return price(sqrtPriceX96: sqrtPriceX96, token: token, token0: token0, tokenDecimals: tokenDecimals, quoteDecimals: quote == Monad.usdc ? 6 : 18)
+            // USDC and AUSD are 6-decimal dollar stables; a WMON quote is 18-decimal and converted to USD via MON.
+            let quoteDecimals = (quote == Monad.usdc || quote == Monad.ausd) ? 6 : 18
+            return price(sqrtPriceX96: sqrtPriceX96, token: token, token0: token0, tokenDecimals: tokenDecimals, quoteDecimals: quoteDecimals)
         }
     }
 
@@ -269,5 +274,5 @@ public actor PriceService {
         return sqrt
     }
 
-    static func isUSD(_ token: Token) -> Bool { token.address == Monad.usdc }
+    static func isUSD(_ token: Token) -> Bool { token.address == Monad.usdc || token.address == Monad.ausd }
 }

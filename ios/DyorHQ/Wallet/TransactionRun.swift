@@ -14,6 +14,8 @@ final class TransactionRun {
 
     var isRunning: Bool { phase == .running }
     var isDone: Bool { if case .done = phase { return true } else { return false } }
+    /// The settled transaction hash once the plan's final step confirms, for callers that record or route on it.
+    var doneHash: Data? { if case .done(let hash) = phase { return hash } else { return nil } }
 
     func start(_ steps: [TransactionStep], session: Session, sender: TransactionSender) {
         guard !isRunning else { return }
@@ -49,6 +51,11 @@ struct ConfirmationSheet<Details: View>: View {
     let confirmTitle: String
     var build: () async throws -> [TransactionStep]
     let onDone: () -> Void
+    /// Fired with the settled transaction hash when the sheet finishes, for callers that log the action or record it.
+    var onCompleted: ((Data) -> Void)? = nil
+    /// When set, the confirmed step's "View" control calls this with the tx hash instead of opening the block
+    /// explorer — the launch flow uses it to route to the in-app coin page.
+    var onView: ((Data) -> Void)? = nil
     @ViewBuilder var details: Details
 
     @Environment(Session.self) private var session
@@ -73,7 +80,7 @@ struct ConfirmationSheet<Details: View>: View {
                     Section { InlineError(message: buildError) }.listRowBackground(Color.clear)
                 }
                 if !run.events.isEmpty {
-                    Section("Progress") { TransactionProgress(events: run.events) }
+                    Section("Progress") { TransactionProgress(events: run.events, onView: onView) }
                 }
                 if case .failed(let message) = run.phase {
                     Section { InlineError(message: message) }.listRowBackground(Color.clear)
@@ -84,17 +91,14 @@ struct ConfirmationSheet<Details: View>: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(run.isDone ? "Done" : "Cancel") {
-                        dismiss()
-                        if run.isDone { onDone() }
-                    }
+                    Button(run.isDone ? "Done" : "Cancel") { finish() }
                     .disabled(run.isRunning)
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 8) {
                     if run.isDone {
-                        PrimaryButton(title: "Done", systemImage: "checkmark") { dismiss(); onDone() }
+                        PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
                     } else if !session.canSign {
                         Text(SessionError.readOnly.localizedDescription)
                             .font(.footnote)
@@ -123,6 +127,18 @@ struct ConfirmationSheet<Details: View>: View {
         .task {
             do { steps = try await build() } catch { buildError = describe(error) }
             preparing = false
+        }
+    }
+
+    /// Dismiss and, when the plan settled, notify the caller. `onCompleted` runs BEFORE `onDone` on purpose:
+    /// callers clear their input in `onDone`, and `onCompleted` reads that live input to record the action, so it
+    /// must see the amount before it is cleared.
+    private func finish() {
+        let hash = run.doneHash
+        dismiss()
+        if run.isDone {
+            if let hash { onCompleted?(hash) }
+            onDone()
         }
     }
 }

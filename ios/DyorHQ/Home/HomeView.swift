@@ -200,12 +200,13 @@ struct HomeView: View {
                     }
                 }
             case .launchpad:
-                if model.launches.isEmpty { holdingsEmpty("No launches yet", "Fair-launch a coin on the Launch tab.") }
+                if model.launchHoldings.isEmpty { holdingsEmpty("No launch holdings", "Buy or launch a coin on the Launch tab.") }
                 else {
                     VStack(spacing: 0) {
-                        ForEach(Array(model.launches.prefix(6).enumerated()), id: \.element.id) { index, launch in
-                            LaunchRow(launch: launch)
-                            if index < min(5, model.launches.count - 1) { Divider().padding(.leading, 44) }
+                        ForEach(Array(model.launchHoldings.enumerated()), id: \.element.id) { index, holding in
+                            Button { router.openLaunch(holding.launch) } label: { LaunchHoldingRow(holding: holding) }
+                                .buttonStyle(.plain)
+                            if index < model.launchHoldings.count - 1 { Divider().padding(.leading, 44) }
                         }
                     }
                 }
@@ -354,6 +355,32 @@ private struct HoldingRow: View {
     }
 }
 
+/// A launch-coin holding row: artwork, the held amount, and its USD value — the user's position, not the market cap.
+private struct LaunchHoldingRow: View {
+    let holding: HomeModel.LaunchHolding
+
+    var body: some View {
+        HStack(spacing: 12) {
+            LaunchArtwork(symbol: holding.launch.symbol, logo: holding.launch.logo)
+                .frame(width: 34, height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(holding.launch.symbol).font(.subheadline.weight(.semibold))
+                Text("\(NumberStyle.units(holding.balance, decimals: 18, compact: true)) \(holding.launch.symbol)")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 1) {
+                USDText(value: holding.valueUSD, font: .subheadline.weight(.medium))
+                Text(holding.launch.phase == .bonding ? "\(holding.launch.progressBps / 100)% to graduation" : holding.launch.phase.title)
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+}
+
 /// A perps position summarised for the holdings list.
 private struct PositionSummaryRow: View {
     let position: PerpPosition
@@ -405,8 +432,17 @@ struct MarketRow: Identifiable, Hashable {
 @Observable
 @MainActor
 final class HomeModel {
+    /// A launch coin the wallet holds (or created), valued at its curve price in USD.
+    struct LaunchHolding: Identifiable, Hashable {
+        let launch: Launch
+        let balance: BigUInt
+        let valueUSD: Double
+        var id: Address { launch.token }
+    }
+
     private(set) var rows: [MarketRow] = []
     private(set) var launches: [Launch] = []
+    private(set) var launchHoldings: [LaunchHolding] = []
     private(set) var positions: [PerpPosition] = []
     private(set) var perpEquity: Double?
     private(set) var loading = false
@@ -417,9 +453,8 @@ final class HomeModel {
 
     var spotValue: Double { holdings.compactMap(\.value).reduce(0, +) }
     var perpsValue: Double { perpEquity ?? 0 }
-    /// Launchpad holdings value. Curve-token balances are not yet indexed per wallet, so this is 0 until that
-    /// read lands; the slot stays in the split and ring so the shape is right.
-    var launchpadValue: Double { 0 }
+    /// Value of the wallet's launch-coin holdings, priced from each curve. Feeds the allocation ring and total.
+    var launchpadValue: Double { launchHoldings.reduce(0) { $0 + $1.valueUSD } }
     var availableBalance: Double { spotValue }
     var inUse: Double { perpsValue }
 
@@ -462,10 +497,11 @@ final class HomeModel {
         let tokens = KnownTokenStore.universe(owner: address).filter { $0.symbol != "WMON" }
         async let prices = env.prices.prices(for: tokens)
         async let balances = walletBalances(env: env, address: address, tokens: tokens)
-        async let launches = env.launchpad.launches(limit: 10)
+        async let launches = env.launchpad.launches(limit: 30)
         async let perps = loadPerps(env: env, address: address)
+        var priceMap: [Address: PriceInfo] = [:]
         do {
-            let priceMap = try await prices
+            priceMap = try await prices
             let balanceMap = await balances
             rows = tokens.map { token in
                 MarketRow(token: token, usd: priceMap[token.address]?.usd, change24h: priceMap[token.address]?.change24h, balance: balanceMap[token.address] ?? 0)
@@ -475,7 +511,9 @@ final class HomeModel {
         } catch {
             self.error = describe(error)
         }
-        self.launches = (try? await launches) ?? []
+        let launchList = (try? await launches) ?? []
+        self.launches = launchList
+        launchHoldings = await loadLaunchHoldings(env: env, address: address, launches: launchList, priceMap: priceMap)
         let perpState = await perps
         positions = perpState.positions
         perpEquity = perpState.equity
@@ -484,6 +522,23 @@ final class HomeModel {
     private func walletBalances(env: AppEnvironment, address: Address?, tokens: [Token]) async -> [Address: BigUInt] {
         guard let address else { return [:] }
         return (try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
+    }
+
+    /// The wallet's launch-coin balances (and coins it created), each valued at the curve price × the pair asset's
+    /// USD price, in one balanceOf multicall over the recent launches.
+    private func loadLaunchHoldings(env: AppEnvironment, address: Address?, launches: [Launch], priceMap: [Address: PriceInfo]) async -> [LaunchHolding] {
+        guard let address, !launches.isEmpty else { return [] }
+        let tokens = launches.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
+        let balances = (try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
+        return launches.compactMap { launch -> LaunchHolding? in
+            let balance = balances[launch.token] ?? 0
+            let created = launch.deployer == address
+            guard balance > 0 || created else { return nil }
+            let pairUSD = launch.pair.isNative ? priceMap[Monad.native]?.usd : priceMap[launch.pairToken]?.usd
+            let value = pairUSD.map { Amount.units(balance, decimals: 18) * LaunchpadService.priceNumber(launch) * $0 } ?? 0
+            return LaunchHolding(launch: launch, balance: balance, valueUSD: value)
+        }
+        .sorted { $0.valueUSD > $1.valueUSD }
     }
 
     private func loadPerps(env: AppEnvironment, address: Address?) async -> (positions: [PerpPosition], equity: Double?) {

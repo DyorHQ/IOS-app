@@ -17,6 +17,23 @@ public extension LaunchpadService {
         return Self.trades(buys: buys, sells: sells, anchor: anchor, pair: pair)
     }
 
+    /// Approximate holder count: the number of addresses with a positive net token balance, from the token's
+    /// `Transfer` events over the window. Mints/burns (the zero address) and any `excluding` address (e.g. the bonding
+    /// curve, which holds the unsold supply) are left out. Exact counts want an indexer; this is right for a new coin.
+    func holderCount(token: Address, excluding: Set<Address> = [], lookbackBlocks: UInt64 = 216_000 * 30) async -> Int {
+        guard let anchor = try? await logsRPC.block(.latest) else { return 0 }
+        let from = anchor.number > lookbackBlocks ? anchor.number - lookbackBlocks : 0
+        let logs = await logsRPC.chunkedLogs(address: token, topics: [ABI.eventTopic("Transfer(address,address,uint256)")], fromBlock: from, toBlock: anchor.number)
+        var net: [Address: BigInt] = [:]
+        for log in logs {
+            guard let sender = log.indexedAddress(0), let recipient = log.indexedAddress(1) else { continue }
+            let amount = BigInt(BigUInt(log.data))
+            if !sender.isZero { net[sender, default: 0] -= amount }
+            if !recipient.isZero { net[recipient, default: 0] += amount }
+        }
+        return net.reduce(0) { count, entry in count + (entry.value > 0 && !excluding.contains(entry.key) ? 1 : 0) }
+    }
+
     /// Pure half of `trades(curve:pair:lookbackBlocks:)`, so the parser can be tested on canned logs.
     nonisolated static func trades(buys: [Log], sells: [Log], anchor: BlockHeader, pair: PairInfo) -> [CurveTrade] {
         var out: [CurveTrade] = []

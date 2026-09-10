@@ -10,15 +10,17 @@ import SwiftUI
 struct LaunchpadView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
+    @Environment(Router.self) private var router
     @State private var model = LaunchpadModel()
     @State private var showCreate = false
     @State private var query = ""
     @State private var sort: LaunchSort = .newest
+    @State private var path: [Launch] = []
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if !env.config.launchpad.isDeployed {
                     ContentUnavailableView {
@@ -43,6 +45,12 @@ struct LaunchpadView: View {
             .task { await model.poll(env: env) }
             .overlay { if model.launches.isEmpty, model.loading, env.config.launchpad.isDeployed { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showCreate) { CreateLaunchView(protocolInfo: model.protocolInfo) { Task { await model.load(env: env) } } }
+            .onChange(of: router.pendingLaunch) { _, launch in
+                guard let launch else { return }
+                if path.last != launch { path.append(launch) }
+                router.pendingLaunch = nil
+            }
+            .onAppear { if let launch = router.pendingLaunch { path = [launch]; router.pendingLaunch = nil } }
         }
     }
 
@@ -336,13 +344,24 @@ struct LaunchDetailView: View {
     @Environment(Router.self) private var router
     @State private var detail: LaunchDetail?
     @State private var account: LaunchAccountView?
-    @State private var candles: [Candle] = []
+    @State private var trades: [CurveTrade] = []
+    @State private var priceSeries: [PricePoint] = []
+    @State private var pairUSD: Double?
+    @State private var holders: Int?
+    @State private var loadingTrades = true
     @State private var side: TradeSide = .buy
     @State private var amountText = ""
     @State private var buyQuote: BuyQuote?
     @State private var sellQuote: SellQuote?
     @State private var showConfirm = false
     @State private var showClaim = false
+
+    /// The coin's price and market cap in USD, when the pair asset has a known dollar price.
+    private var priceUSD: Double? { pairUSD.map { LaunchpadService.priceNumber(launch) * $0 } }
+    private var marketCapUSD: Double? { pairUSD.map { Amount.units(launch.marketCap, decimals: launch.pair.decimals) * $0 } }
+    /// 24h trading volume in pair units, and in USD when priced.
+    private var volume24: Double { trades.filter { Date().timeIntervalSince1970 - Double($0.time) <= 86_400 }.reduce(0) { $0 + Amount.units($1.quoteAmount, decimals: $1.quoteDecimals) } }
+    private var volume24USD: Double? { pairUSD.map { volume24 * $0 } }
 
     private enum TradeSide { case buy, sell }
     private var token: Token { Token(address: launch.token, symbol: launch.symbol, name: launch.name, decimals: 18, logoURL: URL(string: launch.logo), isLaunchpad: true) }
@@ -352,9 +371,11 @@ struct LaunchDetailView: View {
     var body: some View {
         List {
             headerSection
-            if !candles.isEmpty { chartSection }
+            statsSection
+            chartSection
             if launch.phase == .bonding { ticketSection } else { graduatedSection }
             if let account, account.tokenBalance > 0 || account.pendingRewards > 0 { holdingsSection(account) }
+            if !trades.isEmpty { tradesSection }
             aboutSection
         }
         .listStyle(.insetGrouped)
@@ -381,12 +402,16 @@ struct LaunchDetailView: View {
                     }
                 }
                 HStack(alignment: .firstTextBaseline) {
-                    Text("\(NumberStyle.number(LaunchpadService.priceNumber(launch))) \(launch.pair.symbol)")
-                        .font(.system(.title, design: .rounded).weight(.semibold)).monospacedDigit()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(NumberStyle.number(LaunchpadService.priceNumber(launch))) \(launch.pair.symbol)")
+                            .font(.system(.title, design: .rounded).weight(.semibold)).monospacedDigit()
+                        if let priceUSD { Text(priceUSD, format: .currency(code: "USD").precision(.fractionLength(2...8))).font(.footnote).foregroundStyle(.secondary).monospacedDigit() }
+                    }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
                         Text("\(NumberStyle.units(launch.marketCap, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)").monospacedDigit().fontWeight(.medium)
-                        Text("Market cap").font(.caption).foregroundStyle(.secondary)
+                        if let marketCapUSD { Text(marketCapUSD, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+                        else { Text("Market cap").font(.caption).foregroundStyle(.secondary) }
                     }
                 }
                 if launch.phase == .bonding {
@@ -405,17 +430,50 @@ struct LaunchDetailView: View {
     }
 
     private var chartSection: some View {
-        Section("Price") {
-            Chart(candles) { candle in
-                RectangleMark(x: .value("Time", Date(timeIntervalSince1970: TimeInterval(candle.time))), yStart: .value("Open", candle.open), yEnd: .value("Close", candle.close), width: 5)
-                    .foregroundStyle(candle.close >= candle.open ? Color.positive : Color.negative)
-                RuleMark(x: .value("Time", Date(timeIntervalSince1970: TimeInterval(candle.time))), yStart: .value("Low", candle.low), yEnd: .value("High", candle.high))
-                    .lineStyle(StrokeStyle(lineWidth: 1))
-                    .foregroundStyle(candle.close >= candle.open ? Color.positive : Color.negative)
+        Section {
+            PriceChart(points: priceSeries, isLoading: loadingTrades, tint: chartTint)
+                .frame(height: 180)
+                .padding(.vertical, 4)
+                .accessibilityLabel("Price from curve trades")
+        } header: {
+            Text("Price")
+        } footer: {
+            if trades.isEmpty, !loadingTrades {
+                Text("No trades yet — the chart moves up as people buy on the curve and down as they sell.").font(.caption)
             }
-            .chartYScale(domain: .automatic(includesZero: false))
-            .frame(height: 180)
-            .accessibilityLabel("Price candles from curve trades")
+        }
+    }
+
+    private var chartTint: Color {
+        guard let first = priceSeries.first?.usd, let last = priceSeries.last?.usd, first != last else { return Color.brand }
+        return last >= first ? Color.positive : Color.negative
+    }
+
+    private var statsSection: some View {
+        Section {
+            HStack(spacing: 0) {
+                stat("24h Volume", volume24USD.map { $0.formatted(.currency(code: "USD").precision(.fractionLength(0...2))) } ?? "\(NumberStyle.number(volume24)) \(launch.pair.symbol)")
+                Divider().frame(height: 34)
+                stat("Holders", holders.map { "\($0)" } ?? "—")
+                Divider().frame(height: 34)
+                stat("Progress", "\(launch.progressBps / 100)%")
+            }
+        }
+    }
+
+    private func stat(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 3) {
+            Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var tradesSection: some View {
+        Section("Recent Trades") {
+            ForEach(trades.reversed().prefix(25)) { trade in
+                LaunchTradeRow(trade: trade, symbol: launch.symbol, pair: launch.pair)
+            }
         }
     }
 
@@ -497,13 +555,17 @@ struct LaunchDetailView: View {
     @ViewBuilder private var confirmation: some View {
         if let address = session.address {
             if side == .buy, let q = buyQuote {
-                ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }) {
+                ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
+                    ActivityLog.record(ActivityRecord(kind: .buy, title: "Bought \(launch.symbol)", subtitle: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash), owner: session.address)
+                }) {
                     DetailRow("You pay", "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
                     DetailRow("You receive", "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
                     DetailRow("Minimum", "\(NumberStyle.units(q.tokensOut * 99 / 100, decimals: 18, compact: true)) \(launch.symbol) (1% slippage)")
                 }
             } else if side == .sell, let q = sellQuote {
-                ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: q.quoteOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }) {
+                ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: q.quoteOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
+                    ActivityLog.record(ActivityRecord(kind: .sell, title: "Sold \(launch.symbol)", subtitle: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash), owner: session.address)
+                }) {
                     DetailRow("You sell", "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol)")
                     DetailRow("You receive", "\(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
                     DetailRow("Minimum", "\(NumberStyle.units(q.quoteOut * 99 / 100, decimals: launch.pair.decimals)) \(launch.pair.symbol) (1% slippage)")
@@ -515,9 +577,37 @@ struct LaunchDetailView: View {
     private func load() async {
         async let d = env.launchpad.launch(token: launch.token)
         async let t = env.launchpad.trades(curve: launch.curve, pair: launch.pair)
+        async let h = env.launchpad.holderCount(token: launch.token, excluding: [launch.curve])
+        async let pu = pairUSDPrice()
         if let address = session.address { account = try? await env.launchpad.accountView(launch, account: address) }
         detail = try? await d
-        if let trades = try? await t { candles = LaunchpadService.candles(from: trades, interval: 300) }
+        pairUSD = await pu
+        let curveTrades = (try? await t) ?? []
+        trades = curveTrades
+        priceSeries = Self.priceSeries(trades: curveTrades, launch: launch, unit: pairUSD ?? 1)
+        loadingTrades = false
+        holders = await h
+    }
+
+    private func pairUSDPrice() async -> Double? {
+        (try? await env.prices.prices(for: [pairToken]))?[pairToken.address]?.usd
+    }
+
+    /// A price line for the chart: one point per curve trade, always ending on the live price, with a launch-time
+    /// baseline prepended so a coin with no trades still draws a flat line rather than an empty box. Sequential ids
+    /// keep points distinct even when trades share a block.
+    private static func priceSeries(trades: [CurveTrade], launch: Launch, unit: Double) -> [PricePoint] {
+        let current = LaunchpadService.priceNumber(launch) * unit
+        var points: [PricePoint] = []
+        var idx: UInt64 = 0
+        for trade in trades where trade.price > 0 {
+            points.append(PricePoint(block: idx, time: Date(timeIntervalSince1970: TimeInterval(trade.time)), usd: trade.price * unit)); idx += 1
+        }
+        points.append(PricePoint(block: idx, time: Date(), usd: current)); idx += 1
+        if points.count < 2 {
+            points.insert(PricePoint(block: idx, time: Date(timeIntervalSince1970: TimeInterval(launch.launchedAt)), usd: current), at: 0)
+        }
+        return points
     }
 
     private func quote() async {
@@ -532,6 +622,46 @@ struct LaunchDetailView: View {
     }
 }
 
+/// One curve fill in the token page's recent-trades list: buy/sell, the token amount, the pair amount, and when — a
+/// tap opens the transaction on Monadscan.
+private struct LaunchTradeRow: View {
+    let trade: CurveTrade
+    let symbol: String
+    let pair: PairInfo
+
+    var body: some View {
+        Group {
+            if let hash = trade.transactionHash {
+                Link(destination: Monad.explorerTransaction(hash)) { rowContent }.foregroundStyle(.primary)
+            } else {
+                rowContent
+            }
+        }
+    }
+
+    private var rowContent: some View {
+        HStack(spacing: 10) {
+            Image(systemName: trade.isBuy ? "arrow.down.left" : "arrow.up.right")
+                .font(.footnote.weight(.bold))
+                .frame(width: 30, height: 30)
+                .background((trade.isBuy ? Color.positive : Color.negative).opacity(0.14), in: Circle())
+                .foregroundStyle(trade.isBuy ? Color.positive : Color.negative)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(trade.isBuy ? "Buy" : "Sell") \(NumberStyle.units(trade.tokenAmount, decimals: 18, compact: true)) \(symbol)")
+                    .font(.subheadline.weight(.medium))
+                Text(trade.trader.short).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("\(NumberStyle.units(trade.quoteAmount, decimals: pair.decimals, compact: true)) \(pair.symbol)")
+                    .font(.subheadline.weight(.medium)).monospacedDigit()
+                Text("\(RelativeTime.short(trade.time)) ago").font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
 /// Launch a coin: pick its image, name and ticker, describe it, choose the pairing asset and economics, optionally
 /// buy first. A live "Your coin" card mirrors the discovery grid as you fill it in — the Ponsfamily create flow in
 /// DyorHQ's system.
@@ -540,6 +670,7 @@ struct CreateLaunchView: View {
     let onLaunched: () -> Void
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
+    @Environment(Router.self) private var router
     @Environment(SocialSession.self) private var social
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -614,7 +745,30 @@ struct CreateLaunchView: View {
                 if let address = session.address, let info = protocolInfo {
                     // Use the async plan: it reads the launch fee and the on-chain economics hash the factory
                     // requires (`expectedEconomics`). The sync overload leaves that hash zero → LaunchEconomicsMismatch.
-                    ConfirmationSheet(title: "Launch \(symbol)", confirmTitle: "Launch \(symbol)", build: { try await env.launchpad.launchPlan(input, from: address) }, onDone: { dismiss(); onLaunched() }) {
+                    ConfirmationSheet(
+                        title: "Launch \(symbol)", confirmTitle: "Launch \(symbol)",
+                        build: { try await env.launchpad.launchPlan(input, from: address) },
+                        onDone: { dismiss(); onLaunched() },
+                        onCompleted: { hash in
+                            ActivityLog.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
+                        },
+                        onView: { hash in
+                            // Route to the coin's in-app page instead of the block explorer (the explorer link lives
+                            // in Recent Activity). Resolve the new token from the launch tx, then open its page.
+                            // "View" and "Done" are mutually exclusive, so record here too (de-duped by hash) — a
+                            // launch tapped straight through to its page still lands in Recent Activity.
+                            ActivityLog.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
+                            Task {
+                                let detail = (try? await env.launchpad.launchResult(transaction: hash)).flatMap { $0 }
+                                if let result = detail, let launch = (try? await env.launchpad.launch(token: result.token)) ?? nil {
+                                    router.openLaunch(launch.launch)
+                                    dismiss()
+                                } else {
+                                    _ = await UIApplication.shared.open(Monad.explorerTransaction(hash))
+                                }
+                            }
+                        }
+                    ) {
                         DetailRow("Coin", "\(name) ($\(symbol))")
                         DetailRow("Paired with", pairInfo?.symbol ?? "MON")
                         DetailRow("Graduation", pairInfo.map { "\(NumberStyle.units(pairGraduation, decimals: $0.decimals, compact: true)) \($0.symbol)" } ?? "—")

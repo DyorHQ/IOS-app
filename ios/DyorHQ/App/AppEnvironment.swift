@@ -15,6 +15,7 @@ final class AppEnvironment {
     let perpl: PerplService
     let launchpad: LaunchpadService
     let activity: TokenActivityService
+    let swapHistory: SwapHistoryService
     let session: Session
     let settings = AppSettings()
     let perplTrading = PerplTrading()
@@ -33,6 +34,7 @@ final class AppEnvironment {
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
         // History reads want the larger log-chunk RPC, like the launchpad does.
         activity = TokenActivityService(rpc: RPCClient(url: LaunchpadService.defaultLogsRPC))
+        swapHistory = SwapHistoryService(rpc: RPCClient(url: LaunchpadService.defaultLogsRPC))
         session = Session(config: config)
     }
 }

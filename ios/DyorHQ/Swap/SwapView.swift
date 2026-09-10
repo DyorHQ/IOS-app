@@ -12,6 +12,9 @@ struct SwapView: View {
     @State private var picking: SwapModel.Side?
     @State private var showConfirm = false
     @State private var showSlippage = false
+    @State private var historyWindow: SwapHistoryService.Window = .day
+    @State private var swapHistory: [SwapHistoryItem] = []
+    @State private var loadingHistory = false
 
     var body: some View {
         NavigationStack {
@@ -41,6 +44,9 @@ struct SwapView: View {
             }
             .sheet(item: $picking) { side in
                 TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: KnownTokenStore.universe(owner: session.address)) { token in
+                    // Remember any token the user picks (a pasted ERC-20 included) so it shows a balance and price in
+                    // holdings and the picker from now on, not only after a completed swap.
+                    KnownTokenStore.add(token, owner: session.address)
                     model.select(token, for: side)
                 }
             }
@@ -53,15 +59,48 @@ struct SwapView: View {
         }
     }
 
-    /// Your recent on-chain movements of the asset you're paying with — read from its Transfer events, per wallet.
+    /// All the wallet's swaps over the selected range (not just the paying asset) — recorded swaps merged with an
+    /// on-chain Transfer scan that backfills older ones, newest first.
     @ViewBuilder private var activitySection: some View {
         if session.canSign {
             Section {
-                RecentActivityList(token: model.tokenIn, owner: session.address)
+                Picker("Range", selection: $historyWindow) {
+                    ForEach(SwapHistoryService.Window.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if loadingHistory, swapHistory.isEmpty {
+                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading swaps…").font(.subheadline).foregroundStyle(.secondary) }
+                } else if swapHistory.isEmpty {
+                    Text("No swaps in this range yet.").font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    ForEach(swapHistory) { SwapHistoryRow(item: $0) }
+                }
             } header: {
-                Text("\(model.tokenIn.symbol) Activity")
+                Text("Swap History")
             }
+            .task(id: "\(historyWindow.rawValue)-\(session.address?.hex ?? "")") { await loadHistory() }
         }
+    }
+
+    private func loadHistory() async {
+        guard let address = session.address else { swapHistory = []; return }
+        loadingHistory = true
+        defer { loadingHistory = false }
+        let tokens = Dictionary(KnownTokenStore.universe(owner: address).map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
+        let scanned = await env.swapHistory.swaps(wallet: address, window: historyWindow, decimals: tokens.mapValues(\.decimals))
+        let cutoff = Date().addingTimeInterval(-historyWindow.seconds)
+        var items: [SwapHistoryItem] = []
+        var seen = Set<String>()
+        // Recorded swaps first: exact legs, and they include native-MON legs the Transfer scan can't see.
+        for record in ActivityLog.all(owner: address) where record.kind == .swap && record.time >= cutoff {
+            guard let hashHex = record.txHashHex, seen.insert(hashHex).inserted else { continue }
+            items.append(SwapHistoryItem(id: hashHex, hash: record.txHash, time: record.time, text: record.subtitle))
+        }
+        // On-chain reconstruction backfills swaps made before recording (or on another device).
+        for swap in scanned where seen.insert(swap.hash.hexString).inserted {
+            items.append(SwapHistoryItem(id: swap.hash.hexString, hash: swap.hash, time: swap.time, text: SwapHistoryItem.describe(swap, tokens: tokens)))
+        }
+        swapHistory = items.sorted { $0.time > $1.time }
     }
 
     private var paySection: some View {
@@ -217,17 +256,23 @@ struct SwapView: View {
 
     @ViewBuilder private var confirmation: some View {
         if let quote = model.selectedQuote {
-            SwapConfirmation(model: model, quote: quote) {
+            SwapConfirmation(model: model, quote: quote, onDone: {
+                let paidIn = model.amountIn // capture before clearing, so the notification reports the real amount
                 model.amountText = ""
                 // Remember both sides so they show in holdings and the picker even if they aren't curated: the token
                 // just acquired, and the one paid with (a partial swap leaves a balance still worth showing).
                 KnownTokenStore.add(model.tokenOut, owner: session.address)
                 KnownTokenStore.add(model.tokenIn, owner: session.address)
                 if settings.notificationsEnabled, settings.notifyFills {
-                    Notifications.swapped(model.amountIn, model.tokenIn, quote.amountOut, model.tokenOut)
+                    Notifications.swapped(paidIn, model.tokenIn, quote.amountOut, model.tokenOut)
                 }
                 Task { await model.refreshBalances(env: env, address: session.address) }
-            }
+            }, onCompleted: { hash in
+                // Record the swap so it shows in Swap History and Recent Activity with its exact legs (including a
+                // native MON leg, which an on-chain Transfer scan can't recover).
+                let text = "\(NumberStyle.units(model.amountIn, decimals: model.tokenIn.decimals, compact: true)) \(model.tokenIn.symbol) → \(NumberStyle.units(quote.amountOut, decimals: model.tokenOut.decimals, compact: true)) \(model.tokenOut.symbol)"
+                ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash), owner: session.address)
+            })
         }
     }
 
@@ -244,13 +289,14 @@ private struct SwapConfirmation: View {
     let model: SwapModel
     let quote: VenueQuote
     let onDone: () -> Void
+    var onCompleted: ((Data) -> Void)? = nil
     @Environment(Session.self) private var session
 
     var body: some View {
         ConfirmationSheet(title: "Review Swap", confirmTitle: "Swap", build: {
             guard let address = session.address else { throw SessionError.readOnly }
             return try await quote.build(address)
-        }, onDone: onDone) {
+        }, onDone: onDone, onCompleted: onCompleted) {
             DetailRow("You pay", "\(NumberStyle.units(model.amountIn, decimals: model.tokenIn.decimals)) \(model.tokenIn.symbol)")
             DetailRow("You receive", "\(NumberStyle.units(quote.amountOut, decimals: model.tokenOut.decimals)) \(model.tokenOut.symbol)")
             DetailRow("Minimum received", "\(NumberStyle.units(quote.minOut, decimals: model.tokenOut.decimals)) \(model.tokenOut.symbol)")
@@ -433,62 +479,53 @@ struct SlippageSheet: View {
     }
 }
 
-/// The wallet's recent transfers of one token, newest first, each linking to the explorer. Loaded on demand when the
-/// selected asset changes.
-struct RecentActivityList: View {
-    let token: Token
-    let owner: Address?
-    @Environment(AppEnvironment.self) private var env
-    @State private var items: [TokenActivity] = []
-    @State private var loading = true
+/// One row in the swap-history list: a "sold → bought" line and when, linking to the transaction.
+struct SwapHistoryItem: Identifiable, Hashable {
+    let id: String
+    let hash: Data?
+    let time: Date
+    let text: String
 
-    var body: some View {
-        Group {
-            if loading, items.isEmpty {
-                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading activity…").font(.subheadline).foregroundStyle(.secondary) }
-            } else if items.isEmpty {
-                Text("No recent \(token.symbol) activity for this wallet.").font(.subheadline).foregroundStyle(.secondary)
-            } else {
-                ForEach(items) { ActivityRow(item: $0, token: token) }
-            }
+    /// A "sold → bought" line from a reconstructed swap, resolving symbols/decimals from the wallet's token set. When
+    /// the token isn't known (so its decimals are unknown), the amount is omitted rather than shown with a guessed
+    /// 18-decimal scale that could be wildly off — only the short address is shown.
+    static func describe(_ swap: SwapRecord, tokens: [Address: Token]) -> String {
+        func leg(_ address: Address, _ raw: BigUInt) -> String {
+            guard let token = tokens[address] else { return address.short }
+            return "\(NumberStyle.units(raw, decimals: token.decimals, compact: true)) \(token.symbol)"
         }
-        .task(id: "\(token.address.hex)-\(owner?.hex ?? "")") {
-            guard let owner else { items = []; loading = false; return }
-            loading = true
-            items = await env.activity.recent(token: token.address, wallet: owner)
-            loading = false
-        }
+        return "\(leg(swap.soldToken, swap.soldAmount)) → \(leg(swap.boughtToken, swap.boughtAmount))"
     }
 }
 
-private struct ActivityRow: View {
-    let item: TokenActivity
-    let token: Token
-
-    private var incoming: Bool { item.direction == .incoming }
+private struct SwapHistoryRow: View {
+    let item: SwapHistoryItem
 
     var body: some View {
-        Link(destination: Monad.explorerTransaction(item.hash)) {
-            HStack(spacing: 12) {
-                Image(systemName: incoming ? "arrow.down.left" : "arrow.up.right")
-                    .font(.footnote.weight(.bold))
-                    .frame(width: 34, height: 34)
-                    .background((incoming ? Color.positive : Color.negative).opacity(0.14), in: Circle())
-                    .foregroundStyle(incoming ? Color.positive : Color.negative)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(incoming ? "Received" : "Sent").font(.subheadline.weight(.medium))
-                    Text("\(incoming ? "from" : "to") \(item.counterparty.short)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("\(incoming ? "+" : "−")\(NumberStyle.units(item.amount, decimals: token.decimals, compact: true)) \(token.symbol)")
-                        .font(.subheadline.weight(.medium)).monospacedDigit()
-                        .foregroundStyle(incoming ? Color.positive : Color.primary)
-                    Text("\(RelativeTime.short(Int(item.time.timeIntervalSince1970))) ago").font(.caption2).foregroundStyle(.tertiary)
-                }
+        Group {
+            if let hash = item.hash {
+                Link(destination: Monad.explorerTransaction(hash)) { content }.foregroundStyle(.primary)
+            } else {
+                content
             }
         }
-        .foregroundStyle(.primary)
+    }
+
+    private var content: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.left.arrow.right")
+                .font(.footnote.weight(.bold))
+                .frame(width: 34, height: 34)
+                .background(Color.brand.opacity(0.14), in: Circle())
+                .foregroundStyle(Color.brand)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.text).font(.subheadline.weight(.medium)).monospacedDigit()
+                Text("\(RelativeTime.short(Int(item.time.timeIntervalSince1970))) ago").font(.caption2).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 8)
+            if item.hash != nil { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary) }
+        }
+        .contentShape(Rectangle())
     }
 }
 

@@ -288,6 +288,8 @@ struct DetailRow: View {
 /// Progress of a transaction plan, shown in confirmation sheets.
 struct TransactionProgress: View {
     let events: [TransactionEvent]
+    /// When set, the confirmed row's "View" opens this callback with the tx hash instead of the block explorer.
+    var onView: ((Data) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -301,7 +303,11 @@ struct TransactionProgress: View {
                     HStack {
                         Label("\(label) confirmed", systemImage: "checkmark.circle.fill").foregroundStyle(Color.positive)
                         Spacer()
-                        Link("View", destination: Monad.explorerTransaction(hash)).font(.footnote)
+                        if let onView {
+                            Button("View") { onView(hash) }.font(.footnote)
+                        } else {
+                            Link("View", destination: Monad.explorerTransaction(hash)).font(.footnote)
+                        }
                     }
                 }
             }

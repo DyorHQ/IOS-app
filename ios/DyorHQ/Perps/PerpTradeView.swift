@@ -344,7 +344,9 @@ struct PerpTradeView: View {
     // MARK: Confirmation sheets
 
     private var confirmSheet: some View {
-        ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { env.perpl.orderPlan(ticket.input(market: market)) }, onDone: { ticket.sizeText = ""; Task { await model.load(env: env, address: session.address) } }) {
+        ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { env.perpl.orderPlan(ticket.input(market: market)) }, onDone: { ticket.sizeText = ""; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
+            ActivityLog.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash), owner: session.address)
+        }) {
             DetailRow("Market", "\(market.asset)-PERP")
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
             DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(ticket.priceText)")
@@ -588,6 +590,7 @@ struct AuthedOrderSheet: View {
     @Environment(PerplTrading.self) private var perplTrading
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
+    @Environment(Session.self) private var session
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .review
 
@@ -649,8 +652,13 @@ struct AuthedOrderSheet: View {
         do {
             let ack = try await perplTrading.submit(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env)
             phase = ack.accepted ? .done : .failed(ack.error ?? "Perpl rejected the order.")
-            if ack.accepted, settings.notificationsEnabled, settings.notifyFills {
-                Notifications.perpOrder(side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP", filled: input.kind == .market)
+            if ack.accepted {
+                // Perpl's authenticated path settles off-chain, so there is no Monad tx hash to link — record it for
+                // Recent Activity anyway (perps have no on-chain feed to scan).
+                ActivityLog.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil), owner: session.address)
+                if settings.notificationsEnabled, settings.notifyFills {
+                    Notifications.perpOrder(side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP", filled: input.kind == .market)
+                }
             }
         } catch {
             phase = .failed(describe(error))

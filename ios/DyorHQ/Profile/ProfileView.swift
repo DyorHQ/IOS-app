@@ -27,9 +27,7 @@ struct ProfileView: View {
                     Button { showReceive = true } label: { SettingsRow("Receive", symbol: "qrcode", tint: .accent) }
                     Button { showSend = true } label: { SettingsRow("Send", symbol: "paperplane", tint: .accent) }
                         .disabled(!session.canSign)
-                    if let address = session.address {
-                        Link(destination: Monad.explorerAddress(address)) { SettingsRow("Activity on Monadscan", symbol: "clock.arrow.circlepath", tint: .accent) }
-                    }
+                    NavigationLink { RecentActivityView() } label: { SettingsRow("Recent Activity", symbol: "clock.arrow.circlepath", tint: .accent) }
                 } header: {
                     Text("Wallet")
                 } footer: {
