@@ -9,7 +9,8 @@ import {FeeEscrow} from "../src/FeeEscrow.sol";
 import {HolderFeeSharing} from "../src/HolderFeeSharing.sol";
 import {LaunchLocker} from "../src/LaunchLocker.sol";
 import {MemeHook} from "../src/MemeHook.sol";
-import {GraduationExecutor} from "../src/GraduationExecutor.sol";
+import {MondayGraduationExecutor} from "../src/MondayGraduationExecutor.sol";
+import {IMondayV3Factory} from "../src/interfaces/IMondayV3.sol";
 import {LaunchAndBuyRouter} from "../src/LaunchAndBuyRouter.sol";
 import {LaunchDeployer} from "../src/LaunchDeployer.sol";
 import {Types, ILaunchpadFactory} from "../src/interfaces/ILaunchpad.sol";
@@ -39,6 +40,9 @@ contract Deploy is Script {
         int24 tickSpacing = int24(int256(vm.envOr("TICK_SPACING", uint256(60))));
         uint256 phantomQuote = vm.envOr("PHANTOM_QUOTE_WEI", uint256(4_000 ether));
         uint256 graduationThreshold = vm.envOr("GRADUATION_THRESHOLD_WEI", uint256(16_000 ether));
+        // Graduation venue: Monday Trade's spot AMM (Uniswap-v3-style). Native-MON launches graduate into a WMON pool.
+        address mondayFactory = vm.envOr("MONDAY_FACTORY", address(0xC1e98D0A2a58fB8aBd10ccc30a58efff4080Aa21));
+        address wmon = vm.envOr("WMON", address(0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A));
 
         require(poolManager.code.length > 0, "PoolManager has no code on this chain");
 
@@ -55,7 +59,7 @@ contract Deploy is Script {
         MemeHook hook = new MemeHook{salt: salt}(IPoolManager(poolManager), address(factory));
         require(address(hook) == predictedHook, "hook landed on an unexpected address");
 
-        GraduationExecutor executor = new GraduationExecutor(IPoolManager(poolManager), address(factory), address(hook), address(locker));
+        MondayGraduationExecutor executor = new MondayGraduationExecutor(IMondayV3Factory(mondayFactory), address(factory), address(locker), wmon);
         LaunchAndBuyRouter router = new LaunchAndBuyRouter(ILaunchpadFactory(address(factory)));
         LaunchDeployer launchDeployer = new LaunchDeployer(address(factory));
         factory.setModules(address(hook), address(executor), address(locker), address(escrow), address(sharing), address(router), address(launchDeployer));
