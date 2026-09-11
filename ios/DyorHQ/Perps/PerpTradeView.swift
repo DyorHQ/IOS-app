@@ -25,6 +25,10 @@ struct PerpTradeView: View {
     @State private var closingPosition: PerpPosition?
     @State private var addingMargin: PerpPosition?
     @State private var cancellingOrder: PerpOrder?
+    @State private var fills: [PerplFill] = []
+    @State private var pnlByOrder: [Int: Double] = [:]
+    @State private var loadingFills = false
+    @State private var fillsError: String?
     @State private var candleTask: Task<Void, Never>?
 
     enum DataTab: String, CaseIterable, Identifiable { case chart = "Chart", book = "Order Book", trades = "Trades"; var id: String { rawValue } }
@@ -75,7 +79,10 @@ struct PerpTradeView: View {
         .onChange(of: model.fillSignal) { _, _ in
             if model.lastFilledPerpId == market.id { withAnimation { bottomTab = .positions } }
         }
-        .task(id: session.address) { perplTrading.refresh(address: session.address) }
+        .task(id: session.address) { perplTrading.refresh(address: session.address); await loadFills() }
+        // Load history when the user opens the History tab, and refresh it right after a fill lands on this market.
+        .onChange(of: bottomTab) { _, tab in if tab == .history { Task { await loadFills() } } }
+        .onChange(of: model.fillSignal) { _, _ in if model.lastFilledPerpId == market.id { Task { await loadFills() } } }
         .sheet(isPresented: $showConfirm) {
             if perplTrading.isReady, let accountId = model.account?.accountId {
                 AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1)) {
@@ -90,6 +97,16 @@ struct PerpTradeView: View {
 
     private var tpValue: Double? { ticket.tpslEnabled ? Double(ticket.takeProfitText) : nil }
     private var slValue: Double? { ticket.tpslEnabled ? Double(ticket.stopLossText) : nil }
+
+    /// Why TP/SL can't be placed yet, matched to the exact trading state so the user knows what to do — the socket is
+    /// signed in but forwarding is off (enable one-click) vs. no trading connection at all (connect).
+    private var tpslGateMessage: String {
+        switch perplTrading.status {
+        case .needsForwarding: return "Enable one-click trading in Profile to place take-profit and stop-loss."
+        case .connecting: return "Connecting to Perpl trading…"
+        default: return "Connect Perpl trading in Profile to place take-profit and stop-loss."
+        }
+    }
 
     /// % move to the trigger and the expected P&L in USD at that trigger, accounting for side and size.
     private func triggerMetrics(_ trigger: Double?) -> (pct: Double, pnl: Double)? {
@@ -276,9 +293,7 @@ struct PerpTradeView: View {
                 if let m = tpMetrics { triggerMetricRow("Exp. profit", m) }
                 fieldRow("Stop loss", text: $ticket.stopLossText, unit: "USD", placeholder: "Optional")
                 if let m = slMetrics { triggerMetricRow("Exp. loss", m) }
-                Text(perplTrading.isReady
-                     ? "Placed on Perpl as keeper-managed trigger orders linked to this position."
-                     : "Connect Perpl trading in Profile to place take-profit and stop-loss.")
+                Text(perplTrading.isReady ? "Placed on Perpl as keeper-managed trigger orders linked to this position." : tpslGateMessage)
                     .font(.caption2).foregroundStyle(perplTrading.isReady ? Color.secondary : Color.attention)
             }
 
@@ -367,13 +382,16 @@ struct PerpTradeView: View {
                 if orders.isEmpty { emptyRow("No open orders") }
                 else { ForEach(orders) { order in OrderCard(order: order, onCancel: { cancellingOrder = order }) } }
             case .assets:
+                let total = model.account.map { Amount.units($0.balance, decimals: 6) } ?? 0
+                let inUse = model.account.map { Amount.units(min($0.balance, $0.locked), decimals: 6) } ?? 0
                 DetailRows {
-                    DetailRow("Trading balance", (model.account.map { Amount.units($0.balance, decimals: 6) } ?? 0).formatted(.currency(code: "USD")))
+                    DetailRow("Total balance", total.formatted(.currency(code: "USD")))
+                    DetailRow("In use (margin)", inUse.formatted(.currency(code: "USD")))
                     DetailRow("Available", availableMargin.formatted(.currency(code: "USD")))
                     DetailRow("Unrealized", model.unrealizedTotal.formatted(.currency(code: "USD").sign(strategy: .always())), tint: model.unrealizedTotal < 0 ? .negative : .positive)
                 }
             case .history:
-                emptyRow("Trade history appears here")
+                historyList
             }
         }
         .padding(14)
@@ -389,6 +407,94 @@ struct PerpTradeView: View {
 
     private func emptyRow(_ text: String) -> some View {
         Text(text).font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 24)
+    }
+
+    // MARK: Trade history (this market) — Perpl Trade History rows, each with its realized P&L
+
+    @ViewBuilder private var historyList: some View {
+        if perplTrading.key == nil {
+            emptyRow("Connect Perpl trading in Profile to see your history.")
+        } else if let fillsError {
+            InlineError(message: fillsError)
+        } else if loadingFills, fills.isEmpty {
+            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 24)
+        } else if fills.isEmpty {
+            emptyRow("No trades on \(market.asset)-PERP yet")
+        } else {
+            LazyVStack(spacing: 0) {
+                ForEach(fills.prefix(50)) { fill in
+                    historyRow(fill)
+                    if fill.id != fills.prefix(50).last?.id { Divider() }
+                }
+            }
+        }
+    }
+
+    /// One trade row: Perpl's Trade History fields (direction, price, size, trade value, fee) plus a P&L line — the
+    /// realized P&L for a closing fill (joined from position-history by order id), or zero for an opening fill.
+    private func historyRow(_ fill: PerplFill) -> some View {
+        let pnl: Double? = fill.isClose ? pnlByOrder[fill.orderId] : 0
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(fill.direction).font(.subheadline.weight(.semibold))
+                    .foregroundStyle(fill.side == .buy ? Color.positive : Color.negative)
+                Spacer()
+                Text(fill.time, format: .dateTime.month().day().hour().minute())
+                    .font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+            }
+            LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .trailing)], spacing: 6) {
+                historyStat("Price", NumberStyle.number(fill.price), align: .leading)
+                historyStat("Size", "\(NumberStyle.number(fill.size, maximumFractionDigits: 4)) \(fill.symbol)", align: .leading)
+                historyStat("Value", fill.notional.formatted(.currency(code: "USD")), align: .trailing)
+                historyStat("Fee", fill.fee.formatted(.currency(code: "USD")), align: .leading)
+                Color.clear.frame(height: 0)
+                pnlStat(pnl)
+            }
+        }
+        .padding(.vertical, 10)
+    }
+
+    private func historyStat(_ label: String, _ value: String, align: HorizontalAlignment) -> some View {
+        VStack(alignment: align, spacing: 1) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.caption.weight(.medium)).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: align == .trailing ? .trailing : .leading)
+    }
+
+    @ViewBuilder private func pnlStat(_ pnl: Double?) -> some View {
+        VStack(alignment: .trailing, spacing: 1) {
+            Text("PnL").font(.caption2).foregroundStyle(.secondary)
+            if let pnl {
+                Text(pnl, format: .currency(code: "USD").sign(strategy: .always()))
+                    .font(.caption.weight(.medium)).monospacedDigit()
+                    .foregroundStyle(pnl < 0 ? Color.negative : (pnl > 0 ? Color.positive : Color.primary))
+            } else {
+                Text("—").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    /// Loads this market's recent Trade History (fills) plus its realized-P&L events, joined by order id so each
+    /// trade shows its P&L. Requires an enrolled key; a failed read keeps the last good list and surfaces the reason.
+    private func loadFills() async {
+        guard let key = perplTrading.key else { fills = []; pnlByOrder = [:]; fillsError = nil; return }
+        loadingFills = fills.isEmpty
+        defer { loadingFills = false }
+        let markets = model.markets.isEmpty ? [market] : model.markets
+        do {
+            let fillPage = try await env.perpl.fills(key: key, markets: markets, count: 100)
+            fills = fillPage.items.filter { $0.marketId == market.id }
+            fillsError = nil
+            // Best-effort P&L join; if it fails, still show the trades (P&L column falls back to "—"). Scope to this
+            // market first — Perpl order ids are per-market, so joining unscoped could match a foreign market's event.
+            if let pnlPage = try? await env.perpl.positionHistory(key: key, markets: markets, count: 100) {
+                pnlByOrder = Dictionary(pnlPage.items.filter { $0.marketId == market.id }.map { ($0.orderId, $0.realizedPnl) }, uniquingKeysWith: +)
+            }
+        } catch {
+            if fills.isEmpty { fillsError = describe(error) }
+        }
     }
 
     // MARK: Confirmation sheets
