@@ -11,14 +11,19 @@ enum MMExecutor {
 
     /// Places the ladder at `mark`. Returns ONLY the levels whose entry AND every requested TP/SL trigger were
     /// accepted — a level whose protective trigger was rejected is cancelled rather than left as a naked position.
-    @MainActor static func place(_ strategy: MMStrategy, market: PerpMarket, mark: Double, env: AppEnvironment) async -> [MMLevel] {
-        guard let accountId = env.perplTrading.accountId, mark > 0 else { return [] }
+    @MainActor static func place(_ strategy: MMStrategy, market: PerpMarket, mark: Double, env: AppEnvironment) async -> (placed: [MMLevel], error: String?) {
+        // Make sure the trading socket is live before placing (it can silently drop between enabling and starting).
+        await env.perplTrading.ensureConnected()
+        guard let accountId = env.perplTrading.accountId, mark > 0 else {
+            return ([], "Trading isn't connected. Enable one-click trading in Profile and try again.")
+        }
         // Clamp leverage to the market's own cap so the order can't wholesale revert.
         let marketMaxLev = market.initMarginFraction > 0 ? (1 / market.initMarginFraction).rounded(.down) : 25
         let leverage = max(1, min(strategy.leverage, marketMaxLev))
         let minLot = pow(10, -Double(market.lotDecimals))
 
         var placed: [MMLevel] = []
+        var firstError: String?
         for level in strategy.levels(mark: mark) {
             // A resting maker order must be on the correct side of the mark, and above the tradable minimum lot.
             let crosses = level.positionSide == .long ? level.entry >= mark : level.entry <= mark
@@ -27,16 +32,20 @@ enum MMExecutor {
                                    price: level.entry, leverage: leverage, reduceOnly: false, slippageBps: 0, postOnly: true)
             guard let result = try? await env.perplTrading.submitBracket(input: input, accountId: accountId,
                                                                         takeProfit: level.takeProfit, stopLoss: level.stopLoss,
-                                                                        env: env, ttlBlocks: orderTTLBlocks) else { continue }
+                                                                        env: env, ttlBlocks: orderTTLBlocks) else {
+                firstError = firstError ?? "Order could not be sent — trading not connected."
+                continue
+            }
             let bracketsOk = (level.takeProfit == nil || result.takeProfit == true) && (level.stopLoss == nil || result.stopLoss == true)
             if result.entry, bracketsOk {
                 placed.append(level)
-            } else if result.entry {
+            } else {
+                firstError = firstError ?? result.error
                 // Entry landed but a protective trigger did NOT — cancel the naked entry so it can't fill unprotected.
-                await cancelEntry(level: level, market: market, env: env)
+                if result.entry { await cancelEntry(level: level, market: market, env: env) }
             }
         }
-        return placed
+        return (placed, placed.isEmpty ? firstError : nil)
     }
 
     @MainActor private static func cancelEntry(level: MMLevel, market: PerpMarket, env: AppEnvironment) async {
@@ -152,7 +161,7 @@ final class MMWatcher {
             if s.recycleArmed {
                 s.recycleArmed = false
                 if let market = markets.first(where: { $0.id == s.marketId }), market.mark > 0 {
-                    let placed = await MMExecutor.place(s, market: market, mark: market.mark, env: env)
+                    let placed = await MMExecutor.place(s, market: market, mark: market.mark, env: env).placed
                     if !placed.isEmpty {
                         s.placedLevels = placed
                         s.restingPrices = placed.map(\.entry)

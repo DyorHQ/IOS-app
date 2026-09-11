@@ -133,6 +133,13 @@ public final class PerplTradeClient {
     public private(set) var accountId: Int?
     public private(set) var forwardingEnabled = false
     public private(set) var error: String?
+    /// Fired on the main actor whenever account state (id / forwardingEnabled / lfr) changes — from the initial
+    /// snapshot or a later AccountUpdate — so the owner can re-derive its status the moment forwarding turns on.
+    public var onAccountUpdate: (@MainActor () -> Void)?
+    /// Fired on the main actor when the socket drops, so the owner can flip status off `.connected` and reconnect on
+    /// next use (the socket has no reconnect of its own).
+    public var onDisconnect: (@MainActor () -> Void)?
+    private var keepAlive: Task<Void, Never>?
 
     private let chainId: Int
     private let wsURL: URL
@@ -158,6 +165,14 @@ public final class PerplTradeClient {
         task.resume()
         try signIn()
         receive()
+        // Keep the socket alive so it isn't dropped for idleness between orders.
+        keepAlive?.cancel()
+        keepAlive = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(20))
+                self?.task?.sendPing { _ in }
+            }
+        }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connectContinuation = continuation
             Task { try? await Task.sleep(for: .seconds(timeout)); self.failConnect(PerplTradeError.timeout) }
@@ -165,6 +180,8 @@ public final class PerplTradeClient {
     }
 
     public func disconnect() {
+        keepAlive?.cancel()
+        keepAlive = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         signedIn = false
@@ -243,6 +260,8 @@ public final class PerplTradeClient {
                     self.failConnect(PerplTradeError.closed(failure.localizedDescription))
                     for (_, c) in self.pending { c.resume(throwing: PerplTradeError.closed(failure.localizedDescription)) }
                     self.pending.removeAll()
+                    self.keepAlive?.cancel()
+                    self.onDisconnect?()
                 }
             }
         }
@@ -251,9 +270,10 @@ public final class PerplTradeClient {
     private func handle(_ data: Data) {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let mt = obj["mt"] as? Int else { return }
         switch mt {
-        case 19: // WalletSnapshot — accounts + sequence seed
-            applyAccounts(obj["accounts"] as? [[String: Any]] ?? obj["acc"] as? [[String: Any]])
+        case 19: // WalletSnapshot — the accounts array is under `as` (Perpl `Wallet.as: Account[]`); the previous
+                 // `accounts`/`acc` guesses never matched, so account id + forwarding flag never seeded on connect.
             signedIn = true
+            applyAccounts(obj["as"] as? [[String: Any]] ?? obj["accounts"] as? [[String: Any]] ?? obj["acc"] as? [[String: Any]])
             resolveConnect()
         case 21: // AccountUpdate — fw / lfr change
             applyAccount(obj)
@@ -272,9 +292,18 @@ public final class PerplTradeClient {
     }
 
     private func applyAccount(_ account: [String: Any]) {
-        if let id = account["id"] as? Int ?? account["in"] as? Int { accountId = id }
-        if let lfr = account["lfr"] as? Int { lastForwardedRq = max(lastForwardedRq, lfr) }
-        if let fw = account["fw"] as? Bool { forwardingEnabled = fw }
+        // `id` is the AccountID (`in` is the InstanceID — never use it as the account id).
+        if let id = (account["id"] as? Int) ?? (account["id"] as? NSNumber)?.intValue { accountId = id }
+        if let lfr = (account["lfr"] as? Int) ?? (account["lfr"] as? NSNumber)?.intValue { lastForwardedRq = max(lastForwardedRq, lfr) }
+        if let fw = Self.boolValue(account["fw"]) { forwardingEnabled = fw }
+        onAccountUpdate?()
+    }
+
+    /// Reads a JSON bool that may arrive as a real boolean or as 0/1.
+    private static func boolValue(_ value: Any?) -> Bool? {
+        if let b = value as? Bool { return b }
+        if let n = value as? NSNumber { return n.intValue != 0 }
+        return nil
     }
 
     private func resolveConnect() {

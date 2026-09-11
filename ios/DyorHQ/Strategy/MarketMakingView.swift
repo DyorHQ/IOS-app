@@ -261,7 +261,16 @@ struct MarketMakingView: View {
         let markets = (try? await env.perpl.markets()) ?? []
         let fresh = markets.first { $0.id == selected.id } ?? selected
         guard fresh.mark > 0 else { startError = "Couldn't read the market price."; return }
-        let startBalance = (try? await env.perpl.account(owner)).map { Amount.units($0.balance, decimals: Perpl.collateralDecimals) } ?? 0
+        let account = try? await env.perpl.account(owner)
+        let startBalance = account.map { Amount.units($0.balance, decimals: Perpl.collateralDecimals) } ?? 0
+        let available = account.map { Amount.units($0.balance - min($0.balance, $0.locked), decimals: Perpl.collateralDecimals) } ?? 0
+
+        // The strategy's total margin ≈ its capital (deployed notional = capital × leverage). Block early with a clear
+        // message rather than firing orders the venue will reject for margin.
+        guard capital <= available + 0.01 else {
+            startError = "Not enough Perpl balance: \(available.formatted(.currency(code: "USD"))) available, but this strategy needs about \(capital.formatted(.currency(code: "USD"))). Lower the capital or deposit more."
+            return
+        }
 
         // Persist a manageable record BEFORE placing, so a crash mid-placement leaves a strategy the manager/Stop can
         // reconcile — never orphaned orders with no record.
@@ -269,10 +278,11 @@ struct MarketMakingView: View {
         strategy.active = true
         MMStore.upsert(strategy, owner: owner)
 
-        let placed = await MMExecutor.place(strategy, market: fresh, mark: fresh.mark, env: env)
+        let result = await MMExecutor.place(strategy, market: fresh, mark: fresh.mark, env: env)
+        let placed = result.placed
         guard !placed.isEmpty else {
             MMStore.remove(id: strategy.id, owner: owner) // nothing rested — drop the placeholder
-            startError = "No orders were accepted. Check your Perpl balance and try again."
+            startError = result.error ?? "No orders were accepted. Check your Perpl balance and try again."
             return
         }
         strategy.placedLevels = placed

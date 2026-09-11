@@ -22,14 +22,25 @@ final class PerplTrading {
     private(set) var status: Status = .notEnrolled
     private(set) var key: PerplApiKey?
     private var client: PerplTradeClient?
+    /// The wallet (checksummed address) the trading session is bound to, so a wallet change tears the session down.
+    private var boundAddress: String?
 
     var isReady: Bool { status == .connected }
     /// The signed-in account id from the trading WS (same value the on-chain account reports).
     var accountId: Int? { client?.accountId }
 
-    /// Load any stored key for this address so the UI shows "enrolled" without a network call.
+    /// Load any stored key for this address so the UI shows "enrolled" without a network call. Rebinds to the given
+    /// wallet: when the wallet changes (or signs out) it tears down the previous wallet's authenticated session first,
+    /// so a `connected` / one-click-ready state can never carry over to a different account.
     func refresh(address: Address?) {
-        guard let address else { key = nil; status = .notEnrolled; return }
+        let target = address?.checksummed
+        if target != boundAddress {
+            disconnect()
+            key = nil
+            status = .notEnrolled
+            boundAddress = target
+        }
+        guard let address else { return }
         key = PerplKeychain.load(address: address.checksummed)
         if status == .notEnrolled || status == .enrolled { status = key == nil ? .notEnrolled : .enrolled }
     }
@@ -59,13 +70,30 @@ final class PerplTrading {
         guard let key else { throw PerplTradeError.notSignedIn }
         status = .connecting
         let client = PerplTradeClient(key: key, chainId: Monad.chainId)
+        // Re-derive status on every account update, so the moment Perpl reports forwarding enabled — which can lag the
+        // on-chain allowOrderForwarding tx and arrives via an AccountUpdate — the UI flips to connected on its own.
+        client.onAccountUpdate = { [weak self] in self?.syncStatus() }
+        // A dropped socket must move status off `.connected` so `isReady` is honest and the next op reconnects.
+        client.onDisconnect = { [weak self] in self?.syncStatus() }
+        self.client = client
         do {
             try await client.connect()
-            self.client = client
-            status = client.forwardingEnabled ? .connected : .needsForwarding
+            syncStatus()
         } catch {
+            self.client = nil
             status = .failed(describe(error))
             throw error
+        }
+    }
+
+    /// Derives `status` from the live client's signed-in + forwarding state. Idempotent; safe to call repeatedly. A
+    /// dropped socket (`signedIn == false`) falls back to `.enrolled` so the next use reconnects.
+    private func syncStatus() {
+        guard let client, status != .connecting else { return }
+        if client.signedIn {
+            status = client.forwardingEnabled ? .connected : .needsForwarding
+        } else if key != nil {
+            status = .enrolled
         }
     }
 
@@ -86,6 +114,7 @@ final class PerplTrading {
     /// Places the entry order (market/limit) with optional take-profit / stop-loss triggers linked to it. Returns
     /// the entry's gateway acknowledgement.
     func submit(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int = 100) async throws -> PerplOrderAck {
+        await ensureConnected()
         guard let client, status == .connected else { throw PerplTradeError.notSignedIn }
         let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
         var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
@@ -111,6 +140,7 @@ final class PerplTrading {
     /// Cancels a resting order over the authenticated path (no wallet signature) — for recycling / stopping a strategy.
     @discardableResult
     func cancel(perpId: Int, orderId: Int, env: AppEnvironment) async throws -> PerplOrderAck {
+        await ensureConnected()
         guard let client, status == .connected, let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
         let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
         return try await client.place([PerplOrders.cancel(perpId: perpId, orderId: orderId, accountId: accountId, head: head)])
@@ -127,11 +157,12 @@ final class PerplTrading {
 
     /// The per-frame acceptance of a bracket placement, so an automated caller can refuse to record a level whose
     /// take-profit or stop-loss trigger was rejected (which would leave a position unprotected).
-    struct BracketResult: Sendable { var entry: Bool; var takeProfit: Bool?; var stopLoss: Bool? }
+    struct BracketResult: Sendable { var entry: Bool; var takeProfit: Bool?; var stopLoss: Bool?; var error: String? }
 
     /// Places a bracket (entry + linked TP/SL) and reports whether the entry AND each requested trigger were
     /// individually accepted — unlike `submit`, which returns only the entry ack.
     func submitBracket(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int) async throws -> BracketResult {
+        await ensureConnected()
         guard let client, status == .connected else { throw PerplTradeError.notSignedIn }
         let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
         var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
@@ -156,12 +187,16 @@ final class PerplTrading {
         }
         return BracketResult(entry: accepted("entry"),
                              takeProfit: takeProfit != nil ? accepted("tp") : nil,
-                             stopLoss: stopLoss != nil ? accepted("sl") : nil)
+                             stopLoss: stopLoss != nil ? accepted("sl") : nil,
+                             error: acks.first { !$0.accepted }?.error)
     }
 
-    /// Reconnects the trading socket if a running strategy dropped it (the socket has no reconnect of its own).
+    /// Ensures a LIVE trading socket before an authed operation. Reconnects when the socket isn't truly alive — even
+    /// if `status` is a stale `.connected` — which is the fix for "one-click works but starting a strategy / placing
+    /// an order later fails" because the idle socket had silently dropped.
     func ensureConnected() async {
-        guard status != .connected, key != nil else { return }
+        guard key != nil else { return }
+        if status == .connected, client?.signedIn == true { return }
         try? await connect()
     }
 
