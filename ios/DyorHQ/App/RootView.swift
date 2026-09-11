@@ -26,6 +26,13 @@ struct RootView: View {
         // snapshot only ever captures the cover, never a secret.
         .overlay { PrivacyCover(active: scenePhase == .active) }
         .task { session.start() }
+        // Keep the per-wallet sessions tied to the active wallet: rebind whenever the signed-in address changes, so a
+        // sign-out + import of a different wallet never carries over the previous account's social profile or its
+        // authenticated Perpl trading session.
+        .task(id: session.address) {
+            env.social.bind(address: session.address)
+            env.perplTrading.refresh(address: session.address)
+        }
         .task { env.alertWatcher.start(env: env, settings: settings) }
         .task { env.copyWatcher.start(env: env, settings: settings) }
         .task { env.mmWatcher.start(env: env) }

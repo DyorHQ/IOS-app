@@ -15,6 +15,8 @@ final class SocialSession {
     private(set) var profile: SocialProfile?
     private(set) var error: String?
     let client: SupabaseClient
+    /// The wallet the social session is currently bound to (lowercased address), so a wallet change is detected.
+    private var boundWallet: String?
 
     var isSignedIn: Bool { state == .signedIn }
 
@@ -22,13 +24,31 @@ final class SocialSession {
         client = SupabaseClient(url: config.supabaseURL, anonKey: config.supabaseKey)
     }
 
-    /// Reuse a stored session (if still valid) for the given wallet on launch.
-    func restore(address: Address?) {
-        guard let address, let stored = SupabaseSessionStore.load(), stored.wallet == address.checksummed.lowercased(), stored.isValid else { return }
+    /// Binds the social session to the active wallet. Called whenever the signed-in wallet changes (sign in, sign
+    /// out, or switch accounts), so the social identity always matches the current wallet — there is no separate
+    /// social sign-out. A different wallet (or none) immediately drops the previous wallet's in-memory session so a
+    /// stale profile can never show; a genuine wallet sign-out (wallet → none) also clears the stored token, fully
+    /// signing out of social. A stored session is only ever reused when it belongs to exactly this wallet.
+    func bind(address: Address?) {
+        let target = address?.checksummed.lowercased()
+        guard target != boundWallet else { return }
+        let previous = boundWallet
+        boundWallet = target
+        reset()
+        if target == nil, previous != nil { SupabaseSessionStore.clear() } // full sign-out on wallet sign-out
+        guard let target, let stored = SupabaseSessionStore.load(), stored.wallet == target, stored.isValid else { return }
         Task {
             await client.restore(stored)
             if await client.currentSession != nil { state = .signedIn; await loadProfile() }
         }
+    }
+
+    /// Clears the in-memory session (keeps any stored token). Used when rebinding to a different wallet.
+    private func reset() {
+        Task { await client.signOut() }
+        state = .signedOut
+        profile = nil
+        error = nil
     }
 
     func signIn(session: Session) async {
@@ -38,6 +58,7 @@ final class SocialSession {
         do {
             let created = try await client.signIn(address: address.checksummed) { message in try await wallet.signMessage(message) }
             SupabaseSessionStore.save(created)
+            boundWallet = created.wallet
             state = .signedIn
             try? await ensureProfile(wallet: created.wallet)
             await loadProfile()
@@ -47,11 +68,11 @@ final class SocialSession {
         }
     }
 
+    /// Full sign-out: clears the in-memory session and the stored token, and unbinds the wallet.
     func signOut() {
-        Task { await client.signOut() }
+        reset()
         SupabaseSessionStore.clear()
-        state = .signedOut
-        profile = nil
+        boundWallet = nil
     }
 
     /// Make sure a profile row exists so foreign keys (posts, follows, watchlists) resolve.

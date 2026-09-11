@@ -78,7 +78,6 @@ struct SocialProfileView: View {
                         HStack { Text("Save Profile"); Spacer(); if busy { ProgressView().controlSize(.small) } }
                     }
                     .disabled(busy)
-                    Button("Sign Out of Social", role: .destructive) { social.signOut() }.disabled(busy)
                 } footer: {
                     if let error { InlineError(message: error) }
                     else if let savedNote { Label(savedNote, systemImage: "checkmark.circle.fill").foregroundStyle(Color.positive) }
@@ -88,7 +87,7 @@ struct SocialProfileView: View {
         }
         .navigationTitle("DyorHQ Social")
         .navigationBarTitleDisplayMode(.inline)
-        .task { social.restore(address: session.address); sync() }
+        .task { social.bind(address: session.address); sync() }
         .onChange(of: social.isSignedIn) { _, _ in sync() }
         .onChange(of: social.profile) { _, _ in sync() }
         .onChange(of: photoItem) { _, item in
