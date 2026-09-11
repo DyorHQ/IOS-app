@@ -15,7 +15,8 @@ enum MMExecutor {
         // Make sure the trading socket is live before placing (it can silently drop between enabling and starting).
         await env.perplTrading.ensureConnected()
         guard let accountId = env.perplTrading.accountId, mark > 0 else {
-            return ([], "Trading isn't connected. Enable one-click trading in Profile and try again.")
+            // Prefer the socket's own reason (rejected key, connection cap, …) over a generic hint.
+            return ([], env.perplTrading.failureMessage ?? "Trading isn't connected. Enable one-click trading in Profile and try again.")
         }
         // Clamp leverage to the market's own cap so the order can't wholesale revert.
         let marketMaxLev = market.initMarginFraction > 0 ? (1 / market.initMarginFraction).rounded(.down) : 25

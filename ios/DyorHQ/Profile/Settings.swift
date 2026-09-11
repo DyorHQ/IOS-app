@@ -237,6 +237,8 @@ struct PerplTradingView: View {
                 Text("Connection")
             } footer: {
                 if let error { InlineError(message: error) }
+                // A drop that happened outside a tap (idle timeout, rejected key, connection cap) is only on `status`.
+                else if case .failed(let why) = trading.status { InlineError(message: why) }
                 else if trading.status == .needsForwarding { Text("One-click trading lets Perpl's keeper forward your signed orders and fire triggers. It is a single on-chain transaction from your wallet.") }
             }
 

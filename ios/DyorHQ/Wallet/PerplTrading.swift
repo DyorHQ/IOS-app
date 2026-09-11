@@ -7,6 +7,11 @@ import Security
 /// in the Keychain), sign in to the trading WebSocket, enable one-click order forwarding, and place market / limit
 /// orders with optional take-profit and stop-loss triggers. This is the only path that yields real TP/SL, because
 /// the on-chain Exchange has no trigger primitive — Perpl's keeper watches the mark and fires the close.
+///
+/// Exactly ONE trading socket is ever open per app. Perpl caps a wallet at 4 concurrent trading connections (shared
+/// with the Perpl web app) and closes any beyond that with 1008 "too many connections" — so every connect goes
+/// through a single in-flight task, tears the previous socket down first, and failed attempts back off before an
+/// automatic retry.
 @Observable
 @MainActor
 final class PerplTrading {
@@ -24,10 +29,19 @@ final class PerplTrading {
     private var client: PerplTradeClient?
     /// The wallet (checksummed address) the trading session is bound to, so a wallet change tears the session down.
     private var boundAddress: String?
+    /// The one connect in flight, if any — concurrent callers await it instead of opening a second socket.
+    private var connectTask: Task<Void, Error>?
+    /// Automatic reconnects (watchers, order submission) wait until this instant; a user's tap always tries.
+    private var retryAfter: Date = .distantPast
+    private var consecutiveFailures = 0
+    /// Perpl rejected the key (close 3401). Automatic reconnects stop: the same key can never sign in again.
+    private var keyRejected = false
 
     var isReady: Bool { status == .connected }
     /// The signed-in account id from the trading WS (same value the on-chain account reports).
     var accountId: Int? { client?.accountId }
+    /// The most recent failure, for callers that need to say why an authenticated action couldn't run.
+    var failureMessage: String? { if case .failed(let why) = status { return why } else { return nil } }
 
     /// Load any stored key for this address so the UI shows "enrolled" without a network call. Rebinds to the given
     /// wallet: when the wallet changes (or signs out) it tears down the previous wallet's authenticated session first,
@@ -39,6 +53,8 @@ final class PerplTrading {
             key = nil
             status = .notEnrolled
             boundAddress = target
+            keyRejected = false
+            resetRetry()
         }
         guard let address else { return }
         key = PerplKeychain.load(address: address.checksummed)
@@ -58,6 +74,8 @@ final class PerplTrading {
             let enrolled = try await auth.enroll(address: address.checksummed, secret: secret, payload: payload, walletSignature: walletSignature, scopeMask: PerplScope.trade)
             PerplKeychain.save(enrolled, address: address.checksummed)
             key = enrolled
+            keyRejected = false
+            resetRetry()
             try await connect()
         } catch {
             status = .failed(describe(error))
@@ -65,29 +83,53 @@ final class PerplTrading {
         }
     }
 
-    /// Sign in to the trading WebSocket with the stored key.
+    /// Sign in to the trading WebSocket with the stored key. Single-flight: a call made while a connect is already in
+    /// progress awaits that one instead of opening a second socket.
     func connect() async throws {
+        if let connectTask { try await connectTask.value; return }
+        let task = Task<Void, Error> { [self] in
+            defer { self.connectTask = nil }
+            try await self.performConnect()
+        }
+        connectTask = task
+        try await task.value
+    }
+
+    private func performConnect() async throws {
         guard let key else { throw PerplTradeError.notSignedIn }
+        // One socket per app: close whatever was open before opening another.
+        client?.disconnect()
+        client = nil
         status = .connecting
         let client = PerplTradeClient(key: key, chainId: Monad.chainId)
-        // Re-derive status on every account update, so the moment Perpl reports forwarding enabled — which can lag the
-        // on-chain allowOrderForwarding tx and arrives via an AccountUpdate — the UI flips to connected on its own.
-        client.onAccountUpdate = { [weak self] in self?.syncStatus() }
-        // A dropped socket must move status off `.connected` so `isReady` is honest and the next op reconnects.
-        client.onDisconnect = { [weak self] in self?.syncStatus() }
+        // Both callbacks check the client is still the current one, so a superseded socket can't touch status.
+        client.onAccountUpdate = { [weak self, weak client] in
+            guard let self, let client, self.client === client else { return }
+            self.syncStatus()
+        }
+        client.onDisconnect = { [weak self, weak client] in
+            guard let self, let client, self.client === client else { return }
+            self.socketDropped(client.lastClose)
+        }
         self.client = client
         do {
             try await client.connect()
+            keyRejected = false
+            resetRetry()
             syncStatus()
         } catch {
+            client.disconnect()
+            // Report only if this attempt is still current — a deliberate disconnect() or a newer connect has already
+            // moved status on, and a stale failure must not overwrite it.
+            guard self.client === client else { throw error }
             self.client = nil
+            noteFailure(client.lastClose)
             status = .failed(describe(error))
             throw error
         }
     }
 
-    /// Derives `status` from the live client's signed-in + forwarding state. Idempotent; safe to call repeatedly. A
-    /// dropped socket (`signedIn == false`) falls back to `.enrolled` so the next use reconnects.
+    /// Derives `status` from the live client's signed-in + forwarding state. Idempotent; safe to call repeatedly.
     private func syncStatus() {
         guard let client, status != .connecting else { return }
         if client.signedIn {
@@ -97,25 +139,72 @@ final class PerplTrading {
         }
     }
 
+    /// The live socket closed on its own. A rejected key or the connection cap surfaces as a failure the user can
+    /// read; any other drop (idle timeout, server restart, network) just leaves the session `enrolled` so the next
+    /// authenticated action reconnects after backoff — that is what keeps an active strategy's socket self-healing.
+    private func socketDropped(_ close: PerplClose?) {
+        guard status != .connecting else { return } // the in-flight connect reports its own outcome
+        noteFailure(close)
+        if let close, close.isAuthFailure || close.isConnectionCap {
+            status = .failed(close.message)
+        } else {
+            status = key != nil ? .enrolled : .notEnrolled
+        }
+    }
+
+    private func noteFailure(_ close: PerplClose?) {
+        if close?.isAuthFailure == true { keyRejected = true }
+        consecutiveFailures += 1
+        // 5s, 10s, 20s, 40s, 80s (capped at 2 min); the connection cap starts at 30s since slots free up slowly.
+        let base: TimeInterval = close?.isConnectionCap == true ? 30 : 5
+        retryAfter = Date().addingTimeInterval(min(120, base * pow(2, Double(min(consecutiveFailures - 1, 4)))))
+    }
+
+    private func resetRetry() {
+        consecutiveFailures = 0
+        retryAfter = .distantPast
+    }
+
     func disconnect() {
         client?.disconnect()
         client = nil
         if key != nil { status = .enrolled }
     }
 
-    /// Turn on one-click trading (order forwarding) with a single on-chain call, then reconnect to pick it up.
+    /// Turn on one-click trading (order forwarding) with a single on-chain call. Perpl pushes the new `fw` flag as an
+    /// AccountUpdate on the live socket, so wait for that first and only reconnect (for a fresh snapshot) if it
+    /// doesn't arrive — every reconnect spends one of the wallet's 4 connection slots.
     func enableForwarding(env: AppEnvironment, wallet: Wallet) async throws {
         let data = try ABI.encodeCall("allowOrderForwarding(bool)", [.bool(true)])
         _ = try await env.sender.run([.call(TransactionRequest(to: Perpl.exchange, data: data), label: "Enable one-click trading")], from: wallet) { _ in }
-        disconnect()
+        if client?.signedIn == true {
+            var waited = 0
+            while client?.forwardingEnabled != true, waited < 8 {
+                try? await Task.sleep(for: .seconds(1))
+                waited += 1
+            }
+            syncStatus()
+            if status == .connected { return }
+        }
+        resetRetry()
         try await connect()
+    }
+
+    /// The connected, forwarding-enabled client — or the most specific error for why there isn't one.
+    private func liveClient() throws -> PerplTradeClient {
+        guard let client, status == .connected else {
+            if let failureMessage { throw PerplTradeError.closed(failureMessage) }
+            if status == .needsForwarding { throw PerplTradeError.forwardingDisabled }
+            throw PerplTradeError.notSignedIn
+        }
+        return client
     }
 
     /// Places the entry order (market/limit) with optional take-profit / stop-loss triggers linked to it. Returns
     /// the entry's gateway acknowledgement.
     func submit(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int = 100) async throws -> PerplOrderAck {
         await ensureConnected()
-        guard let client, status == .connected else { throw PerplTradeError.notSignedIn }
+        let client = try liveClient()
         let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
         var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
         let entryRq = client.nextRequestId()
@@ -141,7 +230,8 @@ final class PerplTrading {
     @discardableResult
     func cancel(perpId: Int, orderId: Int, env: AppEnvironment) async throws -> PerplOrderAck {
         await ensureConnected()
-        guard let client, status == .connected, let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
+        let client = try liveClient()
+        guard let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
         let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
         return try await client.place([PerplOrders.cancel(perpId: perpId, orderId: orderId, accountId: accountId, head: head)])
     }
@@ -150,6 +240,7 @@ final class PerplTrading {
     /// order is submitted on the opposite side (matches PerplService.closePositionPlan) so it actually reduces.
     @discardableResult
     func closePosition(market: PerpMarket, side: PositionSide, size: Double, slippageBps: Int, env: AppEnvironment) async throws -> PerplOrderAck {
+        await ensureConnected()
         guard let accountId = client?.accountId else { throw PerplTradeError.notSignedIn }
         let input = OrderInput(market: market, side: side.opposite, kind: .market, size: size, leverage: 1, reduceOnly: true, slippageBps: slippageBps)
         return try await submit(input: input, accountId: accountId, takeProfit: nil, stopLoss: nil, env: env)
@@ -163,7 +254,7 @@ final class PerplTrading {
     /// individually accepted — unlike `submit`, which returns only the entry ack.
     func submitBracket(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int) async throws -> BracketResult {
         await ensureConnected()
-        guard let client, status == .connected else { throw PerplTradeError.notSignedIn }
+        let client = try liveClient()
         let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
         var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
         let entryRq = client.nextRequestId()
@@ -192,11 +283,13 @@ final class PerplTrading {
     }
 
     /// Ensures a LIVE trading socket before an authed operation. Reconnects when the socket isn't truly alive — even
-    /// if `status` is a stale `.connected` — which is the fix for "one-click works but starting a strategy / placing
-    /// an order later fails" because the idle socket had silently dropped.
+    /// if `status` is a stale `.connected` — but never hammers Perpl: it joins an in-flight connect, waits out the
+    /// backoff after a failure, and gives up on a key Perpl has rejected (the user must re-enroll).
     func ensureConnected() async {
-        guard key != nil else { return }
+        guard key != nil, !keyRejected else { return }
         if status == .connected, client?.signedIn == true { return }
+        if let connectTask { _ = try? await connectTask.value; return }
+        guard Date() >= retryAfter else { return }
         try? await connect()
     }
 
@@ -204,6 +297,8 @@ final class PerplTrading {
         PerplKeychain.delete(address: address.checksummed)
         disconnect()
         key = nil
+        keyRejected = false
+        resetRetry()
         status = .notEnrolled
     }
 }

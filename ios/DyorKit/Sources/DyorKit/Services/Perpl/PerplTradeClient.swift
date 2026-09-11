@@ -120,7 +120,45 @@ public enum PerplTradeError: LocalizedError {
         case .noAccount: return "No Perpl trading account. Deposit AUSD first."
         case .forwardingDisabled: return "Enable one-click trading (order forwarding) on your Perpl account first."
         case .timeout: return "Perpl did not acknowledge the order in time."
-        case .closed(let why): return "Perpl trading connection closed: \(why)."
+        case .closed(let why): return why // already a full sentence from PerplClose.message
+        }
+    }
+}
+
+/// Why the trading socket closed, as the server reported it: the RFC 6455 close code plus Perpl's reason string
+/// (api-docs README → "WebSocket Close Codes"). URLSession surfaces every server-initiated close as the same generic
+/// "Socket is not connected" — the code and reason on the task are the only way to tell an idle timeout from a
+/// rejected key from the per-wallet connection cap, so they are kept and turned into a specific message here.
+public struct PerplClose: Sendable, Equatable {
+    public let code: Int
+    public let reason: String
+
+    /// 3401 — the API key was rejected. Retrying with the same key can never succeed; the user must re-enroll.
+    public var isAuthFailure: Bool { code == 3401 }
+    /// 1008 "too many connections" — Perpl allows 4 trading sockets per WALLET (shared with app.perpl.xyz tabs).
+    public var isConnectionCap: Bool { code == 1008 && reason.localizedCaseInsensitiveContains("too many connections") }
+    public var isRateLimit: Bool { code == 1008 && reason.localizedCaseInsensitiveContains("too many requests") }
+
+    public var message: String {
+        switch code {
+        case 3401:
+            return "Perpl rejected this trading key. Remove the API key below and connect again to enroll a fresh one."
+        case 1008 where isConnectionCap:
+            return "Too many Perpl trading connections for this wallet — Perpl allows 4, shared with the Perpl web app. Close other Perpl sessions (or wait a minute) and try again."
+        case 1008 where isRateLimit:
+            return "Perpl's trading rate limit was hit. Wait a moment and try again."
+        case 1008:
+            return "Perpl closed the idle trading connection (\(reason)). It reconnects on your next order."
+        case 1011:
+            return "Perpl couldn't process a trading frame (\(reason)). Reconnect and try again."
+        case 1013:
+            return "Perpl dropped the trading connection because the app fell behind reading it. Try again."
+        case 1001:
+            return "Perpl's trading server is restarting. Try again in a moment."
+        case 0:
+            return reason.isEmpty ? "Perpl trading connection was lost." : "Perpl trading connection was lost: \(reason)."
+        default:
+            return reason.isEmpty ? "Perpl trading connection closed (code \(code))." : "Perpl trading connection closed (\(code): \(reason))."
         }
     }
 }
@@ -139,6 +177,9 @@ public final class PerplTradeClient {
     /// Fired on the main actor when the socket drops, so the owner can flip status off `.connected` and reconnect on
     /// next use (the socket has no reconnect of its own).
     public var onDisconnect: (@MainActor () -> Void)?
+    /// How the last socket ended, from the server's close frame — read it in `onDisconnect` to decide whether a
+    /// retry can help (idle timeout: yes; 3401 rejected key: never; connection cap: only after backing off).
+    public private(set) var lastClose: PerplClose?
     private var keepAlive: Task<Void, Never>?
 
     private let chainId: Int
@@ -160,31 +201,45 @@ public final class PerplTradeClient {
 
     /// Connects and signs in, resolving once the WalletSnapshot has seeded the account and request-id counter.
     public func connect(timeout: TimeInterval = 10) async throws {
-        let task = session.webSocketTask(with: wsURL)
-        self.task = task
-        task.resume()
+        if self.task != nil { disconnect() } // one socket per client, ever
+        lastClose = nil
+        let socket = session.webSocketTask(with: wsURL)
+        self.task = socket
+        socket.resume()
+        // Sign in as the very first frame: Perpl closes the socket (1008 idle timeout) if it doesn't arrive promptly.
         try signIn()
-        receive()
-        // Keep the socket alive so it isn't dropped for idleness between orders.
+        receive(on: socket)
+        // Keep the socket alive with Perpl's APPLICATION ping (`mt:1`, api-docs websocket.md → Keep-Alive). A
+        // WebSocket protocol ping is answered at the edge and never reaches Perpl as activity, so the server's idle
+        // timeout would still close the socket between orders. 30s = 2 requests/min of the 120/min budget.
         keepAlive?.cancel()
         keepAlive = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(20))
-                self?.task?.sendPing { _ in }
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { break }
+                self?.send(["mt": 1, "t": Int(Date().timeIntervalSince1970 * 1000)])
             }
         }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connectContinuation = continuation
-            Task { try? await Task.sleep(for: .seconds(timeout)); self.failConnect(PerplTradeError.timeout) }
+            // Scoped to THIS socket: a stale attempt's timer must never fail a later connect's continuation.
+            Task { try? await Task.sleep(for: .seconds(timeout)); if self.task === socket { self.failConnect(PerplTradeError.timeout) } }
         }
     }
 
+    /// Tears the socket down and fails anything still waiting on it (an in-flight connect, unacknowledged orders),
+    /// so no caller can hang on a socket that no longer exists.
     public func disconnect() {
         keepAlive?.cancel()
         keepAlive = nil
-        task?.cancel(with: .goingAway, reason: nil)
+        let open = task
         task = nil
         signedIn = false
+        open?.cancel(with: .goingAway, reason: nil)
+        let closed = PerplTradeError.closed("Trading connection was closed.")
+        failConnect(closed)
+        for (_, c) in pending { c.resume(throwing: closed) }
+        pending.removeAll()
     }
 
     /// Places the frames in order (entry first, then triggers), returning the entry's ack. Triggers are sent
@@ -246,25 +301,43 @@ public final class PerplTradeClient {
         task?.send(.string(text)) { _ in }
     }
 
-    private func receive() {
-        task?.receive { [weak self] result in
+    /// Reads frames from `socket` until it fails. The socket is captured (not re-read from `self.task`) so a close
+    /// that lands after `disconnect()` swapped the task still reports the right close code, and a stale socket's
+    /// failure can never be mistaken for the current one's.
+    private func receive(on socket: URLSessionWebSocketTask) {
+        socket.receive { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
                 switch result {
                 case .success(let message):
                     if case .string(let text) = message, let data = text.data(using: .utf8) { self.handle(data) }
-                    self.receive()
+                    self.receive(on: socket)
                 case .failure(let failure):
+                    // A deliberate disconnect() already tore down and reported; ignore the cancelled socket's echo.
+                    guard socket === self.task else { return }
+                    let close = Self.closeInfo(socket, fallback: failure)
+                    self.lastClose = close
+                    self.task = nil
                     self.signedIn = false
-                    self.error = failure.localizedDescription
-                    self.failConnect(PerplTradeError.closed(failure.localizedDescription))
-                    for (_, c) in self.pending { c.resume(throwing: PerplTradeError.closed(failure.localizedDescription)) }
+                    self.error = close.message
+                    let error = PerplTradeError.closed(close.message)
+                    self.failConnect(error)
+                    for (_, c) in self.pending { c.resume(throwing: error) }
                     self.pending.removeAll()
                     self.keepAlive?.cancel()
                     self.onDisconnect?()
                 }
             }
         }
+    }
+
+    /// The server's close code + reason when it sent a close frame; otherwise a code-0 close carrying the transport's
+    /// own description (a dropped network, a TLS failure, the app being suspended).
+    private static func closeInfo(_ socket: URLSessionWebSocketTask, fallback: Error) -> PerplClose {
+        let code = socket.closeCode
+        guard code != .invalid else { return PerplClose(code: 0, reason: fallback.localizedDescription) }
+        let reason = socket.closeReason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        return PerplClose(code: code.rawValue, reason: reason)
     }
 
     private func handle(_ data: Data) {
