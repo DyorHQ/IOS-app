@@ -36,12 +36,20 @@ final class PerplTrading {
     private var consecutiveFailures = 0
     /// Perpl rejected the key (close 3401). Automatic reconnects stop: the same key can never sign in again.
     private var keyRejected = false
+    /// Set once `allowOrderForwarding(true)` has CONFIRMED on-chain for the bound wallet this session. There is no
+    /// on-chain getter for the flag and Perpl's WS `fw` push can lag the keeper by seconds, so a confirmed tx is the
+    /// authority: forwarding is treated as on from that moment, regardless of the (possibly stale) WS `fw`. Cleared
+    /// on a wallet change / forget.
+    private var forwardingGrantedOnChain = false
 
     var isReady: Bool { status == .connected }
     /// The signed-in account id from the trading WS (same value the on-chain account reports).
     var accountId: Int? { client?.accountId }
     /// The most recent failure, for callers that need to say why an authenticated action couldn't run.
     var failureMessage: String? { if case .failed(let why) = status { return why } else { return nil } }
+    /// Live socket diagnostics, so the connection screen can show the ground truth behind `status`.
+    var isSignedIn: Bool { client?.signedIn == true }
+    var isForwarding: Bool { client?.forwardingEnabled == true || forwardingGrantedOnChain }
 
     /// Load any stored key for this address so the UI shows "enrolled" without a network call. Rebinds to the given
     /// wallet: when the wallet changes (or signs out) it tears down the previous wallet's authenticated session first,
@@ -54,6 +62,7 @@ final class PerplTrading {
             status = .notEnrolled
             boundAddress = target
             keyRejected = false
+            forwardingGrantedOnChain = false
             resetRetry()
         }
         guard let address else { return }
@@ -130,12 +139,18 @@ final class PerplTrading {
     }
 
     /// Derives `status` from the live client's signed-in + forwarding state. Idempotent; safe to call repeatedly.
+    ///
+    /// Once the client is signed in, ALWAYS advance — including out of `.connecting`, which is the whole point of the
+    /// call at the end of a successful connect (the socket signed in, so `.connecting` must resolve to `.connected` /
+    /// `.needsForwarding`). Only when NOT yet signed in is `.connecting` held, so a spurious callback during the
+    /// handshake can't prematurely downgrade a connect that is still in flight.
     private func syncStatus() {
-        guard let client, status != .connecting else { return }
+        guard let client else { return }
         if client.signedIn {
-            status = client.forwardingEnabled ? .connected : .needsForwarding
-        } else if key != nil {
-            status = .enrolled
+            // Forwarding is on if the WS says so OR we confirmed the on-chain grant this session (the WS can lag it).
+            status = (client.forwardingEnabled || forwardingGrantedOnChain) ? .connected : .needsForwarding
+        } else if status != .connecting {
+            status = key != nil ? .enrolled : .notEnrolled
         }
     }
 
@@ -177,17 +192,19 @@ final class PerplTrading {
     func enableForwarding(env: AppEnvironment, wallet: Wallet) async throws {
         let data = try ABI.encodeCall("allowOrderForwarding(bool)", [.bool(true)])
         _ = try await env.sender.run([.call(TransactionRequest(to: Perpl.exchange, data: data), label: "Enable one-click trading")], from: wallet) { _ in }
+        // The tx confirmed, so forwarding is now enabled on-chain — the authority. Reflect it immediately instead of
+        // waiting on Perpl's WS `fw` echo, which can lag the keeper by seconds and left the user stuck on
+        // "Enable one-click" even after the grant landed.
+        forwardingGrantedOnChain = true
         if client?.signedIn == true {
-            var waited = 0
-            while client?.forwardingEnabled != true, waited < 8 {
-                try? await Task.sleep(for: .seconds(1))
-                waited += 1
-            }
-            syncStatus()
-            if status == .connected { return }
+            syncStatus() // → .connected right away via the flag; no needless reconnect that spends a connection slot
+        } else {
+            resetRetry()
+            try await connect()
         }
-        resetRetry()
-        try await connect()
+        // Best-effort: let the WS echo the new `fw` so the flag becomes redundant. Status is already connected.
+        for _ in 0..<8 where client?.forwardingEnabled != true { try? await Task.sleep(for: .seconds(1)) }
+        syncStatus()
     }
 
     /// The connected, forwarding-enabled client — or the most specific error for why there isn't one.
@@ -298,6 +315,7 @@ final class PerplTrading {
         disconnect()
         key = nil
         keyRejected = false
+        forwardingGrantedOnChain = false
         resetRetry()
         status = .notEnrolled
     }

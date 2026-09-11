@@ -198,6 +198,10 @@ struct PerplTradingView: View {
         List {
             Section {
                 LabeledContent("Status") { statusLabel }
+                if trading.key != nil {
+                    LabeledContent("Signed in") { checkmark(trading.isSignedIn) }
+                    LabeledContent("One-click trading") { checkmark(trading.isForwarding) }
+                }
             } footer: {
                 Text("Perpl's trading connection lets you place market, limit, and take-profit / stop-loss orders. Your Ed25519 key is generated on this device and authorized once by your wallet — it never leaves the device.")
             }
@@ -253,6 +257,11 @@ struct PerplTradingView: View {
         .navigationTitle("Perpl Trading")
         .navigationBarTitleDisplayMode(.inline)
         .task { trading.refresh(address: session.address) }
+    }
+
+    private func checkmark(_ on: Bool) -> some View {
+        Image(systemName: on ? "checkmark.circle.fill" : "circle")
+            .foregroundStyle(on ? Color.positive : Color.secondary)
     }
 
     @ViewBuilder private var statusLabel: some View {
