@@ -63,6 +63,12 @@ public enum PerplOrders {
     private static func scaleSize(_ size: Double, _ market: PerpMarket) -> Int { Int((size * pow(10, Double(market.lotDecimals))).rounded()) }
 
     /// The entry order. A market order is a marketable-limit IOC at the slippage bound (`p:0`, `ms`, `fl:4`).
+    ///
+    /// `lb` (last-execution block) is sent as `0`: Perpl then substitutes the market's OWN maximum window
+    /// (`order_ttl_blocks`). Computing `head + ttlBlocks` ourselves — from the RPC block, which runs ahead of Perpl's
+    /// heartbeat head — overshot that ceiling and every entry was rejected with `last exec block too high` (which is
+    /// why authenticated market/limit orders, TP/SL brackets and strategies all failed once one-click was on). The
+    /// `head`/`ttlBlocks` parameters are kept for source compatibility but no longer bound the entry.
     public static func entry(_ input: OrderInput, accountId: Int, head: Int, ttlBlocks: Int = 100) -> PerplOrderFrame {
         let type: PerpOrderType = input.reduceOnly
             ? (input.side == .long ? .closeShort : .closeLong)     // reduce-only market close
@@ -75,7 +81,7 @@ public enum PerplOrders {
             leverageHdths: Int((input.leverage * 100).rounded()),
             slippageBps: market ? input.slippageBps : nil,
             ioc: market,
-            lastExecutionBlock: head + ttlBlocks
+            lastExecutionBlock: 0
         )
     }
 
@@ -101,7 +107,9 @@ public enum PerplOrders {
     }
 
     public static func cancel(perpId: Int, orderId: Int, accountId: Int, head: Int) -> PerplOrderFrame {
-        PerplOrderFrame(type: .cancel, marketId: perpId, accountId: accountId, pricePNS: 0, lotLNS: 0, leverageHdths: 0, ioc: false, lastExecutionBlock: head + 100, orderId: orderId)
+        // `lb: 0` for the same reason as `entry` — a computed `head + 100` can exceed the market's ceiling and be
+        // rejected with `last exec block too high`.
+        PerplOrderFrame(type: .cancel, marketId: perpId, accountId: accountId, pricePNS: 0, lotLNS: 0, leverageHdths: 0, ioc: false, lastExecutionBlock: 0, orderId: orderId)
     }
 }
 
