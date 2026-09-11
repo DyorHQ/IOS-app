@@ -122,6 +122,16 @@ enum PerplExchange {
         ]
     }
 
+    /// Adds `amountCNS` (AUSD, 6 decimals) of collateral to the account's open position on `perpId`. The Exchange
+    /// has no dedicated method — `execOrders` carries it as an `IncreasePositionCollateral` desc whose only live
+    /// field is `amountCNS` (index 13); everything else stays zero.
+    static func addMarginDesc(perpId: Int, amountCNS: BigUInt, descId: BigUInt) -> [ABIValue] {
+        [
+            .uint(descId), .uint(perpId), .uint(PerpOrderType.increasePositionCollateral.rawValue), .uint(0), .uint(0), .uint(0), .uint(0),
+            .bool(false), .bool(false), .bool(false), .uint(0), .uint(0), .uint(0), .uint(amountCNS), .uint(0),
+        ]
+    }
+
     // MARK: Decoding
 
     static func market(id: Int, info p: ABIValue, margins m: [ABIValue]?) -> PerpMarket {

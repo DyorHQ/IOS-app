@@ -188,6 +188,36 @@ public actor PerplService {
         }
     }
 
+    // MARK: Authenticated history
+
+    /// One page of fills (newest first). `count` ≤ 100; pass the previous page's `next` cursor to continue.
+    public func fills(key: PerplApiKey, markets: [PerpMarket], count: Int = 100, cursor: String? = nil) async throws -> PerplHistoryPage<PerplFill> {
+        let byId = Dictionary(markets.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let (rows, next) = try await signedHistory("/v1/trading/fills", count: count, cursor: cursor, key: key)
+        return PerplHistoryPage(items: rows.compactMap { PerplFill(fill: $0, markets: byId) }, next: next)
+    }
+
+    /// One page of position-history rows that realized P&L (closes, decreases, liquidations), newest first.
+    public func positionHistory(key: PerplApiKey, markets: [PerpMarket], count: Int = 100, cursor: String? = nil) async throws -> PerplHistoryPage<PerplPositionRecord> {
+        let byId = Dictionary(markets.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let (rows, next) = try await signedHistory("/v1/trading/position-history", count: count, cursor: cursor, key: key)
+        return PerplHistoryPage(items: rows.compactMap { PerplPositionRecord(position: $0, markets: byId) }, next: next)
+    }
+
+    /// Signs and fetches one `{d:[…], np:cursor}` history page. `path` is the gateway path with no `/api` prefix.
+    private func signedHistory(_ path: String, count: Int, cursor: String?, key: PerplApiKey) async throws -> (rows: [[String: Any]], next: String?) {
+        var target = "\(path)?count=\(max(1, min(count, 100)))"
+        if let cursor, !cursor.isEmpty { target += "&page=\(cursor)" }
+        let auth = PerplAuthClient(chainId: Monad.chainId, apiBase: apiBase, session: session)
+        let timestamp = String(Int(Date().timeIntervalSince1970 * 1000))
+        let nonce = PerplAuth.base64url(Data((0..<16).map { _ in UInt8.random(in: 0...255) }))
+        let data = try await auth.signedGet(target, key: key, timestamp: timestamp, nonce: nonce)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw PerplError.malformedResponse("history page") }
+        let rows = json["d"] as? [[String: Any]] ?? []
+        let np = json["np"] as? String
+        return (rows, (np?.isEmpty == false) ? np : nil)
+    }
+
     // MARK: Transaction plans
 
     /// Approves AUSD to the Exchange when needed (the sender skips a sufficient allowance), then opens the
@@ -219,12 +249,25 @@ public actor PerplService {
         return [.call(TransactionRequest(to: PerplExchange.address, data: data), label: "Cancel order")]
     }
 
-    /// Closes a position with a reduce-only market order on the opposite side.
-    public nonisolated func closePositionPlan(market: PerpMarket, position: PerpPosition, slippageBps: Int) -> [TransactionStep] {
+    /// Closes a position with a reduce-only order on the opposite side. Defaults to a market close; pass
+    /// `kind: .limit` with a `limitPrice` to rest a reduce-only maker order (optionally post-only) instead — the
+    /// same order desc the venue uses for any close, so a limit close is as accurate as a market one.
+    public nonisolated func closePositionPlan(market: PerpMarket, position: PerpPosition, slippageBps: Int,
+                                              kind: OrderKind = .market, limitPrice: Double? = nil, postOnly: Bool = false) -> [TransactionStep] {
         let rounded = PerplExchange.jsRound(position.leverage)
         let leverage = max(1, rounded == 0 || rounded.isNaN ? 1 : rounded)
-        let input = OrderInput(market: market, side: position.side.opposite, kind: .market, size: position.size, leverage: leverage, reduceOnly: true, slippageBps: slippageBps)
+        let input = OrderInput(market: market, side: position.side.opposite, kind: kind, size: position.size,
+                               price: kind == .limit ? limitPrice : nil, leverage: leverage, reduceOnly: true,
+                               slippageBps: slippageBps, postOnly: postOnly && kind == .limit)
         return orderPlan(input)
+    }
+
+    /// Adds `amount` AUSD of collateral to the open position on `market`, lowering its leverage and pushing the
+    /// liquidation price further away. One `execOrders` call, no approval (the collateral is already in the account).
+    public nonisolated func addMarginPlan(market: PerpMarket, amount: Double) -> [TransactionStep] {
+        let desc = PerplExchange.addMarginDesc(perpId: market.id, amountCNS: PerplExchange.toCNS(amount), descId: BigUInt(OrderDescIDs.shared.next()))
+        let data = PerplExchange.execOrdersCalldata([desc], revertOnFail: true)
+        return [.call(TransactionRequest(to: PerplExchange.address, data: data), label: "Add \(NumberStyle.number(amount, maximumFractionDigits: 2)) AUSD margin")]
     }
 
     // MARK: Pure helpers

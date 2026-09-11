@@ -11,6 +11,7 @@ struct PerpsView: View {
     @State private var model = PerpsModel()
     @State private var sheet: PerpsSheet?
     @State private var path: [Int] = []
+    @State private var showPortfolio = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -23,6 +24,13 @@ struct PerpsView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Trade")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Portfolio", systemImage: "chart.xyaxis.line") { showPortfolio = true }
+                        .disabled(session.address == nil)
+                }
+            }
+            .sheet(isPresented: $showPortfolio) { PerpsPortfolioView(model: model) }
             .safeAreaInset(edge: .top, spacing: 0) { TradeModeSwitcher() }
             .navigationDestination(for: Int.self) { id in
                 if let market = model.markets.first(where: { $0.id == id }) {
@@ -215,6 +223,15 @@ final class PerpsModel {
     var cancelling: PerpOrder?
     private var perpl: PerplService?
 
+    /// Fill detection: increments whenever an open order fills (a position appears or grows between polls), with
+    /// `lastFilledPerpId` naming the market so the trade screen can jump to Positions. Position size is in base
+    /// contracts — it moves only on fills and closes, never with the mark — so a size increase is an unambiguous
+    /// fill signal that never fires on a cancel or a price move.
+    private(set) var fillSignal = 0
+    private(set) var lastFilledPerpId: Int?
+    private var lastPositionSize: [Int: Double] = [:]
+    private var fillPrimed = false
+
     var unrealizedTotal: Double { positions.reduce(0) { $0 + $1.unrealized } }
     var equity: Double? { account.map { Amount.units($0.balance, decimals: 6) + unrealizedTotal } }
 
@@ -246,11 +263,14 @@ final class PerpsModel {
                 if let acct {
                     async let p = env.perpl.positions(acct, markets: fetched)
                     async let o = env.perpl.openOrders(acct, markets: fetched)
-                    positions = (try? await p) ?? positions
+                    // A failed read returns nil (keep the last good list); only diff for fills on a successful read.
+                    if let fresh = try? await p { detectFills(fresh); positions = fresh }
                     orders = (try? await o) ?? orders
                 } else {
                     positions = []
                     orders = []
+                    lastPositionSize = [:]
+                    fillPrimed = false
                 }
                 collateral = (try? await collateralTask) ?? collateral
             } else {
@@ -264,6 +284,19 @@ final class PerpsModel {
         if let list = try? await ctx { context = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) }) }
     }
 
+    /// Compares the fresh positions against the previous snapshot and fires a fill signal + local notification for
+    /// any market whose position opened or grew. Skips the very first snapshot so an already-open position on launch
+    /// isn't reported as a new fill.
+    private func detectFills(_ fresh: [PerpPosition]) {
+        let sizes = Dictionary(fresh.map { ($0.perpId, $0.size) }, uniquingKeysWith: +)
+        defer { lastPositionSize = sizes; fillPrimed = true }
+        guard fillPrimed else { return }
+        for position in fresh where position.size > (lastPositionSize[position.perpId] ?? 0) + 1e-9 {
+            lastFilledPerpId = position.perpId
+            fillSignal &+= 1
+            Notifications.perpOrder(side: position.side == .long ? "Long" : "Short", market: position.symbol, filled: true)
+        }
+    }
 }
 
 /// Deposit into or withdraw from the Perpl account.

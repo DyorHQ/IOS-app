@@ -51,6 +51,12 @@ public struct PerpMarket: Identifiable, Hashable, Sendable {
     public let maintMarginFraction: Double
     public let numOrders: Int
 
+    /// The bare asset symbol for display and logo lookup — e.g. "SOL" from a contract symbol like "SOL_v2".
+    public var asset: String {
+        let letters = String(symbol.prefix { $0.isLetter })
+        return letters.isEmpty ? symbol : letters.uppercased()
+    }
+
     public init(id: Int, symbol: String, name: String, priceDecimals: Int, lotDecimals: Int, basePricePNS: BigUInt, mark: Double, last: Double, oracle: Double, markTimestamp: Int, longOI: Double, shortOI: Double, fundingRatePct100k: Int, status: Int, initMarginFraction: Double, maintMarginFraction: Double, numOrders: Int) {
         self.id = id
         self.symbol = symbol

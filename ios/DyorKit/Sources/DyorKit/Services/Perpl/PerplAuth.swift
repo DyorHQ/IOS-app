@@ -123,11 +123,16 @@ public actor PerplAuthClient {
         return PerplApiKey(token: token, secret: secret, address: address, scopeMask: scopeMask)
     }
 
-    /// A signed GET against a history endpoint (fills, order-history, …). `target` is the path+query, exactly.
+    /// A signed GET against a history endpoint (fills, order-history, …). `target` is the path+query exactly as the
+    /// gateway receives it — leading slash, no `/api` prefix, e.g. `/v1/trading/fills?count=100` — signed byte for
+    /// byte and appended verbatim to the API base, so the query survives (URL.appending(path:) would percent-encode
+    /// the `?` and break it). Matches PerplFoundation/api-docs examples/js/authed_rest_requests.js.
     public func signedGet(_ target: String, key: PerplApiKey, timestamp: String, nonce: String) async throws -> Data {
         let canonical = PerplAuth.restCanonical(chainId: chainId, method: "GET", target: target, timestamp: timestamp, nonce: nonce, body: "")
         let signature = try PerplAuth.sign(Data(canonical.utf8), secret: key.secret)
-        var request = URLRequest(url: apiBase.appending(path: String(target.dropFirst())))
+        guard let url = URL(string: apiBase.absoluteString + target) else { throw PerplError.malformedResponse("history URL") }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 25
         request.setValue(key.token, forHTTPHeaderField: "X-API-Key")
         request.setValue(timestamp, forHTTPHeaderField: "X-API-Timestamp")
         request.setValue(nonce, forHTTPHeaderField: "X-API-Nonce")

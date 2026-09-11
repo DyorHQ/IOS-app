@@ -121,6 +121,39 @@
       volume.update({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? palette.up2 : palette.down2 });
     };
 
+    // Horizontal price lines for the open position and resting orders: entry, liquidation, take-profit / stop-loss,
+    // and each resting limit order. Fully replaced on every call so a closed position leaves no stale line behind.
+    let priceLines = [];
+    window.__setLevels = function (levels) {
+      for (const line of priceLines) { try { candles.removePriceLine(line); } catch (e) {} }
+      priceLines = [];
+      if (!levels || !levels.length) return;
+      for (const lv of levels) {
+        if (lv.price == null || isNaN(lv.price) || lv.price <= 0) continue;
+        priceLines.push(candles.createPriceLine({
+          price: lv.price,
+          color: lv.color,
+          lineWidth: lv.width || 1,
+          lineStyle: lv.dashed ? 2 : 0, // 0 = solid, 2 = dashed
+          axisLabelVisible: true,
+          title: lv.title || '',
+        }));
+      }
+    };
+
+    // Buy/sell fill markers under/over the bar they filled in.
+    window.__setMarkers = function (marks) {
+      if (!marks || !marks.length) { candles.setMarkers([]); return; }
+      const rows = marks.map((m) => ({
+        time: m.time,
+        position: m.side === 'buy' ? 'belowBar' : 'aboveBar',
+        color: m.side === 'buy' ? palette.up : palette.down,
+        shape: m.side === 'buy' ? 'arrowUp' : 'arrowDown',
+        text: m.text || '',
+      })).sort((a, b) => a.time - b.time);
+      candles.setMarkers(rows);
+    };
+
     chart.subscribeCrosshairMove((param) => {
       if (!param.time || !param.point) { legend.style.opacity = '0'; return; }
       const c = param.seriesData.get(candles);

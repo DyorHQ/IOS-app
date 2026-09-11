@@ -8,16 +8,38 @@ import WebKit
 /// the theme flips, so the chart matches the surrounding screen exactly in light and dark.
 struct TradingViewChart: View {
     let candles: [PerpCandle]
+    /// Horizontal reference lines (entry, liquidation, take-profit/stop-loss, resting orders) drawn over the candles.
+    var levels: [ChartLevel] = []
+    /// Buy/sell fill markers to pin under/over the bar they filled in.
+    var markers: [ChartMarker] = []
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        ChartWebView(candles: candles, colorScheme: colorScheme)
+        ChartWebView(candles: candles, levels: levels, markers: markers, colorScheme: colorScheme)
             .background(Color(.secondarySystemGroupedBackground))
     }
 }
 
+/// One horizontal line on the chart, coloured for its role (side/liq/tp/sl) with an axis label.
+struct ChartLevel: Equatable {
+    let price: Double
+    let colorHex: String
+    let title: String
+    var dashed: Bool = false
+    var width: Int = 1
+}
+
+/// One fill marker: the bar time it belongs to, its side, and a short label.
+struct ChartMarker: Equatable {
+    let time: Int
+    let side: OrderSide
+    var text: String = ""
+}
+
 private struct ChartWebView: UIViewRepresentable {
     let candles: [PerpCandle]
+    let levels: [ChartLevel]
+    let markers: [ChartMarker]
     let colorScheme: ColorScheme
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -42,7 +64,7 @@ private struct ChartWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ web: WKWebView, context: Context) {
-        context.coordinator.apply(candles: candles, colorScheme: colorScheme)
+        context.coordinator.apply(candles: candles, levels: levels, markers: markers, colorScheme: colorScheme)
     }
 
     static func dismantleUIView(_ web: WKWebView, coordinator: Coordinator) {
@@ -54,8 +76,12 @@ private struct ChartWebView: UIViewRepresentable {
         weak var webView: WKWebView?
         private var ready = false
         private var lastSignature = ""
+        private var lastLevels = ""
+        private var lastMarkers = ""
         private var lastScheme: ColorScheme?
         private var pendingCandles: [PerpCandle] = []
+        private var pendingLevels: [ChartLevel] = []
+        private var pendingMarkers: [ChartMarker] = []
         private var pendingScheme: ColorScheme = .light
 
         nonisolated func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -65,8 +91,10 @@ private struct ChartWebView: UIViewRepresentable {
             }
         }
 
-        func apply(candles: [PerpCandle], colorScheme: ColorScheme) {
+        func apply(candles: [PerpCandle], levels: [ChartLevel], markers: [ChartMarker], colorScheme: ColorScheme) {
             pendingCandles = candles
+            pendingLevels = levels
+            pendingMarkers = markers
             pendingScheme = colorScheme
             if ready { flush() }
         }
@@ -78,9 +106,39 @@ private struct ChartWebView: UIViewRepresentable {
                 web.evaluateJavaScript("window.__configure(\(Self.paletteJSON(for: pendingScheme)))")
             }
             let signature = "\(pendingCandles.count)|\(pendingCandles.first?.id ?? 0)|\(pendingCandles.last?.id ?? 0)|\(pendingCandles.last?.close ?? 0)|\(pendingCandles.last?.high ?? 0)|\(pendingCandles.last?.low ?? 0)"
-            guard signature != lastSignature, !pendingCandles.isEmpty else { return }
-            lastSignature = signature
-            web.evaluateJavaScript("window.__setData(\(Self.candlesJSON(pendingCandles)))")
+            if signature != lastSignature, !pendingCandles.isEmpty {
+                lastSignature = signature
+                web.evaluateJavaScript("window.__setData(\(Self.candlesJSON(pendingCandles)))")
+            }
+            let levelsJSON = Self.levelsJSON(pendingLevels)
+            if levelsJSON != lastLevels {
+                lastLevels = levelsJSON
+                web.evaluateJavaScript("window.__setLevels(\(levelsJSON))")
+            }
+            let markersJSON = Self.markersJSON(pendingMarkers)
+            if markersJSON != lastMarkers {
+                lastMarkers = markersJSON
+                web.evaluateJavaScript("window.__setMarkers(\(markersJSON))")
+            }
+        }
+
+        private static func levelsJSON(_ levels: [ChartLevel]) -> String {
+            let rows = levels.map { lv in
+                "{\"price\":\(lv.price),\"color\":\"\(lv.colorHex)\",\"title\":\"\(escape(lv.title))\",\"dashed\":\(lv.dashed),\"width\":\(lv.width)}"
+            }
+            return "[\(rows.joined(separator: ","))]"
+        }
+
+        private static func markersJSON(_ markers: [ChartMarker]) -> String {
+            let rows = markers.map { m in
+                "{\"time\":\(m.time),\"side\":\"\(m.side == .buy ? "buy" : "sell")\",\"text\":\"\(escape(m.text))\"}"
+            }
+            return "[\(rows.joined(separator: ","))]"
+        }
+
+        /// Minimal JSON-string escaping for the short titles we send (no control characters expected).
+        private static func escape(_ s: String) -> String {
+            s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
         }
 
         private static func candlesJSON(_ candles: [PerpCandle]) -> String {

@@ -2,14 +2,6 @@ import BigInt
 import DyorKit
 import SwiftUI
 
-extension PerpMarket {
-    /// The bare asset symbol for display and logo lookup — e.g. "SOL" from a contract symbol like "SOL_v2".
-    var asset: String {
-        let letters = String(symbol.prefix { $0.isLetter })
-        return letters.isEmpty ? symbol : letters.uppercased()
-    }
-}
-
 /// The pro perpetuals screen: a live Perpl candlestick chart, the live order book and trade tape from Perpl's
 /// market-data feed, and an order ticket that switches green/red with the side. Positions, orders and the account
 /// come from the Exchange contract. Everything here — symbols, prices, chart, book — is Perpl's own data.
@@ -31,6 +23,7 @@ struct PerpTradeView: View {
     @State private var ticket = OrderTicket()
     @State private var showConfirm = false
     @State private var closingPosition: PerpPosition?
+    @State private var addingMargin: PerpPosition?
     @State private var cancellingOrder: PerpOrder?
     @State private var candleTask: Task<Void, Never>?
 
@@ -77,10 +70,15 @@ struct PerpTradeView: View {
         }
         .onDisappear { feed.stop(); candleTask?.cancel() }
         .onChange(of: resolution) { _, _ in Task { await loadCandles() } }
+        // When an order fills on this market (position appeared/grew between polls), jump to Positions so the user
+        // sees it immediately — the local notification is posted by the model.
+        .onChange(of: model.fillSignal) { _, _ in
+            if model.lastFilledPerpId == market.id { withAnimation { bottomTab = .positions } }
+        }
         .task(id: session.address) { perplTrading.refresh(address: session.address) }
         .sheet(isPresented: $showConfirm) {
             if perplTrading.isReady, let accountId = model.account?.accountId {
-                AuthedOrderSheet(market: market, input: ticket.input(market: market), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1)) {
+                AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1)) {
                     ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""
                     Task { await model.load(env: env, address: session.address) }
                 }
@@ -92,6 +90,25 @@ struct PerpTradeView: View {
 
     private var tpValue: Double? { ticket.tpslEnabled ? Double(ticket.takeProfitText) : nil }
     private var slValue: Double? { ticket.tpslEnabled ? Double(ticket.stopLossText) : nil }
+
+    /// % move to the trigger and the expected P&L in USD at that trigger, accounting for side and size.
+    private func triggerMetrics(_ trigger: Double?) -> (pct: Double, pnl: Double)? {
+        guard let trigger, trigger > 0, refPrice > 0, baseSize > 0 else { return nil }
+        let dir = ticket.side == .long ? 1.0 : -1.0
+        return ((trigger - refPrice) / refPrice * 100, dir * (trigger - refPrice) * baseSize)
+    }
+    private var tpMetrics: (pct: Double, pnl: Double)? { triggerMetrics(tpValue) }
+    private var slMetrics: (pct: Double, pnl: Double)? { triggerMetrics(slValue) }
+
+    private func triggerMetricRow(_ label: String, _ m: (pct: Double, pnl: Double)) -> some View {
+        HStack {
+            Text("\(label) \(m.pnl.formatted(.currency(code: "USD").sign(strategy: .always())))")
+            Spacer()
+            Text(NumberStyle.percent(m.pct))
+        }
+        .font(.caption2).monospacedDigit()
+        .foregroundStyle(m.pnl >= 0 ? Color.positive : Color.negative)
+    }
 
     // MARK: Header
 
@@ -114,12 +131,18 @@ struct PerpTradeView: View {
             HStack(spacing: 0) {
                 headerStat("Funding", fundingText, tint: fundingTint)
                 headerStat("Countdown", countdownText)
-                headerStat("24h Vol", live.map { NumberStyle.number($0.volume24h, compact: true) } ?? "—")
-                headerStat("Open Int.", NumberStyle.number(market.longOI + market.shortOI, compact: true))
+                headerStat("24h Vol", live.map { usdCompact($0.volume24h * mark) } ?? "—")
+                headerStat("Open Int.", usdCompact((market.longOI + market.shortOI) * mark))
             }
         }
         .padding(14)
         .cardBackground()
+    }
+
+    /// Compact USD for header stats ("$1.2M", "$847K"). Volume/OI come from Perpl in base-asset units, so × mark.
+    private func usdCompact(_ value: Double) -> String {
+        guard value.isFinite, value > 0 else { return "—" }
+        return "$" + NumberStyle.number(value, compact: true)
     }
 
     private func headerStat(_ title: String, _ value: String, tint: Color = .primary) -> some View {
@@ -151,9 +174,10 @@ struct PerpTradeView: View {
             switch dataTab {
             case .chart:
                 VStack(spacing: 8) {
-                    TradingViewChart(candles: candles)
+                    TradingViewChart(candles: candles, levels: chartLevels)
                         .frame(height: 280)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(alignment: .topTrailing) { positionBadge }
                         .overlay {
                             if candles.isEmpty {
                                 if loadingCandles { ProgressView() }
@@ -219,7 +243,20 @@ struct PerpTradeView: View {
             if ticket.kind == .limit {
                 fieldRow("Limit price", text: $ticket.priceText, unit: "USD", placeholder: NumberStyle.number(mark))
             }
-            fieldRow("Amount", text: $ticket.sizeText, unit: market.asset, placeholder: NumberStyle.number(minSize))
+            Picker("Unit", selection: $ticket.amountUnit) {
+                Text(market.asset).tag(OrderTicket.AmountUnit.asset)
+                Text("AUSD").tag(OrderTicket.AmountUnit.usd)
+            }
+            .pickerStyle(.segmented)
+            fieldRow("Amount", text: $ticket.sizeText,
+                     unit: ticket.amountUnit == .usd ? "AUSD" : market.asset,
+                     placeholder: ticket.amountUnit == .usd ? NumberStyle.number(minSize * mark) : NumberStyle.number(minSize))
+            if let typed = Double(ticket.sizeText), typed > 0, refPrice > 0, baseSize > 0 {
+                Text(ticket.amountUnit == .usd
+                     ? "≈ \(NumberStyle.number(baseSize, maximumFractionDigits: market.lotDecimals)) \(market.asset)"
+                     : "≈ \((baseSize * refPrice).formatted(.currency(code: "USD")))")
+                    .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing)
+            }
 
             // Percent presets of available margin.
             HStack(spacing: 8) {
@@ -236,7 +273,9 @@ struct PerpTradeView: View {
                 .tint(.brand)
             if ticket.tpslEnabled {
                 fieldRow("Take profit", text: $ticket.takeProfitText, unit: "USD", placeholder: "Optional")
+                if let m = tpMetrics { triggerMetricRow("Exp. profit", m) }
                 fieldRow("Stop loss", text: $ticket.stopLossText, unit: "USD", placeholder: "Optional")
+                if let m = slMetrics { triggerMetricRow("Exp. loss", m) }
                 Text(perplTrading.isReady
                      ? "Placed on Perpl as keeper-managed trigger orders linked to this position."
                      : "Connect Perpl trading in Profile to place take-profit and stop-loss.")
@@ -321,7 +360,7 @@ struct PerpTradeView: View {
 
             switch bottomTab {
             case .positions:
-                if let position { PositionCard(position: position, onClose: { closingPosition = position }) }
+                if let position { PositionCard(position: position, liveMark: mark, onClose: { closingPosition = position }, onAddMargin: { addingMargin = position }) }
                 else { emptyRow("No open positions") }
             case .orders:
                 let orders = model.orders.filter { $0.perpId == market.id }
@@ -339,7 +378,12 @@ struct PerpTradeView: View {
         }
         .padding(14)
         .cardBackground()
-        .sheet(item: $closingPosition) { position in closePositionSheet(position) }
+        .sheet(item: $closingPosition) { position in
+            ClosePositionSheet(market: market, position: position, mark: mark) { Task { await model.load(env: env, address: session.address) } }
+        }
+        .sheet(item: $addingMargin) { position in
+            AddMarginSheet(market: market, position: position, available: availableMargin) { Task { await model.load(env: env, address: session.address) } }
+        }
         .sheet(item: $cancellingOrder) { order in cancelOrderSheet(order) }
     }
 
@@ -350,7 +394,7 @@ struct PerpTradeView: View {
     // MARK: Confirmation sheets
 
     private var confirmSheet: some View {
-        ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { env.perpl.orderPlan(ticket.input(market: market)) }, onDone: { ticket.sizeText = ""; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
+        ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { env.perpl.orderPlan(ticket.input(market: market, refPrice: refPrice)) }, onDone: { ticket.sizeText = ""; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
             ActivityLog.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash), owner: session.address)
         }) {
             DetailRow("Market", "\(market.asset)-PERP")
@@ -361,15 +405,6 @@ struct PerpTradeView: View {
             DetailRow("Margin", (notional / max(ticket.leverage, 1)).formatted(.currency(code: "USD")))
             if ticket.tpslEnabled, !ticket.takeProfitText.isEmpty { DetailRow("Take profit", ticket.takeProfitText) }
             if ticket.tpslEnabled, !ticket.stopLossText.isEmpty { DetailRow("Stop loss", ticket.stopLossText) }
-        }
-    }
-
-    private func closePositionSheet(_ position: PerpPosition) -> some View {
-        ConfirmationSheet(title: "Close Position", confirmTitle: "Close \(position.symbol)", build: { env.perpl.closePositionPlan(market: market, position: position, slippageBps: 100) }, onDone: { Task { await model.load(env: env, address: session.address) } }) {
-            DetailRow("Size", "\(NumberStyle.number(position.size)) \(position.symbol)")
-            DetailRow("Mark price", NumberStyle.number(mark))
-            DetailRow("Unrealized", position.unrealized.formatted(.currency(code: "USD").sign(strategy: .always())), tint: position.unrealized < 0 ? .negative : .positive)
-            DetailRow("Order", "Market, reduce only, 1% slippage")
         }
     }
 
@@ -386,14 +421,50 @@ struct PerpTradeView: View {
     private var leverageOptions: [Double] { [1, 2, 3, 5, 10, 15, 20, 25, 50].filter { $0 <= maxLeverage } }
     private var minSize: Double { pow(10, -Double(market.lotDecimals)) }
     private var refPrice: Double { ticket.kind == .limit ? (Double(ticket.priceText) ?? mark) : mark }
-    private var notional: Double { (Double(ticket.sizeText) ?? 0) * refPrice }
+    private var baseSize: Double { ticket.baseSize(market: market, price: refPrice) }
+    private var notional: Double { baseSize * refPrice }
     private var estFee: Double { notional * 0.00069 } // T1 taker ≈ 6.9 bps; close is free
+    /// Reference lines drawn over the candles: the position's entry and liquidation, and every resting order on this
+    /// market. Colours match the app palette (long/buy green, short/sell red, liquidation amber).
+    private var chartLevels: [ChartLevel] {
+        var out: [ChartLevel] = []
+        if let position {
+            out.append(ChartLevel(price: position.entry, colorHex: position.side == .long ? "#1F9E5B" : "#D2483F", title: "Entry"))
+            if let liq = position.liquidation, liq > 0 {
+                out.append(ChartLevel(price: liq, colorHex: "#F5A623", title: "Liq", dashed: true))
+            }
+        }
+        for order in model.orders where order.perpId == market.id {
+            out.append(ChartLevel(price: order.price, colorHex: order.side == .buy ? "#1F9E5B" : "#D2483F",
+                                  title: order.reduceOnly ? "Close" : "Limit", dashed: true))
+        }
+        return out
+    }
+
+    /// A compact P&L pill pinned to the chart's corner while a position is open, updating with the live mark.
+    @ViewBuilder private var positionBadge: some View {
+        if let position {
+            let dir = position.side == .long ? 1.0 : -1.0
+            let pnl = dir * (mark - position.entry) * position.size + position.premium
+            HStack(spacing: 6) {
+                Text("\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.leverage, maximumFractionDigits: 1))×")
+                    .foregroundStyle(position.side == .long ? Color.positive : Color.negative)
+                Text(pnl, format: .currency(code: "USD").sign(strategy: .always()))
+                    .foregroundStyle(pnl < 0 ? Color.negative : Color.positive)
+            }
+            .font(.caption2.weight(.semibold).monospacedDigit())
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(8)
+        }
+    }
+
     private var availableMargin: Double {
         guard let account = model.account else { return 0 }
         return Amount.units(account.balance - min(account.balance, account.locked), decimals: 6)
     }
     private var liquidationText: String {
-        let size = Double(ticket.sizeText) ?? 0
+        let size = baseSize
         guard size > 0 else { return "—" }
         let margin = notional / max(ticket.leverage, 1)
         guard let liq = PerplService.liquidationPrice(side: ticket.side, entry: refPrice, size: size, margin: margin, premium: 0, maintenanceFraction: market.maintMarginFraction) else { return "—" }
@@ -404,7 +475,9 @@ struct PerpTradeView: View {
         guard refPrice > 0 else { return }
         let size = availableMargin * (pct / 100) * ticket.leverage / refPrice
         let stepped = (size * pow(10, Double(market.lotDecimals))).rounded(.down) / pow(10, Double(market.lotDecimals))
-        ticket.sizeText = stepped > 0 ? plainSize(stepped) : ""
+        guard stepped > 0 else { ticket.sizeText = ""; return }
+        // Write the value in whatever unit the field is currently showing.
+        ticket.sizeText = ticket.amountUnit == .usd ? plainSize(stepped * refPrice) : plainSize(stepped)
     }
 
     /// Formats a size into the amount field as a plain, ungrouped decimal. `NumberStyle.number` inserts the locale's
@@ -540,7 +613,17 @@ struct TradesTape: View {
 
 private struct PositionCard: View {
     let position: PerpPosition
+    /// Live mark from the market-data feed, so P&L and the mark row update in real time rather than at the last load.
+    let liveMark: Double
     let onClose: () -> Void
+    let onAddMargin: () -> Void
+
+    /// Recompute unrealized P&L (and % return on margin) against the live mark, so the number moves with the market.
+    private var livePnl: Double {
+        let dir = position.side == .long ? 1.0 : -1.0
+        return dir * (liveMark - position.entry) * position.size + position.premium
+    }
+    private var pnlPct: Double? { position.margin > 0 ? livePnl / position.margin * 100 : nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -549,20 +632,30 @@ private struct PositionCard: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(position.side == .long ? Color.positive : Color.negative)
                 Spacer()
-                Text(position.unrealized, format: .currency(code: "USD").sign(strategy: .always()))
-                    .font(.subheadline.weight(.semibold)).monospacedDigit()
-                    .foregroundStyle(position.unrealized < 0 ? Color.negative : Color.positive)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(livePnl, format: .currency(code: "USD").sign(strategy: .always()))
+                        .font(.subheadline.weight(.semibold)).monospacedDigit()
+                    if let pnlPct {
+                        Text(pnlPct, format: .number.precision(.fractionLength(2)).sign(strategy: .always())) + Text("%")
+                    }
+                }
+                .foregroundStyle(livePnl < 0 ? Color.negative : Color.positive)
+                .font(.caption.monospacedDigit())
             }
             LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], spacing: 8) {
                 stat("Size", "\(NumberStyle.number(position.size)) \(position.symbol)")
                 stat("Entry", NumberStyle.number(position.entry))
-                stat("Mark", NumberStyle.number(position.mark))
+                stat("Mark", NumberStyle.number(liveMark > 0 ? liveMark : position.mark))
                 stat("Margin", position.margin.formatted(.currency(code: "USD")))
                 stat("Liq.", position.liquidation.map { NumberStyle.number($0) } ?? "—")
                 stat("Notional", position.notional.formatted(.currency(code: "USD")))
             }
-            Button("Close at Market", action: onClose)
-                .buttonStyle(.bordered).controlSize(.small).tint(.negative)
+            HStack(spacing: 8) {
+                Button("Add Margin", action: onAddMargin)
+                    .buttonStyle(.bordered).controlSize(.small).tint(.brand)
+                Button("Close", action: onClose)
+                    .buttonStyle(.bordered).controlSize(.small).tint(.negative)
+            }
         }
         .padding(.vertical, 4)
     }
@@ -592,6 +685,208 @@ private struct OrderCard: View {
             Button("Cancel", action: onCancel).buttonStyle(.bordered).controlSize(.small).tint(.negative)
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// Closes a position at market or with a resting reduce-only limit order (optionally post-only). The plan is a
+/// single on-chain `execOrders`, so a limit close is placed as accurately as a market one and fills at the venue.
+private struct ClosePositionSheet: View {
+    let market: PerpMarket
+    let position: PerpPosition
+    let mark: Double
+    let onDone: () -> Void
+
+    @Environment(Session.self) private var session
+    @Environment(AppEnvironment.self) private var env
+    @Environment(AppSettings.self) private var settings
+    @Environment(\.dismiss) private var dismiss
+    @State private var run = TransactionRun()
+    @State private var kind: OrderKind = .market
+    @State private var limitText = ""
+    @State private var postOnly = false
+
+    private var isLimit: Bool { kind == .limit }
+    private var limitPrice: Double? { Double(limitText) }
+    private var canConfirm: Bool { session.canSign && !run.isRunning && (!isLimit || (limitPrice ?? 0) > 0) }
+
+    private var steps: [TransactionStep] {
+        env.perpl.closePositionPlan(market: market, position: position, slippageBps: 100, kind: kind, limitPrice: limitPrice, postOnly: postOnly)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    DetailRow("Position", "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
+                    DetailRow("Mark price", NumberStyle.number(mark))
+                    DetailRow("Unrealized", position.unrealized.formatted(.currency(code: "USD").sign(strategy: .always())), tint: position.unrealized < 0 ? .negative : .positive)
+                }
+                Section("Close order") {
+                    Picker("Type", selection: $kind) {
+                        Text("Market").tag(OrderKind.market)
+                        Text("Limit").tag(OrderKind.limit)
+                    }
+                    .pickerStyle(.segmented)
+                    if isLimit {
+                        HStack {
+                            Text("Limit price").foregroundStyle(.secondary)
+                            Spacer()
+                            TextField(NumberStyle.number(mark), text: $limitText)
+                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
+                        }
+                        Toggle("Post only (maker)", isOn: $postOnly)
+                        Text("Rests as a reduce-only limit at your price until it fills. It won't reduce your position until then.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        DetailRow("Order", "Market, reduce-only, 1% slippage")
+                    }
+                }
+                if !run.events.isEmpty { Section("Progress") { TransactionProgress(events: run.events) } }
+                if case .failed(let message) = run.phase {
+                    Section { InlineError(message: message) }.listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Close Position")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(run.isDone ? "Done" : "Cancel") { finish() }.disabled(run.isRunning)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 8) {
+                    if run.isDone {
+                        PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+                    } else if !session.canSign {
+                        Text(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    } else {
+                        PrimaryButton(title: isLimit ? "Place Limit Close" : "Close at Market", isBusy: run.isRunning, isDisabled: !canConfirm) {
+                            Task {
+                                if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm close")) { return }
+                                run.start(steps, session: session, sender: env.sender)
+                            }
+                        }
+                    }
+                }
+                .padding().frame(maxWidth: .infinity).background(.bar)
+            }
+            .interactiveDismissDisabled(run.isRunning)
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(Color(.systemGroupedBackground))
+        .sensoryFeedback(.success, trigger: run.isDone)
+    }
+
+    private func finish() {
+        let done = run.isDone
+        dismiss()
+        if done { onDone() }
+    }
+}
+
+/// Adds AUSD collateral to an open position — lowering its leverage and pushing the liquidation price away. One
+/// on-chain `execOrders` call, drawn from the account's available balance (no approval needed).
+private struct AddMarginSheet: View {
+    let market: PerpMarket
+    let position: PerpPosition
+    let available: Double
+    let onDone: () -> Void
+
+    @Environment(Session.self) private var session
+    @Environment(AppEnvironment.self) private var env
+    @Environment(AppSettings.self) private var settings
+    @Environment(\.dismiss) private var dismiss
+    @State private var run = TransactionRun()
+    @State private var amountText = ""
+
+    private var amount: Double { Double(amountText) ?? 0 }
+    private var overBalance: Bool { amount > available + 0.000001 }
+    private var canConfirm: Bool { session.canSign && !run.isRunning && amount > 0 && !overBalance }
+
+    /// Projected margin, leverage and liquidation after adding `amount`, so the user sees the effect before signing.
+    private var projMargin: Double { position.margin + max(0, amount) }
+    private var projLeverage: Double { projMargin > 0 ? position.notional / projMargin : position.leverage }
+    private var projLiquidation: Double? {
+        PerplService.liquidationPrice(side: position.side, entry: position.entry, size: position.size, margin: projMargin, premium: position.premium, maintenanceFraction: market.maintMarginFraction)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    DetailRow("Position", "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
+                    DetailRow("Current margin", position.margin.formatted(.currency(code: "USD")))
+                    DetailRow("Available", available.formatted(.currency(code: "USD")))
+                }
+                Section("Add margin") {
+                    HStack {
+                        Text("Amount").foregroundStyle(.secondary)
+                        Spacer()
+                        TextField("0", text: $amountText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
+                        Text("AUSD").foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 8) {
+                        ForEach([0.25, 0.5, 1.0], id: \.self) { frac in
+                            Button(frac == 1.0 ? "Max" : "\(Int(frac * 100))%") { amountText = plainAmount(available * frac) }
+                                .buttonStyle(.bordered).controlSize(.small).frame(maxWidth: .infinity)
+                        }
+                    }
+                    if overBalance { Text("More than your available balance.").font(.caption).foregroundStyle(.negative) }
+                }
+                if amount > 0, !overBalance {
+                    Section("After") {
+                        DetailRow("Margin", projMargin.formatted(.currency(code: "USD")))
+                        DetailRow("Leverage", "\(NumberStyle.number(projLeverage, maximumFractionDigits: 1))×")
+                        DetailRow("Liq. price", projLiquidation.map { NumberStyle.number($0) } ?? "—")
+                    }
+                }
+                if !run.events.isEmpty { Section("Progress") { TransactionProgress(events: run.events) } }
+                if case .failed(let message) = run.phase {
+                    Section { InlineError(message: message) }.listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Add Margin")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(run.isDone ? "Done" : "Cancel") { finish() }.disabled(run.isRunning)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 8) {
+                    if run.isDone {
+                        PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+                    } else if !session.canSign {
+                        Text(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    } else {
+                        PrimaryButton(title: "Add Margin", isBusy: run.isRunning, isDisabled: !canConfirm) {
+                            Task {
+                                if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm add margin")) { return }
+                                run.start(env.perpl.addMarginPlan(market: market, amount: amount), session: session, sender: env.sender)
+                            }
+                        }
+                    }
+                }
+                .padding().frame(maxWidth: .infinity).background(.bar)
+            }
+            .interactiveDismissDisabled(run.isRunning)
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(Color(.systemGroupedBackground))
+        .sensoryFeedback(.success, trigger: run.isDone)
+    }
+
+    /// AUSD amount with no grouping separator, so it round-trips back through `Double(_:)` for the percentage chips.
+    private func plainAmount(_ value: Double) -> String {
+        String(format: "%.2f", max(0, value))
+    }
+
+    private func finish() {
+        let done = run.isDone
+        dismiss()
+        if done { onDone() }
     }
 }
 
@@ -688,6 +983,7 @@ struct AuthedOrderSheet: View {
 // MARK: - Order ticket state
 
 struct OrderTicket {
+    enum AmountUnit { case asset, usd }
     var side: PositionSide = .long
     var kind: OrderKind = .market
     var sizeText = ""
@@ -698,19 +994,33 @@ struct OrderTicket {
     var tpslEnabled = false
     var takeProfitText = ""
     var stopLossText = ""
+    /// Whether `sizeText` is entered in the base asset (BTC) or in AUSD notional ($). All consumers resolve the base
+    /// size through `baseSize(market:price:)`, the single conversion choke point.
+    var amountUnit: AmountUnit = .asset
+
+    /// The order size in base (asset) units, resolving the typed value from the selected unit and rounding down to
+    /// the market's lot precision. `price` is the reference price (limit price or mark).
+    func baseSize(market: PerpMarket, price: Double) -> Double {
+        let typed = Double(sizeText) ?? 0
+        guard typed > 0, price > 0 else { return 0 }
+        let raw = amountUnit == .usd ? typed / price : typed
+        let scale = pow(10, Double(market.lotDecimals))
+        return (raw * scale).rounded(.down) / scale
+    }
 
     func problem(market: PerpMarket, account: PerpAccount?, available: Double) -> String? {
-        guard let size = Double(sizeText), size > 0 else { return "Enter a size in \(market.asset)." }
+        let price = kind == .limit ? (Double(priceText) ?? market.mark) : market.mark
+        let size = baseSize(market: market, price: price)
+        guard size > 0 else { return amountUnit == .usd ? "Enter an amount in AUSD." : "Enter a size in \(market.asset)." }
         if kind == .limit, (Double(priceText) ?? 0) <= 0 { return "Enter a limit price." }
         if account == nil, !reduceOnly { return "Deposit AUSD to open a trading account first." }
         if account != nil, !reduceOnly {
-            let price = kind == .limit ? (Double(priceText) ?? market.mark) : market.mark
             if size * price / max(leverage, 1) > available * 1.0001 { return "Not enough available margin." }
         }
         return nil
     }
 
-    func input(market: PerpMarket) -> OrderInput {
-        OrderInput(market: market, side: side, kind: kind, size: Double(sizeText) ?? 0, price: kind == .limit ? Double(priceText) : nil, leverage: leverage, reduceOnly: reduceOnly, slippageBps: slippageBps, postOnly: false)
+    func input(market: PerpMarket, refPrice: Double) -> OrderInput {
+        OrderInput(market: market, side: side, kind: kind, size: baseSize(market: market, price: refPrice), price: kind == .limit ? Double(priceText) : nil, leverage: leverage, reduceOnly: reduceOnly, slippageBps: slippageBps, postOnly: false)
     }
 }
