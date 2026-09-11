@@ -92,6 +92,13 @@ public struct Secp256k1Account: Sendable {
     }
 }
 
+extension Secp256k1Account: CustomStringConvertible, CustomDebugStringConvertible {
+    /// Redacted on purpose: the private key must never appear in a `print`, log, string interpolation, or crash
+    /// reflection. Only the (public) address is shown.
+    public var description: String { "Secp256k1Account(\(address.short), privateKey: <redacted>)" }
+    public var debugDescription: String { description }
+}
+
 public enum Secp256k1Error: Error { case badHashLength }
 
 /// Wraps an already-computed 32-byte hash (e.g. a keccak-256 digest) so it can be signed by swift-secp256k1's

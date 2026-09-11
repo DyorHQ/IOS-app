@@ -129,6 +129,7 @@ enum SupabaseSessionStore {
         var add = query
         add[kSecValueData as String] = data
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        add[kSecAttrSynchronizable as String] = false // explicit: session token stays on this device only
         SecItemAdd(add as CFDictionary, nil)
     }
 

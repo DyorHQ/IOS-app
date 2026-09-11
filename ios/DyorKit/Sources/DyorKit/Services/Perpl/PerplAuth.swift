@@ -21,6 +21,13 @@ public struct PerplApiKey: Sendable, Codable, Equatable {
     }
 }
 
+extension PerplApiKey: CustomStringConvertible, CustomDebugStringConvertible {
+    /// Redacted on purpose: the Ed25519 secret and bearer token must never appear in a log, `print`, interpolation,
+    /// or crash reflection.
+    public var description: String { "PerplApiKey(address: \(address), secret: <redacted>, token: <redacted>)" }
+    public var debugDescription: String { description }
+}
+
 public enum PerplScope {
     public static let read = 1
     public static let trade = 2

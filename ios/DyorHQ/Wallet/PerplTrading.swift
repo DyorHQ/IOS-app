@@ -184,6 +184,7 @@ enum PerplKeychain {
         var add = query
         add[kSecValueData as String] = data
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        add[kSecAttrSynchronizable as String] = false // explicit: keep the Perpl API secret off iCloud Keychain
         SecItemAdd(add as CFDictionary, nil)
     }
 

@@ -19,6 +19,7 @@ enum ImportedWalletStore {
         var add = query
         add[kSecValueData as String] = privateKey
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        add[kSecAttrSynchronizable as String] = false // explicit: never sync the key to iCloud Keychain
         SecItemAdd(add as CFDictionary, nil)
     }
 

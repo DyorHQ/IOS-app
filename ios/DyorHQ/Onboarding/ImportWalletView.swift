@@ -7,11 +7,13 @@ import SwiftUI
 /// DyorHQ without creating a new one.
 struct ImportWalletView: View {
     @Environment(Session.self) private var session
+    @Environment(\.scenePhase) private var scenePhase
     @State private var kind: Kind = .phrase
     @State private var phrase = ""
     @State private var privateKey = ""
     @State private var derived: Secp256k1Account?
     @State private var importing = false
+    @State private var reveal = false
     @State private var error: String?
 
     enum Kind: String, CaseIterable, Identifiable { case phrase = "Recovery Phrase", key = "Private Key"; var id: String { rawValue } }
@@ -71,6 +73,8 @@ struct ImportWalletView: View {
             .background(.bar)
         }
         .keyboardDoneButton()
+        // Re-hide a revealed secret whenever the app leaves the foreground, so it isn't shown again on return.
+        .onChange(of: scenePhase) { _, phase in if phase != .active { reveal = false } }
         .task(id: currentInput + kind.rawValue) {
             try? await Task.sleep(for: .milliseconds(250))
             if Task.isCancelled { return }
@@ -78,15 +82,33 @@ struct ImportWalletView: View {
         }
     }
 
+    /// Toggles between secure (dots) and revealed entry so the user can verify what they pasted.
+    private var revealToggle: some View {
+        Button { reveal.toggle(); Haptics.selection() } label: {
+            Label(reveal ? "Hide" : "Reveal", systemImage: reveal ? "eye.slash" : "eye").font(.subheadline)
+        }
+    }
+
     private var phraseSection: some View {
         Section {
-            TextField("Enter your 12 or 24 word phrase", text: $phrase, axis: .vertical)
-                .lineLimit(3...6)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.body)
-            Button("Paste", systemImage: "doc.on.clipboard") {
-                if let pasted = UIPasteboard.general.string { phrase = pasted.trimmingCharacters(in: .whitespacesAndNewlines); Haptics.selection() }
+            Group {
+                if reveal {
+                    TextField("Enter your 12 or 24 word phrase", text: $phrase, axis: .vertical).lineLimit(3...6)
+                } else {
+                    // Secure entry keeps the phrase off-screen and out of the keyboard's predictive/learning cache.
+                    SecureField("Enter your 12 or 24 word phrase", text: $phrase)
+                }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .privacySensitive()
+            .font(.body)
+            HStack {
+                Button("Paste", systemImage: "doc.on.clipboard") {
+                    if let pasted = UIPasteboard.general.string { phrase = pasted.trimmingCharacters(in: .whitespacesAndNewlines); Haptics.selection() }
+                }
+                Spacer()
+                revealToggle
             }
             .font(.subheadline)
         } header: {
@@ -100,12 +122,23 @@ struct ImportWalletView: View {
 
     private var keySection: some View {
         Section {
-            TextField("0x…", text: $privateKey)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.body.monospaced())
-            Button("Paste", systemImage: "doc.on.clipboard") {
-                if let pasted = UIPasteboard.general.string { privateKey = pasted.trimmingCharacters(in: .whitespacesAndNewlines); Haptics.selection() }
+            Group {
+                if reveal {
+                    TextField("0x…", text: $privateKey)
+                } else {
+                    SecureField("0x…", text: $privateKey)
+                }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .privacySensitive()
+            .font(.body.monospaced())
+            HStack {
+                Button("Paste", systemImage: "doc.on.clipboard") {
+                    if let pasted = UIPasteboard.general.string { privateKey = pasted.trimmingCharacters(in: .whitespacesAndNewlines); Haptics.selection() }
+                }
+                Spacer()
+                revealToggle
             }
             .font(.subheadline)
         } header: {
@@ -129,11 +162,15 @@ struct ImportWalletView: View {
 
     private func runImport() {
         guard let derived else { return }
+        let importedSecret = currentInput
         importing = true
         error = nil
         Task {
             await session.importWallet(derived)
             Haptics.success()
+            // Scrub the secret from memory and the system clipboard now that the key is safely in the Keychain.
+            if UIPasteboard.general.string == importedSecret { UIPasteboard.general.string = "" }
+            phrase = ""; privateKey = ""; self.derived = nil; reveal = false
             importing = false
             // The session flips to signed-in and the root view swaps to the app; nothing else to dismiss.
         }
