@@ -182,9 +182,13 @@ struct LaunchCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topLeading) {
-                LaunchArtwork(symbol: launch.symbol, logo: launch.logo)
-                    .aspectRatio(1, contentMode: .fill)
-                    .frame(maxWidth: .infinity)
+                // A fixed square sized to the cell width, with the artwork cropped to fill it. Defining the square
+                // with a Color spacer (instead of `.aspectRatio(.fill)` on the image, which reports a size larger than
+                // its frame) keeps every card's height — and its tap area — bounded, so a wide or tall image can no
+                // longer overflow its cell and spill onto the filter chips above (which was hijacking their taps).
+                Color(.tertiarySystemFill)
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay { LaunchArtwork(symbol: launch.symbol, logo: launch.logo) }
                     .clipped()
                 badge
                     .padding(8)
@@ -213,6 +217,7 @@ struct LaunchCard: View {
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color(.separator).opacity(0.4), lineWidth: 0.5))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous)) // tap area is exactly the card, never its neighbours
     }
 
     @ViewBuilder private var badge: some View {
