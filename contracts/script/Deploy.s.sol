@@ -11,6 +11,7 @@ import {LaunchLocker} from "../src/LaunchLocker.sol";
 import {MemeHook} from "../src/MemeHook.sol";
 import {GraduationExecutor} from "../src/GraduationExecutor.sol";
 import {MondayGraduationExecutor} from "../src/MondayGraduationExecutor.sol";
+import {MondayFeeVault} from "../src/MondayFeeVault.sol";
 import {IMondayV3Factory} from "../src/interfaces/IMondayV3.sol";
 import {LaunchAndBuyRouter} from "../src/LaunchAndBuyRouter.sol";
 import {LaunchDeployer} from "../src/LaunchDeployer.sol";
@@ -40,6 +41,9 @@ contract Deploy is Script {
     function run() external {
         address poolManager = vm.envOr("POOL_MANAGER", address(0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e));
         address protocolFeeRecipient = vm.envOr("PROTOCOL_FEE_RECIPIENT", msg.sender);
+        // Distinct from owner and treasury: Monday LP swap fees harvest here. If unset, Monday LP mints to LaunchLocker
+        // and those fees cannot be collected.
+        address feesRecipient = vm.envOr("FEES", address(0));
         uint256 launchFee = vm.envOr("LAUNCH_FEE_WEI", uint256(1 ether));
         uint16 protocolShareBps = uint16(vm.envOr("PROTOCOL_FEE_SHARE_BPS", uint256(5000)));
         uint16 maxCreatorTaxBps = uint16(vm.envOr("MAX_CREATOR_TAX_BPS", uint256(1000)));
@@ -80,7 +84,17 @@ contract Deploy is Script {
 
         // Both venues: Uniswap v4 (default) and Monday Trade (creator-selectable; the only venue for aBIL).
         GraduationExecutor v4Executor = new GraduationExecutor(IPoolManager(poolManager), address(factory), address(hook), address(locker));
-        MondayGraduationExecutor mondayExecutor = new MondayGraduationExecutor(IMondayV3Factory(mondayFactory), address(factory), address(locker), wmon);
+        // Monday LP is minted to a collectable vault when FEES is set, so swap fees can be harvested without
+        // unlocking principal. LaunchLocker stays the v4 position owner (it has no v3 collect path).
+        address mondayPositionOwner = address(locker);
+        address feeVault = address(0);
+        if (feesRecipient != address(0)) {
+            require(feesRecipient != msg.sender && feesRecipient != protocolFeeRecipient && protocolFeeRecipient != msg.sender, "roles must be distinct");
+            MondayFeeVault vault = new MondayFeeVault(msg.sender, feesRecipient);
+            feeVault = address(vault);
+            mondayPositionOwner = feeVault;
+        }
+        MondayGraduationExecutor mondayExecutor = new MondayGraduationExecutor(IMondayV3Factory(mondayFactory), address(factory), mondayPositionOwner, wmon);
         LaunchAndBuyRouter router = new LaunchAndBuyRouter(ILaunchpadFactory(address(factory)));
         LaunchDeployer launchDeployer = new LaunchDeployer(address(factory));
 
@@ -116,6 +130,9 @@ contract Deploy is Script {
         vm.serializeAddress(json, "graduationExecutor", address(v4Executor));
         vm.serializeAddress(json, "mondayExecutor", address(mondayExecutor));
         vm.serializeAddress(json, "launchAndBuyRouter", address(router));
+        vm.serializeAddress(json, "feeVault", feeVault);
+        vm.serializeAddress(json, "treasury", protocolFeeRecipient);
+        vm.serializeAddress(json, "feesRecipient", feesRecipient);
         string memory out = vm.serializeAddress(json, "launchDeployer", address(launchDeployer));
         vm.createDir("deployments", true);
         string memory path = string.concat("deployments/", vm.toString(block.chainid), ".json");
