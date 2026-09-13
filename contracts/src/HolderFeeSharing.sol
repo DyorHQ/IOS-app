@@ -84,6 +84,10 @@ contract HolderFeeSharing {
     function beforeTransfer(address from, address to, uint256 amount) external {
         Pool storage p = pools[msg.sender];
         if (!p.registered) revert NotRegistered();
+        // A self-transfer is net-zero, but settling both the `from` and `to` sides for the SAME account would
+        // double-credit its rewards (accrued once, debt re-based twice), letting a holder mint unfunded rewards
+        // and drain the pool. Self-transfers change no balance, so there is nothing to settle — return early.
+        if (from == to) return;
         address token = msg.sender;
         bool fromEligible = from != address(0) && !excluded[token][from];
         bool toEligible = to != address(0) && !excluded[token][to];

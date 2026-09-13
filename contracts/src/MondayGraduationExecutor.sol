@@ -32,6 +32,7 @@ contract MondayGraduationExecutor is IGraduationExecutor, IMondayV3MintCallback 
     error NoLiquidity();
     error UnsupportedFee();
     error WrongPool();
+    error PoolPreInitialized();
 
     address private transientPool; // set for the duration of a mint so the callback can trust the caller
 
@@ -77,9 +78,14 @@ contract MondayGraduationExecutor is IGraduationExecutor, IMondayV3MintCallback 
         uint160 sqrtPriceX96 = FullRangeLiquidity.sqrtPriceX96(amount0, amount1);
         if (sqrtPriceX96 <= TickMath.MIN_SQRT_PRICE || sqrtPriceX96 >= TickMath.MAX_SQRT_PRICE) revert PriceOutOfRange();
 
-        // A freshly graduated token has no pool yet; initialize only if it hasn't been.
+        // A freshly graduated token has no pool yet; initialize it at the curve's final price. Monday's factory is
+        // permissionless, so an attacker could front-run graduation by pre-creating and initializing this pool at a
+        // chosen price; if so, minting here would add liquidity at the attacker's price and let them extract the
+        // graduating reserves. Require any pre-existing pool to sit at EXACTLY the intended price, else revert
+        // (the launch stays un-graduated and holders can exit fee-free via the factory's rescue valve).
         (uint160 current,,,,,,) = IMondayV3Pool(pool).slot0();
         if (current == 0) IMondayV3Pool(pool).initialize(sqrtPriceX96);
+        else if (current != sqrtPriceX96) revert PoolPreInitialized();
 
         int24 lower = TickMath.minUsableTick(tickSpacing);
         int24 upper = TickMath.maxUsableTick(tickSpacing);

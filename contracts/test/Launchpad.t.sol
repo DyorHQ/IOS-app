@@ -294,10 +294,12 @@ contract LaunchpadTest is LaunchpadBase {
     }
 
     function test_rescue_after_failed_graduation() public {
-        (LaunchToken token, BondingCurve curve) = _launch(alice, address(0), 0, false, 1);
-        vm.warp(vm.getBlockTimestamp() + 10);
+        // Executors are frozen after the first launch, so swap in the reverting executor BEFORE launching
+        // (modules are still mutable while zero launches exist) to induce a failed graduation.
         RevertingExecutor broken = new RevertingExecutor();
         factory.setModules(address(hook), address(broken), address(locker), address(escrow), address(sharing), address(router), address(launchDeployer));
+        (LaunchToken token, BondingCurve curve) = _launch(alice, address(0), 0, false, 1);
+        vm.warp(vm.getBlockTimestamp() + 10);
 
         _buy(curve, bob, 15_000 ether);
         vm.expectEmit(true, false, false, false, address(factory));
@@ -329,7 +331,10 @@ contract LaunchpadTest is LaunchpadBase {
         assertEq(got, quoteOut);
         assertApproxEqAbs(got, THRESHOLD, 1e6, "everyone can exit at the curve price");
 
+        // Executors are locked once a launch exists: even the owner cannot swap the (broken) executor back out.
+        vm.expectRevert(LaunchpadFactory.ModulesLocked.selector);
         factory.setModules(address(hook), address(executor), address(locker), address(escrow), address(sharing), address(router), address(launchDeployer));
+        // And a rescued launch can never graduate regardless.
         vm.expectRevert(LaunchpadFactory.WrongGraduationPhase.selector);
         factory.graduate(address(token));
     }

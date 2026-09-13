@@ -111,6 +111,7 @@ contract LaunchpadFactory {
     error TimelockExpired();
     error NoProposal();
     error Create2Mismatch();
+    error NotAuthorizedToCancel();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -144,13 +145,20 @@ contract LaunchpadFactory {
 
     // ------------------------------------------------------------------ admin
 
-    /// @notice Wires the modules. The hook, locker, escrow and sharing contracts are fixed once the first launch
-    ///         exists; the executor and router can be replaced (e.g. a new graduation venue).
+    /// @notice Wires the modules. ALL of them — hook, graduation executor, locker, escrow, sharing, router and
+    ///         deployer — are frozen once the first launch exists, so no module (including the graduation executor
+    ///         that custodies swept reserves during graduation) can be swapped for a malicious one afterwards.
     function setModules(address _hook, address _executor, address _locker, address _escrow, address _sharing, address _router, address _deployer)
         external
         onlyOwner
     {
-        if (_allTokens.length != 0 && (_hook != hook || _locker != locker || _escrow != escrow || _sharing != holderFeeSharing)) revert ModulesLocked();
+        if (
+            _allTokens.length != 0
+                && (
+                    _hook != hook || _executor != graduationExecutor || _locker != locker || _escrow != escrow
+                        || _sharing != holderFeeSharing || _router != router || _deployer != launchDeployer
+                )
+        ) revert ModulesLocked();
         hook = _hook;
         graduationExecutor = _executor;
         locker = _locker;
@@ -162,9 +170,11 @@ contract LaunchpadFactory {
         emit ModulesSet(_hook, _executor, _locker, _escrow, _sharing, _router, _deployer);
     }
 
-    /// @notice Sets the Monday Trade graduation executor. Like the Uniswap v4 executor it can be replaced (e.g. a new
-    ///         venue version). Launches that chose Monday, and any aBIL/Monday-only pair, need this set.
+    /// @notice Sets the Monday Trade graduation executor. Frozen once the first launch exists (like every other
+    ///         module), so it cannot be swapped for a malicious executor that would seize a Monday graduation's
+    ///         swept reserves. Must therefore be configured at deploy time for Monday/aBIL launches to work.
     function setMondayExecutor(address _mondayExecutor) external onlyOwner {
+        if (_allTokens.length != 0 && _mondayExecutor != mondayExecutor) revert ModulesLocked();
         mondayExecutor = _mondayExecutor;
         emit MondayExecutorSet(_mondayExecutor);
     }
@@ -201,6 +211,10 @@ contract LaunchpadFactory {
 
     function addLaunchConfig(Types.LaunchConfig calldata config) external onlyOwner returns (uint256 id) {
         if (config.curveFeeBps > 10_000 || config.poolFeeBps > 10_000) revert InvalidBps();
+        // Base fees (curve fee + max creator tax) must stay under 100% so normal post-snipe trades always yield
+        // a positive output. The snipe-tax schedule is intentionally allowed to push the total higher during the
+        // opening window (that is its anti-snipe purpose; exempt wallets bypass it).
+        if (uint256(config.curveFeeBps) + maxCreatorTaxBps >= 10_000) revert InvalidBps();
         for (uint256 i = 0; i < config.snipeTaxSchedule.length; i++) {
             if (config.snipeTaxSchedule[i] > 10_000) revert InvalidBps();
         }
@@ -440,7 +454,11 @@ contract LaunchpadFactory {
         emit CreatorFeeRecipientChangeProposed(token, newRecipient, effectiveAt, expiresAt);
     }
 
-    function cancelCreatorFeeRecipientChange(address token) external onlyOwner {
+    /// @notice Cancel a pending creator-fee-recipient takeover. The owner may cancel a mistaken proposal, and —
+    ///         crucially — the CURRENT creatorFeeRecipient can veto their own takeover any time before it executes,
+    ///         so the owner cannot unilaterally seize an active creator's fee stream.
+    function cancelCreatorFeeRecipientChange(address token) external {
+        if (msg.sender != owner && msg.sender != _launches[token].creatorFeeRecipient) revert NotAuthorizedToCancel();
         delete pendingCreatorFeeRecipient[token];
         emit CreatorFeeRecipientChangeCancelled(token);
     }
