@@ -80,6 +80,7 @@ export default function TokenPage() {
             <h2 className="panel-title">About this launch<small>fair launch · no pre-mine</small></h2>
             <div className="kvlist">
               <Row label="Paired asset" value={pair.symbol} />
+              <Row label="Graduation venue" value={data.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4"} />
               <Row label="Trade fee" value={bpsToPct(data.feeBps)} />
               <Row label="Creator tax" value={bpsToPct(data.creatorTaxBps)} />
               <Row label="Fees go to" value={data.holderFeeSharing ? "Token holders (pro rata)" : "Creator wallet"} />
@@ -91,7 +92,7 @@ export default function TokenPage() {
               <Row label="Liquidity after graduation" value={<span className="up">Locked forever</span>} />
             </div>
           </div>
-          <div className="note"><b>How graduation works</b><p>Buys push {pair.symbol} into the curve. Once {fmtAmount(data.graduationThreshold, pair.decimals, pair.symbol, { compact: true })} is raised, the launchpad opens a Uniswap v4 pool at the exact curve price with the raised {pair.symbol} and the reserved supply, and locks the position permanently. Trading fees keep flowing to {data.holderFeeSharing ? "holders" : "the creator"} and the protocol through the pool hook.</p></div>
+          <div className="note"><b>How graduation works</b><p>Buys push {pair.symbol} into the curve. Once {fmtAmount(data.graduationThreshold, pair.decimals, pair.symbol, { compact: true })} is raised, the launchpad opens a {data.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4"} pool at the exact curve price with the raised {pair.symbol} and the reserved supply, and locks the position permanently. Trading fees keep flowing to {data.holderFeeSharing ? "holders" : "the creator"} and the protocol through the pool hook.</p></div>
         </div>
         <div className="stack-cards">
           {trading ? <TradePanel launch={data} view={view.data ?? null} onDone={refreshAll} /> : data.rescued || data.phase === 3 ? <><StatePanel launch={data} onDone={refreshAll} /><TradePanel launch={data} view={view.data ?? null} onDone={refreshAll} /></> : <StatePanel launch={data} onDone={refreshAll} />}

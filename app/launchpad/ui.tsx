@@ -91,7 +91,7 @@ export function LaunchCard({ launch, now }: { launch: LaunchInfo; now: number })
         {launch.creatorTaxBps > 0 && <em className="badge">Creator tax {bpsToPct(launch.creatorTaxBps)}</em>}
         <em className="badge">LP locks at graduation</em>
       </div>
-      <div className="progress-label"><span>{launch.phase === 2 ? "Graduated to Uniswap v4" : "Graduation progress"}</span><b>{(launch.progressBps / 100).toFixed(1)}%</b></div>
+      <div className="progress-label"><span>{launch.phase === 2 ? `Graduated to ${launch.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4"}` : "Graduation progress"}</span><b>{(launch.progressBps / 100).toFixed(1)}%</b></div>
       <Progress bps={launch.progressBps} />
       <div className="launch-stats">
         <span>Market cap<b>{fmtAmount(launch.marketCap, pair.decimals, pair.symbol, { compact: true })}</b></span>

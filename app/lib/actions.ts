@@ -18,6 +18,8 @@ export type LaunchInput = {
   creatorFeeRecipient: Address;
   creatorTaxBps: number;
   holderFeeSharing: boolean;
+  /** 0 = Uniswap v4 (default), 1 = Monday Trade. Forced to 1 for Monday-only (aBIL) pairs. */
+  graduationVenue: number;
   pairToken: Address;
   pairNative: boolean;
   configId: bigint;
@@ -51,6 +53,7 @@ export async function launch(wallet: Wallet, input: LaunchInput, onSent: OnSent)
     creatorFeeRecipient: input.creatorFeeRecipient,
     creatorTaxBps: input.creatorTaxBps,
     holderFeeSharing: input.holderFeeSharing,
+    graduationVenue: input.graduationVenue,
     expectedEconomics,
     salt: randomSalt(),
   };

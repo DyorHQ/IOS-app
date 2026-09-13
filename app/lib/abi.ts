@@ -363,6 +363,11 @@ export const LaunchpadFactoryAbi = [
             "internalType": "bool"
           },
           {
+            "name": "graduationVenue",
+            "type": "uint8",
+            "internalType": "enum Types.GraduationVenue"
+          },
+          {
             "name": "phase",
             "type": "uint8",
             "internalType": "enum Types.Phase"
@@ -602,6 +607,11 @@ export const LaunchpadFactoryAbi = [
             "internalType": "bool"
           },
           {
+            "name": "graduationVenue",
+            "type": "uint8",
+            "internalType": "enum Types.GraduationVenue"
+          },
+          {
             "name": "expectedEconomics",
             "type": "bytes32",
             "internalType": "bytes32"
@@ -720,6 +730,11 @@ export const LaunchpadFactoryAbi = [
             "internalType": "bool"
           },
           {
+            "name": "graduationVenue",
+            "type": "uint8",
+            "internalType": "enum Types.GraduationVenue"
+          },
+          {
             "name": "expectedEconomics",
             "type": "bytes32",
             "internalType": "bytes32"
@@ -794,6 +809,19 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "function",
+    "name": "mondayExecutor",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "onCurveComplete",
     "inputs": [
       {
@@ -814,6 +842,25 @@ export const LaunchpadFactoryAbi = [
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pairMondayOnly",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "stateMutability": "view"
@@ -1154,6 +1201,19 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "function",
+    "name": "setMondayExecutor",
+    "inputs": [
+      {
+        "name": "_mondayExecutor",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setPairEconomics",
     "inputs": [
       {
@@ -1178,6 +1238,24 @@ export const LaunchpadFactoryAbi = [
       },
       {
         "name": "approved",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setPairMondayOnly",
+    "inputs": [
+      {
+        "name": "pairToken",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "mondayOnly",
         "type": "bool",
         "internalType": "bool"
       }
@@ -1547,6 +1625,19 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "event",
+    "name": "MondayExecutorSet",
+    "inputs": [
+      {
+        "name": "executor",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "OwnershipTransferStarted",
     "inputs": [
       {
@@ -1613,6 +1704,25 @@ export const LaunchpadFactoryAbi = [
       },
       {
         "name": "approved",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "PairMondayOnlySet",
+    "inputs": [
+      {
+        "name": "pairToken",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "mondayOnly",
         "type": "bool",
         "indexed": false,
         "internalType": "bool"
@@ -1737,6 +1847,11 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "error",
+    "name": "GraduationVenueUnavailable",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "InsufficientGasForGraduation",
     "inputs": []
   },
@@ -1808,6 +1923,11 @@ export const LaunchpadFactoryAbi = [
   {
     "type": "error",
     "name": "NotWhitelisted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "PairRequiresMonday",
     "inputs": []
   },
   {
@@ -4937,6 +5057,11 @@ export const LaunchAndBuyRouterAbi = [
             "name": "holderFeeSharing",
             "type": "bool",
             "internalType": "bool"
+          },
+          {
+            "name": "graduationVenue",
+            "type": "uint8",
+            "internalType": "enum Types.GraduationVenue"
           },
           {
             "name": "expectedEconomics",
