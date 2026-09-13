@@ -83,8 +83,8 @@ contract PoolTest is LaunchpadBase {
 
         hook.sweepPoolFees(PoolId.unwrap(id), NATIVE);
         assertEq(hook.pendingFees(id, NATIVE), 0);
-        assertEq(escrow.balanceOf(protocol), LAUNCH_FEE + 0.5 ether + _curveProtocolShare());
-        assertEq(escrow.balanceOf(creator), 0.5 ether + _curveCreatorShare());
+        assertEq(_protocolNative(), LAUNCH_FEE + 0.5 ether + _curveProtocolShare());
+        assertEq(_creatorNative(), 0.5 ether + _curveCreatorShare());
     }
 
     function test_hook_charges_exact_input_sell_on_quote_received() public {
@@ -137,8 +137,8 @@ contract PoolTest is LaunchpadBase {
         uint256 tokenFee = hook.pendingFees(id, Currency.wrap(address(token)));
         assertGt(tokenFee, 0, "exact-output sells pay the fee in the launch token");
         hook.sweepPoolFees(PoolId.unwrap(id), Currency.wrap(address(token)));
-        assertGt(escrow.balanceOfToken(creator, address(token)), 0);
-        assertGt(escrow.balanceOfToken(protocol, address(token)), 0);
+        assertGt(_creatorToken(address(token)), 0);
+        assertGt(_protocolToken(address(token)), 0);
     }
 
     function test_holders_share_pool_fees_after_graduation() public {
@@ -150,7 +150,7 @@ contract PoolTest is LaunchpadBase {
         assertGt(sharing.pendingRewards(address(token), bob), bobBefore, "curve buyers earn pool fees");
         assertGt(sharing.pendingRewards(address(token), carol), 0, "pool buyers earn too");
         assertEq(sharing.pendingRewards(address(token), address(manager)), 0, "the pool's own balance is excluded");
-        assertEq(escrow.balanceOf(creator), 0);
+        assertEq(_creatorNative(), 0);
     }
 
     function test_nobody_can_initialize_a_hooked_pool_early() public {
@@ -172,10 +172,10 @@ contract PoolTest is LaunchpadBase {
 
     function _curveProtocolShare() internal view returns (uint256) {
         // Fees paid on the curve during the six 3,000 MON buys that completed it, excluding the launch fee and the pool swap.
-        return escrow.balanceOf(protocol) - LAUNCH_FEE - 0.5 ether;
+        return _protocolNative() - LAUNCH_FEE - 0.5 ether;
     }
 
     function _curveCreatorShare() internal view returns (uint256) {
-        return escrow.balanceOf(creator) - 0.5 ether;
+        return _creatorNative() - 0.5 ether;
     }
 }

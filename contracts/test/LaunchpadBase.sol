@@ -16,6 +16,7 @@ import {LaunchAndBuyRouter} from "../src/LaunchAndBuyRouter.sol";
 import {LaunchDeployer} from "../src/LaunchDeployer.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {Types, ILaunchpadFactory} from "../src/interfaces/ILaunchpad.sol";
+import {IERC20} from "../src/interfaces/IERC20.sol";
 import {HookAddress} from "../src/libraries/HookAddress.sol";
 
 /// @dev Deploys a fresh Uniswap v4 PoolManager plus the whole launchpad, wired the way the deploy script wires it.
@@ -48,6 +49,7 @@ abstract contract LaunchpadBase is Test, Deployers {
     address internal carol = makeAddr("carol");
     address internal dave = makeAddr("dave");
     address internal creator = makeAddr("creator");
+    uint256 internal creatorStart;
 
     function setUp() public virtual {
         vm.warp(1_780_000_000);
@@ -87,6 +89,7 @@ abstract contract LaunchpadBase is Test, Deployers {
         vm.deal(carol, 1_000_000 ether);
         vm.deal(dave, 1_000_000 ether);
         vm.deal(creator, 10 ether);
+        creatorStart = creator.balance;
         usd.mint(alice, 1_000_000_000e6);
         usd.mint(bob, 1_000_000_000e6);
         usd.mint(carol, 1_000_000_000e6);
@@ -134,5 +137,24 @@ abstract contract LaunchpadBase is Test, Deployers {
 
     function _completeUsd(BondingCurve curve, address who) internal {
         while (!curve.completed()) _buyUsd(curve, who, 800e6);
+    }
+
+    // Fees now auto-push to their recipient (falling back to the escrow only if a send fails), so "earned" is the
+    // sum of what landed in the wallet and any escrow fallback. protocol/creator never trade and hold no usd, so
+    // their native/token balances above their starting point are exactly their fee income.
+    function _protocolNative() internal view returns (uint256) {
+        return protocol.balance + escrow.balanceOf(protocol);
+    }
+
+    function _creatorNative() internal view returns (uint256) {
+        return (creator.balance - creatorStart) + escrow.balanceOf(creator);
+    }
+
+    function _protocolToken(address t) internal view returns (uint256) {
+        return IERC20(t).balanceOf(protocol) + escrow.balanceOfToken(protocol, t);
+    }
+
+    function _creatorToken(address t) internal view returns (uint256) {
+        return IERC20(t).balanceOf(creator) + escrow.balanceOfToken(creator, t);
     }
 }

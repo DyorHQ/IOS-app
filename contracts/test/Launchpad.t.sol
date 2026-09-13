@@ -27,7 +27,7 @@ contract LaunchpadTest is LaunchpadBase {
         assertEq(launch.deployer, alice);
         assertEq(launch.creatorFeeRecipient, creator);
         assertEq(uint8(launch.phase), uint8(Types.Phase.NotGraduated));
-        assertEq(escrow.balanceOf(protocol), LAUNCH_FEE, "launch fee escrowed to protocol");
+        assertEq(_protocolNative(), LAUNCH_FEE, "launch fee sent to protocol");
 
         (address deployer, string memory logo, string memory description, Types.Socials memory socials) = token.getTokenInfo();
         assertEq(deployer, alice);
@@ -118,8 +118,8 @@ contract LaunchpadTest is LaunchpadBase {
         (uint256 q, uint256 t) = curve.getReserves();
         assertEq(q, PHANTOM + 99 ether);
         assertEq(t, SUPPLY - out);
-        assertEq(escrow.balanceOf(protocol), LAUNCH_FEE + 0.5 ether, "protocol keeps half the base fee");
-        assertEq(escrow.balanceOf(creator), 0.5 ether, "creator gets the other half");
+        assertEq(_protocolNative(), LAUNCH_FEE + 0.5 ether, "protocol keeps half the base fee");
+        assertEq(_creatorNative(), 0.5 ether, "creator gets the other half");
         assertGt(curve.price(), (PHANTOM * 1e18) / SUPPLY, "price rose");
 
         vm.startPrank(bob);
@@ -135,11 +135,12 @@ contract LaunchpadTest is LaunchpadBase {
         (q,) = curve.getReserves();
         assertEq(q, PHANTOM + curve.realQuoteReserve(), "quote reserve is phantom plus real");
 
-        uint256 creatorBefore = creator.balance;
+        // Fees were auto-pushed to the creator across the buy and sell — nothing sits in escrow to claim.
+        assertEq(_creatorNative(), 0.5 ether + (sellFee - sellFee / 2), "creator's half of the sell fee rounds up");
+        assertEq(escrow.balanceOf(creator), 0, "auto-sent, so the escrow holds nothing");
         vm.prank(creator);
+        vm.expectRevert();
         escrow.claim();
-        assertEq(creator.balance - creatorBefore, 0.5 ether + (sellFee - sellFee / 2), "creator's half of the sell fee rounds up");
-        assertEq(escrow.balanceOf(creator), 0);
     }
 
     function test_snipe_tax_schedule() public {
@@ -153,9 +154,9 @@ contract LaunchpadTest is LaunchpadBase {
         (uint256 clean,,,,,) = curve.quoteBuy(100 ether, alice);
         assertGt(clean, sniped * 50, "a sniper gets almost nothing");
 
-        uint256 protocolBefore = escrow.balanceOf(protocol);
+        uint256 protocolBefore = _protocolNative();
         _buy(curve, bob, 100 ether);
-        assertEq(escrow.balanceOf(protocol) - protocolBefore, 49.5 ether, "snipe tax joins the base fee split");
+        assertEq(_protocolNative() - protocolBefore, 49.5 ether, "snipe tax joins the base fee split");
 
         vm.warp(vm.getBlockTimestamp() + 1);
         assertEq(curve.currentSnipeTaxBps(bob), 2500);
@@ -181,7 +182,7 @@ contract LaunchpadTest is LaunchpadBase {
         (LaunchToken token, BondingCurve curve) = _launch(alice, address(0), 500, false, 1);
         vm.warp(vm.getBlockTimestamp() + 10);
         uint256 out = _buy(curve, bob, 100 ether);
-        assertEq(escrow.balanceOf(creator), 0.5 ether + 5 ether, "creator tax is on top of the base fee");
+        assertEq(_creatorNative(), 0.5 ether + 5 ether, "creator tax is on top of the base fee");
         assertEq(curve.realQuoteReserve(), 94 ether);
 
         vm.startPrank(bob);
@@ -223,7 +224,7 @@ contract LaunchpadTest is LaunchpadBase {
         uint256 bobTokens = _buy(curve, bob, 100 ether);
         // bob's own buy pays 0.5 MON of creator fees; he is the only eligible holder so it is all his
         assertApproxEqAbs(sharing.pendingRewards(address(token), bob), 0.5 ether, 1);
-        assertEq(escrow.balanceOf(creator), 0, "creator wallet receives nothing when sharing is on");
+        assertEq(_creatorNative(), 0, "creator wallet receives nothing when sharing is on");
 
         uint256 carolTokens = _buy(curve, carol, 100 ether);
         uint256 total = sharing.pendingRewards(address(token), bob) + sharing.pendingRewards(address(token), carol);
@@ -383,8 +384,8 @@ contract LaunchpadTest is LaunchpadBase {
         uint256 out = _buyUsd(curve, bob, 100e6);
         assertGt(out, 0);
         assertEq(curve.realQuoteReserve(), 97e6);
-        assertEq(escrow.balanceOfToken(protocol, address(usd)), 0.5e6);
-        assertEq(escrow.balanceOfToken(creator, address(usd)), 2.5e6);
+        assertEq(_protocolToken(address(usd)), 0.5e6);
+        assertEq(_creatorToken(address(usd)), 2.5e6);
 
         vm.startPrank(bob);
         token.approve(address(curve), out);
@@ -393,9 +394,11 @@ contract LaunchpadTest is LaunchpadBase {
         vm.stopPrank();
         assertEq(usd.balanceOf(bob) - usdBefore, got);
 
+        // usd fees auto-pushed to the creator across the buy and sell — nothing to claim.
+        assertGt(_creatorToken(address(usd)), 2.5e6);
         vm.prank(creator);
+        vm.expectRevert();
         escrow.claimToken(address(usd));
-        assertGt(usd.balanceOf(creator), 2.5e6);
         vm.prank(bob);
         vm.expectRevert(BondingCurve.UnexpectedNativeValue.selector);
         curve.buy{value: 1}(100e6, 0, bob);
@@ -427,5 +430,28 @@ contract LaunchpadTest is LaunchpadBase {
         assertEq(factory.getLaunchedToken(page[1]).pairToken, address(usd));
         assertEq(page[1], factory.tokenAt(2));
         assertEq(factory.getLaunches(3, 5).length, 0);
+    }
+
+    function test_fee_push_falls_back_to_escrow_on_a_reverting_recipient() public {
+        // Point protocol fees at a contract that reverts on receiving native.
+        RejectNative bad = new RejectNative();
+        factory.setFeePolicy(address(bad), PROTOCOL_SHARE);
+
+        // The launch still succeeds; its fee could not be pushed, so it is safely booked as claimable in the escrow.
+        (, BondingCurve curve) = _launch(alice, address(0), 0, false, 1);
+        assertEq(escrow.balanceOf(address(bad)), LAUNCH_FEE, "unpushable launch fee fell back to escrow, launch not bricked");
+
+        // A trade also succeeds even though the protocol fee cannot be pushed to `bad`.
+        vm.warp(vm.getBlockTimestamp() + 10);
+        uint256 out = _buy(curve, bob, 100 ether);
+        assertGt(out, 0, "buyer still received tokens");
+        assertEq(escrow.balanceOf(address(bad)), LAUNCH_FEE + 0.5 ether, "protocol share fell back too; trade not DoS'd");
+    }
+}
+
+/// Rejects any native transfer, to prove fee pushes fall back to the escrow instead of bricking the payer's tx.
+contract RejectNative {
+    receive() external payable {
+        revert("no native");
     }
 }
