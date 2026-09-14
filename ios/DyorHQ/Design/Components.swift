@@ -231,6 +231,10 @@ struct PrimaryButton: View {
     var systemImage: String?
     var isBusy = false
     var isDisabled = false
+    /// Label/spinner color on the prominent fill. Defaults to white, which reads on the brand purple in both themes.
+    /// When the caller tints the button with a status color (`.positive`/`.negative`), pass `.onStatus` instead — the
+    /// dark-mode status hues are light mint/rose where white fails WCAG contrast.
+    var foreground: Color = .white
     let action: () -> Void
 
     var body: some View {
@@ -239,15 +243,13 @@ struct PrimaryButton: View {
             action()
         } label: {
             HStack(spacing: 8) {
-                if isBusy { ProgressView().controlSize(.small).tint(.white) }
+                if isBusy { ProgressView().controlSize(.small).tint(foreground) }
                 else if let systemImage { Image(systemName: systemImage) }
                 Text(title).fontWeight(.semibold)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
-            // The prominent fill is the brand purple (or a Long/Short tint); white reads on all of them in both
-            // themes. The old default let the label take the Paper accent, which vanished on the dark-mode fill.
-            .foregroundStyle(.white)
+            .foregroundStyle(foreground)
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)

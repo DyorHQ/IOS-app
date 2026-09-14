@@ -13,6 +13,10 @@ extension Color {
     /// in dark mode where the old Paper-on-Paper accent was not. Text and the wordmark stay Ink/Paper — only the
     /// accent is purple, so the monochrome identity holds.
     static let brand = Color("Brand")
+    /// Foreground for text/icons sitting on a filled `.positive`/`.negative` status button. White reads on the deep
+    /// light-mode fills (#126A4B / #AD3047), but the dark-mode status hues are light mint/rose (#77D8AC / #F496AA) where
+    /// white fails WCAG contrast — so this flips to near-black in dark mode, keeping the Long/Short CTAs legible in both.
+    static let onStatus = Color(light: .white, dark: Color(red: 0.05, green: 0.05, blue: 0.07))
 }
 
 extension ShapeStyle where Self == Color {
