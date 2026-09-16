@@ -6,8 +6,11 @@ import SwiftUI
 struct StrategyView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
+    @Environment(Router.self) private var router
     @State private var pendingCount = 0
     @State private var goCopyTrading = false
+    @State private var goDeltaNeutral = false
+    @State private var deltaNeutral: [DNStrategy] = []
 
     var body: some View {
         NavigationStack {
@@ -16,6 +19,14 @@ struct StrategyView: View {
                     header
 
                     if pendingCount > 0 { pendingBanner }
+                    if !deltaNeutral.isEmpty { deltaNeutralBanner }
+
+                    StrategyCard(
+                        eyebrow: "EARN FUNDING", title: "Delta Neutral", symbol: "asset:scale.balance",
+                        tint: .allocationPerps, tags: ["Spot + Perps", "Funding", "TWAP entry"],
+                        detail: "Buy the asset on spot, short the same size on Perpl, and collect the hourly funding while longs pay shorts. Fees, funding and liquidation distance are shown before you start.",
+                        cta: "Set up a hedge", status: .live
+                    ) { DeltaNeutralView() }
 
                     StrategyCard(
                         eyebrow: "COPY OR AUTOMATE", title: "Copy Trading", symbol: "person.2.badge.gearshape",
@@ -36,13 +47,40 @@ struct StrategyView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Strategy")
             .navigationDestination(isPresented: $goCopyTrading) { CopyTradingView() }
+            .navigationDestination(isPresented: $goDeltaNeutral) { DeltaNeutralView() }
             .task(id: session.address) { refreshPending() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in refreshPending() }
             .onReceive(NotificationCenter.default.publisher(for: .copySignalsChanged)) { _ in refreshPending() }
+            .onReceive(NotificationCenter.default.publisher(for: .dnStrategyChanged)) { _ in refreshPending() }
+            .onChange(of: router.pendingDeltaNeutralID) { _, id in if id != nil { goDeltaNeutral = true } }
+            .onAppear { if router.pendingDeltaNeutralID != nil { goDeltaNeutral = true } }
         }
     }
 
-    private func refreshPending() { pendingCount = CopyStore.signals(owner: session.address).count }
+    private func refreshPending() {
+        pendingCount = CopyStore.signals(owner: session.address).count
+        deltaNeutral = DNStore.active(owner: session.address)
+    }
+
+    private var deltaNeutralBanner: some View {
+        Button { goDeltaNeutral = true } label: {
+            HStack(spacing: 12) {
+                Image("scale.balance").font(.headline).foregroundStyle(.white)
+                    .frame(width: 38, height: 38).background(Color.allocationPerps, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(deltaNeutral.count == 1 ? "Delta-neutral \(deltaNeutral[0].symbol) · \(deltaNeutral[0].status.title)" : "\(deltaNeutral.count) delta-neutral positions")
+                        .font(.subheadline.weight(.semibold))
+                    Text(deltaNeutral.contains { $0.status == .failed } ? "One needs attention" : "Open the dashboard").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .background(Color.allocationPerps.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.allocationPerps.opacity(0.25)))
+        }
+        .buttonStyle(.plain)
+    }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -133,7 +171,7 @@ private struct StrategyCard<Destination: View>: View {
     }
 
     private var iconTile: some View {
-        Image(systemName: symbol)
+        (symbol.hasPrefix("asset:") ? Image(String(symbol.dropFirst(6))) : Image(systemName: symbol))
             .font(.title2.weight(.semibold)).foregroundStyle(.white)
             .frame(width: 52, height: 52)
             .background(

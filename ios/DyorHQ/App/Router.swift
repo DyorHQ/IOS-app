@@ -13,7 +13,7 @@ enum TradeMode: String, CaseIterable, Identifiable {
 /// Screens that live outside the tab bar: opened from the side menu (or the home header) as full-screen covers with
 /// their own navigation stack and a Close control.
 enum PresentedScreen: String, Identifiable {
-    case portfolio, news, help, profile
+    case portfolio, news, help, profile, notifications
     var id: String { rawValue }
 }
 
@@ -40,6 +40,8 @@ final class Router {
     var pendingLaunch: Launch?
     /// A Moment to open on the Moments tab's detail page.
     var pendingMoment: MomentInfo?
+    /// A delta-neutral strategy to open on the Strategy tab (from a notification or the Strategy landing).
+    var pendingDeltaNeutralID: String?
 
     func openSwap(tokenIn: Token? = nil, tokenOut: Token? = nil) {
         pendingSwap = (tokenIn, tokenOut)
@@ -64,6 +66,27 @@ final class Router {
     func openMoment(_ moment: MomentInfo) {
         pendingMoment = moment
         tab = .moments
+    }
+
+    func openDeltaNeutral(id: String?) {
+        pendingDeltaNeutralID = id ?? ""
+        tab = .strategy
+    }
+
+    /// Follows a tapped notification to its screen.
+    func open(_ notification: AppNotification) {
+        presented = nil
+        switch notification.route {
+        case .none: break
+        case .home: tab = .home
+        case .trade: tradeMode = .swap; tab = .trade
+        case .perps: tradeMode = .perps; tab = .trade
+        case .launch: tab = .launch
+        case .moments: tab = .moments
+        case .strategy: tab = .strategy
+        case .portfolio: presented = .portfolio
+        case .deltaNeutral: openDeltaNeutral(id: notification.reference)
+        }
     }
 
     /// Opens a section from the side menu: tabs switch (and the Trade tab picks its mode), the rest present.

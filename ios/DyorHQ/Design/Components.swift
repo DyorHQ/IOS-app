@@ -229,6 +229,8 @@ struct InlineError: View {
 struct PrimaryButton: View {
     let title: String
     var systemImage: String?
+    /// A custom symbol from the asset catalog, used when no `systemImage` fits (e.g. the balance scale).
+    var image: String?
     var isBusy = false
     var isDisabled = false
     /// Label/spinner color on the prominent fill. Defaults to white, which reads on the brand purple in both themes.
@@ -245,6 +247,7 @@ struct PrimaryButton: View {
             HStack(spacing: 8) {
                 if isBusy { ProgressView().controlSize(.small).tint(foreground) }
                 else if let systemImage { Image(systemName: systemImage) }
+                else if let image { Image(image) }
                 Text(title).fontWeight(.semibold)
             }
             .frame(maxWidth: .infinity)

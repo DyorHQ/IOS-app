@@ -126,7 +126,7 @@
       "round": 78338
     },
     {
-      "value": 1e-7,
+      "value": 1e-07,
       "cns": 0,
       "round": 0
     },
@@ -484,7 +484,7 @@
       "prev24h": 78366,
       "volume24h": 556.094,
       "openInterest": 12.0705,
-      "fundingRate": -0.0004,
+      "fundingRate": -4e-05,
       "isOpen": true
     },
     {
@@ -497,7 +497,7 @@
       "prev24h": 0.025669,
       "volume24h": 13348254,
       "openInterest": 4330807,
-      "fundingRate": 0.000002,
+      "fundingRate": 2e-05,
       "isOpen": true
     },
     {
@@ -549,7 +549,7 @@
       "prev24h": 1133.59,
       "volume24h": 388.4243,
       "openInterest": 104.0913,
-      "fundingRate": 0.000003,
+      "fundingRate": 3e-05,
       "isOpen": true
     },
     {
@@ -562,7 +562,7 @@
       "prev24h": 4.63338,
       "volume24h": 414810.9,
       "openInterest": 11882.4,
-      "fundingRate": -0.00004,
+      "fundingRate": -4e-05,
       "isOpen": true
     },
     {

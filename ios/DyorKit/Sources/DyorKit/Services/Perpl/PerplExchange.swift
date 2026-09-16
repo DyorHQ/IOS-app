@@ -157,7 +157,9 @@ enum PerplExchange {
             status: int(p[22].uint),
             initMarginFraction: initial.flatMap { $0 > 0 ? 100 / Double($0) : nil } ?? 0.1,
             maintMarginFraction: maintenance.flatMap { $0 > 0 ? 100 / Double($0) : nil } ?? 0.05,
-            numOrders: int(p[28].uint)
+            numOrders: int(p[28].uint),
+            fundingStartBlock: UInt64(clamping: p[19].uint),
+            fundingClampPct100k: int(p[21].uint)
         )
     }
 

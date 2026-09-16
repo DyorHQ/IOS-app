@@ -32,10 +32,13 @@ struct RootView: View {
         .task(id: session.address) {
             env.social.bind(address: session.address)
             env.perplTrading.refresh(address: session.address)
+            NotificationHub.shared.bind(owner: session.address)
         }
         .task { env.alertWatcher.start(env: env, settings: settings) }
         .task { env.copyWatcher.start(env: env, settings: settings) }
         .task { env.mmWatcher.start(env: env) }
+        .task { env.dnWatcher.start(env: env, settings: settings) }
+        .task { env.dnRunner.resume(env: env) }
         .task { await env.refreshVenueTokens() }
     }
 }
@@ -84,6 +87,7 @@ struct MainTabView: View {
             case .news: NewsView()
             case .help: GetHelpView()
             case .profile: ProfileView(presented: true)
+            case .notifications: NotificationCenterView()
             }
         }
     }

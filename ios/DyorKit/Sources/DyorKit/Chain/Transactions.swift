@@ -130,6 +130,18 @@ public enum RevertReason {
         }
         let message = error.message
         if message.localizedCaseInsensitiveContains("insufficient funds") { return "Not enough MON to pay for gas." }
+        // "execution reverted: custom error 0xabcdef12: 0000…" — keep the selector and the payload's words as
+        // numbers (usually amounts or limits), drop the wall of hex.
+        if let range = message.range(of: #"custom error (0x[0-9a-fA-F]{8})"#, options: .regularExpression) {
+            let selector = String(message[range]).replacingOccurrences(of: "custom error ", with: "")
+            var args = ""
+            let payload = error.data.flatMap { Data(hex: $0) }?.dropFirst(4) ?? Data()
+            if !payload.isEmpty, payload.count % 32 == 0, payload.count <= 32 * 6 {
+                let words = stride(from: payload.startIndex, to: payload.endIndex, by: 32).map { BigUInt(payload[$0..<$0 + 32]) }
+                args = " with " + words.map { $0.bitWidth > 128 ? "0x" + String($0, radix: 16).prefix(10) + "…" : String($0) }.joined(separator: ", ")
+            }
+            return "The contract rejected the transaction (custom error \(selector)\(args))."
+        }
         return message.isEmpty ? "The transaction would fail." : message
     }
 

@@ -794,6 +794,26 @@ struct HomeHeader: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Search tokens")
 
+            Button { Haptics.tap(); router.presented = .notifications } label: {
+                Image(systemName: NotificationHub.shared.unreadCount > 0 ? "bell.badge" : "bell")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(Color.brand, Color.primary)
+                    .font(.title3.weight(.semibold))
+                    .frame(width: 44, height: 44)
+                    .background(Color(.secondarySystemGroupedBackground), in: Circle())
+                    .overlay(alignment: .topTrailing) {
+                        let unread = NotificationHub.shared.unreadCount
+                        if unread > 0 {
+                            Text(unread > 99 ? "99+" : "\(unread)")
+                                .font(.caption2.weight(.bold)).foregroundStyle(.white)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Color.negative, in: Capsule())
+                                .offset(x: 4, y: -2)
+                        }
+                    }
+            }
+            .accessibilityLabel("Notifications, \(NotificationHub.shared.unreadCount) unread")
+
             Button { Haptics.tap(); router.presented = .profile } label: {
                 if let account = session.account, account.method == .watchOnly {
                     ZStack {

@@ -29,6 +29,9 @@ final class AppEnvironment {
     let alertWatcher = AlertWatcher()
     let copyWatcher = CopyTradeWatcher()
     let mmWatcher = MMWatcher()
+    /// Delta-neutral strategies: the entry/exit runner (TWAP + hedge) and the funding / risk monitor.
+    let dnRunner = DNRunner()
+    let dnWatcher = DNWatcher()
     let social: SocialSession
 
     init(config: AppConfig) {
