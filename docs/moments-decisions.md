@@ -114,3 +114,13 @@ contract that implements it so a reviewer can check the code against the ruling.
     is presented as 1.5% everywhere (0.5% pool + 1% hook) per ruling 12. (e) A dev-only in-page wallet
     (`app/lib/dev-wallet.ts`) exists solely for fork rehearsals; it is inert unless `NEXT_PUBLIC_DEV_WALLET_KEY` is
     set at build time and must never be set for production builds.
+
+## Phase 6 — 2026-09-16
+
+17. **Launch gates split by owner.** Engineering-side gates are closed: fork/live verification (Phase 3, 5),
+    containment UI (Phase 5), geofence mechanism (`/api/moments/geo` + `MOMENTS_BLOCKED_COUNTRIES`, off until
+    counsel sets the list), on-ramp link slot (`NEXT_PUBLIC_ONRAMP_URL`), gas guidance ("user needs MON for gas"
+    is the documented answer for the web surface), iOS web-first rule (no Moments in the binary), status monitor
+    (`scripts/moments-status.mjs`) and governance ops (`PolicyOps.s.sol`). Owner-side gates remain open: the
+    independent audit (gate 2) and the legal determination + KYC on-ramp (gate 4). No collector money before both.
+    The validation launch run-of-show and the threshold-raise procedure are in `docs/moments-launch-gates.md`.

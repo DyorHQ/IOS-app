@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useState, useSyncExternalStore } from "react";
 import { Icon } from "../ui/icons";
 import { ActionButton, TxStatus } from "../launchpad/ui";
-import { BPS, MAX_BATCH, MOMENTS_DEPLOYED, MONTH_SECONDS, STUCK_GRACE_SECONDS, SUPPLY, USDC } from "../lib/moments/config";
+import { BPS, MAX_BATCH, MOMENTS_DEPLOYED, MONTH_SECONDS, ONRAMP_URL, STUCK_GRACE_SECONDS, SUPPLY, USDC } from "../lib/moments/config";
+import { useGeo } from "../lib/moments/geo";
 import { claim, collect, expire, retryGraduation, runBuyback, withdrawCreatorFees, withdrawCreatorProceeds, withdrawPlatformFees, withdrawPlatformProceeds, withdrawTreasuryProceeds, type CollectMode } from "../lib/moments/actions";
 import { fdvUsd, quoteCollect, type AccountView, type MomentDetail } from "../lib/moments/reads";
 import { useAsync, useNow } from "../lib/use-async";
@@ -47,6 +48,7 @@ function useDisclosure(): [boolean, (v: boolean) => void] {
 export function CollectPanel({ moment, view, onDone }: { moment: MomentDetail; view: AccountView | null; onDone: () => void }) {
   const wallet = useWallet();
   const now = useNow();
+  const geo = useGeo();
   const [qty, setQty] = useState(1);
   const [mode, setMode] = useState<CollectMode>("permit2");
   const [agreed, setAgreed] = useDisclosure();
@@ -75,7 +77,8 @@ export function CollectPanel({ moment, view, onDone }: { moment: MomentDetail; v
         <button type="button" aria-label="More" onClick={() => setQty((n) => Math.min(MAX_BATCH, n + 1))} disabled={qty >= MAX_BATCH}>+</button>
         <span className="hint">up to {MAX_BATCH} per collect</span>
       </div>
-      {balance !== undefined && <p className="hint">Balance: {usd(balance)} USDC</p>}
+      {balance !== undefined && <p className="hint">Balance: {usd(balance)} USDC{view && view.monBalance === 0n ? " · you also need a little MON for gas" : ""}{balance === 0n && ONRAMP_URL ? <> · <a href={ONRAMP_URL} target="_blank" rel="noreferrer">Get USDC</a></> : ""}</p>}
+      {geo.blocked && <div className="warnbox"><b>Not available in your region.</b> Collecting is switched off for {geo.country ?? "your location"} pending the legal determination. You can still view Moments.</div>}
       <div className="breakdown">
         <div><span>You pay</span><b>{q ? usd(q.gross) : "—"}</b></div>
         <div><span>Editions minted to you</span><b>{q ? `${q.editions} (rank #${moment.editions + 1}${q.editions > 1n ? `–#${moment.editions + Number(q.editions)}` : ""})` : "—"}</b></div>
@@ -94,7 +97,7 @@ export function CollectPanel({ moment, view, onDone }: { moment: MomentDetail; v
       </div>
       <TxStatus tx={tx} onDismiss={reset} />
       {insufficient && <p className="hint err">Not enough USDC.</p>}
-      <ActionButton requireLaunchpad={false} ready={MOMENTS_DEPLOYED && !!q && agreed && !insufficient && !closed} busy={busy || (quote.loading && !q)} label={<>Collect {q ? `${q.editions} for ${usd(q.gross)}` : ""} <Icon name="arrow-ur" /></>} onClick={submit} className="btn big tone-up" />
+      <ActionButton requireLaunchpad={false} ready={MOMENTS_DEPLOYED && !!q && agreed && !insufficient && !closed && !geo.blocked} busy={busy || (quote.loading && !q)} label={<>Collect {q ? `${q.editions} for ${usd(q.gross)}` : ""} <Icon name="arrow-ur" /></>} onClick={submit} className="btn big tone-up" />
       <p className="hint">Window closes {fmtDate(moment.deadline)} (<Countdown until={moment.deadline} now={now} />). Nothing is refunded and nothing is over-pulled: the last collect is clamped so the reserve lands exactly on {usd(moment.threshold)}.</p>
     </div>
   );

@@ -100,6 +100,12 @@ first; that remains the owner's decision.
 `anvil --fork-url monad` (guarded by `FORK_REHEARSAL=1`, exact approvals, anvil's throwaway keys). It is not a
 mainnet procedure.
 
+## Phase 6 — launch gates
+
+See `docs/moments-launch-gates.md`: gate status (audit and legal sign-offs are the owner's), the curated validation
+launch run-of-show, the threshold-raise procedure (`PolicyOps.s.sol`, 48h timelock) and the monitor
+(`node scripts/moments-status.mjs`).
+
 ## Phase 5 — the web app (`app/moments`)
 
 Routes: `/moments` (explore), `/moments/create` (publish), `/moments/:id` (detail: collect, state, position, creator

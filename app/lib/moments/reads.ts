@@ -95,6 +95,7 @@ export type MomentDetail = MomentInfo & {
 export type CollectQuote = { gross: bigint; editions: bigint; entitlement: bigint; reserveIn: bigint; creatorIn: bigint; platformIn: bigint; excess: bigint; terminal: boolean };
 export type AccountView = {
   usdcBalance: bigint;
+  monBalance: bigint; // gas
   permit2Allowance: bigint; // USDC -> Permit2
   collectAllowance: bigint; // USDC -> collect (approve path)
   entitlement: bigint;
@@ -318,10 +319,14 @@ export async function fetchAccountView(m: MomentInfo, account: Address): Promise
     ],
     allowFailure: false,
   });
-  const nftIds = nftBalance > 0n ? [...(await publicClient.readContract({ ...nft, functionName: "tokensOfOwner", args: [account, 0n, 50n] }))] : [];
+  const [nftIds, monBalance] = await Promise.all([
+    nftBalance > 0n ? publicClient.readContract({ ...nft, functionName: "tokensOfOwner", args: [account, 0n, 50n] }).then((ids) => [...ids]) : Promise.resolve([] as bigint[]),
+    publicClient.getBalance({ address: account }),
+  ]);
   const ledger = toLedger(ledgerRaw);
   return {
     usdcBalance,
+    monBalance,
     permit2Allowance,
     collectAllowance,
     entitlement,

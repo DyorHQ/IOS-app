@@ -5,6 +5,8 @@ import handler from "vinext/server/app-router-entry";
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  /** Comma-separated ISO-3166 alpha-2 codes where Moments money actions are switched off (set per the legal determination). */
+  MOMENTS_BLOCKED_COUNTRIES?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -49,6 +51,14 @@ async function proxyPerplSocket(): Promise<Response> {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    // Moments geofence: Cloudflare knows the request's country; the app hides collect/publish for blocked ones.
+    // The list is a Worker variable so it can follow the legal determination without a rebuild.
+    if (url.pathname === "/api/moments/geo") {
+      const country = ((request as Request & { cf?: { country?: string } }).cf?.country ?? "").toUpperCase() || null;
+      const blocked = (env.MOMENTS_BLOCKED_COUNTRIES ?? "").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+      return Response.json({ country, blocked: country !== null && blocked.includes(country), list: blocked }, { headers: { "cache-control": "no-store" } });
+    }
 
     // Perpl's market-data WebSocket only accepts its own origin, so browsers connect here and the Worker
     // bridges the socket to Perpl without an Origin header (Cloudflare Workers can dial WebSockets with fetch).
