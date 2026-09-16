@@ -118,9 +118,13 @@ contract that implements it so a reviewer can check the code against the ruling.
 ## Phase 6 — 2026-09-16
 
 17. **Launch gates split by owner.** Engineering-side gates are closed: fork/live verification (Phase 3, 5),
-    containment UI (Phase 5), geofence mechanism (`/api/moments/geo` + `MOMENTS_BLOCKED_COUNTRIES`, off until
-    counsel sets the list), on-ramp link slot (`NEXT_PUBLIC_ONRAMP_URL`), gas guidance ("user needs MON for gas"
+    containment UI (Phase 5), on-ramp link slot (`NEXT_PUBLIC_ONRAMP_URL`), gas guidance ("user needs MON for gas"
     is the documented answer for the web surface), iOS web-first rule (no Moments in the binary), status monitor
-    (`scripts/moments-status.mjs`) and governance ops (`PolicyOps.s.sol`). Owner-side gates remain open: the
-    independent audit (gate 2) and the legal determination + KYC on-ramp (gate 4). No collector money before both.
-    The validation launch run-of-show and the threshold-raise procedure are in `docs/moments-launch-gates.md`.
+    (`scripts/moments-status.mjs`) and governance ops (`PolicyOps.s.sol`). The validation launch run-of-show and
+    the threshold-raise procedure are in `docs/moments-launch-gates.md`.
+
+18. **No KYC, no legal determination, no geofence.** The owner rules that DyorHQ Moments is a decentralized,
+    permissionless protocol: spec §14's legal/geofence/KYC gate is waived and spec §13 item 2 (securities/AML
+    mitigations "required before real money") is superseded. The geofence route and UI gate built earlier in
+    Phase 6 were removed. The independent audit (spec §14 gate 2) remains the only pre-launch gate; it is a
+    security gate and stands unless the owner rules otherwise.

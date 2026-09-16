@@ -10,12 +10,12 @@ owner action each one needs. The contracts (v1.1) are live and verified; nothing
 | 1 | Launchpad audit fixes (holder-reward drain + owner backdoors) | done | Launchpad redeployed 2026-09-16; Moments imports nothing from it |
 | 2 | Independent audit of the clean-room Moments contracts; critical/high resolved | **open — owner** | Hand-off package: `docs/moments-security-review-2026-09-16/REPORT.md` §7 (scope tag `moments-mainnet-v1.1`, questions for the auditor). If the audit changes code, redeploy the whole set (the factory embeds the coin + NFT creation code) and pause publishing on the superseded set, as done for v1 |
 | 3 | Fork test on Monad v4 with the real USDC pool: collect → graduate → trade → claim → buyback | done | Phase 3 mainnet-fork suites (10/10, reconciled to `economics.py`), `LiveDeployment.t.sol` through the deployed contracts, and the Phase 5 browser run (publish, collects, claimAll, Universal Router trade, fee accrual, withdrawal) |
-| 4 | Legal determination per jurisdiction; geofencing + KYC'd on-ramp wired | **open — owner / counsel** | Mechanisms are in place and switched off: the Worker answers `/api/moments/geo` from Cloudflare's country detection and the `MOMENTS_BLOCKED_COUNTRIES` variable (ISO alpha-2 list), and the app hides collect + publish for blocked countries; `NEXT_PUBLIC_ONRAMP_URL` shows a "Get USDC" link once a licensed on-ramp partner exists. Spec §13 names Ghana explicitly; the list follows counsel. The contracts stay permissionless: the geofence is a product control, not a security boundary |
+| 4 | Legal determination per jurisdiction; geofencing + KYC'd on-ramp wired | **waived by the owner** (ruling 18) | DyorHQ Moments is a decentralized, permissionless protocol: no KYC, no legal determination, no geofence. The geofence mechanism built earlier in this phase was removed again; the contracts and the app are open to anyone with a wallet. Spec §13 item 2 and §14's legal line are superseded by the ruling |
 | 5 | iOS: coin purchase off-binary; web-first transaction surface | done by construction | The iOS app has no Moments surface; Moments live on the web app. Rule for the iOS team: link out to `/moments`, never sell coins or editions inside the binary (Apple 3.1.5(b)) |
 | 6 | Privy gas sponsorship validated, or "user needs MON for gas" documented | documented | The web app uses injected wallets, so users pay gas in MON; the collect panel says so when a wallet holds no MON. Privy sponsorship only matters for the iOS surface, which is out of scope for this launch |
 | 7 | Small-cap containment: curated cohort, early/low-cap/validation labels, holder count + top-holder % shown, not marketed as investments; raise the threshold via policy later | done in the app; cohort is operational | Labels on every card and page, holder + edition statistics, mandatory plain-language disclosure, no "proven demand" badge anywhere, copy never calls the coins investments. Threshold raise: `PolicyOps` below |
 
-**Hard stop:** gates 2 and 4 are the owner's sign-offs. No collector money before both.
+**The one remaining gate is the independent audit (gate 2).** Spec §14 makes it a precondition for real money and the build plan repeats it; it is a security gate, not a legal one, and it stays until the owner rules otherwise.
 
 ## Validation launch — run of show
 
@@ -23,8 +23,8 @@ Cohort: one creator wallet and three to five collector wallets, all dedicated an
 MON each), never the governance, platform or treasury wallets. Total exposure at the $10 policy is about $13.34.
 
 1. **Before:** `node scripts/moments-status.mjs` (all invariants OK, 0 or the expected number of Moments); app
-   deployed with `app/lib/moments-deployment.json` from `npm run sync:moments`; `MOMENTS_BLOCKED_COUNTRIES` set per
-   counsel; `NEXT_PUBLIC_ONRAMP_URL` set if available; `NEXT_PUBLIC_DEV_WALLET_KEY` **unset**.
+   deployed with `app/lib/moments-deployment.json` from `npm run sync:moments`; `NEXT_PUBLIC_ONRAMP_URL` set if
+   there is a preferred place to get USDC; `NEXT_PUBLIC_DEV_WALLET_KEY` **unset**.
 2. **Publish** from the creator wallet on `/moments/create`: $1 collect price, 10% allocation, a window of a few
    days, IPFS-hosted media with the original file fingerprinted. Then `contracts/script/moments/verify-moment.sh <id>`
    so the coin and the NFT are Sourcify-verified from the start.
@@ -73,6 +73,6 @@ cd /Users/jerry/Hackathon-moments/contracts && ~/.foundry/bin/forge script scrip
 ## Web app deployment notes
 
 `cd contracts && forge build` → `npm run abis` → `npm run sync:moments` → `npm run build` → deploy through the
-existing hosting pipeline. Worker variable `MOMENTS_BLOCKED_COUNTRIES`; optional `NEXT_PUBLIC_MOMENTS_*` address
-overrides and `NEXT_PUBLIC_MONAD_LOGS_RPC` (default rpc1.monad.xyz for holder statistics). Never set
-`NEXT_PUBLIC_DEV_WALLET_KEY` for a production build.
+existing hosting pipeline. Optional `NEXT_PUBLIC_MOMENTS_*` address overrides, `NEXT_PUBLIC_ONRAMP_URL` and
+`NEXT_PUBLIC_MONAD_LOGS_RPC` (default rpc1.monad.xyz for holder statistics). Never set `NEXT_PUBLIC_DEV_WALLET_KEY`
+for a production build.

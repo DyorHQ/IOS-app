@@ -8,7 +8,6 @@ import { ActionButton, TxStatus } from "../../launchpad/ui";
 import { BPS, MAX_COLLECT_WINDOW_SECONDS, MIN_COLLECT_WINDOW_SECONDS, MOMENTS_DEPLOYED, SUPPLY, USDC } from "../../lib/moments/config";
 import { publish, type PublishInput } from "../../lib/moments/actions";
 import { fetchPolicy, type Policy } from "../../lib/moments/reads";
-import { useGeo } from "../../lib/moments/geo";
 import { useAsync, useNow } from "../../lib/use-async";
 import { useTx } from "../../lib/use-tx";
 import { useWallet } from "../../lib/wallet";
@@ -53,7 +52,6 @@ function validate(form: Form, policy: Policy | null, mediaHash: Hex | null): Val
 export default function Create() {
   const router = useRouter();
   const wallet = useWallet();
-  const geo = useGeo();
   const [form, setForm] = useState<Form>(EMPTY);
   const [file, setFile] = useState<File | null>(null);
   const [fileHash, setFileHash] = useState<Hex | null>(null);
@@ -125,8 +123,7 @@ export default function Create() {
           <TxStatus tx={tx} onDismiss={reset} />
           {firstError && <p className="hint err" role="alert">{firstError}</p>}
           {p?.publishingPaused && <div className="warnbox"><b>Publishing is paused.</b> Governance has paused new Moments for now.</div>}
-          {geo.blocked && <div className="warnbox"><b>Not available in your region.</b> Publishing is switched off for {geo.country ?? "your location"} pending the legal determination.</div>}
-          <ActionButton requireLaunchpad={false} type="submit" ready={MOMENTS_DEPLOYED && !!input && !p?.publishingPaused && !geo.blocked} busy={busy} label={<>Publish <Icon name="arrow-ur" /></>} onClick={submit} />
+          <ActionButton requireLaunchpad={false} type="submit" ready={MOMENTS_DEPLOYED && !!input && !p?.publishingPaused} busy={busy} label={<>Publish <Icon name="arrow-ur" /></>} onClick={submit} />
           <p className="hint">Publishing costs gas only. The coin and the NFT contracts deploy in the same transaction; their addresses are fixed by your wallet, so nobody can front-run them.</p>
         </form>
 

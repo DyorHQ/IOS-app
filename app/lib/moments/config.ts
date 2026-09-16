@@ -42,7 +42,7 @@ export const MOMENTS_DEPLOY_BLOCK = BigInt((deployment as { deployBlock?: number
 export const LOGS_RPC = publicEnv(() => process.env.NEXT_PUBLIC_MONAD_LOGS_RPC) ?? "https://rpc1.monad.xyz";
 
 export const USDC = { address: MOMENTS.usdc, symbol: "USDC", decimals: 6 } as const;
-/** Optional link to a licensed USDC on-ramp (set once the KYC/on-ramp partner is wired); shown when a wallet holds no USDC. */
+/** Optional link to a place to get USDC (any venue); shown when a wallet holds no USDC. */
 export const ONRAMP_URL = publicEnv(() => process.env.NEXT_PUBLIC_ONRAMP_URL) ?? "";
 export const COIN_DECIMALS = 18;
 export const BPS = 10_000n;
