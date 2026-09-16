@@ -71,7 +71,7 @@ final class LaunchpadTests: XCTestCase {
     private func makeLaunch(pairToken: Address, pair: PairInfo, holderFeeSharing: Bool = true, price: BigUInt = 0, poolId: Data = Data(repeating: 0, count: 32), symbol: String = "DYOR") -> Launch {
         Launch(token: token, curve: curve, deployer: deployer, creatorFeeRecipient: creatorFeeRecipient, pairToken: pairToken,
                graduationThreshold: e6(4000), creatorTaxBps: 250, poolFeeBps: 3000, tickSpacing: 60, holderFeeSharing: holderFeeSharing,
-               phase: .bonding, sweptQuote: 0, sweptTokens: 0, sweptAt: 0, poolId: poolId, name: "Dyor Coin", symbol: symbol, logo: "",
+               graduationVenue: .uniswapV4, phase: .bonding, sweptQuote: 0, sweptTokens: 0, sweptAt: 0, poolId: poolId, name: "Dyor Coin", symbol: symbol, logo: "",
                description: "", socials: .none, pair: pair, price: price, realQuoteReserve: 0, completed: false, rescued: false,
                launchedAt: 0, supply: 0, marketCap: 0, progressBps: 0)
     }
@@ -207,6 +207,7 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(r.poolFeeBps, 3000)
         XCTAssertEqual(r.tickSpacing, 60)
         XCTAssertTrue(r.holderFeeSharing)
+        XCTAssertEqual(r.graduationVenue, .monday, "graduationVenue 1 decodes to .monday, and every field after it stays aligned")
         XCTAssertEqual(r.phase, .graduated, "phase 2 == PoolCreated maps to .graduated")
         XCTAssertEqual(r.sweptQuote, bn(d["sweptQuote"].string!))
         XCTAssertEqual(r.sweptTokens, bn(d["sweptTokens"].string!))

@@ -1,0 +1,82 @@
+{
+  "status": "recommended_prototype_profile_not_production_authorization",
+  "initialSupplyWholeCoins": "100000000",
+  "decimals": 18,
+  "coinsPerNFT": {
+    "min": "10000",
+    "default": "20000",
+    "max": "1000000",
+    "wholeCoinsOnly": true,
+    "immutableAfterPublication": true
+  },
+  "collectFeeBps": 0,
+  "publicationFeeMON": "0",
+  "redemptionBps": {
+    "holder": 9800,
+    "lpIncentives": 75,
+    "creator": 50,
+    "project": 50,
+    "burn": 25
+  },
+  "curve": {
+    "virtualMON": "1000",
+    "graduationRealMON": "4000",
+    "creatorFeeBps": 50,
+    "projectFeeBps": 30,
+    "lpReserveBps": 20,
+    "surplusPolicy": "burn_actual_surplus_after_successful_price_preserving_migration",
+    "pendingRescueDelaySeconds": 86400
+  },
+  "v4": {
+    "pair": "native_MON",
+    "lpFeeUnits": 3000,
+    "tickSpacing": 60,
+    "range": "full_usable_range",
+    "hookInputBps": 70,
+    "hookCreatorWeight": 5,
+    "hookProjectWeight": 2,
+    "positionCustody": "PositionManager_NFTs"
+  },
+  "lpRewards": {
+    "eligibility": "canonical_pool_full_range_position_NFT",
+    "seedEligible": false,
+    "warmupSeconds": 86400,
+    "streamEligibleSeconds": 604800,
+    "emptyStakePolicy": "pause_remaining_stream",
+    "arrivingFunds": "queue_for_next_stream",
+    "assets": [
+      "native_MON",
+      "MomentCoin"
+    ],
+    "principalWithdrawal": "return_position_NFT_without_requiring_fee_claim"
+  },
+  "governance": {
+    "multisigThreshold": 2,
+    "multisigSigners": 3,
+    "futurePolicyDelaySeconds": 172800,
+    "publishedInstanceUpgradeable": false,
+    "redemptionPause": false
+  },
+  "ui": {
+    "slippageBps": 100,
+    "quoteRefreshSeconds": 10,
+    "transactionDeadlineSeconds": 60,
+    "impactWarningBps": 500,
+    "impactExtraConfirmationBps": 1500,
+    "nftBatchLimit": 20
+  },
+  "beneficiaries": {
+    "project": null,
+    "creator": "per_publication_verified_account"
+  },
+  "releaseGates": [
+    "real_addresses",
+    "independent_security_review",
+    "v4_fork_evidence",
+    "OpenSea_image_video_evidence",
+    "current_affordability_review",
+    "LP_reward_invariants",
+    "distribution_and_jurisdiction_review",
+    "explicit_environment_and_budget"
+  ]
+}

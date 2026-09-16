@@ -7,7 +7,7 @@ import { ADDRESSES, DEPLOYED, EXTRA_PAIR_TOKENS, ZERO_ADDRESS, publicClient } fr
 export const PHASES = ["Bonding", "Migrating", "Graduated", "Refund mode"] as const;
 export type Socials = { twitter: string; telegram: string; discord: string; website: string; farcaster: string };
 export type PairInfo = { address: Address; symbol: string; decimals: number; native: boolean };
-export type PairEconomics = PairInfo & { phantomQuote: bigint; graduationThreshold: bigint; approved: boolean };
+export type PairEconomics = PairInfo & { phantomQuote: bigint; graduationThreshold: bigint; approved: boolean; mondayOnly: boolean };
 export type ProtocolInfo = {
   launchFee: bigint;
   configId: bigint;
@@ -33,6 +33,7 @@ export type LaunchRecord = {
   poolFeeBps: number;
   tickSpacing: number;
   holderFeeSharing: boolean;
+  graduationVenue: number;
   phase: number;
   sweptQuote: bigint;
   sweptTokens: bigint;
@@ -125,10 +126,15 @@ export async function fetchProtocol(): Promise<ProtocolInfo | null> {
     contracts: pairAddresses.map((pairToken) => ({ ...factoryContract, functionName: "pairTokenEconomics", args: [pairToken] }) as const),
     allowFailure: false,
   });
+  // Monday-only pairs (aBIL) can only graduate on Monday Trade; the create screen forces the venue for them.
+  const mondayOnly = await publicClient.multicall({
+    contracts: pairAddresses.map((pairToken) => ({ ...factoryContract, functionName: "pairMondayOnly", args: [pairToken] }) as const),
+    allowFailure: false,
+  });
   const infos = await Promise.all(pairAddresses.map(pairInfo));
   const pairs = infos.map((info, i) => {
     const [phantomQuote, graduationThreshold, , approved] = economics[i];
-    return { ...info, phantomQuote, graduationThreshold, approved };
+    return { ...info, phantomQuote, graduationThreshold, approved, mondayOnly: mondayOnly[i] };
   });
   return {
     launchFee,

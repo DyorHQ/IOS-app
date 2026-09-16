@@ -443,7 +443,9 @@ final class LaunchpadProfileModel {
         }
         let priceMap = (try? await env.prices.prices(for: priceTokens)) ?? [:]
         pairUSD = Dictionary(uniqueKeysWithValues: pairTokens.map { ($0, priceMap[$0]?.usd ?? ($0.isZero ? (priceMap[Monad.native]?.usd ?? 0) : 0)) })
-        pairMeta = Dictionary(uniqueKeysWithValues: launches.map { ($0.pairToken, ($0.pair.symbol, $0.pair.decimals)) })
+        // Multiple launches share a pair asset (MON / USDC / AUSD), so keys repeat — dedupe instead of
+        // Dictionary(uniqueKeysWithValues:), which traps on the first duplicate key and crashed this screen.
+        pairMeta = Dictionary(launches.map { ($0.pairToken, ($0.pair.symbol, $0.pair.decimals)) }, uniquingKeysWith: { first, _ in first })
 
         // Balances across every launch token in one multicall.
         let tokens = launches.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }

@@ -7,8 +7,8 @@ import Foundation
 enum LaunchpadABI {
     // MARK: Signatures
 
-    static let tokenParams = "(string,string,string,string,(string,string,string,string,string),address,uint16,bool,bytes32,bytes32)"
-    static let launchedTokenTuple = "(address,address,address,address,address,uint256,uint16,uint16,int24,bool,uint8,uint256,uint256,uint256,bytes32,bool)"
+    static let tokenParams = "(string,string,string,string,(string,string,string,string,string),address,uint16,bool,uint8,bytes32,bytes32)"
+    static let launchedTokenTuple = "(address,address,address,address,address,uint256,uint16,uint16,int24,bool,uint8,uint8,uint256,uint256,uint256,bytes32,bool)"
     static let launchConfigTuple = "(uint256,uint16,uint16,int24,uint16[],bool)"
     static let poolKeyTuple = "(address,address,uint24,int24,address)"
     static let socialsTuple = "(string,string,string,string,string)"
@@ -22,6 +22,7 @@ enum LaunchpadABI {
         static let launchCount = "launchCount()"
         static let getLaunchConfig = "getLaunchConfig(uint256)"
         static let pairTokenEconomics = "pairTokenEconomics(address)"
+        static let pairMondayOnly = "pairMondayOnly(address)"
         static let getLaunches = "getLaunches(uint256,uint256)"
         static let getLaunchedToken = "getLaunchedToken(address)"
         static let stuckSince = "stuckSince(address)"
@@ -176,6 +177,7 @@ enum LaunchpadABI {
             .string(input.name), .string(input.symbol), .string(input.logo), .string(input.description),
             .tuple([.string(input.socials.twitter), .string(input.socials.telegram), .string(input.socials.discord), .string(input.socials.website), .string(input.socials.farcaster)]),
             .address(input.creatorFeeRecipient), .uint(BigUInt(max(0, input.creatorTaxBps))), .bool(input.holderFeeSharing),
+            .uint(BigUInt(input.graduationVenue.rawValue)),
             .bytes(word(input.expectedEconomics)), .bytes(word(input.salt)),
         ])
     }
@@ -205,6 +207,7 @@ enum LaunchpadABI {
         let poolFeeBps: Int
         let tickSpacing: Int
         let holderFeeSharing: Bool
+        let graduationVenue: GraduationVenue
         let phase: LaunchPhase
         let sweptQuote: BigUInt
         let sweptTokens: BigUInt
@@ -223,12 +226,13 @@ enum LaunchpadABI {
             poolFeeBps = int(tuple[7])
             tickSpacing = int(tuple[8])
             holderFeeSharing = tuple[9].bool
-            phase = LaunchPhase(raw: tuple[10].uint)
-            sweptQuote = tuple[11].uint
-            sweptTokens = tuple[12].uint
-            sweptAt = int(tuple[13])
-            poolId = tuple[14].bytes
-            exists = tuple[15].bool
+            graduationVenue = GraduationVenue(raw: tuple[10].uint)
+            phase = LaunchPhase(raw: tuple[11].uint)
+            sweptQuote = tuple[12].uint
+            sweptTokens = tuple[13].uint
+            sweptAt = int(tuple[14])
+            poolId = tuple[15].bytes
+            exists = tuple[16].bool
         }
     }
 

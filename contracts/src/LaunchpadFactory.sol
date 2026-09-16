@@ -7,7 +7,14 @@ import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {
-    Types, IFeeEscrow, IHolderFeeSharing, IBondingCurve, IMemeHook, IGraduationExecutor, ILaunchDeployer
+    Types,
+    IFeeEscrow,
+    IHolderFeeSharing,
+    IBondingCurve,
+    IMemeHook,
+    IGraduationExecutor,
+    ILaunchDeployer,
+    IMondayGraduationExecutor
 } from "./interfaces/ILaunchpad.sol";
 
 /// @notice Entry point for launches and graduation. Owner-managed policy (fees, launch templates, approved quote
@@ -29,7 +36,8 @@ contract LaunchpadFactory {
     address public pendingOwner;
 
     address public hook;
-    address public graduationExecutor;
+    address public graduationExecutor; // Uniswap v4 graduation venue
+    address public mondayExecutor; // Monday Trade graduation venue (creator-selectable; the only venue for aBIL)
     address public locker;
     address public escrow;
     address public holderFeeSharing;
@@ -45,11 +53,16 @@ contract LaunchpadFactory {
 
     Types.LaunchConfig[] private _configs;
     mapping(address => Types.PairEconomics) public pairTokenEconomics;
+    /// @dev Pair assets that may ONLY graduate on Monday Trade (e.g. the RWA quote asset aBIL). A launch quoted in
+    ///      such an asset must choose the Monday venue; a Uniswap v4 choice is rejected at launch.
+    mapping(address => bool) public pairMondayOnly;
 
     mapping(address => Types.LaunchedToken) private _launches;
     address[] private _allTokens;
     mapping(address => address) public curveToToken;
     mapping(address => uint256) public stuckSince;
+    /// @dev Owner permission for a stuck launch quoted in a Monday-only asset to graduate on Uniswap v4 instead.
+    mapping(address => bool) public v4FallbackAllowed;
 
     struct Proposal {
         address newRecipient;
@@ -62,6 +75,8 @@ contract LaunchpadFactory {
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event ModulesSet(address hook, address executor, address locker, address escrow, address sharing, address router, address deployer);
+    event MondayExecutorSet(address executor);
+    event PairMondayOnlySet(address indexed pairToken, bool mondayOnly);
     event LaunchFeeSet(uint256 fee);
     event FeePolicySet(address recipient, uint16 protocolShareBps);
     event MaxCreatorTaxSet(uint16 bps);
@@ -74,6 +89,8 @@ contract LaunchpadFactory {
     event LaunchSwept(address indexed token);
     event PoolGraduated(address indexed token, bytes32 indexed poolId, uint128 liquidity);
     event AutoGraduationFailed(address indexed token);
+    event GraduationVenueFallback(address indexed token);
+    event V4FallbackAllowed(address indexed token);
     event LaunchRescued(address indexed token);
     event CreatorFeeRecipientChangeProposed(address indexed token, address newRecipient, uint256 effectiveAt, uint256 expiresAt);
     event CreatorFeeRecipientChangeCancelled(address indexed token);
@@ -92,6 +109,8 @@ contract LaunchpadFactory {
     error LaunchConfigDisabled();
     error PairTokenNotApproved();
     error PairTokenDecimalsMismatch();
+    error PairRequiresMonday();
+    error GraduationVenueUnavailable();
     error LaunchFeeNotPaid();
     error CreatorTaxTooHigh();
     error ExemptionListTooLong();
@@ -103,6 +122,10 @@ contract LaunchpadFactory {
     error TimelockExpired();
     error NoProposal();
     error Create2Mismatch();
+    error NotAuthorizedToCancel();
+    error FallbackNotAvailable();
+    error ZeroAddress();
+    error InvalidEconomics();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -136,13 +159,20 @@ contract LaunchpadFactory {
 
     // ------------------------------------------------------------------ admin
 
-    /// @notice Wires the modules. The hook, locker, escrow and sharing contracts are fixed once the first launch
-    ///         exists; the executor and router can be replaced (e.g. a new graduation venue).
+    /// @notice Wires the modules. ALL of them — hook, graduation executor, locker, escrow, sharing, router and
+    ///         deployer — are frozen once the first launch exists, so no module (including the graduation executor
+    ///         that custodies swept reserves during graduation) can be swapped for a malicious one afterwards.
     function setModules(address _hook, address _executor, address _locker, address _escrow, address _sharing, address _router, address _deployer)
         external
         onlyOwner
     {
-        if (_allTokens.length != 0 && (_hook != hook || _locker != locker || _escrow != escrow || _sharing != holderFeeSharing)) revert ModulesLocked();
+        if (
+            _allTokens.length != 0
+                && (
+                    _hook != hook || _executor != graduationExecutor || _locker != locker || _escrow != escrow
+                        || _sharing != holderFeeSharing || _router != router || _deployer != launchDeployer
+                )
+        ) revert ModulesLocked();
         hook = _hook;
         graduationExecutor = _executor;
         locker = _locker;
@@ -154,11 +184,23 @@ contract LaunchpadFactory {
         emit ModulesSet(_hook, _executor, _locker, _escrow, _sharing, _router, _deployer);
     }
 
+    /// @notice Sets the Monday Trade graduation executor. Frozen once the first launch exists (like every other
+    ///         module), so it cannot be swapped for a malicious executor that would seize a Monday graduation's
+    ///         swept reserves. Must therefore be configured at deploy time for Monday/aBIL launches to work.
+    function setMondayExecutor(address _mondayExecutor) external onlyOwner {
+        if (_allTokens.length != 0 && _mondayExecutor != mondayExecutor) revert ModulesLocked();
+        mondayExecutor = _mondayExecutor;
+        emit MondayExecutorSet(_mondayExecutor);
+    }
+
     function setLaunchFee(uint256 fee) external onlyOwner {
         launchFee = fee;
         emit LaunchFeeSet(fee);
     }
 
+    /// @notice Sets where the protocol's fees go and its share of the base fee. The share is pinned into every
+    ///         launch at launch time (it is part of `expectedEconomics`), so changing it here only affects launches
+    ///         created from now on; existing curves and pools keep the split their creator signed up for.
     function setFeePolicy(address recipient, uint16 protocolShareBps) external onlyOwner {
         if (protocolShareBps > 10_000) revert InvalidBps();
         protocolFeeRecipient = recipient;
@@ -186,6 +228,13 @@ contract LaunchpadFactory {
 
     function addLaunchConfig(Types.LaunchConfig calldata config) external onlyOwner returns (uint256 id) {
         if (config.curveFeeBps > 10_000 || config.poolFeeBps > 10_000) revert InvalidBps();
+        // Base fees (curve fee + max creator tax) must stay under 100% so normal post-snipe trades always yield
+        // a positive output. The snipe-tax schedule is intentionally allowed to push the total higher during the
+        // opening window (that is its anti-snipe purpose; exempt wallets bypass it).
+        if (uint256(config.curveFeeBps) + maxCreatorTaxBps >= 10_000) revert InvalidBps();
+        // Same bound for the post-graduation pool fee: at >= 100% every v4 swap would revert and the locked
+        // liquidity would become unsellable for holders.
+        if (uint256(config.poolFeeBps) + maxCreatorTaxBps >= 10_000) revert InvalidBps();
         for (uint256 i = 0; i < config.snipeTaxSchedule.length; i++) {
             if (config.snipeTaxSchedule[i] > 10_000) revert InvalidBps();
         }
@@ -200,8 +249,18 @@ contract LaunchpadFactory {
     }
 
     function setPairEconomics(address pairToken, uint256 phantomQuote, uint256 graduationThreshold, uint8 decimals, bool approved) external onlyOwner {
+        // A zero phantom reserve would sell the whole supply for 1 wei; a zero threshold would complete the curve
+        // on its first buy. Neither is ever a valid template for an approved quote asset.
+        if (approved && (phantomQuote == 0 || graduationThreshold == 0)) revert InvalidEconomics();
         pairTokenEconomics[pairToken] = Types.PairEconomics(phantomQuote, graduationThreshold, decimals, approved);
         emit PairEconomicsSet(pairToken, phantomQuote, graduationThreshold, decimals, approved);
+    }
+
+    /// @notice Marks a quote asset as Monday-only (used for the RWA quote asset aBIL). Launches quoted in it must
+    ///         graduate on Monday Trade; choosing Uniswap v4 reverts with `PairRequiresMonday`.
+    function setPairMondayOnly(address pairToken, bool mondayOnly) external onlyOwner {
+        pairMondayOnly[pairToken] = mondayOnly;
+        emit PairMondayOnlySet(pairToken, mondayOnly);
     }
 
     // ------------------------------------------------------------------ launching
@@ -248,8 +307,15 @@ contract LaunchpadFactory {
         Types.PairEconomics storage econ = pairTokenEconomics[pairToken];
         if (!econ.approved) revert PairTokenNotApproved();
         if (pairToken != address(0) && IERC20(pairToken).decimals() != econ.decimals) revert PairTokenDecimalsMismatch();
+        if (params.graduationVenue == Types.GraduationVenue.UniswapV4 && pairMondayOnly[pairToken]) revert PairRequiresMonday();
+        if (params.graduationVenue == Types.GraduationVenue.Monday && mondayExecutor == address(0)) revert GraduationVenueUnavailable();
         if (msg.value != launchFee) revert LaunchFeeNotPaid();
         if (params.creatorTaxBps > maxCreatorTaxBps) revert CreatorTaxTooHigh();
+        // Enforced per launch (not only when the config was added) so a later `setMaxCreatorTaxBps` can never let
+        // a launch's base fee, or its pool fee, reach 100%.
+        if (uint256(cfg.curveFeeBps) + params.creatorTaxBps >= 10_000 || uint256(cfg.poolFeeBps) + params.creatorTaxBps >= 10_000) {
+            revert InvalidBps();
+        }
         if (exemptions.length > MAX_EXEMPTIONS) revert ExemptionListTooLong();
         if (params.expectedEconomics != previewLaunchEconomics(launchConfigId, pairToken)) revert LaunchEconomicsMismatch();
 
@@ -270,13 +336,20 @@ contract LaunchpadFactory {
         ILaunchDeployer deployerModule = ILaunchDeployer(launchDeployer);
         token = deployerModule.predictToken(salt, tokenInit);
         if (params.holderFeeSharing) {
-            address[] memory excludedAccounts = new address[](6);
+            // Every protocol-owned balance on BOTH venues sits outside the holders' split. The Monday pool itself
+            // only exists at graduation and is excluded then (see `_graduate`).
+            address monday = mondayExecutor;
+            address[] memory excludedAccounts = new address[](monday == address(0) ? 6 : 8);
             excludedAccounts[0] = address(this);
             excludedAccounts[1] = locker;
             excludedAccounts[2] = address(poolManager);
             excludedAccounts[3] = hook;
             excludedAccounts[4] = graduationExecutor;
             excludedAccounts[5] = DEAD;
+            if (monday != address(0)) {
+                excludedAccounts[6] = monday;
+                excludedAccounts[7] = IMondayGraduationExecutor(monday).locker();
+            }
             IHolderFeeSharing(holderFeeSharing).register(token, pairToken, excludedAccounts);
         }
         if (deployerModule.deployToken(salt, tokenInit) != token) revert Create2Mismatch();
@@ -291,6 +364,7 @@ contract LaunchpadFactory {
                 graduationThreshold: econ.graduationThreshold,
                 feeBps: cfg.curveFeeBps,
                 creatorTaxBps: params.creatorTaxBps,
+                protocolShareBps: protocolFeeShareBps,
                 creatorFeeRecipient: creatorFeeRecipient,
                 holderFeeSharing: params.holderFeeSharing,
                 deployer: deployer,
@@ -315,6 +389,7 @@ contract LaunchpadFactory {
             poolFeeBps: cfg.poolFeeBps,
             tickSpacing: cfg.tickSpacing,
             holderFeeSharing: params.holderFeeSharing,
+            graduationVenue: params.graduationVenue,
             phase: Types.Phase.NotGraduated,
             sweptQuote: 0,
             sweptTokens: 0,
@@ -342,40 +417,88 @@ contract LaunchpadFactory {
         }
     }
 
-    /// @notice Sweeps a completed curve into its Uniswap v4 pool. Anyone can call it.
+    /// @notice Sweeps a completed curve into its pool on the creator's chosen venue. Anyone can call it.
     function graduate(address token) public {
+        _graduate(token, false);
+    }
+
+    /// @notice Venue fallback for a Monday launch whose automatic graduation failed — typically because someone
+    ///         squatted its Monday pool at a price the executor could not realign (see MondayGraduationExecutor).
+    ///         Anyone may graduate it on Uniswap v4 instead, right away, so a squatter can never force holders into
+    ///         the 7-day rescue lock-up. Monday-only quote assets (aBIL) keep their rule unless the owner has
+    ///         explicitly allowed the fallback for that launch with `allowV4Fallback`.
+    function graduateFallback(address token) external {
+        // The creator's venue is honoured whenever it works: if the Monday graduation succeeds now (e.g. the squat
+        // was realignable, or an earlier attempt merely ran out of gas), that is the result. Only a Monday path
+        // that still reverts falls back to Uniswap v4 — so nobody can use this entry point to override a venue
+        // choice that is still viable.
+        try this.graduate(token) {
+            return;
+        } catch {}
+        _graduate(token, true);
+    }
+
+    /// @notice Lets a specific stuck launch quoted in a Monday-only asset use the Uniswap v4 fallback.
+    function allowV4Fallback(address token) external onlyOwner {
+        if (!_launches[token].exists) revert UnknownLaunch();
+        v4FallbackAllowed[token] = true;
+        emit V4FallbackAllowed(token);
+    }
+
+    function _graduate(address token, bool fallbackToV4) internal {
         Types.LaunchedToken storage launch = _launches[token];
         if (!launch.exists) revert UnknownLaunch();
         if (launch.phase != Types.Phase.NotGraduated) revert WrongGraduationPhase();
         IBondingCurve curve = IBondingCurve(launch.curve);
         if (!curve.completed() || curve.rescued()) revert WrongGraduationPhase();
 
-        (uint256 quoteAmount, uint256 tokenAmount) = curve.sweep(graduationExecutor);
+        bool useMonday = launch.graduationVenue == Types.GraduationVenue.Monday;
+        if (fallbackToV4) {
+            if (!useMonday || stuckSince[token] == 0) revert FallbackNotAvailable();
+            if (pairMondayOnly[launch.pairToken] && !v4FallbackAllowed[token]) revert PairRequiresMonday();
+            launch.graduationVenue = Types.GraduationVenue.UniswapV4;
+            useMonday = false;
+            emit GraduationVenueFallback(token);
+        }
+        address executor = useMonday ? mondayExecutor : graduationExecutor;
+        if (executor == address(0)) revert GraduationVenueUnavailable();
+
+        (uint256 quoteAmount, uint256 tokenAmount) = curve.sweep(executor);
         launch.phase = Types.Phase.Swept;
         launch.sweptQuote = quoteAmount;
         launch.sweptTokens = tokenAmount;
         launch.sweptAt = block.timestamp;
         emit LaunchSwept(token);
 
-        IMemeHook(hook).registerLaunch(
-            poolKeyOf(token),
-            Types.PoolLaunch({
-                token: token,
-                quoteToken: launch.pairToken,
-                tokenIsCurrency0: token < launch.pairToken,
-                creatorFeeRecipient: launch.creatorFeeRecipient,
-                feeBps: launch.poolFeeBps,
-                creatorTaxBps: launch.creatorTaxBps,
-                holderFeeSharing: launch.holderFeeSharing,
-                registered: true
-            })
-        );
-        (bytes32 poolId, uint128 liquidity) = IGraduationExecutor(graduationExecutor).graduate(
+        // The Uniswap v4 pool levies fees through the hook, so the launch must be registered before its pool
+        // initializes. Monday Trade pools use Monday's own fee tier and never touch the hook.
+        if (!useMonday) {
+            IMemeHook(hook).registerLaunch(
+                poolKeyOf(token),
+                Types.PoolLaunch({
+                    token: token,
+                    quoteToken: launch.pairToken,
+                    tokenIsCurrency0: token < launch.pairToken,
+                    creatorFeeRecipient: launch.creatorFeeRecipient,
+                    feeBps: launch.poolFeeBps,
+                    creatorTaxBps: launch.creatorTaxBps,
+                    protocolShareBps: curve.protocolShareBps(),
+                    holderFeeSharing: launch.holderFeeSharing,
+                    registered: true
+                })
+            );
+        }
+        (bytes32 poolId, uint128 liquidity) = IGraduationExecutor(executor).graduate(
             token, launch.pairToken, quoteAmount, tokenAmount, IBondingCurve(launch.curve).phantomQuote(), launch.tickSpacing
         );
         launch.phase = Types.Phase.PoolCreated;
         launch.poolId = poolId;
         stuckSince[token] = 0;
+        // A Monday pool only exists from this moment, so it is excluded from the holders' split here (the v4
+        // PoolManager and locker were excluded at launch).
+        if (useMonday && launch.holderFeeSharing) {
+            IHolderFeeSharing(holderFeeSharing).exclude(token, address(uint160(uint256(poolId))));
+        }
         emit PoolGraduated(token, poolId, liquidity);
     }
 
@@ -401,13 +524,18 @@ contract LaunchpadFactory {
     /// @notice Community takeover for absent creators: public 3-day wait, then a 3-day window to execute.
     function proposeCreatorFeeRecipient(address token, address newRecipient) external onlyOwner {
         if (!_launches[token].exists) revert UnknownLaunch();
+        if (newRecipient == address(0)) revert ZeroAddress();
         uint256 effectiveAt = block.timestamp + TAKEOVER_DELAY;
         uint256 expiresAt = effectiveAt + TAKEOVER_WINDOW;
         pendingCreatorFeeRecipient[token] = Proposal(newRecipient, effectiveAt, expiresAt);
         emit CreatorFeeRecipientChangeProposed(token, newRecipient, effectiveAt, expiresAt);
     }
 
-    function cancelCreatorFeeRecipientChange(address token) external onlyOwner {
+    /// @notice Cancel a pending creator-fee-recipient takeover. The owner may cancel a mistaken proposal, and —
+    ///         crucially — the CURRENT creatorFeeRecipient can veto their own takeover any time before it executes,
+    ///         so the owner cannot unilaterally seize an active creator's fee stream.
+    function cancelCreatorFeeRecipientChange(address token) external {
+        if (msg.sender != owner && msg.sender != _launches[token].creatorFeeRecipient) revert NotAuthorizedToCancel();
         delete pendingCreatorFeeRecipient[token];
         emit CreatorFeeRecipientChangeCancelled(token);
     }
@@ -422,10 +550,15 @@ contract LaunchpadFactory {
     }
 
     function _setCreatorFeeRecipient(address token, address newRecipient) internal {
+        // Fees pushed to address(0) would be burned, not booked.
+        if (newRecipient == address(0)) revert ZeroAddress();
         Types.LaunchedToken storage launch = _launches[token];
         launch.creatorFeeRecipient = newRecipient;
         IBondingCurve(launch.curve).setCreatorFeeRecipient(newRecipient);
-        if (launch.phase == Types.Phase.PoolCreated) IMemeHook(hook).setCreatorFeeRecipient(launch.poolId, newRecipient);
+        // Only the Uniswap v4 pool keeps a hook-side creator-fee stream to update; Monday pools have none.
+        if (launch.phase == Types.Phase.PoolCreated && launch.graduationVenue == Types.GraduationVenue.UniswapV4) {
+            IMemeHook(hook).setCreatorFeeRecipient(launch.poolId, newRecipient);
+        }
         emit CreatorFeeRecipientUpdated(token, newRecipient);
     }
 

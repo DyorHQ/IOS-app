@@ -3,204 +3,48 @@ import Charts
 import DyorKit
 import SwiftUI
 
-/// Perpetuals on Perpl: account, positions, open orders and markets, all read from the Exchange contract.
+/// Perpetuals on Perpl, as a single-screen trading app: the Trade screen renders the ticket, live book, chart and
+/// positions for the currently-selected market, and the market header's chevron swaps markets in place through a
+/// Select Perpetual sheet — no drilling into a list. Account, positions, open orders and markets are all read from
+/// the Exchange contract; deposit/withdraw and the portfolio live in the header's ⋯ menu.
 struct PerpsView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
     @Environment(Router.self) private var router
     @State private var model = PerpsModel()
-    @State private var sheet: PerpsSheet?
-    @State private var path: [Int] = []
-    @State private var showPortfolio = false
+    @State private var selectedId: Int?
+
+    /// The market to trade: the explicit selection, else the deep-linked one, else BTC, else the first listed.
+    private var currentMarket: PerpMarket? {
+        if let selectedId, let m = model.markets.first(where: { $0.id == selectedId }) { return m }
+        return model.markets.first { $0.asset == "BTC" } ?? model.markets.first
+    }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            List {
-                accountSection
-                if !model.positions.isEmpty { positionsSection }
-                if !model.orders.isEmpty { ordersSection }
-                marketsSection
+        NavigationStack {
+            Group {
+                if let market = currentMarket {
+                    PerpTradeView(market: market, model: model, onSelectMarket: { id in
+                        withAnimation(.easeInOut(duration: 0.15)) { selectedId = id }
+                    })
+                    .id(market.id)   // reset the ticket/feed cleanly when the market changes
+                } else if model.loading {
+                    ProgressView().controlSize(.large).frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ContentUnavailableView("No Markets", systemImage: "chart.bar.xaxis", description: Text("Perpl markets are unavailable right now."))
+                }
             }
-            .listStyle(.insetGrouped)
-            .navigationTitle("Trade")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Portfolio", systemImage: "chart.xyaxis.line") { showPortfolio = true }
-                        .disabled(session.address == nil)
-                }
-            }
-            .sheet(isPresented: $showPortfolio) { PerpsPortfolioView(model: model) }
             .safeAreaInset(edge: .top, spacing: 0) { TradeModeSwitcher() }
-            .navigationDestination(for: Int.self) { id in
-                if let market = model.markets.first(where: { $0.id == id }) {
-                    PerpTradeView(market: market, model: model)
-                }
-            }
-            .refreshable { await model.load(env: env, address: session.address) }
             .task(id: session.address) { await model.poll(env: env, address: session.address) }
-            .overlay { if model.markets.isEmpty, model.loading { ProgressView().controlSize(.large) } }
-            .sheet(item: $sheet) { which in
-                switch which {
-                case .deposit: CollateralSheet(kind: .deposit, model: model)
-                case .withdraw: CollateralSheet(kind: .withdraw, model: model)
-                }
-            }
             .onChange(of: router.pendingPerpMarket) { _, id in
-                if let id { path = [id]; router.pendingPerpMarket = nil }
+                if let id { selectedId = id; router.pendingPerpMarket = nil }
             }
             // Fallback for when this view is created *after* the deep link is set — e.g. opening a perp from Home
             // while the Trade tab is in Swap mode, which builds PerpsView fresh with pendingPerpMarket already set,
-            // so `.onChange` never fires. Mirrors SwapView's `applyPending()` on appear.
+            // so `.onChange` never fires.
             .onAppear {
-                if let id = router.pendingPerpMarket { path = [id]; router.pendingPerpMarket = nil }
-            }
-        }
-    }
-
-    private var accountSection: some View {
-        Section {
-            if let account = model.account {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Trading Balance").font(.subheadline).foregroundStyle(.secondary)
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        USDText(value: model.equity, font: .system(.largeTitle, design: .rounded).weight(.semibold))
-                        if model.unrealizedTotal != 0 {
-                            Text(model.unrealizedTotal, format: .currency(code: "USD").sign(strategy: .always()))
-                                .font(.subheadline.weight(.medium)).monospacedDigit()
-                                .foregroundStyle(model.unrealizedTotal < 0 ? Color.negative : Color.positive)
-                        }
-                    }
-                    HStack(spacing: 16) {
-                        Label("\(NumberStyle.units(account.balance - min(account.balance, account.locked), decimals: 6)) AUSD available", systemImage: "circle.lefthalf.filled")
-                        if account.frozen { Label("Frozen", systemImage: "snowflake").foregroundStyle(Color.attention) }
-                    }
-                    .font(.footnote).foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 4)
-            } else if session.address != nil {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("No Trading Account Yet").font(.headline)
-                    Text("New to Perpl? Create your account on the web first, then deposit at least 10 AUSD to open a trading account. Collateral stays in the Perpl Exchange contract under your address.")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    Link(destination: PerplLinks.signup) {
-                        Label("Create a Perpl Account", systemImage: "arrow.up.forward.square").font(.subheadline.weight(.medium))
-                    }
-                    .padding(.top, 2)
-                }
-                .padding(.vertical, 4)
-            }
-            HStack(spacing: 12) {
-                Button("Deposit", systemImage: "plus") { sheet = .deposit }
-                    .buttonStyle(.borderedProminent)
-                Button("Withdraw", systemImage: "minus") { sheet = .withdraw }
-                    .buttonStyle(.bordered)
-                    .disabled(model.account == nil)
-            }
-            .controlSize(.regular)
-            .disabled(!session.canSign)
-        } footer: {
-            if !session.canSign { Text("Sign in to deposit and trade.") }
-            else if let error = model.error { InlineError(message: error) }
-        }
-    }
-
-    private var positionsSection: some View {
-        Section("Positions") {
-            ForEach(model.positions) { position in
-                NavigationLink(value: position.perpId) { PositionRow(position: position) }
-                    .swipeActions {
-                        Button("Close") { model.closing = position }
-                            .tint(Color.negative)
-                    }
-            }
-        }
-        .sheet(item: $model.closing) { position in
-            if let market = model.markets.first(where: { $0.id == position.perpId }) {
-                ConfirmationSheet(title: "Close Position", confirmTitle: "Close \(position.symbol) \(position.side.rawValue.capitalized)", build: { env.perpl.closePositionPlan(market: market, position: position, slippageBps: 100) }, onDone: { Task { await model.load(env: env, address: session.address) } }) {
-                    DetailRow("Size", "\(NumberStyle.number(position.size)) \(position.symbol)")
-                    DetailRow("Mark price", NumberStyle.number(position.mark))
-                    DetailRow("Unrealized", position.unrealized.formatted(.currency(code: "USD").sign(strategy: .always())), tint: position.unrealized < 0 ? Color.negative : Color.positive)
-                    DetailRow("Order", "Market, reduce only, 1% slippage")
-                }
-            }
-        }
-    }
-
-    private var ordersSection: some View {
-        Section("Open Orders") {
-            ForEach(model.orders) { order in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(order.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(order.size)) \(order.symbol)").font(.headline)
-                        Text("Limit \(NumberStyle.number(order.price)) · \(NumberStyle.number(order.leverage, maximumFractionDigits: 1))×\(order.reduceOnly ? " · Reduce only" : "")")
-                            .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
-                    }
-                    Spacer()
-                    Text("#\(order.orderId)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary)
-                }
-                .swipeActions {
-                    Button("Cancel Order") { model.cancelling = order }.tint(Color.negative)
-                }
-            }
-        }
-        .sheet(item: $model.cancelling) { order in
-            ConfirmationSheet(title: "Cancel Order", confirmTitle: "Cancel Order", build: { env.perpl.cancelPlan(perpId: order.perpId, orderId: order.orderId) }, onDone: { Task { await model.load(env: env, address: session.address) } }) {
-                DetailRow("Market", order.symbol)
-                DetailRow("Order", "\(order.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(order.size)) at \(NumberStyle.number(order.price))")
-            }
-        }
-    }
-
-    private var marketsSection: some View {
-        Section("Markets") {
-            ForEach(model.markets) { market in
-                NavigationLink(value: market.id) {
-                    HStack(spacing: 12) {
-                        TokenLogo(symbol: market.asset, url: nil, size: 34)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(market.asset).font(.headline)
-                            Text(market.name).font(.footnote).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 3) {
-                            Text(NumberStyle.number(market.mark)).font(.body.weight(.medium)).monospacedDigit()
-                            HStack(spacing: 6) {
-                                ChangeBadge(value: model.change24h(for: market))
-                                Text("\(NumberStyle.percent(Double(market.fundingRatePct100k) / 1_000, fractionDigits: 3)) fund.")
-                                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct PositionRow: View {
-    let position: PerpPosition
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(position.symbol).font(.headline)
-                    Text("\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.leverage, maximumFractionDigits: 1))×")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background((position.side == .long ? Color.positive : Color.negative).opacity(0.14), in: Capsule())
-                        .foregroundStyle(position.side == .long ? Color.positive : Color.negative)
-                }
-                Text("\(NumberStyle.number(position.size)) at \(NumberStyle.number(position.entry)) · Liq. \(position.liquidation.map { NumberStyle.number($0) } ?? "—")")
-                    .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(position.unrealized, format: .currency(code: "USD").sign(strategy: .always()))
-                    .monospacedDigit().fontWeight(.medium)
-                    .foregroundStyle(position.unrealized < 0 ? Color.negative : Color.positive)
-                Text("Margin \(NumberStyle.number(position.margin, maximumFractionDigits: 2))").font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                if let id = router.pendingPerpMarket { selectedId = id; router.pendingPerpMarket = nil }
             }
         }
     }
@@ -312,6 +156,8 @@ struct CollateralSheet: View {
 
     private var raw: BigUInt { Amount.parse(amountText, decimals: 6) ?? 0 }
     private var limit: BigUInt { kind == .deposit ? model.collateral.wallet : (model.account.map { $0.balance - min($0.balance, $0.locked) } ?? 0) }
+    /// A first deposit with no account yet is really account creation — the plan calls `createAccount`, not `depositCollateral`.
+    private var isCreating: Bool { kind == .deposit && model.account == nil }
     private var problem: String? {
         if raw == 0 { return nil }
         if raw > limit { return kind == .deposit ? "Not enough AUSD in your wallet." : "More than your available balance." }
@@ -325,12 +171,14 @@ struct CollateralSheet: View {
                 Section {
                     AmountField(title: "0", text: $amountText, token: .ausd) { Haptics.selection(); amountText = Amount.exact(limit, decimals: 6) }
                 } header: {
-                    Text(kind == .deposit ? "Deposit AUSD" : "Withdraw AUSD")
+                    Text(isCreating ? "Open your Perpl account" : (kind == .deposit ? "Deposit AUSD" : "Withdraw AUSD"))
                 } footer: {
-                    if let problem { Text(problem) } else { Text("\(kind == .deposit ? "In wallet" : "Available"): \(NumberStyle.units(limit, decimals: 6)) AUSD") }
+                    if let problem { Text(problem) }
+                    else if isCreating { Text("Your first deposit opens your Perpl trading account in-app — no website needed. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.") }
+                    else { Text("\(kind == .deposit ? "In wallet" : "Available"): \(NumberStyle.units(limit, decimals: 6)) AUSD") }
                 }
             }
-            .navigationTitle(kind == .deposit ? "Deposit" : "Withdraw")
+            .navigationTitle(isCreating ? "Create Account" : (kind == .deposit ? "Deposit" : "Withdraw"))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .toolbar {
@@ -338,7 +186,7 @@ struct CollateralSheet: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Review") { showConfirm = true }.disabled(raw == 0 || problem != nil) }
             }
             .sheet(isPresented: $showConfirm) {
-                ConfirmationSheet(title: kind == .deposit ? "Confirm Deposit" : "Confirm Withdrawal", confirmTitle: kind == .deposit ? "Deposit" : "Withdraw", build: { kind == .deposit ? env.perpl.depositPlan(amountCNS: raw, hasAccount: model.account != nil) : env.perpl.withdrawPlan(amountCNS: raw) }, onDone: { dismiss(); Task { await model.load(env: env, address: session.address) } }) {
+                ConfirmationSheet(title: isCreating ? "Create Trading Account" : (kind == .deposit ? "Confirm Deposit" : "Confirm Withdrawal"), confirmTitle: isCreating ? "Create Account" : (kind == .deposit ? "Deposit" : "Withdraw"), build: { kind == .deposit ? env.perpl.depositPlan(amountCNS: raw, hasAccount: model.account != nil) : env.perpl.withdrawPlan(amountCNS: raw) }, onDone: { dismiss(); Task { await model.load(env: env, address: session.address) } }) {
                     DetailRow("Amount", "\(NumberStyle.units(raw, decimals: 6)) AUSD")
                     DetailRow(kind == .deposit ? "To" : "From", "Perpl Exchange")
                     if kind == .deposit, model.account == nil { DetailRow("Account", "Opens a new trading account") }

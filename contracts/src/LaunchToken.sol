@@ -71,10 +71,14 @@ contract LaunchToken {
 
     function _transfer(address from, address to, uint256 amount) internal {
         if (balanceOf[from] < amount) revert InsufficientBalance();
-        if (holderFeeSharing != address(0)) IHolderFeeSharing(holderFeeSharing).beforeTransfer(from, to, amount);
-        unchecked {
-            balanceOf[from] -= amount;
-            balanceOf[to] += amount;
+        // Self-transfers are net-zero; skip the fee-sharing hook (settling both sides for one account would
+        // double-credit rewards) but still emit Transfer for ERC-20 compliance.
+        if (from != to) {
+            if (holderFeeSharing != address(0)) IHolderFeeSharing(holderFeeSharing).beforeTransfer(from, to, amount);
+            unchecked {
+                balanceOf[from] -= amount;
+                balanceOf[to] += amount;
+            }
         }
         emit Transfer(from, to, amount);
     }

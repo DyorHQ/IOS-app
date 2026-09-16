@@ -5,6 +5,13 @@ import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 
 /// @notice Shared types for the DyorHQ launchpad (Pons v2 shaped, built for Monad + Uniswap v4).
 library Types {
+    /// @dev Where a completed curve graduates. The creator chooses at launch; aBIL-quoted launches are forced to
+    ///      Monday (see `LaunchpadFactory.pairMondayOnly`). UniswapV4 is the default (enum value 0).
+    enum GraduationVenue {
+        UniswapV4,
+        Monday
+    }
+
     struct Socials {
         string twitter;
         string telegram;
@@ -24,6 +31,7 @@ library Types {
         address creatorFeeRecipient;
         uint16 creatorTaxBps;
         bool holderFeeSharing;
+        GraduationVenue graduationVenue; // creator's chosen graduation venue (UniswapV4 or Monday)
         bytes32 expectedEconomics;
         bytes32 salt;
     }
@@ -69,6 +77,7 @@ library Types {
         uint16 poolFeeBps;
         int24 tickSpacing;
         bool holderFeeSharing;
+        GraduationVenue graduationVenue;
         Phase phase;
         uint256 sweptQuote;
         uint256 sweptTokens;
@@ -97,6 +106,7 @@ library Types {
         uint256 graduationThreshold;
         uint16 feeBps;
         uint16 creatorTaxBps;
+        uint16 protocolShareBps; // protocol's share of the base fee, pinned for this launch (see LaunchpadFactory)
         address creatorFeeRecipient;
         bool holderFeeSharing;
         address deployer;
@@ -112,6 +122,7 @@ library Types {
         address creatorFeeRecipient;
         uint16 feeBps;
         uint16 creatorTaxBps;
+        uint16 protocolShareBps; // pinned at launch; the owner cannot rewrite an existing launch's split
         bool holderFeeSharing;
         bool registered;
     }
@@ -135,6 +146,7 @@ interface IBondingCurve {
     function rescued() external view returns (bool);
     function swept() external view returns (bool);
     function phantomQuote() external view returns (uint256);
+    function protocolShareBps() external view returns (uint16);
     function sweep(address to) external returns (uint256 quoteAmount, uint256 tokenAmount);
     function enableRescue() external;
     function setCreatorFeeRecipient(address recipient) external;
@@ -161,6 +173,12 @@ interface IGraduationExecutor {
 
 interface ILaunchLocker {
     function lock(PoolKey calldata key, uint128 liquidity) external;
+}
+
+/// @notice The Monday Trade venue exposes where it parks the graduated position (the fee vault), so the factory can
+///         keep that address out of holder-fee-sharing accounting.
+interface IMondayGraduationExecutor {
+    function locker() external view returns (address);
 }
 
 interface ILaunchDeployer {
