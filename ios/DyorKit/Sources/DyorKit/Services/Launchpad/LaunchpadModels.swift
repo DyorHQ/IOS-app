@@ -45,6 +45,22 @@ public enum LaunchPhase: Int, Sendable, Hashable, CaseIterable {
     init(raw: BigUInt) { self = LaunchPhase(rawValue: Int(clamping: raw)) ?? .bonding }
 }
 
+/// `Types.GraduationVenue` in the contracts: where a completed curve graduates. The creator chooses at launch;
+/// aBIL-quoted (and any `pairMondayOnly`) launches are forced to Monday. UniswapV4 is the default (enum value 0).
+public enum GraduationVenue: UInt8, Sendable, Hashable, CaseIterable {
+    case uniswapV4 = 0
+    case monday = 1
+
+    public var title: String {
+        switch self {
+        case .uniswapV4: return "Uniswap v4"
+        case .monday: return "Monday Trade"
+        }
+    }
+
+    init(raw: BigUInt) { self = GraduationVenue(rawValue: UInt8(clamping: raw)) ?? .uniswapV4 }
+}
+
 public struct Socials: Hashable, Sendable {
     public var twitter: String
     public var telegram: String
@@ -85,12 +101,16 @@ public struct PairEconomics: Hashable, Sendable {
     public let phantomQuote: BigUInt
     public let graduationThreshold: BigUInt
     public let approved: Bool
+    /// The pair can only graduate on Monday Trade (the factory's `pairMondayOnly`); the create screen then forces
+    /// the Monday venue and disables the picker. aBIL is the canonical Monday-only quote asset.
+    public let mondayOnly: Bool
 
-    public init(pair: PairInfo, phantomQuote: BigUInt, graduationThreshold: BigUInt, approved: Bool) {
+    public init(pair: PairInfo, phantomQuote: BigUInt, graduationThreshold: BigUInt, approved: Bool, mondayOnly: Bool = false) {
         self.pair = pair
         self.phantomQuote = phantomQuote
         self.graduationThreshold = graduationThreshold
         self.approved = approved
+        self.mondayOnly = mondayOnly
     }
 }
 
@@ -142,6 +162,7 @@ public struct Launch: Identifiable, Hashable, Sendable {
     public let poolFeeBps: Int
     public let tickSpacing: Int
     public let holderFeeSharing: Bool
+    public let graduationVenue: GraduationVenue
     public let phase: LaunchPhase
     public let sweptQuote: BigUInt
     public let sweptTokens: BigUInt
@@ -164,7 +185,7 @@ public struct Launch: Identifiable, Hashable, Sendable {
     public let marketCap: BigUInt
     public let progressBps: Int
 
-    public init(token: Address, curve: Address, deployer: Address, creatorFeeRecipient: Address, pairToken: Address, graduationThreshold: BigUInt, creatorTaxBps: Int, poolFeeBps: Int, tickSpacing: Int, holderFeeSharing: Bool, phase: LaunchPhase, sweptQuote: BigUInt, sweptTokens: BigUInt, sweptAt: Int, poolId: Data, name: String, symbol: String, logo: String, description: String, socials: Socials, pair: PairInfo, price: BigUInt, realQuoteReserve: BigUInt, completed: Bool, rescued: Bool, launchedAt: Int, supply: BigUInt, marketCap: BigUInt, progressBps: Int) {
+    public init(token: Address, curve: Address, deployer: Address, creatorFeeRecipient: Address, pairToken: Address, graduationThreshold: BigUInt, creatorTaxBps: Int, poolFeeBps: Int, tickSpacing: Int, holderFeeSharing: Bool, graduationVenue: GraduationVenue, phase: LaunchPhase, sweptQuote: BigUInt, sweptTokens: BigUInt, sweptAt: Int, poolId: Data, name: String, symbol: String, logo: String, description: String, socials: Socials, pair: PairInfo, price: BigUInt, realQuoteReserve: BigUInt, completed: Bool, rescued: Bool, launchedAt: Int, supply: BigUInt, marketCap: BigUInt, progressBps: Int) {
         self.token = token
         self.curve = curve
         self.deployer = deployer
@@ -175,6 +196,7 @@ public struct Launch: Identifiable, Hashable, Sendable {
         self.poolFeeBps = poolFeeBps
         self.tickSpacing = tickSpacing
         self.holderFeeSharing = holderFeeSharing
+        self.graduationVenue = graduationVenue
         self.phase = phase
         self.sweptQuote = sweptQuote
         self.sweptTokens = sweptTokens
@@ -395,6 +417,9 @@ public struct LaunchInput: Sendable, Hashable {
     public var creatorFeeRecipient: Address
     public var creatorTaxBps: Int
     public var holderFeeSharing: Bool
+    /// Where the curve graduates. Defaults to Uniswap v4; the create screen forces `.monday` for `pairMondayOnly`
+    /// (aBIL) pairs, which the factory also enforces (`PairRequiresMonday`).
+    public var graduationVenue: GraduationVenue
     public var pairToken: Address
     public var configId: BigUInt
     /// Snipe-tax exemptions (at most `LaunchpadService.maxExemptions`); the deployer and creator wallet are always exempt.
@@ -408,7 +433,7 @@ public struct LaunchInput: Sendable, Hashable {
     /// 32 random bytes; the token and curve addresses derive from `keccak(deployer, salt)`.
     public var salt: Data
 
-    public init(name: String, symbol: String, description: String = "", logo: String = "", socials: Socials = .none, creatorFeeRecipient: Address = .zero, creatorTaxBps: Int = 0, holderFeeSharing: Bool = true, pairToken: Address = .zero, configId: BigUInt = 0, exemptions: [Address] = [], initialBuy: BigUInt = 0, minTokensOut: BigUInt = 0, expectedEconomics: Data = Data(repeating: 0, count: 32), salt: Data = LaunchInput.randomSalt()) {
+    public init(name: String, symbol: String, description: String = "", logo: String = "", socials: Socials = .none, creatorFeeRecipient: Address = .zero, creatorTaxBps: Int = 0, holderFeeSharing: Bool = true, graduationVenue: GraduationVenue = .uniswapV4, pairToken: Address = .zero, configId: BigUInt = 0, exemptions: [Address] = [], initialBuy: BigUInt = 0, minTokensOut: BigUInt = 0, expectedEconomics: Data = Data(repeating: 0, count: 32), salt: Data = LaunchInput.randomSalt()) {
         self.name = name
         self.symbol = symbol
         self.description = description
@@ -417,6 +442,7 @@ public struct LaunchInput: Sendable, Hashable {
         self.creatorFeeRecipient = creatorFeeRecipient
         self.creatorTaxBps = creatorTaxBps
         self.holderFeeSharing = holderFeeSharing
+        self.graduationVenue = graduationVenue
         self.pairToken = pairToken
         self.configId = configId
         self.exemptions = exemptions

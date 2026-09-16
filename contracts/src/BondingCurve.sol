@@ -22,7 +22,14 @@ contract BondingCurve {
     uint256 public immutable reservedTokens; // the token reserve left when the threshold is raised
     uint16 public immutable feeBps;
     uint16 public immutable creatorTaxBps;
+    /// @dev The protocol's share of the base fee, pinned at launch. Reading it live from the factory would let the
+    ///      owner retroactively rewrite the split that `expectedEconomics` promised the creator.
+    uint16 public immutable protocolShareBps;
     bool public immutable holderFeeSharing;
+    /// @dev Hard ceiling on fee + creator tax + snipe tax. The opening-second snipe tax (98%) plus a 10% creator tax
+    ///      would exceed 100% and make every buy revert with an arithmetic panic (or, at exactly 100%, take the
+    ///      whole input for zero tokens); the snipe portion is clamped so a buy always returns something.
+    uint256 public constant MAX_TOTAL_BPS = 9_900;
     uint64 public immutable launchedAt;
 
     address public creatorFeeRecipient;
@@ -80,6 +87,7 @@ contract BondingCurve {
         reservedTokens = CurveMath.reservedSupply(init.supply, init.phantomQuote, init.graduationThreshold);
         feeBps = init.feeBps;
         creatorTaxBps = init.creatorTaxBps;
+        protocolShareBps = init.protocolShareBps;
         creatorFeeRecipient = init.creatorFeeRecipient;
         holderFeeSharing = init.holderFeeSharing;
         launchedAt = uint64(block.timestamp);
@@ -245,7 +253,10 @@ contract BondingCurve {
         view
         returns (uint256 used, uint256 net, uint256 fee, uint256 tax, uint256 snipe, uint256 refund)
     {
-        uint256 totalBps = uint256(feeBps) + creatorTaxBps + currentSnipeTaxBps(recipient);
+        uint256 baseBps = uint256(feeBps) + creatorTaxBps;
+        uint256 snipeBps = currentSnipeTaxBps(recipient);
+        if (baseBps + snipeBps > MAX_TOTAL_BPS) snipeBps = baseBps >= MAX_TOTAL_BPS ? 0 : MAX_TOTAL_BPS - baseBps;
+        uint256 totalBps = baseBps + snipeBps;
         used = quoteIn;
         net = quoteIn - CurveMath.feeOf(quoteIn, totalBps);
         uint256 remaining = graduationThreshold - realQuoteReserve;
@@ -270,11 +281,11 @@ contract BondingCurve {
         }
     }
 
-    /// @dev Protocol takes its share of the base fee (snipe tax included); the rest plus the whole creator tax goes
-    ///      to the creator wallet, or to the holders when holder fee sharing is on. Everything is pull-payment.
+    /// @dev Protocol takes its (launch-pinned) share of the base fee (snipe tax included); the rest plus the whole
+    ///      creator tax goes to the creator wallet, or to the holders when holder fee sharing is on.
     function _distributeFees(uint256 baseFee, uint256 tax) internal {
         if (baseFee + tax == 0) return;
-        uint256 protocolCut = CurveMath.feeOf(baseFee, ILaunchpadFactory(factory).protocolFeeShareBps());
+        uint256 protocolCut = CurveMath.feeOf(baseFee, protocolShareBps);
         uint256 creatorCut = baseFee - protocolCut + tax;
         address protocol = ILaunchpadFactory(factory).protocolFeeRecipient();
         if (pairToken == address(0)) {

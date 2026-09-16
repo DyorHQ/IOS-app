@@ -103,11 +103,12 @@ export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: (
   const wallet = useWallet();
   const { tx, run, reset, busy } = useTx();
   const pending = launch.hookPendingFees + launch.hookPendingTax;
+  const venue = launch.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4";
   if (launch.phase === 2) {
     return (
       <div className="card state-card">
-        <h3>Graduated to Uniswap v4</h3>
-        <p>The curve raised its threshold. Its {launch.pair.symbol} and the remaining supply now sit in a full-range Uniswap v4 position on Monad that nobody can withdraw. Swaps pay the same {bpsToPct(launch.poolFeeBps)} fee through the launchpad hook.</p>
+        <h3>Graduated to {venue}</h3>
+        <p>The curve raised its threshold. Its {launch.pair.symbol} and the remaining supply now sit in a full-range {venue} position on Monad that nobody can withdraw. Swaps pay the same {bpsToPct(launch.poolFeeBps)} fee through the launchpad hook.</p>
         <div className="kvlist">
           <Row label="Pool id" value={<span className="mono">{shortAddress(launch.poolId, 6)}</span>} />
           <Row label="Swept into the pool" value={fmtAmount(launch.sweptQuote, launch.pair.decimals, launch.pair.symbol, { compact: true })} />
@@ -134,7 +135,7 @@ export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: (
   return (
     <div className="card state-card">
       <h3>Graduation pending</h3>
-      <p>The curve is complete but the Uniswap v4 pool has not opened yet. Anyone can retry the migration; if it keeps failing, the owner can enable refunds after seven days.</p>
+      <p>The curve is complete but the {venue} pool has not opened yet. Anyone can retry the migration; if it keeps failing, the owner can enable refunds after seven days.</p>
       <TxStatus tx={tx} onDismiss={reset} />
       <ActionButton ready={!busy} busy={busy} label="Retry graduation" className="btn secondary" onClick={() => { const client = wallet.client; if (client) void run("Graduate", (onSent) => retryGraduation(client, launch.token, onSent), onDone); }} />
     </div>

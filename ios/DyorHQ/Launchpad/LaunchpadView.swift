@@ -469,7 +469,7 @@ struct LaunchDetailView: View {
                         Text("\(launch.progressBps / 100)%")
                     }
                     .gaugeStyle(.accessoryLinearCapacity)
-                    Text("Graduates at \(NumberStyle.units(launch.graduationThreshold, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol) raised. Liquidity then moves to a locked Uniswap v4 pool.")
+                    Text("Graduates at \(NumberStyle.units(launch.graduationThreshold, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol) raised. Liquidity then moves to a locked \(launch.graduationVenue.title) pool.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -559,7 +559,7 @@ struct LaunchDetailView: View {
 
     private var graduatedSection: some View {
         Section {
-            Button("Swap \(launch.symbol) on Uniswap", systemImage: "arrow.left.arrow.right") {
+            Button("Swap \(launch.symbol) on \(launch.graduationVenue.title)", systemImage: "arrow.left.arrow.right") {
                 router.openSwap(tokenIn: pairToken.isNative ? Token.mon : pairToken, tokenOut: token)
             }
             if let detail, let key = detail.poolKey {
@@ -568,7 +568,7 @@ struct LaunchDetailView: View {
         } header: {
             Text(launch.phase == .graduated ? "Graduated" : launch.phase.title)
         } footer: {
-            Text(launch.phase == .graduated ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. Ongoing pool swap fees stay with the locked liquidity and aren't distributed to holders or the creator." : "This launch is between phases. Trading resumes when migration completes.")
+            Text(launch.phase == .graduated ? "The curve's liquidity is permanently locked in a \(launch.graduationVenue.title) pool — trades now route through the Swap screen. Ongoing pool swap fees stay with the locked liquidity and aren't distributed to holders or the creator." : "This launch is between phases. Trading resumes when migration completes.")
         }
     }
 
@@ -589,6 +589,7 @@ struct LaunchDetailView: View {
             AddressRow(title: "Creator", address: launch.deployer)
             LabeledContent("Creator tax", value: NumberStyle.basisPoints(launch.creatorTaxBps))
             LabeledContent("Holder fee sharing", value: launch.holderFeeSharing ? "On" : "Off")
+            LabeledContent("Graduation venue", value: launch.graduationVenue.title)
             ForEach(socialLinks, id: \.0) { label, url in
                 Link(destination: url) { Label(label, systemImage: "link") }
             }
@@ -729,6 +730,7 @@ struct CreateLaunchView: View {
     @State private var twitter = ""
     @State private var telegram = ""
     @State private var pair: Address = .zero
+    @State private var venue: GraduationVenue = .uniswapV4
     @State private var creatorTaxBps = 0
     @State private var holderFeeSharing = true
     @State private var initialBuyText = ""
@@ -742,6 +744,11 @@ struct CreateLaunchView: View {
     private var valid: Bool { name.trimmingCharacters(in: .whitespaces).count >= 2 && symbolValid }
     private var pairInfo: PairInfo? { protocolInfo?.pairs.first { $0.pair.address == pair }?.pair }
     private var initialBuy: BigUInt { Amount.parse(initialBuyText, decimals: pairInfo?.decimals ?? 18) ?? 0 }
+    /// aBIL (and any `pairMondayOnly` pair) can only graduate on Monday Trade; the factory reverts `PairRequiresMonday`
+    /// if a v4 venue is submitted for one. The picker is then forced to Monday and disabled.
+    private var pairMondayOnly: Bool { protocolInfo?.pairs.first { $0.pair.address == pair }?.mondayOnly ?? false }
+    /// The venue actually submitted: forced to Monday for Monday-only pairs regardless of the picker's state.
+    private var effectiveVenue: GraduationVenue { pairMondayOnly ? .monday : venue }
 
     var body: some View {
         NavigationStack {
@@ -766,11 +773,17 @@ struct CreateLaunchView: View {
                     Picker("Paired with", selection: $pair) {
                         ForEach(protocolInfo?.pairs.filter(\.approved) ?? [], id: \.pair.address) { Text($0.pair.symbol).tag($0.pair.address) }
                     }
+                    Picker("Graduates on", selection: $venue) {
+                        Text(GraduationVenue.uniswapV4.title).tag(GraduationVenue.uniswapV4)
+                        Text(GraduationVenue.monday.title).tag(GraduationVenue.monday)
+                    }
+                    .disabled(pairMondayOnly)
+                    .onChange(of: pair) { _, _ in if pairMondayOnly { venue = .monday } }
                 } header: {
                     Text("Pairing")
                 } footer: {
                     if let info = protocolInfo, let pi = pairInfo {
-                        Text("Graduates to a locked Monday Trade pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol). Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                        Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol).\(pairMondayOnly ? " \(pi.symbol) coins graduate on Monday Trade." : "") Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
                     }
                 }
                 Section {
@@ -820,6 +833,7 @@ struct CreateLaunchView: View {
                         DetailRow("Coin", "\(name) ($\(symbol))")
                         DetailRow("Paired with", pairInfo?.symbol ?? "MON")
                         DetailRow("Graduation", pairInfo.map { "\(NumberStyle.units(pairGraduation, decimals: $0.decimals, compact: true)) \($0.symbol)" } ?? "—")
+                        DetailRow("Graduation venue", effectiveVenue.title)
                         DetailRow("Creator tax", NumberStyle.basisPoints(creatorTaxBps))
                         DetailRow("Fee sharing", holderFeeSharing ? "On" : "Off")
                         DetailRow("Launch fee", "\(NumberStyle.units(info.launchFee, decimals: 18)) MON")
@@ -907,7 +921,7 @@ struct CreateLaunchView: View {
     }
 
     private var input: LaunchInput {
-        LaunchInput(name: name.trimmingCharacters(in: .whitespaces), symbol: symbol, description: description, logo: logo, socials: Socials(twitter: twitter, telegram: telegram, discord: "", website: website, farcaster: ""), creatorTaxBps: creatorTaxBps, holderFeeSharing: holderFeeSharing, pairToken: pair, initialBuy: initialBuy)
+        LaunchInput(name: name.trimmingCharacters(in: .whitespaces), symbol: symbol, description: description, logo: logo, socials: Socials(twitter: twitter, telegram: telegram, discord: "", website: website, farcaster: ""), creatorTaxBps: creatorTaxBps, holderFeeSharing: holderFeeSharing, graduationVenue: effectiveVenue, pairToken: pair, initialBuy: initialBuy)
     }
 }
 

@@ -14,8 +14,10 @@ import { useWallet } from "../../lib/wallet";
 import { bpsToPct, fmtAmount, fmtUnits, parseAmount, seconds } from "../../lib/format";
 import { ActionButton, DeployNotice, TokenLogo, TxStatus, toneFor } from "../ui";
 
-type Form = { name: string; symbol: string; description: string; logo: string; twitter: string; telegram: string; website: string; pair: Address; devBuy: string; holderFeeSharing: boolean; creatorWallet: string; creatorTax: string; exemptions: string };
-const EMPTY: Form = { name: "", symbol: "", description: "", logo: "", twitter: "", telegram: "", website: "", pair: ZERO_ADDRESS, devBuy: "", holderFeeSharing: true, creatorWallet: "", creatorTax: "0", exemptions: "" };
+type Form = { name: string; symbol: string; description: string; logo: string; twitter: string; telegram: string; website: string; pair: Address; devBuy: string; holderFeeSharing: boolean; graduationVenue: number; creatorWallet: string; creatorTax: string; exemptions: string };
+const EMPTY: Form = { name: "", symbol: "", description: "", logo: "", twitter: "", telegram: "", website: "", pair: ZERO_ADDRESS, devBuy: "", holderFeeSharing: true, graduationVenue: 0, creatorWallet: "", creatorTax: "0", exemptions: "" };
+const VENUES = [{ v: 0, label: "Uniswap v4" }, { v: 1, label: "Monday Trade" }] as const;
+const venueLabel = (v: number) => VENUES.find((x) => x.v === v)?.label ?? "Uniswap v4";
 const MAX_EXEMPTIONS = 32;
 
 const socialUrl = (value: string, base: string) => {
@@ -86,6 +88,7 @@ function validate(form: Form, protocol: ProtocolInfo | null, pair: PairEconomics
       creatorFeeRecipient: getAddress(creatorWallet),
       creatorTaxBps,
       holderFeeSharing: form.holderFeeSharing,
+      graduationVenue: pair.mondayOnly ? 1 : form.graduationVenue,
       pairToken: pair.address,
       pairNative: pair.native,
       configId: protocol.configId,
@@ -130,6 +133,10 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
   const creatorTaxBps = input?.creatorTaxBps ?? (Math.round(Number(form.creatorTax || "0") * 100) || 0);
   const estimate = input && pair && protocol.data && input.devBuy > 0n ? estimateDevBuy(input.devBuy, pair, protocol.data, input.creatorTaxBps) : null;
   const fee = protocol.data ? fmtAmount(protocol.data.launchFee, 18, "MON") : "—";
+  // aBIL (any Monday-only pair) can only graduate on Monday Trade; the factory reverts `PairRequiresMonday`
+  // otherwise. The picker is then forced to Monday and disabled.
+  const pairMondayOnly = pair?.mondayOnly ?? false;
+  const effectiveVenue = pairMondayOnly ? 1 : form.graduationVenue;
 
   const submit = async () => {
     setTouched(true);
@@ -174,7 +181,18 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
               ))}
               {pairs.length === 0 && <span className="hint">{DEPLOYED ? "Loading approved pair assets…" : "Pair assets appear once the contracts are deployed."}</span>}
             </div>
-            <span className="help">The curve collects this asset. At graduation it becomes the other side of the Uniswap v4 pool.</span>
+            <span className="help">The curve collects this asset. At graduation it becomes the other side of the {venueLabel(effectiveVenue)} pool.</span>
+          </div>
+
+          <div className="field"><span>Graduation venue</span>
+            <div className="pair-pick">
+              {VENUES.map(({ v, label }) => (
+                <button key={v} type="button" aria-pressed={effectiveVenue === v} disabled={pairMondayOnly && v !== 1} onClick={() => set({ graduationVenue: v })}>
+                  <span><b>{label}</b></span>
+                </button>
+              ))}
+            </div>
+            <span className="help">{pairMondayOnly ? `${pair?.symbol ?? "This asset"} coins graduate on Monday Trade.` : "Where the curve's liquidity graduates once the threshold is raised. Locked forever either way."}</span>
           </div>
 
           <label className="field">Developer buy (optional)
@@ -215,10 +233,11 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
               <Row label="Fees go to" value={form.holderFeeSharing ? "Holders" : "Creator wallet"} />
               <Row label="Launch window" value={protocol.data ? `${seconds(protocol.data.snipeSchedule.length)} snipe tax` : "—"} />
               <Row label="Graduation" value={pair ? fmtAmount(pair.graduationThreshold, pair.decimals, pair.symbol, { compact: true }) : "—"} />
+              <Row label="Graduation venue" value={venueLabel(effectiveVenue)} />
               <Row label="Liquidity" value={<span className="up">Locked forever</span>} />
               {estimate && pair && <Row label="Your buy" value={`≈ ${fmtUnits(estimate.tokens, 18, { compact: true })} $${form.symbol || "TOKEN"} · ${estimate.share.toFixed(2)}%`} />}
             </div>
-            <div className="note"><b>Fair by construction</b><p>{protocol.data ? `${fmtUnits(protocol.data.supply, 18, { compact: true })} supply mints to the bonding curve.` : "The whole supply mints to the bonding curve."} When the threshold is raised, the pool opens on Uniswap v4 at the curve price and the position is locked for good.</p></div>
+            <div className="note"><b>Fair by construction</b><p>{protocol.data ? `${fmtUnits(protocol.data.supply, 18, { compact: true })} supply mints to the bonding curve.` : "The whole supply mints to the bonding curve."} When the threshold is raised, the pool opens on {venueLabel(effectiveVenue)} at the curve price and the position is locked for good.</p></div>
           </div>
         </aside>
       </div>

@@ -219,7 +219,8 @@ contract MemeHook is IHooks {
         pendingFees[id][currency] = 0;
         pendingCreatorTax[id][currency] = 0;
 
-        uint256 protocolCut = CurveMath.feeOf(fee, ILaunchpadFactory(factory).protocolFeeShareBps());
+        // The split is the one pinned at launch (copied from the curve at graduation), never the live policy.
+        uint256 protocolCut = CurveMath.feeOf(fee, launch.protocolShareBps);
         uint256 creatorCut = fee - protocolCut + tax;
         address escrow = ILaunchpadFactory(factory).escrow();
         address protocol = ILaunchpadFactory(factory).protocolFeeRecipient();

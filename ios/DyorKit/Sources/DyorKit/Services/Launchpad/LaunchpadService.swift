@@ -86,15 +86,21 @@ public actor LaunchpadService {
         let hasConfig = policy[1][0].uint > 0
         let pairTokens = [Address.zero] + extraPairTokens
         let configCalls: [ContractCall] = hasConfig ? [LaunchpadABI.call(factory, F.getLaunchConfig, [.uint(configId)], returns: LaunchpadABI.launchConfigTuple)] : []
-        let calls = configCalls + pairTokens.map { LaunchpadABI.call(factory, F.pairTokenEconomics, [.address($0)], returns: "uint256,uint256,uint8,bool") }
+        // Economics and the Monday-only flag are read for every pair: the create screen uses `mondayOnly` to force
+        // the Monday graduation venue (and disable the picker) for aBIL, matching the factory's `PairRequiresMonday`.
+        let econCalls = pairTokens.map { LaunchpadABI.call(factory, F.pairTokenEconomics, [.address($0)], returns: "uint256,uint256,uint8,bool") }
+        let mondayOnlyCalls = pairTokens.map { LaunchpadABI.call(factory, F.pairMondayOnly, [.address($0)], returns: "bool") }
+        let calls = configCalls + econCalls + mondayOnlyCalls
         async let economics = multicall.readAll(calls)
         async let infos = pairInfos(pairTokens)
         let (results, pairs) = try await (economics, infos)
         let config = hasConfig ? LaunchpadABI.LaunchConfig(results[0][0]) : nil
         let offset = hasConfig ? 1 : 0
+        let mondayOffset = offset + pairTokens.count
         let pairEconomics = pairTokens.enumerated().map { i, token in
             let values = results[offset + i]
-            return PairEconomics(pair: pairs[token] ?? .mon, phantomQuote: values[0].uint, graduationThreshold: values[1].uint, approved: values[3].bool)
+            let mondayOnly = results[mondayOffset + i][0].bool
+            return PairEconomics(pair: pairs[token] ?? .mon, phantomQuote: values[0].uint, graduationThreshold: values[1].uint, approved: values[3].bool, mondayOnly: mondayOnly)
         }
         return ProtocolInfo(
             launchFee: policy[0][0].uint,
@@ -276,7 +282,7 @@ public actor LaunchpadService {
             return Launch(
                 token: r.token, curve: r.curve, deployer: r.deployer, creatorFeeRecipient: r.creatorFeeRecipient, pairToken: r.pairToken,
                 graduationThreshold: r.graduationThreshold, creatorTaxBps: r.creatorTaxBps, poolFeeBps: r.poolFeeBps, tickSpacing: r.tickSpacing,
-                holderFeeSharing: r.holderFeeSharing, phase: r.phase, sweptQuote: r.sweptQuote, sweptTokens: r.sweptTokens, sweptAt: r.sweptAt, poolId: r.poolId,
+                holderFeeSharing: r.holderFeeSharing, graduationVenue: r.graduationVenue, phase: r.phase, sweptQuote: r.sweptQuote, sweptTokens: r.sweptTokens, sweptAt: r.sweptAt, poolId: r.poolId,
                 name: results[base][0].string, symbol: results[base + 1][0].string, logo: info.logo, description: info.description, socials: info.socials,
                 pair: pairs[r.pairToken] ?? .mon,
                 price: price,

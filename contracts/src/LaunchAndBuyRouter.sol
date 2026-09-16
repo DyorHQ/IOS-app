@@ -29,19 +29,44 @@ contract LaunchAndBuyRouter {
     ) external payable returns (address token, address curve, uint256 tokensOut) {
         uint256 fee = factory.launchFee();
         if (msg.value != (pairToken == address(0) ? fee + quoteIn : fee)) revert NativeValueMismatch();
-        (token, curve) = factory.launchTokenFor{value: fee}(params, launchConfigId, pairToken, snipeTaxExemptions, msg.sender);
-        if (quoteIn == 0) return (token, curve, 0);
+        // Baseline the router's PRE-EXISTING balance (anything not part of this call). Refunds below only ever return
+        // the unused portion of THIS call's funds, so funds mistakenly sent to the router can't be swept by a caller.
+        uint256 nativeBaseline = address(this).balance - msg.value;
+        // The snipe tax keys on the buy's `recipient`, and only the deployer is exempt by construction. A dev buy
+        // delivered to another wallet would otherwise be taxed 98% in the launch block, so exempt that wallet too.
+        (token, curve) = factory.launchTokenFor{value: fee}(params, launchConfigId, pairToken, _withRecipient(snipeTaxExemptions, recipient), msg.sender);
+        if (quoteIn == 0) {
+            _refundNative(nativeBaseline);
+            return (token, curve, 0);
+        }
 
         if (pairToken == address(0)) {
             tokensOut = IBondingCurve(curve).buy{value: quoteIn}(quoteIn, minTokensOut, recipient);
-            uint256 leftover = address(this).balance;
-            if (leftover > 0) TransferHelper.sendNative(msg.sender, leftover);
+            _refundNative(nativeBaseline);
         } else {
+            uint256 tokenBaseline = IERC20(pairToken).balanceOf(address(this));
             TransferHelper.safeTransferFrom(pairToken, msg.sender, address(this), quoteIn);
             TransferHelper.safeApprove(pairToken, curve, quoteIn);
             tokensOut = IBondingCurve(curve).buy(quoteIn, minTokensOut, recipient);
-            uint256 leftover = IERC20(pairToken).balanceOf(address(this));
-            if (leftover > 0) TransferHelper.safeTransfer(pairToken, msg.sender, leftover);
+            uint256 bal = IERC20(pairToken).balanceOf(address(this));
+            if (bal > tokenBaseline) TransferHelper.safeTransfer(pairToken, msg.sender, bal - tokenBaseline);
+            _refundNative(nativeBaseline);
         }
+    }
+
+    /// @dev The caller's exemption list plus the dev-buy recipient (when it is not the deployer itself).
+    function _withRecipient(address[] calldata list, address recipient) private view returns (address[] memory out) {
+        if (recipient == msg.sender || recipient == address(0)) return list;
+        out = new address[](list.length + 1);
+        for (uint256 i = 0; i < list.length; i++) {
+            out[i] = list[i];
+        }
+        out[list.length] = recipient;
+    }
+
+    /// @dev Return any native above `baseline` (this call's unused fee/quote) to the caller; never the baseline.
+    function _refundNative(uint256 baseline) private {
+        uint256 bal = address(this).balance;
+        if (bal > baseline) TransferHelper.sendNative(msg.sender, bal - baseline);
     }
 }

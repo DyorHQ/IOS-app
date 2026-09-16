@@ -13,6 +13,11 @@ contract MockGraduationExecutor {
 
     receive() external payable {}
 
+    /// The real Monday executor parks the position in a vault; the mock keeps everything itself.
+    function locker() external view returns (address) {
+        return address(this);
+    }
+
     function graduate(address token, address pairToken, uint256 quoteAmount, uint256 tokenAmount, uint256, int24)
         external
         returns (bytes32 poolId, uint128 liquidity)

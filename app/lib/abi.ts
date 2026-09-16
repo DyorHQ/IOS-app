@@ -126,6 +126,19 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "function",
+    "name": "allowV4Fallback",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "approvedPairTokens",
     "inputs": [
       {
@@ -363,6 +376,11 @@ export const LaunchpadFactoryAbi = [
             "internalType": "bool"
           },
           {
+            "name": "graduationVenue",
+            "type": "uint8",
+            "internalType": "enum Types.GraduationVenue"
+          },
+          {
             "name": "phase",
             "type": "uint8",
             "internalType": "enum Types.Phase"
@@ -424,6 +442,19 @@ export const LaunchpadFactoryAbi = [
   {
     "type": "function",
     "name": "graduate",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "graduateFallback",
     "inputs": [
       {
         "name": "token",
@@ -602,6 +633,11 @@ export const LaunchpadFactoryAbi = [
             "internalType": "bool"
           },
           {
+            "name": "graduationVenue",
+            "type": "uint8",
+            "internalType": "enum Types.GraduationVenue"
+          },
+          {
             "name": "expectedEconomics",
             "type": "bytes32",
             "internalType": "bytes32"
@@ -720,6 +756,11 @@ export const LaunchpadFactoryAbi = [
             "internalType": "bool"
           },
           {
+            "name": "graduationVenue",
+            "type": "uint8",
+            "internalType": "enum Types.GraduationVenue"
+          },
+          {
             "name": "expectedEconomics",
             "type": "bytes32",
             "internalType": "bytes32"
@@ -794,6 +835,19 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "function",
+    "name": "mondayExecutor",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "onCurveComplete",
     "inputs": [
       {
@@ -814,6 +868,25 @@ export const LaunchpadFactoryAbi = [
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pairMondayOnly",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "stateMutability": "view"
@@ -1154,6 +1227,19 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "function",
+    "name": "setMondayExecutor",
+    "inputs": [
+      {
+        "name": "_mondayExecutor",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setPairEconomics",
     "inputs": [
       {
@@ -1178,6 +1264,24 @@ export const LaunchpadFactoryAbi = [
       },
       {
         "name": "approved",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setPairMondayOnly",
+    "inputs": [
+      {
+        "name": "pairToken",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "mondayOnly",
         "type": "bool",
         "internalType": "bool"
       }
@@ -1284,6 +1388,25 @@ export const LaunchpadFactoryAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "v4FallbackAllowed",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -1408,6 +1531,19 @@ export const LaunchpadFactoryAbi = [
         "type": "uint16",
         "indexed": false,
         "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "GraduationVenueFallback",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
       }
     ],
     "anonymous": false
@@ -1547,6 +1683,19 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "event",
+    "name": "MondayExecutorSet",
+    "inputs": [
+      {
+        "name": "executor",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "OwnershipTransferStarted",
     "inputs": [
       {
@@ -1613,6 +1762,25 @@ export const LaunchpadFactoryAbi = [
       },
       {
         "name": "approved",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "PairMondayOnlySet",
+    "inputs": [
+      {
+        "name": "pairToken",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "mondayOnly",
         "type": "bool",
         "indexed": false,
         "internalType": "bool"
@@ -1690,6 +1858,19 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "event",
+    "name": "V4FallbackAllowed",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "WhitelistSet",
     "inputs": [
       {
@@ -1737,12 +1918,27 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "error",
+    "name": "FallbackNotAvailable",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "GraduationVenueUnavailable",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "InsufficientGasForGraduation",
     "inputs": []
   },
   {
     "type": "error",
     "name": "InvalidBps",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidEconomics",
     "inputs": []
   },
   {
@@ -1773,6 +1969,11 @@ export const LaunchpadFactoryAbi = [
   {
     "type": "error",
     "name": "NoProposal",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotAuthorizedToCancel",
     "inputs": []
   },
   {
@@ -1812,6 +2013,11 @@ export const LaunchpadFactoryAbi = [
   },
   {
     "type": "error",
+    "name": "PairRequiresMonday",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "PairTokenDecimalsMismatch",
     "inputs": []
   },
@@ -1839,10 +2045,28 @@ export const LaunchpadFactoryAbi = [
     "type": "error",
     "name": "WrongGraduationPhase",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
   }
 ] as const;
 
 export const BondingCurveAbi = [
+  {
+    "type": "function",
+    "name": "MAX_TOTAL_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
   {
     "type": "function",
     "name": "buy",
@@ -2094,6 +2318,19 @@ export const BondingCurveAbi = [
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "protocolShareBps",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
       }
     ],
     "stateMutability": "view"
@@ -3165,6 +3402,50 @@ export const FeeEscrowAbi = [
     "anonymous": false
   },
   {
+    "type": "event",
+    "name": "Paid",
+    "inputs": [
+      {
+        "name": "recipient",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "PaidToken",
+    "inputs": [
+      {
+        "name": "recipient",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
     "type": "error",
     "name": "NativeTransferFailed",
     "inputs": []
@@ -3172,6 +3453,11 @@ export const FeeEscrowAbi = [
   {
     "type": "error",
     "name": "NothingToClaim",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "Reentrancy",
     "inputs": []
   },
   {
@@ -3394,6 +3680,40 @@ export const HolderFeeSharingAbi = [
         "name": "eligibleSupply",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "queued",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "queuedBlock",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "queuedRewards",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "releasableFromBlock",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -3520,6 +3840,31 @@ export const HolderFeeSharingAbi = [
       },
       {
         "name": "eligibleSupply",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RewardQueued",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "blockNumber",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -4507,6 +4852,11 @@ export const MemeHookAbi = [
             "internalType": "uint16"
           },
           {
+            "name": "protocolShareBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
             "name": "holderFeeSharing",
             "type": "bool",
             "internalType": "bool"
@@ -4650,6 +5000,11 @@ export const MemeHookAbi = [
           },
           {
             "name": "creatorTaxBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "protocolShareBps",
             "type": "uint16",
             "internalType": "uint16"
           },
@@ -4937,6 +5292,11 @@ export const LaunchAndBuyRouterAbi = [
             "name": "holderFeeSharing",
             "type": "bool",
             "internalType": "bool"
+          },
+          {
+            "name": "graduationVenue",
+            "type": "uint8",
+            "internalType": "enum Types.GraduationVenue"
           },
           {
             "name": "expectedEconomics",
