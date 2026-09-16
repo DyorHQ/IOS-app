@@ -44,7 +44,7 @@ abstract contract MomentsMarketBase is MomentsBase {
         }
     }
 
-    function _deployMarket() internal override returns (address, address, address, address) {
+    function _deployMarket() internal virtual override returns (address, address, address, address) {
         manager = IPoolManager(address(new PoolManager(address(this))));
         swapRouter = new PoolSwapTest(manager);
         locker = new MomentLocker(manager, factory);
