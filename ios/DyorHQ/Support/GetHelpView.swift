@@ -1,15 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// Where DyorHQ's support and community links live. The official site is dyorhq.fun; the Discord invite and X
-/// handle are set here once the owner publishes them (until then those rows open the site).
+/// Where DyorHQ's support and community links live. The official site is dyorhq.fun; the X profile is set here
+/// once the owner publishes the handle (until then the row says so and offers the site).
 enum SupportLinks {
     static let site = URL(string: "https://dyorhq.fun")!
     static let helpCenter = URL(string: "https://dyorhq.fun/support")!
     static let terms = URL(string: "https://dyorhq.fun/terms")!
     static let supportEmail = "support@dyorhq.fun"
-    /// Community links: replace with the real invite / profile when they exist.
-    static let discord: URL? = nil
+    /// The DyorHQ profile on X: replace with the real profile URL when it exists.
     static let x: URL? = nil
 
     /// A mail link with the subject and the app / device details support asks for.
@@ -26,7 +25,7 @@ enum SupportLinks {
 }
 
 /// Get Help: how to reach support and where the community lives, in the grouped-rows shape of the reference app
-/// (Help Center, Contact Support, Report a Bug; Discord, X). Opened from the side menu as a full-screen page.
+/// (Help Center, Contact Support, Report a Bug; X). Opened from the side menu as a full-screen page.
 struct GetHelpView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -42,7 +41,6 @@ struct GetHelpView: View {
                         HelpRow(symbol: "ladybug", title: "Report a Bug", detail: "Help us improve the app") { mail(subject: "DyorHQ bug report", body: "What happened:\n\nWhat I expected:\n\nSteps to reproduce:\n") }
                     }
                     group("Community") {
-                        HelpRow(symbol: "bubble.left.and.bubble.right", title: "Discord", detail: "Join our community") { community(SupportLinks.discord, name: "Discord") }
                         HelpRow(symbol: "at", title: "X", detail: "Follow us for updates") { community(SupportLinks.x, name: "X") }
                     }
                     group("About") {
