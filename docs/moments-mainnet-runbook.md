@@ -17,7 +17,7 @@ in `contracts/deployments/moments-143.json`, source tag `moments-mainnet-v1.1`:
 
 Governance = the deployer `0xCf7A…7e10` (nothing pending); platform `0xf4D4…Cfb48`; treasury `0x5282…f045`; policy
 $10 threshold / $0.10 minimum / 20-5-75 / 10% max allocation / 70% expiry creator share / 5% ERC-2981 royalty;
-`externalBaseURI` not yet set (metadata only).
+`externalBaseURI` = `https://dyorhq.app/moments/` (set 2026-09-16, tx `0xd4930561…4c75e6`; metadata only).
 
 Verified 2026-09-16: on-chain wiring, policy and constants read back correctly; all seven runtime bytecodes match the
 source at `optimizer_runs = 44444444` (via_ir, cancun, solc 0.8.26 — the `v4core` profile); all seven are verified on
@@ -25,12 +25,12 @@ Sourcify; `test/moments/fork/LiveDeployment.t.sol` runs the whole $10 lifecycle 
 fresh mainnet fork (terminal collect + graduation 989,002 gas).
 
 **v1** (factory `0x47D989a54232D3bCdB7A7760D10E596647D986BA`, record `contracts/deployments/moments-143-v1.json`, tag
-`moments-mainnet-v1`) is superseded: no Moments were published on it; its publishing is to be paused (below).
+`moments-mainnet-v1`) is superseded: no Moments were published on it and its publishing is paused (tx `0xe7cc3d8e…37f714`, 2026-09-16).
 
-**Not yet done:** the independent audit (spec §14) and the two governance calls below. Nobody should put real money
-into these contracts before the audit, and the owner wallet should never be the one doing it.
+**Not yet done:** the independent audit (spec §14). Nobody should put real money into these contracts before the
+audit, and the owner wallet should never be the one doing it.
 
-## Governance calls after the redeploy (owner wallet, pending)
+## Governance calls after the redeploy — done 2026-09-16 (kept for the record)
 
 Pause publishing on the superseded v1 factory so no Moment can ever be created on the old set:
 
