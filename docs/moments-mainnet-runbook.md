@@ -2,7 +2,8 @@
 
 ## Status (2026-09-16)
 
-Live on Monad mainnet (chain 143), deployed by the owner, recorded in `contracts/deployments/moments-143.json`:
+**v1.1 is live on Monad mainnet (chain 143)**, deployed by the owner at nonce 67 (24,520,475 gas / 2.501 MON), recorded
+in `contracts/deployments/moments-143.json`, source tag `moments-mainnet-v1.1`:
 
 | contract | address |
 |---|---|
@@ -11,56 +12,37 @@ Live on Monad mainnet (chain 143), deployed by the owner, recorded in `contracts
 | vesting | `0x360E2068eAEc5b5A9AF60A7c4059Bd4b30B7209C` |
 | graduation | `0x307De00950F039969855eFb859A6088d695e76b1` |
 | locker | `0x832851A42Bf1FD1aF7a19c82cF132290c605E406` |
-| hook | `0x54E83342f4910853A8B1630654754Eb49123e0cC` (permission bits `0x20cc`) |
+| hook | `0x8Aa322471Bef2996D3B50cB12F63C6A0054460Cc` (salt `0x11a2b`, permission bits `0x20cc`) |
 | buyback | `0x03282D5421a3bE3ff79c5962819c9a6e5E0b52d2` |
 
-Governance = the deployer `0xCf7A…7e10` (nothing pending); platform `0xf4D4…Cfb48`; treasury `0x5282…f045`.
+Governance = the deployer `0xCf7A…7e10` (nothing pending); platform `0xf4D4…Cfb48`; treasury `0x5282…f045`; policy
+$10 threshold / $0.10 minimum / 20-5-75 / 10% max allocation / 70% expiry creator share / 5% ERC-2981 royalty;
+`externalBaseURI` not yet set (metadata only).
 
-Verified: on-chain wiring, policy and constants read back correctly; all seven runtime bytecodes match the source at
-`optimizer_runs = 44444444` (via_ir, cancun, solc 0.8.26 — the `v4core` profile); all seven are **verified on Sourcify**
-(creation + runtime match, 2026-09-16 11:33–11:35 UTC, `https://sourcify-api-monad.blockvision.org/v2/contract/143/<address>`);
-`test/moments/fork/LiveDeployment.t.sol` runs the whole $10 lifecycle through the deployed contracts on a mainnet fork.
+Verified 2026-09-16: on-chain wiring, policy and constants read back correctly; all seven runtime bytecodes match the
+source at `optimizer_runs = 44444444` (via_ir, cancun, solc 0.8.26 — the `v4core` profile); all seven are verified on
+Sourcify; `test/moments/fork/LiveDeployment.t.sol` runs the whole $10 lifecycle through the deployed contracts on a
+fresh mainnet fork (terminal collect + graduation 989,002 gas).
 
-**Not yet done:** the independent audit (spec §14) and the Phase 4 security self-review. Nobody should put real
-money into these contracts before those, and the owner wallet should never be the one doing it (below).
+**v1** (factory `0x47D989a54232D3bCdB7A7760D10E596647D986BA`, record `contracts/deployments/moments-143-v1.json`, tag
+`moments-mainnet-v1`) is superseded: no Moments were published on it; its publishing is to be paused (below).
 
-## Redeploy v1.1 (owner action, pending)
+**Not yet done:** the independent audit (spec §14) and the two governance calls below. Nobody should put real money
+into these contracts before the audit, and the owner wallet should never be the one doing it.
 
-The v1 set above stays on-chain but will be paused; the app (Phase 5) wires to the v1.1 set. v1.1 = branch HEAD: v1 + constructor zero-address checks, NFT metadata JSON escaping, policy floors (threshold ≥ 1 USDC,
-min price ≥ $0.01) and the marketplace standards on the NFT (ERC-2981 5% creator royalty via policy `ROYALTY_BPS`,
-ERC-4906, ERC-7572 `contractURI`, `owner()` convention, `animation_url`, `external_url`). Full suite green (106 tests). The v1 record is archived as
-`contracts/deployments/moments-143-v1.json`; the script overwrites `moments-143.json` with the v1.1 addresses.
+## Governance calls after the redeploy (owner wallet, pending)
 
-Dry run as the owner address (nonce 67) predicted these addresses — they hold only if the deployment transactions
-are the owner wallet's next eight transactions, in order; otherwise the recorded JSON is the truth:
-
-| contract | predicted v1.1 address |
-|---|---|
-| factory | `0x64698c7702d85F87f43a6dFF7D495CDD2327C020` |
-| vesting | `0x360E2068eAEc5b5A9AF60A7c4059Bd4b30B7209C` |
-| collect | `0xb4EE9e67d9e1772BC6949748e3755EA7C1DFE32c` |
-| locker | `0x832851A42Bf1FD1aF7a19c82cF132290c605E406` |
-| graduation | `0x307De00950F039969855eFb859A6088d695e76b1` |
-| buyback | `0x03282D5421a3bE3ff79c5962819c9a6e5E0b52d2` |
-| hook | `0x8Aa322471Bef2996D3B50cB12F63C6A0054460Cc` (salt `0x11a2b`, bits `0x20cc`) |
-
-Estimated cost from the simulation: about 22.9M gas (≈ 4.6 MON at the 202 gwei quoted at the time). Governance,
-platform and treasury are unchanged (`0xCf7A…7e10`, `0xf4D4…Cfb48`, `0x5282…f045`); nothing is pending.
-
-Broadcast (encrypted keystore, recommended — one-time `cast wallet import owner --interactive`):
-
-```bash
-cd /Users/jerry/Hackathon-moments/contracts && PLATFORM=0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48 TREASURY=0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045 ~/.foundry/bin/forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad --broadcast --non-interactive --account owner --code-size-limit 200000
-```
-
-or, as done for v1, with the key in the environment (`--private-key $OWNER_KEY` in place of `--account owner`).
-
-After it lands: report the written `deployments/moments-143.json`; verification (wiring, bytecode at the v4core
-profile, live-fork lifecycle through the new contracts, Sourcify) follows, then the v1 factory is paused so no
-Moment can be published on the old set (governance call from the owner wallet):
+Pause publishing on the superseded v1 factory so no Moment can ever be created on the old set:
 
 ```bash
 ~/.foundry/bin/cast send 0x47D989a54232D3bCdB7A7760D10E596647D986BA "setPublishingPaused(bool)" true --rpc-url monad --account owner
+```
+
+Set the metadata-only base for the NFTs' `external_url` / `external_link` (replace with the real Moment page base;
+the NFT appends the Moment id; can be changed any time by governance, touches no money path):
+
+```bash
+~/.foundry/bin/cast send 0x64698c7702d85F87f43a6dFF7D495CDD2327C020 "setExternalBaseURI(string)" "https://dyorhq.app/moments/" --rpc-url monad --account owner
 ```
 
 ## Wallet hygiene (non-negotiable)
