@@ -222,11 +222,14 @@ contract LaunchpadTest is LaunchpadBase {
         vm.warp(vm.getBlockTimestamp() + 10);
 
         uint256 bobTokens = _buy(curve, bob, 100 ether);
-        // bob's own buy pays 0.5 MON of creator fees; he is the only eligible holder so it is all his
+        // Rewards are queued and released at the first touch of a LATER block (flash-loan-resistant, see
+        // HolderFeeSharing); advancing one block makes bob's own 0.5 MON of creator fees claimable.
+        vm.roll(vm.getBlockNumber() + 1);
         assertApproxEqAbs(sharing.pendingRewards(address(token), bob), 0.5 ether, 1);
         assertEq(_creatorNative(), 0, "creator wallet receives nothing when sharing is on");
 
         uint256 carolTokens = _buy(curve, carol, 100 ether);
+        vm.roll(vm.getBlockNumber() + 1);
         uint256 total = sharing.pendingRewards(address(token), bob) + sharing.pendingRewards(address(token), carol);
         assertApproxEqAbs(total, 1 ether, 2);
         // second reward split pro-rata by holdings at the time
@@ -239,6 +242,7 @@ contract LaunchpadTest is LaunchpadBase {
         token.transfer(dave, bobTokens / 2);
         uint256 bobBefore = sharing.pendingRewards(address(token), bob);
         _buy(curve, alice, 100 ether);
+        vm.roll(vm.getBlockNumber() + 1);
         assertGt(sharing.pendingRewards(address(token), dave), 0);
         assertGt(sharing.pendingRewards(address(token), bob), bobBefore);
 

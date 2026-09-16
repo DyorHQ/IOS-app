@@ -147,6 +147,7 @@ contract PoolTest is LaunchpadBase {
         uint256 bobBefore = sharing.pendingRewards(address(token), bob);
         _swap(carol, key, true, -100 ether, 100 ether);
         hook.sweepPoolFees(PoolId.unwrap(id), NATIVE);
+        vm.roll(vm.getBlockNumber() + 1); // queued fees release at the first touch of a later block
         assertGt(sharing.pendingRewards(address(token), bob), bobBefore, "curve buyers earn pool fees");
         assertGt(sharing.pendingRewards(address(token), carol), 0, "pool buyers earn too");
         assertEq(sharing.pendingRewards(address(token), address(manager)), 0, "the pool's own balance is excluded");

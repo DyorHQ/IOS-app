@@ -32,7 +32,9 @@ contract LaunchAndBuyRouter {
         // Baseline the router's PRE-EXISTING balance (anything not part of this call). Refunds below only ever return
         // the unused portion of THIS call's funds, so funds mistakenly sent to the router can't be swept by a caller.
         uint256 nativeBaseline = address(this).balance - msg.value;
-        (token, curve) = factory.launchTokenFor{value: fee}(params, launchConfigId, pairToken, snipeTaxExemptions, msg.sender);
+        // The snipe tax keys on the buy's `recipient`, and only the deployer is exempt by construction. A dev buy
+        // delivered to another wallet would otherwise be taxed 98% in the launch block, so exempt that wallet too.
+        (token, curve) = factory.launchTokenFor{value: fee}(params, launchConfigId, pairToken, _withRecipient(snipeTaxExemptions, recipient), msg.sender);
         if (quoteIn == 0) {
             _refundNative(nativeBaseline);
             return (token, curve, 0);
@@ -50,6 +52,16 @@ contract LaunchAndBuyRouter {
             if (bal > tokenBaseline) TransferHelper.safeTransfer(pairToken, msg.sender, bal - tokenBaseline);
             _refundNative(nativeBaseline);
         }
+    }
+
+    /// @dev The caller's exemption list plus the dev-buy recipient (when it is not the deployer itself).
+    function _withRecipient(address[] calldata list, address recipient) private view returns (address[] memory out) {
+        if (recipient == msg.sender || recipient == address(0)) return list;
+        out = new address[](list.length + 1);
+        for (uint256 i = 0; i < list.length; i++) {
+            out[i] = list[i];
+        }
+        out[list.length] = recipient;
     }
 
     /// @dev Return any native above `baseline` (this call's unused fee/quote) to the caller; never the baseline.

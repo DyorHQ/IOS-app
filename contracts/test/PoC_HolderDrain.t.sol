@@ -67,6 +67,8 @@ contract HolderDrainPoC is Test {
     /// Pre-fix the attacker drained 200 (its 100 + the victim's 100); post-fix it can claim only its fair 100 and
     /// the victim keeps theirs.
     function test_self_transfer_cannot_drain_rewards() public {
+        // Rewards queue on notify and release a block later; advance so the fair split is observable/claimable.
+        vm.roll(vm.getBlockNumber() + 1);
         assertEq(sharing.pendingRewards(address(token), address(attacker)), 100 ether, "attacker fair share");
         assertEq(sharing.pendingRewards(address(token), victim), 100 ether, "victim fair share");
         assertEq(address(sharing).balance, 200 ether, "escrowed rewards");

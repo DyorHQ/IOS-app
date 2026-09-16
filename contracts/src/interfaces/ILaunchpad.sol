@@ -106,6 +106,7 @@ library Types {
         uint256 graduationThreshold;
         uint16 feeBps;
         uint16 creatorTaxBps;
+        uint16 protocolShareBps; // protocol's share of the base fee, pinned for this launch (see LaunchpadFactory)
         address creatorFeeRecipient;
         bool holderFeeSharing;
         address deployer;
@@ -121,6 +122,7 @@ library Types {
         address creatorFeeRecipient;
         uint16 feeBps;
         uint16 creatorTaxBps;
+        uint16 protocolShareBps; // pinned at launch; the owner cannot rewrite an existing launch's split
         bool holderFeeSharing;
         bool registered;
     }
@@ -144,6 +146,7 @@ interface IBondingCurve {
     function rescued() external view returns (bool);
     function swept() external view returns (bool);
     function phantomQuote() external view returns (uint256);
+    function protocolShareBps() external view returns (uint16);
     function sweep(address to) external returns (uint256 quoteAmount, uint256 tokenAmount);
     function enableRescue() external;
     function setCreatorFeeRecipient(address recipient) external;
@@ -170,6 +173,12 @@ interface IGraduationExecutor {
 
 interface ILaunchLocker {
     function lock(PoolKey calldata key, uint128 liquidity) external;
+}
+
+/// @notice The Monday Trade venue exposes where it parks the graduated position (the fee vault), so the factory can
+///         keep that address out of holder-fee-sharing accounting.
+interface IMondayGraduationExecutor {
+    function locker() external view returns (address);
 }
 
 interface ILaunchDeployer {
