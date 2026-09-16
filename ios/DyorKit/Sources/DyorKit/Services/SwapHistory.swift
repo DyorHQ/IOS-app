@@ -94,8 +94,11 @@ public struct SwapHistoryService: Sendable {
         struct Leg { let token: Address; let amount: BigUInt; let block: UInt64 }
         var sent: [Data: [Leg]] = [:]
         var received: [Data: [Leg]] = [:]
-        for log in outLogs { sent[log.transactionHash, default: []].append(Leg(token: log.address, amount: BigUInt(log.data), block: log.blockNumber)) }
-        for log in inLogs { received[log.transactionHash, default: []].append(Leg(token: log.address, amount: BigUInt(log.data), block: log.blockNumber)) }
+        // Only ERC-20 transfers: exactly three topics and a 32-byte amount. ERC-721 `Transfer` shares the topic but
+        // indexes the token id (four topics, empty data), and an NFT mint in a payment transaction is not a swap leg.
+        func isERC20(_ log: Log) -> Bool { log.topics.count == 3 && log.data.count == 32 }
+        for log in outLogs where isERC20(log) { sent[log.transactionHash, default: []].append(Leg(token: log.address, amount: BigUInt(log.data), block: log.blockNumber)) }
+        for log in inLogs where isERC20(log) { received[log.transactionHash, default: []].append(Leg(token: log.address, amount: BigUInt(log.data), block: log.blockNumber)) }
 
         // Compare tokens by human value (decimals-normalized), not raw wei — otherwise an 18-decimal reward/refund
         // credited in the same tx would outrank a 6-decimal output. Unknown tokens assume 18.

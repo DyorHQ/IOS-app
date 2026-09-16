@@ -11,11 +11,15 @@ struct HomeView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
     @Environment(Router.self) private var router
+    @Environment(SocialSession.self) private var social
+    @Environment(PerplTrading.self) private var perplTrading
     @State private var model = HomeModel()
     @State private var tokenTab: HomeTokenTab = .popular
     @State private var holdingTab: HoldingCategory = .spot
     @State private var showReceive = false
     @State private var showSend = false
+    @State private var showSearch = false
+    @State private var searchTarget: MarketRow?
 
     var body: some View {
         NavigationStack {
@@ -32,42 +36,53 @@ struct HomeView: View {
             }
             .background(Color(.systemGroupedBackground))
             .scrollIndicators(.hidden)
-            .navigationTitle("Home")
-            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) { HomeHeader(showSearch: $showSearch, error: model.error, updatedAt: model.updatedAt) }
             .navigationDestination(for: MarketRow.self) { row in TokenDetailView(row: row) }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    if let error = model.error {
-                        Image(systemName: "wifi.exclamationmark").foregroundStyle(Color.attention).help(error)
-                    } else if let updated = model.updatedAt {
-                        Text(updated, style: .relative).font(.caption2).foregroundStyle(.tertiary)
-                    }
-                }
+            .navigationDestination(item: $searchTarget) { row in TokenDetailView(row: row) }
+            .refreshable {
+                await model.load(env: env, address: session.address)
+                await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: true)
             }
-            .refreshable { await model.load(env: env, address: session.address) }
             .task(id: session.address) { await model.poll(env: env, address: session.address) }
             .task(id: session.address) { await model.discoverHeldTokens(env: env, address: session.address) }
+            .task(id: session.address) { await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: false) }
             .overlay { if model.rows.isEmpty, model.loading { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showReceive) { if let address = session.address { ReceiveSheet(address: address) } }
             .sheet(isPresented: $showSend) { SendSheet() }
+            .sheet(isPresented: $showSearch) {
+                TokenPickerSheet(selected: .mon, balances: Dictionary(uniqueKeysWithValues: model.rows.map { ($0.token.address, $0.balance) }), universe: KnownTokenStore.universe(owner: session.address)) { token in
+                    // Open the token's page; a token outside the priced list gets a bare row (price loads on the page).
+                    searchTarget = model.rows.first { $0.token.address == token.address } ?? MarketRow(token: token, usd: nil, change24h: nil, balance: 0)
+                }
+            }
         }
     }
 
     // MARK: Hero
 
+    /// The balance hero, in the reference layout: the total on the left with its 24h move; on the right the
+    /// wallet's Total Volume across DyorHQ for the selected period, with the period switch right under it.
     private var heroCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Portfolio").font(.subheadline).foregroundStyle(.secondary)
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(model.totalValue ?? 0, format: .currency(code: "USD"))
                         .font(.system(size: 40, weight: .semibold, design: .serif))
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                         .contentTransition(.numericText(value: model.totalValue ?? 0))
                         .redacted(reason: model.totalValue == nil ? .placeholder : [])
-                    Spacer(minLength: 0)
+                    HStack(spacing: 8) {
+                        Text(changeAmount, format: .currency(code: "USD").sign(strategy: .always()))
+                            .font(.subheadline.weight(.medium)).monospacedDigit()
+                            .foregroundStyle(changeAmount < 0 ? Color.negative : Color.positive)
+                        ChangeBadge(value: model.change24h ?? 0)
+                    }
                 }
-                ChangeBadge(value: model.change24h)
+                Spacer(minLength: 8)
+                totalVolume
             }
 
             Divider()
@@ -80,14 +95,55 @@ struct HomeView: View {
 
             Divider()
 
-            HStack(spacing: 0) {
+            HStack(spacing: 10) {
                 splitStat("Spot", model.spotValue, .allocationSpot)
                 splitStat("Perps", model.perpsValue, .allocationPerps)
-                splitStat("Launchpad", model.launchpadValue, .allocationLaunchpad)
+                splitStat("Launch", model.launchpadValue, .allocationLaunchpad)
+                splitStat("Moments", model.momentsValue, .allocationMoments)
             }
         }
         .padding(16)
         .cardBackground()
+    }
+
+    /// Today's move in dollars, from the value-weighted 24h change.
+    private var changeAmount: Double {
+        guard let total = model.totalValue, let change = model.change24h, change != 0 else { return 0 }
+        return total - total / (1 + change / 100)
+    }
+
+    /// Total Volume for the period, right-aligned, with the period menu (24h · 7 days · 30 days · All) under it —
+    /// the same figure the Portfolio breaks down by section. Tapping the number opens the Portfolio.
+    private var totalVolume: some View {
+        @Bindable var router = router
+        return VStack(alignment: .trailing, spacing: 4) {
+            Button { Haptics.tap(); router.presented = .portfolio } label: {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Total Volume").font(.subheadline).foregroundStyle(.secondary)
+                    Text(env.portfolio.totals(router.period).volume, format: .currency(code: "USD").precision(.fractionLength(0...2)))
+                        .font(.headline).monospacedDigit().foregroundStyle(.primary)
+                        .contentTransition(.numericText(value: env.portfolio.totals(router.period).volume))
+                        .redacted(reason: env.portfolio.loading && !env.portfolio.hasLoaded ? .placeholder : [])
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Total volume \(router.period.label)")
+            Menu {
+                Picker("Period", selection: $router.period) {
+                    ForEach(VolumePeriod.allCases) { Text($0.label).tag($0) }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock").font(.caption2.weight(.semibold))
+                    Text(router.period.label).font(.subheadline.weight(.medium))
+                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Color(.tertiarySystemFill), in: Capsule())
+            }
+            .accessibilityLabel("Volume period")
+        }
     }
 
     private func statColumn(_ title: String, value: Double, tint: Color, alignment: HorizontalAlignment = .leading) -> some View {
@@ -103,7 +159,8 @@ struct HomeView: View {
                 Circle().fill(dot).frame(width: 7, height: 7)
                 Text(title).font(.caption).foregroundStyle(.secondary)
             }
-            Text(value, format: .currency(code: "USD")).font(.subheadline.weight(.medium)).monospacedDigit()
+            Text(value, format: .currency(code: "USD").precision(.fractionLength(0...2)))
+                .font(.subheadline.weight(.medium)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -130,6 +187,7 @@ struct HomeView: View {
                     .init(label: "Spot", value: model.spotValue, color: .allocationSpot),
                     .init(label: "Perps", value: model.perpsValue, color: .allocationPerps),
                     .init(label: "Launchpad", value: model.launchpadValue, color: .allocationLaunchpad),
+                    .init(label: "Moments", value: model.momentsValue, color: .allocationMoments),
                 ],
                 total: model.totalValue ?? 0
             )
@@ -211,6 +269,17 @@ struct HomeView: View {
                         }
                     }
                 }
+            case .moments:
+                if model.momentRows.isEmpty { holdingsEmpty("No Moments yet", "Collect a Moment on the Moments tab and your editions and coins appear here.") }
+                else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(model.momentRows.enumerated()), id: \.element.id) { index, row in
+                            Button { router.openMoment(row.moment) } label: { MomentHoldingRow(row: row) }
+                                .buttonStyle(.plain)
+                            if index < model.momentRows.count - 1 { Divider().padding(.leading, 44) }
+                        }
+                    }
+                }
             }
         }
         .padding(16)
@@ -236,7 +305,7 @@ enum HomeTokenTab: String, CaseIterable, Identifiable {
 }
 
 enum HoldingCategory: String, CaseIterable, Identifiable {
-    case spot, perps, launchpad
+    case spot, perps, launchpad, moments
     var id: String { rawValue }
     var label: String { self == .launchpad ? "Launch" : rawValue.capitalized }
 }
@@ -450,6 +519,8 @@ final class HomeModel {
     private(set) var launchHoldings: [LaunchHolding] = []
     private(set) var positions: [PerpPosition] = []
     private(set) var perpEquity: Double?
+    /// The wallet's Moments stakes (editions, entitlements, coins), valued at each graduated pool's price.
+    private(set) var momentRows: [MomentPortfolioRow] = []
     private(set) var loading = false
     private(set) var error: String?
     private(set) var updatedAt: Date?
@@ -460,11 +531,20 @@ final class HomeModel {
     var perpsValue: Double { perpEquity ?? 0 }
     /// Value of the wallet's launch-coin holdings, priced from each curve. Feeds the allocation ring and total.
     var launchpadValue: Double { launchHoldings.reduce(0) { $0 + $1.valueUSD } }
+    /// Value of the wallet's Moment coins (held plus still owed) at each pool's live price; pre-graduation
+    /// entitlements have no market yet and count at zero.
+    var momentsValue: Double {
+        momentRows.reduce(0) { total, row in
+            guard let pool = row.moment.pool else { return total }
+            let owed = row.entitlement > row.claimed ? row.entitlement - row.claimed : 0
+            return total + (MomentsMath.coins(row.coinBalance) + MomentsMath.coins(owed)) * pool.usdcPerCoin
+        }
+    }
     var availableBalance: Double { spotValue }
     var inUse: Double { perpsValue }
 
     var totalValue: Double? {
-        rows.isEmpty ? nil : spotValue + perpsValue + launchpadValue
+        rows.isEmpty ? nil : spotValue + perpsValue + launchpadValue + momentsValue
     }
 
     /// Value-weighted 24h change of the wallet, when every priced holding has a change.
@@ -526,6 +606,7 @@ final class HomeModel {
         async let balances = walletBalances(env: env, address: address, tokens: tokens)
         async let launches = env.launchpad.launches(limit: 30)
         async let perps = loadPerps(env: env, address: address)
+        async let moments = loadMoments(env: env, address: address)
         var priceMap: [Address: PriceInfo] = [:]
         do {
             priceMap = try await prices
@@ -544,6 +625,12 @@ final class HomeModel {
         let perpState = await perps
         positions = perpState.positions
         perpEquity = perpState.equity
+        momentRows = await moments
+    }
+
+    private func loadMoments(env: AppEnvironment, address: Address?) async -> [MomentPortfolioRow] {
+        guard let address, env.config.moments.isDeployed else { return [] }
+        return (try? await env.moments.portfolio(account: address, limit: 100))?.rows ?? []
     }
 
     private func walletBalances(env: AppEnvironment, address: Address?, tokens: [Token]) async -> [Address: BigUInt] {
@@ -663,5 +750,107 @@ struct PriceChart: View {
         } else {
             ContentUnavailableView("No Price History", systemImage: "chart.line.downtrend.xyaxis", description: Text("This token has no pool with enough liquidity to chart."))
         }
+    }
+}
+
+
+/// The home header, in the reference layout: the three-line menu button, a search field, and the profile avatar
+/// on the right — the profile is one tap away from the top of the screen instead of a tab.
+struct HomeHeader: View {
+    @Binding var showSearch: Bool
+    let error: String?
+    let updatedAt: Date?
+    @Environment(Router.self) private var router
+    @Environment(Session.self) private var session
+    @Environment(SocialSession.self) private var social
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button { Haptics.tap(); router.menuOpen = true } label: {
+                Image(systemName: "line.3.horizontal")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .background(Color(.secondarySystemGroupedBackground), in: Circle())
+            }
+            .accessibilityLabel("Menu")
+
+            Button { Haptics.tap(); showSearch = true } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    Text("Search tokens…").foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    if let error {
+                        Image(systemName: "wifi.exclamationmark").foregroundStyle(Color.attention).accessibilityLabel(error)
+                    } else if let updatedAt {
+                        Text(updatedAt, style: .relative).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                    }
+                }
+                .font(.body)
+                .padding(.horizontal, 14)
+                .frame(height: 44)
+                .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Search tokens")
+
+            Button { Haptics.tap(); router.presented = .profile } label: {
+                if let account = session.account, account.method == .watchOnly {
+                    ZStack {
+                        Circle().fill(Color(.secondarySystemGroupedBackground)).frame(width: 44, height: 44)
+                        Image(systemName: "eye").foregroundStyle(.secondary)
+                    }
+                } else {
+                    Avatar(url: avatarURL, initials: initials, size: 44)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Profile")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private var avatarURL: URL? {
+        guard let raw = social.profile?.avatar_url, !raw.isEmpty else { return nil }
+        return URL(string: raw)
+    }
+
+    private var initials: String {
+        let source = social.profile?.display_name ?? social.profile?.handle ?? session.account?.label ?? ""
+        let letters = source.split(whereSeparator: { $0 == " " || $0 == "@" }).prefix(2).compactMap { $0.first }
+        return letters.isEmpty ? "" : String(letters).uppercased()
+    }
+}
+
+/// A Moments stake row for the holdings list: media, name, editions and coins, then the value at the pool price.
+private struct MomentHoldingRow: View {
+    let row: MomentPortfolioRow
+
+    private var owed: BigUInt { row.entitlement > row.claimed ? row.entitlement - row.claimed : 0 }
+    private var coins: Double { MomentsMath.coins(row.coinBalance) + MomentsMath.coins(owed) }
+    private var value: Double? { row.moment.pool.map { coins * $0.usdcPerCoin } }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            MomentArtwork(provenance: row.moment.provenance, symbol: row.moment.symbol)
+                .frame(width: 34, height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.moment.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text("\(row.nftBalance) \(row.nftBalance == 1 ? "edition" : "editions") · \(NumberStyle.number(coins, compact: true)) \(row.moment.symbol)")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 1) {
+                USDText(value: value, font: .subheadline.weight(.medium))
+                Text(row.moment.graduated ? "Graduated" : row.moment.state == .expired ? "Expired" : "\(row.moment.progressBps / 100)% to graduation")
+                    .font(.caption2).foregroundStyle(row.moment.graduated ? Color.positive : .secondary)
+            }
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 }

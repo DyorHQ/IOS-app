@@ -57,22 +57,34 @@ private struct PrivacyCover: View {
 }
 
 enum AppTab: String, CaseIterable, Identifiable {
-    case home, launch, trade, strategy, profile
+    case home, launch, trade, moments, strategy
     var id: String { rawValue }
 }
 
+/// The tab bar plus everything layered over it: the side menu (the three-line button on Home) and the sections it
+/// opens outside the tabs (Portfolio, News, Get Help, Profile) as full-screen covers.
 struct MainTabView: View {
     @Environment(Router.self) private var router
 
     var body: some View {
         @Bindable var router = router
         TabView(selection: $router.tab) {
+            // Trade sits between Launch and Moments, dividing the two coin sections.
             Tab("Home", systemImage: "house", value: .home) { HomeView() }
             Tab("Launch", systemImage: "flame", value: .launch) { LaunchpadView() }
             Tab("Trade", systemImage: "arrow.left.arrow.right", value: .trade) { TradeView() }
+            Tab("Moments", systemImage: "camera.aperture", value: .moments) { MomentsView() }
             Tab("Strategy", systemImage: "wand.and.stars", value: .strategy) { StrategyView() }
-            Tab("Profile", systemImage: "person.crop.circle", value: .profile) { ProfileView() }
         }
         .sensoryFeedback(.selection, trigger: router.tab)
+        .fullScreenCover(isPresented: $router.menuOpen) { SideMenuView() }
+        .fullScreenCover(item: $router.presented) { screen in
+            switch screen {
+            case .portfolio: PortfolioView()
+            case .news: NewsView()
+            case .help: GetHelpView()
+            case .profile: ProfileView(presented: true)
+            }
+        }
     }
 }

@@ -6,7 +6,7 @@ import Foundation
 /// an explorer link. Persisted per wallet in UserDefaults; only public details are stored, never keys.
 struct ActivityRecord: Codable, Identifiable, Hashable {
     enum Kind: String, Codable, Hashable {
-        case swap, launch, buy, sell, perp, send
+        case swap, launch, buy, sell, perp, send, moment
 
         var symbol: String {
             switch self {
@@ -16,6 +16,7 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
             case .sell: return "arrow.up"
             case .perp: return "chart.line.uptrend.xyaxis"
             case .send: return "paperplane.fill"
+            case .moment: return "camera.aperture"
             }
         }
     }

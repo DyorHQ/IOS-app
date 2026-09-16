@@ -8,6 +8,15 @@ struct UniswapVenue: Sendable {
     let v3: V3Router
     /// The launchpad factory whose graduated pools are routable; nil until it is deployed.
     let launchpadFactory: Address?
+    /// The Moments contracts whose graduated coin ↔ USDC pools are routable; nil when Moments are not live.
+    let moments: MomentsAddresses?
+
+    init(multicall: Multicall, v3: V3Router, launchpadFactory: Address?, moments: MomentsAddresses? = nil) {
+        self.multicall = multicall
+        self.v3 = v3
+        self.launchpadFactory = launchpadFactory
+        self.moments = moments
+    }
 
     static let v3Venue = V3Venue(factory: Uniswap.v3Factory, quoter: Uniswap.quoterV2, tiers: Uniswap.v3FeeTiers)
 
@@ -54,7 +63,7 @@ struct UniswapVenue: Sendable {
         case .v4(let v4):
             amountOut = v4.amountOut
             gas = v4.gas
-            route = Self.describeV4(v4.hops, symbolIn: req.tokenIn.symbol, symbolOut: req.tokenOut.symbol)
+            route = Self.describeV4(v4.hops, symbolIn: req.tokenIn.symbol, symbolOut: req.tokenOut.symbol, momentsHook: moments?.hook)
             let slice = req.amountIn / 1000
             if slice > 0, let sliceOut = try? await quoteV4Once(currencyIn: req.tokenIn.address, hops: v4.hops, amountIn: slice) {
                 priceImpactBps = SwapMath.impactBps(amountIn: req.amountIn, amountOut: amountOut, sliceIn: slice, sliceOut: sliceOut)
@@ -127,15 +136,23 @@ struct UniswapVenue: Sendable {
         try await multicall.readAll([try SwapCalldata.v4Quote(currencyIn: currencyIn, hops: hops, amountIn: amountIn)])[0][0].uint
     }
 
-    /// Candidate v4 routes: hookless canonical pools (direct and through native MON) and graduated launchpad pools.
+    /// Candidate v4 routes: hookless canonical pools (direct and through native MON), graduated launchpad pools,
+    /// and graduated Moment pools (coin ↔ USDC, reached directly or through a canonical USDC pool).
     private func v4Routes(currencyIn cIn: Address, currencyOut cOut: Address) async throws -> [[V4Hop]] {
         let canonical = { (a: Address, b: Address) in Uniswap.v4Tiers.map { PoolKey.canonical(a, b, fee: $0.fee, tickSpacing: $0.tickSpacing) } }
         let viaNative = !cIn.isZero && !cOut.isZero
-        let probe = canonical(cIn, cOut) + (viaNative ? canonical(cIn, Monad.native) + canonical(Monad.native, cOut) : [])
+        let usdc = moments?.usdc ?? Monad.usdc
+        // Probe layout: [0,4) direct, [4,8) in→MON, [8,12) MON→out, [12,16) in→USDC, [16,20) USDC→out (the latter
+        // two pad with the direct pools when a side already is USDC, so the offsets stay fixed).
+        let probe = canonical(cIn, cOut)
+            + (viaNative ? canonical(cIn, Monad.native) + canonical(Monad.native, cOut) : canonical(cIn, cOut) + canonical(cIn, cOut))
+            + (cIn != usdc ? canonical(cIn, usdc) : canonical(cIn, cOut))
+            + (cOut != usdc ? canonical(usdc, cOut) : canonical(cIn, cOut))
         let liquidityCalls = try probe.map { try SwapCalldata.stateViewLiquidity(poolId: $0.id) }
         async let liquidityRead = multicall.read(liquidityCalls)
         async let launchRead = launchpadKeys([cIn, cOut])
-        let (liquidity, launchKeys) = try await (liquidityRead, launchRead)
+        async let momentRead = momentsKeys([cIn, cOut])
+        let (liquidity, launchKeys, momentKeys) = try await (liquidityRead, launchRead, momentRead)
 
         func alive(_ range: Range<Int>) -> [PoolKey] {
             probe.enumerated().filter { range.contains($0.offset) }.compactMap { entry in
@@ -144,8 +161,10 @@ struct UniswapVenue: Sendable {
             }
         }
         let direct = alive(0..<4)
-        let toNative = alive(4..<8)
-        let fromNative = alive(8..<12)
+        let toNative = viaNative ? alive(4..<8) : []
+        let fromNative = viaNative ? alive(8..<12) : []
+        let toUSDC = cIn != usdc ? alive(12..<16) : []
+        let fromUSDC = cOut != usdc ? alive(16..<20) : []
         func route(_ hops: [V4Hop?]) -> [V4Hop]? {
             let present = hops.compactMap { $0 }
             return present.count == hops.count ? present : nil
@@ -174,7 +193,47 @@ struct UniswapVenue: Sendable {
                 }
             }
         }
+        // Moment pools pair a coin with USDC; reach them directly or through a canonical USDC pool.
+        for (coin, key) in momentKeys {
+            if cOut == coin {
+                if cIn == usdc {
+                    if let r = route([V4Hop(key: key, from: cIn)]) { routes.append(r) }
+                } else {
+                    for a in toUSDC { if let r = route([V4Hop(key: a, from: cIn), V4Hop(key: key, from: usdc)]) { routes.append(r) } }
+                }
+            } else if cIn == coin {
+                if cOut == usdc {
+                    if let r = route([V4Hop(key: key, from: cIn)]) { routes.append(r) }
+                } else {
+                    for b in fromUSDC { if let r = route([V4Hop(key: key, from: cIn), V4Hop(key: b, from: usdc)]) { routes.append(r) } }
+                }
+            }
+        }
         return routes
+    }
+
+    /// Pool keys of graduated Moment coins among `tokens`, in input order.
+    private func momentsKeys(_ tokens: [Address]) async throws -> [(coin: Address, key: PoolKey)] {
+        guard let moments, moments.isDeployed else { return [] }
+        let candidates = tokens.filter { !$0.isZero && $0 != moments.usdc && $0 != Monad.wmon }
+        if candidates.isEmpty { return [] }
+        let ids = try await multicall.read(try candidates.map { try SwapCalldata.momentIdByCoin(factory: moments.factory, coin: $0) })
+        var coins: [(Address, BigUInt)] = []
+        for (coin, result) in zip(candidates, ids) {
+            guard case .success(let values) = result, values[0].uint > 0 else { continue }
+            coins.append((coin, values[0].uint))
+        }
+        if coins.isEmpty { return [] }
+        let keys = try await multicall.read(try coins.map { try SwapCalldata.momentsPoolKey(graduation: moments.graduation, momentId: $0.1) })
+        var out: [(coin: Address, key: PoolKey)] = []
+        for (entry, result) in zip(coins, keys) {
+            guard case .success(let values) = result else { continue }
+            let key = values[0]
+            let poolKey = PoolKey(currency0: key[0].address, currency1: key[1].address, fee: Int(key[2].uint), tickSpacing: Int(key[3].int), hooks: key[4].address)
+            guard !poolKey.hooks.isZero else { continue } // not graduated: no pool yet
+            out.append((entry.0, poolKey))
+        }
+        return out
     }
 
     /// Pool keys of graduated launchpad tokens among `tokens`, in input order.
@@ -196,11 +255,18 @@ struct UniswapVenue: Sendable {
         }
     }
 
-    /// "v4 · MON → USDC · 0.05%" / "v4 · USDC → MON → TOKEN · 0.05% + launchpad".
-    static func describeV4(_ hops: [V4Hop], symbolIn: String, symbolOut: String) -> String {
+    /// "v4 · MON → USDC · 0.05%" / "v4 · USDC → MON → TOKEN · 0.05% + launchpad" / "v4 · USDC → COIN · moments 1.5%".
+    static func describeV4(_ hops: [V4Hop], symbolIn: String, symbolOut: String, momentsHook: Address? = nil) -> String {
         var names = [symbolIn]
-        for (i, hop) in hops.enumerated() { names.append(i == hops.count - 1 ? symbolOut : (hop.currencyOut.isZero ? "MON" : "…")) }
-        let fees = hops.map { $0.key.isHookless ? SwapMath.feeLabel($0.key.fee) : "launchpad" }.joined(separator: " + ")
+        for (i, hop) in hops.enumerated() {
+            let middle = hop.currencyOut.isZero ? "MON" : (hop.currencyOut == Monad.usdc ? "USDC" : "…")
+            names.append(i == hops.count - 1 ? symbolOut : middle)
+        }
+        let fees = hops.map { hop -> String in
+            if hop.key.isHookless { return SwapMath.feeLabel(hop.key.fee) }
+            if let momentsHook, hop.key.hooks == momentsHook { return "moments 1.5%" }
+            return "launchpad"
+        }.joined(separator: " + ")
         return "v4 · \(names.joined(separator: " → ")) · \(fees)"
     }
 }

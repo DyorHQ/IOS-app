@@ -102,4 +102,5 @@ extension Color {
     static let allocationSpot = Color(light: Color(red: 0.12, green: 0.51, blue: 0.60), dark: Color(red: 0.42, green: 0.79, blue: 0.86))
     static let allocationPerps = Color(light: Color(red: 0.36, green: 0.33, blue: 0.66), dark: Color(red: 0.62, green: 0.58, blue: 0.95))
     static let allocationLaunchpad = Color(light: Color(red: 0.72, green: 0.48, blue: 0.14), dark: Color(red: 0.93, green: 0.71, blue: 0.36))
+    static let allocationMoments = Color(light: Color(red: 0.70, green: 0.30, blue: 0.42), dark: Color(red: 0.94, green: 0.56, blue: 0.68))
 }

@@ -14,6 +14,8 @@ final class AppEnvironment {
     let swap: SwapEngine
     let perpl: PerplService
     let launchpad: LaunchpadService
+    let moments: MomentsService
+    let news: NewsService
     let activity: TokenActivityService
     let swapHistory: SwapHistoryService
     let walletDiscovery: WalletTokenDiscovery
@@ -22,6 +24,8 @@ final class AppEnvironment {
     let session: Session
     let settings = AppSettings()
     let perplTrading = PerplTrading()
+    /// The wallet's cross-section volume / fees / P&L model, shared by Home's Total Volume and the Portfolio page.
+    let portfolio = PortfolioModel()
     let alertWatcher = AlertWatcher()
     let copyWatcher = CopyTradeWatcher()
     let mmWatcher = MMWatcher()
@@ -34,14 +38,20 @@ final class AppEnvironment {
         multicall = Multicall(rpc: rpc)
         sender = TransactionSender(rpc: rpc)
         prices = PriceService(rpc: rpc)
-        swap = SwapEngine(rpc: rpc)
+        // Graduated launchpad and Moment pools become swap routes on Uniswap v4.
+        swap = SwapEngine(rpc: rpc, launchpadFactory: config.launchpad.isDeployed ? config.launchpad.factory : nil, moments: config.moments)
         perpl = PerplService(rpc: rpc)
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
-        // History reads want the larger log-chunk RPC, like the launchpad does.
-        activity = TokenActivityService(rpc: RPCClient(url: LaunchpadService.defaultLogsRPC))
-        swapHistory = SwapHistoryService(rpc: RPCClient(url: LaunchpadService.defaultLogsRPC))
+        moments = MomentsService(rpc: rpc, addresses: config.moments)
+        news = NewsService()
+        // History reads want the larger log-chunk RPC (rpc1), like the launchpad does. A local fork keeps its own
+        // logs, so a development build pointed at 127.0.0.1 scans the fork instead.
+        let host = config.rpcURL.host() ?? ""
+        let logsURL = host == "127.0.0.1" || host == "localhost" ? config.rpcURL : LaunchpadService.defaultLogsRPC
+        activity = TokenActivityService(rpc: RPCClient(url: logsURL))
+        swapHistory = SwapHistoryService(rpc: RPCClient(url: logsURL))
         // Wallet discovery scans logs on rpc1 and reads balances/metadata on the primary multicall.
-        walletDiscovery = WalletTokenDiscovery(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
+        walletDiscovery = WalletTokenDiscovery(logsRPC: RPCClient(url: logsURL), multicall: multicall)
         kuruTokens = KuruTokenListClient()
         venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
         session = Session(config: config)

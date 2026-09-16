@@ -10,6 +10,8 @@ struct AppConfig: Sendable {
     let passkeyRelyingParty: String
     let perplBuilderID: Int
     let launchpad: LaunchpadAddresses
+    /// Moments (v1.1) is live on Monad mainnet; the addresses are the verified deployment, baked into DyorKit.
+    let moments: MomentsAddresses
     /// DyorHQ's Supabase backend (social, alerts, copy trading, launch index). The publishable key is safe to
     /// embed — row-level security protects the data — so these have working defaults.
     let supabaseURL: URL
@@ -47,6 +49,7 @@ struct AppConfig: Sendable {
                 hook: address("MemeHook"),
                 poolManager: Uniswap.poolManager
             ),
+            moments: .monadMainnet,
             supabaseURL: supabaseURL,
             supabaseKey: supabaseKey,
             walletExportURL: URL(string: string("WalletExportURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil }
