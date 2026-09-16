@@ -115,6 +115,14 @@ final class SocialSession {
         return try await client.uploadPublic(bucket: "launch-media", path: "\(wallet)/\(name).jpg", data: jpeg, contentType: "image/jpeg")
     }
 
+    /// Uploads a Moment's photo to the wallet's folder in the public `launch-media` bucket and returns its public
+    /// URL — the caller writes it on-chain as the NFT's `mediaURI` next to the keccak-256 of these exact bytes.
+    func uploadMomentImage(jpeg: Data) async throws -> URL {
+        guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
+        let name = "moment-" + UUID().uuidString.lowercased()
+        return try await client.uploadPublic(bucket: "launch-media", path: "\(wallet)/\(name).jpg", data: jpeg, contentType: "image/jpeg")
+    }
+
     /// Uploads a new profile picture (JPEG bytes) to the wallet's own folder in the public `avatars` bucket, then
     /// records its URL on the profile. A cache-busting query is appended so the new image shows immediately.
     func uploadAvatar(jpeg: Data) async throws {

@@ -108,6 +108,25 @@ public extension RPCClient {
     /// The chunk size for this endpoint; see `logChunkSize(for:)`.
     nonisolated var logChunkSize: UInt64 { Self.logChunkSize(for: url) }
 
+    nonisolated var isLocal: Bool {
+        let host = url.host() ?? ""
+        return host == "127.0.0.1" || host == "localhost"
+    }
+
+    /// The block a local Anvil fork started from (`anvil_metadata`), cached for the process; nil when the local node
+    /// is not Anvil or is not a fork.
+    func localForkBlock() async -> UInt64? {
+        if let cached = await LocalForkInfo.shared.block(for: url) { return cached }
+        let block: UInt64?
+        if let json = try? await call("anvil_metadata"), let raw = json["forkedNetwork"]["forkBlockNumber"].number {
+            block = UInt64(raw)
+        } else {
+            block = nil
+        }
+        await LocalForkInfo.shared.set(block, for: url)
+        return block
+    }
+
     /// One `eth_getLogs` request. The range must respect the endpoint's cap; use `chunkedLogs` for wider windows.
     func logs(_ filter: LogFilter) async throws -> [Log] {
         try Self.parseLogs(await call("eth_getLogs", [filter.json]))
@@ -127,6 +146,10 @@ public extension RPCClient {
     /// sending `concurrency` ranges per round trip. A range that fails leaves a gap rather than failing the whole
     /// window, exactly as the web app's `chunkedLogs` does; the caller gets everything that could be read.
     func chunkedLogs(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6) async -> [Log] {
+        // A local Anvil fork only holds logs from its fork block on (older ranges are forwarded upstream, where the
+        // default RPC caps them at 100 blocks), so a development build scans the fork's own blocks only.
+        var fromBlock = fromBlock
+        if isLocal, let forkBlock = await localForkBlock() { fromBlock = max(fromBlock, forkBlock) }
         guard fromBlock <= toBlock else { return [] }
         let chunk = max(1, chunkSize ?? logChunkSize)
         var ranges: [LogFilter] = []
@@ -142,8 +165,38 @@ public extension RPCClient {
         while next < ranges.count, !Task.isCancelled {
             let slice = Array(ranges[next..<min(next + max(1, concurrency), ranges.count)])
             next += slice.count
-            guard let results = try? await logs(slice) else { continue }
-            for case .success(let logs) in results { out.append(contentsOf: logs) }
+            if let results = try? await logs(slice) {
+                for (filter, result) in zip(slice, results) {
+                    switch result {
+                    case .success(let logs): out.append(contentsOf: logs)
+                    case .failure: out.append(contentsOf: await narrowedLogs(filter))
+                    }
+                }
+            } else {
+                for filter in slice { out.append(contentsOf: await narrowedLogs(filter)) }
+            }
+        }
+        return out
+    }
+
+    /// A range the endpoint refused, retried in halves down to 100 blocks (the cap of the default Monad RPC).
+    /// Anything still refused at that size is skipped; a local node stops narrowing at 5 000 blocks.
+    private func narrowedLogs(_ filter: LogFilter) async -> [Log] {
+        let span = filter.toBlock >= filter.fromBlock ? filter.toBlock - filter.fromBlock + 1 : 0
+        let floor: UInt64 = isLocal ? 5_000 : 100
+        guard span > floor, !Task.isCancelled else {
+            return (try? await logs(filter)) ?? []
+        }
+        let mid = filter.fromBlock + span / 2
+        let first = LogFilter(address: filter.address, topics: filter.topics, fromBlock: filter.fromBlock, toBlock: mid - 1)
+        let second = LogFilter(address: filter.address, topics: filter.topics, fromBlock: mid, toBlock: filter.toBlock)
+        var out: [Log] = []
+        for half in [first, second] {
+            if let results = try? await logs([half]), case .success(let logs)? = results.first {
+                out.append(contentsOf: logs)
+            } else {
+                out.append(contentsOf: await narrowedLogs(half))
+            }
         }
         return out
     }
@@ -172,4 +225,13 @@ public extension RPCClient {
             return log
         }
     }
+}
+
+
+/// Process-wide cache of local fork blocks, keyed by endpoint (so every RPC client pointed at the fork shares one lookup).
+actor LocalForkInfo {
+    static let shared = LocalForkInfo()
+    private var blocks: [URL: UInt64?] = [:]
+    func block(for url: URL) -> UInt64?? { blocks[url] }
+    func set(_ block: UInt64?, for url: URL) { blocks[url] = .some(block) }
 }

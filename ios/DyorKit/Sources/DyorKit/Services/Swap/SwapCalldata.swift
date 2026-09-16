@@ -190,6 +190,14 @@ public enum SwapCalldata {
     public static func launchpadPoolKey(factory: Address, token: Address) throws -> ContractCall {
         try ContractCall(to: factory, "poolKeyOf(address)", [.address(token)], returns: "(address,address,uint24,int24,address)")
     }
+    /// Moments: the Moment id of a coin (0 when the address is not a Moment coin).
+    public static func momentIdByCoin(factory: Address, coin: Address) throws -> ContractCall {
+        try ContractCall(to: factory, "momentIdByCoin(address)", [.address(coin)], returns: "uint256")
+    }
+    /// Moments: the graduated pool key of a Moment (reverts while it has no pool).
+    public static func momentsPoolKey(graduation: Address, momentId: BigUInt) throws -> ContractCall {
+        try ContractCall(to: graduation, "poolKeyOf(uint256)", [.uint(momentId)], returns: "(address,address,uint24,int24,address)")
+    }
 
     // MARK: Uniswap SwapRouter02 (no deadline in the params; `multicall(deadline, data)` instead)
 

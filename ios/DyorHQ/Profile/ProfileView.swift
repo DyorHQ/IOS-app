@@ -7,7 +7,10 @@ import SwiftUI
 /// two-factor), notifications, appearance, language, support — then sign out. Modeled on a settings screen: a
 /// grouped list with a symbol per row, in DyorHQ's system.
 struct ProfileView: View {
+    /// True when opened as a full-screen page from the home header or the menu (adds a Close control).
+    var presented = false
     @Environment(Session.self) private var session
+    @Environment(\.dismiss) private var dismiss
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
     @Environment(PerplTrading.self) private var perplTrading
@@ -83,7 +86,15 @@ struct ProfileView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Profile")
+            .navigationBarTitleDisplayMode(presented ? .inline : .large)
             .foregroundStyle(.primary)
+            .toolbar {
+                if presented {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }.accessibilityLabel("Close")
+                    }
+                }
+            }
             .sheet(isPresented: $showReceive) { if let address = session.address { ReceiveSheet(address: address) } }
             .sheet(isPresented: $showSend) { SendSheet() }
             .sheet(isPresented: $showAppearance) { AppearanceSheet() }
