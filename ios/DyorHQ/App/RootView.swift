@@ -57,7 +57,7 @@ private struct PrivacyCover: View {
 }
 
 enum AppTab: String, CaseIterable, Identifiable {
-    case home, trade, launch, moments, strategy
+    case home, launch, trade, moments, strategy
     var id: String { rawValue }
 }
 
@@ -69,9 +69,10 @@ struct MainTabView: View {
     var body: some View {
         @Bindable var router = router
         TabView(selection: $router.tab) {
+            // Trade sits between Launch and Moments, dividing the two coin sections.
             Tab("Home", systemImage: "house", value: .home) { HomeView() }
-            Tab("Trade", systemImage: "arrow.left.arrow.right", value: .trade) { TradeView() }
             Tab("Launch", systemImage: "flame", value: .launch) { LaunchpadView() }
+            Tab("Trade", systemImage: "arrow.left.arrow.right", value: .trade) { TradeView() }
             Tab("Moments", systemImage: "camera.aperture", value: .moments) { MomentsView() }
             Tab("Strategy", systemImage: "wand.and.stars", value: .strategy) { StrategyView() }
         }
