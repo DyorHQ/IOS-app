@@ -60,3 +60,18 @@ contract that implements it so a reviewer can check the code against the ruling.
    Universal Router. The options are (A) pair the coin with native MON instead of USDC — which reverses the
    spec's "USDC only" and, for price continuity, means collecting in MON too — or (B) keep USDC. Awaiting the
    owner's choice before Phase 3 (the fork lifecycle depends on the pair asset).
+
+## Phase 2 gate review, second round — 2026-09-16
+
+10. **Fee currency: Option B.** USDC stays the settlement and pair asset; all fees (0.5% LP + 1% hook) are in
+    USDC / the pool's own currencies. Ruling 9 closed.
+
+11. **Phase 3 runs against Monad mainnet.** The owner's instruction: "we are building on mainnet". Phase 3 is
+    executed against Monad mainnet state — the real PoolManager `0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e`,
+    real USDC `0x754704Bc059F8C67012fEd69BC8A327a5aafb603`, real Permit2 and the real Universal Router — as
+    Foundry mainnet-fork tests (the adversarial matrix can only be run that way), with the deploy script and the
+    live $10 lifecycle commands prepared for the owner to broadcast with their own key. Note for the record: the
+    spec's §14 gate ("no real money before an independent audit") is the owner's rule; a live $10 lifecycle on
+    mainnet puts roughly $13 of USDC plus gas on un-audited code, by the owner's decision.
+
+12. **Total trading cost stays 1.5%** (0.5% LP + 1% hook) until the owner says otherwise (ruling 8's open point).
