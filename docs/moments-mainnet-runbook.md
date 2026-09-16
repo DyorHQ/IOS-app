@@ -24,6 +24,45 @@ Verified: on-chain wiring, policy and constants read back correctly; all seven r
 **Not yet done:** the independent audit (spec §14) and the Phase 4 security self-review. Nobody should put real
 money into these contracts before those, and the owner wallet should never be the one doing it (below).
 
+## Redeploy v1.1 (owner action, pending)
+
+The v1 set above stays on-chain but will be paused; the app (Phase 5) wires to the v1.1 set. v1.1 = branch commit
+`ac33952`: v1 + constructor zero-address checks, NFT metadata JSON escaping, policy floors (threshold ≥ 1 USDC,
+min price ≥ $0.01). Full suite green on that commit (106 tests). The v1 record is archived as
+`contracts/deployments/moments-143-v1.json`; the script overwrites `moments-143.json` with the v1.1 addresses.
+
+Dry run as the owner address (nonce 67) predicted these addresses — they hold only if the deployment transactions
+are the owner wallet's next eight transactions, in order; otherwise the recorded JSON is the truth:
+
+| contract | predicted v1.1 address |
+|---|---|
+| factory | `0x64698c7702d85F87f43a6dFF7D495CDD2327C020` |
+| vesting | `0x360E2068eAEc5b5A9AF60A7c4059Bd4b30B7209C` |
+| collect | `0xb4EE9e67d9e1772BC6949748e3755EA7C1DFE32c` |
+| locker | `0x832851A42Bf1FD1aF7a19c82cF132290c605E406` |
+| graduation | `0x307De00950F039969855eFb859A6088d695e76b1` |
+| buyback | `0x03282D5421a3bE3ff79c5962819c9a6e5E0b52d2` |
+| hook | `0x7987611588FDEdf0753176Aa8036206c26C560CC` (salt `0x2bd`, bits `0x20cc`) |
+
+Estimated cost from the simulation: about 22.9M gas (≈ 4.6 MON at the 202 gwei quoted at the time). Governance,
+platform and treasury are unchanged (`0xCf7A…7e10`, `0xf4D4…Cfb48`, `0x5282…f045`); nothing is pending.
+
+Broadcast (encrypted keystore, recommended — one-time `cast wallet import owner --interactive`):
+
+```bash
+cd /Users/jerry/Hackathon-moments/contracts && PLATFORM=0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48 TREASURY=0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045 ~/.foundry/bin/forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad --broadcast --non-interactive --account owner --code-size-limit 200000
+```
+
+or, as done for v1, with the key in the environment (`--private-key $OWNER_KEY` in place of `--account owner`).
+
+After it lands: report the written `deployments/moments-143.json`; verification (wiring, bytecode at the v4core
+profile, live-fork lifecycle through the new contracts, Sourcify) follows, then the v1 factory is paused so no
+Moment can be published on the old set (governance call from the owner wallet):
+
+```bash
+~/.foundry/bin/cast send 0x47D989a54232D3bCdB7A7760D10E596647D986BA "setPublishingPaused(bool)" true --rpc-url monad --account owner
+```
+
 ## Wallet hygiene (non-negotiable)
 
 - The **owner / governance wallet** (`0xCf7A…7e10`) does governance only: `proposePolicy`, `applyPolicy`,
