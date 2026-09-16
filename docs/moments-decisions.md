@@ -75,3 +75,13 @@ contract that implements it so a reviewer can check the code against the ruling.
     mainnet puts roughly $13 of USDC plus gas on un-audited code, by the owner's decision.
 
 12. **Total trading cost stays 1.5%** (0.5% LP + 1% hook) until the owner says otherwise (ruling 8's open point).
+
+## Post-deployment — 2026-09-16
+
+13. **The live lifecycle runs through the app, with dedicated wallets; the owner wallet is governance-only.** The
+    forge-script walkthrough proposed at gate 3 (owner key in a shell, unlimited USDC approval, owner acting as
+    creator + collector) was withdrawn on the owner's objection. `script/moments/Lifecycle.s.sol` is now a
+    fork-only rehearsal (`FORK_REHEARSAL=1`, exact approvals). Sequence restored to the build plan: Phase 4 security
+    self-review → Phase 5 app (verified on a fork) → Phase 6 validation launch through the app by ordinary,
+    low-value wallets. Sourcify verification was submitted before any interaction; the spec §14 audit gate still
+    stands before real money.

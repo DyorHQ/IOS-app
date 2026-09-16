@@ -1,107 +1,85 @@
-# Moments — Monad mainnet runbook (owner-operated)
+# Moments — Monad mainnet runbook
 
-Everything here is broadcast by **you** with your own key. Nothing in this repo holds or reads a private key.
-Chain 143, RPC alias `monad` (`https://rpc.monad.xyz`), run from `contracts/`.
+## Status (2026-09-16)
 
-Reminder from the spec (§14) and the decisions log (ruling 11): a live lifecycle puts about **$13.34 of USDC
-plus gas** on contracts that have not had an independent audit yet. That is your call; keep the policy at the
-$10 threshold and treat this as the plumbing validation, not a launch.
+Live on Monad mainnet (chain 143), deployed by the owner, recorded in `contracts/deployments/moments-143.json`:
 
-## Deployed 2026-09-16
+| contract | address |
+|---|---|
+| factory | `0x47D989a54232D3bCdB7A7760D10E596647D986BA` |
+| collect | `0x582E63927Ef364b3737c5F4861517C2C99a8B784` |
+| vesting | `0xB58894e56737cd21e8dD70B9cc69e89D2AAe2466` |
+| graduation | `0xC626493540d9eA868b58cBe912E027d4236e5B6F` |
+| locker | `0x125a957360DE495600a1872E19C72823f329b68c` |
+| hook | `0x54E83342f4910853A8B1630654754Eb49123e0cC` (permission bits `0x20cc`) |
+| buyback | `0xaB5A89779F451d812855206833d8fbe7873f00C8` |
 
-Live on Monad mainnet (chain 143) by the owner, recorded in `contracts/deployments/moments-143.json`:
-factory `0x47D989a54232D3bCdB7A7760D10E596647D986BA`, collect `0x582E63927Ef364b3737c5F4861517C2C99a8B784`,
-vesting `0xB58894e56737cd21e8dD70B9cc69e89D2AAe2466`, graduation `0xC626493540d9eA868b58cBe912E027d4236e5B6F`,
-locker `0x125a957360DE495600a1872E19C72823f329b68c`, hook `0x54E83342f4910853A8B1630654754Eb49123e0cC`,
-buyback `0xaB5A89779F451d812855206833d8fbe7873f00C8`. Governance = deployer `0xCf7A…7e10` (nothing pending),
-platform `0xf4D4…Cfb48`, treasury `0x5282…f045`. Section 1 is done; sections 2 and 3 are still to run.
+Governance = the deployer `0xCf7A…7e10` (nothing pending); platform `0xf4D4…Cfb48`; treasury `0x5282…f045`.
 
-Verified 2026-09-16: on-chain wiring, policy and constants read back correctly; all seven runtime bytecodes match the
-source at `optimizer_runs = 44444444` (via_ir, cancun, solc 0.8.26 — the `v4core` profile, which the Sourcify script
-tries first); and `test/moments/fork/LiveDeployment.t.sol` runs the full lifecycle through the deployed contracts
-on a fresh mainnet fork (terminal collect + graduation 986,085 gas).
+Verified: on-chain wiring, policy and constants read back correctly; all seven runtime bytecodes match the source at
+`optimizer_runs = 44444444` (via_ir, cancun, solc 0.8.26 — the `v4core` profile); all seven are **verified on Sourcify**
+(creation + runtime match, 2026-09-16 11:33–11:35 UTC, `https://sourcify-api-monad.blockvision.org/v2/contract/143/<address>`);
+`test/moments/fork/LiveDeployment.t.sol` runs the whole $10 lifecycle through the deployed contracts on a mainnet fork.
 
-## 0. Prerequisites
+**Not yet done:** the independent audit (spec §14) and the Phase 4 security self-review. Nobody should put real
+money into these contracts before those, and the owner wallet should never be the one doing it (below).
 
-- Owner wallet with MON for gas (≈ 0.1 MON is plenty) and ≥ 15 USDC (`0x754704Bc059F8C67012fEd69BC8A327a5aafb603`).
-- `export OWNER_KEY=0x…` in the shell that runs the commands (never commit it).
-- Decide the beneficiaries. Defaults are the deployer for all three; override with env vars:
-  `GOVERNANCE` (policy multisig; two-step, it must call `acceptGovernance()`), `PLATFORM` (5% + 0.3% fee
-  receiver), `TREASURY` (30% of an expired reserve). Policy overrides: `THRESHOLD_USDC` (default 10_000_000),
-  `MIN_PRICE_USDC` (100_000), `EXPIRY_CREATOR_BPS` (7_000).
+## Wallet hygiene (non-negotiable)
 
-## 1. Deploy (dry run first)
+- The **owner / governance wallet** (`0xCf7A…7e10`) does governance only: `proposePolicy`, `applyPolicy`,
+  `cancelPolicy`, `setPublishingPaused`, `transferGovernance`. It never publishes, collects, trades, approves USDC
+  or holds allowances to any Moments contract. The platform and treasury wallets only ever *pull* their USDC.
+- Governance transactions are signed with a hardware wallet or an encrypted keystore, not a raw key in the shell:
+  `forge script … --ledger` / `cast send … --ledger`, or `cast wallet import owner --interactive` then `--account owner`.
+  Do not keep `OWNER_KEY` in an environment variable or shell history.
+- Product actions (publish, collect, claim, trade) are done through the DyorHQ app by ordinary wallets. For the
+  validation launch use **dedicated, low-value wallets**: one creator wallet and a few collector wallets funded by a
+  normal USDC transfer of a few dollars each, and nothing else in them. They approve exact amounts or use Permit2
+  signatures (the app's default), never unlimited approvals.
+
+## 1. Deploy — done
 
 ```bash
-cd contracts && ~/.foundry/bin/forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad --code-size-limit 200000
-```
-
-```bash
-cd contracts && PLATFORM=0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48 TREASURY=0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045 ~/.foundry/bin/forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad --broadcast --non-interactive --private-key $OWNER_KEY --code-size-limit 200000
+cd contracts && PLATFORM=0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48 TREASURY=0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045 ~/.foundry/bin/forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad --broadcast --non-interactive --ledger --code-size-limit 200000
 ```
 
 `--code-size-limit 200000` silences forge's EIP-170 lint: the factory embeds the coin + NFT creation code and is
-27 KB, which Monad allows (its limit is 128 KB; the Launchpad factory deployed the same way).
+27 KB, which Monad allows (128 KB limit; the Launchpad factory deployed the same way). The Launchpad's
+`deployments/143.json` is never touched.
 
-Writes `contracts/deployments/moments-143.json` (the Launchpad's `143.json` is never touched). The hook lands on a
-mined CREATE2 address whose low 14 bits are `0x20CC` (beforeInitialize, beforeSwap, afterSwap, both return deltas).
-If you set `GOVERNANCE` to a multisig, it must call `acceptGovernance()` on the factory to take over policy.
-
-## 2. Verify on Sourcify
+## 2. Verify on Sourcify — done
 
 ```bash
 cd contracts && ./script/moments/verify-moments-143.sh
 ```
 
-## 3. Live $10 lifecycle (one `--sig` per step, all from the owner wallet)
+No key and no transaction: it uploads source + metadata and Sourcify matches them against the chain.
 
-Publish the validation Moment ($1 collects, 10% creator allocation, 30-day window; override `COLLECT_PRICE_USDC`,
-`CREATOR_ALLOC_BPS`, `COLLECT_WINDOW`, `MOMENT_NAME`, `MOMENT_SYMBOL`, `MEDIA_URI`, `PLACE`, `SALT`):
+## 3. The live lifecycle runs through the app, not through scripts
 
-```bash
-cd contracts && ~/.foundry/bin/forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url monad --broadcast --non-interactive --private-key $OWNER_KEY --sig "publish()"
-```
+The build plan's order is: Phase 4 security self-review → Phase 5 web app (`app/moments`) verified against a fork →
+Phase 6 deploy gates and the curated small-cap validation launch. The validation launch *is* the live lifecycle:
 
-Collect until graduation — 14 collects: 13 × $1 and one clamped to 0.333334 USDC; the last one graduates the
-Moment inside the same transaction (pool opened on the real PoolManager, position locked, vesting started):
+1. A creator (dedicated wallet, via the app) publishes a Moment with a $1 collect price and a 30-day window.
+2. A few collectors (dedicated wallets, via the app, Permit2-signed) collect until the reserve reaches $10 —
+   14 collects at $1: 13 full ones and one clamped to 0.333334 USDC. The last collect graduates the Moment on the
+   real PoolManager in the same transaction; the app shows the pool, the fixed edition and the vesting schedule.
+3. Collectors claim 60% at graduation and the rest at the 30- and 60-day cliffs; the creator claims 20% then
+   16% per month; the app's portfolio view drives `claim` / `claimAll`.
+4. Trades go through the app's existing v4 swap path (Universal Router + Permit2); the hook takes 1% of the USDC
+   leg on top of the pool's 0.5% LP fee. Once ≥ 1 USDC of buyback fees has accrued (~$200 of volume) anyone can
+   trigger the buyback from the app; it can only add to the locked position.
+5. The platform and treasury wallets pull their USDC when they choose.
 
-```bash
-cd contracts && MOMENT_ID=1 ~/.foundry/bin/forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url monad --broadcast --non-interactive --private-key $OWNER_KEY --sig "collectUntilGraduated()"
-```
+No step above involves the owner wallet, a private key in a shell, or an unlimited approval. Total exposure of the
+validation launch is the collectors' ~$13.34 of USDC plus gas, on contracts that — per spec §14 — should be audited
+first; that remains the owner's decision.
 
-Trade $1 through the real Universal Router (Permit2-funded, exactly like the app): the hook takes 1% of the USDC
-leg (0.2% creator / 0.3% platform / 0.5% buyback) on top of the pool's 0.5% LP fee:
+`script/moments/Lifecycle.s.sol` is a **fork-only** rehearsal of the same steps for app development against
+`anvil --fork-url monad` (guarded by `FORK_REHEARSAL=1`, exact approvals, anvil's throwaway keys). It is not a
+mainnet procedure.
 
-```bash
-cd contracts && MOMENT_ID=1 ~/.foundry/bin/forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url monad --broadcast --non-interactive --private-key $OWNER_KEY --sig "trade()"
-```
-
-Claim vested coins (60% collector tranche + 20% creator tranche at graduation; rerun after each 30-day cliff):
-
-```bash
-cd contracts && MOMENT_ID=1 ~/.foundry/bin/forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url monad --broadcast --non-interactive --private-key $OWNER_KEY --sig "claim()"
-```
-
-Withdraw pull-only USDC (creator collect share 2.666668 USDC + creator trading fees; run from the platform /
-treasury wallets for their shares):
-
-```bash
-cd contracts && MOMENT_ID=1 ~/.foundry/bin/forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url monad --broadcast --non-interactive --private-key $OWNER_KEY --sig "withdraw()"
-```
-
-Buyback-and-LP (permissionless; needs ≥ 1 USDC of accrued buyback fees, i.e. ≥ $200 of volume at 0.5%):
-
-```bash
-cd contracts && MOMENT_ID=1 ~/.foundry/bin/forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url monad --broadcast --non-interactive --private-key $OWNER_KEY --sig "buyback()"
-```
-
-Read-only status at any time:
-
-```bash
-cd contracts && MOMENT_ID=1 ~/.foundry/bin/forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url monad --sig "status()"
-```
-
-## 4. What to expect (reconciled against economics.py and the fork run)
+## 4. What to expect (reconciled against economics.py and the fork runs)
 
 | step | expected on-chain figure |
 |---|---|
@@ -110,6 +88,4 @@ cd contracts && MOMENT_ID=1 ~/.foundry/bin/forge script script/moments/Lifecycle
 | opening price | 2.5926e-7 USDC per coin (FDV ≈ $25.93); first buy lands within 0.05% of the collectors' rate after fees |
 | $1 buy | 10,000 units hook fee → 2,000 / 3,000 / 5,000; pool receives 990,000 minus the 0.5% LP fee |
 | claim at graduation | 60% of each entitlement; creator 2,000,000 coins |
-
-Note the wallet that publishes and collects everything is doing a self-graduation: the fork run shows it recovers
-~7.21 of the 13.33 USDC if it dumps everything liquid at open. That is the accepted, UI-contained risk from spec §13.
+| terminal collect + graduation | ≈ 986,000 gas on the live contracts (3,000,000 reserved for the subcall) |

@@ -24,16 +24,18 @@ interface IPermit2Allowance {
     function approve(address token, address spender, uint160 amount, uint48 expiration) external;
 }
 
-/// @notice The live $10 validation lifecycle on Monad mainnet, one step per `--sig`, all broadcast by the owner's
-///         key (which acts as creator, collector and trader). Reads deployments/moments-<chainId>.json.
+/// @notice FORK-ONLY rehearsal of the $10 lifecycle, for app development against `anvil --fork-url monad`
+///         (chain id 143 on the fork too). It is NOT a mainnet procedure: the live lifecycle is exercised through
+///         the DyorHQ app by ordinary, low-value wallets (see docs/moments-mainnet-runbook.md). Never run this with
+///         a real key: it publishes, collects and trades from whatever key broadcasts it. The `FORK_REHEARSAL=1`
+///         guard exists so a mainnet RPC + real key cannot run it by accident.
 ///
-///           forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url monad --broadcast --private-key $OWNER_KEY --sig "publish()"
-///           MOMENT_ID=1 forge script ... --sig "collectUntilGraduated()"
-///           MOMENT_ID=1 forge script ... --sig "trade()"        # $1 buy through the real Universal Router
-///           MOMENT_ID=1 forge script ... --sig "claim()"        # vested coins (collector + creator tranches)
-///           MOMENT_ID=1 forge script ... --sig "withdraw()"     # pull-only USDC proceeds + hook fees
-///           MOMENT_ID=1 forge script ... --sig "buyback()"      # once >= 1 USDC of buyback fees accrued
-///           MOMENT_ID=1 forge script ... --sig "status()"       # read-only
+///           anvil --fork-url https://rpc.monad.xyz --chain-id 143   # in another shell
+///           export FORK_REHEARSAL=1 RPC=http://127.0.0.1:8545 KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80  # anvil #0
+///           forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url $RPC --broadcast --private-key $KEY --sig "publish()"
+///           MOMENT_ID=1 forge script ... --sig "collectUntilGraduated()"   # fund the anvil account with USDC first (anvil_setStorageAt / deal)
+///           MOMENT_ID=1 forge script ... --sig "trade()"                   # $1 buy through the real Universal Router
+///           MOMENT_ID=1 forge script ... --sig "claim()" | "withdraw()" | "buyback()" | "status()"
 contract MomentsLifecycle is Script {
     address internal constant UR = 0x0D97Dc33264bfC1c226207428A79b26757fb9dc3;
 
@@ -56,6 +58,7 @@ contract MomentsLifecycle is Script {
     address permit2;
 
     function _load() internal {
+        require(vm.envOr("FORK_REHEARSAL", false), "fork-only rehearsal: set FORK_REHEARSAL=1 on an anvil fork; never on mainnet with a real key");
         string memory json = vm.readFile(string.concat("deployments/moments-", vm.toString(block.chainid), ".json"));
         factory = MomentsFactory(vm.parseJsonAddress(json, ".factory"));
         collect = MomentCollect(vm.parseJsonAddress(json, ".collect"));
@@ -107,7 +110,7 @@ contract MomentsLifecycle is Script {
         MomentTypes.Moment memory m = factory.getMoment(id);
         uint256 maxCollects = vm.envOr("MAX_COLLECTS", uint256(20));
         vm.startBroadcast();
-        if (usdc.allowance(msg.sender, address(collect)) < m.price * maxCollects) usdc.approve(address(collect), type(uint256).max);
+        if (usdc.allowance(msg.sender, address(collect)) < m.price * maxCollects) usdc.approve(address(collect), m.price * maxCollects); // exact, never unlimited
         for (uint256 i = 0; i < maxCollects && collect.state(id) == MomentTypes.State.Collecting; i++) {
             MomentCollect.Quote memory q = collect.collect(id, 1);
             console2.log("collect", i + 1, "gross", q.gross);
@@ -125,8 +128,8 @@ contract MomentsLifecycle is Script {
         bool usdcIs0 = Currency.unwrap(key.currency0) == address(usdc);
         uint128 amountIn = uint128(vm.envOr("TRADE_USDC", uint256(1_000_000)));
         vm.startBroadcast();
-        if (usdc.allowance(msg.sender, permit2) < amountIn) usdc.approve(permit2, type(uint256).max);
-        IPermit2Allowance(permit2).approve(address(usdc), UR, type(uint160).max, type(uint48).max);
+        if (usdc.allowance(msg.sender, permit2) < amountIn) usdc.approve(permit2, amountIn);
+        IPermit2Allowance(permit2).approve(address(usdc), UR, uint160(amountIn), uint48(block.timestamp + 1 hours));
         bytes memory actions = abi.encodePacked(uint8(0x06), uint8(0x0c), uint8(0x0f));
         bytes[] memory params = new bytes[](3);
         params[0] = abi.encode(ExactInputSingleParams({poolKey: key, zeroForOne: usdcIs0, amountIn: amountIn, amountOutMinimum: 0, hookData: ""}));
