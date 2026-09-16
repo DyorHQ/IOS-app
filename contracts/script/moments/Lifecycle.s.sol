@@ -86,7 +86,8 @@ contract MomentsLifecycle is Script {
                 mediaURI: vm.envOr("MEDIA_URI", string("ipfs://validation-launch")),
                 mediaHash: keccak256(bytes(vm.envOr("MEDIA_URI", string("ipfs://validation-launch")))),
                 place: vm.envOr("PLACE", string("Accra")),
-                date: uint64(block.timestamp)
+                date: uint64(block.timestamp),
+                animationURI: vm.envOr("ANIMATION_URI", string(""))
             }),
             price: vm.envOr("COLLECT_PRICE_USDC", uint256(1_000_000)),
             creatorAllocBps: uint16(vm.envOr("CREATOR_ALLOC_BPS", uint256(1_000))),

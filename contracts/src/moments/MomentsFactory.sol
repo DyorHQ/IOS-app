@@ -33,6 +33,8 @@ contract MomentsFactory is IMomentsFactory {
     uint64 public pendingPolicyAt; // earliest time the pending policy may be applied (0 = none)
 
     bool public publishingPaused;
+    /// @dev Metadata only: prefix for the NFTs' `external_url` / `external_link` (`<base><momentId>`). No money path.
+    string public externalBaseURI;
     uint256 public momentCount; // ids are 1-based
     mapping(uint256 => MomentTypes.Moment) private _moments;
     mapping(address => uint256) public momentIdByCoin;
@@ -54,6 +56,7 @@ contract MomentsFactory is IMomentsFactory {
     event PolicyApplied(MomentTypes.Policy policy);
     event PolicyCancelled();
     event PublishingPaused(bool paused);
+    event ExternalBaseURISet(string base);
     event Published(
         uint256 indexed momentId,
         address indexed creator,
@@ -155,6 +158,12 @@ contract MomentsFactory is IMomentsFactory {
         emit PublishingPaused(paused);
     }
 
+    /// @notice Sets the metadata-only base for the NFTs' external links (e.g. https://dyorhq.app/moments/).
+    function setExternalBaseURI(string calldata base) external onlyGovernance {
+        externalBaseURI = base;
+        emit ExternalBaseURISet(base);
+    }
+
     // ------------------------------------------------------------------ publishing
 
     /// @notice Publishes a Moment: deploys its coin + NFT (CREATE2) and freezes its economics and deadline.
@@ -169,7 +178,7 @@ contract MomentsFactory is IMomentsFactory {
         momentId = ++momentCount;
         bytes32 salt = keccak256(abi.encode(momentId, msg.sender, p.salt));
         coin = address(new MomentCoin{salt: salt}(momentId, p.name, p.symbol, vesting, graduation));
-        nft = address(new MomentNFT{salt: salt}(momentId, p.name, p.symbol, msg.sender, collect, graduation, p.provenance));
+        nft = address(new MomentNFT{salt: salt}(momentId, p.name, p.symbol, msg.sender, collect, graduation, pol.royaltyBps, p.provenance));
         (uint256 rateNum, uint256 rateDen) = bundleRate(pol.threshold, pol.reserveBps, p.creatorAllocBps);
         uint64 deadline = uint64(block.timestamp + p.collectWindow);
 
@@ -188,6 +197,7 @@ contract MomentsFactory is IMomentsFactory {
             reserveBps: pol.reserveBps,
             creatorAllocBps: p.creatorAllocBps,
             expiryCreatorBps: pol.expiryCreatorBps,
+            royaltyBps: pol.royaltyBps,
             publishedAt: uint64(block.timestamp),
             deadline: deadline
         });
@@ -217,5 +227,6 @@ contract MomentsFactory is IMomentsFactory {
         if (uint256(pol.creatorBps) + pol.platformBps + pol.reserveBps != MomentTypes.BPS) revert InvalidPolicy();
         if (pol.maxCreatorAllocBps > MomentTypes.MAX_CREATOR_ALLOC_BPS) revert InvalidPolicy();
         if (pol.expiryCreatorBps > MomentTypes.BPS) revert InvalidPolicy();
+        if (pol.royaltyBps > MomentTypes.MAX_ROYALTY_BPS) revert InvalidPolicy();
     }
 }

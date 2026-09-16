@@ -44,6 +44,7 @@ contract DeployMoments is Script {
             reserveBps: uint16(vm.envOr("RESERVE_BPS", uint256(7_500))),
             maxCreatorAllocBps: uint16(vm.envOr("MAX_CREATOR_ALLOC_BPS", uint256(1_000))),
             expiryCreatorBps: uint16(vm.envOr("EXPIRY_CREATOR_BPS", uint256(7_000))),
+            royaltyBps: uint16(vm.envOr("ROYALTY_BPS", uint256(500))), // ERC-2981 creator royalty, 5%
             platform: platform,
             treasury: treasury
         });
@@ -91,7 +92,8 @@ contract DeployMoments is Script {
         vm.serializeUint(json, "thresholdUsdc", policy.threshold);
         vm.serializeUint(json, "minPriceUsdc", policy.minPrice);
         vm.serializeUint(json, "lpFee", uint256(graduation.LP_FEE()));
-        string memory out = vm.serializeUint(json, "expiryCreatorBps", policy.expiryCreatorBps);
+        vm.serializeUint(json, "expiryCreatorBps", policy.expiryCreatorBps);
+        string memory out = vm.serializeUint(json, "royaltyBps", policy.royaltyBps);
         vm.createDir("deployments", true);
         string memory path = string.concat("deployments/moments-", vm.toString(block.chainid), ".json");
         vm.writeJson(out, path);

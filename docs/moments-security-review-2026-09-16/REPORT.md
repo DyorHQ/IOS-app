@@ -80,7 +80,7 @@ No Critical or High severity issue was found in this self-review. Severity follo
 | I-3 | A late successful graduation retry and `expire()` (after deadline + grace) are both permissionless; whichever lands first wins. Intended. |
 | I-4 | Integer dust (≤ 2 USDC units, wei-level coin) stays in the locker per add; it is re-added on the next increase. |
 | I-5 | `GRADUATION_GAS = 3,000,000` is fixed; the live terminal collect measured 986,085 gas (3× margin). The PoolManager is immutable, so the profile cannot drift. |
-| I-6 | ERC-721: no ERC-2981 royalties, no burn, no takedown, transferable bearer badge — spec §13 accepted risks / product decisions, unchanged. |
+| I-6 | ERC-721 marketplace standards were incomplete in v1 (no ERC-2981, no ERC-4906/ERC-7572, no `animation_url`/`external_url`). **v1.1 implements them** (owner ruling 15): ERC-2981 royalties to the immutable creator (policy `royaltyBps`, cap 10%), ERC-4906 refresh on close, ERC-7572 `contractURI()`, `owner()` = creator as the marketplace admin convention (no on-chain power), numeric rank with `max_value`, optional `animation_url`, `external_url` from a governance-set, metadata-only base URI. No burn / takedown; transferable bearer badge — spec §13 accepted. |
 | I-7 | `MomentCoin` has no EIP-2612 `permit`; the app sells coin through Permit2 (allowance transfer), which is what the Universal Router expects. |
 | I-8 | Slither (Moments-only triage): `reentrancy-no-eth` on `collect`, `collectWithPermit2`, `graduate`, `execute`, `unlockCallback` — every flagged call is to a contract of ours or to the PoolManager, the entry points are `nonReentrant` / `onlyPoolManager`, and the receive-hook reentrancy test fails closed; `incorrect-equality` — sentinel `== 0` checks by design; `divide-before-multiply` in `creatorVestedBps` — floor-months by design; `uninitialized-local` in `_json` — defaults to 0; `unused-return` on `initialize`/`settle`/`getSlot0` — values not needed; `timestamp` — deadlines and cliffs are second-granular by design; `missing-zero-check` — L-3. No detector hit remains unexplained. (Slither also reports Launchpad items in the shared `src/`; out of scope, covered by the Launchpad audit.) |
 
@@ -89,6 +89,7 @@ No Critical or High severity issue was found in this self-review. Severity follo
 - `MomentNFT._json` escaping (L-2) with `NFTMetadata.t.sol`.
 - Zero-address checks in the constructors of Collect, Vesting, Graduation, Locker, FeeHook, Buyback, Coin and NFT (L-3), `Constructors.t.sol`.
 - `MomentsFactory._validate`: `threshold ≥ 1_000_000`, `minPrice ≥ 10_000` (L-4).
+- Marketplace standards on `MomentNFT` (I-6): ERC-2981 / ERC-4906 / ERC-7572, `owner()` convention, `animation_url`, `external_url` (factory `externalBaseURI`, governance-settable, metadata only); `Policy.royaltyBps` and `Provenance.animationURI` added; `NFTMetadata.t.sol` covers interface ids, royalty math, refresh events, contract metadata and transfers through standard approvals.
 - Test-side: the "implied pool vs remainder" rounding bound now scales with `BPS/reserveBps` (it was only correct
   for prices that split exactly).
 

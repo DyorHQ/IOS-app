@@ -94,3 +94,11 @@ contract that implements it so a reviewer can check the code against the ruling.
     code and the modules hold the factory as an immutable. The live v1 (tag `moments-mainnet-v1`) has no Moments
     published. Decision pending with the owner: redeploy v1.1 now, or fold it into the post-audit redeploy
     (recommended). Report: `docs/moments-security-review-2026-09-16/REPORT.md`.
+
+15. **Moments NFTs are transferable and marketplace-grade (OpenSea standards).** v1.1 `MomentNFT` implements ERC-2981
+    (royalty to the immutable creator; policy `royaltyBps`, default **5%**, hard cap 10% — owner to confirm the
+    rate), ERC-4906 metadata refresh when the edition is fixed, ERC-7572 `contractURI()`, the `owner()` collection-
+    admin convention (returns the creator, no on-chain power), numeric Rank with `max_value`, `animation_url` for
+    video Moments (`Provenance.animationURI`) and `external_url` / `external_link` built from a governance-set,
+    metadata-only `externalBaseURI` on the factory. Transfers were never restricted. These land with the v1.1
+    redeploy (the factory embeds the NFT creation code).

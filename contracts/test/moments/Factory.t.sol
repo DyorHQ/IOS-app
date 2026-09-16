@@ -49,6 +49,9 @@ contract FactoryTest is MomentsBase {
         assertEq(m.platform, platform);
         assertEq(m.treasury, treasury);
         assertEq(m.expiryCreatorBps, EXPIRY_CREATOR_BPS);
+        assertEq(m.royaltyBps, ROYALTY_BPS);
+        assertEq(nft.royaltyBps(), ROYALTY_BPS);
+        assertEq(nft.factory(), address(factory));
         assertEq(m.deadline, uint64(block.timestamp + WINDOW));
         assertEq(factory.momentIdByCoin(address(coin)), id);
         assertEq(m.coin, address(coin));
@@ -91,7 +94,7 @@ contract FactoryTest is MomentsBase {
         );
         address predictedNft = vm.computeCreate2Address(
             salt,
-            keccak256(abi.encodePacked(type(MomentNFT).creationCode, abi.encode(nextId, p.name, p.symbol, creator, address(collect), address(graduation), p.provenance))),
+            keccak256(abi.encodePacked(type(MomentNFT).creationCode, abi.encode(nextId, p.name, p.symbol, creator, address(collect), address(graduation), ROYALTY_BPS, p.provenance))),
             address(factory)
         );
         vm.prank(creator);
@@ -118,7 +121,7 @@ contract FactoryTest is MomentsBase {
         factory.applyPolicy();
         vm.warp(block.timestamp + 1);
         factory.applyPolicy(); // anyone may apply a proposal once ripe
-        (uint256 threshold,,,,,,,,) = factory.policy();
+        (uint256 threshold,,,,,,,,,) = factory.policy();
         assertEq(threshold, 1_000_000_000);
         (uint256 id2,,) = _publish(creator, PRICE, MAX_ALLOC_BPS, 2);
         assertEq(factory.getMoment(id2).threshold, 1_000_000_000, "new moment takes the new policy");
@@ -158,6 +161,11 @@ contract FactoryTest is MomentsBase {
         vm.expectRevert(MomentsFactory.ZeroAddress.selector);
         factory.proposePolicy(bad);
         bad = _policy(THRESHOLD);
+        bad.royaltyBps = MomentTypes.MAX_ROYALTY_BPS + 1;
+        vm.prank(gov);
+        vm.expectRevert(MomentsFactory.InvalidPolicy.selector);
+        factory.proposePolicy(bad);
+        bad = _policy(THRESHOLD);
         bad.expiryCreatorBps = 10_001;
         vm.prank(gov);
         vm.expectRevert(MomentsFactory.InvalidPolicy.selector);
@@ -191,6 +199,15 @@ contract FactoryTest is MomentsBase {
         vm.prank(gov);
         vm.expectRevert(MomentsFactory.NotGovernance.selector);
         factory.setPublishingPaused(true);
+    }
+
+    function test_external_base_uri_is_governance_only_and_metadata_only() public {
+        vm.prank(alice);
+        vm.expectRevert(MomentsFactory.NotGovernance.selector);
+        factory.setExternalBaseURI("https://dyorhq.app/moments/");
+        vm.prank(gov);
+        factory.setExternalBaseURI("https://dyorhq.app/moments/");
+        assertEq(factory.externalBaseURI(), "https://dyorhq.app/moments/");
     }
 
     function test_factory_holds_no_money_and_has_no_money_functions() public {

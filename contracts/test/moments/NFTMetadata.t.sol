@@ -13,7 +13,7 @@ contract NFTMetadataTest is MomentsBase {
         MomentsFactory.PublishParams memory p = _params(PRICE, 0, 77);
         p.name = name_;
         p.symbol = "WEIRD";
-        p.provenance = MomentTypes.Provenance({mediaURI: 'ipfs://bafy"quoted', mediaHash: keccak256("x"), place: place, date: 1_779_900_000});
+        p.provenance = MomentTypes.Provenance({mediaURI: 'ipfs://bafy"quoted', mediaHash: keccak256("x"), place: place, date: 1_779_900_000, animationURI: ""});
         vm.prank(creator);
         (uint256 i,, address n) = factory.publish(p);
         return (i, MomentNFT(n));
@@ -47,6 +47,74 @@ contract NFTMetadataTest is MomentsBase {
         assertTrue(_contains(json, string.concat("Edition #2 of ", vm.toString(nft.totalMinted()))));
         vm.expectRevert(); // ERC721NonexistentToken
         nft.tokenURI(999);
+    }
+
+    /// OpenSea / marketplace standards: ERC-165 ids, ERC-2981, ERC-4906 refresh on close, ERC-7572 contractURI,
+    /// owner() convention, animation_url + external_url, numeric rank with max_value once the edition is fixed.
+    function test_marketplace_standards() public {
+        MomentsFactory.PublishParams memory p = _params(PRICE, 0, 78);
+        p.provenance.animationURI = "ipfs://bafy-video.mp4";
+        vm.prank(creator);
+        (uint256 id,, address n) = factory.publish(p);
+        MomentNFT nft = MomentNFT(n);
+        assertTrue(nft.supportsInterface(0x01ffc9a7), "ERC-165");
+        assertTrue(nft.supportsInterface(0x80ac58cd), "ERC-721");
+        assertTrue(nft.supportsInterface(0x5b5e139f), "ERC-721 metadata");
+        assertTrue(nft.supportsInterface(0x780e9d63), "ERC-721 enumerable");
+        assertTrue(nft.supportsInterface(0x2a55205a), "ERC-2981");
+        assertTrue(nft.supportsInterface(0x49064906), "ERC-4906");
+        assertFalse(nft.supportsInterface(0xffffffff));
+        (address receiver, uint256 amount) = nft.royaltyInfo(1, 1_000_000);
+        assertEq(receiver, creator, "royalties to the immutable creator");
+        assertEq(amount, 50_000, "5% policy royalty");
+        assertEq(nft.owner(), creator, "collection-admin convention");
+        assertEq(nft.royaltyBps(), ROYALTY_BPS);
+
+        _collect(id, alice, 2);
+        string memory json = _decode(nft.tokenURI(2));
+        assertEq(vm.parseJsonString(json, ".animation_url"), "ipfs://bafy-video.mp4");
+        assertEq(vm.parseJsonString(json, ".image"), "ipfs://bafy-labadi");
+        assertEq(vm.parseJsonString(json, ".attributes[0].display_type"), "number");
+        assertEq(vm.parseJsonUint(json, ".attributes[0].value"), 2);
+        assertEq(vm.parseJsonString(json, ".attributes[2].display_type"), "date");
+        assertFalse(vm.keyExistsJson(json, ".external_url"), "no external_url before a base is set");
+        // contract-level metadata
+        string memory cjson = _decode(nft.contractURI());
+        assertEq(vm.parseJsonString(cjson, ".name"), "Sunrise over Labadi");
+        assertEq(vm.parseJsonString(cjson, ".image"), "ipfs://bafy-labadi");
+
+        // external links appear once governance sets the base (metadata only)
+        vm.prank(gov);
+        factory.setExternalBaseURI("https://dyorhq.app/moments/");
+        json = _decode(nft.tokenURI(1));
+        assertEq(vm.parseJsonString(json, ".external_url"), string.concat("https://dyorhq.app/moments/", vm.toString(id)));
+        cjson = _decode(nft.contractURI());
+        assertEq(vm.parseJsonString(cjson, ".external_link"), string.concat("https://dyorhq.app/moments/", vm.toString(id)));
+
+        // closing fixes the edition: ERC-4906 batch refresh + ERC-7572 signal, rank gets max_value, edition size trait
+        for (uint256 i = 0; i < 11; i++) _collect(id, bob, 1); // reserve 9.75
+        vm.expectEmit(true, true, true, true, address(nft));
+        emit MomentNFT.BatchMetadataUpdate(1, 14);
+        vm.expectEmit(true, true, true, true, address(nft));
+        emit MomentNFT.ContractURIUpdated();
+        _collect(id, carol, 1); // terminal: graduates and closes at 14 editions
+        assertTrue(nft.closed());
+        json = _decode(nft.tokenURI(2));
+        assertEq(vm.parseJsonUint(json, ".attributes[0].max_value"), 14);
+        assertEq(vm.parseJsonString(json, ".attributes[5].trait_type"), "Edition size");
+        assertEq(vm.parseJsonUint(json, ".attributes[5].value"), 14);
+        assertTrue(_contains(json, "Edition #2 of 14."));
+        // freely transferable, and marketplaces operate through standard approvals
+        vm.prank(alice);
+        nft.setApprovalForAll(bob, true);
+        vm.prank(bob);
+        nft.safeTransferFrom(alice, carol, 1);
+        assertEq(nft.ownerOf(1), carol);
+    }
+
+    function _decode(string memory uri) internal pure returns (string memory) {
+        bytes memory raw = bytes(uri);
+        return string(_b64decode(_slice(raw, 29, raw.length - 29)));
     }
 
     // ---- helpers ----

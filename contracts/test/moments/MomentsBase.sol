@@ -25,6 +25,7 @@ abstract contract MomentsBase is Test {
     uint16 internal constant RESERVE_BPS = 7_500;
     uint16 internal constant MAX_ALLOC_BPS = 1_000;
     uint16 internal constant EXPIRY_CREATOR_BPS = 7_000; // creator may claim 70% of an expired reserve (rest -> treasury)
+    uint16 internal constant ROYALTY_BPS = 500; // ERC-2981 creator royalty suggested to marketplaces
     uint32 internal constant WINDOW = 30 days; // default (maximum) collect window
 
     MockUSDC internal usdc;
@@ -77,6 +78,7 @@ abstract contract MomentsBase is Test {
             reserveBps: RESERVE_BPS,
             maxCreatorAllocBps: MAX_ALLOC_BPS,
             expiryCreatorBps: EXPIRY_CREATOR_BPS,
+            royaltyBps: ROYALTY_BPS,
             platform: platform,
             treasury: treasury
         });
@@ -90,7 +92,7 @@ abstract contract MomentsBase is Test {
         return MomentsFactory.PublishParams({
             name: "Sunrise over Labadi",
             symbol: "LABADI",
-            provenance: MomentTypes.Provenance({mediaURI: "ipfs://bafy-labadi", mediaHash: keccak256("labadi.jpg"), place: "Labadi Beach, Accra", date: 1_779_900_000}),
+            provenance: MomentTypes.Provenance({mediaURI: "ipfs://bafy-labadi", mediaHash: keccak256("labadi.jpg"), place: "Labadi Beach, Accra", date: 1_779_900_000, animationURI: ""}),
             price: price,
             creatorAllocBps: allocBps,
             collectWindow: window,

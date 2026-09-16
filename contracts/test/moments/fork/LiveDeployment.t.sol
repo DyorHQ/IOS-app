@@ -75,7 +75,7 @@ contract LiveDeploymentTest is MomentsForkBase {
         assertEq(factory.buyback(), address(buyback));
         assertFalse(factory.publishingPaused());
         assertEq(factory.pendingPolicyAt(), 0);
-        (uint256 threshold, uint256 minPrice, uint16 cBps, uint16 pBps, uint16 rBps, uint16 maxAlloc, uint16 expBps, address plat, address treas) = factory.policy();
+        (uint256 threshold, uint256 minPrice, uint16 cBps, uint16 pBps, uint16 rBps, uint16 maxAlloc, uint16 expBps, uint16 royBps, address plat, address treas) = factory.policy();
         assertEq(threshold, 10_000_000);
         assertEq(minPrice, 100_000);
         assertEq(cBps, 2_000);
@@ -83,6 +83,9 @@ contract LiveDeploymentTest is MomentsForkBase {
         assertEq(rBps, 7_500);
         assertEq(maxAlloc, 1_000);
         assertEq(expBps, 7_000);
+        assertEq(royBps, 500, "v1.1: ERC-2981 creator royalty policy");
+        assertEq(factory.MIN_THRESHOLD(), 1_000_000, "v1.1 policy floors");
+        assertEq(factory.MIN_MIN_PRICE(), 10_000);
         assertEq(plat, livePlatform);
         assertEq(plat, 0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48);
         assertEq(treas, liveTreasury);

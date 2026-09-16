@@ -6,13 +6,13 @@ Live on Monad mainnet (chain 143), deployed by the owner, recorded in `contracts
 
 | contract | address |
 |---|---|
-| factory | `0x47D989a54232D3bCdB7A7760D10E596647D986BA` |
-| collect | `0x582E63927Ef364b3737c5F4861517C2C99a8B784` |
-| vesting | `0xB58894e56737cd21e8dD70B9cc69e89D2AAe2466` |
-| graduation | `0xC626493540d9eA868b58cBe912E027d4236e5B6F` |
-| locker | `0x125a957360DE495600a1872E19C72823f329b68c` |
+| factory | `0x64698c7702d85F87f43a6dFF7D495CDD2327C020` |
+| collect | `0xb4EE9e67d9e1772BC6949748e3755EA7C1DFE32c` |
+| vesting | `0x360E2068eAEc5b5A9AF60A7c4059Bd4b30B7209C` |
+| graduation | `0x307De00950F039969855eFb859A6088d695e76b1` |
+| locker | `0x832851A42Bf1FD1aF7a19c82cF132290c605E406` |
 | hook | `0x54E83342f4910853A8B1630654754Eb49123e0cC` (permission bits `0x20cc`) |
-| buyback | `0xaB5A89779F451d812855206833d8fbe7873f00C8` |
+| buyback | `0x03282D5421a3bE3ff79c5962819c9a6e5E0b52d2` |
 
 Governance = the deployer `0xCf7A…7e10` (nothing pending); platform `0xf4D4…Cfb48`; treasury `0x5282…f045`.
 
@@ -26,9 +26,9 @@ money into these contracts before those, and the owner wallet should never be th
 
 ## Redeploy v1.1 (owner action, pending)
 
-The v1 set above stays on-chain but will be paused; the app (Phase 5) wires to the v1.1 set. v1.1 = branch commit
-`ac33952`: v1 + constructor zero-address checks, NFT metadata JSON escaping, policy floors (threshold ≥ 1 USDC,
-min price ≥ $0.01). Full suite green on that commit (106 tests). The v1 record is archived as
+The v1 set above stays on-chain but will be paused; the app (Phase 5) wires to the v1.1 set. v1.1 = branch HEAD: v1 + constructor zero-address checks, NFT metadata JSON escaping, policy floors (threshold ≥ 1 USDC,
+min price ≥ $0.01) and the marketplace standards on the NFT (ERC-2981 5% creator royalty via policy `ROYALTY_BPS`,
+ERC-4906, ERC-7572 `contractURI`, `owner()` convention, `animation_url`, `external_url`). Full suite green (106 tests). The v1 record is archived as
 `contracts/deployments/moments-143-v1.json`; the script overwrites `moments-143.json` with the v1.1 addresses.
 
 Dry run as the owner address (nonce 67) predicted these addresses — they hold only if the deployment transactions
@@ -42,7 +42,7 @@ are the owner wallet's next eight transactions, in order; otherwise the recorded
 | locker | `0x832851A42Bf1FD1aF7a19c82cF132290c605E406` |
 | graduation | `0x307De00950F039969855eFb859A6088d695e76b1` |
 | buyback | `0x03282D5421a3bE3ff79c5962819c9a6e5E0b52d2` |
-| hook | `0x7987611588FDEdf0753176Aa8036206c26C560CC` (salt `0x2bd`, bits `0x20cc`) |
+| hook | `0x8Aa322471Bef2996D3B50cB12F63C6A0054460Cc` (salt `0x11a2b`, bits `0x20cc`) |
 
 Estimated cost from the simulation: about 22.9M gas (≈ 4.6 MON at the 202 gwei quoted at the time). Governance,
 platform and treasury are unchanged (`0xCf7A…7e10`, `0xf4D4…Cfb48`, `0x5282…f045`); nothing is pending.

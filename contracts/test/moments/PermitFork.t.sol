@@ -35,14 +35,14 @@ contract PermitForkTest is Test {
 
     function setUp() public {
         vm.createSelectFork("monad");
-        factory = new MomentsFactory(gov, MomentTypes.Policy({threshold: 10_000_000, minPrice: 100_000, creatorBps: 2_000, platformBps: 500, reserveBps: 7_500, maxCreatorAllocBps: 1_000, expiryCreatorBps: 7_000, platform: makeAddr("platform"), treasury: makeAddr("treasury")}));
+        factory = new MomentsFactory(gov, MomentTypes.Policy({threshold: 10_000_000, minPrice: 100_000, creatorBps: 2_000, platformBps: 500, reserveBps: 7_500, maxCreatorAllocBps: 1_000, expiryCreatorBps: 7_000, royaltyBps: 500, platform: makeAddr("platform"), treasury: makeAddr("treasury")}));
         vesting = new MomentVesting(factory);
         collect = new MomentCollect(IERC20(USDC), IPermit2(PERMIT2), factory, vesting);
         graduation = new MockGraduation(factory, collect, vesting);
         vm.prank(gov);
         factory.setModules(address(collect), address(vesting), address(graduation), makeAddr("locker"), makeAddr("hook"), makeAddr("buyback"));
         vm.prank(makeAddr("creator"));
-        (id,,) = factory.publish(MomentsFactory.PublishParams({name: "Fork Moment", symbol: "FORK", provenance: MomentTypes.Provenance("ipfs://x", keccak256("x"), "Accra", 1_780_000_000), price: 1_000_000, creatorAllocBps: 1_000, collectWindow: 30 days, salt: bytes32(0)}));
+        (id,,) = factory.publish(MomentsFactory.PublishParams({name: "Fork Moment", symbol: "FORK", provenance: MomentTypes.Provenance("ipfs://x", keccak256("x"), "Accra", 1_780_000_000, ""), price: 1_000_000, creatorAllocBps: 1_000, collectWindow: 30 days, salt: bytes32(0)}));
         deal(USDC, alice, 100_000_000); // $100
         vm.prank(alice);
         IERC20(USDC).approve(PERMIT2, type(uint256).max);

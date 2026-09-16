@@ -46,13 +46,15 @@ contract ConstructorsTest is MomentsMarketBase {
         new MomentCoin(1, "n", "s", address(0), address(1));
         vm.expectRevert(MomentCoin.ZeroAddress.selector);
         new MomentCoin(1, "n", "s", address(1), address(0));
-        MomentTypes.Provenance memory prov = MomentTypes.Provenance("ipfs://x", keccak256("x"), "Accra", 1);
+        MomentTypes.Provenance memory prov = MomentTypes.Provenance("ipfs://x", keccak256("x"), "Accra", 1, "");
         vm.expectRevert(MomentNFT.ZeroAddress.selector);
-        new MomentNFT(1, "n", "s", address(0), address(1), address(2), prov);
+        new MomentNFT(1, "n", "s", address(0), address(1), address(2), 500, prov);
         vm.expectRevert(MomentNFT.ZeroAddress.selector);
-        new MomentNFT(1, "n", "s", address(1), address(0), address(2), prov);
+        new MomentNFT(1, "n", "s", address(1), address(0), address(2), 500, prov);
         vm.expectRevert(MomentNFT.ZeroAddress.selector);
-        new MomentNFT(1, "n", "s", address(1), address(2), address(0), prov);
+        new MomentNFT(1, "n", "s", address(1), address(2), address(0), 500, prov);
+        vm.expectRevert(MomentNFT.BadRoyalty.selector);
+        new MomentNFT(1, "n", "s", address(1), address(2), address(3), 1_001, prov);
     }
 
     function test_policy_floors() public {

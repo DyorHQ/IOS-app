@@ -13,6 +13,8 @@ library MomentTypes {
     uint256 internal constant MAX_BATCH = 20;
     /// @dev Hard cap on the creator's coin allocation (10%), regardless of policy.
     uint16 internal constant MAX_CREATOR_ALLOC_BPS = 1_000;
+    /// @dev Hard cap on the ERC-2981 creator royalty a policy may set (10%).
+    uint16 internal constant MAX_ROYALTY_BPS = 1_000;
     /// @dev Bounds on the creator-chosen collect window. Collecting ends at graduation or at the deadline.
     uint32 internal constant MIN_COLLECT_WINDOW = 1 hours;
     uint32 internal constant MAX_COLLECT_WINDOW = 30 days;
@@ -36,6 +38,7 @@ library MomentTypes {
         uint16 reserveBps; // share of each collect that accrues to the pool reserve
         uint16 maxCreatorAllocBps; // cap on the creator's coin allocation
         uint16 expiryCreatorBps; // share of an EXPIRED Moment's reserve the creator may claim (rest -> treasury)
+        uint16 royaltyBps; // ERC-2981 creator royalty suggested to marketplaces for new Moments' NFTs
         address platform; // platform beneficiary for new Moments
         address treasury; // wind-down beneficiary for new Moments
     }
@@ -56,6 +59,7 @@ library MomentTypes {
         uint16 reserveBps;
         uint16 creatorAllocBps; // creator coin allocation, <= maxCreatorAllocBps
         uint16 expiryCreatorBps;
+        uint16 royaltyBps;
         uint64 publishedAt;
         uint64 deadline; // collecting is possible strictly before this timestamp
     }
@@ -65,12 +69,14 @@ library MomentTypes {
         bytes32 mediaHash; // hash of the media bytes
         string place;
         uint64 date; // unix timestamp of the moment
+        string animationURI; // optional content-addressed video/animation (marketplace `animation_url`)
     }
 }
 
 interface IMomentsFactory {
     function getMoment(uint256 momentId) external view returns (MomentTypes.Moment memory);
     function momentIdByCoin(address coin) external view returns (uint256);
+    function externalBaseURI() external view returns (string memory);
     function momentCount() external view returns (uint256);
     function collect() external view returns (address);
     function vesting() external view returns (address);
