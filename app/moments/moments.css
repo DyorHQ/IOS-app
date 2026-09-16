@@ -1,0 +1,39 @@
+/* Moments pages reuse the launchpad's design system (launchpad.css); these are the additions. */
+.moment-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 18px; }
+.moment-card { padding: 0; overflow: hidden; }
+.moment-card .media, .moment-media { position: relative; aspect-ratio: 4 / 3; background: var(--panel-2, rgba(127,127,127,.12)); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.moment-card .media img, .moment-media img, .moment-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.moment-media.hero { aspect-ratio: 16 / 10; border-radius: 22px; }
+.moment-media .placeholder { font-size: 44px; opacity: .5; }
+.moment-card .body { padding: 14px 16px 16px; }
+.moment-card h3 { margin: 0 0 4px; display: flex; gap: 8px; align-items: baseline; }
+.moment-card h3 .ticker { font-size: 12px; opacity: .7; }
+.moment-card p.place { margin: 0 0 10px; font-size: 13px; opacity: .75; }
+.moment-card .launch-stats { margin-top: 12px; }
+.label-early { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; background: rgba(255, 170, 0, .14); color: #b06a00; border: 1px solid rgba(255,170,0,.35); }
+:root[data-theme="dark"] .label-early, .dark .label-early { color: #ffc966; }
+.disclosure-box { border: 1px solid rgba(255, 90, 90, .35); background: rgba(255, 90, 90, .08); border-radius: 16px; padding: 14px 16px; font-size: 13px; line-height: 1.5; }
+.disclosure-box b { display: block; margin-bottom: 6px; }
+.disclosure-box ul { margin: 6px 0 0; padding-left: 18px; }
+.disclosure-box label { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; font-weight: 600; cursor: pointer; }
+.qty { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; }
+.qty button { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line, rgba(127,127,127,.3)); background: transparent; font-size: 20px; cursor: pointer; }
+.qty input { width: 70px; text-align: center; font-size: 20px; font-weight: 700; padding: 8px; border-radius: 12px; border: 1px solid var(--line, rgba(127,127,127,.3)); background: transparent; }
+.holders { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.holders .stat b { display: block; font-size: 20px; }
+.holders .stat span { font-size: 12px; opacity: .7; }
+.nft-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.nft-strip span { font-size: 12px; padding: 4px 8px; border-radius: 8px; background: rgba(127,127,127,.12); font-weight: 600; }
+.timeline { display: grid; gap: 8px; margin-top: 8px; }
+.timeline div { display: flex; justify-content: space-between; font-size: 13px; }
+.timeline div b { font-variant-numeric: tabular-nums; }
+.vest-bar { height: 8px; border-radius: 999px; background: rgba(127,127,127,.18); overflow: hidden; margin-top: 8px; display: flex; }
+.vest-bar i { display: block; height: 100%; }
+.vest-bar .claimed { background: var(--accent-ink, #2b7cff); }
+.vest-bar .claimable { background: #22c55e; }
+.vest-bar .locked { background: rgba(127,127,127,.35); }
+.portfolio-totals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+@media (max-width: 720px) { .portfolio-totals { grid-template-columns: repeat(2, 1fr); } .holders { grid-template-columns: 1fr 1fr; } }
+.file-pick { display: flex; gap: 12px; align-items: center; }
+.file-pick .thumb { width: 84px; height: 84px; border-radius: 16px; object-fit: cover; background: rgba(127,127,127,.12); }
+.mono-sm { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }

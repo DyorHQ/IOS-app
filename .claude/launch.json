@@ -4,9 +4,21 @@
     {
       "name": "web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "web-fork",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "NEXT_PUBLIC_MONAD_RPC=http://127.0.0.1:8545 NEXT_PUBLIC_MONAD_LOGS_RPC=http://127.0.0.1:8545 NEXT_PUBLIC_DEV_WALLET_KEY=0x57bcbb515c0a9835560414863de2a2903e4f195eb93fa071b8d0557608ee952a npm run dev -- --port 3100"
+      ],
+      "port": 3100
     }
   ]
 }

@@ -14,6 +14,11 @@ function publicEnv(read: () => string | undefined): string | undefined {
   }
 }
 
+/* Inspectors, loggers and devtools serialize component props with JSON.stringify, which throws on bigint and can
+   take a React commit down with it. viem has its own serializer, so this only makes plain JSON.stringify safe. */
+const bigintProto = BigInt.prototype as unknown as { toJSON?: () => string };
+if (typeof bigintProto.toJSON !== "function") bigintProto.toJSON = function toJSON(this: bigint) { return this.toString(); };
+
 export const chain = monad;
 export const CHAIN_ID: number = monad.id;
 export const CHAIN_HEX = `0x${monad.id.toString(16)}`;
