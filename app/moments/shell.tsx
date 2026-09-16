@@ -5,14 +5,14 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { Icon, Sprite } from "../ui/icons";
 import { setPrefs, useApplyPrefs, type Theme } from "../preview-controls";
-import { NetworkPill, WalletButton } from "./ui";
+import { NetworkPill, WalletButton } from "../launchpad/ui";
 import { Wordmark } from "../ui/wordmark";
 import "../lib/dev-wallet";
 
 const NEXT_THEME: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
 const THEME_ICON = { system: "settings", light: "sun", dark: "moon" } as const;
 
-export default function Shell({ children }: { children: ReactNode }) {
+export default function MomentsShell({ children }: { children: ReactNode }) {
   const { prefs } = useApplyPrefs();
   const pathname = usePathname();
   const current = (href: string, exact = false) => ((exact ? pathname === href : pathname.startsWith(href)) ? "page" : undefined);
@@ -21,13 +21,13 @@ export default function Shell({ children }: { children: ReactNode }) {
       <Sprite />
       <header className="site-head">
         <div className="bar glass">
-          <Link href="/launchpad" className="brand" aria-label="DyorHQ launchpad"><Wordmark /></Link>
-          <nav className="site-nav" aria-label="Launchpad">
-            <Link href="/launchpad" aria-current={current("/launchpad", true)}>Explore</Link>
-            <Link href="/launchpad/create" aria-current={current("/launchpad/create")}>Create</Link>
-            <Link href="/moments">Moments</Link>
+          <Link href="/moments" className="brand" aria-label="DyorHQ Moments"><Wordmark /></Link>
+          <nav className="site-nav" aria-label="Moments">
+            <Link href="/moments" aria-current={current("/moments", true)}>Moments</Link>
+            <Link href="/moments/create" aria-current={current("/moments/create")}>Publish</Link>
+            <Link href="/moments/portfolio" aria-current={current("/moments/portfolio")}>Portfolio</Link>
             <Link href="/swap" aria-current={current("/swap")}>Swap</Link>
-            <Link href="/">App preview</Link>
+            <Link href="/launchpad">Launchpad</Link>
           </nav>
           <span className="spacer" />
           <NetworkPill />
@@ -38,7 +38,7 @@ export default function Shell({ children }: { children: ReactNode }) {
         </div>
       </header>
       <main className="wrap">{children}</main>
-      <footer className="site-foot">DyorHQ Launchpad on Monad · bonding curves that graduate into Uniswap v4 pools with permanently locked liquidity · <a href="https://monadscan.com" target="_blank" rel="noreferrer">Monadscan</a></footer>
+      <footer className="site-foot">DyorHQ Moments on Monad · collect a moment, own its edition, share its coin · early, low-cap, validation-stage assets · <a href="https://monadscan.com" target="_blank" rel="noreferrer">Monadscan</a></footer>
     </div>
   );
 }

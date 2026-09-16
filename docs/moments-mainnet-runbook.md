@@ -100,6 +100,31 @@ first; that remains the owner's decision.
 `anvil --fork-url monad` (guarded by `FORK_REHEARSAL=1`, exact approvals, anvil's throwaway keys). It is not a
 mainnet procedure.
 
+## Phase 5 — the web app (`app/moments`)
+
+Routes: `/moments` (explore), `/moments/create` (publish), `/moments/:id` (detail: collect, state, position, creator
+pulls, holders), `/moments/portfolio` (pending / claimable / vesting / claimed, `claimAll`). Graduated coins trade on
+`/swap` through their hooked pool (route label "moments 1.5%"). Reads are multicalls against
+`app/lib/moments-deployment.json` (written by `npm run sync:moments`; ABIs by `npm run abis`); every write is
+simulated first. Collects pay through a Permit2 signature (Permit2 approved once) or an exact approval of the collect
+contract. Containment: every card and page carries "Early · low-cap · validation", the holder panel shows coin
+holders + largest-wallet share + pool share (rebuilt from Transfer logs; no indexer yet) and edition holders, the
+pre-collect disclosure must be acknowledged, and nothing anywhere says "proven demand".
+
+Rehearsal against a mainnet fork (the v1.1 contracts already exist in the forked state; anvil's default keys are
+7702-delegated on Monad, so the scripts use fresh throwaway keys):
+
+```bash
+~/.foundry/bin/anvil --fork-url https://rpc.monad.xyz --chain-id 143 --port 8545
+```
+
+```bash
+cd /Users/jerry/Hackathon-moments && node scripts/dev/seed-moments-fork.mjs
+```
+
+Then start the `web-fork` dev server from `.claude/launch.json` (RPC and log RPC on the fork, the seed's wallet 1 as
+an in-page EIP-6963 wallet via `NEXT_PUBLIC_DEV_WALLET_KEY`, dev builds only) and open http://localhost:3100/moments.
+
 ## 4. What to expect (reconciled against economics.py and the fork runs)
 
 | step | expected on-chain figure |

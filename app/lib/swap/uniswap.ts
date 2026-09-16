@@ -1,6 +1,8 @@
 import { encodeAbiParameters, encodeFunctionData, encodePacked, keccak256, type Address, type Hex } from "viem";
 import { ADDRESSES, DEPLOYED, publicClient } from "../chain";
 import { LaunchpadFactoryAbi } from "../abi";
+import { MomentGraduationAbi, MomentsFactoryAbi } from "../moments-abi";
+import { MOMENTS, MOMENTS_DEPLOYED } from "../moments/config";
 import { bpsToPct } from "../format";
 import { quoterV2Abi, stateViewAbi, swapRouter02Abi, universalRouterAbi, v3FactoryAbi, v3PoolAbi, v4QuoterAbi } from "./abis";
 import { HOP_TOKENS, NATIVE, SWAP_DEADLINE_SECONDS, UNISWAP, WMON } from "./config";
@@ -129,6 +131,24 @@ async function launchpadKeys(tokens: Address[]): Promise<Map<string, { token: Ad
   return keys;
 }
 
+/** Graduated Moments coins trade in a hooked coin/USDC pool registered by the Moments graduation executor. */
+async function momentsKeys(tokens: Address[]): Promise<Map<string, { token: Address; key: PoolKey }>> {
+  const keys = new Map<string, { token: Address; key: PoolKey }>();
+  if (!MOMENTS_DEPLOYED) return keys;
+  const candidates = tokens.filter((t) => !isNative(t) && !sameToken(t, WMON) && !sameToken(t, MOMENTS.usdc));
+  if (candidates.length === 0) return keys;
+  const factory = { address: MOMENTS.factory, abi: MomentsFactoryAbi } as const;
+  const ids = await publicClient.multicall({ contracts: candidates.map((t) => ({ ...factory, functionName: "momentIdByCoin", args: [t] }) as const), allowFailure: true });
+  const known = candidates.map((t, i) => ({ t, id: ids[i].status === "success" ? (ids[i].result as bigint) : 0n })).filter((x) => x.id > 0n);
+  if (known.length === 0) return keys;
+  const graduation = { address: MOMENTS.graduation, abi: MomentGraduationAbi } as const;
+  const poolKeys = await publicClient.multicall({ contracts: known.map((x) => ({ ...graduation, functionName: "poolKeyOf", args: [x.id] }) as const), allowFailure: true });
+  known.forEach((x, i) => {
+    if (poolKeys[i].status === "success") keys.set(x.t.toLowerCase(), { token: x.t, key: { ...(poolKeys[i].result as PoolKey) } });
+  });
+  return keys;
+}
+
 function hopFor(key: PoolKey, from: Address): V4Hop | null {
   if (sameToken(key.currency0, from)) return { key, zeroForOne: true };
   if (sameToken(key.currency1, from)) return { key, zeroForOne: false };
@@ -143,10 +163,17 @@ async function v4Routes(cIn: Address, cOut: Address): Promise<V4Hop[][]> {
     return UNISWAP.v4Tiers.map((t) => ({ currency0: c0, currency1: c1, fee: t.fee, tickSpacing: t.tickSpacing, hooks: ZERO }));
   };
   const viaNative = !isNative(cIn) && !isNative(cOut);
-  const probe: PoolKey[] = [...canonical(cIn, cOut), ...(viaNative ? [...canonical(cIn, NATIVE), ...canonical(NATIVE, cOut)] : [])];
-  const [liquidity, launchKeys] = await Promise.all([
+  const usdc = MOMENTS.usdc;
+  const viaUsdc = !sameToken(cIn, usdc) && !sameToken(cOut, usdc);
+  const probe: PoolKey[] = [
+    ...canonical(cIn, cOut),
+    ...(viaNative ? [...canonical(cIn, NATIVE), ...canonical(NATIVE, cOut)] : [...canonical(cIn, cOut), ...canonical(cIn, cOut)]),
+    ...(viaUsdc ? [...canonical(cIn, usdc), ...canonical(usdc, cOut)] : [...canonical(cIn, cOut), ...canonical(cIn, cOut)]),
+  ];
+  const [liquidity, launchKeys, momentKeys] = await Promise.all([
     publicClient.multicall({ contracts: probe.map((key) => ({ address: UNISWAP.stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [poolId(key)] }) as const), allowFailure: true }),
     launchpadKeys([cIn, cOut]),
+    momentsKeys([cIn, cOut]),
   ]);
   const alive = (key: PoolKey, i: number) => liquidity[i].status === "success" && (liquidity[i].result as bigint) > 0n;
   const direct = probe.slice(0, 4).filter(alive);
@@ -165,6 +192,18 @@ async function v4Routes(cIn: Address, cOut: Address): Promise<V4Hop[][]> {
     } else if (sameToken(cIn, token)) {
       if (sameToken(cOut, quote)) routes.push([hopFor(key, cIn)!]);
       else if (isNative(quote)) for (const b of probe.slice(8, 12).filter((k, i) => alive(k, i + 8))) routes.push([hopFor(key, cIn)!, hopFor(b, NATIVE)!]);
+    }
+  }
+  // Moments pools pair a coin with USDC; reach them directly or through a canonical USDC pool.
+  const usdcLeg1 = viaUsdc ? probe.slice(12, 16).filter((k, i) => alive(k, i + 12)) : [];
+  const usdcLeg2 = viaUsdc ? probe.slice(16, 20).filter((k, i) => alive(k, i + 16)) : [];
+  for (const { token, key } of momentKeys.values()) {
+    if (sameToken(cOut, token)) {
+      if (sameToken(cIn, usdc)) routes.push([hopFor(key, cIn)!]);
+      else for (const a of usdcLeg1) routes.push([hopFor(a, cIn)!, hopFor(key, usdc)!]);
+    } else if (sameToken(cIn, token)) {
+      if (sameToken(cOut, usdc)) routes.push([hopFor(key, cIn)!]);
+      else for (const b of usdcLeg2) routes.push([hopFor(key, cIn)!, hopFor(b, usdc)!]);
     }
   }
   return routes.filter((r) => r.every(Boolean));
@@ -200,7 +239,7 @@ async function bestV4(cIn: Address, cOut: Address, amountIn: bigint): Promise<V4
 function describeV4(hops: V4Hop[], cIn: Address, symbols: { in: string; out: string }) {
   const names = [symbols.in];
   hops.forEach((h, i) => names.push(i === hops.length - 1 ? symbols.out : isNative(otherSide(h)) ? "MON" : "…"));
-  const fees = hops.map((h) => (h.key.hooks === ZERO ? feeLabel(h.key.fee) : "launchpad")).join(" + ");
+  const fees = hops.map((h) => (h.key.hooks === ZERO ? feeLabel(h.key.fee) : sameToken(h.key.hooks, MOMENTS.hook) ? "moments 1.5%" : "launchpad")).join(" + ");
   return `v4 · ${names.join(" → ")} · ${fees}`;
 }
 

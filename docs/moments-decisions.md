@@ -102,3 +102,15 @@ contract that implements it so a reviewer can check the code against the ruling.
     video Moments (`Provenance.animationURI`) and `external_url` / `external_link` built from a governance-set,
     metadata-only `externalBaseURI` on the factory. Transfers were never restricted. These land with the v1.1
     redeploy (the factory embeds the NFT creation code).
+
+## Phase 5 — 2026-09-16
+
+16. **Web app choices.** (a) Coin holder statistics are rebuilt client-side from Transfer logs on a wide-range RPC
+    (`NEXT_PUBLIC_MONAD_LOGS_RPC`, default rpc1.monad.xyz) with per-coin incremental caching; a Supabase indexer can
+    replace `app/lib/moments/holders.ts` later without touching the UI. (b) Media is fingerprinted in the browser
+    (keccak-256 of the chosen file) and the hosted copy is a link the creator supplies (ipfs:// or https://); no
+    upload service is wired yet, so without a file the link itself is hashed. (c) Collects default to a Permit2
+    signature (Permit2 approved once, the canonical pattern); an exact-approval path is offered. (d) The trading fee
+    is presented as 1.5% everywhere (0.5% pool + 1% hook) per ruling 12. (e) A dev-only in-page wallet
+    (`app/lib/dev-wallet.ts`) exists solely for fork rehearsals; it is inert unless `NEXT_PUBLIC_DEV_WALLET_KEY` is
+    set at build time and must never be set for production builds.

@@ -14,7 +14,8 @@
     "db:generate": "drizzle-kit generate",
     "abis": "node scripts/export-abis.mjs",
     "sync:deployment": "node scripts/sync-deployment.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sync:moments": "node scripts/sync-moments-deployment.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
