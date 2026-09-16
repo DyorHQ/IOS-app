@@ -1,0 +1,184 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {MomentTypes, IMomentsFactory} from "./interfaces/IMoments.sol";
+import {MomentCoin} from "./MomentCoin.sol";
+import {MomentNFT} from "./MomentNFT.sol";
+
+/// @notice Publishes Moments and keeps the registry. Each Moment's economics (price, threshold, split, creator
+///         allocation, bundle rate) are snapshotted into an immutable record at publish — there is no function
+///         that can change a live Moment. Policy edits only affect Moments published after a 48h timelock.
+///         The factory never holds USDC or coins; it has no money path at all.
+contract MomentsFactory is IMomentsFactory {
+    uint256 public constant POLICY_DELAY = 48 hours;
+
+    address public governance;
+    address public pendingGovernance;
+
+    address public collect;
+    address public vesting;
+    address public graduation;
+    bool public modulesSet;
+
+    MomentTypes.Policy public policy;
+    MomentTypes.Policy public pendingPolicy;
+    uint64 public pendingPolicyAt; // earliest time the pending policy may be applied (0 = none)
+
+    bool public publishingPaused;
+    uint256 public momentCount; // ids are 1-based
+    mapping(uint256 => MomentTypes.Moment) private _moments;
+
+    struct PublishParams {
+        string name;
+        string symbol;
+        MomentTypes.Provenance provenance;
+        uint256 price; // USDC (6 dp), >= policy.minPrice
+        uint16 creatorAllocBps; // <= policy.maxCreatorAllocBps
+        bytes32 salt;
+    }
+
+    event GovernanceTransferStarted(address indexed from, address indexed to);
+    event GovernanceTransferred(address indexed from, address indexed to);
+    event ModulesSet(address collect, address vesting, address graduation);
+    event PolicyProposed(MomentTypes.Policy policy, uint64 applicableAt);
+    event PolicyApplied(MomentTypes.Policy policy);
+    event PolicyCancelled();
+    event PublishingPaused(bool paused);
+    event Published(uint256 indexed momentId, address indexed creator, address coin, address nft, uint256 price, uint16 creatorAllocBps, uint256 rateNum, uint256 rateDen);
+
+    error NotGovernance();
+    error NotPendingGovernance();
+    error ModulesAlreadySet();
+    error ModulesNotSet();
+    error ZeroAddress();
+    error InvalidPolicy();
+    error NoPendingPolicy();
+    error TimelockNotElapsed();
+    error Paused();
+    error PriceTooLow();
+    error AllocTooHigh();
+    error UnknownMoment();
+
+    modifier onlyGovernance() {
+        if (msg.sender != governance) revert NotGovernance();
+        _;
+    }
+
+    constructor(address _governance, MomentTypes.Policy memory initial) {
+        if (_governance == address(0)) revert ZeroAddress();
+        _validate(initial);
+        governance = _governance;
+        policy = initial;
+        emit GovernanceTransferred(address(0), _governance);
+    }
+
+    // ------------------------------------------------------------------ governance
+
+    function transferGovernance(address to) external onlyGovernance {
+        pendingGovernance = to;
+        emit GovernanceTransferStarted(governance, to);
+    }
+
+    function acceptGovernance() external {
+        if (msg.sender != pendingGovernance) revert NotPendingGovernance();
+        emit GovernanceTransferred(governance, msg.sender);
+        governance = msg.sender;
+        pendingGovernance = address(0);
+    }
+
+    /// @notice Wires the modules exactly once. After this nothing about the wiring can change.
+    function setModules(address _collect, address _vesting, address _graduation) external onlyGovernance {
+        if (modulesSet) revert ModulesAlreadySet();
+        if (_collect == address(0) || _vesting == address(0) || _graduation == address(0)) revert ZeroAddress();
+        collect = _collect;
+        vesting = _vesting;
+        graduation = _graduation;
+        modulesSet = true;
+        emit ModulesSet(_collect, _vesting, _graduation);
+    }
+
+    /// @notice Queues a policy for FUTURE Moments (threshold, split, min price, alloc cap, platform address).
+    function proposePolicy(MomentTypes.Policy calldata next) external onlyGovernance {
+        _validate(next);
+        pendingPolicy = next;
+        pendingPolicyAt = uint64(block.timestamp + POLICY_DELAY);
+        emit PolicyProposed(next, pendingPolicyAt);
+    }
+
+    function applyPolicy() external {
+        if (pendingPolicyAt == 0) revert NoPendingPolicy();
+        if (block.timestamp < pendingPolicyAt) revert TimelockNotElapsed();
+        policy = pendingPolicy;
+        delete pendingPolicy;
+        pendingPolicyAt = 0;
+        emit PolicyApplied(policy);
+    }
+
+    function cancelPolicy() external onlyGovernance {
+        delete pendingPolicy;
+        pendingPolicyAt = 0;
+        emit PolicyCancelled();
+    }
+
+    function setPublishingPaused(bool paused) external onlyGovernance {
+        publishingPaused = paused;
+        emit PublishingPaused(paused);
+    }
+
+    // ------------------------------------------------------------------ publishing
+
+    /// @notice Publishes a Moment: deploys its coin + NFT (CREATE2) and freezes its economics.
+    function publish(PublishParams calldata p) external returns (uint256 momentId, address coin, address nft) {
+        if (!modulesSet) revert ModulesNotSet();
+        if (publishingPaused) revert Paused();
+        MomentTypes.Policy memory pol = policy;
+        if (p.price < pol.minPrice) revert PriceTooLow();
+        if (p.creatorAllocBps > pol.maxCreatorAllocBps) revert AllocTooHigh();
+
+        momentId = ++momentCount;
+        bytes32 salt = keccak256(abi.encode(momentId, msg.sender, p.salt));
+        coin = address(new MomentCoin{salt: salt}(momentId, p.name, p.symbol, vesting, graduation));
+        nft = address(new MomentNFT{salt: salt}(momentId, p.name, p.symbol, msg.sender, collect, graduation, p.provenance));
+        (uint256 rateNum, uint256 rateDen) = bundleRate(pol.threshold, pol.reserveBps, p.creatorAllocBps);
+
+        _moments[momentId] = MomentTypes.Moment({
+            creator: msg.sender,
+            platform: pol.platform,
+            coin: coin,
+            nft: nft,
+            price: p.price,
+            threshold: pol.threshold,
+            rateNum: rateNum,
+            rateDen: rateDen,
+            creatorBps: pol.creatorBps,
+            platformBps: pol.platformBps,
+            reserveBps: pol.reserveBps,
+            creatorAllocBps: p.creatorAllocBps,
+            publishedAt: uint64(block.timestamp)
+        });
+        emit Published(momentId, msg.sender, coin, nft, p.price, p.creatorAllocBps, rateNum, rateDen);
+    }
+
+    /// @notice The price-continuous bundle rate, as an exact fraction of coin wei per USDC unit:
+    ///         rate = S·(1−alloc) / (threshold/reserveFrac + threshold)
+    ///              = S·(BPS−allocBps)·reserveBps / (BPS·threshold·(BPS+reserveBps)).
+    ///         Deriving it from the ACTUAL creator allocation is what routes an un-taken allocation into the pool.
+    function bundleRate(uint256 threshold, uint16 reserveBps, uint16 creatorAllocBps) public pure returns (uint256 num, uint256 den) {
+        num = MomentTypes.SUPPLY * (MomentTypes.BPS - creatorAllocBps) * reserveBps;
+        den = MomentTypes.BPS * threshold * (MomentTypes.BPS + reserveBps);
+    }
+
+    // ------------------------------------------------------------------ views
+
+    function getMoment(uint256 momentId) external view returns (MomentTypes.Moment memory m) {
+        m = _moments[momentId];
+        if (m.coin == address(0)) revert UnknownMoment();
+    }
+
+    function _validate(MomentTypes.Policy memory pol) private pure {
+        if (pol.platform == address(0)) revert ZeroAddress();
+        if (pol.threshold == 0 || pol.minPrice == 0 || pol.reserveBps == 0) revert InvalidPolicy();
+        if (uint256(pol.creatorBps) + pol.platformBps + pol.reserveBps != MomentTypes.BPS) revert InvalidPolicy();
+        if (pol.maxCreatorAllocBps > MomentTypes.MAX_CREATOR_ALLOC_BPS) revert InvalidPolicy();
+    }
+}
