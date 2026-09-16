@@ -15,9 +15,10 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "v4-cor
 import {MomentTypes, IMomentsFactory} from "./interfaces/IMoments.sol";
 import {IMomentFeeHook} from "./interfaces/IMomentsMarket.sol";
 
-/// @notice Singleton v4 hook for every graduated Moment pool. Pools carry a zero LP fee; the hook charges 1% of
-///         the USDC side of every swap instead — off the USDC spent on buys, off the USDC received on sells,
-///         whichever leg is USDC — and splits it 0.2% creator / 0.3% platform / 0.5% buyback. Fees are held
+/// @notice Singleton v4 hook for every graduated Moment pool. On top of the pool's own 0.5% LP fee (which accrues
+///         to the locked position), the hook charges 1% of the USDC side of every swap — off the USDC spent on
+///         buys, off the USDC received on sells, whichever leg is USDC — and splits it 0.2% creator / 0.3% platform
+///         / 0.5% buyback. Fees are held
 ///         here in USDC and are pull-only by the Moment's immutable creator and platform; the buyback share can
 ///         only be pulled by the buyback module. Only the graduation executor can initialize a registered pool,
 ///         and the hook refuses to serve unregistered pools, so nobody can front-run graduation with a mispriced

@@ -15,8 +15,9 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 
 /// @notice Owns every Moment's full-range coin/USDC position, forever. The only liquidity operation this
 ///         contract can perform is an INCREASE funded from its own balances: `seed` (graduation executor, once)
-///         and `increase` (buyback module). There is no function that removes liquidity, no `take` to any address
-///         but itself, no token transfer except paying the PoolManager what a position add costs, and no owner.
+///         and `increase` (buyback module). The pool's LP fees accrue to this position and are folded back into
+///         it on every increase. There is no function that removes liquidity, no `take` to any address but
+///         itself, no token transfer except paying the PoolManager what a position add costs, and no owner.
 contract MomentLocker is IMomentLocker, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -70,34 +71,46 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
     }
 
     function _add(uint256 momentId, PoolKey memory key) private returns (uint128 liquidity, uint256 used0, uint256 used1) {
-        (uint160 sqrtP,,,) = poolManager.getSlot0(key.toId());
-        uint160 sqrtA = TickMath.getSqrtPriceAtTick(TickMath.minUsableTick(key.tickSpacing));
-        uint160 sqrtB = TickMath.getSqrtPriceAtTick(TickMath.maxUsableTick(key.tickSpacing));
-        liquidity = MomentPoolMath.liquidityForAmounts(sqrtP, sqrtA, sqrtB, key.currency0.balanceOfSelf(), key.currency1.balanceOfSelf());
-        if (liquidity == 0) return (0, 0, 0);
-        _positions[momentId].liquidity += liquidity; // effect before the PoolManager interaction
-        bytes memory result = poolManager.unlock(abi.encode(momentId, key, liquidity));
-        (used0, used1) = abi.decode(result, (uint256, uint256));
+        bytes memory result = poolManager.unlock(abi.encode(momentId, key));
+        (liquidity, used0, used1) = abi.decode(result, (uint128, uint256, uint256));
     }
 
-    /// @dev Only ever adds liquidity. A positive delta (LP fees, if a pool ever had a non-zero LP fee) is taken
-    ///      back into this contract — never to an external address — and re-locked on the next increase.
+    /// @dev Only ever adds liquidity. First folds the LP fees the position has earned back into this contract's
+    ///      balances (a zero-delta position update credits them; they are taken to THIS contract, never to an
+    ///      external address), then sizes the largest full-range add both balances can fund and pays for it.
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         if (msg.sender != address(poolManager)) revert NotPoolManager();
-        (uint256 momentId, PoolKey memory key, uint128 liquidity) = abi.decode(data, (uint256, PoolKey, uint128));
+        (uint256 momentId, PoolKey memory key) = abi.decode(data, (uint256, PoolKey));
+        Position storage p = _positions[momentId];
+        int24 tickLower = TickMath.minUsableTick(key.tickSpacing);
+        int24 tickUpper = TickMath.maxUsableTick(key.tickSpacing);
+        if (p.liquidity != 0) {
+            (BalanceDelta fees,) = poolManager.modifyLiquidity(
+                key, IPoolManager.ModifyLiquidityParams({tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: 0, salt: bytes32(momentId)}), ""
+            );
+            _settle(key.currency0, fees.amount0());
+            _settle(key.currency1, fees.amount1());
+        }
+        (uint160 sqrtP,,,) = poolManager.getSlot0(key.toId());
+        uint128 liquidity = MomentPoolMath.liquidityForAmounts(
+            sqrtP,
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            key.currency0.balanceOfSelf(),
+            key.currency1.balanceOfSelf()
+        );
+        if (liquidity == 0) return abi.encode(uint128(0), uint256(0), uint256(0));
+        p.liquidity += liquidity; // effect before the position update
         (BalanceDelta delta,) = poolManager.modifyLiquidity(
             key,
             IPoolManager.ModifyLiquidityParams({
-                tickLower: TickMath.minUsableTick(key.tickSpacing),
-                tickUpper: TickMath.maxUsableTick(key.tickSpacing),
-                liquidityDelta: int256(uint256(liquidity)),
-                salt: bytes32(momentId)
+                tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liquidity)), salt: bytes32(momentId)
             }),
             ""
         );
         uint256 used0 = _settle(key.currency0, delta.amount0());
         uint256 used1 = _settle(key.currency1, delta.amount1());
-        return abi.encode(used0, used1);
+        return abi.encode(liquidity, used0, used1);
     }
 
     function _settle(Currency currency, int128 amount) private returns (uint256 paid) {

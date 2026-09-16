@@ -45,3 +45,18 @@ contract that implements it so a reviewer can check the code against the ruling.
 7. **Other Phase 1 defaults confirmed at the gate:** the clamped terminal collect mints `⌈accepted/price⌉`
    editions; a vesting month is 30 days; the factory policy timelock is 48 hours; the creator's USDC share absorbs
    the ≤2-unit split rounding.
+
+## Phase 2 gate review — 2026-09-16
+
+8. **Pool LP fee ≥ 0.5%.** Every Moment pool is created with a 0.5% LP fee (`MomentGraduation.LP_FEE = 5_000`).
+   The locked full-range position is the only LP, so the fee accrues to it; `MomentLocker` folds earned fees
+   back into the position on every increase (zero-delta position update → fees taken to the locker itself →
+   re-added as principal). The hook's 1% Moments fee (0.2/0.3/0.5) is charged on top, so a trade now costs 1.5%
+   in total. Open for the owner: keep 1.5%, or drop the hook to 0.5% (0.2 creator / 0.3 platform) and let the
+   0.5% LP fee BE the buyback-and-LP share (then `MomentBuyback` can be retired).
+
+9. **Fee currency ("fees should be in MON").** Not implementable on a coin/USDC pool: a v4 hook can only charge
+   the pool's own two currencies, and a third-currency debt cannot be imposed on a swapper going through the
+   Universal Router. The options are (A) pair the coin with native MON instead of USDC — which reverses the
+   spec's "USDC only" and, for price continuity, means collecting in MON too — or (B) keep USDC. Awaiting the
+   owner's choice before Phase 3 (the fork lifecycle depends on the pair asset).

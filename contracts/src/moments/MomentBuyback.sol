@@ -19,14 +19,16 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 
 /// @notice Buyback-and-LP for the 0.5% fee share. `execute` pulls a Moment's accrued buyback USDC from the hook,
 ///         swaps roughly half of it into the coin through the pool (fee-exempt, price impact capped at 1% per
-///         call), and adds coin + USDC to the locked full-range position. USDC that the impact cap leaves
-///         unspent, or that the pairing does not need, is carried to the next round. Nothing can leave this
+///         call), and adds coin + USDC to the locked full-range position — pairing every coin the locker holds
+///         (bought or earned as LP fee) and using USDC the locker already holds first. USDC that the impact cap
+///         leaves unspent, or that the pairing does not need, is carried to the next round. Nothing can leave this
 ///         contract except into the PoolManager (paying for the swap) and into the locker; there is no owner
 ///         and no address parameter anywhere.
 ///
 ///         MEV note: the swap is permissionless but bounded to a 1% price move per call and one call per hour
-///         per Moment. A sandwich has to pay the 1% hook fee twice (2% round trip) to capture at most that 1%
-///         move, so it loses money — see test/moments/Buyback.t.sol. Callers may still pass `minCoinOut`.
+///         per Moment. A sandwich has to pay the 1% hook fee plus the 0.5% LP fee twice (3% round trip) to
+///         capture at most that 1% move, so it loses money — see test/moments/Buyback.t.sol. Callers may still
+///         pass `minCoinOut`.
 contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -90,10 +92,14 @@ contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
         r.usdcSpent = spent;
         r.coinBought = got;
 
-        // 2. Pair: send exactly the USDC the bought coin needs at the post-swap price (rounded up), carry the rest.
+        // 2. Pair: the locker adds everything it holds, so size the USDC top-up for ALL the coin it now holds
+        //    (bought + LP-fee coin already folded in) at the post-swap price, net of USDC it already holds.
         uint256 remaining = r.budget - spent;
-        uint256 needed = _usdcForCoin(key, usdcIs0, sqrtAfter, got);
-        r.usdcToPool = needed < remaining ? needed : remaining;
+        uint256 coinHeld = IERC20(Currency.unwrap(usdcIs0 ? key.currency1 : key.currency0)).balanceOf(locker);
+        uint256 usdcHeld = USDC.balanceOf(locker);
+        uint256 needed = _usdcForCoin(key, usdcIs0, sqrtAfter, coinHeld);
+        uint256 missing = needed > usdcHeld ? needed - usdcHeld : 0;
+        r.usdcToPool = missing < remaining ? missing : remaining;
         r.carried = remaining - r.usdcToPool;
         carry[momentId] = r.carried;
         if (r.usdcToPool != 0) USDC.safeTransfer(locker, r.usdcToPool);

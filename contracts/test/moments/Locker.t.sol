@@ -90,6 +90,38 @@ contract LockerTest is MomentsMarketBase {
         (PoolKey memory k, uint128 liq) = locker.positionOf(id);
         assertEq(liq, r.liquidity);
         assertEq(k.tickSpacing, executor.TICK_SPACING());
-        assertEq(k.fee, 0, "zero LP fee: the hook charges the Moments fee instead");
+        assertEq(k.fee, 5_000, "0.5% LP fee accrues to the locked position");
+    }
+
+    function test_lp_fees_compound_into_the_locked_position() public {
+        _approveCoin(coin, bob);
+        uint128 before = _lockerPositionLiquidity(id, key);
+        // round trips: the 0.5% LP fee is charged on the input of each leg (USDC on buys, coin on sells)
+        for (uint256 i = 0; i < 5; i++) {
+            uint256 c0 = coin.balanceOf(bob);
+            _buyExactIn(bob, key, true, 5_000_000);
+            _sellExactIn(bob, key, true, coin.balanceOf(bob) - c0);
+        }
+        assertEq(_lockerPositionLiquidity(id, key), before, "fees accrue as fee growth, not as liquidity, until folded");
+        uint256 pmUsdc = usdc.balanceOf(address(manager));
+        uint256 pmCoin = coin.balanceOf(address(manager));
+        uint256 lockerUsdc0 = usdc.balanceOf(address(locker));
+        uint256 lockerCoin0 = coin.balanceOf(address(locker));
+        vm.prank(address(buyback));
+        (uint128 added, uint256 used0, uint256 used1) = locker.increase(id);
+        assertGt(added, 0, "earned LP fees were folded into the position");
+        assertGt(used0, 0);
+        assertGt(used1, 0);
+        assertEq(_lockerPositionLiquidity(id, key), before + added);
+        assertEq(locker.liquidityOf(id), before + added);
+        // the fees never left {PoolManager, locker}: whatever the pairing could not use stays locked in the locker,
+        // and the limiting side is used up to integer rounding
+        assertEq(usdc.balanceOf(address(manager)) + usdc.balanceOf(address(locker)), pmUsdc + lockerUsdc0, "USDC conserved");
+        assertEq(coin.balanceOf(address(manager)) + coin.balanceOf(address(locker)), pmCoin + lockerCoin0, "coin conserved");
+        assertTrue(usdc.balanceOf(address(locker)) <= 2 || coin.balanceOf(address(locker)) <= 1e12, "one side fully paired");
+        // folding again right away finds (almost) nothing
+        vm.prank(address(buyback));
+        (uint128 again,,) = locker.increase(id);
+        assertLt(uint256(again) * 1_000, uint256(added), "second fold is dust-only");
     }
 }

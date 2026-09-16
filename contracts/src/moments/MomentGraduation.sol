@@ -27,8 +27,10 @@ contract MomentGraduation is IMomentGraduation, IMomentGraduationRegistry, Reent
 
     uint256 private constant BPS = MomentTypes.BPS;
     uint256 private constant S = MomentTypes.SUPPLY;
-    /// @dev Pools carry no LP fee; the hook charges the 1% Moments fee instead.
-    uint24 public constant LP_FEE = 0;
+    /// @dev Pool LP fee, in hundredths of a bip (1e6 = 100%): 0.5%. It accrues to the locked full-range position,
+    ///      which is the only LP, and is folded back into that position by the locker (depth grows with volume).
+    ///      The hook charges the 1% Moments fee on top.
+    uint24 public constant LP_FEE = 5_000;
     int24 public constant TICK_SPACING = 60;
 
     IPoolManager public immutable poolManager;

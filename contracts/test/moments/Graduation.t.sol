@@ -100,17 +100,20 @@ contract GraduationTest is MomentsMarketBase {
         }
     }
 
-    /// A tiny buy right after open executes at the bundle rate (minus the 1% hook fee): +0.00% price jump.
-    function test_first_market_buy_gets_the_collectors_rate_minus_fee() public {
+    /// A tiny buy right after open executes at the bundle rate (minus the 1% hook fee and the 0.5% LP fee):
+    /// +0.00% price jump at open.
+    function test_first_market_buy_gets_the_collectors_rate_minus_fees() public {
         (uint256 id, MomentCoin coin,, MomentGraduation.Record memory r) = _run(true);
         MomentTypes.Moment memory m = factory.getMoment(id);
         uint256 usdcIn = 1_000; // $0.001 -- negligible impact on a $10 pool
         uint256 before = coin.balanceOf(bob);
         _buyExactIn(bob, r.key, true, usdcIn);
         uint256 got = coin.balanceOf(bob) - before;
-        uint256 expected = FullMath.mulDiv(usdcIn * 99 / 100, m.rateNum, m.rateDen); // 990 units at the bundle rate
+        uint256 net = usdcIn * (BPS - hook.FEE_BPS()) / BPS; // 990 after the hook
+        net = net * (1_000_000 - executor.LP_FEE()) / 1_000_000; // 985 after the LP fee
+        uint256 expected = FullMath.mulDiv(net, m.rateNum, m.rateDen);
         uint256 diff = got > expected ? got - expected : expected - got;
-        assertLt(diff * 10_000, expected, "within 0.01% of the collectors' rate after the 1% fee");
+        assertLt(diff * 2_000, expected, "within 0.05% of the collectors' rate after both fees (integer + impact)");
     }
 
     function test_untaken_creator_allocation_deepens_the_pool() public {
