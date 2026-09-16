@@ -8,14 +8,17 @@ owner action each one needs. The contracts (v1.1) are live and verified; nothing
 | # | gate (spec §14) | status | evidence / what is left |
 |---|---|---|---|
 | 1 | Launchpad audit fixes (holder-reward drain + owner backdoors) | done | Launchpad redeployed 2026-09-16; Moments imports nothing from it |
-| 2 | Independent audit of the clean-room Moments contracts; critical/high resolved | **open — owner** | Hand-off package: `docs/moments-security-review-2026-09-16/REPORT.md` §7 (scope tag `moments-mainnet-v1.1`, questions for the auditor). If the audit changes code, redeploy the whole set (the factory embeds the coin + NFT creation code) and pause publishing on the superseded set, as done for v1 |
+| 2 | Independent audit of the clean-room Moments contracts; critical/high resolved | **deferred by the owner** (ruling 19): launch first, audit later | The live v1.1 code has had the Phase 4 self-review (no Critical/High found; four Lows fixed, two accepted), Slither triage, invariant and fuzz suites, and the mainnet-fork runs — but no independent audit. Hand-off package for when it happens: `docs/moments-security-review-2026-09-16/REPORT.md` §7 (scope tag `moments-mainnet-v1.1`). If the audit changes code, redeploy the whole set and pause publishing on the superseded set, as done for v1 |
 | 3 | Fork test on Monad v4 with the real USDC pool: collect → graduate → trade → claim → buyback | done | Phase 3 mainnet-fork suites (10/10, reconciled to `economics.py`), `LiveDeployment.t.sol` through the deployed contracts, and the Phase 5 browser run (publish, collects, claimAll, Universal Router trade, fee accrual, withdrawal) |
 | 4 | Legal determination per jurisdiction; geofencing + KYC'd on-ramp wired | **waived by the owner** (ruling 18) | DyorHQ Moments is a decentralized, permissionless protocol: no KYC, no legal determination, no geofence. The geofence mechanism built earlier in this phase was removed again; the contracts and the app are open to anyone with a wallet. Spec §13 item 2 and §14's legal line are superseded by the ruling |
 | 5 | iOS: coin purchase off-binary; web-first transaction surface | done by construction | The iOS app has no Moments surface; Moments live on the web app. Rule for the iOS team: link out to `/moments`, never sell coins or editions inside the binary (Apple 3.1.5(b)) |
 | 6 | Privy gas sponsorship validated, or "user needs MON for gas" documented | documented | The web app uses injected wallets, so users pay gas in MON; the collect panel says so when a wallet holds no MON. Privy sponsorship only matters for the iOS surface, which is out of scope for this launch |
 | 7 | Small-cap containment: curated cohort, early/low-cap/validation labels, holder count + top-holder % shown, not marketed as investments; raise the threshold via policy later | done in the app; cohort is operational | Labels on every card and page, holder + edition statistics, mandatory plain-language disclosure, no "proven demand" badge anywhere, copy never calls the coins investments. Threshold raise: `PolicyOps` below |
 
-**The one remaining gate is the independent audit (gate 2).** Spec §14 makes it a precondition for real money and the build plan repeats it; it is a security gate, not a legal one, and it stays until the owner rules otherwise.
+**No gate blocks the launch.** The owner waived the legal/KYC line (ruling 18) and deferred the independent audit
+(ruling 19). Interim posture while the code is unaudited: keep the policy at the $10 threshold (any Moment's pool
+holds at most $10 of USDC plus trading proceeds), keep the cohort small, run `scripts/moments-status.mjs` before and
+after every step, and schedule the audit before the threshold is raised.
 
 ## Validation launch — run of show
 

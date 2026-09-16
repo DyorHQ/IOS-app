@@ -128,3 +128,9 @@ contract that implements it so a reviewer can check the code against the ruling.
     mitigations "required before real money") is superseded. The geofence route and UI gate built earlier in
     Phase 6 were removed. The independent audit (spec §14 gate 2) remains the only pre-launch gate; it is a
     security gate and stands unless the owner rules otherwise.
+
+19. **Audit deferred: launch first, audit later.** The owner waives spec §14 gate 2 for the validation launch. The
+    live v1.1 code carries only the Phase 4 self-review, Slither triage, invariant/fuzz suites and fork runs.
+    Interim posture recorded in `docs/moments-launch-gates.md`: threshold stays at $10 (bounded exposure per
+    Moment), small cohort, monitor before and after each step, audit before any threshold raise. Nothing in the
+    contracts or the app blocks the launch any more.

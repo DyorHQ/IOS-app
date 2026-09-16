@@ -27,8 +27,9 @@ fresh mainnet fork (terminal collect + graduation 989,002 gas).
 **v1** (factory `0x47D989a54232D3bCdB7A7760D10E596647D986BA`, record `contracts/deployments/moments-143-v1.json`, tag
 `moments-mainnet-v1`) is superseded: no Moments were published on it and its publishing is paused (tx `0xe7cc3d8e…37f714`, 2026-09-16).
 
-**Not yet done:** the independent audit (spec §14), the one remaining gate before collector money (ruling 18 waived
-the legal/KYC/geofence line). The owner wallet is never the one collecting.
+**Launch is unblocked:** ruling 18 waived the legal/KYC/geofence line and ruling 19 defers the independent audit
+until after the validation launch (interim posture in `docs/moments-launch-gates.md`). The owner wallet is never the
+one collecting.
 
 ## Governance calls after the redeploy — done 2026-09-16 (kept for the record)
 
