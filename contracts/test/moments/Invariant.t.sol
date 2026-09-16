@@ -11,7 +11,7 @@ import {MomentVesting} from "../../src/moments/MomentVesting.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockGraduation} from "./mocks/MockGraduation.sol";
 
-/// Random collects / graduations / claims / withdrawals across three differently-priced Moments.
+/// Random collects / graduations / expiries / claims / withdrawals across three differently-priced Moments.
 contract MomentsHandler is Test {
     MockUSDC public usdc;
     MomentCollect public collect;
@@ -21,12 +21,25 @@ contract MomentsHandler is Test {
     address[] public actors;
     address public creator;
     address public platform;
+    address public treasury;
 
-    mapping(uint256 => uint256) public editionsMinted; // ghost: sum  editions per moment
+    mapping(uint256 => uint256) public editionsMinted; // ghost: sum editions per moment
+    mapping(uint256 => uint256) public reserveAtExpiry; // ghost: reserve wound down per moment
     uint256 public withdrawnCreator;
     uint256 public withdrawnPlatform;
+    uint256 public withdrawnTreasury;
 
-    constructor(MockUSDC u, MomentCollect c, MomentVesting v, MockGraduation g, uint256[] memory _ids, address[] memory _actors, address _creator, address _platform) {
+    constructor(
+        MockUSDC u,
+        MomentCollect c,
+        MomentVesting v,
+        MockGraduation g,
+        uint256[] memory _ids,
+        address[] memory _actors,
+        address _creator,
+        address _platform,
+        address _treasury
+    ) {
         usdc = u;
         collect = c;
         vesting = v;
@@ -35,6 +48,7 @@ contract MomentsHandler is Test {
         actors = _actors;
         creator = _creator;
         platform = _platform;
+        treasury = _treasury;
     }
 
     function collectRandom(uint256 momentSeed, uint256 actorSeed, uint256 qty) external {
@@ -42,6 +56,7 @@ contract MomentsHandler is Test {
         address who = actors[actorSeed % actors.length];
         qty = bound(qty, 1, MomentTypes.MAX_BATCH);
         if (collect.ledger(id).state != MomentTypes.State.Collecting) return;
+        if (block.timestamp >= _deadline(id)) return;
         vm.prank(who);
         MomentCollect.Quote memory q = collect.collect(id, qty);
         editionsMinted[id] += q.editions;
@@ -58,6 +73,20 @@ contract MomentsHandler is Test {
         graduation.graduate(id);
     }
 
+    function expire(uint256 momentSeed) external {
+        uint256 id = ids[momentSeed % ids.length];
+        MomentCollect.Ledger memory l = collect.ledger(id);
+        if (l.state == MomentTypes.State.Collecting) {
+            if (block.timestamp < _deadline(id)) return;
+        } else if (l.state == MomentTypes.State.GraduationPending) {
+            if (block.timestamp < _deadline(id) || block.timestamp < uint256(l.stuckSince) + MomentTypes.STUCK_GRACE) return;
+        } else {
+            return;
+        }
+        reserveAtExpiry[id] = l.reserve;
+        collect.expire(id);
+    }
+
     function claimRandom(uint256 momentSeed, uint256 actorSeed) external {
         uint256 id = ids[momentSeed % ids.length];
         address who = actorSeed % (actors.length + 1) == actors.length ? creator : actors[actorSeed % actors.length];
@@ -68,7 +97,7 @@ contract MomentsHandler is Test {
     }
 
     function warp(uint256 daysAhead) external {
-        vm.warp(block.timestamp + bound(daysAhead, 1, 40) * 1 days);
+        vm.warp(block.timestamp + bound(daysAhead, 1, 12) * 1 days);
     }
 
     function withdrawCreator(uint256 momentSeed) external {
@@ -83,6 +112,17 @@ contract MomentsHandler is Test {
         if (collect.ledger(id).platformClaimable == 0) return;
         vm.prank(platform);
         withdrawnPlatform += collect.withdrawPlatform(id);
+    }
+
+    function withdrawTreasury(uint256 momentSeed) external {
+        uint256 id = ids[momentSeed % ids.length];
+        if (collect.ledger(id).treasuryClaimable == 0) return;
+        vm.prank(treasury);
+        withdrawnTreasury += collect.withdrawTreasury(id);
+    }
+
+    function _deadline(uint256 id) internal view returns (uint64) {
+        return collect.factory().getMoment(id).deadline;
     }
 }
 
@@ -102,11 +142,11 @@ contract MomentsInvariantTest is MomentsBase {
         actors[0] = alice;
         actors[1] = bob;
         actors[2] = carol;
-        handler = new MomentsHandler(usdc, collect, vesting, graduation, ids, actors, creator, platform);
+        handler = new MomentsHandler(usdc, collect, vesting, graduation, ids, actors, creator, platform, treasury);
         targetContract(address(handler));
     }
 
-    /// Supply: never over-promised while collecting; exactly S at/after graduation.
+    /// Supply: never over-promised while collecting; exactly S at/after graduation; zero forever after expiry.
     function invariant_supply() public view {
         for (uint256 i = 0; i < ids.length; i++) {
             uint256 id = ids[i];
@@ -119,7 +159,7 @@ contract MomentsInvariantTest is MomentsBase {
                 assertEq(coin.totalSupply(), graduation.poolCoins(id) + vesting.totalMinted(id), "minted == pool seed + claims");
                 assertLe(vesting.totalMinted(id), vesting.totalEntitlement(id) + alloc);
             } else {
-                assertEq(coin.totalSupply(), 0, "no coin before graduation");
+                assertEq(coin.totalSupply(), 0, "no coin before graduation / ever after expiry");
                 (uint256 ents, uint256 alloc2, uint256 remainderPool, uint256 impliedPool, uint256 collects) = collect.supplyCheck(id);
                 assertEq(ents + alloc2 + remainderPool, S, "remainder pool closes the identity at every step");
                 assertGt(remainderPool, 0, "the pool is never over-promised away");
@@ -136,12 +176,13 @@ contract MomentsInvariantTest is MomentsBase {
         uint256 owed;
         for (uint256 i = 0; i < ids.length; i++) {
             MomentCollect.Ledger memory l = collect.ledger(ids[i]);
-            owed += l.reserve + l.creatorClaimable + l.platformClaimable;
+            owed += l.reserve + l.creatorClaimable + l.platformClaimable + l.treasuryClaimable;
         }
         assertEq(usdc.balanceOf(address(collect)), owed);
     }
 
-    /// Reserve never exceeds the threshold; Collecting implies strictly below it; the NFT closes exactly at graduation.
+    /// Reserve never exceeds the threshold; Collecting implies strictly below it; the NFT closes exactly at
+    /// graduation or expiry; an expired reserve is fully booked to creator + treasury and nothing else moves.
     function invariant_reserve_and_edition_bounds() public view {
         for (uint256 i = 0; i < ids.length; i++) {
             uint256 id = ids[i];
@@ -151,8 +192,13 @@ contract MomentsInvariantTest is MomentsBase {
             assertLe(l.reserve, m.threshold);
             if (l.state == MomentTypes.State.Collecting) assertLt(l.reserve, m.threshold);
             if (l.state == MomentTypes.State.GraduationPending) assertEq(l.reserve, m.threshold);
+            if (l.state == MomentTypes.State.Expired) {
+                assertEq(l.reserve, 0, "expired reserve fully wound down");
+                assertGe(l.endedAt, m.deadline, "expiry never before the deadline");
+                assertEq(vesting.graduatedAt(id), 0, "expired never vests");
+            }
             assertEq(nft.totalMinted(), handler.editionsMinted(id));
-            assertEq(nft.closed(), l.state == MomentTypes.State.Graduated);
+            assertEq(nft.closed(), l.state == MomentTypes.State.Graduated || l.state == MomentTypes.State.Expired);
         }
     }
 }

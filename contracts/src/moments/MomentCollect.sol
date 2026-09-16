@@ -12,10 +12,16 @@ import {
 /// @notice The collect action and the USDC ledger of every Moment. A collect pays `price × quantity` USDC (via
 ///         `approve` or a Permit2 signature transfer), which is split creator / platform / reserve; the collector
 ///         receives NFT editions now and a coin entitlement (recorded in MomentVesting) for later. The collect
-///         that would push the reserve past the threshold is clamped so the reserve lands EXACTLY on it, only
-///         the accepted amount is pulled (the excess never leaves the collector), and graduation is attempted in
-///         an isolated subcall. Creator and platform proceeds are pull-only by their immutable beneficiaries;
-///         the reserve can only leave to the graduation executor. There is no owner and no admin path.
+///         that would push the reserve past the threshold is clamped so the reserve lands EXACTLY on it: only the
+///         accepted amount is pulled from the collector — nothing is ever sent back, the excess simply never leaves
+///         their wallet — and graduation is attempted in an isolated subcall.
+///
+///         Collecting ends at graduation or at the creator-set deadline, whichever comes first. A Moment whose
+///         deadline passes without graduation is wound down by `expire`: the NFT collection closes, no coin is ever
+///         minted, and the reserve becomes claimable by the treasury with the policy's creator share carved out.
+///
+///         Every payout is pull-only by an immutable beneficiary; the reserve can only leave to the graduation
+///         executor (seed) or, after expiry, to treasury/creator. There is no owner and no admin path.
 contract MomentCollect is IMomentCollect, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -32,9 +38,11 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
         MomentTypes.State state;
         uint64 completedAt; // when the reserve reached the threshold
         uint64 stuckSince; // first failed graduation attempt (never reset by retries)
+        uint64 endedAt; // graduation or expiry time
         uint256 reserve; // USDC held for the pool seed
         uint256 creatorClaimable; // USDC owed to the creator (pull)
         uint256 platformClaimable; // USDC owed to the platform (pull)
+        uint256 treasuryClaimable; // USDC owed to the treasury after expiry (pull)
         uint256 totalGross; // USDC accepted so far
         uint256 collects; // number of collect calls
     }
@@ -46,24 +54,27 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
         uint256 reserveIn;
         uint256 creatorIn;
         uint256 platformIn;
-        uint256 refund; // USDC of the request that is NOT pulled (terminal clamp only)
+        uint256 excess; // USDC of the request that is NOT pulled (terminal clamp only); never a transfer
         bool terminal; // this collect completes the Moment
     }
 
     mapping(uint256 => Ledger) private _ledgers;
 
-    event Collected(uint256 indexed momentId, address indexed collector, uint256 gross, uint256 editions, uint256 firstRank, uint256 entitlement, uint256 reserveIn, uint256 creatorIn, uint256 platformIn, uint256 refund);
+    event Collected(uint256 indexed momentId, address indexed collector, uint256 gross, uint256 editions, uint256 firstRank, uint256 entitlement, uint256 reserveIn, uint256 creatorIn, uint256 platformIn, uint256 excess);
     event Completed(uint256 indexed momentId, uint256 reserve, uint256 totalGross);
     event GraduationFailed(uint256 indexed momentId);
     event Graduated(uint256 indexed momentId);
+    event Expired(uint256 indexed momentId, uint256 reserve, uint256 creatorShare, uint256 treasuryShare);
     event Withdrawn(uint256 indexed momentId, address indexed beneficiary, uint256 amount);
     event ReserveReleased(uint256 indexed momentId, address indexed to, uint256 amount);
 
     error NotCollecting();
+    error CollectWindowClosed();
     error BadQuantity();
     error WrongToken();
     error NotGraduation();
     error WrongState();
+    error NotExpirable();
     error NotBeneficiary();
     error NothingToWithdraw();
     error InsufficientGasForGraduation();
@@ -109,6 +120,7 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
     function _prepare(uint256 momentId, MomentTypes.Moment memory m, uint256 quantity) private view returns (Quote memory q) {
         Ledger storage l = _ledgers[momentId];
         if (l.state != MomentTypes.State.Collecting) revert NotCollecting();
+        if (block.timestamp >= m.deadline) revert CollectWindowClosed();
         if (quantity == 0 || quantity > MomentTypes.MAX_BATCH) revert BadQuantity();
 
         uint256 requested = m.price * quantity;
@@ -123,7 +135,7 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
             q.gross = Math.ceilDiv(remaining * BPS, m.reserveBps);
             q.reserveIn = q.gross * m.reserveBps / BPS;
             q.editions = Math.ceilDiv(q.gross, m.price); // paid editions only (≤ quantity)
-            q.refund = requested - q.gross;
+            q.excess = requested - q.gross; // stays in the collector's wallet
         }
         q.platformIn = q.gross * m.platformBps / BPS;
         q.creatorIn = q.gross - q.reserveIn - q.platformIn; // creator absorbs the ≤2-unit split rounding
@@ -147,7 +159,7 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
     function _deliver(uint256 momentId, MomentTypes.Moment memory m, Quote memory q) private {
         uint256 firstRank = IMomentNFT(m.nft).mint(msg.sender, q.editions);
         vesting.accrue(momentId, msg.sender, q.entitlement);
-        emit Collected(momentId, msg.sender, q.gross, q.editions, firstRank, q.entitlement, q.reserveIn, q.creatorIn, q.platformIn, q.refund);
+        emit Collected(momentId, msg.sender, q.gross, q.editions, firstRank, q.entitlement, q.reserveIn, q.creatorIn, q.platformIn, q.excess);
         if (q.terminal) {
             Ledger storage l = _ledgers[momentId];
             emit Completed(momentId, l.reserve, l.totalGross);
@@ -165,6 +177,36 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
             if (l.stuckSince == 0) l.stuckSince = uint64(block.timestamp);
             emit GraduationFailed(momentId);
         }
+    }
+
+    // ------------------------------------------------------------------ expiry (wind-down)
+
+    /// @notice Winds down a Moment that did not graduate: possible once the deadline has passed while Collecting,
+    ///         or — for a completed Moment whose graduation keeps failing — once BOTH the deadline and the stuck
+    ///         grace period have passed (so retries always come first). Permissionless; nothing goes to the caller.
+    ///         The reserve is split creator (policy `expiryCreatorBps`) / treasury, both pull-only. The NFT closes.
+    function expire(uint256 momentId) external nonReentrant {
+        MomentTypes.Moment memory m = factory.getMoment(momentId);
+        Ledger storage l = _ledgers[momentId];
+        if (l.state == MomentTypes.State.Collecting) {
+            if (block.timestamp < m.deadline) revert NotExpirable();
+        } else if (l.state == MomentTypes.State.GraduationPending) {
+            if (block.timestamp < m.deadline || block.timestamp < uint256(l.stuckSince) + MomentTypes.STUCK_GRACE) revert NotExpirable();
+        } else {
+            revert WrongState();
+        }
+        uint256 reserve = l.reserve;
+        uint256 creatorShare = reserve * m.expiryCreatorBps / BPS;
+        uint256 treasuryShare = reserve - creatorShare;
+        // effects
+        l.reserve = 0;
+        l.creatorClaimable += creatorShare;
+        l.treasuryClaimable += treasuryShare;
+        l.state = MomentTypes.State.Expired;
+        l.endedAt = uint64(block.timestamp);
+        // interaction (our own NFT; fixes the edition size)
+        IMomentNFT(m.nft).close();
+        emit Expired(momentId, reserve, creatorShare, treasuryShare);
     }
 
     // ------------------------------------------------------------------ pull-only proceeds
@@ -191,6 +233,17 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
         emit Withdrawn(momentId, msg.sender, amount);
     }
 
+    function withdrawTreasury(uint256 momentId) external nonReentrant returns (uint256 amount) {
+        MomentTypes.Moment memory m = factory.getMoment(momentId);
+        if (msg.sender != m.treasury) revert NotBeneficiary();
+        Ledger storage l = _ledgers[momentId];
+        amount = l.treasuryClaimable;
+        if (amount == 0) revert NothingToWithdraw();
+        l.treasuryClaimable = 0;
+        USDC.safeTransfer(msg.sender, amount);
+        emit Withdrawn(momentId, msg.sender, amount);
+    }
+
     // ------------------------------------------------------------------ graduation executor hooks
 
     /// @notice Hands the reserve to the graduation executor for the pool seed. Executor-only, GraduationPending only.
@@ -210,6 +263,7 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
         if (l.state != MomentTypes.State.GraduationPending) revert WrongState();
         l.state = MomentTypes.State.Graduated;
         l.stuckSince = 0;
+        l.endedAt = uint64(block.timestamp);
         emit Graduated(momentId);
     }
 
@@ -217,6 +271,10 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
 
     function ledger(uint256 momentId) external view returns (Ledger memory) {
         return _ledgers[momentId];
+    }
+
+    function state(uint256 momentId) external view returns (MomentTypes.State) {
+        return _ledgers[momentId].state;
     }
 
     /// @notice The supply picture of a Moment. `remainderPool` is the exact number of coins the graduation seeds

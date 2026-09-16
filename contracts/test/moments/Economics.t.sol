@@ -73,7 +73,7 @@ contract EconomicsTest is MomentsBase {
         assertEq(q.platformIn, 16_666);
         assertEq(q.creatorIn, 66_668);
         assertEq(q.editions, 1);
-        assertEq(q.refund, 666_666);
+        assertEq(q.excess, 666_666);
         assertEq(q.entitlement, TERMINAL_ENT);
 
         MomentCollect.Ledger memory l = collect.ledger(id);
@@ -104,7 +104,7 @@ contract EconomicsTest is MomentsBase {
         MomentCollect c = new MomentCollect(usdc, permit2, f, v);
         MockGraduation g = new MockGraduation(f, c, v);
         vm.prank(gov);
-        f.setModules(address(c), address(v), address(g));
+        f.setModules(address(c), address(v), address(g), makeAddr("locker-x"), makeAddr("hook-x"), makeAddr("buyback-x"));
         vm.prank(alice);
         usdc.approve(address(c), type(uint256).max);
         vm.prank(creator);

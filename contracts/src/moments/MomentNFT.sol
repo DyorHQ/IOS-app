@@ -9,7 +9,7 @@ import {MomentTypes} from "./interfaces/IMoments.sol";
 
 /// @notice The per-Moment collectible: a transferable ERC-721 whose token id IS the collector's edition rank
 ///         (#1, #2, ...). Minted only by the collect contract while the Moment is Collecting; the collection is
-///         closed by the graduation executor and can never mint again (fixed edition). Provenance is written once
+///         closed at graduation (by the executor) or at expiry (by the collect contract) and can never mint again. Provenance is written once
 ///         at construction and has no setter. Metadata is fully on-chain (no server dependency).
 contract MomentNFT is ERC721Enumerable {
     using Strings for uint256;
@@ -18,8 +18,8 @@ contract MomentNFT is ERC721Enumerable {
 
     uint256 public immutable momentId;
     address public immutable creator;
-    address public immutable collect; // the only minter
-    address public immutable graduation; // the only closer
+    address public immutable collect; // the only minter; also closes on expiry
+    address public immutable graduation; // closes at graduation
 
     MomentTypes.Provenance private _provenance;
     uint256 public totalMinted;
@@ -28,7 +28,7 @@ contract MomentNFT is ERC721Enumerable {
     event Closed(uint256 totalMinted);
 
     error NotCollect();
-    error NotGraduation();
+    error NotCloser();
     error CollectionClosed();
     error BadQuantity();
 
@@ -60,9 +60,9 @@ contract MomentNFT is ERC721Enumerable {
         }
     }
 
-    /// @notice Fixes the edition size forever. Only the graduation executor, once.
+    /// @notice Fixes the edition size forever: at graduation (executor) or at expiry (collect contract).
     function close() external {
-        if (msg.sender != graduation) revert NotGraduation();
+        if (msg.sender != graduation && msg.sender != collect) revert NotCloser();
         if (closed) return;
         closed = true;
         emit Closed(totalMinted);

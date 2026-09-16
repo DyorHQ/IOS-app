@@ -6,18 +6,22 @@ import {MomentCoin} from "./MomentCoin.sol";
 import {MomentNFT} from "./MomentNFT.sol";
 
 /// @notice Publishes Moments and keeps the registry. Each Moment's economics (price, threshold, split, creator
-///         allocation, bundle rate) are snapshotted into an immutable record at publish — there is no function
-///         that can change a live Moment. Policy edits only affect Moments published after a 48h timelock.
-///         The factory never holds USDC or coins; it has no money path at all.
+///         allocation, bundle rate, collect deadline, beneficiaries) are snapshotted into an immutable record at
+///         publish — there is no function that can change a live Moment. Policy edits only affect Moments published
+///         after a 48h timelock. The factory never holds USDC or coins; it has no money path at all.
 contract MomentsFactory is IMomentsFactory {
     uint256 public constant POLICY_DELAY = 48 hours;
 
     address public governance;
     address public pendingGovernance;
 
+    // Modules, wired exactly once. Every module reads its peers from here, so nothing can be re-pointed later.
     address public collect;
     address public vesting;
     address public graduation;
+    address public locker;
+    address public feeHook;
+    address public buyback;
     bool public modulesSet;
 
     MomentTypes.Policy public policy;
@@ -27,6 +31,7 @@ contract MomentsFactory is IMomentsFactory {
     bool public publishingPaused;
     uint256 public momentCount; // ids are 1-based
     mapping(uint256 => MomentTypes.Moment) private _moments;
+    mapping(address => uint256) public momentIdByCoin;
 
     struct PublishParams {
         string name;
@@ -34,17 +39,28 @@ contract MomentsFactory is IMomentsFactory {
         MomentTypes.Provenance provenance;
         uint256 price; // USDC (6 dp), >= policy.minPrice
         uint16 creatorAllocBps; // <= policy.maxCreatorAllocBps
+        uint32 collectWindow; // seconds the Moment can be collected for, within [MIN_COLLECT_WINDOW, MAX_COLLECT_WINDOW]
         bytes32 salt;
     }
 
     event GovernanceTransferStarted(address indexed from, address indexed to);
     event GovernanceTransferred(address indexed from, address indexed to);
-    event ModulesSet(address collect, address vesting, address graduation);
+    event ModulesSet(address collect, address vesting, address graduation, address locker, address feeHook, address buyback);
     event PolicyProposed(MomentTypes.Policy policy, uint64 applicableAt);
     event PolicyApplied(MomentTypes.Policy policy);
     event PolicyCancelled();
     event PublishingPaused(bool paused);
-    event Published(uint256 indexed momentId, address indexed creator, address coin, address nft, uint256 price, uint16 creatorAllocBps, uint256 rateNum, uint256 rateDen);
+    event Published(
+        uint256 indexed momentId,
+        address indexed creator,
+        address coin,
+        address nft,
+        uint256 price,
+        uint16 creatorAllocBps,
+        uint256 rateNum,
+        uint256 rateDen,
+        uint64 deadline
+    );
 
     error NotGovernance();
     error NotPendingGovernance();
@@ -57,6 +73,7 @@ contract MomentsFactory is IMomentsFactory {
     error Paused();
     error PriceTooLow();
     error AllocTooHigh();
+    error BadWindow();
     error UnknownMoment();
 
     modifier onlyGovernance() {
@@ -87,17 +104,26 @@ contract MomentsFactory is IMomentsFactory {
     }
 
     /// @notice Wires the modules exactly once. After this nothing about the wiring can change.
-    function setModules(address _collect, address _vesting, address _graduation) external onlyGovernance {
+    function setModules(address _collect, address _vesting, address _graduation, address _locker, address _feeHook, address _buyback)
+        external
+        onlyGovernance
+    {
         if (modulesSet) revert ModulesAlreadySet();
-        if (_collect == address(0) || _vesting == address(0) || _graduation == address(0)) revert ZeroAddress();
+        if (
+            _collect == address(0) || _vesting == address(0) || _graduation == address(0) || _locker == address(0)
+                || _feeHook == address(0) || _buyback == address(0)
+        ) revert ZeroAddress();
         collect = _collect;
         vesting = _vesting;
         graduation = _graduation;
+        locker = _locker;
+        feeHook = _feeHook;
+        buyback = _buyback;
         modulesSet = true;
-        emit ModulesSet(_collect, _vesting, _graduation);
+        emit ModulesSet(_collect, _vesting, _graduation, _locker, _feeHook, _buyback);
     }
 
-    /// @notice Queues a policy for FUTURE Moments (threshold, split, min price, alloc cap, platform address).
+    /// @notice Queues a policy for FUTURE Moments (threshold, split, min price, alloc cap, beneficiaries, expiry share).
     function proposePolicy(MomentTypes.Policy calldata next) external onlyGovernance {
         _validate(next);
         pendingPolicy = next;
@@ -127,23 +153,26 @@ contract MomentsFactory is IMomentsFactory {
 
     // ------------------------------------------------------------------ publishing
 
-    /// @notice Publishes a Moment: deploys its coin + NFT (CREATE2) and freezes its economics.
+    /// @notice Publishes a Moment: deploys its coin + NFT (CREATE2) and freezes its economics and deadline.
     function publish(PublishParams calldata p) external returns (uint256 momentId, address coin, address nft) {
         if (!modulesSet) revert ModulesNotSet();
         if (publishingPaused) revert Paused();
         MomentTypes.Policy memory pol = policy;
         if (p.price < pol.minPrice) revert PriceTooLow();
         if (p.creatorAllocBps > pol.maxCreatorAllocBps) revert AllocTooHigh();
+        if (p.collectWindow < MomentTypes.MIN_COLLECT_WINDOW || p.collectWindow > MomentTypes.MAX_COLLECT_WINDOW) revert BadWindow();
 
         momentId = ++momentCount;
         bytes32 salt = keccak256(abi.encode(momentId, msg.sender, p.salt));
         coin = address(new MomentCoin{salt: salt}(momentId, p.name, p.symbol, vesting, graduation));
         nft = address(new MomentNFT{salt: salt}(momentId, p.name, p.symbol, msg.sender, collect, graduation, p.provenance));
         (uint256 rateNum, uint256 rateDen) = bundleRate(pol.threshold, pol.reserveBps, p.creatorAllocBps);
+        uint64 deadline = uint64(block.timestamp + p.collectWindow);
 
         _moments[momentId] = MomentTypes.Moment({
             creator: msg.sender,
             platform: pol.platform,
+            treasury: pol.treasury,
             coin: coin,
             nft: nft,
             price: p.price,
@@ -154,9 +183,12 @@ contract MomentsFactory is IMomentsFactory {
             platformBps: pol.platformBps,
             reserveBps: pol.reserveBps,
             creatorAllocBps: p.creatorAllocBps,
-            publishedAt: uint64(block.timestamp)
+            expiryCreatorBps: pol.expiryCreatorBps,
+            publishedAt: uint64(block.timestamp),
+            deadline: deadline
         });
-        emit Published(momentId, msg.sender, coin, nft, p.price, p.creatorAllocBps, rateNum, rateDen);
+        momentIdByCoin[coin] = momentId;
+        emit Published(momentId, msg.sender, coin, nft, p.price, p.creatorAllocBps, rateNum, rateDen, deadline);
     }
 
     /// @notice The price-continuous bundle rate, as an exact fraction of coin wei per USDC unit:
@@ -176,9 +208,10 @@ contract MomentsFactory is IMomentsFactory {
     }
 
     function _validate(MomentTypes.Policy memory pol) private pure {
-        if (pol.platform == address(0)) revert ZeroAddress();
+        if (pol.platform == address(0) || pol.treasury == address(0)) revert ZeroAddress();
         if (pol.threshold == 0 || pol.minPrice == 0 || pol.reserveBps == 0) revert InvalidPolicy();
         if (uint256(pol.creatorBps) + pol.platformBps + pol.reserveBps != MomentTypes.BPS) revert InvalidPolicy();
         if (pol.maxCreatorAllocBps > MomentTypes.MAX_CREATOR_ALLOC_BPS) revert InvalidPolicy();
+        if (pol.expiryCreatorBps > MomentTypes.BPS) revert InvalidPolicy();
     }
 }

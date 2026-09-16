@@ -15,16 +15,22 @@ contract FactoryTest is MomentsBase {
         fresh.publish(_params(PRICE, 0, 1));
         vm.prank(alice);
         vm.expectRevert(MomentsFactory.NotGovernance.selector);
-        fresh.setModules(address(1), address(2), address(3));
+        fresh.setModules(address(1), address(2), address(3), address(4), address(5), address(6));
         vm.prank(gov);
         vm.expectRevert(MomentsFactory.ZeroAddress.selector);
-        fresh.setModules(address(0), address(2), address(3));
+        fresh.setModules(address(0), address(2), address(3), address(4), address(5), address(6));
         vm.prank(gov);
-        fresh.setModules(address(1), address(2), address(3));
+        vm.expectRevert(MomentsFactory.ZeroAddress.selector);
+        fresh.setModules(address(1), address(2), address(3), address(4), address(5), address(0));
+        vm.prank(gov);
+        fresh.setModules(address(1), address(2), address(3), address(4), address(5), address(6));
         vm.prank(gov);
         vm.expectRevert(MomentsFactory.ModulesAlreadySet.selector);
-        fresh.setModules(address(collect), address(vesting), address(graduation));
+        fresh.setModules(address(collect), address(vesting), address(graduation), address(4), address(5), address(6));
         assertTrue(fresh.modulesSet());
+        assertEq(fresh.locker(), address(4));
+        assertEq(fresh.feeHook(), address(5));
+        assertEq(fresh.buyback(), address(6));
     }
 
     function test_publish_validates_and_snapshots() public {
@@ -41,6 +47,10 @@ contract FactoryTest is MomentsBase {
         MomentTypes.Moment memory m = factory.getMoment(id);
         assertEq(m.creator, creator);
         assertEq(m.platform, platform);
+        assertEq(m.treasury, treasury);
+        assertEq(m.expiryCreatorBps, EXPIRY_CREATOR_BPS);
+        assertEq(m.deadline, uint64(block.timestamp + WINDOW));
+        assertEq(factory.momentIdByCoin(address(coin)), id);
         assertEq(m.coin, address(coin));
         assertEq(m.nft, address(nft));
         assertEq(m.price, PRICE);
@@ -108,7 +118,7 @@ contract FactoryTest is MomentsBase {
         factory.applyPolicy();
         vm.warp(block.timestamp + 1);
         factory.applyPolicy(); // anyone may apply a proposal once ripe
-        (uint256 threshold,,,,,,) = factory.policy();
+        (uint256 threshold,,,,,,,,) = factory.policy();
         assertEq(threshold, 1_000_000_000);
         (uint256 id2,,) = _publish(creator, PRICE, MAX_ALLOC_BPS, 2);
         assertEq(factory.getMoment(id2).threshold, 1_000_000_000, "new moment takes the new policy");
@@ -141,6 +151,16 @@ contract FactoryTest is MomentsBase {
         bad.platform = address(0);
         vm.prank(gov);
         vm.expectRevert(MomentsFactory.ZeroAddress.selector);
+        factory.proposePolicy(bad);
+        bad = _policy(THRESHOLD);
+        bad.treasury = address(0);
+        vm.prank(gov);
+        vm.expectRevert(MomentsFactory.ZeroAddress.selector);
+        factory.proposePolicy(bad);
+        bad = _policy(THRESHOLD);
+        bad.expiryCreatorBps = 10_001;
+        vm.prank(gov);
+        vm.expectRevert(MomentsFactory.InvalidPolicy.selector);
         factory.proposePolicy(bad);
         bad = _policy(0);
         vm.prank(gov);

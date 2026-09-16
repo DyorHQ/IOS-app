@@ -13,12 +13,18 @@ library MomentTypes {
     uint256 internal constant MAX_BATCH = 20;
     /// @dev Hard cap on the creator's coin allocation (10%), regardless of policy.
     uint16 internal constant MAX_CREATOR_ALLOC_BPS = 1_000;
+    /// @dev Bounds on the creator-chosen collect window. Collecting ends at graduation or at the deadline.
+    uint32 internal constant MIN_COLLECT_WINDOW = 1 hours;
+    uint32 internal constant MAX_COLLECT_WINDOW = 30 days;
+    /// @dev A Moment that completed but whose graduation keeps failing can only be wound down this long after the
+    ///      first failure (and never before its deadline), so transient failures always get retried first.
+    uint256 internal constant STUCK_GRACE = 7 days;
 
     enum State {
         Collecting, // NFTs mint, USDC accrues, entitlements accrue; no coin market
         GraduationPending, // reserve reached the threshold; collect path locked; graduation attempted/retriable
         Graduated, // pool live, NFT collection closed, entitlements vesting
-        Rescued // stuck-graduation wind-down (Phase 2)
+        Expired // deadline passed without graduation: NFT closed, reserve wound down to treasury (+ creator share)
     }
 
     /// @dev Factory policy applied to FUTURE Moments only (snapshotted immutably into each Moment at publish).
@@ -29,13 +35,16 @@ library MomentTypes {
         uint16 platformBps; // share of each collect to the platform
         uint16 reserveBps; // share of each collect that accrues to the pool reserve
         uint16 maxCreatorAllocBps; // cap on the creator's coin allocation
+        uint16 expiryCreatorBps; // share of an EXPIRED Moment's reserve the creator may claim (rest -> treasury)
         address platform; // platform beneficiary for new Moments
+        address treasury; // wind-down beneficiary for new Moments
     }
 
     /// @dev Everything about a Moment that is fixed at publish. Written once by the factory; there is no setter.
     struct Moment {
         address creator; // immutable beneficiary of the creator share + creator coin allocation
         address platform; // immutable beneficiary of the platform share
+        address treasury; // immutable beneficiary of an expired reserve
         address coin; // per-Moment ERC-20 (CREATE2)
         address nft; // per-Moment ERC-721 (CREATE2)
         uint256 price; // collect price in USDC (6 dp)
@@ -46,7 +55,9 @@ library MomentTypes {
         uint16 platformBps;
         uint16 reserveBps;
         uint16 creatorAllocBps; // creator coin allocation, <= maxCreatorAllocBps
+        uint16 expiryCreatorBps;
         uint64 publishedAt;
+        uint64 deadline; // collecting is possible strictly before this timestamp
     }
 
     struct Provenance {
@@ -59,10 +70,14 @@ library MomentTypes {
 
 interface IMomentsFactory {
     function getMoment(uint256 momentId) external view returns (MomentTypes.Moment memory);
+    function momentIdByCoin(address coin) external view returns (uint256);
     function momentCount() external view returns (uint256);
     function collect() external view returns (address);
     function vesting() external view returns (address);
     function graduation() external view returns (address);
+    function locker() external view returns (address);
+    function feeHook() external view returns (address);
+    function buyback() external view returns (address);
 }
 
 interface IMomentCoin {
@@ -88,6 +103,7 @@ interface IMomentVesting {
 interface IMomentCollect {
     function releaseReserve(uint256 momentId, address to) external returns (uint256 amount);
     function markGraduated(uint256 momentId) external;
+    function state(uint256 momentId) external view returns (MomentTypes.State);
 }
 
 interface IMomentGraduation {

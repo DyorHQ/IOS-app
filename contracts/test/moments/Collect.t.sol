@@ -27,7 +27,7 @@ contract CollectTest is MomentsBase {
         assertEq(q.reserveIn, 1_500_000);
         assertEq(q.platformIn, 100_000);
         assertEq(q.creatorIn, 400_000);
-        assertEq(q.refund, 0);
+        assertEq(q.excess, 0);
         assertFalse(q.terminal);
         assertEq(before - usdc.balanceOf(alice), 2 * PRICE, "exactly the gross was pulled");
         assertEq(usdc.balanceOf(address(collect)), 2 * PRICE, "collect holds every cent");
@@ -81,7 +81,7 @@ contract CollectTest is MomentsBase {
         assertEq(q.gross, 333_334);
         assertEq(q.reserveIn, 250_000);
         assertEq(q.editions, 1, "paid editions only");
-        assertEq(q.refund, 5 * PRICE - 333_334);
+        assertEq(q.excess, 5 * PRICE - 333_334);
         assertEq(before - usdc.balanceOf(bob), 333_334, "only the accepted amount was pulled");
         assertEq(nft.balanceOf(bob), 1);
         MomentCollect.Ledger memory l = collect.ledger(id);
@@ -100,7 +100,7 @@ contract CollectTest is MomentsBase {
     }
 
     function test_exact_threshold_hit_without_overshoot_is_terminal_too() public {
-        // 13 x $1 = 9.75; a 20-edition ask overshoots, but a price that lands exactly is terminal with no refund.
+        // 13 x $1 = 9.75; a 20-edition ask overshoots, but a price that lands exactly is terminal with no excess.
         (uint256 id2,,) = _publish(creator, 250_000, 0, 2); // $0.25 collects: reserve 187,500 each
         for (uint256 i = 0; i < 53; i++) _collect(id2, alice, 1); // 53 x 187,500 = 9,937,500
         MomentCollect.Quote memory q = _collect(id2, bob, 1); // remaining 62,500; $0.25 -> reserveIn 187,500 >= remaining -> clamp
@@ -246,7 +246,7 @@ contract CollectTest is MomentsBase {
         vm.expectRevert(MomentNFT.NotCollect.selector);
         nft.mint(gov, 1);
         vm.prank(gov);
-        vm.expectRevert(MomentNFT.NotGraduation.selector);
+        vm.expectRevert(MomentNFT.NotCloser.selector);
         nft.close();
     }
 
