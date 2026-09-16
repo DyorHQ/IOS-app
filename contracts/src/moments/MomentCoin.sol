@@ -16,11 +16,13 @@ contract MomentCoin is ERC20Capped {
     address public immutable graduation;
 
     error NotMinter();
+    error ZeroAddress();
 
     constructor(uint256 _momentId, string memory name_, string memory symbol_, address _vesting, address _graduation)
         ERC20(name_, symbol_)
         ERC20Capped(MomentTypes.SUPPLY)
     {
+        if (_vesting == address(0) || _graduation == address(0)) revert ZeroAddress();
         momentId = _momentId;
         vesting = _vesting;
         graduation = _graduation;

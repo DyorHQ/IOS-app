@@ -32,8 +32,10 @@ contract MomentVesting is IMomentVesting, ReentrancyGuard {
     error NotGraduated();
     error NothingToClaim();
     error SupplyInvariant();
+    error ZeroAddress();
 
     constructor(IMomentsFactory _factory) {
+        if (address(_factory) == address(0)) revert ZeroAddress();
         factory = _factory;
     }
 

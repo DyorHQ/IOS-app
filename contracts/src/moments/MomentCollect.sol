@@ -78,8 +78,12 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
     error NotBeneficiary();
     error NothingToWithdraw();
     error InsufficientGasForGraduation();
+    error ZeroAddress();
 
     constructor(IERC20 _usdc, IPermit2 _permit2, IMomentsFactory _factory, IMomentVesting _vesting) {
+        if (address(_usdc) == address(0) || address(_permit2) == address(0) || address(_factory) == address(0) || address(_vesting) == address(0)) {
+            revert ZeroAddress();
+        }
         USDC = _usdc;
         PERMIT2 = _permit2;
         factory = _factory;
@@ -280,8 +284,9 @@ contract MomentCollect is IMomentCollect, ReentrancyGuard {
     /// @notice The supply picture of a Moment. `remainderPool` is the exact number of coins the graduation seeds
     ///         (S − creator allocation − Σ entitlements), so `remainderPool + entitlements + creatorAlloc == S` holds
     ///         by construction at every point. `impliedPool` is what the current reserve would seed at the bundle rate;
-    ///         it can exceed `remainderPool` only by the integer rounding of the terminal clamp (the accepted gross is
-    ///         rounded UP so the reserve lands exactly on the threshold), bounded by `collects × ceil(rateNum/rateDen)`.
+    ///         it can exceed `remainderPool` only by integer rounding: each collect can floor away < 1 USDC unit of
+    ///         reserve, which the terminal clamp recovers with up to BPS/reserveBps units of extra gross, so the gap is
+    ///         bounded by `collects × (ceil(rateNum·BPS / (rateDen·reserveBps)) + 1)` coin wei.
     function supplyCheck(uint256 momentId)
         external
         view

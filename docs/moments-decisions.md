@@ -85,3 +85,12 @@ contract that implements it so a reviewer can check the code against the ruling.
     self-review → Phase 5 app (verified on a fork) → Phase 6 validation launch through the app by ordinary,
     low-value wallets. Sourcify verification was submitted before any interaction; the spec §14 audit gate still
     stands before real money.
+
+## Phase 4 — 2026-09-16
+
+14. **v1.1 hardening is on the branch, not on mainnet.** Phase 4 found no Critical/High issue; four Lows are fixed
+    on the branch (NFT metadata escaping, constructor zero-address checks, policy sanity floors, and a test-side
+    rounding bound), which changes the bytecode of every module because the factory embeds the coin + NFT creation
+    code and the modules hold the factory as an immutable. The live v1 (tag `moments-mainnet-v1`) has no Moments
+    published. Decision pending with the owner: redeploy v1.1 now, or fold it into the post-audit redeploy
+    (recommended). Report: `docs/moments-security-review-2026-09-16/REPORT.md`.

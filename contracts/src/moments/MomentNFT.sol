@@ -31,6 +31,7 @@ contract MomentNFT is ERC721Enumerable {
     error NotCloser();
     error CollectionClosed();
     error BadQuantity();
+    error ZeroAddress();
 
     constructor(
         uint256 _momentId,
@@ -41,6 +42,7 @@ contract MomentNFT is ERC721Enumerable {
         address _graduation,
         MomentTypes.Provenance memory prov
     ) ERC721(name_, symbol_) {
+        if (_creator == address(0) || _collect == address(0) || _graduation == address(0)) revert ZeroAddress();
         momentId = _momentId;
         creator = _creator;
         collect = _collect;
@@ -88,7 +90,7 @@ contract MomentNFT is ERC721Enumerable {
         MomentTypes.Provenance memory p = _provenance;
         bytes memory json = abi.encodePacked(
             '{"name":"',
-            name(),
+            _json(name()),
             " #",
             tokenId.toString(),
             '","description":"A collected DyorHQ Moment. Edition #',
@@ -96,11 +98,11 @@ contract MomentNFT is ERC721Enumerable {
             closed ? " of " : " (open edition)",
             closed ? totalMinted.toString() : "",
             '","image":"',
-            p.mediaURI,
+            _json(p.mediaURI),
             '","attributes":[{"trait_type":"Rank","value":',
             tokenId.toString(),
             '},{"trait_type":"Place","value":"',
-            p.place,
+            _json(p.place),
             '"},{"trait_type":"Date","display_type":"date","value":',
             uint256(p.date).toString(),
             '},{"trait_type":"Creator","value":"',
@@ -110,6 +112,39 @@ contract MomentNFT is ERC721Enumerable {
             '"}]}'
         );
         return string(abi.encodePacked("data:application/json;base64,", Base64.encode(json)));
+    }
+
+    /// @dev Escapes a creator-supplied string for embedding in the metadata JSON: `"` and `\` are backslash-escaped
+    ///      and control characters become `\u00XX`, so a quote in a name or place can never break the document.
+    function _json(string memory s) private pure returns (string memory) {
+        bytes memory b = bytes(s);
+        uint256 extra;
+        for (uint256 i = 0; i < b.length; i++) {
+            bytes1 c = b[i];
+            if (c == '"' || c == "\\") extra += 1;
+            else if (c < 0x20) extra += 5;
+        }
+        if (extra == 0) return s;
+        bytes memory out = new bytes(b.length + extra);
+        bytes16 hexChars = "0123456789abcdef";
+        uint256 j;
+        for (uint256 i = 0; i < b.length; i++) {
+            bytes1 c = b[i];
+            if (c == '"' || c == "\\") {
+                out[j++] = "\\";
+                out[j++] = c;
+            } else if (c < 0x20) {
+                out[j++] = "\\";
+                out[j++] = "u";
+                out[j++] = "0";
+                out[j++] = "0";
+                out[j++] = hexChars[uint8(c) >> 4];
+                out[j++] = hexChars[uint8(c) & 0x0f];
+            } else {
+                out[j++] = c;
+            }
+        }
+        return string(out);
     }
 
     // ---- OZ multiple-inheritance plumbing ----

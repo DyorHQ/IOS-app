@@ -163,8 +163,9 @@ contract MomentsInvariantTest is MomentsBase {
                 (uint256 ents, uint256 alloc2, uint256 remainderPool, uint256 impliedPool, uint256 collects) = collect.supplyCheck(id);
                 assertEq(ents + alloc2 + remainderPool, S, "remainder pool closes the identity at every step");
                 assertGt(remainderPool, 0, "the pool is never over-promised away");
-                // the rate-implied pool can exceed the remainder only by the terminal clamp's integer rounding
-                uint256 slack = collects * ((m.rateNum + m.rateDen - 1) / m.rateDen);
+                // the rate-implied pool can exceed the remainder only by integer rounding: < 1 USDC unit of reserve
+                // flooring per collect, recovered by the clamp with up to BPS/reserveBps units of extra gross
+                uint256 slack = collects * ((m.rateNum * BPS + m.rateDen * m.reserveBps - 1) / (m.rateDen * m.reserveBps) + 1);
                 assertLe(impliedPool, remainderPool + slack, "implied pool within rounding slack of the remainder");
             }
             assertLe(coin.totalSupply(), S);

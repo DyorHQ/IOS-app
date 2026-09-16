@@ -66,8 +66,10 @@ contract MomentGraduation is IMomentGraduation, IMomentGraduationRegistry, Reent
     error SupplyInvariant();
     error PriceOutOfRange();
     error NotGraduated();
+    error ZeroAddress();
 
     constructor(IPoolManager _poolManager, IMomentsFactory _factory, IERC20 _usdc) {
+        if (address(_poolManager) == address(0) || address(_factory) == address(0) || address(_usdc) == address(0)) revert ZeroAddress();
         poolManager = _poolManager;
         factory = _factory;
         USDC = _usdc;

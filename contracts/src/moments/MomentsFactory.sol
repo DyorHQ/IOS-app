@@ -11,6 +11,10 @@ import {MomentNFT} from "./MomentNFT.sol";
 ///         after a 48h timelock. The factory never holds USDC or coins; it has no money path at all.
 contract MomentsFactory is IMomentsFactory {
     uint256 public constant POLICY_DELAY = 48 hours;
+    /// @dev Sanity floors for policy values (USDC units): a threshold below 1 USDC or a minimum price below one cent
+    ///      would make the graduation math degenerate; real policies are orders of magnitude above these.
+    uint256 public constant MIN_THRESHOLD = 1_000_000;
+    uint256 public constant MIN_MIN_PRICE = 10_000;
 
     address public governance;
     address public pendingGovernance;
@@ -209,7 +213,7 @@ contract MomentsFactory is IMomentsFactory {
 
     function _validate(MomentTypes.Policy memory pol) private pure {
         if (pol.platform == address(0) || pol.treasury == address(0)) revert ZeroAddress();
-        if (pol.threshold == 0 || pol.minPrice == 0 || pol.reserveBps == 0) revert InvalidPolicy();
+        if (pol.threshold < MIN_THRESHOLD || pol.minPrice < MIN_MIN_PRICE || pol.reserveBps == 0) revert InvalidPolicy();
         if (uint256(pol.creatorBps) + pol.platformBps + pol.reserveBps != MomentTypes.BPS) revert InvalidPolicy();
         if (pol.maxCreatorAllocBps > MomentTypes.MAX_CREATOR_ALLOC_BPS) revert InvalidPolicy();
         if (pol.expiryCreatorBps > MomentTypes.BPS) revert InvalidPolicy();

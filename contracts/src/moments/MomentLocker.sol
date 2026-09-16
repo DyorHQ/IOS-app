@@ -44,8 +44,10 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
     error AlreadySeeded();
     error NotSeeded();
     error NoLiquidity();
+    error ZeroAddress();
 
     constructor(IPoolManager _poolManager, IMomentsFactory _factory) {
+        if (address(_poolManager) == address(0) || address(_factory) == address(0)) revert ZeroAddress();
         poolManager = _poolManager;
         factory = _factory;
     }

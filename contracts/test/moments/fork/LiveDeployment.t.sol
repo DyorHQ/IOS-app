@@ -108,9 +108,12 @@ contract LiveDeploymentTest is MomentsForkBase {
         assertEq(address(buyback.USDC()), USDC_ADDR);
     }
 
+    /// Publishes through the LIVE factory, so the coin address (and therefore the currency ordering) comes from the
+    /// deployed v1 creation code, not from a local prediction: v1.1 changed the coin bytecode.
     function test_live_lifecycle_through_the_deployed_contracts() public {
         uint256 nextId = factory.momentCount() + 1;
-        (uint256 id, MomentCoin coin, MomentNFT nft) = _publishOrdered(creator, PRICE, MAX_ALLOC_BPS, true);
+        (uint256 id, MomentCoin coin, MomentNFT nft) = _publish(creator, PRICE, MAX_ALLOC_BPS, 1001);
+        bool usdcIs0 = address(usdc) < address(coin);
         assertEq(id, nextId);
         assertEq(coin.graduation(), address(executor));
         assertEq(coin.vesting(), address(vesting));
@@ -138,12 +141,12 @@ contract LiveDeploymentTest is MomentsForkBase {
 
         // trade: v4 router buy + real Universal Router sell, both fee-charged by the live hook
         uint256 f0 = hook.creatorAccrued(id) + hook.platformAccrued(id) + hook.buybackAccrued(id);
-        _buyExactIn(bob, r.key, true, 1_000_000);
+        _buyExactIn(bob, r.key, usdcIs0, 1_000_000);
         assertEq(hook.creatorAccrued(id) + hook.platformAccrued(id) + hook.buybackAccrued(id) - f0, 10_000);
         vm.prank(alice);
         vesting.claim(id);
         uint256 a0 = usdc.balanceOf(alice);
-        _urSwapExactIn(alice, r.key, false, 1e24);
+        _urSwapExactIn(alice, r.key, !usdcIs0, 1e24);
         assertGt(usdc.balanceOf(alice) - a0, 0, "Universal Router sell paid out");
 
         // vesting + payouts to the live beneficiaries
@@ -161,8 +164,8 @@ contract LiveDeploymentTest is MomentsForkBase {
         _approveCoin(coin, bob);
         for (uint256 i = 0; i < 12; i++) {
             uint256 c0 = coin.balanceOf(bob);
-            _buyExactIn(bob, r.key, true, 10_000_000);
-            _sellExactIn(bob, r.key, true, coin.balanceOf(bob) - c0);
+            _buyExactIn(bob, r.key, usdcIs0, 10_000_000);
+            _sellExactIn(bob, r.key, usdcIs0, coin.balanceOf(bob) - c0);
         }
         uint128 liq0 = _lockerPositionLiquidity(id, r.key);
         MomentBuyback.Round memory round = buyback.execute(id, 0);
@@ -171,7 +174,7 @@ contract LiveDeploymentTest is MomentsForkBase {
         _assertSupply(id);
 
         // a second Moment expires: 70% creator / 30% to the live treasury
-        (uint256 id2,, MomentNFT nft2) = _publishOrdered(creator, PRICE, 0, true);
+        (uint256 id2,, MomentNFT nft2) = _publish(creator, PRICE, 0, 1002);
         _collect(id2, carol, 2);
         vm.warp(factory.getMoment(id2).deadline);
         collect.expire(id2);

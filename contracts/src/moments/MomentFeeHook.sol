@@ -58,6 +58,7 @@ contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {
     error NotUsdcPair();
     error NothingToWithdraw();
     error HookNotImplemented();
+    error ZeroAddress();
 
     modifier onlyPoolManager() {
         if (msg.sender != address(poolManager)) revert NotPoolManager();
@@ -65,6 +66,7 @@ contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {
     }
 
     constructor(IPoolManager _poolManager, IMomentsFactory _factory, IERC20 _usdc) {
+        if (address(_poolManager) == address(0) || address(_factory) == address(0) || address(_usdc) == address(0)) revert ZeroAddress();
         poolManager = _poolManager;
         factory = _factory;
         usdc = Currency.wrap(address(_usdc));
