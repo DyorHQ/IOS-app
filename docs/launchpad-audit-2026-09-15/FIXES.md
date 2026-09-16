@@ -87,3 +87,16 @@ Also tightened `Z_MyMondayFork.t.sol::test_F2a` to prove the realign completes i
 (no stuck state, no manual call). Final tally: **58 tests, 0 failures** (47 unit + 11 Monad-fork).
 
 The regression tests live in `contracts/test/audit/`. Worktree: `/Users/jerry/Hackathon-launchpad-fix` (uncommitted).
+
+## Deployed (2026-09-16)
+Redeployed by the owner from commit `94e0fb1` (Monad mainnet, 18/18 txs, 3.09 MON): factory
+`0x10F34A174d9C393a90aFf94BDED7E1Db185446D7`, hook `0x51A240c1…60cc`, escrow `0xbc70ba9D…47fc`, holderFeeSharing
+`0x70F8f64c…4eF6`, locker `0x86d5143A…8902`, v4 executor `0x787e49e7…45DA`, Monday executor `0x5c83D582…8fEd`,
+fee vault `0x42a1C1c1…88De`, router `0x3eE688C3…3690`, launchDeployer `0x53C2e716…A445` (curveDeployer
+`0xc2a9B0b9…534D`). All 11 Sourcify-verified (runtime + creation match, `v4core` profile). On-chain checks: module
+wiring, owner, 5 MON fee, 50/50 split, 10% max tax, config `[9800,2500,300,30]`, economics at the day's prices
+(MON $0.0219613 → phantom 91,069.207 MON; aBIL $91.58766 → 21.837 aBIL; USDC/AUSD 2e9), aBIL Monday-only, hook
+flags `0x20cc`, and the fixed-code selectors (`graduateFallback`, `v4FallbackAllowed`, `queuedRewards`,
+`MAX_ALIGN_BPS`, 9-field `PoolLaunch`) all present. Live fork smoke test: `contracts/test/audit/Z_LiveDeployment.t.sol`.
+The previous factory `0x2F02972E…` (and coins GMGM/BPP) remains vulnerable and should be retired by the owner
+(`setWhitelistEnabled(true)`, `setLaunchConfigEnabled(0,false)`).
