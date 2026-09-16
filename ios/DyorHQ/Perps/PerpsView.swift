@@ -156,6 +156,8 @@ struct CollateralSheet: View {
 
     private var raw: BigUInt { Amount.parse(amountText, decimals: 6) ?? 0 }
     private var limit: BigUInt { kind == .deposit ? model.collateral.wallet : (model.account.map { $0.balance - min($0.balance, $0.locked) } ?? 0) }
+    /// A first deposit with no account yet is really account creation — the plan calls `createAccount`, not `depositCollateral`.
+    private var isCreating: Bool { kind == .deposit && model.account == nil }
     private var problem: String? {
         if raw == 0 { return nil }
         if raw > limit { return kind == .deposit ? "Not enough AUSD in your wallet." : "More than your available balance." }
@@ -169,12 +171,14 @@ struct CollateralSheet: View {
                 Section {
                     AmountField(title: "0", text: $amountText, token: .ausd) { Haptics.selection(); amountText = Amount.exact(limit, decimals: 6) }
                 } header: {
-                    Text(kind == .deposit ? "Deposit AUSD" : "Withdraw AUSD")
+                    Text(isCreating ? "Open your Perpl account" : (kind == .deposit ? "Deposit AUSD" : "Withdraw AUSD"))
                 } footer: {
-                    if let problem { Text(problem) } else { Text("\(kind == .deposit ? "In wallet" : "Available"): \(NumberStyle.units(limit, decimals: 6)) AUSD") }
+                    if let problem { Text(problem) }
+                    else if isCreating { Text("Your first deposit opens your Perpl trading account in-app — no website needed. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.") }
+                    else { Text("\(kind == .deposit ? "In wallet" : "Available"): \(NumberStyle.units(limit, decimals: 6)) AUSD") }
                 }
             }
-            .navigationTitle(kind == .deposit ? "Deposit" : "Withdraw")
+            .navigationTitle(isCreating ? "Create Account" : (kind == .deposit ? "Deposit" : "Withdraw"))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .toolbar {
@@ -182,7 +186,7 @@ struct CollateralSheet: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Review") { showConfirm = true }.disabled(raw == 0 || problem != nil) }
             }
             .sheet(isPresented: $showConfirm) {
-                ConfirmationSheet(title: kind == .deposit ? "Confirm Deposit" : "Confirm Withdrawal", confirmTitle: kind == .deposit ? "Deposit" : "Withdraw", build: { kind == .deposit ? env.perpl.depositPlan(amountCNS: raw, hasAccount: model.account != nil) : env.perpl.withdrawPlan(amountCNS: raw) }, onDone: { dismiss(); Task { await model.load(env: env, address: session.address) } }) {
+                ConfirmationSheet(title: isCreating ? "Create Trading Account" : (kind == .deposit ? "Confirm Deposit" : "Confirm Withdrawal"), confirmTitle: isCreating ? "Create Account" : (kind == .deposit ? "Deposit" : "Withdraw"), build: { kind == .deposit ? env.perpl.depositPlan(amountCNS: raw, hasAccount: model.account != nil) : env.perpl.withdrawPlan(amountCNS: raw) }, onDone: { dismiss(); Task { await model.load(env: env, address: session.address) } }) {
                     DetailRow("Amount", "\(NumberStyle.units(raw, decimals: 6)) AUSD")
                     DetailRow(kind == .deposit ? "To" : "From", "Perpl Exchange")
                     if kind == .deposit, model.account == nil { DetailRow("Account", "Opens a new trading account") }

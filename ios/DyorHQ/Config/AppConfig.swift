@@ -14,6 +14,9 @@ struct AppConfig: Sendable {
     /// embed — row-level security protects the data — so these have working defaults.
     let supabaseURL: URL
     let supabaseKey: String
+    /// Privy-hosted key-export page (Privy React SDK) loaded in a WebView to export an embedded wallet's key — the
+    /// only supported path, since Privy's iOS SDK has no native export. Its origin must be a Privy allowed origin.
+    let walletExportURL: URL?
 
     var hasPrivy: Bool { !privyAppID.isEmpty && !privyClientID.isEmpty }
     var hasPasskeys: Bool { hasPrivy && !passkeyRelyingParty.isEmpty }
@@ -45,7 +48,8 @@ struct AppConfig: Sendable {
                 poolManager: Uniswap.poolManager
             ),
             supabaseURL: supabaseURL,
-            supabaseKey: supabaseKey
+            supabaseKey: supabaseKey,
+            walletExportURL: URL(string: string("WalletExportURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil }
         )
     }()
 }

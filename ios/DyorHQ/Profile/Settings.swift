@@ -35,6 +35,16 @@ struct ManageWalletsView: View {
                     Button("Copy Address", systemImage: "doc.on.doc") { UIPasteboard.general.string = account.address.checksummed }
                 }
 
+                if account.canSign {
+                    Section {
+                        NavigationLink { WalletExportView() } label: { Label("Export Wallet", systemImage: "key.horizontal") }
+                    } footer: {
+                        Text(account.method == .imported
+                             ? "Reveal this wallet's private key to back it up or move it to another wallet. The key never leaves your device."
+                             : "Export this wallet's private key through Privy's secure export page.")
+                    }
+                }
+
                 if account.method == .watchOnly {
                     Section {
                         NavigationLink { ImportWalletView() } label: { Label("Import an Existing Wallet", systemImage: "square.and.arrow.down") }
