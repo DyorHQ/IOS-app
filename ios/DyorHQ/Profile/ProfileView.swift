@@ -20,6 +20,7 @@ struct ProfileView: View {
     @State private var showAppearance = false
     @State private var confirmSignOut = false
     @State private var signingOut = false
+    @State private var showDeleteAccount = false
 
     var body: some View {
         NavigationStack {
@@ -80,6 +81,10 @@ struct ProfileView: View {
                         Label(session.canSign ? "Sign Out" : "Stop Watching", systemImage: "rectangle.portrait.and.arrow.right")
                     }
                     .disabled(signingOut)
+                    Button(role: .destructive) { showDeleteAccount = true } label: {
+                        Label("Delete Account", systemImage: "person.crop.circle.badge.xmark")
+                    }
+                    .disabled(signingOut)
                 } footer: {
                     Text("DyorHQ \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · Self-custodial. Keys never leave your device.")
                 }
@@ -98,6 +103,7 @@ struct ProfileView: View {
             .sheet(isPresented: $showReceive) { if let address = session.address { ReceiveSheet(address: address) } }
             .sheet(isPresented: $showSend) { SendSheet() }
             .sheet(isPresented: $showAppearance) { AppearanceSheet() }
+            .sheet(isPresented: $showDeleteAccount) { DeleteAccountView() }
             .confirmationDialog(session.canSign ? "Sign out of DyorHQ?" : "Stop watching this address?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button(session.canSign ? "Sign Out" : "Stop Watching", role: .destructive) {
                     signingOut = true

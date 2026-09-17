@@ -118,6 +118,61 @@ public actor SupabaseClient {
         return baseURL.appending(path: "storage/v1/object/public/\(bucket)/\(path)")
     }
 
+    /// Deletes every object under `prefix` (a folder) in a Storage bucket: lists first, then removes what is there,
+    /// so an empty folder is simply a no-op (Storage answers a blind delete of a missing object with an error).
+    /// RLS on `storage.objects` decides whether the wallet owns those paths. Requires a session. Returns the count.
+    @discardableResult
+    public func deleteObjects(bucket: String, prefix: String) async throws -> Int {
+        guard let token = currentSession?.accessToken else { throw SupabaseError.notSignedIn }
+        func storageRequest(_ method: String, _ path: String, json: [String: Any]) throws -> URLRequest {
+            var request = URLRequest(url: baseURL.appending(path: "storage/v1/\(path)"))
+            request.httpMethod = method
+            request.httpBody = try JSONSerialization.data(withJSONObject: json)
+            request.setValue(anonKey, forHTTPHeaderField: "apikey")
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+            request.timeoutInterval = 30
+            return request
+        }
+        let (listData, listResponse) = try await session.data(for: try storageRequest("POST", "object/list/\(bucket)", json: ["prefix": prefix, "limit": 1000]))
+        if let http = listResponse as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw SupabaseError.http(http.statusCode, String(data: listData, encoding: .utf8) ?? "")
+        }
+        let entries = (try? JSONSerialization.jsonObject(with: listData) as? [[String: Any]]) ?? []
+        // Folders come back without an id; only real objects are deletable.
+        let paths = entries.compactMap { entry -> String? in
+            guard entry["id"] is String, let name = entry["name"] as? String else { return nil }
+            return "\(prefix)/\(name)"
+        }
+        guard !paths.isEmpty else { return 0 }
+        let (deleteData, deleteResponse) = try await session.data(for: try storageRequest("DELETE", "object/\(bucket)", json: ["prefixes": paths]))
+        if let http = deleteResponse as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw SupabaseError.http(http.statusCode, String(data: deleteData, encoding: .utf8) ?? "")
+        }
+        return paths.count
+    }
+
+    // MARK: Edge Functions
+
+    /// Calls an Edge Function that authenticates the caller with its own bearer token (not a Supabase session) —
+    /// e.g. `delete-account`, which takes the Privy access token. Returns the response body.
+    public func invoke(function: String, bearer: String, body: Data? = nil) async throws -> Data {
+        var request = URLRequest(url: baseURL.appending(path: "functions/v1/\(function)"))
+        request.httpMethod = "POST"
+        request.httpBody = body ?? Data("{}".utf8)
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 30
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw SupabaseError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+        return data
+    }
+
     // MARK: Transport
 
     private func send(method: String, path: String, query: [URLQueryItem], body: Data?, prefer: String?, authed: Bool) async throws -> Data {

@@ -2,6 +2,7 @@ import DyorKit
 import Foundation
 import Observation
 import PrivySDK
+import Security
 
 /// Who is signed in and with what wallet. Privy handles Apple, Google, email and passkey sign-in and holds the
 /// embedded wallet's key; a watch-only address lets someone follow a wallet without signing anything.
@@ -222,6 +223,34 @@ final class Session {
         wallet = nil
         if let privy, case .authenticated(let user) = await privy.getAuthState() {
             await user.logout()
+        }
+        state = .signedOut
+    }
+
+    /// The signed-in Privy user's access token (nil for imported, passkey-derived and watch-only accounts). A
+    /// server function uses it to prove the caller owns the Privy account it is asked to delete.
+    func privyAccessToken() async throws -> String? {
+        guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return nil }
+        return try await user.getAccessToken()
+    }
+
+    /// Account deletion, device side: ends the Privy session, then removes every trace of the account from this
+    /// device — imported keys, the passkey account record, Perpl and backend tokens, caches, strategy records,
+    /// settings — and signs out. The blockchain is untouched; only the user's own backup can reach the funds again.
+    func eraseLocalData() async {
+        if let privy, case .authenticated(let user) = await privy.getAuthState() {
+            await user.logout()
+        }
+        WatchOnlyStore.clear()
+        ImportedWalletStore.clear()
+        mera.forget()
+        wallet = nil
+        if let bundle = Bundle.main.bundleIdentifier {
+            UserDefaults.standard.removePersistentDomain(forName: bundle)
+        }
+        // Every Keychain item this app created (imported wallet keys, Perpl trading keys, backend session tokens).
+        for itemClass in [kSecClassGenericPassword, kSecClassInternetPassword, kSecClassKey] {
+            SecItemDelete([kSecClass as String: itemClass] as CFDictionary)
         }
         state = .signedOut
     }

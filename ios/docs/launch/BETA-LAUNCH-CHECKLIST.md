@@ -35,9 +35,13 @@ project as it is today. Boxes are unchecked until done and verified.
       purchase." Buying and minting Moments with USDC in-app is outside what the text allows. Options: view-only
       Moments (own and browse) in the review build with collecting done on the web app; or ship it and accept the
       rejection risk. Launchpad token launches are not NFTs and are not covered by this paragraph.
-- [ ] **Account deletion (5.1.1(v)).** "If your app supports account creation, you must also offer account deletion
-      within the app." Missing today. Add Profile → Delete account: delete the Privy user (Privy API), the Supabase
-      profile and rows, the local stores and Keychain items; for local/imported wallets show the export warning first.
+- [x] **Account deletion (5.1.1(v)).** Built 2026-09-17: Profile → Delete Account (under Sign Out). Deletes the
+      profile row (every other table cascades from it) and the avatar under the wallet's own RLS session, the Privy
+      user through the `delete-account` Edge Function (verifies the Privy access token, deletes with the app secret),
+      then every key, token, cache and setting on the device; wallet-specific warnings and an export link first.
+      **Before the review build: `supabase secrets set PRIVY_APP_SECRET=…`** — without it Privy-account deletion
+      reports "not enabled on the server" (DyorHQ data is still removed). Open: confirm with Privy that deleting a
+      user revokes its Sign in with Apple tokens (Apple requires revocation on account deletion).
 - [ ] **Sign in with Apple (4.8).** Present (Apple, Google, Email via Privy). Keep it first in the list.
 - [ ] **User-generated content (1.2).** Profiles (handle, bio, avatar), launch images and Moment images are UGC. Add:
       a Report action on profiles, launches and Moments (Supabase `reports` table + email alert), Block/hide creator,
