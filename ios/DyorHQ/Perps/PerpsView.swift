@@ -174,7 +174,7 @@ struct CollateralSheet: View {
                     Text(isCreating ? "Open your Perpl account" : (kind == .deposit ? "Deposit AUSD" : "Withdraw AUSD"))
                 } footer: {
                     if let problem { Text(problem) }
-                    else if isCreating { Text("Your first deposit opens your Perpl trading account in-app — no website needed. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.") }
+                    else if isCreating { Text("Your first deposit opens your Perpl account. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.") }
                     else { Text("\(kind == .deposit ? "In wallet" : "Available"): \(NumberStyle.units(limit, decimals: 6)) AUSD") }
                 }
             }

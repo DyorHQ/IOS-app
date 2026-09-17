@@ -134,7 +134,7 @@ struct LaunchpadProfileView: View {
         } header: {
             Text("Claimable Fees")
         } footer: {
-            Text("Creator fees are held per pair asset across all your launches — claim each asset on its own, or Claim All to sweep every asset and holder reward in one go. Coins launched with fee-sharing on pay their fees to holders.")
+            Text("Creator fees accrue per pair asset. Claim each one, or Claim All.")
         }
     }
 

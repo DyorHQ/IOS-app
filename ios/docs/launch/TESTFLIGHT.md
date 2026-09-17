@@ -73,7 +73,7 @@ Trade, one small perps order, open a Moment, read Home's Total Volume and Portfo
 with $20–$50 and exit it, and check the notification center. Report anything that looks wrong or slow with a
 screenshot from the TestFlight app.
 
-**Feedback email.** support@dyorhq.fun
+**Feedback email.** team@dyorhq.fun
 
 **Review notes (external group).** Self-custodial wallet and DeFi interface on the Monad blockchain. No custody, no
 fiat, no exchange operated by us: swaps route to Kuru, Uniswap and Monday Trade contracts, perps to the Perpl

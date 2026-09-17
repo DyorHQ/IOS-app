@@ -55,7 +55,7 @@ struct ManageWalletsView: View {
                     Section {
                         NavigationLink { ImportWalletView() } label: { Label("Import an Existing Wallet", systemImage: "square.and.arrow.down") }
                     } footer: {
-                        Text("Bring in your own wallet (MetaMask, Rabby, OKX…) with its recovery phrase or private key to trade. The key is stored only on this device.")
+                        Text("Import your own wallet with its recovery phrase or private key. It stays on this device.")
                     }
                 }
             }
@@ -105,7 +105,7 @@ struct SecurityView: View {
                 Text("Passkeys")
             } footer: {
                 if let message { Text(message).foregroundStyle(isError ? Color.attention : Color.positive) }
-                else { Text("A passkey signs you in with Face ID or Touch ID and is phishing-resistant — a strong second factor. Add one per device.") }
+                else { Text("Sign in with Face ID or Touch ID. Add one per device.") }
             }
 
             Section {
@@ -117,7 +117,7 @@ struct SecurityView: View {
             } header: {
                 Text("App Lock")
             } footer: {
-                Text("When on, \(BiometricGate.typeName) is required before every transaction is signed — a second factor that stays on your device.")
+                Text("Asks for \(BiometricGate.typeName) before every transaction is signed.")
             }
         }
         .navigationTitle("Security")
@@ -155,7 +155,7 @@ struct NotificationsView: View {
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("“Swaps & Fills” notifies you when a spot swap or a perps order completes. Price alerts notify you when a token crosses a price you set. Copy trade signals alert you when a trader you copy makes a move. Strategy alerts cover your delta-neutral positions: funding flips, liquidation distance, entry and exit progress. Every notification is also kept in the in-app center (the bell on Home).")
+                Text("Swaps, fills, price alerts, copy trades and strategy events. Everything is also kept in the in-app center.")
             }
             .disabled(!settings.notificationsEnabled)
         }
@@ -220,7 +220,7 @@ struct PerplTradingView: View {
                     LabeledContent("One-click trading") { checkmark(trading.isForwarding) }
                 }
             } footer: {
-                Text("Perpl's trading connection lets you place market, limit, and take-profit / stop-loss orders. Your Ed25519 key is generated on this device and authorized once by your wallet — it never leaves the device.")
+                Text("Your trading key is generated on this device and authorized once by your wallet.")
             }
 
             Section {
@@ -234,7 +234,7 @@ struct PerplTradingView: View {
             } header: {
                 Text("New to Perpl?")
             } footer: {
-                Text("Open a Perpl account on the web first — your wallet needs one before it can enroll trading or hold a position. Opens app.perpl.xyz; come back and connect here afterwards.")
+                Text("Your wallet needs a Perpl account before it can trade. Opens app.perpl.xyz.")
             }
 
             Section {
@@ -260,14 +260,14 @@ struct PerplTradingView: View {
                 if let error { InlineError(message: error) }
                 // A drop that happened outside a tap (idle timeout, rejected key, connection cap) is only on `status`.
                 else if case .failed(let why) = trading.status { InlineError(message: why) }
-                else if trading.status == .needsForwarding { Text("One-click trading lets Perpl's keeper forward your signed orders and fire triggers. It is a single on-chain transaction from your wallet.") }
+                else if trading.status == .needsForwarding { Text("Lets Perpl's keeper forward your signed orders. One on-chain transaction.") }
             }
 
             if trading.key != nil {
                 Section {
                     Button("Remove API Key", role: .destructive) { if let address = session.address { trading.forget(address: address) } }.disabled(busy)
                 } footer: {
-                    Text("Deletes the key from this device. You can reconnect any time; revoke it fully in Perpl's web app.")
+                    Text("Deletes the key from this device.")
                 }
             }
         }
@@ -402,7 +402,7 @@ private struct MeraSessionSection: View {
         } header: {
             Text("Passkey")
         } footer: {
-            Text("After a Face ID, swaps, perps orders and strategy steps sign without another prompt until the session ends. Ending it drops the key from memory; the next signature asks for your passkey again.")
+            Text("Signs without another prompt until the session ends; then Face ID again.")
         }
     }
 }

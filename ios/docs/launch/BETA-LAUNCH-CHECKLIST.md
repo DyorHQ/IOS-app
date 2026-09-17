@@ -45,7 +45,7 @@ project as it is today. Boxes are unchecked until done and verified.
 - [ ] **Sign in with Apple (4.8).** Present (Apple, Google, Email via Privy). Keep it first in the list.
 - [ ] **User-generated content (1.2).** Profiles (handle, bio, avatar), launch images and Moment images are UGC. Add:
       a Report action on profiles, launches and Moments (Supabase `reports` table + email alert), Block/hide creator,
-      a basic filter on handles and text (profanity list), and published contact info (support@dyorhq.fun already
+      a basic filter on handles and text (profanity list), and published contact info (team@dyorhq.fun already
       in Help). Reply to reports within 24 hours during the beta.
 - [ ] **Completeness (2.1).** Remove the "Coming soon" alert on the X row in Get Help (hide the row until the handle
       exists). No placeholder screens elsewhere; check every deep link and external link.
@@ -71,7 +71,7 @@ project as it is today. Boxes are unchecked until done and verified.
       launch, a hidden test crash in Settings for the beta; never attach keys, phrases or full addresses.
 - [ ] RPC and price caching already in place; add a status banner when the RPC or Perpl gateway is down.
 - [ ] Rate limits on any edge function (gas drip, reports); leaked-password protection is not applicable (Privy).
-- [ ] A support inbox that someone reads (support@dyorhq.fun) and the X handle.
+- [ ] A support inbox that someone reads (team@dyorhq.fun) and the X handle.
 
 ## D. Build, upload, TestFlight
 

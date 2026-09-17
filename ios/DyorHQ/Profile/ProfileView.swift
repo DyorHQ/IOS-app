@@ -67,8 +67,13 @@ struct ProfileView: View {
                     NavigationLink { LanguageView() } label: {
                         HStack { SettingsRow("Language", symbol: "globe", tint: .accent); Spacer(); Text("English").foregroundStyle(.secondary) }
                     }
-                    Link(destination: URL(string: "https://dyorhq.fun/support")!) { SettingsRow("Support", symbol: "questionmark.circle", tint: .accent) }
-                    Link(destination: URL(string: "https://dyorhq.fun/terms")!) { SettingsRow("Terms of Use", symbol: "doc.text", tint: .accent) }
+                    NavigationLink {
+                        ScrollView { GetHelpContent().padding(16) }
+                            .background(Color(.systemGroupedBackground))
+                            .navigationTitle("Support")
+                            .navigationBarTitleDisplayMode(.inline)
+                    } label: { SettingsRow("Support", symbol: "questionmark.circle", tint: .accent) }
+                    Link(destination: SupportLinks.terms) { SettingsRow("Terms of Use", symbol: "doc.text", tint: .accent) }
                 }
 
                 Section("Network") {
@@ -86,7 +91,7 @@ struct ProfileView: View {
                     }
                     .disabled(signingOut)
                 } footer: {
-                    Text("DyorHQ \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · Self-custodial. Keys never leave your device.")
+                    Text("DyorHQ \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · \(SupportLinks.tagline) · Self-custodial.")
                 }
             }
             .listStyle(.insetGrouped)
