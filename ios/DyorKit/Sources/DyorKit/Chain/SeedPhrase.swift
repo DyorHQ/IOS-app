@@ -67,6 +67,24 @@ enum Mnemonic {
         return Array(hashBits.prefix(checksumLength)) == Array(bits[entropyLength...])
     }
 
+    /// BIP-39 encoding: `entropy` (16, 20, 24, 28 or 32 bytes) plus its SHA-256 checksum bits, in 11-bit words.
+    static func phrase(fromEntropy entropy: Data) -> String? {
+        guard [16, 20, 24, 28, 32].contains(entropy.count) else { return nil }
+        let checksumLength = entropy.count / 4 // bits: 128→4 … 256→8
+        var bits = [Bool]()
+        bits.reserveCapacity(entropy.count * 8 + checksumLength)
+        for byte in entropy { for shift in stride(from: 7, through: 0, by: -1) { bits.append((byte >> shift) & 1 == 1) } }
+        let hash = Array(SHA256.hash(data: entropy))
+        for i in 0..<checksumLength { bits.append((hash[i / 8] >> (7 - i % 8)) & 1 == 1) }
+        var words = [String]()
+        for start in stride(from: 0, to: bits.count, by: 11) {
+            var index = 0
+            for bit in bits[start..<start + 11] { index = (index << 1) | (bit ? 1 : 0) }
+            words.append(BIP39Wordlist.words[index])
+        }
+        return words.joined(separator: " ")
+    }
+
     /// PBKDF2-HMAC-SHA512, 2048 iterations, 64-byte seed. Returns nil for an invalid mnemonic.
     static func seed(phrase: String, passphrase: String = "") -> Data? {
         guard isValid(phrase) else { return nil }

@@ -27,7 +27,13 @@ struct ManageWalletsView: View {
                 } footer: {
                     Text(account.method == .watchOnly
                          ? "You are watching this address. Sign in to create a wallet you can sign with."
+                         : account.method == .meraPasskey
+                         ? "This wallet is derived from your passkey every time you sign in; nothing is stored on this device or on a server. The same passkey gives the same wallet on any device."
                          : "This wallet was created on this device and is secured by your \(account.method.title) account. DyorHQ never holds your keys.")
+                }
+
+                if account.method == .meraPasskey {
+                    MeraSessionSection()
                 }
 
                 Section {
@@ -369,3 +375,35 @@ struct AppearanceSheet: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
+
+/// The passkey signing session: how long signatures stay prompt-free after a Face ID, and a way to end it now.
+private struct MeraSessionSection: View {
+    @Environment(Session.self) private var session
+
+    var body: some View {
+        let mera = session.mera
+        Section {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                LabeledContent("Session") {
+                    if let expiresAt = mera.expiresAt, expiresAt > ctx.date {
+                        let left = Int(expiresAt.timeIntervalSince(ctx.date))
+                        Text(String(format: "Unlocked · %02d:%02d left", left / 60, left % 60)).monospacedDigit().foregroundStyle(Color.positive)
+                    } else {
+                        Text("Locked").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Picker("Prompt-free for", selection: Binding(get: { Int(mera.sessionLength) }, set: { mera.sessionLength = TimeInterval($0) })) {
+                Text("5 minutes").tag(5 * 60)
+                Text("15 minutes").tag(15 * 60)
+                Text("1 hour").tag(60 * 60)
+            }
+            Button("Lock now", systemImage: "lock") { Haptics.tap(); mera.lock() }.disabled(!mera.isUnlocked)
+        } header: {
+            Text("Passkey")
+        } footer: {
+            Text("After a Face ID, swaps, perps orders and strategy steps sign without another prompt until the session ends. Ending it drops the key from memory; the next signature asks for your passkey again.")
+        }
+    }
+}
+

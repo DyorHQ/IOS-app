@@ -82,7 +82,10 @@ targets:
       # properties:
       #   com.apple.developer.applesignin: [Default]
       #   com.apple.developer.associated-domains: ["webcredentials:$(PASSKEY_RP_ID)"]
-      properties: {}
+      # `?mode=developer` skips the association-file check on the simulator and on devices in Developer Mode;
+      # remove the suffix for TestFlight and App Store builds once the file is hosted.
+      properties:
+        com.apple.developer.associated-domains: ["webcredentials:$(PASSKEY_RP_ID)?mode=developer"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fun.dyorhq.app

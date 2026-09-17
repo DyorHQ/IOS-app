@@ -75,7 +75,14 @@ final class PerplTrading {
     func enroll(wallet: any DigestSigner, address: Address) async throws {
         status = .connecting
         do {
-            let secret = PerplAuth.newSecret()
+            // A Mera account derives its trading key from the passkey (utility namespace, purpose-scoped): the same
+            // key reappears on every device and is never generated at random or backed up anywhere.
+            let secret: Data
+            if let mera = wallet as? MeraWallet {
+                secret = try await mera.session.derivedKey(Mera.Purpose.perplTrading)
+            } else {
+                secret = PerplAuth.newSecret()
+            }
             let publicKeyHex = try PerplAuth.publicKeyHex(secret: secret)
             let auth = PerplAuthClient(chainId: Monad.chainId)
             let payload = try await auth.requestPayload(address: address.checksummed, publicKeyHex: publicKeyHex, scopeMask: PerplScope.trade, label: "DyorHQ")

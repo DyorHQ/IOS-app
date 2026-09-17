@@ -98,14 +98,57 @@ vault decrypts only with the passkey, so Supabase stays untrusted storage.
 
 Estimate: steps 1–3 two days, 4–5 one day, 6 half a day, once the domain is live.
 
-## 7. Judging criteria, mapped
+## 7. Bounty two: the passkey as a key factory (non-wallet uses)
+
+The second bounty rewards the most creative use of PRF namespaces for anything that is *not* signing wallet
+transactions: every salt is an isolated namespace, so one passkey can mint unlimited unrelated keys for encryption,
+identities or capabilities, all reconstructible from the passkey alone, with no secret stored anywhere. Judges look
+for novelty, correct use of the primitives (derivation for identities and capabilities, encryption for state,
+genuinely namespaced salts, nothing sensitive persisted), and a live cross-device test.
+
+How DyorHQ uses the primitive (implemented in `DyorKit/Services/Mera`): one ceremony evaluates **two PRF salts** —
+Mera's default salt for the wallet, and `sha256("dyorhq.utility.v1")` for everything else — so the authenticator
+itself keeps the wallet secret unrelated to every utility key, and one Face ID yields both. Under the utility output,
+per-purpose keys come from HKDF-SHA-256 with the purpose string as `info`; the purpose strings are part of the key
+and never change. Secrets that must wrap existing material use Mera's secret-vault format (fresh random PRF salt per
+vault, AES-256-GCM), byte-compatible with the JS library.
+
+Namespaces, in order of build:
+
+1. **Perpl trading capability** (`dyorhq.perpl-trading.v1`, built). Perpl needs an Ed25519 API key enrolled against the
+   wallet. DyorHQ derives it from the passkey instead of generating and storing it: enrol once, and the same key
+   reappears on any device — the trading session survives a lost phone with no backup, and there is no key to leak.
+2. **Device-independent app state** (`dyorhq.state.v1`). Strategies, alerts, notification history and copy-trading
+   settings encrypted client-side and stored in Supabase as ciphertext keyed by address. A fresh device shows the same
+   positions after one ceremony; the server never sees a watchlist or a strategy. This is also what makes the first
+   bounty's stateless test complete.
+3. **Unlinkable social identity** (`dyorhq.social-identity.v1`). The profile, follows, reports and copy-trading
+   signals are signed by an Ed25519 identity that cannot be linked to the trading wallet unless the user opts to
+   verify a wallet. Same passkey, same handle on every device; the backend authenticates the identity, not the wallet.
+4. **Vaulted imports** (Mera secret vaults). An imported private key or a recovery phrase is wrapped in a vault under
+   the passkey and kept in Supabase (untrusted); a fresh device restores it with one ceremony. This is the "wrap
+   existing credentials" starting point, kept optional and explicit.
+
+Further ideas that fit the product and are worth a demo if time allows: per-conversation keys for encrypted trader
+DMs and copy-trading group chats; a passkey-encrypted trade journal or assistant memory (the strategy runner's notes
+and an AI review of a position, readable by no one else); a "sealed Moment" whose media unlocks for holders via keys
+derived from their passkeys; short-lived per-strategy capabilities (a runner key that can only place hedges for one
+strategy) once EIP-7702 session keys land on Monad.
+
+The submission story: one passkey, three lives — a wallet that signs, a Perpl capability that trades, a social identity
+that speaks — plus state that follows the user to any device and is readable by no server. The live test: clear the
+app on one phone, open a second device, one Face ID, and the wallet, the trading session, the handle and the running
+strategies are all back.
+
+## 8. Judging criteria, mapped
 
 - Time-to-first-transaction: 2 taps + Face ID, gas dripped, swap confirmed in the activity log.
 - Session design: scoped, capped, timed sessions with visible expiry and explicit re-prompt classes.
 - Stateless test: no secret on disk; address from the passkey, state from Supabase, secrets from a vault.
 - Composability (bonus): gas drip now, 7702 + paymaster + session keys next; Privy remains the alternative on-ramp.
+- Bounty two: two PRF salts per ceremony, HKDF purposes under the utility salt, vaults for wrapped secrets, nothing on disk; cross-device test = same trading key, same state, same handle on a second device.
 
-## 8. Needed from the owner
+## 9. Needed from the owner
 
 - Apple Team ID (for the AASA file) and hosting access for dyorhq.fun (it is parked at Hostinger today).
 - rpId decision (`dyorhq.fun` recommended) and testnet vs mainnet for the demo.

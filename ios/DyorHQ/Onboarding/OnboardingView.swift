@@ -115,10 +115,16 @@ struct SignInView: View {
                         .listRowBackground(Color.clear)
                     MethodButton(title: "Continue with Google", symbol: "g.circle", busy: busy == "google") { run("google") { try await session.signInWithGoogle() } }
                     MethodButton(title: "Continue with Email", symbol: "envelope", busy: false) { path.append(.email) }
-                    if session.hasPasskeys {
+                    if session.hasMera {
+                        MethodButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
+                        MethodButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
+                    } else if session.hasPasskeys {
                         MethodButton(title: "Sign In with a Passkey", symbol: "person.badge.key", busy: busy == "passkey") { run("passkey") { try await session.signInWithPasskey() } }
                         MethodButton(title: "Create a Passkey", symbol: "faceid", busy: busy == "create") { run("create") { try await session.createPasskey(displayName: "DyorHQ") } }
                     }
+                } else if session.hasMera {
+                    MethodButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
+                    MethodButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
                 } else {
                     Label("Sign-in is not set up in this build. Add the Privy keys to Secrets.xcconfig to enable Apple, Google, email and passkeys.", systemImage: "key.slash")
                         .font(.subheadline)

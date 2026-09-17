@@ -30,7 +30,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>3</string>
 	<key>FeeEscrow</key>
 	<string>$(FEE_ESCROW)</string>
 	<key>HolderFeeSharing</key>
