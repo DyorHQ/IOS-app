@@ -44,7 +44,31 @@ final class AppSettings {
         slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? 50
     }
 
-    private func store(_ value: Any, _ key: String) { defaults.set(value, forKey: key) }
+    private func store(_ value: Any, _ key: String) { defaults.set(value, forKey: key); AppSettings.onChange?() }
+
+    /// Mirrors settings to the backend (installed by the app environment).
+    nonisolated(unsafe) static var onChange: (() -> Void)?
+
+    /// The settings as a JSON object, for the backend copy (no keys, no addresses).
+    var snapshot: [String: Any] {
+        ["appearance": appearance.rawValue, "notificationsEnabled": notificationsEnabled, "notifyFills": notifyFills,
+         "notifyPriceAlerts": notifyPriceAlerts, "notifyCopyTrades": notifyCopyTrades, "notifyStrategy": notifyStrategy,
+         "proStrategies": proStrategies, "dnIntroSeen": dnIntroSeen, "defaultLeverage": defaultLeverage, "slippageBps": slippageBps]
+    }
+
+    /// Applies a backend copy of the settings (a fresh device after sign-in). Unknown keys are ignored.
+    func apply(snapshot: [String: Any]) {
+        if let raw = snapshot["appearance"] as? String, let mode = AppearanceMode(rawValue: raw) { appearance = mode }
+        if let v = snapshot["notificationsEnabled"] as? Bool { notificationsEnabled = v }
+        if let v = snapshot["notifyFills"] as? Bool { notifyFills = v }
+        if let v = snapshot["notifyPriceAlerts"] as? Bool { notifyPriceAlerts = v }
+        if let v = snapshot["notifyCopyTrades"] as? Bool { notifyCopyTrades = v }
+        if let v = snapshot["notifyStrategy"] as? Bool { notifyStrategy = v }
+        if let v = snapshot["proStrategies"] as? Bool { proStrategies = v }
+        if let v = snapshot["dnIntroSeen"] as? Bool { dnIntroSeen = v }
+        if let v = snapshot["defaultLeverage"] as? Double { defaultLeverage = v }
+        if let v = snapshot["slippageBps"] as? Int { slippageBps = v }
+    }
 }
 
 /// Face ID / Touch ID gate used before signing when the user turns on the app lock.

@@ -120,8 +120,13 @@ public actor LaunchpadService {
 
     /// The newest `limit` launches, newest first. Empty until the contracts are deployed.
     public func launches(limit: Int = 48) async throws -> [Launch] {
-        guard addresses.isDeployed, limit > 0 else { return [] }
-        let factory = addresses.factory
+        guard addresses.isDeployed else { return [] }
+        return try await launches(limit: limit, factory: addresses.factory)
+    }
+
+    /// Launches recorded by a specific factory — the live one or a retired one whose history still counts.
+    public func launches(limit: Int = 48, factory: Address) async throws -> [Launch] {
+        guard !factory.isZero, limit > 0 else { return [] }
         let total = LaunchpadABI.int(try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.launchCount, returns: "uint256")])[0][0])
         guard total > 0 else { return [] }
         let offset = max(0, total - limit)

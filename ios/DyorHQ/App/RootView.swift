@@ -31,6 +31,10 @@ struct RootView: View {
         // authenticated Perpl trading session.
         .task(id: session.address) {
             env.social.bind(address: session.address)
+            // A wallet that can sign connects to the backend by itself (one signature), so activity, strategies and
+            // settings are recorded — and restored on a fresh device — without a separate step.
+            if session.canSign, !env.social.isSignedIn { await env.social.signIn(session: session) }
+            if env.social.isSignedIn, let address = session.address { await env.sync.restore(owner: address) }
             env.perplTrading.refresh(address: session.address)
             NotificationHub.shared.bind(owner: session.address)
         }

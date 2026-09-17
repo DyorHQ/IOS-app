@@ -27,13 +27,29 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
     let subtitle: String
     let txHashHex: String?
     let time: Date
+    /// Which part of the app the action belongs to (spot, perps, launch, moments, wallet) and its dollar size,
+    /// when known — what the backend's activity feed and the platform volume are built from.
+    var section: String?
+    var usd: Double?
 
-    init(kind: Kind, title: String, subtitle: String, hash: Data?, time: Date = Date()) {
+    init(kind: Kind, title: String, subtitle: String, hash: Data?, time: Date = Date(), section: String? = nil, usd: Double? = nil) {
         self.kind = kind
         self.title = title
         self.subtitle = subtitle
         self.txHashHex = hash?.hexString
         self.time = time
+        self.section = section ?? Self.defaultSection(kind)
+        self.usd = usd
+    }
+
+    private static func defaultSection(_ kind: Kind) -> String {
+        switch kind {
+        case .swap: return "spot"
+        case .launch, .buy, .sell: return "launch"
+        case .perp: return "perps"
+        case .moment: return "moments"
+        case .send: return "wallet"
+        }
     }
 
     var txHash: Data? { txHashHex.flatMap { Data(hex: $0) } }
@@ -50,6 +66,9 @@ enum ActivityLog {
         return (try? JSONDecoder().decode([ActivityRecord].self, from: data)) ?? []
     }
 
+    /// Mirrors every new record to the backend (installed by the app environment).
+    nonisolated(unsafe) static var onRecord: ((ActivityRecord, Address) -> Void)?
+
     /// Records an action. De-duplicates by tx hash so re-recording the same settled transaction never doubles a row.
     static func record(_ record: ActivityRecord, owner: Address?) {
         guard let owner else { return }
@@ -58,5 +77,6 @@ enum ActivityLog {
         list.insert(record, at: 0)
         if list.count > cap { list = Array(list.prefix(cap)) }
         UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: key(owner))
+        onRecord?(record, owner)
     }
 }

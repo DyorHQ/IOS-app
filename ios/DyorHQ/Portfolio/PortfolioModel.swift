@@ -1,5 +1,6 @@
 import BigInt
 import DyorKit
+import OSLog
 import Foundation
 import Observation
 
@@ -278,6 +279,16 @@ final class PortfolioModel {
     // MARK: Loading
 
     /// Loads every source for the wallet. `force` re-reads even when the last load is fresh (under five minutes old).
+    /// Everyone's volume on DyorHQ, all time, from the backend's activity records (no wallet exposed).
+    private(set) var platformVolume: Double?
+
+    private struct PlatformRow: Decodable { let section: String; let usd: Double?; let actions: Int }
+
+    func loadPlatformVolume(env: AppEnvironment) async {
+        let rows: [PlatformRow]? = try? await env.social.client.rpc("platform_volume")
+        if let rows { platformVolume = rows.reduce(0) { $0 + ($1.usd ?? 0) } }
+    }
+
     func load(env: AppEnvironment, address: Address?, perplKey: PerplApiKey?, force: Bool) async {
         guard let address else { reset(); return }
         if !force, loadedFor == address, let updatedAt, Date().timeIntervalSince(updatedAt) < 300 { return }
@@ -286,9 +297,13 @@ final class PortfolioModel {
         defer { loading = false }
 
         // Reference data first: the launch list (curves + pair assets), the Moments list (coins + pools), the token universe.
-        async let launchesTask = env.launchpad.launches(limit: 100)
+        async let launchesTask = env.launchpad.launches(limit: 200)
         async let momentsTask = env.moments.moments(limit: 200)
-        let launches = (try? await launchesTask) ?? []
+        var launches = (try? await launchesTask) ?? []
+        // Launches on retired factories are history too: the coins and trades stay part of the wallet's record.
+        for factory in LaunchpadAddresses.retiredFactories {
+            launches += (try? await env.launchpad.launches(limit: 200, factory: factory)) ?? []
+        }
         let moments = (try? await momentsTask) ?? []
         launchesByCurve = Dictionary(launches.map { ($0.curve, $0) }, uniquingKeysWith: { first, _ in first })
         launchesByToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
@@ -306,9 +321,11 @@ final class PortfolioModel {
 
         // Histories, all at once.
         let decimals = tokens.mapValues(\.decimals)
-        // On-chain scans are bounded to 30 days of blocks (≈130 range reads on rpc1); Moments and Perps histories are complete.
-        async let swapsTask = env.swapHistory.swaps(wallet: address, window: .month, decimals: decimals, limit: 500)
-        async let launchTask = env.launchpad.walletHistory(wallet: address, lookbackBlocks: VolumePeriod.month.blocks, curves: Set(launchesByCurve.keys))
+        // Whole-history scans: rpc1 answers a wallet's complete transfer history in one call, so every section counts
+        // everything the wallet ever did, not the last 30 days.
+        let head = await env.swapHistory.head() ?? 0
+        async let swapsTask = env.swapHistory.swaps(wallet: address, fromBlock: 0, toBlock: head, decimals: decimals, limit: 2000)
+        async let launchTask = env.launchpad.walletHistory(wallet: address, lookbackBlocks: UInt64.max, curves: Set(launchesByCurve.keys))
         async let momentsHistoryTask = env.moments.history(account: address)
         let priceable = universe.filter { !$0.isLaunchpad && momentsByCoin[$0.address] == nil }
         async let pricesTask = env.prices.prices(for: priceable)
@@ -317,6 +334,7 @@ final class PortfolioModel {
         swaps = await swapsTask
         launchHistory = await launchTask
         momentsHistory = await momentsHistoryTask
+        Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio scans for \(address.short, privacy: .public): head \(head) swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count)")
         var priced: [Address: Double] = [:]
         if let map = try? await pricesTask { for (address, info) in map { priced[address] = info.usd } }
         for stable in Self.stables { priced[stable] = 1 }

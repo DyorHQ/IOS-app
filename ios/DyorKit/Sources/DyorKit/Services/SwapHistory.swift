@@ -123,8 +123,33 @@ public struct SwapHistoryService: Sendable {
             records.append(SwapRecord(hash: hash, block: sold.block, time: Self.time(anchor: anchor, block: sold.block),
                                       soldToken: sold.token, soldAmount: sold.amount, boughtToken: bought.token, boughtAmount: bought.amount))
         }
+
+        // One-sided transactions can still be swaps whose other leg is native MON, which leaves no Transfer log:
+        // MON paid in (the transaction carries value) or MON received (a router unwrapped WMON for the wallet).
+        // The transaction itself tells them apart from plain transfers and deposits: value from the wallet, or a
+        // call into one of the swap routers.
+        let receivedOnly = received.keys.filter { sent[$0] == nil }
+        let sentOnly = sent.keys.filter { received[$0] == nil }
+        let oneSided = Array((receivedOnly + sentOnly).prefix(300))
+        if !oneSided.isEmpty, let answers = try? await rpc.batch(oneSided.map { ("eth_getTransactionByHash", [JSON.string($0.hexString)]) }) {
+            for (hash, answer) in zip(oneSided, answers) {
+                guard case .success(let tx) = answer, let from = tx["from"].string.flatMap(Address.init), from == wallet else { continue }
+                let to = tx["to"].string.flatMap(Address.init)
+                let value = tx["value"].string.map { BigUInt($0.hasPrefix("0x") ? String($0.dropFirst(2)) : $0, radix: 16) ?? 0 } ?? 0
+                if let recvLegs = received[hash], value > 0, let bought = dominant(recvLegs, excluding: nil) {
+                    records.append(SwapRecord(hash: hash, block: bought.block, time: Self.time(anchor: anchor, block: bought.block),
+                                              soldToken: Monad.native, soldAmount: value, boughtToken: bought.token, boughtAmount: bought.amount))
+                } else if let sentLegs = sent[hash], let to, Self.swapRouters.contains(to), let sold = dominant(sentLegs, excluding: nil) {
+                    records.append(SwapRecord(hash: hash, block: sold.block, time: Self.time(anchor: anchor, block: sold.block),
+                                              soldToken: sold.token, soldAmount: sold.amount, boughtToken: Monad.native, boughtAmount: 0))
+                }
+            }
+        }
         return Array(records.sorted { $0.block > $1.block }.prefix(limit))
     }
+
+    /// Contracts a swap for native MON is sent to: the routers DyorHQ itself routes through.
+    static let swapRouters: Set<Address> = [Uniswap.universalRouter, MondayTrade.swapRouter, Kuru.entrypoint]
 
     private static func time(anchor: BlockHeader, block: UInt64) -> Date {
         let delta = Double(anchor.number > block ? anchor.number - block : 0) * 0.4

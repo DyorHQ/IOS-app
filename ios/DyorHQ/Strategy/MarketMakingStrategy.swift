@@ -141,9 +141,13 @@ enum MMStore {
         return list
     }
 
+    /// Mirrors the list to the backend (installed by the app environment).
+    nonisolated(unsafe) static var onChange: (([MMStrategy], Address?) -> Void)?
+
     static func save(_ strategies: [MMStrategy], owner: Address?) {
         guard let data = try? JSONEncoder().encode(strategies) else { return }
         UserDefaults.standard.set(data, forKey: key(owner))
+        onChange?(strategies, owner)
     }
 
     static func upsert(_ strategy: MMStrategy, owner: Address?) {

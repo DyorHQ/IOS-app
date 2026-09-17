@@ -87,6 +87,23 @@ public actor SupabaseClient {
         return first
     }
 
+    /// Upserts many rows in one request (no representation returned). Requires a session.
+    public func upsertRows<Body: Encodable>(_ table: String, _ rows: [Body], onConflict: String? = nil) async throws {
+        guard currentSession != nil else { throw SupabaseError.notSignedIn }
+        guard !rows.isEmpty else { return }
+        var query: [URLQueryItem] = []
+        if let onConflict { query.append(URLQueryItem(name: "on_conflict", value: onConflict)) }
+        let body = try JSONEncoder().encode(rows)
+        _ = try await send(method: "POST", path: "rest/v1/\(table)", query: query, body: body, prefer: "return=minimal,resolution=merge-duplicates", authed: true)
+    }
+
+    /// Calls a Postgres function through PostgREST RPC with the current session (or the publishable key).
+    public func rpc<T: Decodable>(_ function: String, _ arguments: [String: String] = [:], authed: Bool = false) async throws -> T {
+        let body = try JSONSerialization.data(withJSONObject: arguments)
+        let data = try await send(method: "POST", path: "rest/v1/rpc/\(function)", query: [], body: body, prefer: nil, authed: authed)
+        return try decode(data, as: T.self)
+    }
+
     /// Deletes rows matching the query. Requires a session.
     public func delete(_ table: String, query: [URLQueryItem]) async throws {
         guard currentSession != nil else { throw SupabaseError.notSignedIn }

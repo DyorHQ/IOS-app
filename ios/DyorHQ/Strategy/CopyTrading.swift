@@ -124,9 +124,13 @@ enum CopyStore {
         return list
     }
 
+    /// Mirrors the list to the backend (installed by the app environment).
+    nonisolated(unsafe) static var onChange: (([CopiedTrader], Address?) -> Void)?
+
     static func setTraders(_ traders: [CopiedTrader], owner: Address?) {
         guard let data = try? JSONEncoder().encode(traders) else { return }
         UserDefaults.standard.set(data, forKey: key(tradersPrefix, owner))
+        onChange?(traders, owner)
     }
 
     /// Adds or replaces a trader (same venue+address). Returns false if it already existed.

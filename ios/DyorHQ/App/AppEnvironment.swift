@@ -19,6 +19,8 @@ final class AppEnvironment {
     let activity: TokenActivityService
     let swapHistory: SwapHistoryService
     let walletDiscovery: WalletTokenDiscovery
+    /// Every NFT the wallet holds on Monad, from its own transfer history (Moments and any other collection).
+    let nftDiscovery: WalletNFTDiscovery
     let kuruTokens: KuruTokenListClient
     let venueTokens: VenueTokensService
     let session: Session
@@ -33,6 +35,8 @@ final class AppEnvironment {
     let dnRunner = DNRunner()
     let dnWatcher = DNWatcher()
     let social: SocialSession
+    /// Mirrors activity, strategies, notifications, alerts and settings to Supabase, and restores them on a new device.
+    let sync: BackendSync
 
     init(config: AppConfig) {
         self.config = config
@@ -55,9 +59,14 @@ final class AppEnvironment {
         swapHistory = SwapHistoryService(rpc: RPCClient(url: logsURL))
         // Wallet discovery scans logs on rpc1 and reads balances/metadata on the primary multicall.
         walletDiscovery = WalletTokenDiscovery(logsRPC: RPCClient(url: logsURL), multicall: multicall)
+        nftDiscovery = WalletNFTDiscovery(logsRPC: RPCClient(url: logsURL), multicall: multicall)
         kuruTokens = KuruTokenListClient()
-        venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
+        // The venue-wide pool scan (from genesis, no wallet filter) runs on rpc3 so it never crowds out the wallet's
+        // own history scans on rpc1, which answer a whole history in one call.
+        venueTokens = VenueTokensService(logsRPC: RPCClient(url: URL(string: "https://rpc3.monad.xyz")!), multicall: multicall)
         session = Session(config: config)
+        sync = BackendSync(social: social)
+        sync.install(settings: settings, address: { [weak session] in session?.address })
     }
 
     /// Builds/refreshes the global venue token list (Uniswap + Monday Trade). The first run scans the FULL history

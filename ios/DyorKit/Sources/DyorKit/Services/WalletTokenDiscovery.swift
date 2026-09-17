@@ -21,10 +21,10 @@ public struct WalletTokenDiscovery: Sendable {
     /// The ERC-20 tokens the wallet currently holds (balance > 0), resolved to `Token` metadata. `window` bounds how
     /// far back the incoming-transfer scan looks; `known` addresses (already-surfaced tokens, native MON) are skipped
     /// so only NEW tokens are read.
-    public func heldTokens(wallet: Address, window: UInt64 = Monad.blocksPerDay * 30, known: Set<Address> = []) async -> [Token] {
+    public func heldTokens(wallet: Address, window: UInt64 = Monad.blocksPerDay * 30, known: Set<Address> = [], wholeHistory: Bool = false) async -> [Token] {
         guard let anchor = try? await logsRPC.block(.latest) else { return [] }
         let latest = anchor.number
-        let from = latest > window ? latest - window : 0
+        let from = wholeHistory ? 0 : (latest > window ? latest - window : 0)
         let topic = ABI.eventTopic(Self.transferSig)
         let walletWord = wallet.data.leftPadded(to: 32)
         // Every ERC-20 that has sent tokens to this wallet in the window; the emitting contract IS the token.

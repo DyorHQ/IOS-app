@@ -27,7 +27,7 @@ final class Router {
     /// A full-screen section opened from the menu or the home header.
     var presented: PresentedScreen?
     /// The reporting period every volume figure in the app uses (Home's Total Volume and the Portfolio).
-    var period: VolumePeriod = .day
+    var period: VolumePeriod = .all
     /// Which side of the Trade tab is shown (Swap vs Perps).
     var tradeMode: TradeMode = .swap
     var pendingSwap: (tokenIn: Token?, tokenOut: Token?)?

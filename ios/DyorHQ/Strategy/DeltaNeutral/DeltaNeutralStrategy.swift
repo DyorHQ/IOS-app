@@ -170,9 +170,13 @@ enum DNStore {
         return list
     }
 
+    /// Mirrors the list to the backend (installed by the app environment).
+    nonisolated(unsafe) static var onChange: (([DNStrategy], Address?) -> Void)?
+
     static func save(_ strategies: [DNStrategy], owner: Address?) {
         guard let data = try? JSONEncoder().encode(strategies) else { return }
         UserDefaults.standard.set(data, forKey: key(owner))
+        onChange?(strategies, owner)
     }
 
     static func upsert(_ strategy: DNStrategy, owner: Address?) {

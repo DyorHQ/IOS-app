@@ -24,8 +24,12 @@ enum PriceAlertStore {
         return (try? JSONDecoder().decode([PriceAlert].self, from: data)) ?? []
     }
 
+    /// Mirrors the list to the backend (installed by the app environment).
+    nonisolated(unsafe) static var onChange: (([PriceAlert]) -> Void)?
+
     static func save(_ alerts: [PriceAlert]) {
         UserDefaults.standard.set(try? JSONEncoder().encode(alerts), forKey: key)
+        onChange?(alerts)
     }
 
     static func add(_ alert: PriceAlert) { var a = all(); a.append(alert); save(a) }

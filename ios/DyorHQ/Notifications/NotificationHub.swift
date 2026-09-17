@@ -76,8 +76,12 @@ enum NotificationStore {
         return (try? JSONDecoder().decode([AppNotification].self, from: data)) ?? []
     }
 
+    /// Mirrors the center to the backend (installed by the app environment).
+    nonisolated(unsafe) static var onChange: (([AppNotification], Address?) -> Void)?
+
     static func save(_ items: [AppNotification], owner: Address?) {
         UserDefaults.standard.set(try? JSONEncoder().encode(Array(items.prefix(cap))), forKey: key(owner))
+        onChange?(items, owner)
     }
 }
 

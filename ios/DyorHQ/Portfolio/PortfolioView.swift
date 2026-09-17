@@ -12,6 +12,7 @@ struct PortfolioView: View {
     @Environment(PerplTrading.self) private var perplTrading
     @Environment(\.dismiss) private var dismiss
     @State private var showAll = false
+    @State private var assets = AssetsModel()
 
     private var model: PortfolioModel { env.portfolio }
 
@@ -27,7 +28,7 @@ struct PortfolioView: View {
                         heroCard
                         breakdownCard
                         ForEach(PortfolioModel.Section.allCases) { section in sectionCard(section) }
-                        notesCard
+                        AssetsCard(model: assets)
                         activityCard
                     }
                 }
@@ -55,8 +56,17 @@ struct PortfolioView: View {
                     .accessibilityLabel("Period")
                 }
             }
-            .refreshable { await model.load(env: env, address: session.address, perplKey: perplTrading.key, force: true) }
-            .task(id: session.address) { await model.load(env: env, address: session.address, perplKey: perplTrading.key, force: false) }
+            .refreshable {
+                async let portfolio: () = model.load(env: env, address: session.address, perplKey: perplTrading.key, force: true)
+                async let holdings: () = assets.load(env: env, address: session.address, force: true)
+                _ = await (portfolio, holdings)
+            }
+            .task(id: session.address) {
+                async let portfolio: () = model.load(env: env, address: session.address, perplKey: perplTrading.key, force: false)
+                async let holdings: () = assets.load(env: env, address: session.address, force: false)
+                async let platform: () = model.loadPlatformVolume(env: env)
+                _ = await (portfolio, holdings, platform)
+            }
         }
     }
 
@@ -87,6 +97,14 @@ struct PortfolioView: View {
                 metric("P&L", signed(totals.pnl) + (totals.pnlComplete ? "" : "*"), tint: totals.pnl < 0 ? .negative : totals.pnl > 0 ? .positive : .primary)
                 metric("Claimed fees", usd(totals.claimedFees), tint: totals.claimedFees > 0 ? .positive : .primary)
                 metric("Trades", "\(totals.trades)", tint: .primary)
+            }
+            if let platform = model.platformVolume {
+                Divider()
+                HStack {
+                    Text("Everyone on DyorHQ, all time").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(platform, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.caption.weight(.semibold)).monospacedDigit()
+                }
             }
             if model.loading, model.hasLoaded {
                 HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Refreshing…").font(.caption2).foregroundStyle(.tertiary) }
@@ -205,16 +223,6 @@ struct PortfolioView: View {
             Text(value).font(.footnote.weight(.semibold)).monospacedDigit().foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var notesCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("How these are counted").font(.subheadline.weight(.semibold))
-            Text("Volume is the dollar size of each trade: stablecoins at $1, everything else at today's price. Fees are what each venue actually charged — Perpl fees, curve fees and creator tax on Launch, the platform share of a collect and the 1.5% pool fee on Moments; spot swap fees are inside the quoted price. P&L is dollars received minus dollars spent, with what you still hold marked to today's prices (a * means part of it could not be priced). Claimed fees are creator fees, holder rewards and Moment proceeds you have withdrawn. Spot and Launch history covers the last 30 days; Moments and Perps cover everything.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-        .padding(16)
-        .cardBackground()
     }
 
     // MARK: Activity

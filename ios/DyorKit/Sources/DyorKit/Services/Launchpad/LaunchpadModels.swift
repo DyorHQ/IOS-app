@@ -26,6 +26,10 @@ public struct LaunchpadAddresses: Sendable, Hashable {
 
     public static let none = LaunchpadAddresses()
 
+    /// Factories that were retired (nothing new launches there) but whose launches and trades stay part of a
+    /// wallet's history: the pre-audit 2026-09-12 deployment.
+    public static let retiredFactories: [Address] = [Address(literal: "0x2F02972E166dE71097EEAC8303cE7Fe6B6Ebe9f4")]
+
     /// The launchpad on Monad mainnet (chain 143): the 2026-09-16 redeploy carrying every 2026-09-15 audit fix
     /// (the pre-audit factory 0x2F02… is retired). Mirrors `contracts/deployments/143.json`, and
     /// `LaunchpadDeploymentTests` fails whenever the two drift apart.

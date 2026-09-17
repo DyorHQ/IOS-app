@@ -18,6 +18,7 @@ struct HomeView: View {
     @State private var holdingTab: HoldingCategory = .spot
     @State private var showReceive = false
     @State private var showSend = false
+    @State private var showTransfer = false
     @State private var showSearch = false
     @State private var searchTarget: MarketRow?
 
@@ -50,6 +51,7 @@ struct HomeView: View {
             .overlay { if model.rows.isEmpty, model.loading { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showReceive) { if let address = session.address { ReceiveSheet(address: address) } }
             .sheet(isPresented: $showSend) { SendSheet() }
+            .sheet(isPresented: $showTransfer) { TransferSheet() }
             .sheet(isPresented: $showSearch) {
                 TokenPickerSheet(selected: .mon, balances: Dictionary(uniqueKeysWithValues: model.rows.map { ($0.token.address, $0.balance) }), universe: KnownTokenStore.universe(owner: session.address)) { token in
                     // Open the token's page; a token outside the priced list gets a bare row (price loads on the page).
@@ -172,7 +174,7 @@ struct HomeView: View {
             HomeAction(title: "Buy", symbol: "cart") { router.openSwap(tokenIn: .usdc, tokenOut: .mon) }
             HomeAction(title: "Deposit", symbol: "creditcard") { showReceive = true }
             HomeAction(title: "Withdraw", symbol: "arrow.up") { showSend = true }
-            HomeAction(title: "Transfer", symbol: "arrow.left.arrow.right") { showSend = true }
+            HomeAction(title: "Transfer", symbol: "arrow.left.arrow.right") { showTransfer = true }
         }
         .disabled(session.address == nil)
     }

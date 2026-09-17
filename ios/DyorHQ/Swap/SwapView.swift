@@ -273,7 +273,9 @@ struct SwapView: View {
                 // Record the swap so it shows in Swap History and Recent Activity with its exact legs (including a
                 // native MON leg, which an on-chain Transfer scan can't recover).
                 let text = "\(NumberStyle.units(model.amountIn, decimals: model.tokenIn.decimals, compact: true)) \(model.tokenIn.symbol) → \(NumberStyle.units(quote.amountOut, decimals: model.tokenOut.decimals, compact: true)) \(model.tokenOut.symbol)"
-                ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash), owner: session.address)
+                let paidUSD = Amount.units(model.amountIn, decimals: model.tokenIn.decimals) * (model.prices[model.tokenIn.address]?.usd ?? 0)
+                let receivedUSD = Amount.units(quote.amountOut, decimals: model.tokenOut.decimals) * (model.prices[model.tokenOut.address]?.usd ?? 0)
+                ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash, usd: paidUSD > 0 ? paidUSD : (receivedUSD > 0 ? receivedUSD : nil)), owner: session.address)
             })
         }
     }
@@ -419,7 +421,7 @@ struct SlippageSheet: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Slippage is how far the price may move between the moment you tap Swap and the moment it settles on-chain. If the market moves against you by more than this, the swap is cancelled instead of filling at a worse price.")
+                    Text("How far the price may move before your swap settles. Beyond this, it cancels instead of filling worse.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
