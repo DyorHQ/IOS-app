@@ -29,7 +29,6 @@ enum SupportLinks {
 struct GetHelpView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
-    @State private var noticeLink: String?
 
     var body: some View {
         NavigationStack {
@@ -40,8 +39,10 @@ struct GetHelpView: View {
                         HelpRow(symbol: "envelope", title: "Contact Support", detail: "Email our support team") { mail(subject: "DyorHQ support") }
                         HelpRow(symbol: "ladybug", title: "Report a Bug", detail: "Help us improve the app") { mail(subject: "DyorHQ bug report", body: "What happened:\n\nWhat I expected:\n\nSteps to reproduce:\n") }
                     }
-                    group("Community") {
-                        HelpRow(symbol: "at", title: "X", detail: "Follow us for updates") { community(SupportLinks.x, name: "X") }
+                    if let x = SupportLinks.x {
+                        group("Community") {
+                            HelpRow(symbol: "at", title: "X", detail: "Follow us for updates") { openURL(x) }
+                        }
                     }
                     group("About") {
                         HelpRow(symbol: "globe", title: "dyorhq.fun", detail: "The official site") { openURL(SupportLinks.site) }
@@ -63,12 +64,6 @@ struct GetHelpView: View {
                         .accessibilityLabel("Back")
                 }
             }
-            .alert("Coming soon", isPresented: Binding(get: { noticeLink != nil }, set: { if !$0 { noticeLink = nil } })) {
-                Button("Open dyorhq.fun") { openURL(SupportLinks.site) }
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("The DyorHQ \(noticeLink ?? "") link is not published yet. Everything official is on dyorhq.fun.")
-            }
         }
     }
 
@@ -84,9 +79,6 @@ struct GetHelpView: View {
         openURL(url)
     }
 
-    private func community(_ url: URL?, name: String) {
-        if let url { openURL(url) } else { noticeLink = name }
-    }
 }
 
 /// One support row: a symbol on a tinted square, a title and a one-line description, a chevron.
