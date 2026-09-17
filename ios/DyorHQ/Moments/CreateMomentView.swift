@@ -31,6 +31,8 @@ struct CreateMomentView: View {
     @State private var uploading = false
     @State private var imageError: String?
     @State private var isVideo = false
+    /// A fast https mirror of the picked media for the create-screen preview; the on-chain URI is the ipfs:// CID.
+    @State private var mediaMirror = ""
     @State private var showConfirm = false
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
@@ -138,7 +140,7 @@ struct CreateMomentView: View {
     private var mediaSection: some View {
         Section {
             HStack(spacing: 16) {
-                MomentArtwork(provenance: MomentProvenance(mediaURI: mediaURI, mediaHash: Data(), place: "", date: 0, animationURI: ""), symbol: symbol.isEmpty ? "?" : symbol)
+                MomentArtwork(provenance: MomentProvenance(mediaURI: mediaMirror.isEmpty ? mediaURI : mediaMirror, mediaHash: Data(), place: "", date: 0, animationURI: ""), symbol: symbol.isEmpty ? "?" : symbol)
                     .frame(width: 84, height: 84)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 VStack(alignment: .leading, spacing: 6) {
@@ -161,7 +163,7 @@ struct CreateMomentView: View {
             .padding(.vertical, 4)
             TextField("Or paste an image link (ipfs:// or https://)", text: $mediaURI)
                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                .onChange(of: mediaURI) { old, new in if old != new, mediaHash != nil, !new.hasPrefix("https://") { mediaHash = nil; isVideo = false } }
+                .onChange(of: mediaURI) { old, new in if old != new, mediaHash != nil, !new.hasPrefix("https://") { mediaHash = nil; isVideo = false; mediaMirror = "" } }
             TextField("Video link (optional)", text: $animationURI)
                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
         } header: {
@@ -245,10 +247,11 @@ struct CreateMomentView: View {
                 guard let poster = try await MovieFile.coverFrame(url: movie.url)?.avatarJPEG(maxDimension: 2048, quality: 0.9) else { imageError = "Could not read a frame from that video."; return }
                 let type = UTType(filenameExtension: movie.url.pathExtension) ?? .quickTimeMovie
                 let isMP4 = type.conforms(to: .mpeg4Movie)
-                let posterURL = try await social.uploadMomentMedia(poster, contentType: "image/jpeg", fileExtension: "jpg")
-                let videoURL = try await social.uploadMomentMedia(data, contentType: isMP4 ? "video/mp4" : "video/quicktime", fileExtension: isMP4 ? "mp4" : "mov")
-                mediaURI = posterURL.absoluteString
-                animationURI = videoURL.absoluteString
+                let posterPin = try await social.uploadAndPinMomentMedia(poster, contentType: "image/jpeg", fileExtension: "jpg")
+                let videoPin = try await social.uploadAndPinMomentMedia(data, contentType: isMP4 ? "video/mp4" : "video/quicktime", fileExtension: isMP4 ? "mp4" : "mov")
+                mediaURI = posterPin.onchain
+                animationURI = videoPin.onchain
+                mediaMirror = posterPin.mirror.absoluteString
                 mediaHash = Keccak.hash256(data)
                 isVideo = true
             } else {
@@ -256,8 +259,9 @@ struct CreateMomentView: View {
                     imageError = "That photo could not be read."
                     return
                 }
-                let url = try await social.uploadMomentImage(jpeg: jpeg)
-                mediaURI = url.absoluteString
+                let uploaded = try await social.uploadAndPinMomentMedia(jpeg, contentType: "image/jpeg", fileExtension: "jpg")
+                mediaURI = uploaded.onchain
+                mediaMirror = uploaded.mirror.absoluteString
                 if isVideo { animationURI = "" }
                 mediaHash = Keccak.hash256(jpeg)
                 isVideo = false

@@ -172,6 +172,20 @@ public actor SupabaseClient {
 
     // MARK: Edge Functions
 
+    /// Pins an already-uploaded public object to IPFS through the `pin-media` Edge Function (Pinata) and returns its
+    /// `ipfs://<cid>` URI, for writing on-chain as a Moment's permanent media pointer. Requires a session; throws if
+    /// the function is unavailable or its Pinata secret is not configured (the caller falls back to the https URL).
+    public func pinToIPFS(bucket: String, path: String) async throws -> String {
+        guard currentSession != nil else { throw SupabaseError.notSignedIn }
+        let body = try JSONSerialization.data(withJSONObject: ["bucket": bucket, "path": path])
+        let data = try await send(method: "POST", path: "functions/v1/pin-media", query: [], body: body, prefer: nil, authed: true)
+        struct Response: Decodable { let uri: String }
+        guard let response = try? JSONDecoder().decode(Response.self, from: data), response.uri.hasPrefix("ipfs://") else {
+            throw SupabaseError.decoding("the pin-media response")
+        }
+        return response.uri
+    }
+
     /// Calls an Edge Function that authenticates the caller with its own bearer token (not a Supabase session) —
     /// e.g. `delete-account`, which takes the Privy access token. Returns the response body.
     public func invoke(function: String, bearer: String, body: Data? = nil) async throws -> Data {

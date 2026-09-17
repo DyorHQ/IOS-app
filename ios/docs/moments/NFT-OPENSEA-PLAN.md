@@ -14,13 +14,14 @@
   Item URLs are `https://opensea.io/item/monad/<nft>/<tokenId>`; the collection page is the slug OpenSea assigns.
 - What the NFT points at today: the media is a JPEG in DyorHQ's Supabase bucket (`launch-media`, https URL, max 1600
   px, 5 MB), the `animation_url` slot is never filled by the app, and `external_url` is
-  `https://dyorhq.app/moments/<id>` because the factory's `externalBaseURI` was set to the wrong domain.
+  `https://dyorhq.app/moments/<id>` (a domain DyorHQ does not own — the on-chain base must be corrected to
+  `https://dyorhq.fun/moments/<id>`).
 
 ## Orient: the gaps
 
 1. **Media.** Photo only, downscaled; no video; stored on a centralized bucket. "Make your favorite moments last
    forever" needs content-addressed storage (IPFS) so the NFT's image survives DyorHQ's servers.
-2. **Reach.** Nothing in the app links to OpenSea; sharing uses a dead `dyorhq.app` link; the NFT has no page on
+2. **Reach.** Nothing in the app links to OpenSea; sharing used a dead `dyorhq.app` link; the NFT has no page on
    dyorhq.fun.
 3. **Collection quality.** No collection banner, wrong `external_url`, no metadata refresh call after graduation
    (OpenSea relies on ERC-4906 events, which it honours on most chains but not guaranteed on Monad).

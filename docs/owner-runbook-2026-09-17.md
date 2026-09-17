@@ -98,13 +98,19 @@ is a public Supabase URL. `momentCount()` is 1, so only one Moment is affected s
 when that count goes from 1 to N, and each becomes permanent the instant it publishes. "Lasts forever on the
 blockchain" is only true if the media is content-addressed.
 
-1. Create a **Pinata** account (or Filebase / Storacha). Create an API key scoped to `pinFileToIPFS` only. Note the
-   JWT and your dedicated gateway domain. Free tiers cover a beta; paid is ~$20/mo.
-2. Give the engineer the JWT (as a Supabase secret) and the gateway domain. They add a `pin-media` Edge Function
-   that pins each upload and writes `ipfs://<CID>` on-chain, keeping the Supabase copy as the fast mirror (the app
-   already resolves `ipfs://`). This is a dual-write, so nothing else changes.
-3. Because Moment #1 already depends on Supabase forever: keep the project (`fmnjqrguvopusfufmirs`) on the Pro plan
-   with a card on file and never migrate it to a new project ref.
+The `pin-media` Edge Function and the iOS wiring are BUILT and deployed (2026-09-17). A new Moment now uploads to
+Supabase, pins the bytes to IPFS, and writes `ipfs://<CID>` on-chain as the media pointer, with a graceful fallback
+to the Supabase https URL if pinning is unavailable. The only remaining step is the secret:
+
+1. Set `PINATA_JWT` as a **Supabase Edge Function secret** (NOT just `.env` — the deployed function cannot read
+   `.env`): Supabase dashboard → project `fmnjqrguvopusfufmirs` → Edge Functions → Secrets → add `PINATA_JWT`.
+   Use a Pinata key scoped to pinning only. Until this is set, Moments still publish but with Supabase (https)
+   pointers instead of `ipfs://`.
+2. Verify: after setting it, a Moment published in the app will carry an `ipfs://` mediaURI on-chain (check its
+   `tokenURI`). Nothing else changes; the app already resolves `ipfs://` for display.
+3. Because Moment #1 (published before this) depends on Supabase forever, keep the project on the Pro plan with a
+   card on file and never migrate it to a new project ref.
+4. Note: Moment #1's media is a *Wolf of Wall Street* still (a DMCA/delisting risk) — do not demo beta users on it.
 
 ## 4. OpenSea API key — skip it
 

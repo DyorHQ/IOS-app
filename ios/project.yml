@@ -75,16 +75,19 @@ targets:
         MemeHook: "$(MEME_HOOK)"
     entitlements:
       path: DyorHQ/DyorHQ.entitlements
-      # Sign in with Apple + Associated Domains (passkeys) need a paid Apple Developer team; a Personal team
-      # cannot sign them, so they are disabled until enrollment completes. To restore, uncomment `properties`
-      # below, set PASSKEY_RP_ID = accounts.dyorhq.fun in Secrets.xcconfig, host the AASA at
-      # https://accounts.dyorhq.fun/.well-known/apple-app-site-association, then `xcodegen generate`.
-      # properties:
-      #   com.apple.developer.applesignin: [Default]
-      #   com.apple.developer.associated-domains: ["webcredentials:$(PASSKEY_RP_ID)"]
-      # `?mode=developer` skips the association-file check on the simulator and on devices in Developer Mode;
-      # remove the suffix for TestFlight and App Store builds once the file is hosted.
+      # Sign in with Apple (Guideline 4.8) + Associated Domains (Mera passkeys). These require the paid Apple
+      # Developer team's ID in DEVELOPMENT_TEAM and both capabilities enabled on the fun.dyorhq.app App ID at
+      # developer.apple.com. Passkeys additionally need the AASA file live at
+      # https://$(PASSKEY_RP_ID)/.well-known/apple-app-site-association (PASSKEY_RP_ID = dyorhq.fun) before they
+      # associate on a device or in TestFlight — there is no ?mode=developer suffix, so the real hosted file is
+      # required. Simulator builds compile without any of this; only device/archive signing needs the paid team.
+      # To ENABLE for TestFlight, once (a) DEVELOPMENT_TEAM is the paid team id, (b) Sign in with Apple + Associated
+      # Domains are enabled on the fun.dyorhq.app App ID, and (c) the AASA is hosted at
+      # https://$(PASSKEY_RP_ID)/.well-known/apple-app-site-association: uncomment applesignin and remove the
+      # ?mode=developer suffix. Until then, ?mode=developer lets a Developer-Mode device read the AASA from the
+      # origin directly. Passkeys stay broken until the AASA is live regardless — that is the owner's hosting step.
       properties:
+        # com.apple.developer.applesignin: [Default]
         com.apple.developer.associated-domains: ["webcredentials:$(PASSKEY_RP_ID)?mode=developer"]
     settings:
       base:

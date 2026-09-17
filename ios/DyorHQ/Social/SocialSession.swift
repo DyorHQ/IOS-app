@@ -125,9 +125,20 @@ final class SocialSession {
     /// `launch-media` bucket and returns its public URL, which the Moment writes on-chain as the NFT's image or
     /// animation. Videos are accepted up to 50 MB.
     func uploadMomentMedia(_ data: Data, contentType: String, fileExtension: String) async throws -> URL {
+        try await uploadAndPinMomentMedia(data, contentType: contentType, fileExtension: fileExtension).mirror
+    }
+
+    /// Uploads Moment media to the public bucket and pins it to IPFS, so the NFT's on-chain pointer is a permanent
+    /// `ipfs://` CID that outlives DyorHQ's servers. Returns the URI to write on-chain — the `ipfs://` CID, or the
+    /// Supabase https URL as a fallback when pinning is unavailable (e.g. the Pinata secret is not set yet) — plus
+    /// the Supabase URL as a fast in-app mirror. The provenance hash is of these exact bytes regardless of storage.
+    func uploadAndPinMomentMedia(_ data: Data, contentType: String, fileExtension: String) async throws -> (onchain: String, mirror: URL) {
         guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
         let name = "moment-" + UUID().uuidString.lowercased()
-        return try await client.uploadPublic(bucket: "launch-media", path: "\(wallet)/\(name).\(fileExtension)", data: data, contentType: contentType)
+        let path = "\(wallet)/\(name).\(fileExtension)"
+        let url = try await client.uploadPublic(bucket: "launch-media", path: path, data: data, contentType: contentType)
+        let onchain = (try? await client.pinToIPFS(bucket: "launch-media", path: path)) ?? url.absoluteString
+        return (onchain, url)
     }
 
     /// Uploads a new profile picture (JPEG bytes) to the wallet's own folder in the public `avatars` bucket, then
