@@ -49,33 +49,50 @@ final class AssetsModel {
     }
 }
 
-/// The Assets card on the Portfolio: tokens with balances and values, then NFTs as a grid. A Moment edition opens
-/// its Moment; any other NFT opens on OpenSea.
+/// My Holdings on the Portfolio: everything the wallet owns on Monad, as one toggle — Assets (every ERC-20 with a
+/// balance, valued) or NFTs (every ERC-721, from its metadata). A Moment edition opens its Moment; any other NFT
+/// opens on OpenSea.
 struct AssetsCard: View {
     let model: AssetsModel
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var showAllTokens = false
+    @State private var kind: Kind = .assets
+
+    private enum Kind: String, CaseIterable, Identifiable {
+        case assets, nfts
+        var id: String { rawValue }
+        var label: String { self == .assets ? "Assets" : "NFTs" }
+    }
 
     private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Assets").font(.headline)
+                Text("My Holdings").font(.headline)
                 Spacer()
                 if model.loading { ProgressView().controlSize(.mini) }
-                else if model.totalValue > 0 { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
+                else if kind == .assets, model.totalValue > 0 { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
+                else if kind == .nfts, !model.nfts.isEmpty { Text("\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
 
-            if model.tokens.isEmpty, model.nfts.isEmpty {
-                Text(model.loading ? "Reading the wallet…" : "Nothing in this wallet yet.").font(.subheadline).foregroundStyle(.secondary)
+            Picker("Holdings", selection: $kind) {
+                ForEach(Kind.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+
+            if kind == .assets, model.tokens.isEmpty {
+                Text(model.loading ? "Reading the wallet…" : "No tokens in this wallet yet.").font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
+            }
+            if kind == .nfts, model.nfts.isEmpty {
+                Text(model.loading ? "Reading the wallet…" : "No NFTs in this wallet yet.").font(.subheadline).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
             }
 
-            if !model.tokens.isEmpty {
-                Text("Tokens").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            if kind == .assets, !model.tokens.isEmpty {
                 let shown = showAllTokens ? model.tokens : Array(model.tokens.prefix(6))
                 VStack(spacing: 0) {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, asset in
@@ -104,8 +121,7 @@ struct AssetsCard: View {
                 }
             }
 
-            if !model.nfts.isEmpty {
-                Text("NFTs").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            if kind == .nfts, !model.nfts.isEmpty {
                 LazyVGrid(columns: columns, spacing: 10) {
                     ForEach(model.nfts) { nft in
                         Button { open(nft) } label: {

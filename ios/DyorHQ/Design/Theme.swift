@@ -1,12 +1,13 @@
 import LocalAuthentication
 import SwiftUI
+import UIKit
 
 /// User-controlled appearance and trading preferences. Persisted to `UserDefaults` so a choice survives launches,
 /// and observed so the whole app restyles the moment it changes (the Appearance sheet, notifications, defaults).
 @Observable
 @MainActor
 final class AppSettings {
-    var appearance: AppearanceMode { didSet { store(appearance.rawValue, "settings.appearance") } }
+    var appearance: AppearanceMode { didSet { store(appearance.rawValue, "settings.appearance"); appearance.apply() } }
     var notificationsEnabled: Bool { didSet { store(notificationsEnabled, "settings.notifications") } }
     /// Notify on fills and liquidations (a preference; delivery needs the system permission).
     var notifyFills: Bool { didSet { store(notifyFills, "settings.notifyFills") } }
@@ -110,6 +111,47 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
         case .system: nil
         case .light: .light
         case .dark: .dark
+        }
+    }
+
+    /// The scheme this mode actually renders as right now: the choice itself, or what the system is currently set to.
+    /// A sheet keeps the scheme it was presented with, so the Appearance sheet styles itself from this.
+    @MainActor
+    var resolved: ColorScheme {
+        if let colorScheme { return colorScheme }
+        // The scene's own traits, not a window's: a window carries the override we just set, and its trait collection
+        // only catches up on the next layout pass, so reading it here would hand back the scheme we are leaving.
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive } ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        return scene?.traitCollection.userInterfaceStyle == .dark ? .dark : .light
+    }
+
+    var interfaceStyle: UIUserInterfaceStyle {
+        switch self {
+        case .system: .unspecified
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+
+    /// Restyles every window right now. `preferredColorScheme` on the root view only reaches the window itself, so a
+    /// sheet or full-screen cover that is already on screen — Profile, and the Appearance sheet above it — keeps the
+    /// old scheme until it is dismissed. Setting the window's own style restyles the presented hierarchy with it, so
+    /// the switch is visible the instant it is tapped.
+    @MainActor
+    func apply() {
+        let style = interfaceStyle
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for window in scene.windows {
+                window.overrideUserInterfaceStyle = style
+                // A presented sheet or full-screen cover carries its own override once SwiftUI has set one, which
+                // would shadow the window; clear it down the chain so the whole stack follows.
+                var presented = window.rootViewController
+                while let controller = presented {
+                    controller.overrideUserInterfaceStyle = style
+                    presented = controller.presentedViewController
+                }
+            }
         }
     }
 

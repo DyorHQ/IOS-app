@@ -279,16 +279,6 @@ final class PortfolioModel {
     // MARK: Loading
 
     /// Loads every source for the wallet. `force` re-reads even when the last load is fresh (under five minutes old).
-    /// Everyone's volume on DyorHQ, all time, from the backend's activity records (no wallet exposed).
-    private(set) var platformVolume: Double?
-
-    private struct PlatformRow: Decodable { let section: String; let usd: Double?; let actions: Int }
-
-    func loadPlatformVolume(env: AppEnvironment) async {
-        let rows: [PlatformRow]? = try? await env.social.client.rpc("platform_volume")
-        if let rows { platformVolume = rows.reduce(0) { $0 + ($1.usd ?? 0) } }
-    }
-
     func load(env: AppEnvironment, address: Address?, perplKey: PerplApiKey?, force: Bool) async {
         guard let address else { reset(); return }
         if !force, loadedFor == address, let updatedAt, Date().timeIntervalSince(updatedAt) < 300 { return }

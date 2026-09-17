@@ -64,8 +64,7 @@ struct PortfolioView: View {
             .task(id: session.address) {
                 async let portfolio: () = model.load(env: env, address: session.address, perplKey: perplTrading.key, force: false)
                 async let holdings: () = assets.load(env: env, address: session.address, force: false)
-                async let platform: () = model.loadPlatformVolume(env: env)
-                _ = await (portfolio, holdings, platform)
+                _ = await (portfolio, holdings)
             }
         }
     }
@@ -97,14 +96,6 @@ struct PortfolioView: View {
                 metric("P&L", signed(totals.pnl) + (totals.pnlComplete ? "" : "*"), tint: totals.pnl < 0 ? .negative : totals.pnl > 0 ? .positive : .primary)
                 metric("Claimed fees", usd(totals.claimedFees), tint: totals.claimedFees > 0 ? .positive : .primary)
                 metric("Trades", "\(totals.trades)", tint: .primary)
-            }
-            if let platform = model.platformVolume {
-                Divider()
-                HStack {
-                    Text("Everyone on DyorHQ, all time").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(platform, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.caption.weight(.semibold)).monospacedDigit()
-                }
             }
             if model.loading, model.hasLoaded {
                 HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Refreshing…").font(.caption2).foregroundStyle(.tertiary) }

@@ -20,12 +20,16 @@ struct RootView: View {
             }
         }
         .animation(.default, value: session.state)
+        // The appearance lives on a View, not on the App's scene body: a scene body does not re-evaluate reliably on
+        // an observable change, and the stale scheme it left on the root view controller shadowed the window.
+        .preferredColorScheme(settings.appearance.colorScheme)
         // Privacy cover for the app-switcher snapshot: iOS screenshots the UI whenever the app leaves the foreground,
         // and that image is written to the app container. If a recovery phrase / private key were on screen (Import
         // Wallet), it would land in that snapshot. Covering the whole hierarchy the instant we're not active means the
         // snapshot only ever captures the cover, never a secret.
         .overlay { PrivacyCover(active: scenePhase == .active) }
-        .task { session.start() }
+        .task { session.start(); settings.appearance.apply() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { settings.appearance.apply() } }
         // Keep the per-wallet sessions tied to the active wallet: rebind whenever the signed-in address changes, so a
         // sign-out + import of a different wallet never carries over the previous account's social profile or its
         // authenticated Perpl trading session.

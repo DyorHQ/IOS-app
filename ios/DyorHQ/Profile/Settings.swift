@@ -1,5 +1,6 @@
 import DyorKit
 import SwiftUI
+import UIKit
 
 // The settings screens reached from Profile: wallets, security (passkeys + app lock), notifications, trading
 // defaults, language, and the appearance sheet. Plain grouped lists in DyorHQ's system, each doing one real thing.
@@ -363,6 +364,11 @@ struct AppearanceSheet: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .presentationDetents([.height(300)])
+        // A sheet keeps the scheme it was presented with, so switching from inside this one left a pale panel over a
+        // dark app (and the other way round). Styling the sheet from the chosen mode, and drawing its backdrop in
+        // SwiftUI instead of the default UIKit material, makes the whole sheet follow every tap immediately.
+        .environment(\.colorScheme, settings.appearance.resolved)
+        .presentationBackground(Color(uiColor: .systemGroupedBackground.resolvedColor(with: UITraitCollection(userInterfaceStyle: settings.appearance.resolved == .dark ? .dark : .light))))
     }
 
     private func swatch(_ color: Color, _ label: String) -> some View {
