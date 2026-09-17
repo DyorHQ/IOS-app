@@ -14,16 +14,16 @@
   Item URLs are `https://opensea.io/item/monad/<nft>/<tokenId>`; the collection page is the slug OpenSea assigns.
 - What the NFT points at today: the media is a JPEG in DyorHQ's Supabase bucket (`launch-media`, https URL, max 1600
   px, 5 MB), the `animation_url` slot is never filled by the app, and `external_url` is
-  `https://dyorhq.app/moments/<id>` (a domain DyorHQ does not own — the on-chain base must be corrected to
-  `https://dyorhq.fun/moments/<id>`).
+  `https://dyorhq.fun/moments/<id>` — the factory's `externalBaseURI` was corrected from the unregistered
+  `dyorhq.app` to `dyorhq.fun` on 2026-09-17 (tx `0x7f0757eb…3b75`), so every Moment (including #1) now resolves there.
 
 ## Orient: the gaps
 
 1. **Media.** Photo only, downscaled; no video; stored on a centralized bucket. "Make your favorite moments last
    forever" needs content-addressed storage (IPFS) so the NFT's image survives DyorHQ's servers.
 2. **Reach.** Nothing in the app links to OpenSea; sharing used a dead `dyorhq.app` link; the NFT has no page on
-   dyorhq.fun.
-3. **Collection quality.** No collection banner, wrong `external_url`, no metadata refresh call after graduation
+   dyorhq.fun. (Resolved: the app now links/shares to OpenSea and `external_url` points at `dyorhq.fun`.)
+3. **Collection quality.** No collection banner, no metadata refresh call after graduation
    (OpenSea relies on ERC-4906 events, which it honours on most chains but not guaranteed on Monad).
 4. **Discovery.** A wallet's NFTs (Moments and any other Monad collection) are not shown anywhere in the app.
 

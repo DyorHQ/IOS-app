@@ -141,8 +141,9 @@ the iOS launch needs is a handful of static files on any static host (Cloudflare
 - `/privacy` and `/terms` and `/support` — App Store Connect will not accept the app record without a privacy policy
   URL, and the in-app Get Help screen links all three. Support must show real contact info (team@dyorhq.fun + a legal
   address).
-- `/moments/<id>` — every Moment NFT's `external_url` points here. Today it points at `dyorhq.app` (NOT registered —
-  NXDOMAIN), so all 7 editions show a dead website link on OpenSea right now.
+- `/moments/<id>` — every Moment NFT's `external_url` points here. The on-chain `externalBaseURI` was corrected to
+  `https://dyorhq.fun/moments/` on 2026-09-17 (tx `0x7f0757eb…3b75`), so OpenSea now links here; add these pages so
+  the link resolves instead of 404ing.
 - `/export` — the Privy embedded-wallet key-export page (the iOS SDK has no native export).
 
 Steps:
