@@ -85,11 +85,11 @@ contract NFTMetadataTest is MomentsBase {
 
         // external links appear once governance sets the base (metadata only)
         vm.prank(gov);
-        factory.setExternalBaseURI("https://dyorhq.app/moments/");
+        factory.setExternalBaseURI("https://dyorhq.fun/moments/");
         json = _decode(nft.tokenURI(1));
-        assertEq(vm.parseJsonString(json, ".external_url"), string.concat("https://dyorhq.app/moments/", vm.toString(id)));
+        assertEq(vm.parseJsonString(json, ".external_url"), string.concat("https://dyorhq.fun/moments/", vm.toString(id)));
         cjson = _decode(nft.contractURI());
-        assertEq(vm.parseJsonString(cjson, ".external_link"), string.concat("https://dyorhq.app/moments/", vm.toString(id)));
+        assertEq(vm.parseJsonString(cjson, ".external_link"), string.concat("https://dyorhq.fun/moments/", vm.toString(id)));
 
         // closing fixes the edition: ERC-4906 batch refresh + ERC-7572 signal, rank gets max_value, edition size trait
         for (uint256 i = 0; i < 11; i++) _collect(id, bob, 1); // reserve 9.75
