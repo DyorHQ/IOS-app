@@ -126,20 +126,20 @@ struct AssetsCard: View {
                     ForEach(model.nfts) { nft in
                         Button { open(nft) } label: {
                             VStack(alignment: .leading, spacing: 6) {
-                                ZStack {
-                                    Color(.tertiarySystemFill)
-                                    if let url = nft.imageURL {
-                                        AsyncImage(url: url) { phase in
-                                            if let image = phase.image { image.resizable().scaledToFill() }
-                                            else if phase.error != nil { Image(systemName: "photo").foregroundStyle(.secondary) }
-                                            else { ProgressView().controlSize(.small) }
+                                Color(.tertiarySystemFill)
+                                    .aspectRatio(1, contentMode: .fit)
+                                    .overlay {
+                                        if let url = nft.imageURL {
+                                            AsyncImage(url: url) { phase in
+                                                if let image = phase.image { image.resizable().scaledToFill() }
+                                                else if phase.error != nil { Image(systemName: "photo").foregroundStyle(.secondary) }
+                                                else { ProgressView().controlSize(.small) }
+                                            }
+                                        } else {
+                                            Image(systemName: "seal").foregroundStyle(.secondary)
                                         }
-                                    } else {
-                                        Image(systemName: "seal").foregroundStyle(.secondary)
                                     }
-                                }
-                                .aspectRatio(1, contentMode: .fit)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 Text(nft.name).font(.caption.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
                                 Text(model.momentsByNFT[nft.contract] != nil ? "Moment · OpenSea" : "OpenSea").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                             }
