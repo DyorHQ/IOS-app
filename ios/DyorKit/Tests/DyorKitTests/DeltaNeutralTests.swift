@@ -103,6 +103,28 @@ final class DeltaNeutralTests: XCTestCase {
         XCTAssertTrue(problems.contains { $0.contains("TWAP slices") })
     }
 
+    func testAutoSlicesAndEntryLength() {
+        XCTAssertEqual(DeltaNeutral.autoSlices(spotBudget: 50), 1)
+        XCTAssertEqual(DeltaNeutral.autoSlices(spotBudget: 200), 2)
+        XCTAssertEqual(DeltaNeutral.autoSlices(spotBudget: 250), 3)
+        XCTAssertEqual(DeltaNeutral.autoSlices(spotBudget: 5_000), 8)
+        XCTAssertEqual(DeltaNeutral.autoSlices(spotBudget: 0), 1)
+        XCTAssertEqual(DeltaNeutral.entryMinutes(slices: 4, intervalSeconds: 45), 2.25, accuracy: 1e-9)
+        XCTAssertEqual(DeltaNeutral.entryMinutes(slices: 1, intervalSeconds: 45), 0, accuracy: 1e-9)
+    }
+
+    func testParametersDecodeOlderRecords() throws {
+        let json = Data(#"{"spotCapitalUSD":150,"perpLeverage":1}"#.utf8)
+        let p = try JSONDecoder().decode(DeltaNeutral.Parameters.self, from: json)
+        XCTAssertEqual(p.spotCapitalUSD, 150)
+        XCTAssertEqual(p.perpLeverage, 1)
+        XCTAssertEqual(p.twapSlices, DeltaNeutral.Parameters.default.twapSlices)
+        XCTAssertTrue(p.autoExitOnFundingFlip)
+        XCTAssertFalse(p.topUpAUSDFromUSDC)
+        let encoded = try JSONEncoder().encode(p)
+        XCTAssertEqual(try JSONDecoder().decode(DeltaNeutral.Parameters.self, from: encoded), p)
+    }
+
     func testSpotOptionsCoverHedgeableMarkets() {
         for id in DeltaNeutral.hedgeableMarketIds {
             let options = DeltaNeutral.spotOptions(for: id)

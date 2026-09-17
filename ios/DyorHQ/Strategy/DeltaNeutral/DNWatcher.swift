@@ -32,6 +32,7 @@ final class DNWatcher {
         if let account { positions = (try? await env.perpl.positions(account, markets: markets)) ?? [] }
         let notify = settings.notificationsEnabled && settings.notifyStrategy
         env.dnWatcher.lastCheck = Date()
+        var autoExits: [String] = []
 
         for var s in strategies {
             guard let market = markets.first(where: { $0.id == s.marketId }) else { continue }
@@ -39,13 +40,15 @@ final class DNWatcher {
             let hourly = market.fundingRateHourly
             let position = positions.first { $0.perpId == s.marketId && $0.side == .short }
 
-            // Funding sign: notify the moment it flips either way.
+            // Funding sign: notify the moment it flips either way, in dollars a day on this position.
             let positive = hourly > 0
             if let last = s.lastFundingSignPositive, last != positive, hourly != 0 {
                 let pct = NumberStyle.percent(hourly * 100, fractionDigits: 4)
+                let size = position?.size ?? s.perpShortSize
+                let perDay = abs(size * market.mark * PerplFunding.daily(hourly: hourly)).formatted(.currency(code: "USD"))
                 let text = positive
-                    ? "Funding on \(market.asset) flipped back to \(pct)/h: longs pay shorts again, your hedge is earning."
-                    : "Funding on \(market.asset) flipped to \(pct)/h: shorts now pay longs, your hedge is PAYING funding every hour."
+                    ? "Funding on \(market.asset) flipped back to \(pct)/h: longs pay shorts again, your hedge earns about \(perDay) a day."
+                    : "Funding on \(market.asset) flipped to \(pct)/h: shorts now pay longs, your hedge is paying about \(perDay) a day."
                 s.log(text)
                 if notify { Notifications.strategy(kind: .funding, title: positive ? "Funding turned positive" : "Funding flipped against you", body: text, strategyID: s.id) }
             }
@@ -59,9 +62,16 @@ final class DNWatcher {
                     if hourly <= s.parameters.exitFundingHourly {
                         s.intervalsBelowThreshold += 1
                         if s.intervalsBelowThreshold == s.parameters.exitAfterIntervals {
-                            let text = "Funding on \(market.asset) has been at or below your exit threshold for \(s.intervalsBelowThreshold) intervals. Consider exiting the \(s.symbol) hedge."
-                            s.log(text)
-                            if notify { Notifications.strategy(kind: .funding, title: "Exit recommended", body: text, strategyID: s.id) }
+                            if s.parameters.autoExitOnFundingFlip, s.status == .running, !env.dnRunner.isRunning {
+                                let text = "Funding on \(market.asset) has been at or below your exit level for \(s.intervalsBelowThreshold) hourly settlements. Exiting now: closing the short, then selling the \(s.spotSymbol)."
+                                s.log(text)
+                                autoExits.append(s.id)
+                                if notify { Notifications.strategy(kind: .funding, title: "Exiting: funding turned against you", body: text, strategyID: s.id) }
+                            } else {
+                                let text = "Funding on \(market.asset) has been at or below your exit level for \(s.intervalsBelowThreshold) hourly settlements. Consider exiting the \(s.symbol) hedge."
+                                s.log(text)
+                                if notify { Notifications.strategy(kind: .funding, title: "Exit recommended", body: text, strategyID: s.id) }
+                            }
                         }
                     } else {
                         s.intervalsBelowThreshold = 0
@@ -111,5 +121,7 @@ final class DNWatcher {
                 }
             }
         }
+        // The automatic exit starts after the records are saved; the runner re-reads the strategy itself.
+        if let id = autoExits.first { env.dnRunner.beginExit(id: id, env: env) }
     }
 }

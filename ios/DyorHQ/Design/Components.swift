@@ -252,7 +252,8 @@ struct PrimaryButton: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
-            .foregroundStyle(foreground)
+            // Disabled prominent buttons get a pale fill, on which the white label vanishes.
+            .foregroundStyle(isDisabled && !isBusy ? AnyShapeStyle(.secondary) : AnyShapeStyle(foreground))
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)

@@ -11,6 +11,8 @@ struct StrategyView: View {
     @State private var goCopyTrading = false
     @State private var goDeltaNeutral = false
     @State private var deltaNeutral: [DNStrategy] = []
+    /// The best funding a short earns right now across the hedgeable Perpl markets, as one line for the card.
+    @State private var bestFunding: String?
 
     var body: some View {
         NavigationStack {
@@ -23,9 +25,9 @@ struct StrategyView: View {
 
                     StrategyCard(
                         eyebrow: "EARN FUNDING", title: "Delta Neutral", symbol: "asset:scale.balance",
-                        tint: .allocationPerps, tags: ["Spot + Perps", "Funding", "TWAP entry"],
-                        detail: "Buy the asset on spot, short the same size on Perpl, and collect the hourly funding while longs pay shorts. Fees, funding and liquidation distance are shown before you start.",
-                        cta: "Set up a hedge", status: .live
+                        tint: .allocationPerps, tags: [bestFunding ?? "Live Perpl funding", "Spot + Perps"],
+                        detail: "Buy the asset, short the same size on Perpl, collect the hourly funding. What it earns, costs and risks fit on one screen.",
+                        cta: "Start earning", status: .live
                     ) { DeltaNeutralView() }
 
                     StrategyCard(
@@ -49,6 +51,7 @@ struct StrategyView: View {
             .navigationDestination(isPresented: $goCopyTrading) { CopyTradingView() }
             .navigationDestination(isPresented: $goDeltaNeutral) { DeltaNeutralView() }
             .task(id: session.address) { refreshPending() }
+            .task { await loadFunding() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in refreshPending() }
             .onReceive(NotificationCenter.default.publisher(for: .copySignalsChanged)) { _ in refreshPending() }
             .onReceive(NotificationCenter.default.publisher(for: .dnStrategyChanged)) { _ in refreshPending() }
@@ -62,8 +65,17 @@ struct StrategyView: View {
         deltaNeutral = DNStore.active(owner: session.address)
     }
 
+    private func loadFunding() async {
+        guard let markets = try? await env.perpl.markets(ids: DeltaNeutral.hedgeableMarketIds), !markets.isEmpty else { return }
+        if let best = markets.max(by: { $0.fundingRateHourly < $1.fundingRateHourly }), best.fundingRateHourly > 0 {
+            bestFunding = "\(best.asset) pays \(NumberStyle.percent(PerplFunding.annualized(hourly: best.fundingRateHourly) * 100, fractionDigits: 1, signed: false))/yr now"
+        } else {
+            bestFunding = "No market pays shorts right now"
+        }
+    }
+
     private var deltaNeutralBanner: some View {
-        Button { goDeltaNeutral = true } label: {
+        NavigationLink { DeltaNeutralView() } label: {
             HStack(spacing: 12) {
                 Image("scale.balance").font(.headline).foregroundStyle(.white)
                     .frame(width: 38, height: 38).background(Color.allocationPerps, in: RoundedRectangle(cornerRadius: 11, style: .continuous))

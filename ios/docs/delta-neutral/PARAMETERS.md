@@ -35,7 +35,23 @@ and defaults to the plain asset.
 | Market order | marketable limit at the slippage bound, IOC; VWAP fill | docs.perpl.xyz/exchange/order-types |
 | Native TWAP | "coming soon" on Perpl — the app slices both legs itself | same |
 
-## 3. Parameters (`DeltaNeutral.Parameters`)
+## 3. Simple mode and Pro mode
+
+The setup screen opens in **Simple** mode: market chips ranked by what a short earns right now (green pays), an
+amount in USDC with quick amounts, and one "At a Glance" card — what the amount earns a day at today's rate, what
+the round trip costs and when it pays for itself, the rally that would liquidate the short (with 1×/2× chips), and a
+readiness checklist (USDC for the spot leg, AUSD for the margin, with a one-tap opt-in to convert USDC for a
+shortfall). Each line has an ⓘ that opens the full table. Details holds the exact legs, the entry plan and the
+auto-exit switch. Starting shows a receipt (buy, short, margin, entry length, costs, earnings, auto exit, "keep the
+app open for N minutes"). The dashboard opens on one card — earned, per day now, health — with one primary action
+and the rest in a menu; legs, funding, P&L, health and events sit under Details and Activity.
+
+Simple mode picks `twapSlices` itself: one per $100 of spot, 1–8, doubled (up to 20) while one slice's quoted impact
+exceeds `maxSpotImpactBps`; the interval stays 45 s. The market defaults to the best positive funding and the amount
+to half the wallet's USDC ($20–$500). **Pro** mode (menu) shows every parameter and table and leaves the steppers to
+the user. The three "how it works" cards appear once.
+
+## 4. Parameters (`DeltaNeutral.Parameters`)
 
 | Parameter | Default | Bounds | Meaning |
 |---|---|---|---|
@@ -53,8 +69,9 @@ and defaults to the plain asset.
 | `takerFeeBps` / `makerFeeBps` | 6.9 / 0.9 | 0 … 10 | Perpl open fees (tier 1) |
 | `marginBufferFraction` | 2 % | 0 … 50 % | Extra **AUSD** deposited above the margin for the open fee / first adverse intervals |
 | `topUpAUSDFromUSDC` | off | — | Swap USDC → AUSD for a margin shortfall before depositing (off: the perp leg must be funded in AUSD) |
+| `autoExitOnFundingFlip` | on | — | After `exitAfterIntervals` settlements at or below `exitFundingHourly`, the watcher starts the exit itself (app open) |
 
-## 4. Formulas
+## 5. Formulas
 
 Sizing (both legs equal):
 ```
@@ -89,7 +106,7 @@ distance % = (P_liq − mark) / mark × 100
 P&L on the dashboard: `funding (premium + realized) + price P&L (spot value − spot cost + short's price move) − fees
 (perp open fee + quoted spot execution cost)`.
 
-## 5. Execution (what the app does, in order)
+## 6. Execution (what the app does, in order)
 
 1. Refuse if the wallet already holds a position on the market (accounting must be exact).
 2. Ensure Perpl collateral: account exists and holds ≥ margin × (1 + buffer) (≥ $10 to open). The AUSD is deposited
@@ -100,13 +117,14 @@ P&L on the dashboard: `funding (premium + realized) + price P&L (spot value − 
    exactly the acquired units (lot-rounded, never above target) as an on-chain IOC market order at the slippage bound.
    Partial fills are read back from the position. Progress is persisted after every transaction.
 4. After the last slice, top up the hedge for any residual ≥ 1 lot.
-5. Monitor every 30 s while the app is open: funding sign (notify on flip), intervals below threshold (notify "exit
-   recommended"), liquidation distance (notify + Add margin), drift, missing hedge.
+5. Monitor every 30 s while the app is open: funding sign (notify on flip, in dollars a day), intervals below the
+   exit level (start the exit when `autoExitOnFundingFlip` is on, else notify "exit recommended"), liquidation
+   distance (notify + Add margin), drift, missing hedge.
 6. Exit: close the short (market, free), then sell the spot to USDC in slices.
 
 Every transaction is signed by the session wallet on the device; nothing is delegated.
 
-## 6. Blockers and honest limits
+## 7. Blockers and honest limits
 
 1. **No execution while the app is closed.** iOS suspends the app; the TWAP entry, the exit and the monitor run only
    in the foreground (the run resumes on next open). A funding flip at 3 a.m. is noticed at the next open.

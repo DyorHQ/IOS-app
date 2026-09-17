@@ -15,6 +15,10 @@ final class AppSettings {
     var notifyCopyTrades: Bool { didSet { store(notifyCopyTrades, "settings.notifyCopy") } }
     /// Notify on strategy events: funding flips, liquidation warnings, TWAP progress, exits.
     var notifyStrategy: Bool { didSet { store(notifyStrategy, "settings.notifyStrategy") } }
+    /// Strategy screens show every parameter and table (Pro) instead of the one-glance Simple layout.
+    var proStrategies: Bool { didSet { store(proStrategies, "settings.proStrategies") } }
+    /// The Delta Neutral "how it works" cards have been shown once.
+    var dnIntroSeen: Bool { didSet { store(dnIntroSeen, "settings.dnIntroSeen") } }
     /// Require Face ID / Touch ID before signing a transaction — a device-side second factor for a self-custodial
     /// wallet, enforced in the confirmation sheet.
     var requireBiometrics: Bool { didSet { store(requireBiometrics, "settings.biometrics") } }
@@ -33,6 +37,8 @@ final class AppSettings {
         notifyPriceAlerts = defaults.object(forKey: "settings.notifyPrice") as? Bool ?? false
         notifyCopyTrades = defaults.object(forKey: "settings.notifyCopy") as? Bool ?? true
         notifyStrategy = defaults.object(forKey: "settings.notifyStrategy") as? Bool ?? true
+        proStrategies = defaults.object(forKey: "settings.proStrategies") as? Bool ?? false
+        dnIntroSeen = defaults.object(forKey: "settings.dnIntroSeen") as? Bool ?? false
         requireBiometrics = defaults.object(forKey: "settings.biometrics") as? Bool ?? false
         defaultLeverage = defaults.object(forKey: "settings.leverage") as? Double ?? 2
         slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? 50

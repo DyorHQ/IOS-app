@@ -75,7 +75,8 @@ public enum DeltaNeutral {
         public var perpSlippageBps: Int
         /// The hourly funding rate (fraction) below which the position is no longer earning enough; 0 = any negative rate.
         public var exitFundingHourly: Double
-        /// Consecutive settlement intervals at or below `exitFundingHourly` before an exit is recommended.
+        /// Consecutive settlement intervals at or below `exitFundingHourly` before an exit is recommended (or, with
+        /// `autoExitOnFundingFlip`, started).
         public var exitAfterIntervals: Int
         /// Alert when the mark is within this percentage of the short's liquidation price.
         public var liquidationBufferPct: Double
@@ -91,12 +92,15 @@ public enum DeltaNeutral {
         /// When the wallet's AUSD plus the free Perpl balance do not cover the margin, swap USDC → AUSD for the
         /// shortfall before depositing. Off by default: the perp leg is meant to be funded in AUSD.
         public var topUpAUSDFromUSDC: Bool
+        /// Exit on its own (close the short, sell the spot) once funding has sat at or below `exitFundingHourly` for
+        /// `exitAfterIntervals` consecutive settlements. Only while the app is open — nothing runs otherwise.
+        public var autoExitOnFundingFlip: Bool
 
         public init(spotCapitalUSD: Double = 200, perpLeverage: Double = 2, twapSlices: Int = 4, twapIntervalSeconds: Int = 45,
                     spotSlippageBps: Int = 50, maxSpotImpactBps: Int = 30, perpSlippageBps: Int = 50,
                     exitFundingHourly: Double = 0, exitAfterIntervals: Int = 3, liquidationBufferPct: Double = 15,
                     maxDeltaDriftPct: Double = 2, takerFeeBps: Double = 6.9, makerFeeBps: Double = 0.9,
-                    marginBufferFraction: Double = 0.02, topUpAUSDFromUSDC: Bool = false) {
+                    marginBufferFraction: Double = 0.02, topUpAUSDFromUSDC: Bool = false, autoExitOnFundingFlip: Bool = true) {
             self.spotCapitalUSD = spotCapitalUSD; self.perpLeverage = perpLeverage; self.twapSlices = twapSlices
             self.twapIntervalSeconds = twapIntervalSeconds; self.spotSlippageBps = spotSlippageBps
             self.maxSpotImpactBps = maxSpotImpactBps; self.perpSlippageBps = perpSlippageBps
@@ -104,9 +108,32 @@ public enum DeltaNeutral {
             self.liquidationBufferPct = liquidationBufferPct; self.maxDeltaDriftPct = maxDeltaDriftPct
             self.takerFeeBps = takerFeeBps; self.makerFeeBps = makerFeeBps
             self.marginBufferFraction = marginBufferFraction; self.topUpAUSDFromUSDC = topUpAUSDFromUSDC
+            self.autoExitOnFundingFlip = autoExitOnFundingFlip
         }
 
         public static let `default` = Parameters()
+
+        /// Records written by older builds may lack newer keys; every field falls back to its default.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let d = Parameters()
+            spotCapitalUSD = try c.decodeIfPresent(Double.self, forKey: .spotCapitalUSD) ?? d.spotCapitalUSD
+            perpLeverage = try c.decodeIfPresent(Double.self, forKey: .perpLeverage) ?? d.perpLeverage
+            twapSlices = try c.decodeIfPresent(Int.self, forKey: .twapSlices) ?? d.twapSlices
+            twapIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .twapIntervalSeconds) ?? d.twapIntervalSeconds
+            spotSlippageBps = try c.decodeIfPresent(Int.self, forKey: .spotSlippageBps) ?? d.spotSlippageBps
+            maxSpotImpactBps = try c.decodeIfPresent(Int.self, forKey: .maxSpotImpactBps) ?? d.maxSpotImpactBps
+            perpSlippageBps = try c.decodeIfPresent(Int.self, forKey: .perpSlippageBps) ?? d.perpSlippageBps
+            exitFundingHourly = try c.decodeIfPresent(Double.self, forKey: .exitFundingHourly) ?? d.exitFundingHourly
+            exitAfterIntervals = try c.decodeIfPresent(Int.self, forKey: .exitAfterIntervals) ?? d.exitAfterIntervals
+            liquidationBufferPct = try c.decodeIfPresent(Double.self, forKey: .liquidationBufferPct) ?? d.liquidationBufferPct
+            maxDeltaDriftPct = try c.decodeIfPresent(Double.self, forKey: .maxDeltaDriftPct) ?? d.maxDeltaDriftPct
+            takerFeeBps = try c.decodeIfPresent(Double.self, forKey: .takerFeeBps) ?? d.takerFeeBps
+            makerFeeBps = try c.decodeIfPresent(Double.self, forKey: .makerFeeBps) ?? d.makerFeeBps
+            marginBufferFraction = try c.decodeIfPresent(Double.self, forKey: .marginBufferFraction) ?? d.marginBufferFraction
+            topUpAUSDFromUSDC = try c.decodeIfPresent(Bool.self, forKey: .topUpAUSDFromUSDC) ?? d.topUpAUSDFromUSDC
+            autoExitOnFundingFlip = try c.decodeIfPresent(Bool.self, forKey: .autoExitOnFundingFlip) ?? d.autoExitOnFundingFlip
+        }
 
         /// Hard bounds a launch must satisfy; each string is a user-facing problem.
         public func problems(marketMaxLeverage: Double) -> [String] {
@@ -126,6 +153,20 @@ public enum DeltaNeutral {
             if maxDeltaDriftPct < 0.5 || maxDeltaDriftPct > 20 { out.append("Delta drift tolerance must be 0.5–20%.") }
             return out
         }
+    }
+
+    // MARK: TWAP defaults
+
+    /// Slice count for the Simple setup: one slice per $100 of spot, between 1 and 8. The setup doubles it (up to 20)
+    /// while a slice's quoted impact still exceeds the cap.
+    public static func autoSlices(spotBudget: Double) -> Int {
+        guard spotBudget.isFinite, spotBudget > 0 else { return 1 }
+        return max(1, min(8, Int((spotBudget / 100).rounded(.up))))
+    }
+
+    /// Wall-clock length of a sliced entry or exit; the first slice is immediate.
+    public static func entryMinutes(slices: Int, intervalSeconds: Int) -> Double {
+        Double(max(0, slices - 1)) * Double(intervalSeconds) / 60
     }
 
     // MARK: Sizing
