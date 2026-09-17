@@ -21,6 +21,7 @@ struct MomentDetailView: View {
     @State private var holderStats: MomentHolderStats?
     @State private var loadError: String?
     @State private var action: MomentAction?
+    @Environment(\.openURL) private var openURL
 
     private enum MomentAction: Identifiable {
         case collect, claim, creatorProceeds, creatorFees, platformProceeds, platformFees, treasuryProceeds, retry, expire, buyback
@@ -52,8 +53,9 @@ struct MomentDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if let url = URL(string: detail?.externalURL ?? ""), !(detail?.externalURL ?? "").isEmpty {
-                    ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
+                ShareLink(item: OpenSea.collection(contract: m.nft), subject: Text(info.name),
+                          message: Text("\(info.name) — a Moment on Monad, kept forever. Collect it on DyorHQ, \(SupportLinks.tagline).")) {
+                    Image(systemName: "square.and.arrow.up")
                 }
             }
         }
@@ -106,7 +108,7 @@ struct MomentDetailView: View {
                 LabeledContent("Window closes", value: MomentsFormat.date(m.deadline))
             }
         } footer: {
-            Text("Every collect puts \(NumberStyle.basisPoints(m.reserveBps)) of its USDC into the reserve. When the reserve reaches the threshold the coin graduates into a locked Uniswap v4 pool at the same price collectors paid, and vesting starts. If the window closes first, the reserve is wound down instead.")
+            Text("\(NumberStyle.basisPoints(m.reserveBps)) of every collect builds the reserve; at the threshold the coin graduates into a locked Uniswap pool.")
         }
     }
 
@@ -177,7 +179,7 @@ struct MomentDetailView: View {
         } header: {
             Text("Collect")
         } footer: {
-            Text("Paid in USDC. \(NumberStyle.basisPoints(m.reserveBps)) goes to the pool reserve, \(NumberStyle.basisPoints(m.creatorBps)) to the creator and \(NumberStyle.basisPoints(m.platformBps)) to DyorHQ. Coins are owed at one price for everyone and vest 60% at graduation, 80% after a month, all after two. The first collect approves USDC for Permit2 once; after that each collect is one signed transaction.")
+            Text("Paid in USDC: \(NumberStyle.basisPoints(m.reserveBps)) reserve, \(NumberStyle.basisPoints(m.creatorBps)) creator, \(NumberStyle.basisPoints(m.platformBps)) DyorHQ. Your NFT appears on OpenSea as soon as it settles.")
         }
     }
 
@@ -188,7 +190,7 @@ struct MomentDetailView: View {
 
     private var pendingSection: some View {
         Section {
-            Text("The reserve reached the threshold but graduation has not completed. Anyone can retry it; the collect path is locked meanwhile.")
+            Text("Graduation has not completed yet; anyone can retry it.")
                 .font(.footnote).foregroundStyle(.secondary)
             if info.ledger.stuckSince > 0 { LabeledContent("First failure", value: MomentsFormat.date(info.ledger.stuckSince)) }
             Button("Retry Graduation", systemImage: "arrow.clockwise") { Haptics.tap(); action = .retry }.disabled(!session.canSign)
@@ -200,7 +202,7 @@ struct MomentDetailView: View {
     private var expiredSection: some View {
         Section {
             LabeledContent("Ended", value: MomentsFormat.date(info.ledger.endedAt))
-            Text("The window closed before the reserve reached the threshold. The reserve was wound down: \(NumberStyle.basisPoints(m.expiryCreatorBps)) to the creator and the rest to the treasury, each pulled by its beneficiary. Editions stay with their collectors; no coin was ever minted.")
+            Text("The window closed before the threshold; the reserve was wound down. Editions stay with their collectors.")
                 .font(.footnote).foregroundStyle(.secondary)
         } header: {
             Text("Expired")
@@ -223,6 +225,9 @@ struct MomentDetailView: View {
         Section {
             if account.nftBalance > 0 {
                 LabeledContent("Editions", value: account.nftIds.isEmpty ? "\(account.nftBalance)" : account.nftIds.prefix(6).map { "#\($0)" }.joined(separator: ", ") + (account.nftIds.count > 6 ? " +\(account.nftIds.count - 6)" : ""))
+                ForEach(account.nftIds.prefix(3), id: \.self) { id in
+                    Link(destination: OpenSea.item(contract: m.nft, tokenId: id)) { Label("View #\(id) on OpenSea", systemImage: "sailboat") }
+                }
             }
             if account.entitlement > 0 { LabeledContent("Coins owed", value: "\(MomentsFormat.coins(account.entitlement)) $\(info.symbol)") }
             if info.graduated {
@@ -263,7 +268,7 @@ struct MomentDetailView: View {
         } header: {
             Text("You Created This")
         } footer: {
-            Text("Your \(NumberStyle.basisPoints(m.creatorBps)) of every collect and, after graduation, \(NumberStyle.basisPoints(MomentsConstants.hookCreatorShareBps)) of the 1% Moments fee on every pool trade accrue here and are yours to pull any time. Your coin allocation (\(NumberStyle.basisPoints(m.creatorAllocBps)) of the supply) vests 20% at graduation and 16% a month.")
+            Text("\(NumberStyle.basisPoints(m.creatorBps)) of every collect, plus \(NumberStyle.basisPoints(MomentsConstants.hookCreatorShareBps)) of the pool's 1% fee after graduation, accrue here for you.")
         }
     }
 
@@ -307,7 +312,7 @@ struct MomentDetailView: View {
         } header: {
             Text("Pool")
         } footer: {
-            Text("A full-range Uniswap v4 position locked forever. Trades pay the 0.5% pool fee (which deepens the position) plus the 1% Moments fee: \(NumberStyle.basisPoints(MomentsConstants.hookCreatorShareBps)) to the creator, \(NumberStyle.basisPoints(MomentsConstants.hookPlatformShareBps)) to DyorHQ, \(NumberStyle.basisPoints(MomentsConstants.hookBuybackShareBps)) to buybacks that anyone can run once an hour (1 USDC minimum, at most 1% price impact) with the coins bought locked as more liquidity.")
+            Text("Liquidity locked forever in Uniswap v4. Every trade pays 1.5%: pool, creator, DyorHQ and buybacks.")
         }
     }
 
@@ -343,15 +348,15 @@ struct MomentDetailView: View {
             if !info.provenance.mediaHash.isEmpty, info.provenance.mediaHash.contains(where: { $0 != 0 }) {
                 LabeledContent("Media hash") { Text(info.provenance.mediaHash.hexString.prefix(18) + "…").font(.footnote.monospaced()).foregroundStyle(.secondary) }
             }
-            if let url = info.provenance.mediaURL { Link(destination: url) { Label("Open media", systemImage: "photo") } }
+            Link(destination: OpenSea.collection(contract: m.nft)) { Label("View on OpenSea", systemImage: "sailboat") }
             if let url = info.provenance.animationURL { Link(destination: url) { Label("Open video", systemImage: "play.rectangle") } }
+            else if let url = info.provenance.mediaURL { Link(destination: url) { Label("Open media", systemImage: "photo") } }
             AddressRow(title: "Coin", address: m.coin)
             AddressRow(title: "NFT", address: m.nft)
-            Link(destination: Monad.explorerToken(m.nft)) { Label("View collection on Monadscan", systemImage: "safari") }
         } header: {
             Text("About this Moment")
         } footer: {
-            Text("Fixed at publish. No admin can change a live Moment: not the price, the split, the deadline nor the beneficiaries.")
+            Text("Fixed at publish; nothing about a live Moment can be changed.")
         }
     }
 
@@ -368,13 +373,16 @@ struct MomentDetailView: View {
                 },
                 onDone: { finished() },
                 onCompleted: { hash in
-                    ActivityLog.record(ActivityRecord(kind: .moment, title: "Collected \(info.name)", subtitle: "\(quantity) \(quantity == 1 ? "edition" : "editions") · \(MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))", hash: hash), owner: session.address)
-                }
+                    ActivityLog.record(ActivityRecord(kind: .moment, title: "Collected \(info.name)", subtitle: "\(quantity) \(quantity == 1 ? "edition" : "editions") · \(MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))", hash: hash, usd: MomentsMath.usdc(quote?.gross ?? m.price * BigUInt(quantity))), owner: session.address)
+                },
+                // The settled sheet's View control opens the newest edition on OpenSea, where the NFT now lives.
+                onView: { _ in openURL(OpenSea.item(contract: m.nft, tokenId: BigUInt((detail?.supply.collects ?? 0) + quantity))) }
             ) {
                 DetailRow("Moment", "\(info.name) ($\(info.symbol))")
                 DetailRow("Editions", "\(quantity)")
                 DetailRow("You pay", MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))
                 DetailRow("Coins owed", "\(MomentsFormat.coins(quote?.entitlement ?? 0)) $\(info.symbol)")
+                DetailRow("Your NFT", "On OpenSea once it settles")
                 if quote?.terminal == true { DetailRow("Graduates", "Yes, in this transaction", tint: .brand) }
             }
         case .claim:

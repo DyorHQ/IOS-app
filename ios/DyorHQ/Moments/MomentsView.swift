@@ -104,11 +104,11 @@ struct MomentsView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("COLLECT A MOMENT").font(.caption.weight(.semibold)).tracking(1.5).foregroundStyle(.secondary)
-            Text("Every collect funds the coin.").font(.system(.title, design: .serif).weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+            Text("MOMENTS").font(.caption.weight(.semibold)).tracking(1.5).foregroundStyle(.secondary)
+            Text("Make your favorite moments last forever.").font(.system(.title, design: .serif).weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+            Text("Publish a photo or video as an NFT on Monad. Share it with everyone and earn every time it's collected.")
+                .font(.subheadline).foregroundStyle(.secondary)
             if let policy = model.policy {
-                Text("Collect an edition in USDC and you are owed the coin at one price. Once the reserve reaches \(MomentsFormat.usdc(policy.threshold)) the coin graduates into a locked Uniswap pool and vesting starts.")
-                    .font(.subheadline).foregroundStyle(.secondary)
                 if policy.publishingPaused {
                     Label("Publishing is paused by governance; collecting continues.", systemImage: "pause.circle").font(.caption).foregroundStyle(Color.attention)
                 }
@@ -120,7 +120,7 @@ struct MomentsView: View {
         VStack(spacing: 8) {
             Image(systemName: "camera.aperture").font(.largeTitle).foregroundStyle(Color.brand)
             Text(filter == .all ? "No Moments yet" : "Nothing here yet").font(.headline)
-            Text(filter == .all ? "Be the first: publish a moment with its photo, place and date." : "Change the filter to see other Moments.")
+            Text(filter == .all ? "Be the first: publish a photo or video and make it last forever." : "Change the filter to see other Moments.")
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if filter == .all, session.canSign {
                 Button("Publish a Moment") { Haptics.tap(); showCreate = true }.buttonStyle(.borderedProminent).foregroundStyle(.white).padding(.top, 4)
