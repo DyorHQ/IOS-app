@@ -13,7 +13,7 @@ import {MomentsFactory} from "../../src/moments/MomentsFactory.sol";
 ///           forge script ... --sig "applyPolicy()"        # anyone, once the timelock has elapsed
 ///           forge script ... --sig "cancelPolicy()"       # owner
 ///           PAUSED=true forge script ... --sig "setPaused()"
-///           BASE=https://dyorhq.app/moments/ forge script ... --sig "setBase()"
+///           BASE=https://dyorhq.fun/moments/ forge script ... --sig "setBase()"
 ///           forge script ... --sig "show()"         # read-only
 contract PolicyOps is Script {
     MomentsFactory factory;
