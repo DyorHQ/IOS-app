@@ -36,16 +36,6 @@ enum Notifications {
              body: "\(symbol) is now \(NumberStyle.number(price)) — \(above ? "above" : "below") your \(NumberStyle.number(target)) target.", route: .home)
     }
 
-    /// A copied trader made a trade. The body prompts the user to open Strategy → Copy Trading to confirm or decline.
-    static func copyTrade(trader: String, action: String) {
-        post(kind: .copyTrade, title: "Copy signal: \(trader)", body: "\(action) — open Copy Trading to confirm or decline.", route: .strategy)
-    }
-
-    /// Delta-neutral strategy events: entries, exits, funding flips, risk alerts.
-    static func strategy(kind: AppNotification.Kind = .strategy, title: String, body: String, strategyID: String) {
-        post(kind: kind, title: title, body: body, route: .deltaNeutral, reference: strategyID)
-    }
-
     /// Records the notification in the in-app center and delivers it as a system notification (when permitted).
     static func post(kind: AppNotification.Kind, title: String, body: String, route: AppNotification.Route = .none, reference: String? = nil) {
         NotificationHub.shared.post(kind: kind, title: title, body: body, route: route, reference: reference)

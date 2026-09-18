@@ -2,8 +2,7 @@ import DyorKit
 import Foundation
 import Observation
 
-/// Which trading interface the Trade tab shows. Swap and Perps share one tab, switched by a top toggle; this later
-/// gains a Strategy mode (copy-trading, market-making) in place of raw Perps.
+/// Which trading interface the Trade tab shows. Swap and Perps share one tab, switched by a top toggle.
 enum TradeMode: String, CaseIterable, Identifiable {
     case swap, perps
     var id: String { rawValue }
@@ -40,8 +39,6 @@ final class Router {
     var pendingLaunch: Launch?
     /// A Moment to open on the Moments tab's detail page.
     var pendingMoment: MomentInfo?
-    /// A delta-neutral strategy to open on the Strategy tab (from a notification or the Strategy landing).
-    var pendingDeltaNeutralID: String?
 
     func openSwap(tokenIn: Token? = nil, tokenOut: Token? = nil) {
         pendingSwap = (tokenIn, tokenOut)
@@ -68,11 +65,6 @@ final class Router {
         tab = .moments
     }
 
-    func openDeltaNeutral(id: String?) {
-        pendingDeltaNeutralID = id ?? ""
-        tab = .strategy
-    }
-
     /// Follows a tapped notification to its screen.
     func open(_ notification: AppNotification) {
         presented = nil
@@ -83,9 +75,7 @@ final class Router {
         case .perps: tradeMode = .perps; tab = .trade
         case .launch: tab = .launch
         case .moments: tab = .moments
-        case .strategy: tab = .strategy
         case .portfolio: presented = .portfolio
-        case .deltaNeutral: openDeltaNeutral(id: notification.reference)
         }
     }
 
@@ -98,7 +88,6 @@ final class Router {
         case .perps: tradeMode = .perps; tab = .trade
         case .launch: tab = .launch
         case .moments: tab = .moments
-        case .strategies: tab = .strategy
         case .portfolio: presented = .portfolio
         case .news: presented = .news
         case .help: presented = .help
@@ -152,7 +141,7 @@ enum VolumePeriod: String, CaseIterable, Identifiable {
 
 /// The sections listed in the side menu, in display order.
 enum MenuItem: String, CaseIterable, Identifiable {
-    case home, spot, perps, launch, moments, news, strategies, portfolio, help
+    case home, spot, perps, launch, moments, news, portfolio, help
     var id: String { rawValue }
 
     var title: String {
@@ -163,7 +152,6 @@ enum MenuItem: String, CaseIterable, Identifiable {
         case .launch: return "Launch"
         case .moments: return "Moments"
         case .news: return "News"
-        case .strategies: return "Strategies"
         case .portfolio: return "Portfolio"
         case .help: return "Get Help"
         }
@@ -177,7 +165,6 @@ enum MenuItem: String, CaseIterable, Identifiable {
         case .launch: return "flame"
         case .moments: return "camera.aperture"
         case .news: return "newspaper"
-        case .strategies: return "wand.and.stars"
         case .portfolio: return "chart.pie"
         case .help: return "questionmark.circle"
         }
@@ -191,7 +178,6 @@ enum MenuItem: String, CaseIterable, Identifiable {
         case .launch: return "Launch and trade new coins"
         case .moments: return "Collect moments, graduate coins"
         case .news: return "Crypto headlines"
-        case .strategies: return "Copy trading and market making"
         case .portfolio: return "Volume, fees and P&L across DyorHQ"
         case .help: return "Support and community"
         }

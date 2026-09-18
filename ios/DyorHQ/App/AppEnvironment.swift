@@ -29,13 +29,8 @@ final class AppEnvironment {
     /// The wallet's cross-section volume / fees / P&L model, shared by Home's Total Volume and the Portfolio page.
     let portfolio = PortfolioModel()
     let alertWatcher = AlertWatcher()
-    let copyWatcher = CopyTradeWatcher()
-    let mmWatcher = MMWatcher()
-    /// Delta-neutral strategies: the entry/exit runner (TWAP + hedge) and the funding / risk monitor.
-    let dnRunner = DNRunner()
-    let dnWatcher = DNWatcher()
     let social: SocialSession
-    /// Mirrors activity, strategies, notifications, alerts and settings to Supabase, and restores them on a new device.
+    /// Mirrors activity, notifications, alerts and settings to Supabase, and restores them on a new device.
     let sync: BackendSync
 
     init(config: AppConfig) {

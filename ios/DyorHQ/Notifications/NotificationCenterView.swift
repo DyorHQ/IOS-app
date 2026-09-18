@@ -41,7 +41,7 @@ struct NotificationCenterView: View {
         NavigationStack {
             Group {
                 if hub.items.isEmpty {
-                    ContentUnavailableView("No Notifications", systemImage: "bell", description: Text(settings.notificationsEnabled ? "Swaps, fills, price alerts, strategy and funding events show up here." : "Notifications are off. Turn them on in Profile → Notifications to be alerted; events are still recorded here."))
+                    ContentUnavailableView("No Notifications", systemImage: "bell", description: Text(settings.notificationsEnabled ? "Swaps, fills and price alerts show up here." : "Notifications are off. Turn them on in Profile → Notifications to be alerted; events are still recorded here."))
                 } else {
                     List {
                         if presentKinds.count > 1 {
@@ -146,9 +146,6 @@ private struct NotificationRow: View {
 
     private var tint: Color {
         switch item.kind {
-        case .risk: return .negative
-        case .funding: return .allocationPerps
-        case .strategy, .copyTrade: return .brand
         case .swap, .transaction: return .allocationSpot
         case .perp: return .allocationPerps
         case .moments: return .allocationMoments

@@ -12,14 +12,6 @@ final class AppSettings {
     /// Notify on fills and liquidations (a preference; delivery needs the system permission).
     var notifyFills: Bool { didSet { store(notifyFills, "settings.notifyFills") } }
     var notifyPriceAlerts: Bool { didSet { store(notifyPriceAlerts, "settings.notifyPrice") } }
-    /// Notify when a copied trader makes a trade, so the user can confirm or decline copying it.
-    var notifyCopyTrades: Bool { didSet { store(notifyCopyTrades, "settings.notifyCopy") } }
-    /// Notify on strategy events: funding flips, liquidation warnings, TWAP progress, exits.
-    var notifyStrategy: Bool { didSet { store(notifyStrategy, "settings.notifyStrategy") } }
-    /// Strategy screens show every parameter and table (Pro) instead of the one-glance Simple layout.
-    var proStrategies: Bool { didSet { store(proStrategies, "settings.proStrategies") } }
-    /// The Delta Neutral "how it works" cards have been shown once.
-    var dnIntroSeen: Bool { didSet { store(dnIntroSeen, "settings.dnIntroSeen") } }
     /// Require Face ID / Touch ID before signing a transaction — a device-side second factor for a self-custodial
     /// wallet, enforced in the confirmation sheet.
     var requireBiometrics: Bool { didSet { store(requireBiometrics, "settings.biometrics") } }
@@ -36,10 +28,6 @@ final class AppSettings {
         notificationsEnabled = defaults.object(forKey: "settings.notifications") as? Bool ?? true
         notifyFills = defaults.object(forKey: "settings.notifyFills") as? Bool ?? true
         notifyPriceAlerts = defaults.object(forKey: "settings.notifyPrice") as? Bool ?? false
-        notifyCopyTrades = defaults.object(forKey: "settings.notifyCopy") as? Bool ?? true
-        notifyStrategy = defaults.object(forKey: "settings.notifyStrategy") as? Bool ?? true
-        proStrategies = defaults.object(forKey: "settings.proStrategies") as? Bool ?? false
-        dnIntroSeen = defaults.object(forKey: "settings.dnIntroSeen") as? Bool ?? false
         requireBiometrics = defaults.object(forKey: "settings.biometrics") as? Bool ?? false
         defaultLeverage = defaults.object(forKey: "settings.leverage") as? Double ?? 2
         slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? 50
@@ -53,8 +41,7 @@ final class AppSettings {
     /// The settings as a JSON object, for the backend copy (no keys, no addresses).
     var snapshot: [String: Any] {
         ["appearance": appearance.rawValue, "notificationsEnabled": notificationsEnabled, "notifyFills": notifyFills,
-         "notifyPriceAlerts": notifyPriceAlerts, "notifyCopyTrades": notifyCopyTrades, "notifyStrategy": notifyStrategy,
-         "proStrategies": proStrategies, "dnIntroSeen": dnIntroSeen, "defaultLeverage": defaultLeverage, "slippageBps": slippageBps]
+         "notifyPriceAlerts": notifyPriceAlerts, "defaultLeverage": defaultLeverage, "slippageBps": slippageBps]
     }
 
     /// Applies a backend copy of the settings (a fresh device after sign-in). Unknown keys are ignored.
@@ -63,10 +50,6 @@ final class AppSettings {
         if let v = snapshot["notificationsEnabled"] as? Bool { notificationsEnabled = v }
         if let v = snapshot["notifyFills"] as? Bool { notifyFills = v }
         if let v = snapshot["notifyPriceAlerts"] as? Bool { notifyPriceAlerts = v }
-        if let v = snapshot["notifyCopyTrades"] as? Bool { notifyCopyTrades = v }
-        if let v = snapshot["notifyStrategy"] as? Bool { notifyStrategy = v }
-        if let v = snapshot["proStrategies"] as? Bool { proStrategies = v }
-        if let v = snapshot["dnIntroSeen"] as? Bool { dnIntroSeen = v }
         if let v = snapshot["defaultLeverage"] as? Double { defaultLeverage = v }
         if let v = snapshot["slippageBps"] as? Int { slippageBps = v }
     }

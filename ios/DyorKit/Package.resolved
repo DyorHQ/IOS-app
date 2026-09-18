@@ -10,15 +10,6 @@
       }
     },
     {
-      "identity" : "privy-ios",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/privy-io/privy-ios",
-      "state" : {
-        "revision" : "eba79d609c251bb9ace1b892500f2a26863e83d6",
-        "version" : "2.15.0"
-      }
-    },
-    {
       "identity" : "swift-secp256k1",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/21-DOT-DEV/swift-secp256k1",

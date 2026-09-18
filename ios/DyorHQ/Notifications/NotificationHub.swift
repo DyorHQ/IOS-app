@@ -7,7 +7,12 @@ import UserNotifications
 /// app delivers is also recorded here, so nothing is lost when the system banner is missed or permission is off.
 struct AppNotification: Codable, Identifiable, Hashable {
     enum Kind: String, Codable, Hashable, CaseIterable {
-        case transaction, swap, perp, priceAlert, copyTrade, strategy, funding, risk, moments, system
+        case transaction, swap, perp, priceAlert, moments, system
+
+        /// Tolerates values written by older builds (e.g. removed strategy kinds) so a legacy row never breaks decoding.
+        init(from decoder: Decoder) throws {
+            self = Kind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .system
+        }
 
         var symbol: String {
             switch self {
@@ -15,10 +20,6 @@ struct AppNotification: Codable, Identifiable, Hashable {
             case .swap: return "arrow.left.arrow.right"
             case .perp: return "chart.line.uptrend.xyaxis"
             case .priceAlert: return "bell.badge"
-            case .copyTrade: return "person.2.badge.gearshape"
-            case .strategy: return "wand.and.stars"
-            case .funding: return "arrow.triangle.2.circlepath"
-            case .risk: return "exclamationmark.triangle"
             case .moments: return "camera.aperture"
             case .system: return "info.circle"
             }
@@ -30,10 +31,6 @@ struct AppNotification: Codable, Identifiable, Hashable {
             case .swap: return "Swaps"
             case .perp: return "Perps"
             case .priceAlert: return "Price alerts"
-            case .copyTrade: return "Copy trading"
-            case .strategy: return "Strategies"
-            case .funding: return "Funding"
-            case .risk: return "Risk"
             case .moments: return "Moments"
             case .system: return "DyorHQ"
             }
@@ -42,7 +39,12 @@ struct AppNotification: Codable, Identifiable, Hashable {
 
     /// Where a tap should take the user.
     enum Route: String, Codable, Hashable {
-        case none, home, trade, perps, launch, moments, strategy, portfolio, deltaNeutral
+        case none, home, trade, perps, launch, moments, portfolio
+
+        /// Tolerates routes written by older builds (e.g. the removed strategy routes) — they resolve to no-op.
+        init(from decoder: Decoder) throws {
+            self = Route(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .none
+        }
     }
 
     var id = UUID()
@@ -52,7 +54,7 @@ struct AppNotification: Codable, Identifiable, Hashable {
     let time: Date
     var read: Bool
     let route: Route
-    /// An optional id the route can open directly (a strategy id, a Moment id, …).
+    /// An optional id the route can open directly (a Moment id, …).
     let reference: String?
 
     init(kind: Kind, title: String, body: String, time: Date = Date(), read: Bool = false, route: Route = .none, reference: String? = nil) {

@@ -2,7 +2,7 @@ import DyorKit
 import Foundation
 
 /// Mirrors what the app records on the device into the wallet's own rows on Supabase — activity with its dollar
-/// size, strategies, the notification center, price alerts and settings — and restores them on a fresh device
+/// size, the notification center, price alerts and settings — and restores them on a fresh device
 /// after one sign-in. Every write goes through the wallet's backend session (row-level security by wallet);
 /// nothing here touches a key. Uploads are debounced and best-effort: the local stores stay the source of truth,
 /// and anything that failed is retried the next time that store changes or the session connects.
@@ -22,9 +22,6 @@ final class BackendSync {
         self.settings = settings
         self.address = address
         ActivityLog.onRecord = { record, owner in Task { @MainActor [weak self] in self?.activity(record, owner: owner) } }
-        DNStore.onChange = { list, owner in Task { @MainActor [weak self] in self?.strategies(kind: "delta_neutral", rows: list.map { ($0.id, $0) }, owner: owner) } }
-        MMStore.onChange = { list, owner in Task { @MainActor [weak self] in self?.strategies(kind: "market_making", rows: list.map { ($0.id, $0) }, owner: owner) } }
-        CopyStore.onChange = { list, owner in Task { @MainActor [weak self] in self?.strategies(kind: "copy_trader", rows: list.map { ($0.id, $0) }, owner: owner) } }
         NotificationStore.onChange = { items, owner in Task { @MainActor [weak self] in self?.notifications(items, owner: owner) } }
         PriceAlertStore.onChange = { alerts in Task { @MainActor [weak self] in self?.alerts(alerts) } }
         AppSettings.onChange = { Task { @MainActor [weak self] in self?.settingsChanged() } }
@@ -50,26 +47,6 @@ final class BackendSync {
         let b = [UInt8](hash.prefix(16))
         return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
     }
-
-    private struct StrategyRow<T: Encodable>: Encodable { let wallet: String, id: String, kind: String, data: T, updated_at: String }
-
-    private func strategies<T: Encodable & Sendable>(kind: String, rows: [(String, T)], owner: Address?) {
-        guard !restoring, let owner else { return }
-        let wallet = owner.checksummed.lowercased()
-        let uploads = rows.map { StrategyRow(wallet: wallet, id: $0.0, kind: kind, data: $0.1, updated_at: Self.iso(Date())) }
-        let keep = Set(rows.map(\.0))
-        schedule("strategies-\(kind)", delay: 2) { [social] in
-            // Replace the wallet's list of this kind: stale ids go, current ones are upserted.
-            let existing: [IDRow] = try await social.client.read("strategies", query: [URLQueryItem(name: "select", value: "id"), URLQueryItem(name: "wallet", value: "eq.\(wallet)"), URLQueryItem(name: "kind", value: "eq.\(kind)")], authed: true)
-            let stale = existing.map(\.id).filter { !keep.contains($0) }
-            if !stale.isEmpty {
-                try await social.client.delete("strategies", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)"), URLQueryItem(name: "id", value: "in.(\(stale.joined(separator: ",")))")])
-            }
-            try await social.client.upsertRows("strategies", uploads, onConflict: "wallet,id")
-        }
-    }
-
-    private struct IDRow: Decodable { let id: String }
 
     private struct NotificationRow: Encodable {
         let wallet: String, id: String, kind: String, title: String, body: String, read: Bool, data: AppNotification, created_at: String
@@ -116,7 +93,6 @@ final class BackendSync {
 
     // MARK: Restore
 
-    private struct StrategyDown<T: Decodable>: Decodable { let id: String; let data: T }
     private struct NotificationDown: Decodable { let data: AppNotification }
     private struct AlertDown: Decodable { let payload: PriceAlert }
     private struct SettingsDown: Decodable { let data: [String: JSONValue] }
@@ -129,18 +105,6 @@ final class BackendSync {
         defer { restoring = false }
         func rows<T: Decodable>(_ table: String, _ extra: [URLQueryItem]) async -> [T] {
             (try? await social.client.read(table, query: [URLQueryItem(name: "select", value: "*"), URLQueryItem(name: "wallet", value: "eq.\(wallet)")] + extra, authed: true)) ?? []
-        }
-        if DNStore.strategies(owner: owner).isEmpty {
-            let list: [StrategyDown<DNStrategy>] = await rows("strategies", [URLQueryItem(name: "kind", value: "eq.delta_neutral")])
-            if !list.isEmpty { DNStore.save(list.map(\.data), owner: owner) }
-        }
-        if MMStore.strategies(owner: owner).isEmpty {
-            let list: [StrategyDown<MMStrategy>] = await rows("strategies", [URLQueryItem(name: "kind", value: "eq.market_making")])
-            if !list.isEmpty { MMStore.save(list.map(\.data), owner: owner) }
-        }
-        if CopyStore.traders(owner: owner).isEmpty {
-            let list: [StrategyDown<CopiedTrader>] = await rows("strategies", [URLQueryItem(name: "kind", value: "eq.copy_trader")])
-            if !list.isEmpty { CopyStore.setTraders(list.map(\.data), owner: owner) }
         }
         if NotificationStore.all(owner: owner).isEmpty {
             let list: [NotificationDown] = await rows("notifications", [URLQueryItem(name: "order", value: "created_at.desc"), URLQueryItem(name: "limit", value: "200")])

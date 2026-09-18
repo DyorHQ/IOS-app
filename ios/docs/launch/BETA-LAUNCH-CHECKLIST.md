@@ -51,9 +51,9 @@ project as it is today. Boxes are unchecked until done and verified.
       exists). No placeholder screens elsewhere; check every deep link and external link.
 - [ ] **Demo account for review (2.1).** Privy dashboard → Test accounts: a review email with a fixed OTP; fund that
       wallet with a little MON and USDC on mainnet; write the review notes: self-custodial, keys on device, no custody,
-      what each tab does, how to run a $5 swap, how the strategy tab works, that funds are the reviewer's own test funds.
-- [ ] **Screenshots (2.3.3)** from the current UI on a 6.9" iPhone: Home, Trade, Perps, Moments, Strategy (Delta
-      Neutral Simple mode), Portfolio. Regenerate after every visible change.
+      what each tab does, how to run a $5 swap, that funds are the reviewer's own test funds.
+- [ ] **Screenshots (2.3.3)** from the current UI on a 6.9" iPhone: Home, Trade, Perps, Moments, Portfolio.
+      Regenerate after every visible change.
 - [ ] **Privacy.** Nutrition labels in App Store Connect: email (Privy sign-in), wallet address, usage data (Supabase
       events), crash data (if Sentry). No tracking. `PrivacyInfo.xcprivacy` exists (UserDefaults CA92.1); add
       `NSPrivacyCollectedDataTypes` for the above and re-check required-reason APIs after adding Sentry.
@@ -66,7 +66,7 @@ project as it is today. Boxes are unchecked until done and verified.
 
 - [ ] Supabase: tables for `profiles` (exists), `transactions` (type, amount, chain, status, tx hash, wallet,
       created_at), `events` (event name, jsonb metadata), `reports`; RLS on all, wallet-address policies (the
-      existing pattern). Insert after every swap, perps order, deposit, withdrawal, launch, Moment, strategy step.
+      existing pattern). Insert after every swap, perps order, deposit, withdrawal, launch, Moment.
 - [ ] Crash and error reporting: Sentry (sentry-cocoa) with a DSN in `Secrets.xcconfig`, `SentrySDK.start` at app
       launch, a hidden test crash in Settings for the beta; never attach keys, phrases or full addresses.
 - [ ] RPC and price caching already in place; add a status banner when the RPC or Perpl gateway is down.
@@ -85,8 +85,8 @@ project as it is today. Boxes are unchecked until done and verified.
       the first build goes through Beta App Review; later builds usually do not. Builds expire after 90 days.
 - [ ] Public link with a tester cap once internal testing is stable; TestFlight 2.3+ collects screenshots and feedback
       in-app.
-- [ ] Release notes for every build; keep a "what to test" list per build (swap, perps order, Moments, a small
-      delta-neutral run, notifications, account deletion).
+- [ ] Release notes for every build; keep a "what to test" list per build (swap, perps order, Moments,
+      notifications, account deletion).
 
 ## E. QA before the first upload
 
@@ -94,8 +94,6 @@ project as it is today. Boxes are unchecked until done and verified.
       largest Dynamic Type; airplane mode and RPC-down states; low-MON gas states; fresh install and re-login.
 - [ ] Every external link and deep link (dyorhq: scheme for Privy OAuth) works; no dead URLs.
 - [ ] Sign in, sign out, delete account, re-sign in; watch-only wallet paths.
-- [ ] A full delta-neutral entry and exit with a small real amount on mainnet (the fork rehearsal was done; a mainnet
-      run is the remaining check).
 - [ ] Notifications permission flow and the in-app center.
 - [ ] Crash-free session across all tabs for 30 minutes on device.
 

@@ -65,21 +65,18 @@ deletion and content reporting from the checklist (sections B of BETA-LAUNCH-CHE
 ## 5. Test information (paste into App Store Connect)
 
 **Beta app description.** DyorHQ is a self-custodial trading app for Monad: swap on the best venue, trade perps on
-Perpl, launch and collect tokens and Moments, and run strategies such as Delta Neutral. Keys stay on your phone;
-DyorHQ never holds funds.
+Perpl, and launch and collect tokens and Moments. Keys stay on your phone; DyorHQ never holds funds.
 
 **What to test.** Sign in (Apple, Google, email or import), fund the wallet with a little MON and USDC, one swap on
-Trade, one small perps order, open a Moment, read Home's Total Volume and Portfolio, set up a Delta Neutral position
-with $20–$50 and exit it, and check the notification center. Report anything that looks wrong or slow with a
-screenshot from the TestFlight app.
+Trade, one small perps order, open a Moment, read Home's Total Volume and Portfolio, and check the notification
+center. Report anything that looks wrong or slow with a screenshot from the TestFlight app.
 
 **Feedback email.** team@dyorhq.fun
 
 **Review notes (external group).** Self-custodial wallet and DeFi interface on the Monad blockchain. No custody, no
 fiat, no exchange operated by us: swaps route to Kuru, Uniswap and Monday Trade contracts, perps to the Perpl
 protocol, launches and Moments to our audited contracts. Test account: <email> with OTP <code> (Privy test account);
-the wallet holds a few dollars of MON and USDC for a swap. Keys never leave the device; the app must stay open
-while a strategy enters or exits.
+the wallet holds a few dollars of MON and USDC for a swap. Keys never leave the device.
 
 ## 6. Order
 

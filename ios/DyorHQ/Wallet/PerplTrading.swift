@@ -163,7 +163,7 @@ final class PerplTrading {
 
     /// The live socket closed on its own. A rejected key or the connection cap surfaces as a failure the user can
     /// read; any other drop (idle timeout, server restart, network) just leaves the session `enrolled` so the next
-    /// authenticated action reconnects after backoff — that is what keeps an active strategy's socket self-healing.
+    /// authenticated action reconnects after backoff — that is what keeps an active trading socket self-healing.
     private func socketDropped(_ close: PerplClose?) {
         guard status != .connecting else { return } // the in-flight connect reports its own outcome
         noteFailure(close)
@@ -250,7 +250,7 @@ final class PerplTrading {
         return try await client.place(frames)
     }
 
-    /// Cancels a resting order over the authenticated path (no wallet signature) — for recycling / stopping a strategy.
+    /// Cancels a resting order over the authenticated path (no wallet signature) — for recycling / cancelling an order.
     @discardableResult
     func cancel(perpId: Int, orderId: Int, env: AppEnvironment) async throws -> PerplOrderAck {
         await ensureConnected()

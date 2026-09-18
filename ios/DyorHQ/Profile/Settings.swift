@@ -144,8 +144,6 @@ struct NotificationsView: View {
             Section {
                 Toggle("Swaps & Fills", isOn: $settings.notifyFills)
                 Toggle("Price Alerts", isOn: $settings.notifyPriceAlerts)
-                Toggle("Copy Trade Signals", isOn: $settings.notifyCopyTrades)
-                Toggle("Strategy & Funding Alerts", isOn: $settings.notifyStrategy)
                 NavigationLink { PriceAlertsView() } label: {
                     HStack {
                         Label("Manage Price Alerts", systemImage: "bell.badge")
@@ -156,7 +154,7 @@ struct NotificationsView: View {
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("Swaps, fills, price alerts, copy trades and strategy events. Everything is also kept in the in-app center.")
+                Text("Swaps, fills and price alerts. Everything is also kept in the in-app center.")
             }
             .disabled(!settings.notificationsEnabled)
         }

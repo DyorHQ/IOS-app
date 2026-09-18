@@ -55,7 +55,7 @@ public enum Mera {
     public enum Purpose {
         /// Perpl's trade-scoped Ed25519 API key: enrolled once, reappears on every device, never stored.
         public static let perplTrading = "dyorhq.perpl-trading.v1"
-        /// Encryption key for the user's app state (strategies, alerts, notifications) kept in untrusted storage.
+        /// Encryption key for the user's app state (alerts, notifications) kept in untrusted storage.
         public static let state = "dyorhq.state.v1"
         /// The social/backend identity, unlinkable to the trading wallet.
         public static let socialIdentity = "dyorhq.social-identity.v1"

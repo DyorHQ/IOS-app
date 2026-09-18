@@ -235,7 +235,7 @@ final class Session {
     }
 
     /// Account deletion, device side: ends the Privy session, then removes every trace of the account from this
-    /// device — imported keys, the passkey account record, Perpl and backend tokens, caches, strategy records,
+    /// device — imported keys, the passkey account record, Perpl and backend tokens, caches,
     /// settings — and signs out. The blockchain is untouched; only the user's own backup can reach the funds again.
     func eraseLocalData() async {
         if let privy, case .authenticated(let user) = await privy.getAuthState() {

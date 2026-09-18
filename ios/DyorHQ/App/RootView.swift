@@ -35,18 +35,14 @@ struct RootView: View {
         // authenticated Perpl trading session.
         .task(id: session.address) {
             env.social.bind(address: session.address)
-            // A wallet that can sign connects to the backend by itself (one signature), so activity, strategies and
-            // settings are recorded — and restored on a fresh device — without a separate step.
+            // A wallet that can sign connects to the backend by itself (one signature), so activity and settings are
+            // recorded — and restored on a fresh device — without a separate step.
             if session.canSign, !env.social.isSignedIn { await env.social.signIn(session: session) }
             if env.social.isSignedIn, let address = session.address { await env.sync.restore(owner: address) }
             env.perplTrading.refresh(address: session.address)
             NotificationHub.shared.bind(owner: session.address)
         }
         .task { env.alertWatcher.start(env: env, settings: settings) }
-        .task { env.copyWatcher.start(env: env, settings: settings) }
-        .task { env.mmWatcher.start(env: env) }
-        .task { env.dnWatcher.start(env: env, settings: settings) }
-        .task { env.dnRunner.resume(env: env) }
         .task { await env.refreshVenueTokens() }
     }
 }
@@ -68,7 +64,7 @@ private struct PrivacyCover: View {
 }
 
 enum AppTab: String, CaseIterable, Identifiable {
-    case home, launch, trade, moments, strategy
+    case home, launch, trade, moments
     var id: String { rawValue }
 }
 
@@ -85,7 +81,6 @@ struct MainTabView: View {
             Tab("Launch", systemImage: "flame", value: .launch) { LaunchpadView() }
             Tab("Trade", systemImage: "arrow.left.arrow.right", value: .trade) { TradeView() }
             Tab("Moments", systemImage: "camera.aperture", value: .moments) { MomentsView() }
-            Tab("Strategy", systemImage: "wand.and.stars", value: .strategy) { StrategyView() }
         }
         .sensoryFeedback(.selection, trigger: router.tab)
         .fullScreenCover(isPresented: $router.menuOpen) { SideMenuView() }
