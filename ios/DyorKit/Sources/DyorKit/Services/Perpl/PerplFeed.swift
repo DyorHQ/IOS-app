@@ -90,7 +90,17 @@ public final class PerplFeed {
     private var tradeSeq = 0
     private var lastHeartbeat: Int?
     private var retry = 0
+    /// When the last frame of any kind arrived. `connected` is derived from this, not from socket errors: a healthy
+    /// feed streams book, tape and a heartbeat every second, so *silence* is the true "not live" signal — it stays
+    /// live through a brief reconnect and it also catches a half-open socket that never delivers an error.
+    private var lastMessageAt: Date = .distantPast
+    private var lastRestartAt: Date = .distantPast
+    private var supervisor: Task<Void, Never>?
     private static let backoff: [UInt64] = [1, 2, 4, 8, 16, 32, 60]
+    /// Silence beyond this reads as "Connecting…"; beyond the second, a fresh socket is forced (a silent half-open
+    /// stall never fires `.failure`, so nothing else would reconnect it).
+    private static let showConnectingAfter: TimeInterval = 3
+    private static let forceReconnectAfter: TimeInterval = 8
 
     public init(chainId: Int = 143, wsURL: URL = URL(string: "wss://app.perpl.xyz/ws/v1/market-data")!, session: URLSession = .shared) {
         self.chainId = chainId
@@ -99,17 +109,28 @@ public final class PerplFeed {
     }
 
     /// Point the feed at a market. Tears down any previous socket and its book/tape.
+    ///
+    /// Re-focusing the same market is a no-op ONLY while the socket is still alive (`task != nil`). After `stop()`
+    /// (the trade screen disappeared) the task is nil, so the same market must reconnect on the next appear —
+    /// otherwise the feed stays dead and the UI is stuck on "Connecting…".
     public func focus(_ market: PerpMarket) {
-        guard market.id != self.market?.id else { return }
+        if market.id == self.market?.id, task != nil { return }
         self.market = market
         book = OrderBook()
         trades = []
         state = nil
+        // Read honestly as "Connecting…" for the new market instead of carrying the previous market's live state
+        // over its empty book until the supervisor's first tick.
+        connected = false
+        lastMessageAt = .distantPast
         restart()
+        startSupervisor()
     }
 
     public func stop() {
         generation += 1
+        supervisor?.cancel()
+        supervisor = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         connected = false
@@ -120,11 +141,32 @@ public final class PerplFeed {
         let gen = generation
         task?.cancel(with: .goingAway, reason: nil)
         guard let market else { return }
+        lastRestartAt = Date()
         let task = session.webSocketTask(with: wsURL)
         self.task = task
         task.resume()
         subscribe(market: market)
         receive(gen: gen)
+    }
+
+    /// A once-per-second watchdog that owns `connected` from data recency and rescues a socket that went silent
+    /// without erroring. It runs from `focus()` to `stop()`, spanning reconnects, so it is the single authority on
+    /// whether the UI reads "Live". `restart()` supersedes any pending failure-driven reconnect by bumping generation.
+    private func startSupervisor() {
+        supervisor?.cancel()
+        supervisor = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, self.market != nil else { return }
+                let silence = Date().timeIntervalSince(self.lastMessageAt)
+                if self.connected, silence > Self.showConnectingAfter { self.connected = false }
+                // Silent past the hard window with no reconnect since — a half-open socket, or every retry is stalling.
+                // Force a fresh one. `lastRestartAt` (set by every restart, including failure-driven) rate-limits this.
+                if silence > Self.forceReconnectAfter, Date().timeIntervalSince(self.lastRestartAt) > Self.forceReconnectAfter {
+                    self.restart()
+                }
+            }
+        }
     }
 
     private func subscribe(market: PerpMarket) {
@@ -149,14 +191,16 @@ public final class PerplFeed {
                 switch result {
                 case .success(let message):
                     self.connected = true
+                    self.lastMessageAt = Date()
                     self.error = nil
                     self.retry = 0
                     if case .string(let text) = message, let data = text.data(using: .utf8) { self.handle(data) }
                     else if case .data(let data) = message { self.handle(data) }
                     self.receive(gen: gen)
                 case .failure(let failure):
-                    self.connected = false
                     self.error = failure.localizedDescription
+                    // Don't drop `connected` here — the supervisor decides liveness from data recency, so a brief drop
+                    // followed by a fast reconnect never flickers to "Connecting…". Just bring a fresh socket up.
                     self.scheduleReconnect(gen: gen)
                 }
             }
