@@ -618,11 +618,11 @@ struct PerpTradeView: View {
                 else { emptyRow("No open positions") }
             case .orders:
                 let orders = model.orders.filter { $0.perpId == market.id }
-                let triggers = model.triggers.filter { $0.perpId == market.id }
-                if orders.isEmpty, triggers.isEmpty { emptyRow("No open orders") }
+                let rows = triggerRows(for: market)
+                if orders.isEmpty, rows.isEmpty { emptyRow("No open orders") }
                 else {
                     ForEach(orders) { order in OrderCard(order: order, mark: mark, onCancel: { cancellingOrder = order }) }
-                    ForEach(triggers) { TriggerCard(trigger: $0, mark: mark) }
+                    ForEach(rows) { TriggerCard(row: $0, mark: mark) }
                 }
             case .assets:
                 let total = model.account.map { Amount.units($0.balance, decimals: 6) } ?? 0
@@ -796,6 +796,27 @@ struct PerpTradeView: View {
     private var slValue: Double? { ticket.tpslEnabled ? ticket.stopLossText.perpDouble : nil }
     /// The user is asking for at least one trigger — which only the authenticated (keeper-forwarded) path can carry.
     private var wantsTriggers: Bool { tpValue != nil || slValue != nil }
+
+    /// The market's TP/SL to show: Perpl's authoritative open triggers (mt:23/24, source of truth), plus — only
+    /// briefly after placement, or while the trading socket is offline — the app's local echo for a kind the
+    /// authoritative feed hasn't reflected yet. Once the feed confirms a trigger, the echo for that kind drops out.
+    private func triggerRows(for market: PerpMarket) -> [TriggerRow] {
+        let priceScale = pow(10.0, Double(market.priceDecimals))
+        let sizeScale = pow(10.0, Double(market.lotDecimals))
+        let authoritative = perplTrading.openOrders
+            .filter { $0.marketId == market.id && $0.isTrigger && $0.isReduceOnly }
+            .map { o in
+                TriggerRow(id: "auth-\(o.oid)", symbol: market.asset, kind: o.isStopLoss ? .stopLoss : .takeProfit,
+                           price: Double(o.triggerPriceRaw ?? 0) / priceScale, size: Double(o.sizeRaw) / sizeScale,
+                           positionLong: o.protectsLong, live: true)
+            }
+        let authKinds = Set(authoritative.map(\.kind))
+        let live = perplTrading.isReady
+        let echo = model.triggers
+            .filter { $0.perpId == market.id && !authKinds.contains($0.kind) && (!live || Date().timeIntervalSince($0.placedAt) < 10) }
+            .map { TriggerRow(id: "echo-\($0.id)", symbol: $0.symbol, kind: $0.kind, price: $0.price, size: $0.size, positionLong: $0.positionLong, live: false) }
+        return authoritative + echo
+    }
     private var sideColor: Color { ticket.side == .long ? .positive : .negative }
 
     /// What to tell the user about whether their take-profit / stop-loss will actually be placed, and whether it needs
@@ -1744,36 +1765,48 @@ private struct OrderCard: View {
     }
 }
 
-/// A take-profit / stop-loss the app placed (a keeper-managed trigger). Shown from the app's own record since Perpl
-/// exposes no read-back for triggers; it drops off once the position closes.
+/// A TP/SL row to display: either Perpl's authoritative open trigger (`live`) or the app's local echo pending
+/// confirmation from the feed.
+private struct TriggerRow: Identifiable {
+    let id: String
+    let symbol: String
+    let kind: PlacedTrigger.Kind
+    let price: Double
+    let size: Double
+    let positionLong: Bool
+    let live: Bool
+}
+
+/// A take-profit / stop-loss (keeper-managed trigger). `live` rows come from Perpl's authoritative order feed; a
+/// non-live row is the app's own just-placed record, shown until the feed confirms it.
 private struct TriggerCard: View {
-    let trigger: PlacedTrigger
+    let row: TriggerRow
     let mark: Double
 
-    private var tint: Color { trigger.kind == .takeProfit ? .positive : .negative }
-    private var distance: Double? { mark > 0 ? (trigger.price - mark) / mark * 100 : nil }
+    private var tint: Color { row.kind == .takeProfit ? .positive : .negative }
+    private var distance: Double? { mark > 0 ? (row.price - mark) / mark * 100 : nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: trigger.kind == .takeProfit ? "target" : "shield.lefthalf.filled")
+                Image(systemName: row.kind == .takeProfit ? "target" : "shield.lefthalf.filled")
                     .font(.caption).foregroundStyle(tint)
-                Text(trigger.kind.label).font(.caption.weight(.bold)).foregroundStyle(tint)
-                Text(trigger.positionLong ? "on Long" : "on Short").font(.caption2).foregroundStyle(.secondary)
+                Text(row.kind.label).font(.caption.weight(.bold)).foregroundStyle(tint)
+                Text(row.positionLong ? "on Long" : "on Short").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Text("Keeper trigger").font(.caption2).foregroundStyle(.secondary)
+                Text(row.live ? "Keeper trigger" : "Pending…").font(.caption2).foregroundStyle(.secondary)
             }
             HStack(alignment: .top) {
-                MiniStat(label: "Trigger", value: NumberStyle.number(trigger.price), tint: tint)
+                MiniStat(label: "Trigger", value: NumberStyle.number(row.price), tint: tint)
                 Spacer()
-                MiniStat(label: "Size", value: "\(NumberStyle.number(trigger.size)) \(trigger.symbol)")
+                MiniStat(label: "Size", value: "\(NumberStyle.number(row.size)) \(row.symbol)")
                 Spacer()
                 if let d = distance { MiniStat(label: "Distance", value: String(format: "%+.2f%%", d)) }
             }
         }
         .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tint.opacity(0.22), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tint.opacity(row.live ? 0.22 : 0.12), lineWidth: 1))
     }
 }
 

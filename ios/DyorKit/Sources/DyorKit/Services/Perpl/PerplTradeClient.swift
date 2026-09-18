@@ -171,6 +171,45 @@ public struct PerplClose: Sendable, Equatable {
     }
 }
 
+/// One open order from the authenticated trading stream (mt:23/24) — a resting limit order or a pending keeper trigger
+/// (TP/SL). Prices and sizes are the market's scaled integers (the market's decimals live in the app layer, so scaling
+/// happens where a `PerpMarket` is in hand). `OrderType` here is Perpl's 1-indexed API enum, NOT the 0-indexed on-chain
+/// `PerpOrderType`.
+public struct PerplOpenOrder: Identifiable, Sendable, Hashable {
+    public let oid: Int
+    public let marketId: Int
+    public let typeRaw: Int              // 1 OpenLong, 2 OpenShort, 3 CloseLong, 4 CloseShort
+    public let statusRaw: Int            // 2 Open, 3 PartiallyFilled, 8 Untriggered, 9 Triggered
+    public let priceRaw: Int             // limit price (0 = market)
+    public let sizeRaw: Int              // original size
+    public let filledRaw: Int
+    public let triggerPriceRaw: Int?     // `tp`
+    public let triggerConditionRaw: Int? // `tpc`: 1/2 last-based (take-profit), 3/4 mark-based (stop-loss)
+    public let linkedPositionId: Int?
+    public let leverageHundredths: Int
+    public var id: Int { oid }
+
+    public init(oid: Int, marketId: Int, typeRaw: Int, statusRaw: Int, priceRaw: Int, sizeRaw: Int, filledRaw: Int,
+                triggerPriceRaw: Int?, triggerConditionRaw: Int?, linkedPositionId: Int?, leverageHundredths: Int) {
+        self.oid = oid; self.marketId = marketId; self.typeRaw = typeRaw; self.statusRaw = statusRaw
+        self.priceRaw = priceRaw; self.sizeRaw = sizeRaw; self.filledRaw = filledRaw
+        self.triggerPriceRaw = triggerPriceRaw; self.triggerConditionRaw = triggerConditionRaw
+        self.linkedPositionId = linkedPositionId; self.leverageHundredths = leverageHundredths
+    }
+
+    /// A keeper trigger (take-profit / stop-loss) rather than a plain resting order.
+    public var isTrigger: Bool { (triggerPriceRaw ?? 0) != 0 }
+    public var isReduceOnly: Bool { typeRaw == 3 || typeRaw == 4 }
+    /// The side of the position a reduce-only trigger protects: CloseLong (3) protects a long.
+    public var protectsLong: Bool { typeRaw == 3 }
+    /// The trigger fires when price rises through it (GTE conditions 1/3) vs falls through it (LTE 2/4).
+    private var firesOnRise: Bool { triggerConditionRaw == 1 || triggerConditionRaw == 3 }
+    /// Take-profit vs stop-loss is defined by the close side and direction — a long is stopped out when price falls
+    /// and takes profit when it rises (the reverse for a short) — NOT by whether last or mark is watched. This
+    /// classifies triggers placed anywhere (including the Perpl web app), not only this app's own last/mark convention.
+    public var isStopLoss: Bool { protectsLong ? !firesOnRise : firesOnRise }
+}
+
 /// Live authenticated connection: signs in, tracks the account (id, forwarding, request-id seed) and places orders.
 @Observable
 @MainActor
@@ -179,6 +218,13 @@ public final class PerplTradeClient {
     public private(set) var accountId: Int?
     public private(set) var forwardingEnabled = false
     public private(set) var error: String?
+    /// The account's live open orders — resting limit orders AND pending keeper triggers (TP/SL) — as the authenticated
+    /// stream reports them (mt:23 snapshot on connect, mt:24 updates after). This is the ONLY authoritative source for
+    /// pending triggers, since they never touch the on-chain order book. Empty until the first snapshot arrives.
+    public private(set) var openOrders: [PerplOpenOrder] = []
+    private var ordersByOid: [Int: PerplOpenOrder] = [:]
+    /// Fired on the main actor whenever `openOrders` changes, so the owner can republish it.
+    public var onOrdersUpdate: (@MainActor () -> Void)?
     /// Fired on the main actor whenever account state (id / forwardingEnabled / lfr) changes — from the initial
     /// snapshot or a later AccountUpdate — so the owner can re-derive its status the moment forwarding turns on.
     public var onAccountUpdate: (@MainActor () -> Void)?
@@ -358,6 +404,13 @@ public final class PerplTradeClient {
             resolveConnect()
         case 21: // AccountUpdate — fw / lfr change
             applyAccount(obj)
+        case 23: // OrdersSnapshot — the full open-order set replaces what we hold
+            ordersByOid.removeAll()
+            for raw in (obj["d"] as? [[String: Any]]) ?? [] { applyOrder(raw) }
+            publishOrders()
+        case 24: // OrdersUpdate — upsert live orders, drop removed / terminal ones
+            for raw in (obj["d"] as? [[String: Any]]) ?? [] { applyOrder(raw) }
+            publishOrders()
         case 3: // command status ack
             if let cid = obj["cid"] as? Int, let continuation = pending.removeValue(forKey: cid) {
                 let status = obj["status"] as? [String: Any]
@@ -385,6 +438,39 @@ public final class PerplTradeClient {
         if let b = value as? Bool { return b }
         if let n = value as? NSNumber { return n.intValue != 0 }
         return nil
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let i = value as? Int { return i }
+        if let n = value as? NSNumber { return n.intValue }
+        return nil
+    }
+
+    /// Upserts one `Order` from mt:23/24, or drops it when Perpl flags it removed (`r`) or it reaches a terminal
+    /// status. Live statuses kept: Pending(1), Open(2), PartiallyFilled(3), Untriggered(8), Triggered(9).
+    private func applyOrder(_ raw: [String: Any]) {
+        guard let oid = Self.intValue(raw["oid"]) else { return }
+        let status = Self.intValue(raw["st"]) ?? 0
+        let removed = Self.boolValue(raw["r"]) ?? false
+        guard !removed, [1, 2, 3, 8, 9].contains(status) else { ordersByOid[oid] = nil; return }
+        ordersByOid[oid] = PerplOpenOrder(
+            oid: oid,
+            marketId: Self.intValue(raw["mkt"]) ?? 0,
+            typeRaw: Self.intValue(raw["t"]) ?? 0,
+            statusRaw: status,
+            priceRaw: Self.intValue(raw["p"]) ?? 0,
+            sizeRaw: Self.intValue(raw["os"]) ?? 0,
+            filledRaw: Self.intValue(raw["fs"]) ?? 0,
+            triggerPriceRaw: Self.intValue(raw["tp"]),
+            triggerConditionRaw: Self.intValue(raw["tpc"]),
+            linkedPositionId: Self.intValue(raw["lp"]),
+            leverageHundredths: Self.intValue(raw["lv"]) ?? 0
+        )
+    }
+
+    private func publishOrders() {
+        openOrders = ordersByOid.values.sorted { $0.oid < $1.oid } // stable order so rows don't reshuffle between updates
+        onOrdersUpdate?()
     }
 
     private func resolveConnect() {

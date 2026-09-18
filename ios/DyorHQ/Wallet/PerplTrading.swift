@@ -26,6 +26,9 @@ final class PerplTrading {
 
     private(set) var status: Status = .notEnrolled
     private(set) var key: PerplApiKey?
+    /// The account's live open orders + pending keeper triggers, mirrored from the trading socket (mt:23/24). The
+    /// authoritative source for TP/SL — the on-chain order book has none. Empty when the socket isn't live.
+    private(set) var openOrders: [PerplOpenOrder] = []
     private var client: PerplTradeClient?
     /// The wallet (checksummed address) the trading session is bound to, so a wallet change tears the session down.
     private var boundAddress: String?
@@ -152,6 +155,10 @@ final class PerplTrading {
             guard let self, let client, self.client === client else { return }
             self.syncStatus()
         }
+        client.onOrdersUpdate = { [weak self, weak client] in
+            guard let self, let client, self.client === client else { return }
+            self.openOrders = client.openOrders
+        }
         client.onDisconnect = { [weak self, weak client] in
             guard let self, let client, self.client === client else { return }
             self.socketDropped(client.lastClose)
@@ -219,6 +226,7 @@ final class PerplTrading {
     func disconnect() {
         client?.disconnect()
         client = nil
+        openOrders = []
         if key != nil { status = .enrolled }
     }
 
