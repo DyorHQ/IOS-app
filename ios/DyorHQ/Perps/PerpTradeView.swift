@@ -104,7 +104,16 @@ struct PerpTradeView: View {
         .onChange(of: model.fillSignal) { _, _ in
             if model.lastFilledPerpId == market.id { withAnimation { bottomTab = .positions } }
         }
-        .task(id: session.address) { perplTrading.refresh(address: session.address); await loadFills() }
+        .task(id: session.address) {
+            perplTrading.refresh(address: session.address)
+            // The user already connected Perpl trading in Profile; the single trading socket just idles to `.enrolled`
+            // between visits. Bring it live up front (in the background, so it never blocks history) so `isReady` is
+            // true and TP/SL is actually offered — instead of showing "Connect Perpl trading in Profile" to someone
+            // who already did. ensureConnected() is a no-op when already live and respects backoff / a rejected key.
+            Task { await perplTrading.ensureConnected() }
+            await loadFills()
+        }
+        .onChange(of: ticket.tpslEnabled) { _, on in if on { Task { await perplTrading.ensureConnected() } } }
         .onChange(of: bottomTab) { _, tab in if tab == .history { Task { await loadFills() } } }
         .onChange(of: model.fillSignal) { _, _ in if model.lastFilledPerpId == market.id { Task { await loadFills() } } }
         .sheet(isPresented: $showConfirm) { orderConfirmSheet }
@@ -500,8 +509,8 @@ struct PerpTradeView: View {
             if let m = tpMetrics { triggerMetricRow("Exp. profit", m) }
             fieldRow("Stop loss", text: $ticket.stopLossText, unit: "USD", placeholder: "Optional")
             if let m = slMetrics { triggerMetricRow("Exp. loss", m) }
-            Text(perplTrading.isReady ? "Placed on Perpl as keeper-managed trigger orders linked to this position." : tpslGateMessage)
-                .font(.caption2).foregroundStyle(perplTrading.isReady ? Color.secondary : Color.attention)
+            Text(tpslStatus.text)
+                .font(.caption2).foregroundStyle(tpslStatus.warning ? Color.attention : Color.secondary)
         }
     }
 
@@ -718,7 +727,11 @@ struct PerpTradeView: View {
     // MARK: Confirmation
 
     @ViewBuilder private var orderConfirmSheet: some View {
-        if perplTrading.isReady, let accountId = model.account?.accountId {
+        // Use the authenticated (keeper-forwarded) path when the socket is live, OR when the wallet has an enrolled key
+        // and the user wants TP/SL — its submit() awaits ensureConnected(), so a socket that idled to `.enrolled` still
+        // reconnects and carries the triggers instead of silently dropping to a bare on-chain entry. A plain order with
+        // no triggers still falls through to the on-chain path when not live, so trading never depends on one-click.
+        if let accountId = model.account?.accountId, perplTrading.isReady || (perplTrading.key != nil && wantsTriggers) {
             AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1)) {
                 ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""; sizePercent = 0
                 Task { await model.load(env: env, address: session.address) }
@@ -757,23 +770,41 @@ struct PerpTradeView: View {
 
     private var tpValue: Double? { ticket.tpslEnabled ? ticket.takeProfitText.perpDouble : nil }
     private var slValue: Double? { ticket.tpslEnabled ? ticket.stopLossText.perpDouble : nil }
+    /// The user is asking for at least one trigger — which only the authenticated (keeper-forwarded) path can carry.
+    private var wantsTriggers: Bool { tpValue != nil || slValue != nil }
     private var sideColor: Color { ticket.side == .long ? .positive : .negative }
 
-    private var tpslGateMessage: String {
+    /// What to tell the user about whether their take-profit / stop-loss will actually be placed, and whether it needs
+    /// them to act. An enrolled key means the triggers WILL be placed (the order path reconnects on submit), so that
+    /// is reassurance, not a warning — only `notEnrolled` / `needsForwarding` / a hard failure require an action.
+    private var tpslStatus: (text: String, warning: Bool) {
         switch perplTrading.status {
-        case .needsForwarding: return "Enable one-click trading in Profile to place take-profit and stop-loss."
-        case .connecting: return "Connecting to Perpl trading…"
-        default: return "Connect Perpl trading in Profile to place take-profit and stop-loss."
+        case .connected:
+            return ("Placed on Perpl as keeper-managed trigger orders linked to this position.", false)
+        case .connecting, .enrolled:
+            return ("Connecting to Perpl trading to place your take-profit and stop-loss.", false)
+        case .needsForwarding:
+            return ("Enable one-click trading in Profile to place take-profit and stop-loss.", true)
+        case .notEnrolled:
+            return ("Connect Perpl trading in Profile to place take-profit and stop-loss.", true)
+        case .failed:
+            return ("Couldn’t reach Perpl trading — retrying. Take-profit and stop-loss need it live.", true)
         }
     }
 
-    private func triggerMetrics(_ trigger: Double?) -> (pct: Double, pnl: Double)? {
+    /// Expected result at a take-profit / stop-loss trigger, measured from the entry (`refPrice` — the limit price for
+    /// a limit order, else the mark). The ticket's side isn't chosen until the user taps Long or Short, so the sign
+    /// follows the trigger's ROLE, not a not-yet-chosen (and defaulted-to-long) side: a take-profit is by definition a
+    /// gain and a stop-loss a loss, and the magnitude is the price distance from entry × size. This reads correctly
+    /// for both directions — a short's TP sits below entry, a long's above, but each is |trigger − entry| away.
+    private func triggerMetrics(_ trigger: Double?, isProfit: Bool) -> (pct: Double, pnl: Double)? {
         guard let trigger, trigger > 0, refPrice > 0, baseSize > 0 else { return nil }
-        let dir = ticket.side == .long ? 1.0 : -1.0
-        return ((trigger - refPrice) / refPrice * 100, dir * (trigger - refPrice) * baseSize)
+        let distance = abs(trigger - refPrice)
+        let signed = isProfit ? distance : -distance
+        return (signed / refPrice * 100, signed * baseSize)
     }
-    private var tpMetrics: (pct: Double, pnl: Double)? { triggerMetrics(tpValue) }
-    private var slMetrics: (pct: Double, pnl: Double)? { triggerMetrics(slValue) }
+    private var tpMetrics: (pct: Double, pnl: Double)? { triggerMetrics(tpValue, isProfit: true) }
+    private var slMetrics: (pct: Double, pnl: Double)? { triggerMetrics(slValue, isProfit: false) }
 
     private func triggerMetricRow(_ label: String, _ m: (pct: Double, pnl: Double)) -> some View {
         HStack {
