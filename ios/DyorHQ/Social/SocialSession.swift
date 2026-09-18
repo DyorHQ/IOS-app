@@ -5,7 +5,7 @@ import Security
 
 /// The DyorHQ social/backend session: signs in to Supabase by having the Privy wallet sign a nonce (login stays in
 /// Privy), keeps the resulting token in the Keychain, and manages the wallet's public profile. Everything else
-/// (feed, follows, watchlists, alerts, copy trading) builds on this session and its `SupabaseClient`.
+/// (feed, follows, watchlists, alerts) builds on this session and its `SupabaseClient`.
 @Observable
 @MainActor
 final class SocialSession {

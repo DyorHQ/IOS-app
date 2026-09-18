@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Account deletion, as App Store guideline 5.1.1(v) requires of an app that creates accounts. Everything DyorHQ
 /// keeps for the account goes: the profile and every server row keyed to the wallet (posts, comments, follows,
-/// alerts, copy-trading, watchlists, referral codes, device tokens — they cascade from the profile row), the
+/// alerts, watchlists, referral codes, device tokens — they cascade from the profile row), the
 /// profile picture, the Privy sign-in account when there is one, and every key, token, cache and setting on this
 /// device. Funds and on-chain history stay on the blockchain, reachable only through the user's own backup.
 enum AccountDeletion {
@@ -71,7 +71,7 @@ struct DeleteAccountView: View {
             List {
                 Section {
                     Label("Your DyorHQ profile, posts, comments, follows and reactions", systemImage: "person.2")
-                    Label("Alerts, watchlists, copy-trading settings and referral codes", systemImage: "bell.badge")
+                    Label("Alerts, watchlists and referral codes", systemImage: "bell.badge")
                     Label("Notification history and this device's push registration", systemImage: "iphone")
                     if isPrivy { Label("Your \(method.title) sign-in account at Privy, including its embedded wallet", systemImage: "key") }
                     Label("Every key, session and cache stored on this device", systemImage: "trash")

@@ -76,7 +76,7 @@ public struct SwapHistoryService: Sendable {
         return await scan(wallet: wallet, from: from, to: latest, anchor: anchor, decimals: decimals, limit: limit)
     }
 
-    /// Swaps in an explicit block range — used by the copy-trade watcher to scan only blocks since its last checkpoint.
+    /// Swaps in an explicit block range — e.g. the Portfolio's full-history scan from block 0.
     public func swaps(wallet: Address, fromBlock: UInt64, toBlock: UInt64, decimals: [Address: Int] = [:], limit: Int = 100) async -> [SwapRecord] {
         guard toBlock >= fromBlock, let anchor = try? await rpc.block(.latest) else { return [] }
         return await scan(wallet: wallet, from: fromBlock, to: toBlock, anchor: anchor, decimals: decimals, limit: limit)

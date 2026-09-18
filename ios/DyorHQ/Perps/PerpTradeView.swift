@@ -92,11 +92,6 @@ struct PerpTradeView: View {
         .task {
             ticket.leverage = min(settings.defaultLeverage, maxLeverage)
             ticket.slippageBps = settings.slippageBps
-            // Copy-trade hand-off: preset the ticket to the copied trader's direction/leverage so the user doesn't
-            // accidentally place the opposite side.
-            if let side = router.pendingPerpSide { ticket.side = side; router.pendingPerpSide = nil }
-            if let leverage = router.pendingPerpLeverage { ticket.leverage = min(leverage, maxLeverage); router.pendingPerpLeverage = nil }
-            if let size = router.pendingPerpSize, size > 0 { ticket.sizeText = plainSize(size); router.pendingPerpSize = nil }
             feed.focus(market)
             await loadCandles()
             while !Task.isCancelled {
@@ -112,12 +107,6 @@ struct PerpTradeView: View {
         .task(id: session.address) { perplTrading.refresh(address: session.address); await loadFills() }
         .onChange(of: bottomTab) { _, tab in if tab == .history { Task { await loadFills() } } }
         .onChange(of: model.fillSignal) { _, _ in if model.lastFilledPerpId == market.id { Task { await loadFills() } } }
-        // Copy-trade presets also arrive while this view is already alive on the target market (the .task above only
-        // consumes them on a fresh market, since the view is rendered inline with .id(market.id)). Apply them here too
-        // so the copied side/leverage/size land — and clear them so they don't leak into the next market's ticket.
-        .onChange(of: router.pendingPerpSide) { _, side in if let side { ticket.side = side; router.pendingPerpSide = nil } }
-        .onChange(of: router.pendingPerpLeverage) { _, lev in if let lev { ticket.leverage = min(lev, maxLeverage); router.pendingPerpLeverage = nil } }
-        .onChange(of: router.pendingPerpSize) { _, size in if let size, size > 0 { ticket.sizeText = plainSize(size); router.pendingPerpSize = nil } }
         .sheet(isPresented: $showConfirm) { orderConfirmSheet }
         .sheet(isPresented: $showLeverage) {
             LeverageSheet(leverage: ticket.leverage, maxLeverage: maxLeverage) { chosen in

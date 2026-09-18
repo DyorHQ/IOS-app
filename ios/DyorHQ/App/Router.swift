@@ -31,10 +31,6 @@ final class Router {
     var tradeMode: TradeMode = .swap
     var pendingSwap: (tokenIn: Token?, tokenOut: Token?)?
     var pendingPerpMarket: Int?
-    /// Preset the perps ticket direction/leverage/size when opening a market (e.g. copying a trader's LONG 5x).
-    var pendingPerpSide: PositionSide?
-    var pendingPerpLeverage: Double?
-    var pendingPerpSize: Double?
     /// A launch to open on the Launch tab's detail page, set from another tab or the post-launch "View" action.
     var pendingLaunch: Launch?
     /// A Moment to open on the Moments tab's detail page.
@@ -46,11 +42,8 @@ final class Router {
         tab = .trade
     }
 
-    func openPerp(id: Int, side: PositionSide? = nil, leverage: Double? = nil, size: Double? = nil) {
+    func openPerp(id: Int) {
         pendingPerpMarket = id
-        pendingPerpSide = side
-        pendingPerpLeverage = leverage
-        pendingPerpSize = size
         tradeMode = .perps
         tab = .trade
     }

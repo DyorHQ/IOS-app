@@ -203,7 +203,7 @@ public actor PerplService {
     }
 
     /// One page of the account's history (deposits, withdrawals, settlements, funding payments, liquidations), newest
-    /// first. Funding rows (`kind == .funding`) are the realized funding payments the delta-neutral dashboard sums.
+    /// first. Funding rows (`kind == .funding`) are the realized funding payments on the account.
     public func accountHistory(key: PerplApiKey, count: Int = 100, cursor: String? = nil) async throws -> PerplHistoryPage<PerplAccountEvent> {
         let (rows, next) = try await signedHistory("/v1/trading/account-history", count: count, cursor: cursor, key: key)
         return PerplHistoryPage(items: rows.compactMap { PerplAccountEvent(event: $0) }, next: next)

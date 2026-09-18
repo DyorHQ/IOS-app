@@ -12,7 +12,7 @@ struct AppConfig: Sendable {
     let launchpad: LaunchpadAddresses
     /// Moments (v1.1) is live on Monad mainnet; the addresses are the verified deployment, baked into DyorKit.
     let moments: MomentsAddresses
-    /// DyorHQ's Supabase backend (social, alerts, copy trading, launch index). The publishable key is safe to
+    /// DyorHQ's Supabase backend (social, alerts, launch index). The publishable key is safe to
     /// embed — row-level security protects the data — so these have working defaults.
     let supabaseURL: URL
     let supabaseKey: String
