@@ -41,6 +41,11 @@ final class PerplTrading {
     /// authority: forwarding is treated as on from that moment, regardless of the (possibly stale) WS `fw`. Cleared
     /// on a wallet change / forget.
     private var forwardingGrantedOnChain = false
+    /// Keeps the single trading socket alive for as long as a key is enrolled, reconnecting automatically after any
+    /// drop (network change, server restart, app resume) so the user never has to reconnect by hand to place TP/SL.
+    /// It runs from the moment a key is present until the key is removed or the wallet changes; only Perpl rejecting
+    /// the key (close 3401) makes it stand down (that key can never sign in again — the user must re-enroll).
+    private var keepAlive: Task<Void, Never>?
 
     var isReady: Bool { status == .connected }
     /// The signed-in account id from the trading WS (same value the on-chain account reports).
@@ -65,9 +70,32 @@ final class PerplTrading {
             forwardingGrantedOnChain = false
             resetRetry()
         }
-        guard let address else { return }
+        guard let address else { stopKeepAlive(); return }
         key = PerplKeychain.load(address: address.checksummed)
         if status == .notEnrolled || status == .enrolled { status = key == nil ? .notEnrolled : .enrolled }
+        if key != nil { startKeepAlive() } else { stopKeepAlive() }
+    }
+
+    /// Starts the always-on reconnect loop (idempotent). While a key is enrolled and Perpl hasn't rejected it, this
+    /// brings the socket back within seconds of any drop, so `isReady` stays true across the whole app without the
+    /// user reconnecting. It never opens a second socket — `ensureConnected` is single-flight and backs off on failure.
+    private func startKeepAlive() {
+        guard keepAlive == nil else { return }
+        keepAlive = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                // Only act when the socket is actually down. A live socket (signed in — whether `.connected` or
+                // `.needsForwarding`) is left alone; the client's own ping keeps it from idling out.
+                if let self, self.key != nil, !self.keyRejected, self.client?.signedIn != true {
+                    await self.ensureConnected()
+                }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    private func stopKeepAlive() {
+        keepAlive?.cancel()
+        keepAlive = nil
     }
 
     /// Full one-time enrollment: generate a key, sign the server's typed data with the wallet, store, and connect.
@@ -92,6 +120,7 @@ final class PerplTrading {
             key = enrolled
             keyRejected = false
             resetRetry()
+            startKeepAlive()
             try await connect()
         } catch {
             status = .failed(describe(error))
@@ -318,6 +347,7 @@ final class PerplTrading {
     }
 
     func forget(address: Address) {
+        stopKeepAlive()
         PerplKeychain.delete(address: address.checksummed)
         disconnect()
         key = nil

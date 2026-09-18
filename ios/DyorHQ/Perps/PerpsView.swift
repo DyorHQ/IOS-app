@@ -60,6 +60,8 @@ final class PerpsModel {
     private(set) var account: PerpAccount?
     private(set) var positions: [PerpPosition] = []
     private(set) var orders: [PerpOrder] = []
+    /// App-placed TP/SL the user set, reconciled against open positions/orders each poll (Perpl has no read-back API).
+    private(set) var triggers: [PlacedTrigger] = []
     private(set) var collateral: (wallet: BigUInt, allowance: BigUInt) = (0, 0)
     private(set) var loading = false
     private(set) var error: String?
@@ -110,9 +112,14 @@ final class PerpsModel {
                     // A failed read returns nil (keep the last good list); only diff for fills on a successful read.
                     if let fresh = try? await p { detectFills(fresh); positions = fresh }
                     orders = (try? await o) ?? orders
+                    // Reconcile the app's recorded TP/SL: a trigger lives while its market has a position or a resting
+                    // entry, so a fired/closed trigger drops off instead of lingering.
+                    let openPerpIds = Set(positions.map(\.perpId)).union(orders.map(\.perpId))
+                    triggers = TriggerStore.reconcile(owner: address, openPerpIds: openPerpIds)
                 } else {
                     positions = []
                     orders = []
+                    triggers = TriggerStore.reconcile(owner: address, openPerpIds: [])
                     lastPositionSize = [:]
                     fillPrimed = false
                 }
@@ -121,6 +128,7 @@ final class PerpsModel {
                 account = nil
                 positions = []
                 orders = []
+                triggers = []
             }
         } catch {
             self.error = describe(error)
