@@ -1,8 +1,9 @@
 import BigInt
 import Foundation
 
-/// Where the launchpad lives on chain. The contracts are deployed by the owner after the app ships, so these
-/// arrive at runtime; any of them may be `Address.zero`, and `isDeployed` is what every read checks first.
+/// Where the launchpad lives on chain. `monadMainnet` is the audited deployment the app ships with; a build can
+/// point at another one (a fork rehearsal) through Secrets.xcconfig. Any address may be `Address.zero`, and
+/// `isDeployed` is what every read checks first.
 public struct LaunchpadAddresses: Sendable, Hashable {
     public var factory: Address
     public var router: Address
@@ -24,6 +25,22 @@ public struct LaunchpadAddresses: Sendable, Hashable {
     public var isDeployed: Bool { !factory.isZero }
 
     public static let none = LaunchpadAddresses()
+
+    /// Factories that were retired (nothing new launches there) but whose launches and trades stay part of a
+    /// wallet's history: the pre-audit 2026-09-12 deployment.
+    public static let retiredFactories: [Address] = [Address(literal: "0x2F02972E166dE71097EEAC8303cE7Fe6B6Ebe9f4")]
+
+    /// The launchpad on Monad mainnet (chain 143): the 2026-09-16 redeploy carrying every 2026-09-15 audit fix
+    /// (the pre-audit factory 0x2F02… is retired). Mirrors `contracts/deployments/143.json`, and
+    /// `LaunchpadDeploymentTests` fails whenever the two drift apart.
+    public static let monadMainnet = LaunchpadAddresses(
+        factory: Address(literal: "0x10F34A174d9C393a90aFf94BDED7E1Db185446D7"),
+        router: Address(literal: "0x3eE688C3b3aCd652914aD49d8Ee5ae1004bF3690"),
+        escrow: Address(literal: "0xbc70ba9D66F761FFb7647D6B52C8Cf65a49E47fc"),
+        holderFeeSharing: Address(literal: "0x70F8f64c6A4A76A507e322BCef19E6E37abe4eF6"),
+        hook: Address(literal: "0x51A240c13164BcDF3FC11053FddEaC626A4160cc"),
+        poolManager: Uniswap.poolManager
+    )
 }
 
 /// `Types.Phase` in the contracts: NotGraduated, Swept, PoolCreated, Rescued.
@@ -245,8 +262,11 @@ public struct LaunchDetail: Identifiable, Hashable, Sendable {
     public let poolKey: PoolKey?
     public let hookPendingFees: BigUInt
     public let hookPendingTax: BigUInt
+    /// Holder rewards the sharing contract has received but not yet distributed: since the audit fix for flash
+    /// reward-sniping, a reward is released to the balances standing at the first touch of a LATER block.
+    public let queuedRewards: BigUInt
 
-    public init(launch: Launch, feeBps: Int, snipeSchedule: [Int], quoteReserve: BigUInt, tokenReserve: BigUInt, sellableTokens: BigUInt, phantomQuote: BigUInt, reservedTokens: BigUInt, swept: Bool, stuckSince: Int, poolKey: PoolKey?, hookPendingFees: BigUInt, hookPendingTax: BigUInt) {
+    public init(launch: Launch, feeBps: Int, snipeSchedule: [Int], quoteReserve: BigUInt, tokenReserve: BigUInt, sellableTokens: BigUInt, phantomQuote: BigUInt, reservedTokens: BigUInt, swept: Bool, stuckSince: Int, poolKey: PoolKey?, hookPendingFees: BigUInt, hookPendingTax: BigUInt, queuedRewards: BigUInt = 0) {
         self.launch = launch
         self.feeBps = feeBps
         self.snipeSchedule = snipeSchedule
@@ -260,6 +280,7 @@ public struct LaunchDetail: Identifiable, Hashable, Sendable {
         self.poolKey = poolKey
         self.hookPendingFees = hookPendingFees
         self.hookPendingTax = hookPendingTax
+        self.queuedRewards = queuedRewards
     }
 
     /// Seconds of snipe tax left at `now`, clamped to the schedule so a chain clock ahead of the device never

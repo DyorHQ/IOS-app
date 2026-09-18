@@ -20,22 +20,29 @@ struct RootView: View {
             }
         }
         .animation(.default, value: session.state)
+        // The appearance lives on a View, not on the App's scene body: a scene body does not re-evaluate reliably on
+        // an observable change, and the stale scheme it left on the root view controller shadowed the window.
+        .preferredColorScheme(settings.appearance.colorScheme)
         // Privacy cover for the app-switcher snapshot: iOS screenshots the UI whenever the app leaves the foreground,
         // and that image is written to the app container. If a recovery phrase / private key were on screen (Import
         // Wallet), it would land in that snapshot. Covering the whole hierarchy the instant we're not active means the
         // snapshot only ever captures the cover, never a secret.
         .overlay { PrivacyCover(active: scenePhase == .active) }
-        .task { session.start() }
+        .task { session.start(); settings.appearance.apply() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { settings.appearance.apply() } }
         // Keep the per-wallet sessions tied to the active wallet: rebind whenever the signed-in address changes, so a
         // sign-out + import of a different wallet never carries over the previous account's social profile or its
         // authenticated Perpl trading session.
         .task(id: session.address) {
             env.social.bind(address: session.address)
+            // A wallet that can sign connects to the backend by itself (one signature), so activity and settings are
+            // recorded — and restored on a fresh device — without a separate step.
+            if session.canSign, !env.social.isSignedIn { await env.social.signIn(session: session) }
+            if env.social.isSignedIn, let address = session.address { await env.sync.restore(owner: address) }
             env.perplTrading.refresh(address: session.address)
+            NotificationHub.shared.bind(owner: session.address)
         }
         .task { env.alertWatcher.start(env: env, settings: settings) }
-        .task { env.copyWatcher.start(env: env, settings: settings) }
-        .task { env.mmWatcher.start(env: env) }
         .task { await env.refreshVenueTokens() }
     }
 }
@@ -57,7 +64,7 @@ private struct PrivacyCover: View {
 }
 
 enum AppTab: String, CaseIterable, Identifiable {
-    case home, launch, trade, moments, strategy
+    case home, launch, trade, moments
     var id: String { rawValue }
 }
 
@@ -74,7 +81,6 @@ struct MainTabView: View {
             Tab("Launch", systemImage: "flame", value: .launch) { LaunchpadView() }
             Tab("Trade", systemImage: "arrow.left.arrow.right", value: .trade) { TradeView() }
             Tab("Moments", systemImage: "camera.aperture", value: .moments) { MomentsView() }
-            Tab("Strategy", systemImage: "wand.and.stars", value: .strategy) { StrategyView() }
         }
         .sensoryFeedback(.selection, trigger: router.tab)
         .fullScreenCover(isPresented: $router.menuOpen) { SideMenuView() }
@@ -84,6 +90,7 @@ struct MainTabView: View {
             case .news: NewsView()
             case .help: GetHelpView()
             case .profile: ProfileView(presented: true)
+            case .notifications: NotificationCenterView()
             }
         }
     }

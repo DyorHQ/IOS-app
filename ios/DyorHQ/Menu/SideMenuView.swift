@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The app's section menu, opened from the three-line button on Home. A full-screen page in the style of the
 /// reference trading apps: a close control and the wordmark on top, the signed-in profile (tap to open it), then
-/// one row per section of DyorHQ — Home, Spot, Perps, Launch, Moments, News, Strategies, Portfolio, Get Help.
+/// one row per section of DyorHQ — Home, Spot, Perps, Launch, Moments, News, Portfolio, Get Help.
 struct SideMenuView: View {
     @Environment(Router.self) private var router
     @Environment(Session.self) private var session
@@ -124,7 +124,6 @@ struct SideMenuView: View {
         case .perps: return router.tab == .trade && router.tradeMode == .perps
         case .launch: return router.tab == .launch
         case .moments: return router.tab == .moments
-        case .strategies: return router.tab == .strategy
         case .portfolio, .news, .help: return false
         }
     }

@@ -160,6 +160,16 @@ public extension RPCClient {
             if end == UInt64.max { break }
             start = end + 1
         }
+        // A wallet-scoped filter (a topic beyond the event signature) is cheap for the wide-range endpoints however
+        // far back it reaches: rpc1 answers one wallet's whole transfer history in about a second. Ask for the whole
+        // window first and fall back to ranges only when the endpoint refuses it.
+        if ranges.count > 1, chunk >= 100_000, topics.dropFirst().contains(where: { $0 != nil }) {
+            for attempt in 0..<3 {
+                if let whole = try? await logs(LogFilter(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock)) { return whole }
+                if Task.isCancelled { return [] }
+                try? await Task.sleep(for: .milliseconds(400 * (attempt + 1)))
+            }
+        }
         var out: [Log] = []
         var next = 0
         while next < ranges.count, !Task.isCancelled {

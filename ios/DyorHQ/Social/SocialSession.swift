@@ -5,7 +5,7 @@ import Security
 
 /// The DyorHQ social/backend session: signs in to Supabase by having the Privy wallet sign a nonce (login stays in
 /// Privy), keeps the resulting token in the Keychain, and manages the wallet's public profile. Everything else
-/// (feed, follows, watchlists, alerts, copy trading) builds on this session and its `SupabaseClient`.
+/// (feed, follows, watchlists, alerts) builds on this session and its `SupabaseClient`.
 @Observable
 @MainActor
 final class SocialSession {
@@ -118,9 +118,27 @@ final class SocialSession {
     /// Uploads a Moment's photo to the wallet's folder in the public `launch-media` bucket and returns its public
     /// URL — the caller writes it on-chain as the NFT's `mediaURI` next to the keccak-256 of these exact bytes.
     func uploadMomentImage(jpeg: Data) async throws -> URL {
+        try await uploadMomentMedia(jpeg, contentType: "image/jpeg", fileExtension: "jpg")
+    }
+
+    /// Uploads any Moment media file (photo, video, or a video's cover frame) to the wallet's folder in the public
+    /// `launch-media` bucket and returns its public URL, which the Moment writes on-chain as the NFT's image or
+    /// animation. Videos are accepted up to 50 MB.
+    func uploadMomentMedia(_ data: Data, contentType: String, fileExtension: String) async throws -> URL {
+        try await uploadAndPinMomentMedia(data, contentType: contentType, fileExtension: fileExtension).mirror
+    }
+
+    /// Uploads Moment media to the public bucket and pins it to IPFS, so the NFT's on-chain pointer is a permanent
+    /// `ipfs://` CID that outlives DyorHQ's servers. Returns the URI to write on-chain — the `ipfs://` CID, or the
+    /// Supabase https URL as a fallback when pinning is unavailable (e.g. the Pinata secret is not set yet) — plus
+    /// the Supabase URL as a fast in-app mirror. The provenance hash is of these exact bytes regardless of storage.
+    func uploadAndPinMomentMedia(_ data: Data, contentType: String, fileExtension: String) async throws -> (onchain: String, mirror: URL) {
         guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
         let name = "moment-" + UUID().uuidString.lowercased()
-        return try await client.uploadPublic(bucket: "launch-media", path: "\(wallet)/\(name).jpg", data: jpeg, contentType: "image/jpeg")
+        let path = "\(wallet)/\(name).\(fileExtension)"
+        let url = try await client.uploadPublic(bucket: "launch-media", path: path, data: data, contentType: contentType)
+        let onchain = (try? await client.pinToIPFS(bucket: "launch-media", path: path)) ?? url.absoluteString
+        return (onchain, url)
     }
 
     /// Uploads a new profile picture (JPEG bytes) to the wallet's own folder in the public `avatars` bucket, then

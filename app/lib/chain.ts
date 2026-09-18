@@ -31,14 +31,20 @@ const addr = (value: string | undefined, fallback?: string): Address => {
   return candidate && isAddress(candidate) ? getAddress(candidate) : ZERO_ADDRESS;
 };
 
-/** Launchpad contracts on Monad mainnet. Environment variables win over app/lib/deployment.json. */
+/* Launchpad contracts on Monad mainnet: app/lib/deployment.json (written by `npm run sync:deployment` from
+   contracts/deployments/143.json) is the source of truth. NEXT_PUBLIC_LAUNCHPAD_* variables only apply when
+   NEXT_PUBLIC_LAUNCHPAD_OVERRIDE=1 is also set — the fork-rehearsal switch — so a stale variable in a hosting
+   dashboard or an old env file can never point production at a retired deployment again. */
+const overrideLaunchpad = publicEnv(() => process.env.NEXT_PUBLIC_LAUNCHPAD_OVERRIDE) === "1";
+const launchpadEnv = (read: () => string | undefined): string | undefined => (overrideLaunchpad ? publicEnv(read) : undefined);
+
 export const ADDRESSES = {
-  factory: addr(publicEnv(() => process.env.NEXT_PUBLIC_LAUNCHPAD_FACTORY), deployment.factory),
-  router: addr(publicEnv(() => process.env.NEXT_PUBLIC_LAUNCH_ROUTER), deployment.launchAndBuyRouter),
-  escrow: addr(publicEnv(() => process.env.NEXT_PUBLIC_FEE_ESCROW), deployment.escrow),
-  holderFeeSharing: addr(publicEnv(() => process.env.NEXT_PUBLIC_HOLDER_FEE_SHARING), deployment.holderFeeSharing),
-  hook: addr(publicEnv(() => process.env.NEXT_PUBLIC_MEME_HOOK), deployment.hook),
-  poolManager: addr(publicEnv(() => process.env.NEXT_PUBLIC_POOL_MANAGER), deployment.poolManager),
+  factory: addr(launchpadEnv(() => process.env.NEXT_PUBLIC_LAUNCHPAD_FACTORY), deployment.factory),
+  router: addr(launchpadEnv(() => process.env.NEXT_PUBLIC_LAUNCH_ROUTER), deployment.launchAndBuyRouter),
+  escrow: addr(launchpadEnv(() => process.env.NEXT_PUBLIC_FEE_ESCROW), deployment.escrow),
+  holderFeeSharing: addr(launchpadEnv(() => process.env.NEXT_PUBLIC_HOLDER_FEE_SHARING), deployment.holderFeeSharing),
+  hook: addr(launchpadEnv(() => process.env.NEXT_PUBLIC_MEME_HOOK), deployment.hook),
+  poolManager: addr(launchpadEnv(() => process.env.NEXT_PUBLIC_POOL_MANAGER), deployment.poolManager),
 } as const;
 
 /** Extra ERC-20 pair tokens the owner approved with `setPairEconomics` (comma separated). Native MON is always offered. */

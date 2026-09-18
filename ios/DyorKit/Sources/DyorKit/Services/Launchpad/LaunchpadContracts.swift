@@ -31,6 +31,9 @@ enum LaunchpadABI {
         static let canLaunch = "canLaunch(address)"
         static let launchToken = "launchToken(\(tokenParams),uint256,address,address[])"
         static let graduate = "graduate(address)"
+        /// Audit fix H-3: retries the creator's venue, then graduates a stuck Monday launch on Uniswap v4.
+        static let graduateFallback = "graduateFallback(address)"
+        static let v4FallbackAllowed = "v4FallbackAllowed(address)"
     }
 
     enum Router {
@@ -76,6 +79,8 @@ enum LaunchpadABI {
 
     enum Sharing {
         static let pendingRewards = "pendingRewards(address,address)"
+        /// Audit fix H-1: `(amount, releasableFromBlock)` of the reward waiting for the next block.
+        static let queuedRewards = "queuedRewards(address)"
         static let claim = "claim(address)"
     }
 

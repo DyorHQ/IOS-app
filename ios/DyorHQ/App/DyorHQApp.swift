@@ -15,7 +15,6 @@ struct DyorHQApp: App {
                 .environment(environment.social)
                 .environment(router)
                 .tint(.brand)
-                .preferredColorScheme(environment.settings.appearance.colorScheme)
         }
     }
 }

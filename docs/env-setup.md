@@ -38,7 +38,8 @@ Copy `Secrets.example.xcconfig` to `Secrets.xcconfig` and fill in:
 | Variable | Required | Where it comes from |
 | --- | --- | --- |
 | `NEXT_PUBLIC_MONAD_RPC` | Optional | Dedicated RPC URL; the public one is rate-limited on `eth_getLogs` |
-| `NEXT_PUBLIC_LAUNCHPAD_FACTORY`, `NEXT_PUBLIC_LAUNCH_ROUTER`, `NEXT_PUBLIC_FEE_ESCROW`, `NEXT_PUBLIC_HOLDER_FEE_SHARING`, `NEXT_PUBLIC_MEME_HOOK`, `NEXT_PUBLIC_POOL_MANAGER` | After you deploy | `npm run sync:deployment` fills `app/lib/deployment.json` from `contracts/deployments/143.json`; these variables override it |
+| `NEXT_PUBLIC_LAUNCHPAD_FACTORY`, `NEXT_PUBLIC_LAUNCH_ROUTER`, `NEXT_PUBLIC_FEE_ESCROW`, `NEXT_PUBLIC_HOLDER_FEE_SHARING`, `NEXT_PUBLIC_MEME_HOOK`, `NEXT_PUBLIC_POOL_MANAGER` | No | Fork rehearsals only. `app/lib/deployment.json` (written by `npm run sync:deployment` from `contracts/deployments/143.json`) is the source of truth; these variables are ignored unless `NEXT_PUBLIC_LAUNCHPAD_OVERRIDE=1` is also set, so a stale value in a hosting dashboard can never point production at a retired deployment |
+| `NEXT_PUBLIC_LAUNCHPAD_OVERRIDE` | No | `1` makes the six variables above win over the deployment record (anvil fork). Never set it for a production build |
 | `NEXT_PUBLIC_PAIR_TOKENS` | Optional | Comma-separated ERC-20 pair tokens you approved with `setPairEconomics` |
 
 ## 4. Contract deployment — shell environment for `forge script` (you run this; nothing is stored)

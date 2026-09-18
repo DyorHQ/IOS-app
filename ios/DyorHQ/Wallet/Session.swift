@@ -2,6 +2,7 @@ import DyorKit
 import Foundation
 import Observation
 import PrivySDK
+import Security
 
 /// Who is signed in and with what wallet. Privy handles Apple, Google, email and passkey sign-in and holds the
 /// embedded wallet's key; a watch-only address lets someone follow a wallet without signing anything.
@@ -15,14 +16,15 @@ final class Session {
     }
 
     enum Method: String, Codable, Equatable {
-        case apple, google, email, passkey, imported, watchOnly
+        case apple, google, email, passkey, meraPasskey, imported, watchOnly
 
         var title: String {
             switch self {
             case .apple: return "Apple"
             case .google: return "Google"
             case .email: return "Email"
-            case .passkey: return "Passkey"
+            case .passkey: return "Passkey (Privy)"
+            case .meraPasskey: return "Passkey"
             case .imported: return "Imported wallet"
             case .watchOnly: return "Watch only"
             }
@@ -42,6 +44,8 @@ final class Session {
     private(set) var wallet: (any Wallet)?
     let config: AppConfig
     private let privy: (any Privy)?
+    /// The Mera passkey account layer: a wallet derived from the passkey's PRF output, nothing stored.
+    let mera: MeraSession
     private var observing = false
 
     var account: Account? { if case .signedIn(let account) = state { return account } else { return nil } }
@@ -51,6 +55,7 @@ final class Session {
     init(config: AppConfig) {
         self.config = config
         privy = config.hasPrivy ? PrivySdk.initialize(config: PrivyConfig(appId: config.privyAppID, appClientId: config.privyClientID, loggingConfig: PrivyLoggingConfig(logLevel: .warning))) : nil
+        mera = MeraSession(rpId: config.passkeyRelyingParty)
     }
 
     /// Starts following Privy's auth state. Safe to call more than once.
@@ -87,6 +92,12 @@ final class Session {
     /// found, so Privy's unauthenticated state doesn't clobber a locally-held wallet.
     @discardableResult
     private func loadStoredSession() -> Bool {
+        if let address = MeraCredentialStore.address, hasMera {
+            // Locked until the first signature asks for the passkey; reads work immediately.
+            wallet = MeraWallet(address: address, session: mera)
+            state = .signedIn(Account(address: address, method: .meraPasskey, label: "Passkey"))
+            return true
+        }
         if let account = ImportedWalletStore.loadAccount() {
             wallet = LocalWallet(account: account)
             state = .signedIn(Account(address: account.address, method: .imported, label: nil))
@@ -115,6 +126,7 @@ final class Session {
             wallet = PrivyWallet(address: address, provider: embedded.provider)
             WatchOnlyStore.clear()
             ImportedWalletStore.clear() // a fresh Privy sign-in supersedes any imported wallet
+            mera.forget()
             state = .signedIn(Account(address: address, method: method, label: label))
         } catch {
             lastError = error.localizedDescription
@@ -142,6 +154,21 @@ final class Session {
 
     var hasPrivy: Bool { privy != nil }
     var hasPasskeys: Bool { privy != nil && config.hasPasskeys }
+    /// Mera passkey accounts need only a relying party (the domain that serves the passkey association file).
+    var hasMera: Bool { !config.passkeyRelyingParty.isEmpty }
+
+    /// One passkey ceremony creates (or signs into) a Mera account and makes it the app's signer. Supersedes any
+    /// Privy, imported or watch-only session.
+    func signInWithMera(create: Bool) async throws {
+        let address = create ? try await mera.create(userName: "DyorHQ") : try await mera.signIn()
+        WatchOnlyStore.clear()
+        ImportedWalletStore.clear()
+        if let privy, case .authenticated(let user) = await privy.getAuthState() {
+            await user.logout()
+        }
+        wallet = MeraWallet(address: address, session: mera)
+        state = .signedIn(Account(address: address, method: .meraPasskey, label: "Passkey"))
+    }
 
     func sendEmailCode(to email: String) async throws {
         try await requirePrivy().email.sendCode(to: email)
@@ -180,6 +207,7 @@ final class Session {
     func importWallet(_ account: Secp256k1Account) async {
         ImportedWalletStore.save(privateKey: account.privateKey)
         WatchOnlyStore.clear()
+        mera.forget()
         // If a Privy session is lingering, end it so it can't override the imported wallet on the next auth event.
         if let privy, case .authenticated(let user) = await privy.getAuthState() {
             await user.logout()
@@ -191,9 +219,38 @@ final class Session {
     func signOut() async {
         WatchOnlyStore.clear()
         ImportedWalletStore.clear()
+        mera.forget()
         wallet = nil
         if let privy, case .authenticated(let user) = await privy.getAuthState() {
             await user.logout()
+        }
+        state = .signedOut
+    }
+
+    /// The signed-in Privy user's access token (nil for imported, passkey-derived and watch-only accounts). A
+    /// server function uses it to prove the caller owns the Privy account it is asked to delete.
+    func privyAccessToken() async throws -> String? {
+        guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return nil }
+        return try await user.getAccessToken()
+    }
+
+    /// Account deletion, device side: ends the Privy session, then removes every trace of the account from this
+    /// device — imported keys, the passkey account record, Perpl and backend tokens, caches,
+    /// settings — and signs out. The blockchain is untouched; only the user's own backup can reach the funds again.
+    func eraseLocalData() async {
+        if let privy, case .authenticated(let user) = await privy.getAuthState() {
+            await user.logout()
+        }
+        WatchOnlyStore.clear()
+        ImportedWalletStore.clear()
+        mera.forget()
+        wallet = nil
+        if let bundle = Bundle.main.bundleIdentifier {
+            UserDefaults.standard.removePersistentDomain(forName: bundle)
+        }
+        // Every Keychain item this app created (imported wallet keys, Perpl trading keys, backend session tokens).
+        for itemClass in [kSecClassGenericPassword, kSecClassInternetPassword, kSecClassKey] {
+            SecItemDelete([kSecClass as String: itemClass] as CFDictionary)
         }
         state = .signedOut
     }

@@ -38,7 +38,7 @@ struct NewsView: View {
                                 .textCase(nil)
                                 .listRowInsets(EdgeInsets())
                         } footer: {
-                            Text("Headlines are fetched straight from each publisher's RSS feed. DyorHQ does not track what you read.").font(.caption)
+                            Text("Headlines come straight from each publisher's feed.").font(.caption)
                         }
                     }
                     .listStyle(.insetGrouped)

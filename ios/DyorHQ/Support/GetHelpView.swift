@@ -1,15 +1,16 @@
 import SwiftUI
 import UIKit
 
-/// Where DyorHQ's support and community links live. The official site is dyorhq.fun; the X profile is set here
-/// once the owner publishes the handle (until then the row says so and offers the site).
+/// DyorHQ's brand line and the places to reach it: the site, the X profile and the support inbox.
 enum SupportLinks {
+    static let name = "DyorHQ"
+    static let tagline = "The RWA HQ for social trading"
     static let site = URL(string: "https://dyorhq.fun")!
     static let helpCenter = URL(string: "https://dyorhq.fun/support")!
     static let terms = URL(string: "https://dyorhq.fun/terms")!
-    static let supportEmail = "support@dyorhq.fun"
-    /// The DyorHQ profile on X: replace with the real profile URL when it exists.
-    static let x: URL? = nil
+    static let supportEmail = "team@dyorhq.fun"
+    static let xHandle = "@DyorHQ_"
+    static let x: URL? = URL(string: "https://x.com/DyorHQ_")
 
     /// A mail link with the subject and the app / device details support asks for.
     static func mail(subject: String, body: String = "") -> URL? {
@@ -28,32 +29,10 @@ enum SupportLinks {
 /// (Help Center, Contact Support, Report a Bug; X). Opened from the side menu as a full-screen page.
 struct GetHelpView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
-    @State private var noticeLink: String?
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    group("Get Help") {
-                        HelpRow(symbol: "questionmark.circle", title: "Help Center", detail: "Browse articles and FAQs") { openURL(SupportLinks.helpCenter) }
-                        HelpRow(symbol: "envelope", title: "Contact Support", detail: "Email our support team") { mail(subject: "DyorHQ support") }
-                        HelpRow(symbol: "ladybug", title: "Report a Bug", detail: "Help us improve the app") { mail(subject: "DyorHQ bug report", body: "What happened:\n\nWhat I expected:\n\nSteps to reproduce:\n") }
-                    }
-                    group("Community") {
-                        HelpRow(symbol: "at", title: "X", detail: "Follow us for updates") { community(SupportLinks.x, name: "X") }
-                    }
-                    group("About") {
-                        HelpRow(symbol: "globe", title: "dyorhq.fun", detail: "The official site") { openURL(SupportLinks.site) }
-                        HelpRow(symbol: "doc.text", title: "Terms of Use", detail: "How DyorHQ works, in writing") { openURL(SupportLinks.terms) }
-                    }
-                    Text("DyorHQ is self-custodial: support can never access your keys or move your funds. Never share a recovery phrase or private key with anyone, including people claiming to be DyorHQ support.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
-                }
-                .padding(16)
-            }
+            ScrollView { GetHelpContent().padding(16) }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Support")
             .navigationBarTitleDisplayMode(.inline)
@@ -63,12 +42,33 @@ struct GetHelpView: View {
                         .accessibilityLabel("Back")
                 }
             }
-            .alert("Coming soon", isPresented: Binding(get: { noticeLink != nil }, set: { if !$0 { noticeLink = nil } })) {
-                Button("Open dyorhq.fun") { openURL(SupportLinks.site) }
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("The DyorHQ \(noticeLink ?? "") link is not published yet. Everything official is on dyorhq.fun.")
+        }
+    }
+}
+
+/// The support rows themselves, so Profile can push them inside its own navigation.
+struct GetHelpContent: View {
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            group("Get Help") {
+                HelpRow(symbol: "envelope", title: "Contact Support", detail: SupportLinks.supportEmail) { mail(subject: "DyorHQ support") }
+                HelpRow(symbol: "ladybug", title: "Report a Bug", detail: "Tell us what went wrong") { mail(subject: "DyorHQ bug report", body: "What happened:\n\nWhat I expected:\n\nSteps to reproduce:\n") }
             }
+            if let x = SupportLinks.x {
+                group("Community") {
+                    HelpRow(symbol: "at", title: "X", detail: SupportLinks.xHandle) { openURL(x) }
+                }
+            }
+            group("About") {
+                HelpRow(symbol: "globe", title: "dyorhq.fun", detail: SupportLinks.tagline) { openURL(SupportLinks.site) }
+                HelpRow(symbol: "doc.text", title: "Terms of Use", detail: "dyorhq.fun/terms") { openURL(SupportLinks.terms) }
+            }
+            Text("Self-custodial: support can never reach your keys or funds. Never share a recovery phrase with anyone.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
         }
     }
 
@@ -84,9 +84,6 @@ struct GetHelpView: View {
         openURL(url)
     }
 
-    private func community(_ url: URL?, name: String) {
-        if let url { openURL(url) } else { noticeLink = name }
-    }
 }
 
 /// One support row: a symbol on a tinted square, a title and a one-line description, a chevron.

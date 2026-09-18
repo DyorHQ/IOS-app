@@ -4,6 +4,17 @@
       "idiom": "universal",
       "filename": "wordmark.png",
       "scale": "1x"
+    },
+    {
+      "idiom": "universal",
+      "filename": "wordmark-dark.png",
+      "scale": "1x",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
     }
   ],
   "info": {

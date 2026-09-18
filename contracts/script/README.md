@@ -28,12 +28,19 @@ real run will produce (CREATE2 makes the hook address deterministic for a given 
 
 ```bash
 cd contracts
-export PROTOCOL_FEE_RECIPIENT=0x...      # treasury that receives the protocol share (defaults to the deployer)
-export LAUNCH_FEE_WEI=1000000000000000000 # 1 MON per launch (defaults to 1 MON)
-export PHANTOM_QUOTE_WEI=4000000000000000000000        # 4,000 MON opening liquidity depth
-export GRADUATION_THRESHOLD_WEI=16000000000000000000000 # 16,000 MON raised to graduate
-forge script script/Deploy.s.sol:Deploy --rpc-url monad --broadcast --private-key $OWNER_KEY
+export PROTOCOL_FEE_RECIPIENT=0x...      # TREASURY: launch fees + the protocol share of curve fees (defaults to the deployer)
+export FEES=0x...                        # Monday LP swap-fee recipient (MondayFeeVault); must differ from owner and treasury
+export LAUNCH_FEE_WEI=5000000000000000000 # 5 MON per launch (the script's default is 1 MON)
+export MON_USD_E8=...                    # live MON price × 1e8 (sets MON's phantom reserve from LAUNCH_FDV_USD, default $2,000)
+export ABIL_USD_E8=...                   # live aBIL price × 1e8 (Monday aBIL/USDC 0.3% pool 0xb8700E0D0Df2B0b09A1374FbCdCC85E2E14F7898)
+forge script script/Deploy.s.sol:Deploy --rpc-url https://rpc3.monad.xyz --sender $OWNER            # dry run first
+forge script script/Deploy.s.sol:Deploy --rpc-url https://rpc3.monad.xyz --broadcast --private-key $OWNER_KEY
 ```
+
+The dry run needs no key: it simulates every transaction from `--sender`, prints the addresses the real run will
+produce, the gas total, and writes `deployments/143.json` — restore that file (`git checkout -- deployments/143.json`)
+if you are not broadcasting right away. Ignore forge's "above the contract size limit (… > 24576)" lint at the
+end: Monad's limit is 128 KB and `foundry.toml` sets `code_size_limit` accordingly.
 
 The script deploys, in order: `LaunchpadFactory`, `FeeEscrow`, `HolderFeeSharing`, `LaunchLocker`, the
 `MemeHook` at a mined CREATE2 address, `GraduationExecutor`, `LaunchAndBuyRouter`, `LaunchDeployer` (which
@@ -43,10 +50,12 @@ pairing asset. About 24 M gas in total; Monad charges the gas **limit**, so budg
 Addresses are written to `contracts/deployments/143.json` (commit it). Then, from the repo root:
 
 ```bash
-npm run sync:deployment   # copies the addresses into app/lib/deployment.json
+npm run sync:deployment                       # app/lib/deployment.json + the iOS constant (LaunchpadAddresses.monadMainnet)
+python3 scripts/dev/check-launchpad-addresses.py   # every copy agrees with contracts/deployments/143.json
 ```
 
-or set the `NEXT_PUBLIC_*` variables listed in `.env.example`. Rebuild and redeploy the web app afterwards.
+Then rebuild both apps (`vinext deploy` for the web; `xcodegen generate` + an archive for iOS) and retire the previous
+factory (`setWhitelistEnabled(true)`, `setLaunchConfigEnabled(0, false)`) so nothing new launches on it.
 
 ## Verify on Monadscan
 

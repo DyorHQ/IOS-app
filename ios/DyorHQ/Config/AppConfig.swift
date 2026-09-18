@@ -2,7 +2,7 @@ import DyorKit
 import Foundation
 
 /// Build-time configuration, injected through Secrets.xcconfig → Info.plist. Missing values degrade features
-/// (sign-in methods, launchpad) instead of crashing, and the UI says what is missing.
+/// (sign-in methods) instead of crashing, and the UI says what is missing; on-chain addresses have baked defaults.
 struct AppConfig: Sendable {
     let privyAppID: String
     let privyClientID: String
@@ -12,7 +12,7 @@ struct AppConfig: Sendable {
     let launchpad: LaunchpadAddresses
     /// Moments (v1.1) is live on Monad mainnet; the addresses are the verified deployment, baked into DyorKit.
     let moments: MomentsAddresses
-    /// DyorHQ's Supabase backend (social, alerts, copy trading, launch index). The publishable key is safe to
+    /// DyorHQ's Supabase backend (social, alerts, launch index). The publishable key is safe to
     /// embed — row-level security protects the data — so these have working defaults.
     let supabaseURL: URL
     let supabaseKey: String
@@ -41,7 +41,10 @@ struct AppConfig: Sendable {
             rpcURL: rpc,
             passkeyRelyingParty: string("PasskeyRelyingParty"),
             perplBuilderID: Int(string("PerplBuilderID")) ?? 0,
-            launchpad: LaunchpadAddresses(
+            // The audited mainnet launchpad is baked into DyorKit (checked against contracts/deployments/143.json by
+            // its tests). Setting LAUNCHPAD_FACTORY in Secrets.xcconfig points a build at another deployment — a fork
+            // rehearsal — and then all five module addresses come from the xcconfig.
+            launchpad: string("LaunchpadFactory").isEmpty ? .monadMainnet : LaunchpadAddresses(
                 factory: address("LaunchpadFactory"),
                 router: address("LaunchRouter"),
                 escrow: address("FeeEscrow"),

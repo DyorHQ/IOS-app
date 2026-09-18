@@ -1,7 +1,9 @@
+import AVFoundation
 import BigInt
 import DyorKit
 import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Publish a Moment: the photo (uploaded to DyorHQ's media bucket and fingerprinted with keccak-256 on-chain, or a
 /// link you already host), the name and coin ticker, where and when it happened, the collect price, your coin
@@ -28,6 +30,9 @@ struct CreateMomentView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var uploading = false
     @State private var imageError: String?
+    @State private var isVideo = false
+    /// A fast https mirror of the picked media for the create-screen preview; the on-chain URI is the ipfs:// CID.
+    @State private var mediaMirror = ""
     @State private var showConfirm = false
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
@@ -122,7 +127,7 @@ struct CreateMomentView: View {
                         DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve")
                         DetailRow("Your coins", "\(NumberStyle.basisPoints(input.creatorAllocBps)) · \(MomentsFormat.coins(MomentsConstants.supply * BigUInt(input.creatorAllocBps) / BigUInt(MomentsConstants.bps)))")
                         DetailRow("Window", "\(windowDays) \(windowDays == 1 ? "day" : "days")")
-                        DetailRow("Media", mediaHash == nil ? "link, hashed" : "photo, fingerprinted")
+                        DetailRow("Media", mediaHash == nil ? "link, hashed" : (isVideo ? "video, fingerprinted" : "photo, fingerprinted"))
                     }
                 }
             }
@@ -135,30 +140,30 @@ struct CreateMomentView: View {
     private var mediaSection: some View {
         Section {
             HStack(spacing: 16) {
-                MomentArtwork(provenance: MomentProvenance(mediaURI: mediaURI, mediaHash: Data(), place: "", date: 0, animationURI: ""), symbol: symbol.isEmpty ? "?" : symbol)
+                MomentArtwork(provenance: MomentProvenance(mediaURI: mediaMirror.isEmpty ? mediaURI : mediaMirror, mediaHash: Data(), place: "", date: 0, animationURI: ""), symbol: symbol.isEmpty ? "?" : symbol)
                     .frame(width: 84, height: 84)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 VStack(alignment: .leading, spacing: 6) {
-                    PhotosPicker(selection: $photoItem, matching: .images) {
-                        Label(mediaHash == nil ? "Choose Photo" : "Change Photo", systemImage: "photo").font(.subheadline.weight(.medium))
+                    PhotosPicker(selection: $photoItem, matching: .any(of: [.images, .videos])) {
+                        Label(mediaHash == nil ? "Choose Photo or Video" : (isVideo ? "Change Video" : "Change Photo"), systemImage: isVideo ? "video" : "photo").font(.subheadline.weight(.medium))
                     }
                     .disabled(uploading)
                     if uploading {
-                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Uploading and fingerprinting…").font(.caption).foregroundStyle(.secondary) }
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Uploading…").font(.caption).foregroundStyle(.secondary) }
                     } else if let imageError {
                         Text(imageError).font(.caption).foregroundStyle(Color.attention)
                     } else if let mediaHash {
                         Text("Fingerprint \(mediaHash.hexString.prefix(12))… goes on-chain.").font(.caption).foregroundStyle(.secondary)
                     } else {
-                        Text("The photo is hashed with keccak-256; the hash is the provenance record.").font(.caption).foregroundStyle(.secondary)
+                        Text("This becomes the NFT.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Spacer()
             }
             .padding(.vertical, 4)
-            TextField("Or paste a link (ipfs:// or https://)", text: $mediaURI)
+            TextField("Or paste an image link (ipfs:// or https://)", text: $mediaURI)
                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                .onChange(of: mediaURI) { old, new in if old != new, mediaHash != nil, !new.hasPrefix("https://") { mediaHash = nil } }
+                .onChange(of: mediaURI) { old, new in if old != new, mediaHash != nil, !new.hasPrefix("https://") { mediaHash = nil; isVideo = false; mediaMirror = "" } }
             TextField("Video link (optional)", text: $animationURI)
                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
         } header: {
@@ -166,7 +171,8 @@ struct CreateMomentView: View {
         } footer: {
             if !mediaURI.isEmpty, !mediaValid { Text("Use an ipfs:// or https:// link.") }
             else if !animationValid { Text("The video link must be ipfs:// or https://.") }
-            else { Text("Shown on the NFT as its image. A content-addressed (IPFS) link is best; without a photo, the link itself is hashed.") }
+            else if isVideo { Text("The video plays on OpenSea; its cover frame is the NFT image.") }
+            else { Text("Shown on OpenSea and in DyorHQ as the NFT.") }
         }
     }
 
@@ -232,16 +238,64 @@ struct CreateMomentView: View {
         do {
             if !social.isSignedIn { await social.signIn(session: session) }
             guard social.isSignedIn else { imageError = "Connect DyorHQ Social to upload a photo, or paste a link instead."; return }
-            guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data), let jpeg = image.avatarJPEG(maxDimension: 1600, quality: 0.9) else {
-                imageError = "That photo could not be read."
-                return
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
+                // A video: the file itself is the NFT's animation and is fingerprinted; a frame from it is the image.
+                guard let movie = try await item.loadTransferable(type: MovieFile.self) else { imageError = "That video could not be read."; return }
+                defer { try? FileManager.default.removeItem(at: movie.url) }
+                let data = try Data(contentsOf: movie.url)
+                guard data.count <= 50 * 1024 * 1024 else { imageError = "Videos up to 50 MB."; return }
+                guard let poster = try await MovieFile.coverFrame(url: movie.url)?.avatarJPEG(maxDimension: 2048, quality: 0.9) else { imageError = "Could not read a frame from that video."; return }
+                let type = UTType(filenameExtension: movie.url.pathExtension) ?? .quickTimeMovie
+                let isMP4 = type.conforms(to: .mpeg4Movie)
+                let posterPin = try await social.uploadAndPinMomentMedia(poster, contentType: "image/jpeg", fileExtension: "jpg")
+                let videoPin = try await social.uploadAndPinMomentMedia(data, contentType: isMP4 ? "video/mp4" : "video/quicktime", fileExtension: isMP4 ? "mp4" : "mov")
+                mediaURI = posterPin.onchain
+                animationURI = videoPin.onchain
+                mediaMirror = posterPin.mirror.absoluteString
+                mediaHash = Keccak.hash256(data)
+                isVideo = true
+            } else {
+                guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data), let jpeg = image.avatarJPEG(maxDimension: 4096, quality: 0.92) else {
+                    imageError = "That photo could not be read."
+                    return
+                }
+                let uploaded = try await social.uploadAndPinMomentMedia(jpeg, contentType: "image/jpeg", fileExtension: "jpg")
+                mediaURI = uploaded.onchain
+                mediaMirror = uploaded.mirror.absoluteString
+                if isVideo { animationURI = "" }
+                mediaHash = Keccak.hash256(jpeg)
+                isVideo = false
             }
-            let url = try await social.uploadMomentImage(jpeg: jpeg)
-            mediaURI = url.absoluteString
-            mediaHash = Keccak.hash256(jpeg)
             Haptics.success()
         } catch {
             imageError = describe(error)
         }
+    }
+}
+
+
+/// A video picked from the library, copied to a temporary file so it can be read, hashed, uploaded and sampled.
+struct MovieFile: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { SentTransferredFile($0.url) } importing: { received in
+            let copy = URL.temporaryDirectory.appending(path: "moment-\(UUID().uuidString).\(received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension)")
+            try? FileManager.default.removeItem(at: copy)
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return MovieFile(url: copy)
+        }
+    }
+
+    /// The frame one second in (or the first frame of a shorter clip), as the NFT's cover image.
+    static func coverFrame(url: URL) async throws -> UIImage? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 2048, height: 2048)
+        let duration = try await asset.load(.duration)
+        let at = CMTime(seconds: min(1, max(0, duration.seconds / 2)), preferredTimescale: 600)
+        let (image, _) = try await generator.image(at: at)
+        return UIImage(cgImage: image)
     }
 }

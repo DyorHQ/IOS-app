@@ -92,11 +92,6 @@ struct PerpTradeView: View {
         .task {
             ticket.leverage = min(settings.defaultLeverage, maxLeverage)
             ticket.slippageBps = settings.slippageBps
-            // Copy-trade hand-off: preset the ticket to the copied trader's direction/leverage so the user doesn't
-            // accidentally place the opposite side.
-            if let side = router.pendingPerpSide { ticket.side = side; router.pendingPerpSide = nil }
-            if let leverage = router.pendingPerpLeverage { ticket.leverage = min(leverage, maxLeverage); router.pendingPerpLeverage = nil }
-            if let size = router.pendingPerpSize, size > 0 { ticket.sizeText = plainSize(size); router.pendingPerpSize = nil }
             feed.focus(market)
             await loadCandles()
             while !Task.isCancelled {
@@ -112,12 +107,6 @@ struct PerpTradeView: View {
         .task(id: session.address) { perplTrading.refresh(address: session.address); await loadFills() }
         .onChange(of: bottomTab) { _, tab in if tab == .history { Task { await loadFills() } } }
         .onChange(of: model.fillSignal) { _, _ in if model.lastFilledPerpId == market.id { Task { await loadFills() } } }
-        // Copy-trade presets also arrive while this view is already alive on the target market (the .task above only
-        // consumes them on a fresh market, since the view is rendered inline with .id(market.id)). Apply them here too
-        // so the copied side/leverage/size land — and clear them so they don't leak into the next market's ticket.
-        .onChange(of: router.pendingPerpSide) { _, side in if let side { ticket.side = side; router.pendingPerpSide = nil } }
-        .onChange(of: router.pendingPerpLeverage) { _, lev in if let lev { ticket.leverage = min(lev, maxLeverage); router.pendingPerpLeverage = nil } }
-        .onChange(of: router.pendingPerpSize) { _, size in if let size, size > 0 { ticket.sizeText = plainSize(size); router.pendingPerpSize = nil } }
         .sheet(isPresented: $showConfirm) { orderConfirmSheet }
         .sheet(isPresented: $showLeverage) {
             LeverageSheet(leverage: ticket.leverage, maxLeverage: maxLeverage) { chosen in
@@ -741,7 +730,7 @@ struct PerpTradeView: View {
 
     private var confirmSheet: some View {
         ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { env.perpl.orderPlan(ticket.input(market: market, refPrice: refPrice)) }, onDone: { ticket.sizeText = ""; sizePercent = 0; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
-            ActivityLog.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash), owner: session.address)
+            ActivityLog.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }) {
             DetailRow("Market", "\(market.asset)-PERP")
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
@@ -1947,7 +1936,7 @@ struct AuthedOrderSheet: View {
             let ack = try await perplTrading.submit(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env)
             phase = ack.accepted ? .done : .failed(ack.error ?? "Perpl rejected the order.")
             if ack.accepted {
-                ActivityLog.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil), owner: session.address)
+                ActivityLog.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address)
                 if settings.notificationsEnabled, settings.notifyFills {
                     Notifications.perpOrder(side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP", filled: input.kind == .market)
                 }

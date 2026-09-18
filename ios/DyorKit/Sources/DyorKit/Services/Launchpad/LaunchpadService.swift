@@ -120,8 +120,13 @@ public actor LaunchpadService {
 
     /// The newest `limit` launches, newest first. Empty until the contracts are deployed.
     public func launches(limit: Int = 48) async throws -> [Launch] {
-        guard addresses.isDeployed, limit > 0 else { return [] }
-        let factory = addresses.factory
+        guard addresses.isDeployed else { return [] }
+        return try await launches(limit: limit, factory: addresses.factory)
+    }
+
+    /// Launches recorded by a specific factory — the live one or a retired one whose history still counts.
+    public func launches(limit: Int = 48, factory: Address) async throws -> [Launch] {
+        guard !factory.isZero, limit > 0 else { return [] }
         let total = LaunchpadABI.int(try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.launchCount, returns: "uint256")])[0][0])
         guard total > 0 else { return [] }
         let offset = max(0, total - limit)
@@ -159,6 +164,10 @@ public actor LaunchpadService {
             calls.append(LaunchpadABI.call(addresses.hook, LaunchpadABI.Hook.pendingFees, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
             calls.append(LaunchpadABI.call(addresses.hook, LaunchpadABI.Hook.pendingCreatorTax, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
         }
+        let readsQueue = info.holderFeeSharing && !addresses.holderFeeSharing.isZero
+        if readsQueue {
+            calls.append(LaunchpadABI.call(addresses.holderFeeSharing, LaunchpadABI.Sharing.queuedRewards, [.address(token)], returns: "uint256,uint256"))
+        }
         let r = try await multicall.readAll(calls)
         return LaunchDetail(
             launch: info,
@@ -173,7 +182,8 @@ public actor LaunchpadService {
             stuckSince: LaunchpadABI.int(r[7][0]),
             poolKey: graduated ? LaunchpadABI.poolKey(r[8][0]) : nil,
             hookPendingFees: readsHook ? r[9][0].uint : 0,
-            hookPendingTax: readsHook ? r[10][0].uint : 0
+            hookPendingTax: readsHook ? r[10][0].uint : 0,
+            queuedRewards: readsQueue ? r[readsHook ? 11 : 9][0].uint : 0
         )
     }
 
@@ -419,6 +429,14 @@ public actor LaunchpadService {
     public func graduatePlan(launch: Launch) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduate, [.address(launch.token)])
         return [.call(TransactionRequest(to: addresses.factory, data: data), label: "Graduate")]
+    }
+
+    /// `LaunchpadFactory.graduateFallback(token)`, the audit's rescue for a stuck Monday graduation: it retries the
+    /// creator's venue first and, only if Monday still fails, graduates on Uniswap v4 right away (no rescue delay).
+    /// Anyone may call it; a Monday-only quote asset needs the owner's `allowV4Fallback` first.
+    public func graduateFallbackPlan(launch: Launch) -> [TransactionStep] {
+        let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduateFallback, [.address(launch.token)])
+        return [.call(TransactionRequest(to: addresses.factory, data: data), label: "Graduate on Uniswap v4")]
     }
 
     /// `MemeHook.sweepPoolFees(poolId, currency)`: pays out the fees the hook collected for a graduated pool.

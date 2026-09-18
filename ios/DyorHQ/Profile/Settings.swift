@@ -1,5 +1,6 @@
 import DyorKit
 import SwiftUI
+import UIKit
 
 // The settings screens reached from Profile: wallets, security (passkeys + app lock), notifications, trading
 // defaults, language, and the appearance sheet. Plain grouped lists in DyorHQ's system, each doing one real thing.
@@ -27,7 +28,13 @@ struct ManageWalletsView: View {
                 } footer: {
                     Text(account.method == .watchOnly
                          ? "You are watching this address. Sign in to create a wallet you can sign with."
+                         : account.method == .meraPasskey
+                         ? "This wallet is derived from your passkey every time you sign in; nothing is stored on this device or on a server. The same passkey gives the same wallet on any device."
                          : "This wallet was created on this device and is secured by your \(account.method.title) account. DyorHQ never holds your keys.")
+                }
+
+                if account.method == .meraPasskey {
+                    MeraSessionSection()
                 }
 
                 Section {
@@ -49,7 +56,7 @@ struct ManageWalletsView: View {
                     Section {
                         NavigationLink { ImportWalletView() } label: { Label("Import an Existing Wallet", systemImage: "square.and.arrow.down") }
                     } footer: {
-                        Text("Bring in your own wallet (MetaMask, Rabby, OKX…) with its recovery phrase or private key to trade. The key is stored only on this device.")
+                        Text("Import your own wallet with its recovery phrase or private key. It stays on this device.")
                     }
                 }
             }
@@ -99,7 +106,7 @@ struct SecurityView: View {
                 Text("Passkeys")
             } footer: {
                 if let message { Text(message).foregroundStyle(isError ? Color.attention : Color.positive) }
-                else { Text("A passkey signs you in with Face ID or Touch ID and is phishing-resistant — a strong second factor. Add one per device.") }
+                else { Text("Sign in with Face ID or Touch ID. Add one per device.") }
             }
 
             Section {
@@ -111,7 +118,7 @@ struct SecurityView: View {
             } header: {
                 Text("App Lock")
             } footer: {
-                Text("When on, \(BiometricGate.typeName) is required before every transaction is signed — a second factor that stays on your device.")
+                Text("Asks for \(BiometricGate.typeName) before every transaction is signed.")
             }
         }
         .navigationTitle("Security")
@@ -137,7 +144,6 @@ struct NotificationsView: View {
             Section {
                 Toggle("Swaps & Fills", isOn: $settings.notifyFills)
                 Toggle("Price Alerts", isOn: $settings.notifyPriceAlerts)
-                Toggle("Copy Trade Signals", isOn: $settings.notifyCopyTrades)
                 NavigationLink { PriceAlertsView() } label: {
                     HStack {
                         Label("Manage Price Alerts", systemImage: "bell.badge")
@@ -148,7 +154,7 @@ struct NotificationsView: View {
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("“Swaps & Fills” notifies you when a spot swap or a perps order completes. Price alerts notify you when a token crosses a price you set. Copy trade signals alert you when a trader you copy makes a move.")
+                Text("Swaps, fills and price alerts. Everything is also kept in the in-app center.")
             }
             .disabled(!settings.notificationsEnabled)
         }
@@ -213,7 +219,7 @@ struct PerplTradingView: View {
                     LabeledContent("One-click trading") { checkmark(trading.isForwarding) }
                 }
             } footer: {
-                Text("Perpl's trading connection lets you place market, limit, and take-profit / stop-loss orders. Your Ed25519 key is generated on this device and authorized once by your wallet — it never leaves the device.")
+                Text("Your trading key is generated on this device and authorized once by your wallet.")
             }
 
             Section {
@@ -227,7 +233,7 @@ struct PerplTradingView: View {
             } header: {
                 Text("New to Perpl?")
             } footer: {
-                Text("Open a Perpl account on the web first — your wallet needs one before it can enroll trading or hold a position. Opens app.perpl.xyz; come back and connect here afterwards.")
+                Text("Your wallet needs a Perpl account before it can trade. Opens app.perpl.xyz.")
             }
 
             Section {
@@ -253,14 +259,14 @@ struct PerplTradingView: View {
                 if let error { InlineError(message: error) }
                 // A drop that happened outside a tap (idle timeout, rejected key, connection cap) is only on `status`.
                 else if case .failed(let why) = trading.status { InlineError(message: why) }
-                else if trading.status == .needsForwarding { Text("One-click trading lets Perpl's keeper forward your signed orders and fire triggers. It is a single on-chain transaction from your wallet.") }
+                else if trading.status == .needsForwarding { Text("Lets Perpl's keeper forward your signed orders. One on-chain transaction.") }
             }
 
             if trading.key != nil {
                 Section {
                     Button("Remove API Key", role: .destructive) { if let address = session.address { trading.forget(address: address) } }.disabled(busy)
                 } footer: {
-                    Text("Deletes the key from this device. You can reconnect any time; revoke it fully in Perpl's web app.")
+                    Text("Deletes the key from this device.")
                 }
             }
         }
@@ -356,6 +362,11 @@ struct AppearanceSheet: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .presentationDetents([.height(300)])
+        // A sheet keeps the scheme it was presented with, so switching from inside this one left a pale panel over a
+        // dark app (and the other way round). Styling the sheet from the chosen mode, and drawing its backdrop in
+        // SwiftUI instead of the default UIKit material, makes the whole sheet follow every tap immediately.
+        .environment(\.colorScheme, settings.appearance.resolved)
+        .presentationBackground(Color(uiColor: .systemGroupedBackground.resolvedColor(with: UITraitCollection(userInterfaceStyle: settings.appearance.resolved == .dark ? .dark : .light))))
     }
 
     private func swatch(_ color: Color, _ label: String) -> some View {
@@ -368,3 +379,35 @@ struct AppearanceSheet: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
+
+/// The passkey signing session: how long signatures stay prompt-free after a Face ID, and a way to end it now.
+private struct MeraSessionSection: View {
+    @Environment(Session.self) private var session
+
+    var body: some View {
+        let mera = session.mera
+        Section {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                LabeledContent("Session") {
+                    if let expiresAt = mera.expiresAt, expiresAt > ctx.date {
+                        let left = Int(expiresAt.timeIntervalSince(ctx.date))
+                        Text(String(format: "Unlocked · %02d:%02d left", left / 60, left % 60)).monospacedDigit().foregroundStyle(Color.positive)
+                    } else {
+                        Text("Locked").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Picker("Prompt-free for", selection: Binding(get: { Int(mera.sessionLength) }, set: { mera.sessionLength = TimeInterval($0) })) {
+                Text("5 minutes").tag(5 * 60)
+                Text("15 minutes").tag(15 * 60)
+                Text("1 hour").tag(60 * 60)
+            }
+            Button("Lock now", systemImage: "lock") { Haptics.tap(); mera.lock() }.disabled(!mera.isUnlocked)
+        } header: {
+            Text("Passkey")
+        } footer: {
+            Text("Signs without another prompt until the session ends; then Face ID again.")
+        }
+    }
+}
+

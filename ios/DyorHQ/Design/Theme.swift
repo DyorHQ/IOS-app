@@ -1,18 +1,17 @@
 import LocalAuthentication
 import SwiftUI
+import UIKit
 
 /// User-controlled appearance and trading preferences. Persisted to `UserDefaults` so a choice survives launches,
 /// and observed so the whole app restyles the moment it changes (the Appearance sheet, notifications, defaults).
 @Observable
 @MainActor
 final class AppSettings {
-    var appearance: AppearanceMode { didSet { store(appearance.rawValue, "settings.appearance") } }
+    var appearance: AppearanceMode { didSet { store(appearance.rawValue, "settings.appearance"); appearance.apply() } }
     var notificationsEnabled: Bool { didSet { store(notificationsEnabled, "settings.notifications") } }
     /// Notify on fills and liquidations (a preference; delivery needs the system permission).
     var notifyFills: Bool { didSet { store(notifyFills, "settings.notifyFills") } }
     var notifyPriceAlerts: Bool { didSet { store(notifyPriceAlerts, "settings.notifyPrice") } }
-    /// Notify when a copied trader makes a trade, so the user can confirm or decline copying it.
-    var notifyCopyTrades: Bool { didSet { store(notifyCopyTrades, "settings.notifyCopy") } }
     /// Require Face ID / Touch ID before signing a transaction — a device-side second factor for a self-custodial
     /// wallet, enforced in the confirmation sheet.
     var requireBiometrics: Bool { didSet { store(requireBiometrics, "settings.biometrics") } }
@@ -29,13 +28,31 @@ final class AppSettings {
         notificationsEnabled = defaults.object(forKey: "settings.notifications") as? Bool ?? true
         notifyFills = defaults.object(forKey: "settings.notifyFills") as? Bool ?? true
         notifyPriceAlerts = defaults.object(forKey: "settings.notifyPrice") as? Bool ?? false
-        notifyCopyTrades = defaults.object(forKey: "settings.notifyCopy") as? Bool ?? true
         requireBiometrics = defaults.object(forKey: "settings.biometrics") as? Bool ?? false
         defaultLeverage = defaults.object(forKey: "settings.leverage") as? Double ?? 2
         slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? 50
     }
 
-    private func store(_ value: Any, _ key: String) { defaults.set(value, forKey: key) }
+    private func store(_ value: Any, _ key: String) { defaults.set(value, forKey: key); AppSettings.onChange?() }
+
+    /// Mirrors settings to the backend (installed by the app environment).
+    nonisolated(unsafe) static var onChange: (() -> Void)?
+
+    /// The settings as a JSON object, for the backend copy (no keys, no addresses).
+    var snapshot: [String: Any] {
+        ["appearance": appearance.rawValue, "notificationsEnabled": notificationsEnabled, "notifyFills": notifyFills,
+         "notifyPriceAlerts": notifyPriceAlerts, "defaultLeverage": defaultLeverage, "slippageBps": slippageBps]
+    }
+
+    /// Applies a backend copy of the settings (a fresh device after sign-in). Unknown keys are ignored.
+    func apply(snapshot: [String: Any]) {
+        if let raw = snapshot["appearance"] as? String, let mode = AppearanceMode(rawValue: raw) { appearance = mode }
+        if let v = snapshot["notificationsEnabled"] as? Bool { notificationsEnabled = v }
+        if let v = snapshot["notifyFills"] as? Bool { notifyFills = v }
+        if let v = snapshot["notifyPriceAlerts"] as? Bool { notifyPriceAlerts = v }
+        if let v = snapshot["defaultLeverage"] as? Double { defaultLeverage = v }
+        if let v = snapshot["slippageBps"] as? Int { slippageBps = v }
+    }
 }
 
 /// Face ID / Touch ID gate used before signing when the user turns on the app lock.
@@ -77,6 +94,47 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
         case .system: nil
         case .light: .light
         case .dark: .dark
+        }
+    }
+
+    /// The scheme this mode actually renders as right now: the choice itself, or what the system is currently set to.
+    /// A sheet keeps the scheme it was presented with, so the Appearance sheet styles itself from this.
+    @MainActor
+    var resolved: ColorScheme {
+        if let colorScheme { return colorScheme }
+        // The scene's own traits, not a window's: a window carries the override we just set, and its trait collection
+        // only catches up on the next layout pass, so reading it here would hand back the scheme we are leaving.
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive } ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        return scene?.traitCollection.userInterfaceStyle == .dark ? .dark : .light
+    }
+
+    var interfaceStyle: UIUserInterfaceStyle {
+        switch self {
+        case .system: .unspecified
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+
+    /// Restyles every window right now. `preferredColorScheme` on the root view only reaches the window itself, so a
+    /// sheet or full-screen cover that is already on screen — Profile, and the Appearance sheet above it — keeps the
+    /// old scheme until it is dismissed. Setting the window's own style restyles the presented hierarchy with it, so
+    /// the switch is visible the instant it is tapped.
+    @MainActor
+    func apply() {
+        let style = interfaceStyle
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for window in scene.windows {
+                window.overrideUserInterfaceStyle = style
+                // A presented sheet or full-screen cover carries its own override once SwiftUI has set one, which
+                // would shadow the window; clear it down the chain so the whole stack follows.
+                var presented = window.rootViewController
+                while let controller = presented {
+                    controller.overrideUserInterfaceStyle = style
+                    presented = controller.presentedViewController
+                }
+            }
         }
     }
 

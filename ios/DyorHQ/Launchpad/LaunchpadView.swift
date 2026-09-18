@@ -367,6 +367,8 @@ struct LaunchDetailView: View {
     @State private var showConfirm = false
     @State private var showClaim = false
     @State private var showCreatorClaim = false
+    @State private var showGraduate = false
+    @State private var showFallback = false
 
     private var isCreator: Bool { session.address != nil && session.address == launch.deployer }
 
@@ -399,6 +401,18 @@ struct LaunchDetailView: View {
         .task { await load() }
         .task(id: "\(side)-\(rawAmount)") { await quote() }
         .sheet(isPresented: $showConfirm) { confirmation }
+        .sheet(isPresented: $showGraduate) {
+            ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Graduate", build: { env.launchpad.graduatePlan(launch: launch) }, onDone: { Task { await load() } }) {
+                DetailRow("Venue", launch.graduationVenue.title)
+                DetailRow("Who pays", "You (gas only)")
+            }
+        }
+        .sheet(isPresented: $showFallback) {
+            ConfirmationSheet(title: "Graduate on Uniswap v4", confirmTitle: "Graduate", build: { env.launchpad.graduateFallbackPlan(launch: launch) }, onDone: { Task { await load() } }) {
+                DetailRow("Venue", "Uniswap v4 (fallback)")
+                DetailRow("Who pays", "You (gas only)")
+            }
+        }
         .sheet(isPresented: $showClaim) {
             ConfirmationSheet(title: "Claim Rewards", confirmTitle: "Claim", build: { await env.launchpad.claimRewardsPlan(launch: launch, view: account) }, onDone: { Task { await load() } }) {
                 if let account { DetailRow("Pending rewards", "\(NumberStyle.units(account.pendingRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
@@ -565,12 +579,30 @@ struct LaunchDetailView: View {
             if let detail, let key = detail.poolKey {
                 LabeledContent("Pool fee", value: NumberStyle.basisPoints(key.fee / 100))
             }
+            if isStuck, let detail {
+                LabeledContent("Stuck since", value: Date(timeIntervalSince1970: TimeInterval(detail.stuckSince)).formatted(date: .abbreviated, time: .shortened))
+                Button("Retry Graduation", systemImage: "arrow.clockwise") { showGraduate = true }.disabled(!session.canSign)
+                if launch.graduationVenue == .monday {
+                    Button("Graduate on Uniswap v4 Instead", systemImage: "arrow.triangle.branch") { showFallback = true }.disabled(!session.canSign)
+                }
+            }
         } header: {
             Text(launch.phase == .graduated ? "Graduated" : launch.phase.title)
         } footer: {
-            Text(launch.phase == .graduated ? "The curve's liquidity is permanently locked in a \(launch.graduationVenue.title) pool — trades now route through the Swap screen. Ongoing pool swap fees stay with the locked liquidity and aren't distributed to holders or the creator." : "This launch is between phases. Trading resumes when migration completes.")
+            if launch.phase == .graduated {
+                Text("The curve's liquidity is permanently locked in a \(launch.graduationVenue.title) pool — trades now route through the Swap screen. Ongoing pool swap fees stay with the locked liquidity and aren't distributed to holders or the creator.")
+            } else if isStuck {
+                Text(launch.graduationVenue == .monday
+                     ? "The last graduation attempt failed. Anyone can retry it; if Monday Trade keeps rejecting it, the launch can graduate into a locked Uniswap v4 pool right away instead."
+                     : "The last graduation attempt failed. Anyone can retry it; you only pay the gas.")
+            } else {
+                Text("This launch is between phases. Trading resumes when migration completes.")
+            }
         }
     }
+
+    /// A completed curve whose migration reverted (the factory records `stuckSince`): the audit's rescue paths apply.
+    private var isStuck: Bool { launch.phase != .graduated && (detail?.stuckSince ?? 0) > 0 }
 
     private func holdingsSection(_ account: LaunchAccountView) -> some View {
         Section("Your Holdings") {
@@ -578,6 +610,10 @@ struct LaunchDetailView: View {
             if account.pendingRewards > 0 {
                 LabeledContent("Pending rewards") { Text("\(NumberStyle.units(account.pendingRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)").monospacedDigit() }
                 Button("Claim Rewards", systemImage: "gift") { showClaim = true }.disabled(!session.canSign)
+            }
+            if let detail, detail.queuedRewards > 0 {
+                // Rewards wait one block before they are shared out (audit fix against flash-loan reward sniping).
+                LabeledContent("Queued for holders") { Text("\(NumberStyle.units(detail.queuedRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)").monospacedDigit() }
             }
         }
     }
@@ -605,7 +641,7 @@ struct LaunchDetailView: View {
         if let address = session.address {
             if side == .buy, let q = buyQuote {
                 ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
-                    ActivityLog.record(ActivityRecord(kind: .buy, title: "Bought \(launch.symbol)", subtitle: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash), owner: session.address)
+                    ActivityLog.record(ActivityRecord(kind: .buy, title: "Bought \(launch.symbol)", subtitle: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }) {
                     DetailRow("You pay", "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
                     DetailRow("You receive", "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
@@ -613,7 +649,7 @@ struct LaunchDetailView: View {
                 }
             } else if side == .sell, let q = sellQuote {
                 ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: q.quoteOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
-                    ActivityLog.record(ActivityRecord(kind: .sell, title: "Sold \(launch.symbol)", subtitle: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash), owner: session.address)
+                    ActivityLog.record(ActivityRecord(kind: .sell, title: "Sold \(launch.symbol)", subtitle: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }) {
                     DetailRow("You sell", "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol)")
                     DetailRow("You receive", "\(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
@@ -892,7 +928,7 @@ struct CreateLaunchView: View {
                 Label("Advanced", systemImage: "slider.horizontal.3")
             }
         } footer: {
-            Text("Creator tax is charged on curve trades and paid to you. Fee sharing splits post-graduation pool fees with everyone who holds the coin.")
+            Text("Creator tax is charged on curve trades and paid to you. Fee sharing splits pool fees with holders after graduation.")
         }
     }
 

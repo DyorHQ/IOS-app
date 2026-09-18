@@ -38,12 +38,17 @@ struct WelcomeView: View {
                 .scaledToFit()
                 .foregroundStyle(.primary)
                 .frame(maxWidth: 300)
-                .accessibilityLabel("DyorHQ. The RWA HQ for social trading.")
+                .accessibilityLabel("\(SupportLinks.name). \(SupportLinks.tagline).")
+            Text(SupportLinks.tagline)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.top, 10)
             Spacer(minLength: 24)
-            VStack(alignment: .leading, spacing: 28) {
-                FeatureRow(symbol: "flame", title: "Launch a Coin", detail: "Fair-launch a memecoin paired with a tokenized stock. Liquidity locks itself when the curve graduates.")
-                FeatureRow(symbol: "arrow.left.arrow.right", title: "Swap at the Best Price", detail: "Every swap compares Kuru Flow, Uniswap and Monday Trade before you confirm.")
-                FeatureRow(symbol: "chart.line.uptrend.xyaxis", title: "Trade Perpetuals", detail: "Positions and orders live on Perpl's on-chain order book, signed by your own wallet.")
+            VStack(alignment: .leading, spacing: 24) {
+                FeatureRow(symbol: "camera.aperture", title: "Make Moments Last Forever", detail: "Publish a photo or video as an NFT on Monad. Share it with everyone and earn when it's collected.")
+                FeatureRow(symbol: "flame", title: "Launch a Coin", detail: "Fair-launch a memecoin paired with a tokenized stock.")
+                FeatureRow(symbol: "arrow.left.arrow.right", title: "Swap at the Best Price", detail: "Kuru, Uniswap and Monday Trade, compared on every swap.")
+                FeatureRow(symbol: "chart.line.uptrend.xyaxis", title: "Trade Perpetuals", detail: "Perpl's on-chain order book, signed by your own wallet.")
             }
             .padding(.horizontal, 28)
             Spacer(minLength: 24)
@@ -94,7 +99,7 @@ struct SignInView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Sign In")
                         .font(.largeTitle.weight(.bold))
-                    Text("Your wallet is created on this device and secured by your account. You can add more sign-in methods later.")
+                    Text("Your wallet lives on this device. Add more sign-in methods later.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -115,10 +120,16 @@ struct SignInView: View {
                         .listRowBackground(Color.clear)
                     MethodButton(title: "Continue with Google", symbol: "g.circle", busy: busy == "google") { run("google") { try await session.signInWithGoogle() } }
                     MethodButton(title: "Continue with Email", symbol: "envelope", busy: false) { path.append(.email) }
-                    if session.hasPasskeys {
+                    if session.hasMera {
+                        MethodButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
+                        MethodButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
+                    } else if session.hasPasskeys {
                         MethodButton(title: "Sign In with a Passkey", symbol: "person.badge.key", busy: busy == "passkey") { run("passkey") { try await session.signInWithPasskey() } }
                         MethodButton(title: "Create a Passkey", symbol: "faceid", busy: busy == "create") { run("create") { try await session.createPasskey(displayName: "DyorHQ") } }
                     }
+                } else if session.hasMera {
+                    MethodButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
+                    MethodButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
                 } else {
                     Label("Sign-in is not set up in this build. Add the Privy keys to Secrets.xcconfig to enable Apple, Google, email and passkeys.", systemImage: "key.slash")
                         .font(.subheadline)
@@ -131,13 +142,13 @@ struct SignInView: View {
             Section {
                 MethodButton(title: "Import an Existing Wallet", symbol: "square.and.arrow.down", busy: false) { path.append(.importWallet) }
             } footer: {
-                Text("Already have a wallet (MetaMask, Rabby, OKX…)? Import it with your recovery phrase or private key. The key stays on this device.")
+                Text("Bring your own wallet with its recovery phrase or private key. It stays on this device.")
             }
 
             Section {
                 MethodButton(title: "Watch an Address", symbol: "eye", busy: false) { path.append(.watch) }
             } footer: {
-                Text("Follow any Monad wallet without signing in. Trading needs an account.")
+                Text("Follow any Monad wallet. Trading needs an account.")
             }
         }
         .listStyle(.insetGrouped)

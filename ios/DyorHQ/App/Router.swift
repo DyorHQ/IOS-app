@@ -2,8 +2,7 @@ import DyorKit
 import Foundation
 import Observation
 
-/// Which trading interface the Trade tab shows. Swap and Perps share one tab, switched by a top toggle; this later
-/// gains a Strategy mode (copy-trading, market-making) in place of raw Perps.
+/// Which trading interface the Trade tab shows. Swap and Perps share one tab, switched by a top toggle.
 enum TradeMode: String, CaseIterable, Identifiable {
     case swap, perps
     var id: String { rawValue }
@@ -13,7 +12,7 @@ enum TradeMode: String, CaseIterable, Identifiable {
 /// Screens that live outside the tab bar: opened from the side menu (or the home header) as full-screen covers with
 /// their own navigation stack and a Close control.
 enum PresentedScreen: String, Identifiable {
-    case portfolio, news, help, profile
+    case portfolio, news, help, profile, notifications
     var id: String { rawValue }
 }
 
@@ -27,15 +26,11 @@ final class Router {
     /// A full-screen section opened from the menu or the home header.
     var presented: PresentedScreen?
     /// The reporting period every volume figure in the app uses (Home's Total Volume and the Portfolio).
-    var period: VolumePeriod = .day
+    var period: VolumePeriod = .all
     /// Which side of the Trade tab is shown (Swap vs Perps).
     var tradeMode: TradeMode = .swap
     var pendingSwap: (tokenIn: Token?, tokenOut: Token?)?
     var pendingPerpMarket: Int?
-    /// Preset the perps ticket direction/leverage/size when opening a market (e.g. copying a trader's LONG 5x).
-    var pendingPerpSide: PositionSide?
-    var pendingPerpLeverage: Double?
-    var pendingPerpSize: Double?
     /// A launch to open on the Launch tab's detail page, set from another tab or the post-launch "View" action.
     var pendingLaunch: Launch?
     /// A Moment to open on the Moments tab's detail page.
@@ -47,11 +42,8 @@ final class Router {
         tab = .trade
     }
 
-    func openPerp(id: Int, side: PositionSide? = nil, leverage: Double? = nil, size: Double? = nil) {
+    func openPerp(id: Int) {
         pendingPerpMarket = id
-        pendingPerpSide = side
-        pendingPerpLeverage = leverage
-        pendingPerpSize = size
         tradeMode = .perps
         tab = .trade
     }
@@ -66,6 +58,20 @@ final class Router {
         tab = .moments
     }
 
+    /// Follows a tapped notification to its screen.
+    func open(_ notification: AppNotification) {
+        presented = nil
+        switch notification.route {
+        case .none: break
+        case .home: tab = .home
+        case .trade: tradeMode = .swap; tab = .trade
+        case .perps: tradeMode = .perps; tab = .trade
+        case .launch: tab = .launch
+        case .moments: tab = .moments
+        case .portfolio: presented = .portfolio
+        }
+    }
+
     /// Opens a section from the side menu: tabs switch (and the Trade tab picks its mode), the rest present.
     func open(_ item: MenuItem) {
         menuOpen = false
@@ -75,7 +81,6 @@ final class Router {
         case .perps: tradeMode = .perps; tab = .trade
         case .launch: tab = .launch
         case .moments: tab = .moments
-        case .strategies: tab = .strategy
         case .portfolio: presented = .portfolio
         case .news: presented = .news
         case .help: presented = .help
@@ -129,7 +134,7 @@ enum VolumePeriod: String, CaseIterable, Identifiable {
 
 /// The sections listed in the side menu, in display order.
 enum MenuItem: String, CaseIterable, Identifiable {
-    case home, spot, perps, launch, moments, news, strategies, portfolio, help
+    case home, spot, perps, launch, moments, news, portfolio, help
     var id: String { rawValue }
 
     var title: String {
@@ -140,7 +145,6 @@ enum MenuItem: String, CaseIterable, Identifiable {
         case .launch: return "Launch"
         case .moments: return "Moments"
         case .news: return "News"
-        case .strategies: return "Strategies"
         case .portfolio: return "Portfolio"
         case .help: return "Get Help"
         }
@@ -154,7 +158,6 @@ enum MenuItem: String, CaseIterable, Identifiable {
         case .launch: return "flame"
         case .moments: return "camera.aperture"
         case .news: return "newspaper"
-        case .strategies: return "wand.and.stars"
         case .portfolio: return "chart.pie"
         case .help: return "questionmark.circle"
         }
@@ -168,7 +171,6 @@ enum MenuItem: String, CaseIterable, Identifiable {
         case .launch: return "Launch and trade new coins"
         case .moments: return "Collect moments, graduate coins"
         case .news: return "Crypto headlines"
-        case .strategies: return "Copy trading and market making"
         case .portfolio: return "Volume, fees and P&L across DyorHQ"
         case .help: return "Support and community"
         }

@@ -67,7 +67,7 @@ public enum PerplOrders {
     /// `lb` (last-execution block) is sent as `0`: Perpl then substitutes the market's OWN maximum window
     /// (`order_ttl_blocks`). Computing `head + ttlBlocks` ourselves — from the RPC block, which runs ahead of Perpl's
     /// heartbeat head — overshot that ceiling and every entry was rejected with `last exec block too high` (which is
-    /// why authenticated market/limit orders, TP/SL brackets and strategies all failed once one-click was on). The
+    /// why authenticated market/limit orders and TP/SL brackets all failed once one-click was on). The
     /// `head`/`ttlBlocks` parameters are kept for source compatibility but no longer bound the entry.
     public static func entry(_ input: OrderInput, accountId: Int, head: Int, ttlBlocks: Int = 100) -> PerplOrderFrame {
         let type: PerpOrderType = input.reduceOnly

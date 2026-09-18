@@ -32,7 +32,7 @@ struct MomentsPortfolioView: View {
                                 .disabled(!session.canSign)
                         }
                     } footer: {
-                        Text("Coins, across every Moment. Collector coins vest 60% at graduation, 80% after a month, all after two; creator allocations vest 20% then 16% a month.")
+                        Text("Coins across every Moment. Vesting unlocks at the monthly cliffs.")
                     }
                     if portfolio.rows.isEmpty {
                         ContentUnavailableView("No Moments Yet", systemImage: "camera.aperture", description: Text("Collect a Moment and it shows up here with its editions and coins."))

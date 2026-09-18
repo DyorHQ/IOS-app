@@ -141,11 +141,9 @@ public actor PerplService {
             guard let config = market.config, let state = market.state else { return nil }
             let priceScale = pow(10, Double(config.priceDecimals))
             let sizeScale = pow(10, Double(config.sizeDecimals))
-            var fundingRate = 0.0
-            if let funding = market.funding {
-                let divisor = funding.div ?? 0
-                fundingRate = funding.rate / (divisor == 0 ? 1 : divisor) / 100_000
-            }
+            // `funding.rate` is the interval rate in parts per million (BTC 40 ↔ contract fundingRatePct100k 4 ↔
+            // 0.004%/h, verified live 2026-09-16 on BTC, ETH and MON); `div` scales the funding index, not the rate.
+            let fundingRate = (market.funding?.rate ?? 0) / 1_000_000
             return MarketContext(
                 id: market.id,
                 name: market.name ?? "",
@@ -202,6 +200,13 @@ public actor PerplService {
         let byId = Dictionary(markets.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let (rows, next) = try await signedHistory("/v1/trading/position-history", count: count, cursor: cursor, key: key)
         return PerplHistoryPage(items: rows.compactMap { PerplPositionRecord(position: $0, markets: byId) }, next: next)
+    }
+
+    /// One page of the account's history (deposits, withdrawals, settlements, funding payments, liquidations), newest
+    /// first. Funding rows (`kind == .funding`) are the realized funding payments on the account.
+    public func accountHistory(key: PerplApiKey, count: Int = 100, cursor: String? = nil) async throws -> PerplHistoryPage<PerplAccountEvent> {
+        let (rows, next) = try await signedHistory("/v1/trading/account-history", count: count, cursor: cursor, key: key)
+        return PerplHistoryPage(items: rows.compactMap { PerplAccountEvent(event: $0) }, next: next)
     }
 
     /// Signs and fetches one `{d:[…], np:cursor}` history page. `path` is the gateway path with no `/api` prefix.

@@ -8,3 +8,5 @@ DerivedData*/
 # Per-user Xcode state written into the package when it is opened in Xcode.
 xcuserdata/
 .swiftpm/
+# Archive/export output of scripts/testflight.sh
+build/

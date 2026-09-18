@@ -1,7 +1,7 @@
 # DyorHQ backend (Supabase)
 
 Backs the *social trading HQ* features only — push & price alerts, social (profiles/follows/feed/comments/
-leaderboards/referrals), a launch-discovery index, cross-device sync, and hybrid copy trading. The core app stays
+leaderboards/referrals), a launch-discovery index, and cross-device sync. The core app stays
 self-custodial and on-chain; **no private keys or the Perpl Ed25519 secret are ever stored here.**
 
 - **Project:** `DyorHQ` · ref `fmnjqrguvopusfufmirs` · region eu-west-1 · Postgres 17
@@ -27,13 +27,13 @@ writes require the wallet's session.
 | Social | `posts`, `comments`, `reactions`, `referral_codes`, `referrals`, `leaderboard` |
 | Alerts/push | `device_tokens`, `alerts` |
 | Launch index | `launches` |
-| Copy trading (hybrid) | `leaders`, `copy_relationships` (mode signal\|auto + caps), `copy_grants` (encrypted, no-read), `copy_events` |
 
-`copy_grants` holds only a follower's *trade-scoped* Perpl key (can't withdraw), encrypted, with **no SELECT policy** —
-only the service role decrypts it to mirror trades. The migrations are applied in the live project; export with
-`supabase db pull` to snapshot them into `migrations/`.
+The migrations are applied in the live project; export with `supabase db pull` to snapshot them into `migrations/`.
+
+> The Strategies feature (copy-trading, market-making, delta-neutral) was removed from the app on 2026-09-18; its
+> tables (`strategies`, `leaders`, `copy_relationships`, `copy_grants`, `copy_events`) were dropped from the project.
 
 ## Still to build
 
-`alerts`/push watcher (needs an APNs auth key), launch indexer, copy-trade watcher/executor, leaderboard/stats
-Edge Functions; and the remaining iOS feature UIs (feed, follows, watchlist sync, alerts, copy trading).
+`alerts`/push watcher (needs an APNs auth key), launch indexer, leaderboard/stats Edge Functions; and the remaining
+iOS feature UIs (feed, follows, watchlist sync, alerts).
