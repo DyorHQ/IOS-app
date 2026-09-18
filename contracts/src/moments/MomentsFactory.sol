@@ -158,7 +158,7 @@ contract MomentsFactory is IMomentsFactory {
         emit PublishingPaused(paused);
     }
 
-    /// @notice Sets the metadata-only base for the NFTs' external links (e.g. https://dyorhq.app/moments/).
+    /// @notice Sets the metadata-only base for the NFTs' external links (e.g. https://dyorhq.fun/moments/).
     function setExternalBaseURI(string calldata base) external onlyGovernance {
         externalBaseURI = base;
         emit ExternalBaseURISet(base);

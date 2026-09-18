@@ -17,7 +17,8 @@ in `contracts/deployments/moments-143.json`, source tag `moments-mainnet-v1.1`:
 
 Governance = the deployer `0xCf7A…7e10` (nothing pending); platform `0xf4D4…Cfb48`; treasury `0x5282…f045`; policy
 $10 threshold / $0.10 minimum / 20-5-75 / 10% max allocation / 70% expiry creator share / 5% ERC-2981 royalty;
-`externalBaseURI` = `https://dyorhq.app/moments/` (set 2026-09-16, tx `0xd4930561…4c75e6`; metadata only).
+`externalBaseURI` = `https://dyorhq.fun/moments/` (corrected 2026-09-17, tx `0x7f0757eb…3b75`, from the unregistered
+`dyorhq.app` originally set 2026-09-16 tx `0xd4930561…4c75e6`; metadata only, changeable by governance any time).
 
 Verified 2026-09-16: on-chain wiring, policy and constants read back correctly; all seven runtime bytecodes match the
 source at `optimizer_runs = 44444444` (via_ir, cancun, solc 0.8.26 — the `v4core` profile); all seven are verified on
@@ -43,7 +44,7 @@ Set the metadata-only base for the NFTs' `external_url` / `external_link` (repla
 the NFT appends the Moment id; can be changed any time by governance, touches no money path):
 
 ```bash
-~/.foundry/bin/cast send 0x64698c7702d85F87f43a6dFF7D495CDD2327C020 "setExternalBaseURI(string)" "https://dyorhq.app/moments/" --rpc-url monad --account owner
+~/.foundry/bin/cast send 0x64698c7702d85F87f43a6dFF7D495CDD2327C020 "setExternalBaseURI(string)" "https://dyorhq.fun/moments/" --rpc-url monad --account owner
 ```
 
 ## Wallet hygiene (non-negotiable)

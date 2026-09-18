@@ -204,10 +204,10 @@ contract FactoryTest is MomentsBase {
     function test_external_base_uri_is_governance_only_and_metadata_only() public {
         vm.prank(alice);
         vm.expectRevert(MomentsFactory.NotGovernance.selector);
-        factory.setExternalBaseURI("https://dyorhq.app/moments/");
+        factory.setExternalBaseURI("https://dyorhq.fun/moments/");
         vm.prank(gov);
-        factory.setExternalBaseURI("https://dyorhq.app/moments/");
-        assertEq(factory.externalBaseURI(), "https://dyorhq.app/moments/");
+        factory.setExternalBaseURI("https://dyorhq.fun/moments/");
+        assertEq(factory.externalBaseURI(), "https://dyorhq.fun/moments/");
     }
 
     function test_factory_holds_no_money_and_has_no_money_functions() public {
