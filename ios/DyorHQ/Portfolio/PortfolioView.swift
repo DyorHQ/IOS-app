@@ -168,6 +168,7 @@ struct PortfolioView: View {
         case .perps: return .allocationPerps
         case .launch: return .allocationLaunchpad
         case .moments: return .allocationMoments
+        case .bridge: return .brand
         }
     }
 

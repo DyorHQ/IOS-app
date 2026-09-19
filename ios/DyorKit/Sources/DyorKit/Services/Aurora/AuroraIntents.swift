@@ -77,12 +77,14 @@ public struct AuroraIntents: Sendable {
 
     private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = [], as: T.Type) async throws -> T {
         var req = URLRequest(url: url(path, query: query))
+        req.timeoutInterval = 20
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return try await run(req)
     }
 
     private func post<B: Encodable, T: Decodable>(_ path: String, body: B, as: T.Type) async throws -> T {
         var req = URLRequest(url: url(path))
+        req.timeoutInterval = 20
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONEncoder().encode(body)
@@ -169,10 +171,13 @@ public struct AuroraQuote: Decodable, Sendable {
     public let depositMemo: String?
     public let amountIn: String
     public let amountInFormatted: String?
+    public let amountInUsd: String?
     public let amountOut: String
     public let amountOutFormatted: String?
     public let amountOutUsd: String?
     public let minAmountOut: String?
+    public let refundFee: String?
+    public let withdrawFee: String?
     public let deadline: String?
     public let timeEstimate: Double?
 }
@@ -191,12 +196,33 @@ public struct AuroraSwapState: Decodable, Sendable {
     public let status: AuroraSwapStatus
     public let updatedAt: String?
     public let swapDetails: AuroraSwapDetails?
+
+    private enum CodingKeys: String, CodingKey { case status, updatedAt, swapDetails }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = try c.decode(AuroraSwapStatus.self, forKey: .status)
+        updatedAt = try? c.decodeIfPresent(String.self, forKey: .updatedAt)
+        // `swapDetails` is secondary (formatted amount, refund reason). The poll only needs `status` to advance, so a
+        // decode failure or schema drift in `swapDetails` must NEVER stall settlement tracking — swallow it to nil.
+        swapDetails = try? c.decodeIfPresent(AuroraSwapDetails.self, forKey: .swapDetails)
+    }
+}
+
+/// A settlement transaction reference from Aurora (`{hash, explorerUrl}`).
+public struct AuroraTxRef: Decodable, Sendable, Hashable {
+    public let hash: String
+    public let explorerUrl: String?
 }
 
 public struct AuroraSwapDetails: Decodable, Sendable {
     public let amountOutFormatted: String?
-    public let originChainTxHashes: [String]?
-    public let destinationChainTxHashes: [String]?
+    public let amountOutUsd: String?
+    /// Origin / destination settlement txs. These are arrays of OBJECTS in Aurora's schema — decoding them as
+    /// `[String]` (as an earlier version did) threw a typeMismatch the moment the deposit tx was recorded, which
+    /// silently stalled the status poll at "Confirming your deposit…". Keep them as `AuroraTxRef`.
+    public let originChainTxHashes: [AuroraTxRef]?
+    public let destinationChainTxHashes: [AuroraTxRef]?
     public let refundedAmountFormatted: String?
     public let refundReason: String?
 }

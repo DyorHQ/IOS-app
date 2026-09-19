@@ -3,10 +3,11 @@ import SwiftUI
 
 /// Cross-chain Bridge (Home "Bridge"). Moves the user's own funds between their address on any EVM chain and Monad,
 /// both directions, via Aurora Intents — the app quotes, signs the source-chain deposit, and tracks settlement. One
-/// side is always Monad, so the picker only ever chooses the other chain.
+/// side is always Monad, so the chain picker only ever chooses the other chain.
 struct BridgeView: View {
     @State private var model: BridgeModel
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var amountFocused: Bool
     @State private var showChainPicker = false
     @State private var pickingFromToken = false
     @State private var pickingToToken = false
@@ -17,7 +18,7 @@ struct BridgeView: View {
         NavigationStack {
             Group {
                 if !model.isConfigured {
-                    ContentUnavailableView("Bridge unavailable", systemImage: "arrow.left.arrow.right.circle",
+                    ContentUnavailableView("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted",
                                            description: Text("Cross-chain bridging isn't configured in this build yet."))
                 } else {
                     form
@@ -25,7 +26,10 @@ struct BridgeView: View {
             }
             .navigationTitle("Bridge")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .keyboard) { HStack { Spacer(); Button("Done") { amountFocused = false } } }
+            }
         }
         .task { await model.load() }
         .sheet(isPresented: $showChainPicker) { chainPicker }
@@ -35,129 +39,158 @@ struct BridgeView: View {
 
     private var form: some View {
         ScrollView {
-            VStack(spacing: 14) {
+            VStack(spacing: 12) {
                 if let error = model.loadError { InlineError(message: error) }
 
                 ZStack {
-                    VStack(spacing: 8) {
-                        fromCard
-                        toCard
+                    VStack(spacing: 6) {
+                        sendCard
+                        receiveCard
                     }
                     flipButton
                 }
 
-                quoteSummary
+                if let error = model.quoteError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.footnote).foregroundStyle(Color.attention)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                }
+
+                summaryCard
                 statusCard
-                Spacer(minLength: 8)
+
                 PrimaryButton(title: primaryTitle, isBusy: model.isBusy, isDisabled: !primaryEnabled) {
+                    amountFocused = false
                     Task { await runPrimary() }
                 }
                 .disabled(!primaryEnabled)
+                .padding(.top, 2)
+
                 Text("Powered by Aurora Intents · cross-chain settlement handled for you.")
                     .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+                    .padding(.top, 2)
             }
             .padding()
         }
         .scrollDismissesKeyboard(.interactively)
     }
 
-    // MARK: From / To
+    // MARK: Send / receive
 
-    private var fromCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private var sendCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("From").font(.caption).foregroundStyle(.secondary)
+                Text("You send").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 Spacer()
-                if let bal = model.fromBalanceText {
-                    Button { model.useMax() } label: { Text("Balance: \(bal)").font(.caption) }
-                        .buttonStyle(.plain).foregroundStyle(.secondary)
-                } else if model.loadingBalances {
-                    ProgressView().controlSize(.mini)
+                if model.loadingBalances { ProgressView().controlSize(.mini) }
+                else if let bal = model.fromBalanceText {
+                    Button { model.useMax() } label: {
+                        Text("Balance: \(bal)").font(.caption).foregroundStyle(.secondary)
+                    }.buttonStyle(.plain)
                 }
             }
-            HStack(spacing: 8) {
-                chainChip(model.fromChain, tappable: !model.fromChain.isMonad)
-                tokenChip(model.fromToken) { pickingFromToken = true }
-                Spacer()
+            HStack(spacing: 10) {
+                selectorStack(chain: model.fromChain, token: model.fromToken) { pickingFromToken = true }
+                Spacer(minLength: 8)
                 TextField("0", text: Binding(get: { model.amountText }, set: { model.amountText = $0; model.amountChanged() }))
                     .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                    .font(.title3.weight(.semibold)).monospacedDigit().frame(minWidth: 80)
+                    .font(.system(size: 30, weight: .semibold)).monospacedDigit()
+                    .focused($amountFocused)
+                    .foregroundStyle(model.insufficient ? Color.negative : Color.primary)
+            }
+            HStack(spacing: 8) {
+                ForEach([0.25, 0.5, 0.75, 1.0], id: \.self) { fraction in
+                    Button { model.usePercent(fraction) } label: {
+                        Text(fraction >= 1 ? "Max" : "\(Int(fraction * 100))%")
+                            .font(.caption.weight(.medium)).frame(maxWidth: .infinity).padding(.vertical, 7)
+                            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Color.brand)
+                    .disabled(model.fromBalanceRaw == nil || model.isBusy)
+                }
             }
             if model.insufficient {
                 Text("More than your \(model.fromChain.name) balance.").font(.caption2).foregroundStyle(Color.negative)
             }
         }
-        .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private var toCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("To").font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 8) {
-                chainChip(model.toChain, tappable: !model.toChain.isMonad)
-                tokenChip(model.toToken) { pickingToToken = true }
-                Spacer()
+    private var receiveCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("You receive on \(model.toChain.name)").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                selectorStack(chain: model.toChain, token: model.toToken) { pickingToToken = true }
+                Spacer(minLength: 8)
                 if model.quoting { ProgressView().controlSize(.small) }
-                else if let out = model.quote?.amountOutFormatted {
-                    Text("≈ \(out)").font(.title3.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
+                else {
+                    Text(model.quote?.amountOutFormatted.map { "≈ \($0)" } ?? "—")
+                        .font(.system(size: 26, weight: .semibold)).monospacedDigit().foregroundStyle(.secondary)
                 }
             }
         }
-        .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    /// A chain chip stacked over a token chip — the source/destination identity for one side.
+    private func selectorStack(chain: EVMChain, token: AuroraToken?, tokenAction: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Button { if !chain.isMonad { showChainPicker = true } } label: {
+                chip(text: chain.name, chevron: !chain.isMonad)
+            }
+            .buttonStyle(.plain).disabled(chain.isMonad || model.isBusy)
+            Button(action: tokenAction) { chip(text: token?.symbol ?? "Token", chevron: true, bold: true) }
+                .buttonStyle(.plain).disabled(model.isBusy)
+        }
+    }
+
+    private func chip(text: String, chevron: Bool, bold: Bool = false) -> some View {
+        HStack(spacing: 4) {
+            Text(text).font(bold ? .subheadline.weight(.semibold) : .subheadline.weight(.medium))
+            if chevron { Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary) }
+        }
+        .padding(.horizontal, 11).padding(.vertical, 7)
+        .background(Color(.tertiarySystemFill), in: Capsule())
     }
 
     private var flipButton: some View {
         Button { withAnimation(.snappy) { model.flipDirection() } } label: {
             Image(systemName: "arrow.up.arrow.down")
                 .font(.subheadline.weight(.bold)).foregroundStyle(Color.onStatus)
-                .frame(width: 34, height: 34).background(Color.brand, in: Circle())
-                .overlay(Circle().strokeBorder(Color(.systemGroupedBackground), lineWidth: 3))
-        }
-        .buttonStyle(.plain)
-        .disabled(model.isBusy)
-    }
-
-    private func chainChip(_ chain: EVMChain, tappable: Bool) -> some View {
-        Button { if tappable { showChainPicker = true } } label: {
-            HStack(spacing: 4) {
-                Text(chain.name).font(.subheadline.weight(.medium))
-                if tappable { Image(systemName: "chevron.down").font(.caption2) }
-            }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(Color(.tertiarySystemFill), in: Capsule())
-        }
-        .buttonStyle(.plain).disabled(!tappable || model.isBusy)
-    }
-
-    private func tokenChip(_ token: AuroraToken?, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Text(token?.symbol ?? "Token").font(.subheadline.weight(.semibold))
-                Image(systemName: "chevron.down").font(.caption2)
-            }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(Color(.tertiarySystemFill), in: Capsule())
+                .frame(width: 36, height: 36).background(Color.brand, in: Circle())
+                .overlay(Circle().strokeBorder(Color(.systemGroupedBackground), lineWidth: 4))
         }
         .buttonStyle(.plain).disabled(model.isBusy)
     }
 
-    // MARK: Quote + status
+    // MARK: Summary + status
 
-    @ViewBuilder private var quoteSummary: some View {
-        if let error = model.quoteError {
-            Text(error).font(.caption).foregroundStyle(Color.attention).frame(maxWidth: .infinity, alignment: .leading)
-        } else if let quote = model.quote {
-            VStack(spacing: 6) {
-                DetailRow("You send", "\(model.amountText) \(model.fromToken?.symbol ?? "")")
-                DetailRow("You receive", model.expectedOut ?? "—", tint: .positive)
-                if let secs = quote.timeEstimate, secs > 0 { DetailRow("Estimated time", "≈ \(Int(secs))s") }
-                DetailRow("Route", "\(model.fromChain.name) → \(model.toChain.name)")
+    @ViewBuilder private var summaryCard: some View {
+        if let quote = model.quote {
+            VStack(spacing: 0) {
+                summaryRow("You receive", model.expectedOut ?? "—", tint: .positive, bold: true)
+                Divider()
+                summaryRow("Minimum received", model.minReceivedText ?? "—")
+                summaryRow("Total fee", model.feeText ?? "—")
+                summaryRow("Slippage", model.slippageText)
+                if let secs = quote.timeEstimate, secs > 0 { summaryRow("Estimated time", "≈ \(Int(secs))s") }
+                summaryRow("Route", "\(model.fromChain.name) → \(model.toChain.name)")
             }
-            .padding(12)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 16).padding(.vertical, 6)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+    }
+
+    private func summaryRow(_ label: String, _ value: String, tint: Color = .primary, bold: Bool = false) -> some View {
+        HStack {
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value).font(.subheadline.weight(bold ? .semibold : .medium)).monospacedDigit().foregroundStyle(tint)
+        }
+        .padding(.vertical, 9)
     }
 
     @ViewBuilder private var statusCard: some View {
@@ -166,26 +199,33 @@ struct BridgeView: View {
         case .signing, .submitting, .bridging:
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
-                Text(statusText).font(.subheadline)
+                Text(progressText).font(.subheadline)
                 Spacer()
             }
-            .padding(12).background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(14).background(Color.brand.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         case .done(let out):
             HStack(spacing: 10) {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.positive)
+                Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(Color.positive)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Arrived on \(model.toChain.name)").font(.subheadline.weight(.semibold))
                     if !out.isEmpty { Text("Received \(out)").font(.caption).foregroundStyle(.secondary) }
                 }
                 Spacer()
             }
-            .padding(12).background(Color.positive.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(14).background(Color.positive.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        case .settling(let message):
+            HStack(spacing: 10) {
+                Image(systemName: "clock.arrow.circlepath").font(.title3).foregroundStyle(Color.attention)
+                Text(message).font(.caption)
+                Spacer()
+            }
+            .padding(14).background(Color.attention.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         case .failed(let message):
             InlineError(message: message)
         }
     }
 
-    private var statusText: String {
+    private var progressText: String {
         switch model.phase {
         case .signing: return "Sending on \(model.fromChain.name)…"
         case .submitting: return "Notifying the bridge…"
@@ -194,28 +234,31 @@ struct BridgeView: View {
         }
     }
 
+    // MARK: Primary button
+
     private var primaryTitle: String {
         switch model.phase {
         case .done: return "Bridge again"
+        case .settling: return "Done"
         case .failed: return "Try again"
         case .signing, .submitting, .bridging: return "Bridging…"
         default: return model.intoMonad ? "Bridge to Monad" : "Bridge to \(model.toChain.name)"
         }
     }
 
-    /// The primary button is a "start over" once a deposit has been signed (poll-path `.done`/`.failed`), never a
-    /// second `execute()` — so a real deposit can't be double-sent.
+    /// After a deposit is signed (poll-path `.done`/`.settling`/`.failed`) the button is a "start over" that resets and
+    /// re-quotes — never a second `execute()`, so a real deposit can't be double-sent.
     private var primaryEnabled: Bool {
         switch model.phase {
         case .idle: return model.canBridge
-        case .done, .failed: return true
+        case .done, .settling, .failed: return true
         default: return false
         }
     }
 
     private func runPrimary() async {
         switch model.phase {
-        case .done, .failed: model.reset()
+        case .done, .settling, .failed: model.reset()
         default: await model.execute()
         }
     }
@@ -227,7 +270,10 @@ struct BridgeView: View {
             List(model.selectableChains) { chain in
                 Button { model.selectOtherChain(chain); showChainPicker = false } label: {
                     HStack {
-                        Text(chain.name)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(chain.name)
+                            Text(chain.nativeSymbol).font(.caption2).foregroundStyle(.secondary)
+                        }
                         Spacer()
                         if chain == model.otherChain { Image(systemName: "checkmark").foregroundStyle(Color.brand) }
                     }

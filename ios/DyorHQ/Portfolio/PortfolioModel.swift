@@ -16,7 +16,7 @@ import Observation
 @MainActor
 final class PortfolioModel {
     enum Section: String, CaseIterable, Identifiable {
-        case spot, perps, launch, moments
+        case spot, perps, launch, moments, bridge
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -24,6 +24,7 @@ final class PortfolioModel {
             case .perps: return "Perps"
             case .launch: return "Launch"
             case .moments: return "Moments"
+            case .bridge: return "Bridge"
             }
         }
         var symbol: String {
@@ -32,6 +33,7 @@ final class PortfolioModel {
             case .perps: return "chart.line.uptrend.xyaxis"
             case .launch: return "flame"
             case .moments: return "camera.aperture"
+            case .bridge: return "point.3.connected.trianglepath.dotted"
             }
         }
         var menuItem: MenuItem {
@@ -40,6 +42,7 @@ final class PortfolioModel {
             case .perps: return .perps
             case .launch: return .launch
             case .moments: return .moments
+            case .bridge: return .home // the Bridge lives on Home
             }
         }
     }
@@ -106,7 +109,19 @@ final class PortfolioModel {
         case .perps: return perpsStats(since: since)
         case .launch: return launchStats(since: since)
         case .moments: return momentsStats(since: since)
+        case .bridge: return bridgeStats(since: since)
         }
+    }
+
+    /// Cross-chain bridges aren't visible to the Monad history scan, so their volume comes from the local record the
+    /// Bridge writes on completion (BridgeStore), keyed to the loaded wallet.
+    private func bridgeStats(since: Date) -> Stats {
+        var stats = Stats()
+        for record in BridgeStore.all(owner: loadedFor) where record.time >= since {
+            stats.volume += record.usd
+            stats.trades += 1
+        }
+        return stats
     }
 
     /// Everything in the period, newest first.
@@ -147,6 +162,9 @@ final class PortfolioModel {
         for p in momentsHistory.publishes where p.time >= since {
             let m = momentsById[p.momentId]
             out.append(Activity(id: "pub-\(p.id)", section: .moments, title: "Published \(m?.name ?? "Moment #\(p.momentId)")", subtitle: m.map { "$\($0.symbol)" } ?? "", time: p.time, usd: nil, hash: p.hash))
+        }
+        for b in BridgeStore.all(owner: loadedFor) where b.time >= since {
+            out.append(Activity(id: "bridge-\(b.id)", section: .bridge, title: "Bridged \(b.inSymbol) → \(b.outSymbol)", subtitle: "\(b.fromChain) → \(b.toChain)", time: b.time, usd: b.usd, hash: nil))
         }
         return out.sorted { $0.time > $1.time }
     }
