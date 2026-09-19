@@ -21,8 +21,11 @@ final class BridgeModel {
     var toToken: AuroraToken?
     var amountText = ""
 
+    /// Wallet balances keyed by Aurora `assetId` (globally unique across chains), covering every supported source
+    /// chain — so the source picker can rank assets by what the user actually holds, on any chain.
     private(set) var balances: [String: BigUInt] = [:]
     private(set) var loadingBalances = false
+    private var didLoadBalances = false
 
     private(set) var quote: AuroraQuote?
     private(set) var quoting = false
@@ -33,10 +36,15 @@ final class BridgeModel {
     private(set) var phase: Phase = .idle
     /// Invalidates a running poll when the user starts over, so a stale poll can't overwrite a fresh state.
     private var pollGeneration = 0
-    // The bridge in flight, captured at signing time for the completion record + notification.
+    // The bridge in flight, captured at signing time for the completion record + notification — so a record always
+    // describes the bridge that was actually sent, even if the form is somehow changed while a poll is still running.
     private var pendingHash: String?
     private var pendingUsd: Double?
     private var pendingInSymbol: String?
+    private var pendingOutSymbol: String?
+    private var pendingFromName: String?
+    private var pendingToName: String?
+    private var pendingAmountText: String?
 
     init(env: AppEnvironment) {
         self.env = env
@@ -57,6 +65,24 @@ final class BridgeModel {
         tokens.filter { $0.blockchain == chain.auroraId }.sorted { stableRank($0) < stableRank($1) }
     }
     private func stableRank(_ t: AuroraToken) -> Int { ["USDC": 0, "USDT0": 1, "USDT": 2].first { $0.key == t.symbol }?.value ?? 3 }
+
+    /// Every source-side asset (all supported chains except Monad), richest first: assets the user holds float to the
+    /// top ordered by USD value, then the rest by a stable-first, alphabetical order. This is what the cross-chain
+    /// source picker shows, so "100 USDT on Arbitrum" is the first thing the user sees.
+    var sourceAssets: [AuroraToken] {
+        tokens
+            .filter { (EVMChain.byAuroraId($0.blockchain).map { !$0.isMonad }) ?? false }
+            .sorted { a, b in
+                let ha = held(a), hb = held(b)
+                if ha != hb { return ha }                 // any holding ranks above no holding
+                let va = balanceUSD(a), vb = balanceUSD(b)
+                if va != vb { return va > vb }             // among holdings, richest by USD first
+                let ra = stableRank(a), rb = stableRank(b)
+                if ra != rb { return ra < rb }             // then the familiar stables
+                if a.symbol != b.symbol { return a.symbol < b.symbol }
+                return a.blockchain < b.blockchain
+            }
+    }
 
     // MARK: Loading
 
@@ -96,12 +122,63 @@ final class BridgeModel {
     func setFromToken(_ token: AuroraToken) { fromToken = token; resetQuote(); refreshQuoteSoon() }
     func setToToken(_ token: AuroraToken) { toToken = token; resetQuote(); refreshQuoteSoon() }
 
+    /// Pick a source asset from the cross-chain list: this also switches the source chain to wherever the asset lives
+    /// (choosing "USDT on Arbitrum" makes Arbitrum the source), keeping Monad pinned as the destination.
+    func selectSourceAsset(_ token: AuroraToken) {
+        guard let chain = EVMChain.byAuroraId(token.blockchain), !chain.isMonad else { return }
+        fromChain = chain
+        fromToken = token
+        toChain = monad
+        if toToken == nil || toToken?.blockchain != monad.auroraId { toToken = preferred(on: monad) }
+        resetQuote(); refreshQuoteSoon()
+    }
+
     // MARK: Balances
 
-    func loadBalances() async {
+    /// Reads the wallet's balances across every supported chain at once (each chain independently, failures swallowed),
+    /// so the source picker can rank by holdings. Runs once; pass `force` after a bridge lands to pick up the change.
+    func loadBalances(force: Bool = false) async {
         guard let owner = env.session.address else { return }
+        if didLoadBalances && !force { return }
+        guard !loadingBalances else { return } // coalesce overlapping loads (first `load()` + a picker `.task`, etc.)
         loadingBalances = true; defer { loadingBalances = false }
-        balances = await env.chainBalances.balances(owner: owner, chain: fromChain, tokens: tokens(on: fromChain))
+
+        let balancer = env.chainBalances
+        // Use the app's configured Monad endpoint for the Monad side; public RPCs for the rest.
+        let plan: [(EVMChain, [AuroraToken])] = EVMChain.supported
+            .map { $0.isMonad ? env.bridgeMonad : $0 }
+            .compactMap { chain in
+                let toks = tokens(on: chain)
+                return toks.isEmpty ? nil : (chain, toks)
+            }
+
+        let merged = await withTaskGroup(of: [String: BigUInt].self) { group in
+            for (chain, toks) in plan {
+                group.addTask { await balancer.balances(owner: owner, chain: chain, tokens: toks) }
+            }
+            var acc: [String: BigUInt] = [:]
+            for await part in group { acc.merge(part) { current, _ in current } }
+            return acc
+        }
+        balances = merged
+        // Don't latch on a total-failure empty result (every public RPC down): leave it un-latched so opening the
+        // picker or switching chains retries, instead of showing an empty list for the rest of the session.
+        didLoadBalances = !merged.isEmpty
+    }
+
+    // Per-asset balance access for the pickers (keyed by the globally-unique assetId).
+    func held(_ token: AuroraToken) -> Bool { (balances[token.assetId] ?? 0) > 0 }
+    func balanceRaw(_ token: AuroraToken) -> BigUInt? { balances[token.assetId] }
+    /// The USD value of the held balance (0 when nothing held or no price), used only to rank the picker.
+    func balanceUSD(_ token: AuroraToken) -> Double {
+        guard let raw = balances[token.assetId], raw > 0, let price = token.price, price > 0 else { return 0 }
+        let units = (Double(raw.description) ?? 0) / pow(10, Double(token.decimals))
+        return units * price
+    }
+    /// A compact "0.097 USDC" for a picker row; nil when the wallet holds none of it.
+    func balanceText(_ token: AuroraToken) -> String? {
+        guard let raw = balances[token.assetId], raw > 0 else { return nil }
+        return "\(NumberStyle.units(raw, decimals: token.decimals, compact: true)) \(token.symbol)"
     }
 
     var fromBalanceRaw: BigUInt? { fromToken.flatMap { balances[$0.assetId] } }
@@ -219,6 +296,10 @@ final class BridgeModel {
         guard case .idle = phase else { return false }
         return fromToken != nil && toToken != nil && amountRaw != nil && !insufficient && quote?.depositAddress != nil
     }
+    /// The form (chain/token/amount) is only editable from a clean `.idle` state. Once a deposit is signed — through the
+    /// in-flight phases and the terminal `.done`/`.settling`/`.failed` (where a background poll may still be running) —
+    /// the user must tap the primary to `reset()` first, so nothing can change the route while a bridge is settling.
+    var canEdit: Bool { if case .idle = phase { return true }; return false }
 
     func execute() async {
         guard let wallet = env.session.wallet else { phase = .failed("Sign in to bridge."); return }
@@ -238,7 +319,13 @@ final class BridgeModel {
                 request = TransactionRequest(to: contract, data: try ERC20.transferCalldata(to: depositAddr, amount: sendAmount))
             } else { phase = .failed("This source token can't be bridged."); return }
 
-            pendingHash = nil; pendingUsd = quote.amountOutUsd.flatMap(Double.init) ?? quote.amountInUsd.flatMap(Double.init); pendingInSymbol = from.symbol
+            pendingHash = nil
+            pendingUsd = quote.amountOutUsd.flatMap(Double.init) ?? quote.amountInUsd.flatMap(Double.init)
+            pendingInSymbol = from.symbol
+            pendingOutSymbol = toToken?.symbol
+            pendingFromName = fromChain.name
+            pendingToName = toChain.name
+            pendingAmountText = amountText
             let hash = try await env.sender(for: fromChain).send(request, from: wallet)
             pendingHash = hash.hexString
             phase = .submitting
@@ -264,11 +351,11 @@ final class BridgeModel {
                 consecutiveFailures = 0
                 switch state.status {
                 case .success:
-                    let out = state.swapDetails?.amountOutFormatted.map { "\($0) \(toToken?.symbol ?? "")" } ?? expectedOut ?? ""
+                    let out = state.swapDetails?.amountOutFormatted.map { "\($0) \(pendingOutSymbol ?? toToken?.symbol ?? "")" } ?? expectedOut ?? ""
                     recordCompletion(usd: state.swapDetails?.amountOutUsd.flatMap(Double.init))
                     resetQuote() // the deposit address is consumed — a new bridge must re-quote
                     phase = .done(out)
-                    Task { await loadBalances() }
+                    Task { await loadBalances(force: true) } // balances changed — refresh across chains
                     return
                 case .refunded:
                     resetQuote()
@@ -298,14 +385,18 @@ final class BridgeModel {
     }
 
     /// Persist a completed bridge (for Portfolio volume) and post the completion notification. Idempotent per tx hash.
+    /// Uses the route/amount captured at signing time, never the live form, so the record can't be corrupted by a
+    /// later selection.
     private func recordCompletion(usd: Double?) {
         let value = usd ?? pendingUsd ?? 0
+        let from = pendingFromName ?? fromChain.name
+        let to = pendingToName ?? toChain.name
         if let hash = pendingHash {
-            BridgeStore.record(BridgeRecord(id: hash, usd: value, fromChain: fromChain.name, toChain: toChain.name,
-                                            inSymbol: pendingInSymbol ?? "", outSymbol: toToken?.symbol ?? "", time: Date()),
+            BridgeStore.record(BridgeRecord(id: hash, usd: value, fromChain: from, toChain: to,
+                                            inSymbol: pendingInSymbol ?? "", outSymbol: pendingOutSymbol ?? "", time: Date()),
                                owner: env.session.address)
         }
-        Notifications.bridge(amount: "\(amountText) \(pendingInSymbol ?? "")", from: fromChain.name, to: toChain.name)
+        Notifications.bridge(amount: "\(pendingAmountText ?? amountText) \(pendingInSymbol ?? "")", from: from, to: to)
     }
 
     /// Return to a clean state to start another bridge, keeping the entered amount and re-quoting it (so a

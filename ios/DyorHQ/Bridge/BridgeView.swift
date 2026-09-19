@@ -9,6 +9,7 @@ struct BridgeView: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var amountFocused: Bool
     @State private var showChainPicker = false
+    @State private var showSourcePicker = false
     @State private var pickingFromToken = false
     @State private var pickingToToken = false
 
@@ -33,8 +34,15 @@ struct BridgeView: View {
         }
         .task { await model.load() }
         .sheet(isPresented: $showChainPicker) { chainPicker }
+        .sheet(isPresented: $showSourcePicker) { sourceAssetPicker }
         .sheet(isPresented: $pickingFromToken) { tokenPicker(for: model.fromChain, isFrom: true) }
         .sheet(isPresented: $pickingToToken) { tokenPicker(for: model.toChain, isFrom: false) }
+    }
+
+    /// The source-token tap opens the cross-chain, balance-sorted asset picker (which also switches chains); only when
+    /// the source itself is Monad — bridging out — does it fall back to the plain Monad token list.
+    private func openFromTokenPicker() {
+        if model.fromChain.isMonad { pickingFromToken = true } else { showSourcePicker = true }
     }
 
     private var form: some View {
@@ -91,12 +99,14 @@ struct BridgeView: View {
                 }
             }
             HStack(spacing: 10) {
-                selectorStack(chain: model.fromChain, token: model.fromToken) { pickingFromToken = true }
+                selectorStack(chain: model.fromChain, token: model.fromToken) { openFromTokenPicker() }
                 Spacer(minLength: 8)
                 TextField("0", text: Binding(get: { model.amountText }, set: { model.amountText = $0; model.amountChanged() }))
                     .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                     .font(.system(size: 30, weight: .semibold)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.4)
                     .focused($amountFocused)
+                    .disabled(!model.canEdit)
                     .foregroundStyle(model.insufficient ? Color.negative : Color.primary)
             }
             HStack(spacing: 8) {
@@ -107,7 +117,7 @@ struct BridgeView: View {
                             .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
                     .buttonStyle(.plain).foregroundStyle(Color.brand)
-                    .disabled(model.fromBalanceRaw == nil || model.isBusy)
+                    .disabled(model.fromBalanceRaw == nil || !model.canEdit)
                 }
             }
             if model.insufficient {
@@ -128,6 +138,7 @@ struct BridgeView: View {
                 else {
                     Text(model.quote?.amountOutFormatted.map { "≈ \($0)" } ?? "—")
                         .font(.system(size: 26, weight: .semibold)).monospacedDigit().foregroundStyle(.secondary)
+                        .lineLimit(1).minimumScaleFactor(0.5)
                 }
             }
         }
@@ -135,24 +146,41 @@ struct BridgeView: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    /// A chain chip stacked over a token chip — the source/destination identity for one side.
+    /// A chain chip beside a token chip — the source/destination identity for one side, each with its logo.
     private func selectorStack(chain: EVMChain, token: AuroraToken?, tokenAction: @escaping () -> Void) -> some View {
         HStack(spacing: 8) {
             Button { if !chain.isMonad { showChainPicker = true } } label: {
-                chip(text: chain.name, chevron: !chain.isMonad)
+                chainChip(chain)
             }
-            .buttonStyle(.plain).disabled(chain.isMonad || model.isBusy)
-            Button(action: tokenAction) { chip(text: token?.symbol ?? "Token", chevron: true, bold: true) }
-                .buttonStyle(.plain).disabled(model.isBusy)
+            .buttonStyle(.plain).disabled(chain.isMonad || !model.canEdit)
+            Button(action: tokenAction) { tokenChip(token) }
+                .buttonStyle(.plain).disabled(!model.canEdit)
         }
+        .layoutPriority(1) // keep the pills at their intrinsic width; the amount field yields instead
     }
 
-    private func chip(text: String, chevron: Bool, bold: Bool = false) -> some View {
-        HStack(spacing: 4) {
-            Text(text).font(bold ? .subheadline.weight(.semibold) : .subheadline.weight(.medium))
-            if chevron { Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary) }
+    private func chainChip(_ chain: EVMChain) -> some View {
+        HStack(spacing: 6) {
+            ChainBadge(chain: chain, size: 20)
+            Text(chain.name)
+                .font(.subheadline.weight(.medium))
+                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+            if !chain.isMonad { Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary) }
         }
-        .padding(.horizontal, 11).padding(.vertical, 7)
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+    }
+
+    private func tokenChip(_ token: AuroraToken?) -> some View {
+        HStack(spacing: 6) {
+            if let token { TokenLogo(symbol: token.symbol, url: token.logoURL, size: 20) }
+            else { Image(systemName: "circle.dashed").font(.subheadline).foregroundStyle(.secondary).frame(width: 20, height: 20) }
+            Text(token?.symbol ?? "Token")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+            Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
         .background(Color(.tertiarySystemFill), in: Capsule())
     }
 
@@ -163,7 +191,7 @@ struct BridgeView: View {
                 .frame(width: 36, height: 36).background(Color.brand, in: Circle())
                 .overlay(Circle().strokeBorder(Color(.systemGroupedBackground), lineWidth: 4))
         }
-        .buttonStyle(.plain).disabled(model.isBusy)
+        .buttonStyle(.plain).disabled(!model.canEdit)
     }
 
     // MARK: Summary + status
@@ -269,7 +297,8 @@ struct BridgeView: View {
         NavigationStack {
             List(model.selectableChains) { chain in
                 Button { model.selectOtherChain(chain); showChainPicker = false } label: {
-                    HStack {
+                    HStack(spacing: 12) {
+                        ChainBadge(chain: chain, size: 30)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(chain.name)
                             Text(chain.nativeSymbol).font(.caption2).foregroundStyle(.secondary)
@@ -286,6 +315,52 @@ struct BridgeView: View {
         .presentationDetents([.medium, .large])
     }
 
+    /// The source-asset picker: every asset across every supported chain, the wallet's holdings first (highest value
+    /// on top), each with its logo, chain badge and balance. Tapping one sets both the token and its chain.
+    private var sourceAssetPicker: some View {
+        NavigationStack {
+            List(model.sourceAssets) { token in
+                let chain = EVMChain.byAuroraId(token.blockchain) ?? model.fromChain
+                Button {
+                    model.selectSourceAsset(token)
+                    showSourcePicker = false
+                } label: {
+                    HStack(spacing: 12) {
+                        AssetGlyph(token: token, chain: chain, size: 36)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(token.symbol).fontWeight(.medium)
+                            Text(chain.name).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if let balance = model.balanceText(token) {
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text(balance).font(.subheadline.weight(.medium)).monospacedDigit()
+                                let usd = model.balanceUSD(token)
+                                if usd > 0 {
+                                    Text(usd.formatted(.currency(code: "USD"))).font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                        } else if token == model.fromToken {
+                            Image(systemName: "checkmark").foregroundStyle(Color.brand)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .listStyle(.plain)
+            .overlay {
+                if model.loadingBalances && model.sourceAssets.allSatisfy({ !model.held($0) }) {
+                    ProgressView("Reading your balances…").font(.footnote)
+                }
+            }
+            .navigationTitle("Bridge from")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSourcePicker = false } } }
+            .task { await model.loadBalances() } // ensure balances are read (retries if a first load failed)
+        }
+        .presentationDetents([.large])
+    }
+
     private func tokenPicker(for chain: EVMChain, isFrom: Bool) -> some View {
         NavigationStack {
             List(model.tokens(on: chain)) { token in
@@ -293,12 +368,16 @@ struct BridgeView: View {
                     if isFrom { model.setFromToken(token) } else { model.setToToken(token) }
                     pickingFromToken = false; pickingToToken = false
                 } label: {
-                    HStack {
+                    HStack(spacing: 12) {
+                        TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(token.symbol).fontWeight(.medium)
                             Text(chain.name).font(.caption2).foregroundStyle(.secondary)
                         }
                         Spacer()
+                        if let balance = model.balanceText(token) {
+                            Text(balance).font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+                        }
                         let selected = isFrom ? model.fromToken : model.toToken
                         if token == selected { Image(systemName: "checkmark").foregroundStyle(Color.brand) }
                     }
