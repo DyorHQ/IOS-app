@@ -24,6 +24,9 @@ final class AppEnvironment {
     let kuruTokens: KuruTokenListClient
     let venueTokens: VenueTokensService
     let session: Session
+    /// Aurora Intents cross-chain bridge (Home "Bridge") + the multi-chain balance reader behind it.
+    let aurora: AuroraIntents
+    let chainBalances = MultiChainBalances()
     let settings = AppSettings()
     let perplTrading = PerplTrading()
     /// The wallet's cross-section volume / fees / P&L model, shared by Home's Total Volume and the Portfolio page.
@@ -39,6 +42,7 @@ final class AppEnvironment {
         rpc = RPCClient(url: config.rpcURL)
         multicall = Multicall(rpc: rpc)
         sender = TransactionSender(rpc: rpc)
+        aurora = AuroraIntents(apiKey: config.auroraApiKey, feeRecipient: config.auroraFeeRecipient)
         prices = PriceService(rpc: rpc)
         // Graduated launchpad and Moment pools become swap routes on Uniswap v4.
         swap = SwapEngine(rpc: rpc, launchpadFactory: config.launchpad.isDeployed ? config.launchpad.factory : nil, moments: config.moments)
@@ -63,6 +67,16 @@ final class AppEnvironment {
         sync = BackendSync(social: social)
         sync.install(settings: settings, address: { [weak session] in session?.address })
     }
+
+    /// A transaction sender for `chain`: Monad reuses the app's configured endpoint (and multicall); every other
+    /// source chain gets a sender bound to that chain's public RPC + id, so the same wallet key signs a valid
+    /// transfer there.
+    func sender(for chain: EVMChain) -> TransactionSender {
+        chain.isMonad ? sender : TransactionSender(rpc: RPCClient(url: chain.rpcURL), chainId: chain.chainId)
+    }
+
+    /// The Bridge's Monad chain descriptor, pointed at the app's configured RPC rather than the public default.
+    var bridgeMonad: EVMChain { EVMChain.monad(rpc: config.rpcURL) }
 
     /// Builds/refreshes the global venue token list (Uniswap + Monday Trade). The first run scans the FULL history
     /// from genesis in checkpointed segments (rpc1 serves old logs even though it prunes old state), so progress

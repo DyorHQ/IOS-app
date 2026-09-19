@@ -17,6 +17,7 @@ struct HomeView: View {
     @State private var tokenTab: HomeTokenTab = .popular
     @State private var holdingTab: HoldingCategory = .spot
     @State private var showReceive = false
+    @State private var showBridge = false
     @State private var showSend = false
     @State private var showTransfer = false
     @State private var showSearch = false
@@ -50,6 +51,7 @@ struct HomeView: View {
             .task(id: session.address) { await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: false) }
             .overlay { if model.rows.isEmpty, model.loading { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showReceive) { if let address = session.address { ReceiveSheet(address: address) } }
+            .sheet(isPresented: $showBridge) { BridgeView(env: env) }
             .sheet(isPresented: $showSend) { SendSheet() }
             .sheet(isPresented: $showTransfer) { TransferSheet() }
             .sheet(isPresented: $showSearch) {
@@ -171,7 +173,7 @@ struct HomeView: View {
 
     private var quickActions: some View {
         HStack(spacing: 10) {
-            HomeAction(title: "Buy", symbol: "cart") { router.openSwap(tokenIn: .usdc, tokenOut: .mon) }
+            HomeAction(title: "Bridge", symbol: "point.3.connected.trianglepath.dotted") { showBridge = true }
             HomeAction(title: "Deposit", symbol: "creditcard") { showReceive = true }
             HomeAction(title: "Withdraw", symbol: "arrow.up") { showSend = true }
             HomeAction(title: "Transfer", symbol: "arrow.left.arrow.right") { showTransfer = true }

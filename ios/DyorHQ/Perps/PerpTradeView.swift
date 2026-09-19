@@ -582,9 +582,29 @@ struct PerpTradeView: View {
         if let reason = ticket.problem(market: market, account: model.account, available: availableMargin) {
             Haptics.warning(); ticketError = reason; return
         }
+        if let reason = triggerProblem(side: side) {
+            Haptics.warning(); ticketError = reason; return
+        }
         ticketError = nil
         Haptics.commit()
         showConfirm = true
+    }
+
+    /// A take-profit must sit on the profit side of the entry and a stop-loss on the loss side for the chosen
+    /// direction. A wrong-sided trigger is what the keeper rejects or fires instantly, which would leave the position
+    /// unprotected — so block it before placing (and before recording it as if it were live).
+    private func triggerProblem(side: PositionSide) -> String? {
+        guard ticket.tpslEnabled, refPrice > 0 else { return nil }
+        let entry = NumberStyle.number(refPrice)
+        if let tp = tpValue {
+            let ok = side == .long ? tp > refPrice : tp < refPrice
+            if !ok { return "Take-profit must be \(side == .long ? "above" : "below") your entry (\(entry)) for a \(side == .long ? "long" : "short")." }
+        }
+        if let sl = slValue {
+            let ok = side == .long ? sl < refPrice : sl > refPrice
+            if !ok { return "Stop-loss must be \(side == .long ? "below" : "above") your entry (\(entry)) for a \(side == .long ? "long" : "short")." }
+        }
+        return nil
     }
 
     // MARK: Bottom section (positions / orders / assets / trade history)
@@ -598,8 +618,12 @@ struct PerpTradeView: View {
                 else { emptyRow("No open positions") }
             case .orders:
                 let orders = model.orders.filter { $0.perpId == market.id }
-                if orders.isEmpty { emptyRow("No open orders") }
-                else { ForEach(orders) { order in OrderCard(order: order, onCancel: { cancellingOrder = order }) } }
+                let rows = triggerRows(for: market)
+                if orders.isEmpty, rows.isEmpty { emptyRow("No open orders") }
+                else {
+                    ForEach(orders) { order in OrderCard(order: order, mark: mark, onCancel: { cancellingOrder = order }) }
+                    ForEach(rows) { TriggerCard(row: $0, mark: mark) }
+                }
             case .assets:
                 let total = model.account.map { Amount.units($0.balance, decimals: 6) } ?? 0
                 let inUse = model.account.map { Amount.units(min($0.balance, $0.locked), decimals: 6) } ?? 0
@@ -772,6 +796,27 @@ struct PerpTradeView: View {
     private var slValue: Double? { ticket.tpslEnabled ? ticket.stopLossText.perpDouble : nil }
     /// The user is asking for at least one trigger — which only the authenticated (keeper-forwarded) path can carry.
     private var wantsTriggers: Bool { tpValue != nil || slValue != nil }
+
+    /// The market's TP/SL to show: Perpl's authoritative open triggers (mt:23/24, source of truth), plus — only
+    /// briefly after placement, or while the trading socket is offline — the app's local echo for a kind the
+    /// authoritative feed hasn't reflected yet. Once the feed confirms a trigger, the echo for that kind drops out.
+    private func triggerRows(for market: PerpMarket) -> [TriggerRow] {
+        let priceScale = pow(10.0, Double(market.priceDecimals))
+        let sizeScale = pow(10.0, Double(market.lotDecimals))
+        let authoritative = perplTrading.openOrders
+            .filter { $0.marketId == market.id && $0.isTrigger && $0.isReduceOnly }
+            .map { o in
+                TriggerRow(id: "auth-\(o.oid)", symbol: market.asset, kind: o.isStopLoss ? .stopLoss : .takeProfit,
+                           price: Double(o.triggerPriceRaw ?? 0) / priceScale, size: Double(o.sizeRaw) / sizeScale,
+                           positionLong: o.protectsLong, live: true)
+            }
+        let authKinds = Set(authoritative.map(\.kind))
+        let live = perplTrading.isReady
+        let echo = model.triggers
+            .filter { $0.perpId == market.id && !authKinds.contains($0.kind) && (!live || Date().timeIntervalSince($0.placedAt) < 10) }
+            .map { TriggerRow(id: "echo-\($0.id)", symbol: $0.symbol, kind: $0.kind, price: $0.price, size: $0.size, positionLong: $0.positionLong, live: false) }
+        return authoritative + echo
+    }
     private var sideColor: Color { ticket.side == .long ? .positive : .negative }
 
     /// What to tell the user about whether their take-profit / stop-loss will actually be placed, and whether it needs
@@ -1672,23 +1717,96 @@ private struct PositionCard: View {
     }
 }
 
+/// A small labelled figure used across the order / trigger cards.
+private struct MiniStat: View {
+    let label: String
+    let value: String
+    var tint: Color = .primary
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.caption.weight(.medium)).monospacedDigit().foregroundStyle(tint)
+        }
+    }
+}
+
+/// A resting on-chain order (limit / reduce-only limit), with its side, price, size, leverage and distance from mark.
 private struct OrderCard: View {
     let order: PerpOrder
+    let mark: Double
     let onCancel: () -> Void
 
+    private var typeLabel: String { order.reduceOnly ? "Limit · reduce-only" : "Limit" }
+    private var distance: Double? { mark > 0 ? (order.price - mark) / mark * 100 : nil }
+
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(order.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(order.size)) \(order.symbol)")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(order.side == .buy ? Color.positive : Color.negative)
-                Text("Limit \(NumberStyle.number(order.price))\(order.reduceOnly ? " · reduce-only" : "")")
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(order.side == .buy ? "Buy" : "Sell")
+                    .font(.caption.weight(.bold)).foregroundStyle(Color.onStatus)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(order.side == .buy ? Color.positive : Color.negative, in: Capsule())
+                Text(typeLabel).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel", action: onCancel).buttonStyle(.bordered).controlSize(.small).tint(.negative)
             }
-            Spacer()
-            Button("Cancel", action: onCancel).buttonStyle(.bordered).controlSize(.small).tint(.negative)
+            HStack(alignment: .top) {
+                MiniStat(label: "Price", value: NumberStyle.number(order.price))
+                Spacer()
+                MiniStat(label: "Size", value: "\(NumberStyle.number(order.size)) \(order.symbol)")
+                Spacer()
+                MiniStat(label: "Leverage", value: "\(NumberStyle.number(order.leverage, maximumFractionDigits: 1))×")
+                Spacer()
+                if let d = distance { MiniStat(label: "Distance", value: String(format: "%+.2f%%", d), tint: d >= 0 ? .positive : .negative) }
+            }
         }
-        .padding(.vertical, 4)
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// A TP/SL row to display: either Perpl's authoritative open trigger (`live`) or the app's local echo pending
+/// confirmation from the feed.
+private struct TriggerRow: Identifiable {
+    let id: String
+    let symbol: String
+    let kind: PlacedTrigger.Kind
+    let price: Double
+    let size: Double
+    let positionLong: Bool
+    let live: Bool
+}
+
+/// A take-profit / stop-loss (keeper-managed trigger). `live` rows come from Perpl's authoritative order feed; a
+/// non-live row is the app's own just-placed record, shown until the feed confirms it.
+private struct TriggerCard: View {
+    let row: TriggerRow
+    let mark: Double
+
+    private var tint: Color { row.kind == .takeProfit ? .positive : .negative }
+    private var distance: Double? { mark > 0 ? (row.price - mark) / mark * 100 : nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: row.kind == .takeProfit ? "target" : "shield.lefthalf.filled")
+                    .font(.caption).foregroundStyle(tint)
+                Text(row.kind.label).font(.caption.weight(.bold)).foregroundStyle(tint)
+                Text(row.positionLong ? "on Long" : "on Short").font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Text(row.live ? "Keeper trigger" : "Pending…").font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(alignment: .top) {
+                MiniStat(label: "Trigger", value: NumberStyle.number(row.price), tint: tint)
+                Spacer()
+                MiniStat(label: "Size", value: "\(NumberStyle.number(row.size)) \(row.symbol)")
+                Spacer()
+                if let d = distance { MiniStat(label: "Distance", value: String(format: "%+.2f%%", d)) }
+            }
+        }
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tint.opacity(row.live ? 0.22 : 0.12), lineWidth: 1))
     }
 }
 
@@ -1908,7 +2026,10 @@ struct AuthedOrderSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .review
 
-    enum Phase: Equatable { case review, placing, done, failed(String) }
+    enum Phase: Equatable { case review, placing, done, doneWarning(String), failed(String) }
+
+    /// The entry was placed (with or without every trigger) — the sheet closes on "Done" and reloads.
+    private var isPlaced: Bool { if case .done = phase { return true }; if case .doneWarning = phase { return true }; return false }
 
     var body: some View {
         NavigationStack {
@@ -1933,18 +2054,24 @@ struct AuthedOrderSheet: View {
                 if phase == .done {
                     Section { Label("Order sent to Perpl.", systemImage: "checkmark.circle.fill").foregroundStyle(Color.positive) }
                 }
+                if case .doneWarning(let message) = phase {
+                    Section {
+                        Label("Order sent to Perpl.", systemImage: "checkmark.circle.fill").foregroundStyle(Color.positive)
+                        Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(Color.attention).font(.footnote)
+                    }
+                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Place Order")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(phase == .done ? "Done" : "Cancel") { let done = phase == .done; dismiss(); if done { onDone() } }
+                    Button(isPlaced ? "Done" : "Cancel") { let done = isPlaced; dismiss(); if done { onDone() } }
                         .disabled(phase == .placing)
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                if phase != .done {
+                if !isPlaced {
                     PrimaryButton(title: input.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", isBusy: phase == .placing, foreground: .onStatus) {
                         Task { await place() }
                     }
@@ -1958,19 +2085,38 @@ struct AuthedOrderSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationBackground(Color(.systemGroupedBackground))
-        .sensoryFeedback(.success, trigger: phase == .done)
+        .sensoryFeedback(.success, trigger: isPlaced)
     }
 
     private func place() async {
         phase = .placing
         do {
-            let ack = try await perplTrading.submit(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env)
-            phase = ack.accepted ? .done : .failed(ack.error ?? "Perpl rejected the order.")
-            if ack.accepted {
-                ActivityLog.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address)
-                if settings.notificationsEnabled, settings.notifyFills {
-                    Notifications.perpOrder(side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP", filled: input.kind == .market)
-                }
+            // Bracket placement reports per-frame acceptance, so we record only the TP/SL Perpl actually admitted and
+            // can warn if the entry opened without a requested protection (an unprotected position the user must know
+            // about). Perpl offers no read-back for keeper triggers, so the accepted ones are remembered locally.
+            let result = try await perplTrading.submitBracket(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env, ttlBlocks: 100)
+            guard result.entry else { phase = .failed(result.error ?? "Perpl rejected the order."); return }
+
+            var placed: [PlacedTrigger] = []
+            if let tp = takeProfit, result.takeProfit == true {
+                placed.append(PlacedTrigger(perpId: market.id, symbol: market.asset, kind: .takeProfit, price: tp, size: input.size, positionLong: input.side == .long))
+            }
+            if let sl = stopLoss, result.stopLoss == true {
+                placed.append(PlacedTrigger(perpId: market.id, symbol: market.asset, kind: .stopLoss, price: sl, size: input.size, positionLong: input.side == .long))
+            }
+            TriggerStore.record(placed, owner: session.address)
+
+            let tpRejected = takeProfit != nil && result.takeProfit != true
+            let slRejected = stopLoss != nil && result.stopLoss != true
+            if tpRejected || slRejected {
+                let which = tpRejected && slRejected ? "take-profit and stop-loss were" : tpRejected ? "take-profit was" : "stop-loss was"
+                phase = .doneWarning("Position opened, but the \(which) not accepted — set it again from the ticket.")
+            } else {
+                phase = .done
+            }
+            ActivityLog.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address)
+            if settings.notificationsEnabled, settings.notifyFills {
+                Notifications.perpOrder(side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP", filled: input.kind == .market)
             }
         } catch {
             phase = .failed(describe(error))

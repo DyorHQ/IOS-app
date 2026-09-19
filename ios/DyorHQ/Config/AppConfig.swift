@@ -19,8 +19,13 @@ struct AppConfig: Sendable {
     /// Privy-hosted key-export page (Privy React SDK) loaded in a WebView to export an embedded wallet's key — the
     /// only supported path, since Privy's iOS SDK has no native export. Its origin must be a Privy allowed origin.
     let walletExportURL: URL?
+    /// Aurora Intents Swap API key (studio.aurora.dev) powering the cross-chain Bridge, and an optional NEAR account
+    /// to receive the integrator fee. The key is required for the Bridge to work; without it the button explains why.
+    let auroraApiKey: String
+    let auroraFeeRecipient: String?
 
     var hasPrivy: Bool { !privyAppID.isEmpty && !privyClientID.isEmpty }
+    var hasBridge: Bool { !auroraApiKey.isEmpty }
     var hasPasskeys: Bool { hasPrivy && !passkeyRelyingParty.isEmpty }
     var hasSupabase: Bool { !supabaseKey.isEmpty }
 
@@ -55,7 +60,9 @@ struct AppConfig: Sendable {
             moments: .monadMainnet,
             supabaseURL: supabaseURL,
             supabaseKey: supabaseKey,
-            walletExportURL: URL(string: string("WalletExportURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil }
+            walletExportURL: URL(string: string("WalletExportURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil },
+            auroraApiKey: string("AuroraApiKey"),
+            auroraFeeRecipient: { let r = string("AuroraFeeRecipient"); return r.isEmpty ? nil : r }()
         )
     }()
 }

@@ -31,6 +31,11 @@ enum Notifications {
         post(kind: .transaction, title: "Confirmed", body: "\(label) confirmed on Monad.")
     }
 
+    /// A completed cross-chain bridge — recorded in the notification center like a swap.
+    static func bridge(amount: String, from: String, to: String) {
+        post(kind: .swap, title: "Bridge complete", body: "\(amount) bridged from \(from) to \(to).", route: .home)
+    }
+
     static func priceAlert(symbol: String, above: Bool, target: Double, price: Double) {
         post(kind: .priceAlert, title: "Price alert: \(symbol)",
              body: "\(symbol) is now \(NumberStyle.number(price)) — \(above ? "above" : "below") your \(NumberStyle.number(target)) target.", route: .home)

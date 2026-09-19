@@ -29,7 +29,14 @@ struct RootView: View {
         // snapshot only ever captures the cover, never a secret.
         .overlay { PrivacyCover(active: scenePhase == .active) }
         .task { session.start(); settings.appearance.apply() }
-        .onChange(of: scenePhase) { _, phase in if phase == .active { settings.appearance.apply() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                settings.appearance.apply()
+                // Reconnect the trading socket the instant the app returns (iOS drops it while suspended), so TP/SL is
+                // ready without waiting for the keep-alive loop's next tick.
+                Task { await env.perplTrading.ensureConnected() }
+            }
+        }
         // Keep the per-wallet sessions tied to the active wallet: rebind whenever the signed-in address changes, so a
         // sign-out + import of a different wallet never carries over the previous account's social profile or its
         // authenticated Perpl trading session.
