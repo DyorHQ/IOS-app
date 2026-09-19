@@ -73,6 +73,8 @@ targets:
         FeeEscrow: "$(FEE_ESCROW)"
         HolderFeeSharing: "$(HOLDER_FEE_SHARING)"
         MemeHook: "$(MEME_HOOK)"
+        AuroraApiKey: "$(AURORA_API_KEY)"
+        AuroraFeeRecipient: "$(AURORA_FEE_RECIPIENT)"
     entitlements:
       path: DyorHQ/DyorHQ.entitlements
       # Sign in with Apple (Guideline 4.8) + Associated Domains (Mera passkeys). These require the paid Apple

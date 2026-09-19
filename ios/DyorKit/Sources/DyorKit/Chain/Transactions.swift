@@ -63,10 +63,15 @@ public enum TransactionEvent: Sendable, Equatable {
 public struct TransactionSender: Sendable {
     public let rpc: RPCClient
     public let multicall: Multicall
+    /// The EVM chain this sender signs for. Defaults to Monad so every existing caller is unchanged; the Bridge
+    /// builds a sender per source chain (Ethereum, Base, …) with that chain's id and RPC so the same wallet key
+    /// signs a valid transaction there.
+    public let chainId: Int
 
-    public init(rpc: RPCClient) {
+    public init(rpc: RPCClient, chainId: Int = Monad.chainId) {
         self.rpc = rpc
         multicall = Multicall(rpc: rpc)
+        self.chainId = chainId
     }
 
     public func prepare(_ request: TransactionRequest, from wallet: Wallet) async throws -> PreparedTransaction {
@@ -82,7 +87,7 @@ public struct TransactionSender: Sendable {
         async let gasPrice = rpc.gasPrice()
         let gasLimit = try await estimate * 120 / 100
         let fee = try await gasPrice
-        return PreparedTransaction(from: wallet.address, to: request.to, data: request.data, value: request.value, nonce: try await nonce, gasLimit: gasLimit, maxFeePerGas: fee * 2, maxPriorityFeePerGas: fee, chainId: Monad.chainId)
+        return PreparedTransaction(from: wallet.address, to: request.to, data: request.data, value: request.value, nonce: try await nonce, gasLimit: gasLimit, maxFeePerGas: fee * 2, maxPriorityFeePerGas: fee, chainId: chainId)
     }
 
     public func send(_ request: TransactionRequest, from wallet: Wallet) async throws -> Data {
