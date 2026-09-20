@@ -28,7 +28,8 @@ writes require the wallet's session.
 | Alerts/push | `device_tokens`, `alerts` |
 | Launch index | `launches` |
 | App sync (mig. 11) | `activity` (every action: kind, section, USD size + fee, tx hash), `notifications` |
-| Journey (mig. 12–13) | `user_journey` (view — per-wallet spot/perps/launchpad/moments/bridge/deposits/withdrawals rollup, `security_invoker`), `platform_journey()` (platform totals by domain) |
+| Sessions (mig. 14) | `sessions` (one row per sign-in — `signed_in_at`, `signed_out_at`) |
+| Journey (mig. 12–14) | `user_journey` (view — one row per user: handle, wallet, `joined_at`, sign-in/out times, per-domain spot/perps/launchpad/moments/bridge/deposits/withdrawals rollup; **internal analytics only**, not granted to anon/authenticated), `platform_journey()` (platform totals by domain) |
 
 `activity.kind` ∈ swap, buy, sell, launch, perp, moment, **bridge**, **deposit**, **withdraw**, send; `activity.section`
 ∈ spot, perps, launch(pad), moments, bridge, wallet. The whole user journey — username (`profiles.handle`), wallet,
