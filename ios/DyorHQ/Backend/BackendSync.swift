@@ -31,13 +31,13 @@ final class BackendSync {
 
     private struct ActivityRow: Encodable {
         let id: String, wallet: String, kind: String, section: String, title: String, subtitle: String
-        let tx_hash: String?, usd: Double?, occurred_at: String
+        let tx_hash: String?, usd: Double?, fee_usd: Double?, occurred_at: String
     }
 
     private func activity(_ record: ActivityRecord, owner: Address) {
         let row = ActivityRow(id: Self.stableID(record).uuidString.lowercased(), wallet: owner.checksummed.lowercased(), kind: record.kind.rawValue,
                               section: record.section ?? "wallet", title: String(record.title.prefix(120)), subtitle: String(record.subtitle.prefix(300)),
-                              tx_hash: record.txHashHex?.lowercased(), usd: record.usd, occurred_at: Self.iso(record.time))
+                              tx_hash: record.txHashHex?.lowercased(), usd: record.usd, fee_usd: record.feeUsd, occurred_at: Self.iso(record.time))
         schedule("activity-\(row.id)", delay: 0) { [social] in try await social.client.upsertRows("activity", [row], onConflict: "id") }
     }
 

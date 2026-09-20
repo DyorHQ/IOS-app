@@ -17,6 +17,9 @@ final class SocialSession {
     let client: SupabaseClient
     /// The wallet the social session is currently bound to (lowercased address), so a wallet change is detected.
     private var boundWallet: String?
+    /// The open `sessions` row for this app session, persisted per wallet so a sign-out after an app relaunch can
+    /// still close the same row.
+    private var currentSessionRowId: String?
 
     var isSignedIn: Bool { state == .signedIn }
 
@@ -34,12 +37,28 @@ final class SocialSession {
         guard target != boundWallet else { return }
         let previous = boundWallet
         boundWallet = target
-        reset()
-        if target == nil, previous != nil { SupabaseSessionStore.clear() } // full sign-out on wallet sign-out
+
+        // Full wallet sign-out: record the sign-out time on the still-authed session, THEN tear down.
+        if target == nil {
+            state = .signedOut; profile = nil; error = nil
+            Task {
+                if let previous { await closeSession(wallet: previous) }
+                await client.signOut()
+                if previous != nil { SupabaseSessionStore.clear() }
+            }
+            return
+        }
+
+        reset() // switching to a different wallet: drop the previous wallet's in-memory session
         guard let target, let stored = SupabaseSessionStore.load(), stored.wallet == target, stored.isValid else { return }
         Task {
             await client.restore(stored)
-            if await client.currentSession != nil { state = .signedIn; await loadProfile() }
+            if await client.currentSession != nil {
+                state = .signedIn
+                try? await ensureProfile(wallet: target) // safety net: a returning wallet always has a profile
+                await openSession(wallet: target)        // a restored session on launch is this app-session's sign-in
+                await loadProfile()
+            }
         }
     }
 
@@ -61,6 +80,7 @@ final class SocialSession {
             boundWallet = created.wallet
             state = .signedIn
             try? await ensureProfile(wallet: created.wallet)
+            await openSession(wallet: created.wallet)
             await loadProfile()
         } catch {
             state = .signedOut
@@ -68,18 +88,55 @@ final class SocialSession {
         }
     }
 
-    /// Full sign-out: clears the in-memory session and the stored token, and unbinds the wallet.
+    /// Full sign-out: records the sign-out time, then clears the in-memory session and the stored token.
     func signOut() {
-        reset()
-        SupabaseSessionStore.clear()
+        let wallet = boundWallet
+        state = .signedOut; profile = nil; error = nil
         boundWallet = nil
+        Task {
+            if let wallet { await closeSession(wallet: wallet) } // on the still-authed session
+            await client.signOut()
+            SupabaseSessionStore.clear()
+        }
     }
 
-    /// Make sure a profile row exists so foreign keys (posts, follows, watchlists) resolve.
+    /// Make sure a profile row exists so foreign keys (activity, sessions, posts, follows, watchlists) resolve and the
+    /// user has a profile to edit. Called on every sign-in and session restore, so creating an account, importing a
+    /// private key, or using a passkey all auto-create the profile.
     private func ensureProfile(wallet: String) async throws {
         struct Row: Encodable { let wallet: String }
         let _: SocialProfile = try await client.upsert("profiles", Row(wallet: wallet), onConflict: "wallet")
     }
+
+    // MARK: Sessions (sign-in / sign-out analytics)
+
+    private struct SessionRow: Decodable { let id: String }
+    private static func sessionKey(_ wallet: String) -> String { "session.rowid.\(wallet)" }
+
+    /// Opens a `sessions` row (client-generated id) marking this app-session's sign-in. Best-effort; a failure never
+    /// blocks sign-in. The id is persisted per wallet so a later sign-out can close exactly this row.
+    private func openSession(wallet: String) async {
+        let id = UUID().uuidString.lowercased()
+        struct Row: Encodable { let id: String; let wallet: String }
+        let opened: SessionRow? = try? await client.upsert("sessions", Row(id: id, wallet: wallet), onConflict: "id")
+        guard opened != nil else { return }
+        currentSessionRowId = id
+        UserDefaults.standard.set(id, forKey: Self.sessionKey(wallet))
+    }
+
+    /// Stamps `signed_out_at` on the wallet's open session row. Must run while the client is still authed.
+    private func closeSession(wallet: String) async {
+        guard let id = currentSessionRowId ?? UserDefaults.standard.string(forKey: Self.sessionKey(wallet)) else { return }
+        struct Row: Encodable { let id: String; let wallet: String; let signed_out_at: String }
+        let _: SessionRow? = try? await client.upsert("sessions", Row(id: id, wallet: wallet, signed_out_at: Self.iso(Date())), onConflict: "id")
+        currentSessionRowId = nil
+        UserDefaults.standard.removeObject(forKey: Self.sessionKey(wallet))
+    }
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
+    }()
+    private static func iso(_ date: Date) -> String { isoFormatter.string(from: date) }
 
     func loadProfile() async {
         guard let wallet = await client.signedInWallet else { return }

@@ -333,10 +333,15 @@ final class BridgeModel {
             pendingHash = hash.hexString
             phase = .submitting
             _ = try? await env.aurora.submitDeposit(txHash: hash.hexString, depositAddress: deposit, memo: quote.depositMemo)
+            // Bridge fee (USD) = the value the route consumed: input value − output value, when the quote priced both.
+            let bridgeFeeUsd: Double? = {
+                guard let inUsd = quote.amountInUsd.flatMap(Double.init), let outUsd = quote.amountOutUsd.flatMap(Double.init) else { return nil }
+                return max(0, inUsd - outUsd)
+            }()
             ActivityLog.record(ActivityRecord(
-                kind: .send, title: "Bridge \(from.symbol) → \(toToken?.symbol ?? "")",
+                kind: .bridge, title: "Bridge \(from.symbol) → \(toToken?.symbol ?? "")",
                 subtitle: "\(amountText) \(from.symbol) · \(fromChain.name) → \(toChain.name)",
-                hash: hash, section: "wallet", usd: pendingUsd), owner: env.session.address)
+                hash: hash, section: "bridge", usd: pendingUsd, feeUsd: bridgeFeeUsd), owner: env.session.address)
             pollGeneration += 1
             await poll(deposit: deposit, memo: quote.depositMemo, generation: pollGeneration)
         } catch {
