@@ -261,9 +261,12 @@ final class BridgeModel {
         return "\(out) \(to.symbol)"
     }
 
-    /// Slippage the app requests on every quote (basis points). 1% is a safe default for cross-chain settlement.
-    let slippageBps = 100
-    var slippageText: String { "\(NumberStyle.number(Double(slippageBps) / 100, maximumFractionDigits: 2))%" }
+    /// Max slippage the app requests on every quote (basis points), user-adjustable via the slippage sheet. 1% is a
+    /// safe default for cross-chain settlement. Changing it re-quotes, so the minimum-received and fee update at once.
+    var slippageBps = 100 {
+        didSet { guard slippageBps != oldValue else { return }; resetQuote(); refreshQuoteSoon() }
+    }
+    var slippageText: String { NumberStyle.basisPoints(slippageBps) }
 
     /// Total cost of the bridge (USD): input value minus output value — covers Aurora's protocol + withdraw fee, the
     /// route spread and the integrator fee, i.e. the one number a user needs to trust the flow.

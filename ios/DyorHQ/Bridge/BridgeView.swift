@@ -12,6 +12,7 @@ struct BridgeView: View {
     @State private var showSourcePicker = false
     @State private var pickingFromToken = false
     @State private var pickingToToken = false
+    @State private var showSlippage = false
 
     init(env: AppEnvironment) { _model = State(initialValue: BridgeModel(env: env)) }
 
@@ -37,6 +38,7 @@ struct BridgeView: View {
         .sheet(isPresented: $showSourcePicker) { sourceAssetPicker }
         .sheet(isPresented: $pickingFromToken) { tokenPicker(for: model.fromChain, isFrom: true) }
         .sheet(isPresented: $pickingToToken) { tokenPicker(for: model.toChain, isFrom: false) }
+        .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
     }
 
     /// The source-token tap opens the cross-chain, balance-sorted asset picker (which also switches chains); only when
@@ -65,6 +67,7 @@ struct BridgeView: View {
                         .padding(.horizontal, 4)
                 }
 
+                slippageControl
                 summaryCard
                 statusCard
 
@@ -195,6 +198,24 @@ struct BridgeView: View {
     }
 
     // MARK: Summary + status
+
+    /// Always-visible max-slippage control; opens the shared slippage sheet, which re-quotes on change.
+    private var slippageControl: some View {
+        Button { showSlippage = true } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "slider.horizontal.3").foregroundStyle(Color.brand)
+                Text("Max slippage").foregroundStyle(.secondary)
+                Spacer()
+                Text(model.slippageText).fontWeight(.semibold).monospacedDigit().foregroundStyle(.primary)
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .font(.subheadline)
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!model.canEdit)
+    }
 
     @ViewBuilder private var summaryCard: some View {
         if let quote = model.quote {
