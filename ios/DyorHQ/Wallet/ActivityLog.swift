@@ -6,7 +6,7 @@ import Foundation
 /// an explorer link. Persisted per wallet in UserDefaults; only public details are stored, never keys.
 struct ActivityRecord: Codable, Identifiable, Hashable {
     enum Kind: String, Codable, Hashable {
-        case swap, launch, buy, sell, perp, send, moment
+        case swap, launch, buy, sell, perp, send, moment, bridge, deposit, withdraw
 
         var symbol: String {
             switch self {
@@ -17,6 +17,9 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
             case .perp: return "chart.line.uptrend.xyaxis"
             case .send: return "paperplane.fill"
             case .moment: return "camera.aperture"
+            case .bridge: return "point.3.connected.trianglepath.dotted"
+            case .deposit: return "tray.and.arrow.down.fill"
+            case .withdraw: return "tray.and.arrow.up.fill"
             }
         }
     }
@@ -31,8 +34,10 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
     /// when known — what the backend's activity feed and the platform volume are built from.
     var section: String?
     var usd: Double?
+    /// Fee paid for the action in USD, when known (e.g. the bridge spread) — feeds the backend journey's fee totals.
+    var feeUsd: Double?
 
-    init(kind: Kind, title: String, subtitle: String, hash: Data?, time: Date = Date(), section: String? = nil, usd: Double? = nil) {
+    init(kind: Kind, title: String, subtitle: String, hash: Data?, time: Date = Date(), section: String? = nil, usd: Double? = nil, feeUsd: Double? = nil) {
         self.kind = kind
         self.title = title
         self.subtitle = subtitle
@@ -40,6 +45,7 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
         self.time = time
         self.section = section ?? Self.defaultSection(kind)
         self.usd = usd
+        self.feeUsd = feeUsd
     }
 
     private static func defaultSection(_ kind: Kind) -> String {
@@ -48,7 +54,8 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
         case .launch, .buy, .sell: return "launch"
         case .perp: return "perps"
         case .moment: return "moments"
-        case .send: return "wallet"
+        case .bridge: return "bridge"
+        case .send, .deposit, .withdraw: return "wallet"
         }
     }
 

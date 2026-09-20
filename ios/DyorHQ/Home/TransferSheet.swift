@@ -96,7 +96,7 @@ struct TransferSheet: View {
                                   build: { try await plan() },
                                   onDone: { dismiss() },
                                   onCompleted: { hash in
-                                      ActivityLog.record(ActivityRecord(kind: .send, title: direction == .toPerps ? "Transferred to Perps" : "Withdrawn to Spot", subtitle: "\(NumberStyle.units(raw, decimals: 6)) AUSD", hash: hash, section: "perps", usd: Amount.units(raw, decimals: 6)), owner: session.address)
+                                      ActivityLog.record(ActivityRecord(kind: direction == .toPerps ? .deposit : .withdraw, title: direction == .toPerps ? "Transferred to Perps" : "Withdrawn to Spot", subtitle: "\(NumberStyle.units(raw, decimals: 6)) AUSD", hash: hash, section: "perps", usd: Amount.units(raw, decimals: 6)), owner: session.address)
                                   }) {
                     DetailRow("Amount", "\(NumberStyle.units(raw, decimals: 6)) AUSD")
                     if direction == .toPerps, needsSwap, let quote {

@@ -27,6 +27,12 @@ writes require the wallet's session.
 | Social | `posts`, `comments`, `reactions`, `referral_codes`, `referrals`, `leaderboard` |
 | Alerts/push | `device_tokens`, `alerts` |
 | Launch index | `launches` |
+| App sync (mig. 11) | `activity` (every action: kind, section, USD size + fee, tx hash), `notifications` |
+| Journey (mig. 12–13) | `user_journey` (view — per-wallet spot/perps/launchpad/moments/bridge/deposits/withdrawals rollup, `security_invoker`), `platform_journey()` (platform totals by domain) |
+
+`activity.kind` ∈ swap, buy, sell, launch, perp, moment, **bridge**, **deposit**, **withdraw**, send; `activity.section`
+∈ spot, perps, launch(pad), moments, bridge, wallet. The whole user journey — username (`profiles.handle`), wallet,
+per-domain volume, deposits/withdrawals, notifications and activities — is stitched by the `user_journey` view.
 
 The migrations are applied in the live project; export with `supabase db pull` to snapshot them into `migrations/`.
 

@@ -280,7 +280,15 @@ struct SendSheet: View {
             }
             .sheet(isPresented: $showConfirm) {
                 if let to = recipientAddress, let raw = rawAmount {
-                    ConfirmationSheet(title: "Send \(token.symbol)", confirmTitle: "Send", build: { [.call(transfer(to: to, amount: raw), label: "Send \(token.symbol)")] }, onDone: { dismiss() }) {
+                    ConfirmationSheet(title: "Send \(token.symbol)", confirmTitle: "Send", build: { [.call(transfer(to: to, amount: raw), label: "Send \(token.symbol)")] }, onDone: { dismiss() },
+                                      onCompleted: { hash in
+                        // A send out of the wallet is a withdrawal in the journey. USD is exact for the USD stables the
+                        // send picker offers; left unknown otherwise rather than guessed.
+                        let stable = ["USDC", "USDT0", "USDT", "AUSD", "USDe", "USD1", "mUSD"].contains(token.symbol)
+                        ActivityLog.record(ActivityRecord(kind: .withdraw, title: "Sent \(token.symbol)",
+                            subtitle: "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol) → \(to.short)",
+                            hash: hash, section: "wallet", usd: stable ? Amount.units(raw, decimals: token.decimals) : nil), owner: session.address)
+                    }) {
                         DetailRow("To", to.short)
                         DetailRow("Amount", "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol)")
                         DetailRow("Network", "Monad")
