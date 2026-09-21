@@ -89,6 +89,8 @@ struct DeleteAccountView: View {
                             NavigationLink { WalletExportView() } label: { Label("Export Wallet First", systemImage: "key.horizontal") }
                         case .imported:
                             Text("This wallet's private key is removed from this device. Keep its recovery phrase or key somewhere safe; it is the only way back to the funds.")
+                        case .emailPassword:
+                            Text("This wallet is recreated from your email and password. Removing it deletes the device copy; keep your email and password — there is no reset, and they are the only way back to the funds.")
                         case .meraPasskey:
                             Text("Nothing about a passkey wallet is stored, so the same passkey recreates it later. To remove the passkey itself, delete it in Settings › Passwords.")
                         case .watchOnly:

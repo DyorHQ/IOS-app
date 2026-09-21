@@ -13,7 +13,7 @@ struct OnboardingView: View {
                 .navigationDestination(for: OnboardingStep.self) { step in
                     switch step {
                     case .signIn: SignInView(path: $path)
-                    case .email: EmailSignInView(path: $path)
+                    case .email: EmailPasswordView(path: $path)
                     case .watch: WatchAddressView(path: $path)
                     case .importWallet: ImportWalletView()
                     }
@@ -119,7 +119,6 @@ struct SignInView: View {
                         .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
                         .listRowBackground(Color.clear)
                     MethodButton(title: "Continue with Google", symbol: "g.circle", busy: busy == "google") { run("google") { try await session.signInWithGoogle() } }
-                    MethodButton(title: "Continue with Email", symbol: "envelope", busy: false) { path.append(.email) }
                     if session.hasMera {
                         MethodButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
                         MethodButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
@@ -137,6 +136,12 @@ struct SignInView: View {
                 }
             } footer: {
                 if let error { InlineError(message: error) }
+            }
+
+            Section {
+                MethodButton(title: "Continue with Email", symbol: "envelope", busy: false) { path.append(.email) }
+            } footer: {
+                Text("Sign up or log in with an email and password. Your wallet is created on this device from them — no code is sent.")
             }
 
             Section {
@@ -184,53 +189,104 @@ private struct MethodButton: View {
     }
 }
 
-struct EmailSignInView: View {
+/// Email + password onboarding. Sign up **verifies the email with a one-time code** (Privy), then sets a strong
+/// password that deterministically becomes the wallet; log in re-derives the same wallet — no code — but only when the
+/// email is a verified account matching the derived address. See `PasswordWallet` and `Session`.
+struct EmailPasswordView: View {
     @Environment(Session.self) private var session
+    @Environment(AppEnvironment.self) private var env
     @Binding var path: [OnboardingStep]
+
+    enum Mode: String, CaseIterable, Identifiable { case signUp = "Sign Up", logIn = "Log In"; var id: String { rawValue } }
+    enum Stage { case form, otp }
+    @State private var mode: Mode = .signUp
+    @State private var stage: Stage = .form
     @State private var email = ""
+    @State private var password = ""
+    @State private var confirm = ""
     @State private var code = ""
-    @State private var sent = false
+    @State private var acknowledged = false
     @State private var busy = false
     @State private var error: String?
     @FocusState private var focus: Field?
 
-    private enum Field { case email, code }
+    private enum Field { case email, password, confirm, code }
 
     private var emailValid: Bool { email.contains("@") && email.contains(".") && !email.hasSuffix(".") }
+    private var rejection: String? { PasswordStrength.rejection(password, email: email) }
+    private var otpStage: Bool { mode == .signUp && stage == .otp }
+    private var formValid: Bool {
+        guard emailValid else { return false }
+        switch mode {
+        case .signUp: return rejection == nil && !confirm.isEmpty && password == confirm && acknowledged
+        case .logIn: return !password.isEmpty
+        }
+    }
 
     var body: some View {
         Form {
-            Section {
-                TextField("Email", text: $email)
-                    .textContentType(.emailAddress)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .focused($focus, equals: .email)
-                    .disabled(sent)
-                    .submitLabel(.send)
-                    .onSubmit { if emailValid { send() } }
-            } header: {
-                Text(sent ? "Signed in with" : "Email")
-            } footer: {
-                if !sent { Text("We will send a six-digit code to this address.") }
-            }
-
-            if sent {
+            if !otpStage {
                 Section {
-                    TextField("Six-digit code", text: $code)
-                        .textContentType(.oneTimeCode)
-                        .keyboardType(.numberPad)
-                        .font(.title2.monospacedDigit())
-                        .focused($focus, equals: .code)
+                    Picker("Mode", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
+                        .pickerStyle(.segmented).labelsHidden()
+                }
+                .listRowBackground(Color.clear)
+
+                Section {
+                    TextField("Email", text: $email)
+                        .textContentType(.emailAddress).keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .focused($focus, equals: .email)
+                    PasswordField(title: "Password", text: $password).focused($focus, equals: .password)
+                    if mode == .signUp {
+                        PasswordField(title: "Confirm password", text: $confirm).focused($focus, equals: .confirm)
+                    }
+                } footer: {
+                    if mode == .logIn {
+                        Text("Log in with the email and password you signed up with. Your wallet is recreated on this device — no code needed.")
+                    } else if !password.isEmpty, !confirm.isEmpty, password != confirm {
+                        Text("Passwords don’t match.").foregroundStyle(Color.negative)
+                    }
+                }
+
+                if mode == .signUp {
+                    Section {
+                        StrengthMeter(score: PasswordStrength.score(password))
+                        if !password.isEmpty, let rejection {
+                            Label(rejection, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention)
+                        }
+                    } header: { Text("Password strength") }
+
+                    Section {
+                        Label {
+                            Text("This password **is** your wallet. We can’t reset it or send a recovery email. If you lose it, you lose access to your funds — write it down or save it in your password manager.")
+                        } icon: {
+                            Image(systemName: "key.horizontal.fill").foregroundStyle(Color.attention)
+                        }
+                        .font(.footnote)
+                        Toggle("I understand my password is the only way back to my wallet", isOn: $acknowledged).font(.footnote)
+                    }
+                }
+            } else {
+                Section {
+                    TextField("6-digit code", text: $code)
+                        .textContentType(.oneTimeCode).keyboardType(.numberPad)
+                        .font(.title2.monospacedDigit()).focused($focus, equals: .code)
                         .onChange(of: code) { _, value in
                             code = String(value.filter(\.isNumber).prefix(6))
-                            if code.count == 6 { verify() }
+                            if code.count == 6 { completeSignUp() }
                         }
                 } header: {
-                    Text("Code")
+                    Text("Verify your email")
                 } footer: {
-                    Button("Send a New Code") { send() }.font(.footnote).disabled(busy)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Enter the code we emailed to \(email). This proves the email is yours — your wallet is created after you verify, so no fake or unowned emails can register.")
+                        HStack(spacing: 16) {
+                            Button("Send a new code") { startSignUp() }.disabled(busy)
+                            Button("Change details") { stage = .form; code = "" }.disabled(busy)
+                        }
+                        .font(.footnote)
+                    }
                 }
             }
 
@@ -238,43 +294,130 @@ struct EmailSignInView: View {
                 Section { InlineError(message: error) }.listRowBackground(Color.clear)
             }
         }
-        .navigationTitle("Continue with Email")
+        .navigationTitle(otpStage ? "Verify Email" : "Email & Password")
         .navigationBarTitleDisplayMode(.inline)
+        .disabled(busy)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                if busy {
-                    ProgressView()
-                } else if sent {
-                    Button("Verify") { verify() }.disabled(code.count != 6)
-                } else {
-                    Button("Send Code") { send() }.disabled(!emailValid)
-                }
+                if busy { ProgressView() }
+                else if mode == .logIn { Button("Log In") { logIn() }.disabled(!formValid) }
+                else if stage == .form { Button("Continue") { startSignUp() }.disabled(!formValid) }
+                else { Button("Verify") { completeSignUp() }.disabled(code.count != 6) }
             }
         }
         .onAppear { focus = .email }
+        .onChange(of: mode) { _, _ in stage = .form; code = ""; error = nil }
     }
 
-    private func send() {
-        busy = true
-        error = nil
+    // MARK: Actions
+
+    /// Send the sign-up OTP, then move to the verify step.
+    private func startSignUp() {
+        focus = nil; busy = true; error = nil
         Task {
-            do {
-                try await session.sendEmailCode(to: email.trimmingCharacters(in: .whitespaces))
-                sent = true
-                code = ""
-                focus = .code
-            } catch { self.error = describe(error) }
+            do { try await session.sendSignUpCode(to: email); stage = .otp; code = ""; focus = .code }
+            catch { self.error = describe(error) }
             busy = false
         }
     }
 
-    private func verify() {
+    /// Verify the OTP, then create the wallet and register the verified email → address binding.
+    private func completeSignUp() {
         guard code.count == 6, !busy else { return }
-        busy = true
-        error = nil
+        focus = nil; busy = true; error = nil
         Task {
-            do { try await session.signIn(email: email.trimmingCharacters(in: .whitespaces), code: code) } catch { self.error = describe(error) }
+            do {
+                try await session.verifyEmailForSignUp(email: email, code: code)
+                try await session.signUpWithPassword(email: email, password: password, register: registerBinding)
+            } catch {
+                self.error = describe(error)
+                code = ""
+            }
             busy = false
+        }
+    }
+
+    private func logIn() {
+        focus = nil; busy = true; error = nil
+        Task {
+            do { try await session.logInWithPassword(email: email, password: password, verify: verifyBinding) }
+            catch { self.error = describe(error) }
+            busy = false
+        }
+    }
+
+    // MARK: Backend binding (email_accounts)
+
+    /// Bind the verified email to the derived address. Fails if the email is already registered to a different wallet.
+    private func registerBinding(_ email: String, _ address: Address) async throws {
+        if !env.social.isSignedIn { await env.social.signIn(session: session) }
+        let wallet = address.checksummed.lowercased()
+        struct Row: Encodable { let email: String; let wallet: String }
+        _ = try? await env.social.client.upsertRows("email_accounts", [Row(email: email, wallet: wallet)], onConflict: "email")
+        // Authoritative check: the binding must now resolve to THIS wallet (RLS blocks stealing a taken email).
+        let bound: Bool = try await env.social.client.rpc("email_account_matches", ["p_email": email, "p_wallet": wallet], authed: false)
+        if !bound { throw EmailAuthError.emailTaken }
+    }
+
+    /// Login gate: does this email map to exactly the derived address?
+    private func verifyBinding(_ email: String, _ address: Address) async throws -> Bool {
+        try await env.social.client.rpc("email_account_matches",
+                                        ["p_email": email, "p_wallet": address.checksummed.lowercased()], authed: false)
+    }
+}
+
+enum EmailAuthError: LocalizedError {
+    case emailTaken
+    var errorDescription: String? {
+        "That email is already registered to a different wallet. Log in with the password you used before, or use a different email."
+    }
+}
+
+/// A password field with a reveal toggle — reveal matters here because a mistyped password derives a different
+/// wallet, and iOS's password content type lets the user save/autofill it (so they don't forget it).
+private struct PasswordField: View {
+    let title: String
+    @Binding var text: String
+    @State private var reveal = false
+
+    var body: some View {
+        HStack {
+            Group {
+                if reveal { TextField(title, text: $text) } else { SecureField(title, text: $text) }
+            }
+            .textContentType(.password)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            Button { reveal.toggle() } label: {
+                Image(systemName: reveal ? "eye.slash" : "eye").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(reveal ? "Hide password" : "Show password")
+        }
+    }
+}
+
+/// Four-segment strength bar for the sign-up password.
+private struct StrengthMeter: View {
+    let score: Int // 0…4
+
+    private var tint: Color {
+        switch score { case 0, 1: return .negative; case 2: return .attention; default: return .positive }
+    }
+    private var label: String {
+        switch score { case 0: return " "; case 1: return "Weak"; case 2: return "Fair"; case 3: return "Good"; default: return "Strong" }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                ForEach(0..<4, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(i < score ? tint : Color(.tertiarySystemFill))
+                        .frame(height: 5)
+                }
+            }
+            Text(label).font(.caption2).foregroundStyle(tint)
         }
     }
 }

@@ -16,13 +16,14 @@ final class Session {
     }
 
     enum Method: String, Codable, Equatable {
-        case apple, google, email, passkey, meraPasskey, imported, watchOnly
+        case apple, google, email, emailPassword, passkey, meraPasskey, imported, watchOnly
 
         var title: String {
             switch self {
             case .apple: return "Apple"
             case .google: return "Google"
             case .email: return "Email"
+            case .emailPassword: return "Email & Password"
             case .passkey: return "Passkey (Privy)"
             case .meraPasskey: return "Passkey"
             case .imported: return "Imported wallet"
@@ -47,6 +48,9 @@ final class Session {
     /// The Mera passkey account layer: a wallet derived from the passkey's PRF output, nothing stored.
     let mera: MeraSession
     private var observing = false
+    /// While true, a Privy `.authenticated` event is NOT adopted as the signer — used to verify an email at
+    /// sign-up (Privy OTP) without letting Privy's embedded wallet take over from the deterministic one.
+    private var suppressPrivyAdoption = false
 
     var account: Account? { if case .signedIn(let account) = state { return account } else { return nil } }
     var address: Address? { account?.address }
@@ -84,6 +88,7 @@ final class Session {
             wallet = nil
             if !loadStoredSession() { state = .signedOut }
         case .authenticated(let user):
+            if suppressPrivyAdoption { return } // email verification only — don't adopt the Privy wallet
             await adopt(user)
         }
     }
@@ -100,7 +105,11 @@ final class Session {
         }
         if let account = ImportedWalletStore.loadAccount() {
             wallet = LocalWallet(account: account)
-            state = .signedIn(Account(address: account.address, method: .imported, label: nil))
+            if let meta = LocalWalletMeta.load(), meta.kind == .emailPassword {
+                state = .signedIn(Account(address: account.address, method: .emailPassword, label: meta.email))
+            } else {
+                state = .signedIn(Account(address: account.address, method: .imported, label: nil))
+            }
             return true
         }
         if let watched = WatchOnlyStore.load() {
@@ -216,6 +225,67 @@ final class Session {
         state = .signedIn(Account(address: account.address, method: .imported, label: nil))
     }
 
+    // MARK: Email + password (deterministic device-local wallet — see PasswordWallet)
+
+    /// Send the sign-up OTP to `email` via Privy (used only to prove the address is real).
+    func sendSignUpCode(to email: String) async throws {
+        try await requirePrivy().email.sendCode(to: email.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Verify the sign-up OTP with Privy, WITHOUT letting Privy become the signer: adoption is suppressed and the
+    /// Privy session is dropped immediately. Proves the user owns the email before their wallet/account is created.
+    func verifyEmailForSignUp(email: String, code: String) async throws {
+        let privy = try requirePrivy()
+        suppressPrivyAdoption = true
+        defer { suppressPrivyAdoption = false }
+        _ = try await privy.email.loginWithCode(code, sentTo: email.trimmingCharacters(in: .whitespacesAndNewlines))
+        if case .authenticated(let user) = await privy.getAuthState() { await user.logout() }
+    }
+
+    /// Derive the deterministic wallet off the main actor. Returns the account and the normalized email.
+    private func derivePassword(email: String, password: String) async -> (Secp256k1Account, String)? {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let account = await Task.detached(priority: .userInitiated) {
+            PasswordWallet.deriveAccount(email: normalizedEmail, password: password)
+        }.value
+        return account.map { ($0, normalizedEmail) }
+    }
+
+    /// Store the derived key (Keychain, like an import) and make it the signer, superseding any other session.
+    private func commitPasswordWallet(_ account: Secp256k1Account, email: String) async {
+        ImportedWalletStore.save(privateKey: account.privateKey) // clears the local-wallet tag…
+        LocalWalletMeta.setEmailPassword(email: email)           // …then tags it as an email+password wallet
+        WatchOnlyStore.clear()
+        mera.forget()
+        if let privy, case .authenticated(let user) = await privy.getAuthState() { await user.logout() }
+        wallet = LocalWallet(account: account)
+        state = .signedIn(Account(address: account.address, method: .emailPassword, label: email))
+    }
+
+    /// Sign up: the email must already be OTP-verified (`verifyEmailForSignUp`). Derive the wallet, sign in, then
+    /// bind the verified email to the derived address via `register`. If registration fails (e.g. the email is already
+    /// bound to a different wallet), the sign-in is rolled back so no half-created account is left behind.
+    func signUpWithPassword(email: String, password: String,
+                            register: (_ email: String, _ address: Address) async throws -> Void) async throws {
+        guard let (account, normalizedEmail) = await derivePassword(email: email, password: password) else {
+            throw SessionError.passwordDerivationFailed
+        }
+        await commitPasswordWallet(account, email: normalizedEmail)
+        do { try await register(normalizedEmail, account.address) }
+        catch { await signOut(); throw error }
+    }
+
+    /// Log in (no OTP): derive the wallet, then sign in ONLY if `verify` confirms the email is a verified account
+    /// bound to exactly this derived address. A wrong password derives a different address and fails verification.
+    func logInWithPassword(email: String, password: String,
+                           verify: (_ email: String, _ address: Address) async throws -> Bool) async throws {
+        guard let (account, normalizedEmail) = await derivePassword(email: email, password: password) else {
+            throw SessionError.passwordDerivationFailed
+        }
+        guard try await verify(normalizedEmail, account.address) else { throw SessionError.emailNotVerified }
+        await commitPasswordWallet(account, email: normalizedEmail)
+    }
+
     func signOut() async {
         WatchOnlyStore.clear()
         ImportedWalletStore.clear()
@@ -267,12 +337,16 @@ enum SessionError: LocalizedError {
     case privyNotConfigured
     case invalidWalletAddress
     case readOnly
+    case passwordDerivationFailed
+    case emailNotVerified
 
     var errorDescription: String? {
         switch self {
         case .privyNotConfigured: return "Sign-in is not set up in this build. Add the Privy keys to Secrets.xcconfig."
         case .invalidWalletAddress: return "The wallet address returned by Privy is not valid."
         case .readOnly: return "You are watching this address. Sign in to trade."
+        case .passwordDerivationFailed: return "Couldn't create your wallet from that email and password. Please try again."
+        case .emailNotVerified: return "We couldn't find a verified account for that email and password. If you're new, tap Sign Up to verify your email first."
         }
     }
 }

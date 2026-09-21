@@ -10,6 +10,14 @@ session automatically as soon as a wallet that can sign is in use, so nothing be
 | --- | --- | --- | --- |
 | `profiles` | handle, display name, bio, avatar URL | **auto-created on sign-in** (`SocialSession.ensureProfile`, on every sign-in/restore) so creating an account, importing a PK, or using a passkey all seed a profile; the user edits it on the Social profile screen | yes (read) |
 | `sessions` | one row per app sign-in — `signed_in_at`, `signed_out_at` | `SocialSession.openSession` on sign-in, `closeSession` on sign-out | – (analytics) |
+| `email_accounts` (mig. 15) | one binding per **OTP-verified** email → the wallet address it derived | `EmailPasswordView` after Privy email-OTP sign-up (authenticated write) | gates login |
+
+**Email + password (OTP on sign-up, none on login):** Privy sends a one-time code at sign-up to prove the email is
+owned (adoption suppressed so Privy's own wallet never takes over); only then is the deterministic wallet created and
+the email → address binding written. **Log in re-derives the wallet with no code, but signs in only when
+`email_account_matches(email, address)` is true** — so a fake/unverified email can't get a working account, and a
+wrong password (which derives a different address) is rejected instead of silently opening a new wallet. Requires
+**Email login enabled in the Privy dashboard** (same place as Apple/Google).
 | `activity` | every action with kind, section, title, tx hash, USD size, USD fee, time | `ActivityLog.record` → `BackendSync` (swaps `spot`, curve buys/sells + launches `launch`, perps orders `perps`, Moment publish/collect/claim `moments`, bridge `bridge`, Perps funding `deposit`/`withdraw`, external sends `withdraw`) | feeds Portfolio history + the journey rollup |
 | `strategies` | delta-neutral, market-making and copied-trader records (JSON) | `DNStore` / `MMStore` / `CopyStore` saves | yes |
 | `notifications` | the in-app notification center | `NotificationStore.save` | yes |

@@ -21,6 +21,7 @@ enum ImportedWalletStore {
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         add[kSecAttrSynchronizable as String] = false // explicit: never sync the key to iCloud Keychain
         SecItemAdd(add as CFDictionary, nil)
+        LocalWalletMeta.clear() // default: a plain imported key; a password sign-in re-tags it right after saving
     }
 
     static func loadAccount() -> Secp256k1Account? {
@@ -37,6 +38,7 @@ enum ImportedWalletStore {
             kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
+        LocalWalletMeta.clear()
     }
 
     private static func loadKey() -> Data? {
@@ -50,5 +52,31 @@ enum ImportedWalletStore {
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
         return data
+    }
+}
+
+/// Tags how the device-local key in `ImportedWalletStore` was created, so the session restores it with the right
+/// method and label after a relaunch. An imported key has no tag (`.imported`); an email + password key records the
+/// email so the account reads "Email & Password (you@example.com)" rather than "Imported wallet".
+enum LocalWalletMeta {
+    enum Kind: String { case emailPassword }
+    private static let kindKey = "localWallet.kind.v1"
+    private static let emailKey = "localWallet.email.v1"
+
+    struct Meta { let kind: Kind; let email: String? }
+
+    static func setEmailPassword(email: String) {
+        UserDefaults.standard.set(Kind.emailPassword.rawValue, forKey: kindKey)
+        UserDefaults.standard.set(email, forKey: emailKey)
+    }
+
+    static func load() -> Meta? {
+        guard let raw = UserDefaults.standard.string(forKey: kindKey), let kind = Kind(rawValue: raw) else { return nil }
+        return Meta(kind: kind, email: UserDefaults.standard.string(forKey: emailKey))
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: kindKey)
+        UserDefaults.standard.removeObject(forKey: emailKey)
     }
 }
