@@ -286,6 +286,46 @@ final class Session {
         await commitPasswordWallet(account, email: normalizedEmail)
     }
 
+    // MARK: Password reset (re-verify the email, then re-bind it to a new wallet)
+
+    /// Verify a fresh email OTP and RETURN the Privy access token, captured before the Privy session is dropped.
+    /// Adoption stays suppressed so Privy's own wallet never becomes the signer. The token later proves to the
+    /// `email-rebind` function that the caller owns this email (used only for the forgot-password flow).
+    func verifyEmailCapturingToken(email: String, code: String) async throws -> String {
+        let privy = try requirePrivy()
+        suppressPrivyAdoption = true
+        defer { suppressPrivyAdoption = false }
+        _ = try await privy.email.loginWithCode(code, sentTo: email.trimmingCharacters(in: .whitespacesAndNewlines))
+        let token = try await privyAccessToken()
+        if case .authenticated(let user) = await privy.getAuthState() { await user.logout() }
+        guard let token else { throw SessionError.emailNotVerified }
+        return token
+    }
+
+    /// The canonical challenge the new wallet signs to prove control of itself during a re-bind. The `email-rebind`
+    /// function reparses these lines, so the format must stay in lock-step with it.
+    static func rebindMessage(email: String, address: Address) -> String {
+        let issued = ISO8601DateFormatter().string(from: Date())
+        return "DyorHQ Email Rebind\n\nEmail: \(email)\nAddress: \(address.checksummed.lowercased())\nIssued At: \(issued)"
+    }
+
+    /// Forgot-password: the email was just re-verified (`token`). Derive the NEW wallet from the new password, sign a
+    /// challenge to prove control of it, and let `rebind` push both proofs to the server (which rewrites the email →
+    /// address binding with the service role). Only on success does the new wallet become the signer — nothing is
+    /// committed if the re-bind is rejected, so a failed reset leaves the old session untouched.
+    func rebindEmailPassword(email: String, password: String, token: String,
+                             rebind: (_ token: String, _ message: String, _ signature: String) async throws -> Void) async throws {
+        guard let (account, normalizedEmail) = await derivePassword(email: email, password: password) else {
+            throw SessionError.passwordDerivationFailed
+        }
+        let message = Self.rebindMessage(email: normalizedEmail, address: account.address)
+        let signature: String
+        do { signature = try account.signMessage(Data(message.utf8)).hexString }
+        catch { throw SessionError.passwordDerivationFailed }
+        try await rebind(token, message, signature)
+        await commitPasswordWallet(account, email: normalizedEmail)
+    }
+
     func signOut() async {
         WatchOnlyStore.clear()
         ImportedWalletStore.clear()

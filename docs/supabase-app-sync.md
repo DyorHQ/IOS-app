@@ -18,6 +18,12 @@ the email → address binding written. **Log in re-derives the wallet with no co
 `email_account_matches(email, address)` is true** — so a fake/unverified email can't get a working account, and a
 wrong password (which derives a different address) is rejected instead of silently opening a new wallet. Requires
 **Email login enabled in the Privy dashboard** (same place as Apple/Google).
+
+**Forgot password (re-bind on re-verification):** "Forgot password?" on the Log In screen re-verifies the email by OTP,
+takes a new password (→ a new wallet), and rewrites the binding through the `email-rebind` function — so a user who
+loses their password can recover the *email* onto a new wallet (the old wallet's funds still need the old password;
+this moves the login identity, not the coins). The re-bind is the only way to overwrite a taken email, and only with
+both proofs (OTP token + new-wallet signature). Needs `PRIVY_APP_SECRET` set on the function.
 | `activity` | every action with kind, section, title, tx hash, USD size, USD fee, time | `ActivityLog.record` → `BackendSync` (swaps `spot`, curve buys/sells + launches `launch`, perps orders `perps`, Moment publish/collect/claim `moments`, bridge `bridge`, Perps funding `deposit`/`withdraw`, external sends `withdraw`) | feeds Portfolio history + the journey rollup |
 | `strategies` | delta-neutral, market-making and copied-trader records (JSON) | `DNStore` / `MMStore` / `CopyStore` saves | yes |
 | `notifications` | the in-app notification center | `NotificationStore.save` | yes |
@@ -60,6 +66,11 @@ Account deletion removes the `profiles` row; every table above cascades from it.
 
 - `wallet-auth` — signature → session JWT.
 - `delete-account` — deletes the Privy user for account deletion (needs `PRIVY_APP_SECRET`).
+- `email-rebind` — the forgot-password path: moves an email to a NEW password/wallet. Takes two proofs — the Privy
+  access token from a fresh email OTP (proves the email) and an EIP-191 signature from the new wallet (proves the
+  key) — then overwrites the `email_accounts` binding with the service role (the only path past the owner RLS). Deploy
+  `--no-verify-jwt` (the bearer is a Privy token); needs `PRIVY_APP_SECRET`. Inert until that secret is set + Email is
+  enabled in Privy.
 - Next: `pin-media` (IPFS pinning for Moment media, needs a Pinata key) and `opensea-refresh` (metadata refresh
   after a Moment graduates, needs an OpenSea API key). See `ios/docs/moments/NFT-OPENSEA-PLAN.md`.
 
