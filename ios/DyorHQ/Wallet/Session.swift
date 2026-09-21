@@ -235,16 +235,6 @@ final class Session {
         try await requirePrivy().email.sendCode(to: email.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Verify the sign-up OTP with Privy, WITHOUT letting Privy become the signer: adoption is suppressed and the
-    /// Privy session is dropped immediately. Proves the user owns the email before their wallet/account is created.
-    func verifyEmailForSignUp(email: String, code: String) async throws {
-        let privy = try requirePrivy()
-        suppressPrivyAdoption = true
-        defer { suppressPrivyAdoption = false }
-        _ = try await privy.email.loginWithCode(code, sentTo: email.trimmingCharacters(in: .whitespacesAndNewlines))
-        if case .authenticated(let user) = await privy.getAuthState() { await user.logout() }
-    }
-
     /// Derive the deterministic wallet off the main actor. Returns the account and the normalized email.
     private func derivePassword(email: String, password: String) async -> (Secp256k1Account, String)? {
         let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -265,19 +255,6 @@ final class Session {
         state = .signedIn(Account(address: account.address, method: .emailPassword, label: email))
     }
 
-    /// Sign up: the email must already be OTP-verified (`verifyEmailForSignUp`). Derive the wallet, sign in, then
-    /// bind the verified email to the derived address via `register`. If registration fails (e.g. the email is already
-    /// bound to a different wallet), the sign-in is rolled back so no half-created account is left behind.
-    func signUpWithPassword(email: String, password: String,
-                            register: (_ email: String, _ address: Address) async throws -> Void) async throws {
-        guard let (account, normalizedEmail) = await derivePassword(email: email, password: password) else {
-            throw SessionError.passwordDerivationFailed
-        }
-        await commitPasswordWallet(account, email: normalizedEmail)
-        do { try await register(normalizedEmail, account.address) }
-        catch { await signOut(); throw error }
-    }
-
     /// Log in (no OTP): derive the wallet, then sign in ONLY if `verify` confirms the email is a verified account
     /// bound to exactly this derived address. A wrong password derives a different address and fails verification.
     func logInWithPassword(email: String, password: String,
@@ -289,11 +266,12 @@ final class Session {
         await commitPasswordWallet(account, email: normalizedEmail)
     }
 
-    // MARK: Password reset (re-verify the email, then re-bind it to a new wallet)
+    // MARK: Email OTP + server-attested binding (shared by sign-up and forgot-password)
 
     /// Verify a fresh email OTP and RETURN the Privy access token, captured before the Privy session is dropped.
-    /// Adoption stays suppressed so Privy's own wallet never becomes the signer. The token later proves to the
-    /// `email-rebind` function that the caller owns this email (used only for the forgot-password flow).
+    /// Adoption stays suppressed so Privy's own wallet never becomes the signer. The token is the server's proof that
+    /// the caller owns this email — the `email-rebind` function verifies it before writing the binding, so the
+    /// OTP requirement is enforced on the backend, not just in this app. Used by both sign-up and forgot-password.
     func verifyEmailCapturingToken(email: String, code: String) async throws -> String {
         let privy = try requirePrivy()
         suppressPrivyAdoption = true
@@ -305,27 +283,28 @@ final class Session {
         return token
     }
 
-    /// The canonical challenge the new wallet signs to prove control of itself during a re-bind. The `email-rebind`
-    /// function reparses these lines, so the format must stay in lock-step with it.
-    static func rebindMessage(email: String, address: Address) -> String {
+    /// The canonical challenge the wallet signs to prove control of itself during a bind. The `email-rebind` function
+    /// reparses these lines, so the format must stay in lock-step with it.
+    static func bindChallenge(email: String, address: Address) -> String {
         let issued = ISO8601DateFormatter().string(from: Date())
         return "DyorHQ Email Rebind\n\nEmail: \(email)\nAddress: \(address.checksummed.lowercased())\nIssued At: \(issued)"
     }
 
-    /// Forgot-password: the email was just re-verified (`token`). Derive the NEW wallet from the new password, sign a
-    /// challenge to prove control of it, and let `rebind` push both proofs to the server (which rewrites the email →
-    /// address binding with the service role). Only on success does the new wallet become the signer — nothing is
-    /// committed if the re-bind is rejected, so a failed reset leaves the old session untouched.
-    func rebindEmailPassword(email: String, password: String, token: String,
-                             rebind: (_ token: String, _ message: String, _ signature: String) async throws -> Void) async throws {
+    /// Bind (or re-bind) the OTP-verified email to the wallet its password derives — the one write path for both
+    /// sign-up and forgot-password. Derive the wallet, sign a challenge to prove control of it, and let `bind` push
+    /// both proofs (the Privy `token` + the signature) to the server, which writes the binding with the service role
+    /// after re-verifying them. Only on success does the wallet become the signer — nothing is committed if the server
+    /// rejects the proofs, so a failed attempt leaves any existing session untouched.
+    func bindEmailPassword(email: String, password: String, token: String,
+                           bind: (_ token: String, _ message: String, _ signature: String) async throws -> Void) async throws {
         guard let (account, normalizedEmail) = await derivePassword(email: email, password: password) else {
             throw SessionError.passwordDerivationFailed
         }
-        let message = Self.rebindMessage(email: normalizedEmail, address: account.address)
+        let message = Self.bindChallenge(email: normalizedEmail, address: account.address)
         let signature: String
         do { signature = try account.signMessage(Data(message.utf8)).hexString }
         catch { throw SessionError.passwordDerivationFailed }
-        try await rebind(token, message, signature)
+        try await bind(token, message, signature)
         await commitPasswordWallet(account, email: normalizedEmail)
     }
 

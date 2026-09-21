@@ -522,22 +522,6 @@ struct EmailPasswordView: View {
         }
     }
 
-    /// Verify the OTP, then create the wallet and register the verified email → address binding.
-    private func completeSignUp() {
-        guard code.count == 6, !busy else { return }
-        focus = nil; busy = true; error = nil
-        Task {
-            do {
-                try await session.verifyEmailForSignUp(email: email, code: code)
-                try await session.signUpWithPassword(email: email, password: password, register: registerBinding)
-            } catch {
-                self.error = describe(error)
-                code = ""
-            }
-            busy = false
-        }
-    }
-
     private func logIn() {
         focus = nil; busy = true; error = nil
         Task {
@@ -558,18 +542,16 @@ struct EmailPasswordView: View {
         reset = false; stage = .form; code = ""; error = nil
     }
 
-    /// The OTP step finishes either a sign-up or a password reset.
-    private func completeVerification() { reset ? completeReset() : completeSignUp() }
-
-    /// Verify the OTP, then move the email to the new password's wallet through the `email-rebind` function. Nothing is
-    /// committed until the server accepts both proofs, so a failed reset leaves the current session untouched.
-    private func completeReset() {
+    /// Verify the email OTP, then bind it to the wallet the password derives — server-side, through the `email-rebind`
+    /// function. Both sign-up and forgot-password land here; the only difference is copy. Nothing is committed until the
+    /// server re-verifies both proofs, so a failed attempt leaves any current session untouched.
+    private func completeVerification() {
         guard code.count == 6, !busy else { return }
         focus = nil; busy = true; error = nil
         Task {
             do {
                 let token = try await session.verifyEmailCapturingToken(email: email, code: code)
-                try await session.rebindEmailPassword(email: email, password: password, token: token, rebind: rebindBinding)
+                try await session.bindEmailPassword(email: email, password: password, token: token, bind: bindViaServer)
             } catch {
                 self.error = describe(error)
                 code = ""
@@ -578,12 +560,14 @@ struct EmailPasswordView: View {
         }
     }
 
-    /// Push the OTP proof (Privy token) and the new wallet's signature to the server, which rewrites the binding.
-    private func rebindBinding(_ token: String, _ message: String, _ signature: String) async throws {
+    /// Push the OTP proof (Privy token) and the wallet's signature to the `email-rebind` function, which verifies both
+    /// and writes the binding with the service role. This is the ONLY path that writes the email → wallet row — direct
+    /// PostgREST writes are revoked (migration 16) — so an email that wasn't OTP-verified can never be bound.
+    private func bindViaServer(_ token: String, _ message: String, _ signature: String) async throws {
         struct Body: Encodable { let message: String; let signature: String }
         let body = try JSONEncoder().encode(Body(message: message, signature: signature))
         do { _ = try await env.social.client.invoke(function: "email-rebind", bearer: token, body: body) }
-        catch SupabaseError.http(_, let text) { throw EmailAuthError.rebind(Self.serverMessage(text)) }
+        catch SupabaseError.http(_, let text) { throw EmailAuthError.bindFailed(Self.serverMessage(text)) }
     }
 
     /// Surfaces the `{ "error": … }` reason the edge function returns (e.g. wrong code, expired) as a clean sentence.
@@ -591,24 +575,13 @@ struct EmailPasswordView: View {
         guard let data = text.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let msg = (obj["error"] as? String), !msg.isEmpty else {
-            return "We couldn’t confirm that reset. Please try again."
+            return "We couldn’t confirm that. Please try again."
         }
         let capped = msg.prefix(1).uppercased() + String(msg.dropFirst())
         return capped.hasSuffix(".") ? capped : capped + "."
     }
 
-    // MARK: Backend binding (email_accounts)
-
-    /// Bind the verified email to the derived address. Fails if the email is already registered to a different wallet.
-    private func registerBinding(_ email: String, _ address: Address) async throws {
-        if !env.social.isSignedIn { await env.social.signIn(session: session) }
-        let wallet = address.checksummed.lowercased()
-        struct Row: Encodable { let email: String; let wallet: String }
-        _ = try? await env.social.client.upsertRows("email_accounts", [Row(email: email, wallet: wallet)], onConflict: "email")
-        // Authoritative check: the binding must now resolve to THIS wallet (RLS blocks stealing a taken email).
-        let bound: Bool = try await env.social.client.rpc("email_account_matches", ["p_email": email, "p_wallet": wallet], authed: false)
-        if !bound { throw EmailAuthError.emailTaken }
-    }
+    // MARK: Backend gate (email_accounts)
 
     /// Login gate: does this email map to exactly the derived address?
     private func verifyBinding(_ email: String, _ address: Address) async throws -> Bool {
@@ -618,14 +591,10 @@ struct EmailPasswordView: View {
 }
 
 enum EmailAuthError: LocalizedError {
-    case emailTaken
-    case rebind(String)
+    case bindFailed(String)
     var errorDescription: String? {
         switch self {
-        case .emailTaken:
-            return "That email is already registered to a different wallet. Log in with the password you used before, or use a different email."
-        case .rebind(let message):
-            return message
+        case .bindFailed(let message): return message
         }
     }
 }
