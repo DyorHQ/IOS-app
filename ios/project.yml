@@ -70,6 +70,9 @@ targets:
         PrivyClientID: "$(PRIVY_CLIENT_ID)"
         MonadRPCURL: "$(MONAD_RPC_URL)"
         PasskeyRelyingParty: "$(PASSKEY_RP_ID)"
+        # Set SOCIAL_LOGINS_ENABLED=YES in Secrets.xcconfig once Apple/Google are enabled in the Privy dashboard;
+        # until then onboarding hides them so no one taps a disallowed method. Unset resolves to false.
+        SocialLoginsEnabled: "$(SOCIAL_LOGINS_ENABLED)"
         PerplBuilderID: "$(PERPL_BUILDER_ID)"
         LaunchpadFactory: "$(LAUNCHPAD_FACTORY)"
         LaunchRouter: "$(LAUNCH_ROUTER)"

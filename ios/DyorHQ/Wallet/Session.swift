@@ -163,6 +163,9 @@ final class Session {
 
     var hasPrivy: Bool { privy != nil }
     var hasPasskeys: Bool { privy != nil && config.hasPasskeys }
+    /// Apple / Google are offered only when the build enables them (and they're enabled in the Privy dashboard) —
+    /// otherwise onboarding hides them so no one taps a method that returns `disallowed_login_method`.
+    var hasSocialLogins: Bool { privy != nil && config.enableSocialLogins }
     /// Mera passkey accounts need only a relying party (the domain that serves the passkey association file).
     var hasMera: Bool { !config.passkeyRelyingParty.isEmpty }
 

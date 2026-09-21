@@ -1,9 +1,11 @@
 import AuthenticationServices
+import Combine
 import DyorKit
 import SwiftUI
 
-/// Welcome → Sign In. Modeled on Apple's own feature-list welcome screens: a wordmark, three benefits with
-/// symbols, one button. Sign-in offers Apple, Google, email and passkeys through Privy, or a watch-only address.
+/// Welcome → Get Started. A brand hero (serif wordmark over a soft purple glow) and an auto-advancing tour of what
+/// DyorHQ does, then a focused hub that LEADS with the working path — Email & Password — and keeps Import / Watch as
+/// quiet alternatives. Apple / Google appear only when the build actually enables them, so no one taps a dead method.
 struct OnboardingView: View {
     @State private var path: [OnboardingStep] = []
 
@@ -28,137 +30,220 @@ enum OnboardingStep: Hashable {
 
 struct WelcomeView: View {
     let onContinue: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
 
     var body: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 24)
-            Image(.wordmark)
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .foregroundStyle(.primary)
-                .frame(maxWidth: 300)
-                .accessibilityLabel("\(SupportLinks.name). \(SupportLinks.tagline).")
-            Text(SupportLinks.tagline)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
-                .padding(.top, 10)
-            Spacer(minLength: 24)
-            VStack(alignment: .leading, spacing: 24) {
-                FeatureRow(symbol: "camera.aperture", title: "Make Moments Last Forever", detail: "Publish a photo or video as an NFT on Monad. Share it with everyone and earn when it's collected.")
-                FeatureRow(symbol: "flame", title: "Launch a Coin", detail: "Fair-launch a memecoin paired with a tokenized stock.")
-                FeatureRow(symbol: "arrow.left.arrow.right", title: "Swap at the Best Price", detail: "Kuru, Uniswap and Monday Trade, compared on every swap.")
-                FeatureRow(symbol: "chart.line.uptrend.xyaxis", title: "Trade Perpetuals", detail: "Perpl's on-chain order book, signed by your own wallet.")
+            // Hero: the wordmark on a soft brand-purple glow.
+            ZStack {
+                BrandGlow().offset(y: -8)
+                VStack(spacing: 10) {
+                    Image(.wordmark)
+                        .renderingMode(.template).resizable().scaledToFit()
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: 250)
+                        .accessibilityLabel("\(SupportLinks.name). \(SupportLinks.tagline).")
+                    Text(SupportLinks.tagline)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .opacity(appeared ? 1 : 0)
+                .offset(y: appeared ? 0 : 12)
             }
-            .padding(.horizontal, 28)
-            Spacer(minLength: 24)
-            VStack(spacing: 12) {
-                PrimaryButton(title: "Continue", action: onContinue)
-                Text("DyorHQ never holds your keys or your funds.")
+            .padding(.top, 44)
+
+            // An auto-advancing tour of what you can do.
+            FeatureTour()
+                .frame(maxHeight: .infinity)
+                .opacity(appeared ? 1 : 0)
+
+            VStack(spacing: 14) {
+                PrimaryButton(title: "Get Started", action: onContinue)
+                Label("DyorHQ never holds your keys or your funds.", systemImage: "lock.shield")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 16)
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : 12)
         }
+        .background(Color(.systemBackground))
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.6)) { appeared = true }
+        }
     }
 }
 
-private struct FeatureRow: View {
+/// A soft radial halo in the Monad accent — the one splash of color on the monochrome canvas.
+private struct BrandGlow: View {
+    var body: some View {
+        RadialGradient(colors: [Color.brand.opacity(0.30), Color.brand.opacity(0)],
+                       center: .center, startRadius: 4, endRadius: 210)
+            .frame(height: 240)
+            .blur(radius: 18)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct Feature {
     let symbol: String
     let title: String
     let detail: String
+    init(_ symbol: String, _ title: String, _ detail: String) { self.symbol = symbol; self.title = title; self.detail = detail }
+}
+
+/// A gentle, swipeable carousel of the four things DyorHQ does. Auto-advances unless the user prefers reduced motion.
+private struct FeatureTour: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var index = 0
+
+    private let features = [
+        Feature("camera.aperture", "Make Moments last forever", "Mint a photo or video as an NFT on Monad. Share it, and earn when it’s collected."),
+        Feature("flame", "Launch a coin", "Fair-launch a memecoin paired with a tokenized stock."),
+        Feature("arrow.left.arrow.right", "Swap at the best price", "Kuru, Uniswap and Monday Trade — compared on every swap."),
+        Feature("chart.line.uptrend.xyaxis", "Trade perpetuals", "Perpl’s on-chain order book, signed by your own wallet."),
+    ]
+    private let advance = Timer.publish(every: 3.8, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            Image(systemName: symbol)
-                .font(.title)
-                .frame(width: 40)
-                .foregroundStyle(Color.accentColor)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.headline)
-                Text(detail).font(.subheadline).foregroundStyle(.secondary)
+        VStack(spacing: 22) {
+            TabView(selection: $index) {
+                ForEach(features.indices, id: \.self) { i in
+                    FeatureCard(feature: features[i]).tag(i).padding(.horizontal, 28)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .animation(.easeInOut(duration: 0.5), value: index)
+
+            HStack(spacing: 7) {
+                ForEach(features.indices, id: \.self) { i in
+                    Capsule()
+                        .fill(i == index ? Color.brand : Color.secondary.opacity(0.28))
+                        .frame(width: i == index ? 22 : 7, height: 7)
+                }
+            }
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: index)
+            .accessibilityHidden(true)
+        }
+        .onReceive(advance) { _ in
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 0.5)) { index = (index + 1) % features.count }
+        }
+    }
+}
+
+private struct FeatureCard: View {
+    let feature: Feature
+
+    var body: some View {
+        VStack(spacing: 18) {
+            ZStack {
+                Circle().fill(Color.brand.opacity(0.12)).frame(width: 100, height: 100)
+                Image(systemName: feature.symbol)
+                    .font(.system(size: 40, weight: .regular))
+                    .foregroundStyle(Color.brand)
+            }
+            VStack(spacing: 8) {
+                Text(feature.title)
+                    .font(.title2.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                Text(feature.detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
     }
 }
 
 struct SignInView: View {
     @Environment(Session.self) private var session
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var path: [OnboardingStep]
     @State private var busy: String?
     @State private var error: String?
+    @State private var appeared = false
+
+    /// Any social/passkey method the build actually offers. When none do, the whole block (and its divider) is hidden
+    /// so the user only ever sees paths that work.
+    private var hasAlternates: Bool { session.hasSocialLogins || session.hasMera || session.hasPasskeys }
 
     var body: some View {
-        List {
-            Section {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Sign In")
-                        .font(.largeTitle.weight(.bold))
-                    Text("Your wallet lives on this device. Add more sign-in methods later.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    Text("Get started").font(.largeTitle.weight(.bold))
+                    Text("Your wallet is created and kept on this device — you hold the keys.")
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
-            }
+                .padding(.top, 4)
 
-            Section {
-                if session.hasPrivy {
-                    SignInWithAppleButton(.continue) { _ in } onCompletion: { _ in }
-                        .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-                        .frame(height: 50)
-                        .overlay {
-                            // Privy drives the native Apple flow itself; the button is the affordance Apple requires.
-                            Color.clear.contentShape(Rectangle()).onTapGesture { Haptics.tap(); run("apple") { try await session.signInWithApple() } }
-                        }
-                        .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-                        .listRowBackground(Color.clear)
-                    MethodButton(title: "Continue with Google", symbol: "g.circle", busy: busy == "google") { run("google") { try await session.signInWithGoogle() } }
-                    if session.hasMera {
-                        MethodButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
-                        MethodButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
-                    } else if session.hasPasskeys {
-                        MethodButton(title: "Sign In with a Passkey", symbol: "person.badge.key", busy: busy == "passkey") { run("passkey") { try await session.signInWithPasskey() } }
-                        MethodButton(title: "Create a Passkey", symbol: "faceid", busy: busy == "create") { run("create") { try await session.createPasskey(displayName: "DyorHQ") } }
-                    }
-                } else if session.hasMera {
-                    MethodButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
-                    MethodButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
-                } else {
-                    Label("Sign-in is not set up in this build. Add the Privy keys to Secrets.xcconfig to enable Apple, Google, email and passkeys.", systemImage: "key.slash")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                // The primary, recommended path.
+                HeroAuthCard(title: "Email & Password",
+                             subtitle: "Sign up or log in. New accounts verify with a one-time code.",
+                             symbol: "envelope.fill") { Haptics.tap(); path.append(.email) }
+
+                if hasAlternates {
+                    LabeledDivider("or continue with")
+                    VStack(spacing: 10) { alternates }
                 }
-            } footer: {
+
                 if let error { InlineError(message: error) }
-            }
 
-            Section {
-                MethodButton(title: "Continue with Email", symbol: "envelope", busy: false) { path.append(.email) }
-            } footer: {
-                Text("Sign up or log in with an email and password. Your wallet is created on this device from them — no code is sent.")
-            }
+                LabeledDivider("more ways in")
+                VStack(spacing: 10) {
+                    SecondaryAuthRow(title: "Import a wallet",
+                                     subtitle: "Use your recovery phrase or private key.",
+                                     symbol: "square.and.arrow.down") { Haptics.tap(); path.append(.importWallet) }
+                    SecondaryAuthRow(title: "Watch an address",
+                                     subtitle: "Follow any Monad wallet. Trading needs an account.",
+                                     symbol: "eye") { Haptics.tap(); path.append(.watch) }
+                }
 
-            Section {
-                MethodButton(title: "Import an Existing Wallet", symbol: "square.and.arrow.down", busy: false) { path.append(.importWallet) }
-            } footer: {
-                Text("Bring your own wallet with its recovery phrase or private key. It stays on this device.")
+                Label("DyorHQ never holds your keys or your funds.", systemImage: "lock.shield")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 6)
             }
-
-            Section {
-                MethodButton(title: "Watch an Address", symbol: "eye", busy: false) { path.append(.watch) }
-            } footer: {
-                Text("Follow any Monad wallet. Trading needs an account.")
-            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 28)
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : 10)
         }
-        .listStyle(.insetGrouped)
+        .background(Color(.systemBackground))
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .disabled(busy != nil)
+        .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.45)) { appeared = true } }
+    }
+
+    @ViewBuilder private var alternates: some View {
+        if session.hasSocialLogins {
+            SignInWithAppleButton(.continue) { _ in } onCompletion: { _ in }
+                .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+                .frame(height: 50)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    // Privy drives the native Apple flow itself; the button is the affordance Apple requires.
+                    Color.clear.contentShape(Rectangle()).onTapGesture { Haptics.tap(); run("apple") { try await session.signInWithApple() } }
+                }
+            SocialButton(title: "Continue with Google", symbol: "g.circle.fill", busy: busy == "google") { run("google") { try await session.signInWithGoogle() } }
+        }
+        if session.hasMera {
+            SocialButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
+            SocialButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
+        } else if session.hasPasskeys {
+            SocialButton(title: "Sign in with a Passkey", symbol: "person.badge.key", busy: busy == "passkey") { run("passkey") { try await session.signInWithPasskey() } }
+            SocialButton(title: "Create a Passkey", symbol: "faceid", busy: busy == "create") { run("create") { try await session.createPasskey(displayName: "DyorHQ") } }
+        }
     }
 
     private func run(_ key: String, _ work: @escaping () async throws -> Void) {
@@ -171,21 +256,112 @@ struct SignInView: View {
     }
 }
 
-private struct MethodButton: View {
+/// The primary sign-in affordance: a filled brand-purple card that draws the eye first.
+private struct HeroAuthCard: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.18)).frame(width: 46, height: 46)
+                    Image(systemName: symbol).font(.title3).foregroundStyle(.white)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.headline).foregroundStyle(.white)
+                    Text(subtitle).font(.caption).foregroundStyle(.white.opacity(0.9))
+                        .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity)
+            .background(Color.brand, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(PressableStyle())
+    }
+}
+
+/// A quiet, neutral alternative sign-in row.
+private struct SecondaryAuthRow: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color(.tertiarySystemFill)).frame(width: 42, height: 42)
+                    Image(systemName: symbol).font(.body).foregroundStyle(.primary)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color(.separator).opacity(0.5), lineWidth: 0.5))
+        }
+        .buttonStyle(PressableStyle())
+    }
+}
+
+/// A bordered full-width social/passkey button, matched to the hub's card language.
+private struct SocialButton: View {
     let title: String
     let symbol: String
-    let busy: Bool
+    var busy = false
     let action: () -> Void
 
     var body: some View {
         Button { Haptics.tap(); action() } label: {
-            HStack {
-                Label(title, systemImage: symbol)
-                Spacer()
-                if busy { ProgressView().controlSize(.small) }
+            HStack(spacing: 8) {
+                if busy { ProgressView().controlSize(.small) } else { Image(systemName: symbol) }
+                Text(title).fontWeight(.medium)
             }
+            .frame(maxWidth: .infinity).frame(height: 50)
+            .foregroundStyle(.primary)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(.separator).opacity(0.6), lineWidth: 0.5))
         }
-        .foregroundStyle(.primary)
+        // Plain style so the label stays neutral Ink (not the brand tint) — the purple hero stays the only focal point.
+        .buttonStyle(.plain)
+    }
+}
+
+/// A hairline rule with a small centered caption ("or continue with").
+private struct LabeledDivider: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Rectangle().fill(Color(.separator).opacity(0.5)).frame(height: 0.5)
+            Text(text).font(.caption2.weight(.semibold)).textCase(.uppercase).foregroundStyle(.tertiary).fixedSize()
+            Rectangle().fill(Color(.separator).opacity(0.5)).frame(height: 0.5)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// Subtle press feedback for the card-style buttons.
+private struct PressableStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .opacity(configuration.isPressed ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
 
