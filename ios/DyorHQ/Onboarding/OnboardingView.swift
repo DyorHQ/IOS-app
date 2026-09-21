@@ -189,29 +189,34 @@ private struct MethodButton: View {
     }
 }
 
-/// Email + password onboarding. Sign up sets a strong password (enforced) that deterministically becomes the wallet;
-/// log in re-derives the same wallet from the same email + password. No code is sent. See `PasswordWallet`.
+/// Email + password onboarding. Sign up **verifies the email with a one-time code** (Privy), then sets a strong
+/// password that deterministically becomes the wallet; log in re-derives the same wallet — no code — but only when the
+/// email is a verified account matching the derived address. See `PasswordWallet` and `Session`.
 struct EmailPasswordView: View {
     @Environment(Session.self) private var session
+    @Environment(AppEnvironment.self) private var env
     @Binding var path: [OnboardingStep]
 
     enum Mode: String, CaseIterable, Identifiable { case signUp = "Sign Up", logIn = "Log In"; var id: String { rawValue } }
+    enum Stage { case form, otp }
     @State private var mode: Mode = .signUp
+    @State private var stage: Stage = .form
     @State private var email = ""
     @State private var password = ""
     @State private var confirm = ""
+    @State private var code = ""
     @State private var acknowledged = false
     @State private var busy = false
     @State private var error: String?
     @FocusState private var focus: Field?
 
-    private enum Field { case email, password, confirm }
+    private enum Field { case email, password, confirm, code }
 
     private var emailValid: Bool { email.contains("@") && email.contains(".") && !email.hasSuffix(".") }
-    /// Sign-up strength gate (not applied when logging in with an existing password).
     private var rejection: String? { PasswordStrength.rejection(password, email: email) }
-    private var canSubmit: Bool {
-        guard emailValid, !busy else { return false }
+    private var otpStage: Bool { mode == .signUp && stage == .otp }
+    private var formValid: Bool {
+        guard emailValid else { return false }
         switch mode {
         case .signUp: return rejection == nil && !confirm.isEmpty && password == confirm && acknowledged
         case .logIn: return !password.isEmpty
@@ -220,53 +225,68 @@ struct EmailPasswordView: View {
 
     var body: some View {
         Form {
-            Section {
-                Picker("Mode", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-            }
-            .listRowBackground(Color.clear)
+            if !otpStage {
+                Section {
+                    Picker("Mode", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
+                        .pickerStyle(.segmented).labelsHidden()
+                }
+                .listRowBackground(Color.clear)
 
-            Section {
-                TextField("Email", text: $email)
-                    .textContentType(.emailAddress)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .focused($focus, equals: .email)
-                PasswordField(title: "Password", text: $password)
-                    .focused($focus, equals: .password)
+                Section {
+                    TextField("Email", text: $email)
+                        .textContentType(.emailAddress).keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .focused($focus, equals: .email)
+                    PasswordField(title: "Password", text: $password).focused($focus, equals: .password)
+                    if mode == .signUp {
+                        PasswordField(title: "Confirm password", text: $confirm).focused($focus, equals: .confirm)
+                    }
+                } footer: {
+                    if mode == .logIn {
+                        Text("Log in with the email and password you signed up with. Your wallet is recreated on this device — no code needed.")
+                    } else if !password.isEmpty, !confirm.isEmpty, password != confirm {
+                        Text("Passwords don’t match.").foregroundStyle(Color.negative)
+                    }
+                }
+
                 if mode == .signUp {
-                    PasswordField(title: "Confirm password", text: $confirm)
-                        .focused($focus, equals: .confirm)
-                }
-            } footer: {
-                if mode == .logIn {
-                    Text("Logging in recreates your wallet from your email and password. A different password makes a different wallet — there is no reset.")
-                } else if !password.isEmpty, !confirm.isEmpty, password != confirm {
-                    Text("Passwords don’t match.").foregroundStyle(Color.negative)
-                }
-            }
+                    Section {
+                        StrengthMeter(score: PasswordStrength.score(password))
+                        if !password.isEmpty, let rejection {
+                            Label(rejection, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention)
+                        }
+                    } header: { Text("Password strength") }
 
-            if mode == .signUp {
-                Section {
-                    StrengthMeter(score: PasswordStrength.score(password))
-                    if !password.isEmpty, let rejection {
-                        Label(rejection, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention)
-                    }
-                } header: {
-                    Text("Password strength")
-                }
-
-                Section {
-                    Label {
-                        Text("This password **is** your wallet. We can’t reset it or send a recovery email. If you lose it, you lose access to your funds — write it down or save it in your password manager.")
-                    } icon: {
-                        Image(systemName: "key.horizontal.fill").foregroundStyle(Color.attention)
-                    }
-                    .font(.footnote)
-                    Toggle("I understand my password is the only way back to my wallet", isOn: $acknowledged)
+                    Section {
+                        Label {
+                            Text("This password **is** your wallet. We can’t reset it or send a recovery email. If you lose it, you lose access to your funds — write it down or save it in your password manager.")
+                        } icon: {
+                            Image(systemName: "key.horizontal.fill").foregroundStyle(Color.attention)
+                        }
                         .font(.footnote)
+                        Toggle("I understand my password is the only way back to my wallet", isOn: $acknowledged).font(.footnote)
+                    }
+                }
+            } else {
+                Section {
+                    TextField("6-digit code", text: $code)
+                        .textContentType(.oneTimeCode).keyboardType(.numberPad)
+                        .font(.title2.monospacedDigit()).focused($focus, equals: .code)
+                        .onChange(of: code) { _, value in
+                            code = String(value.filter(\.isNumber).prefix(6))
+                            if code.count == 6 { completeSignUp() }
+                        }
+                } header: {
+                    Text("Verify your email")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Enter the code we emailed to \(email). This proves the email is yours — your wallet is created after you verify, so no fake or unowned emails can register.")
+                        HStack(spacing: 16) {
+                            Button("Send a new code") { startSignUp() }.disabled(busy)
+                            Button("Change details") { stage = .form; code = "" }.disabled(busy)
+                        }
+                        .font(.footnote)
+                    }
                 }
             }
 
@@ -274,27 +294,82 @@ struct EmailPasswordView: View {
                 Section { InlineError(message: error) }.listRowBackground(Color.clear)
             }
         }
-        .navigationTitle("Email & Password")
+        .navigationTitle(otpStage ? "Verify Email" : "Email & Password")
         .navigationBarTitleDisplayMode(.inline)
         .disabled(busy)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 if busy { ProgressView() }
-                else { Button(mode == .signUp ? "Create" : "Log In") { submit() }.disabled(!canSubmit) }
+                else if mode == .logIn { Button("Log In") { logIn() }.disabled(!formValid) }
+                else if stage == .form { Button("Continue") { startSignUp() }.disabled(!formValid) }
+                else { Button("Verify") { completeSignUp() }.disabled(code.count != 6) }
             }
         }
         .onAppear { focus = .email }
+        .onChange(of: mode) { _, _ in stage = .form; code = ""; error = nil }
     }
 
-    private func submit() {
-        focus = nil
-        busy = true
-        error = nil
+    // MARK: Actions
+
+    /// Send the sign-up OTP, then move to the verify step.
+    private func startSignUp() {
+        focus = nil; busy = true; error = nil
         Task {
-            do { try await session.signInWithPassword(email: email, password: password) }
+            do { try await session.sendSignUpCode(to: email); stage = .otp; code = ""; focus = .code }
             catch { self.error = describe(error) }
             busy = false
         }
+    }
+
+    /// Verify the OTP, then create the wallet and register the verified email → address binding.
+    private func completeSignUp() {
+        guard code.count == 6, !busy else { return }
+        focus = nil; busy = true; error = nil
+        Task {
+            do {
+                try await session.verifyEmailForSignUp(email: email, code: code)
+                try await session.signUpWithPassword(email: email, password: password, register: registerBinding)
+            } catch {
+                self.error = describe(error)
+                code = ""
+            }
+            busy = false
+        }
+    }
+
+    private func logIn() {
+        focus = nil; busy = true; error = nil
+        Task {
+            do { try await session.logInWithPassword(email: email, password: password, verify: verifyBinding) }
+            catch { self.error = describe(error) }
+            busy = false
+        }
+    }
+
+    // MARK: Backend binding (email_accounts)
+
+    /// Bind the verified email to the derived address. Fails if the email is already registered to a different wallet.
+    private func registerBinding(_ email: String, _ address: Address) async throws {
+        if !env.social.isSignedIn { await env.social.signIn(session: session) }
+        let wallet = address.checksummed.lowercased()
+        struct Row: Encodable { let email: String; let wallet: String }
+        _ = try? await env.social.client.upsertRows("email_accounts", [Row(email: email, wallet: wallet)], onConflict: "email")
+        // Authoritative check: the binding must now resolve to THIS wallet (RLS blocks stealing a taken email).
+        let bound: Bool = try await env.social.client.rpc("email_account_matches", ["p_email": email, "p_wallet": wallet], authed: false)
+        if !bound { throw EmailAuthError.emailTaken }
+    }
+
+    /// Login gate: does this email map to exactly the derived address?
+    private func verifyBinding(_ email: String, _ address: Address) async throws -> Bool {
+        try await env.social.client.rpc("email_account_matches",
+                                        ["p_email": email, "p_wallet": address.checksummed.lowercased()], authed: false)
+    }
+}
+
+enum EmailAuthError: LocalizedError {
+    case emailTaken
+    var errorDescription: String? {
+        "That email is already registered to a different wallet. Log in with the password you used before, or use a different email."
     }
 }
 
