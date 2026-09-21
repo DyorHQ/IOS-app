@@ -13,7 +13,7 @@ struct OnboardingView: View {
                 .navigationDestination(for: OnboardingStep.self) { step in
                     switch step {
                     case .signIn: SignInView(path: $path)
-                    case .email: EmailSignInView(path: $path)
+                    case .email: EmailPasswordView(path: $path)
                     case .watch: WatchAddressView(path: $path)
                     case .importWallet: ImportWalletView()
                     }
@@ -119,7 +119,6 @@ struct SignInView: View {
                         .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
                         .listRowBackground(Color.clear)
                     MethodButton(title: "Continue with Google", symbol: "g.circle", busy: busy == "google") { run("google") { try await session.signInWithGoogle() } }
-                    MethodButton(title: "Continue with Email", symbol: "envelope", busy: false) { path.append(.email) }
                     if session.hasMera {
                         MethodButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
                         MethodButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
@@ -137,6 +136,12 @@ struct SignInView: View {
                 }
             } footer: {
                 if let error { InlineError(message: error) }
+            }
+
+            Section {
+                MethodButton(title: "Continue with Email", symbol: "envelope", busy: false) { path.append(.email) }
+            } footer: {
+                Text("Sign up or log in with an email and password. Your wallet is created on this device from them — no code is sent.")
             }
 
             Section {
@@ -184,22 +189,44 @@ private struct MethodButton: View {
     }
 }
 
-struct EmailSignInView: View {
+/// Email + password onboarding. Sign up sets a strong password (enforced) that deterministically becomes the wallet;
+/// log in re-derives the same wallet from the same email + password. No code is sent. See `PasswordWallet`.
+struct EmailPasswordView: View {
     @Environment(Session.self) private var session
     @Binding var path: [OnboardingStep]
+
+    enum Mode: String, CaseIterable, Identifiable { case signUp = "Sign Up", logIn = "Log In"; var id: String { rawValue } }
+    @State private var mode: Mode = .signUp
     @State private var email = ""
-    @State private var code = ""
-    @State private var sent = false
+    @State private var password = ""
+    @State private var confirm = ""
+    @State private var acknowledged = false
     @State private var busy = false
     @State private var error: String?
     @FocusState private var focus: Field?
 
-    private enum Field { case email, code }
+    private enum Field { case email, password, confirm }
 
     private var emailValid: Bool { email.contains("@") && email.contains(".") && !email.hasSuffix(".") }
+    /// Sign-up strength gate (not applied when logging in with an existing password).
+    private var rejection: String? { PasswordStrength.rejection(password, email: email) }
+    private var canSubmit: Bool {
+        guard emailValid, !busy else { return false }
+        switch mode {
+        case .signUp: return rejection == nil && !confirm.isEmpty && password == confirm && acknowledged
+        case .logIn: return !password.isEmpty
+        }
+    }
 
     var body: some View {
         Form {
+            Section {
+                Picker("Mode", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+            }
+            .listRowBackground(Color.clear)
+
             Section {
                 TextField("Email", text: $email)
                     .textContentType(.emailAddress)
@@ -207,30 +234,39 @@ struct EmailSignInView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focus, equals: .email)
-                    .disabled(sent)
-                    .submitLabel(.send)
-                    .onSubmit { if emailValid { send() } }
-            } header: {
-                Text(sent ? "Signed in with" : "Email")
+                PasswordField(title: "Password", text: $password)
+                    .focused($focus, equals: .password)
+                if mode == .signUp {
+                    PasswordField(title: "Confirm password", text: $confirm)
+                        .focused($focus, equals: .confirm)
+                }
             } footer: {
-                if !sent { Text("We will send a six-digit code to this address.") }
+                if mode == .logIn {
+                    Text("Logging in recreates your wallet from your email and password. A different password makes a different wallet — there is no reset.")
+                } else if !password.isEmpty, !confirm.isEmpty, password != confirm {
+                    Text("Passwords don’t match.").foregroundStyle(Color.negative)
+                }
             }
 
-            if sent {
+            if mode == .signUp {
                 Section {
-                    TextField("Six-digit code", text: $code)
-                        .textContentType(.oneTimeCode)
-                        .keyboardType(.numberPad)
-                        .font(.title2.monospacedDigit())
-                        .focused($focus, equals: .code)
-                        .onChange(of: code) { _, value in
-                            code = String(value.filter(\.isNumber).prefix(6))
-                            if code.count == 6 { verify() }
-                        }
+                    StrengthMeter(score: PasswordStrength.score(password))
+                    if !password.isEmpty, let rejection {
+                        Label(rejection, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention)
+                    }
                 } header: {
-                    Text("Code")
-                } footer: {
-                    Button("Send a New Code") { send() }.font(.footnote).disabled(busy)
+                    Text("Password strength")
+                }
+
+                Section {
+                    Label {
+                        Text("This password **is** your wallet. We can’t reset it or send a recovery email. If you lose it, you lose access to your funds — write it down or save it in your password manager.")
+                    } icon: {
+                        Image(systemName: "key.horizontal.fill").foregroundStyle(Color.attention)
+                    }
+                    .font(.footnote)
+                    Toggle("I understand my password is the only way back to my wallet", isOn: $acknowledged)
+                        .font(.footnote)
                 }
             }
 
@@ -238,43 +274,75 @@ struct EmailSignInView: View {
                 Section { InlineError(message: error) }.listRowBackground(Color.clear)
             }
         }
-        .navigationTitle("Continue with Email")
+        .navigationTitle("Email & Password")
         .navigationBarTitleDisplayMode(.inline)
+        .disabled(busy)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                if busy {
-                    ProgressView()
-                } else if sent {
-                    Button("Verify") { verify() }.disabled(code.count != 6)
-                } else {
-                    Button("Send Code") { send() }.disabled(!emailValid)
-                }
+                if busy { ProgressView() }
+                else { Button(mode == .signUp ? "Create" : "Log In") { submit() }.disabled(!canSubmit) }
             }
         }
         .onAppear { focus = .email }
     }
 
-    private func send() {
+    private func submit() {
+        focus = nil
         busy = true
         error = nil
         Task {
-            do {
-                try await session.sendEmailCode(to: email.trimmingCharacters(in: .whitespaces))
-                sent = true
-                code = ""
-                focus = .code
-            } catch { self.error = describe(error) }
+            do { try await session.signInWithPassword(email: email, password: password) }
+            catch { self.error = describe(error) }
             busy = false
         }
     }
+}
 
-    private func verify() {
-        guard code.count == 6, !busy else { return }
-        busy = true
-        error = nil
-        Task {
-            do { try await session.signIn(email: email.trimmingCharacters(in: .whitespaces), code: code) } catch { self.error = describe(error) }
-            busy = false
+/// A password field with a reveal toggle — reveal matters here because a mistyped password derives a different
+/// wallet, and iOS's password content type lets the user save/autofill it (so they don't forget it).
+private struct PasswordField: View {
+    let title: String
+    @Binding var text: String
+    @State private var reveal = false
+
+    var body: some View {
+        HStack {
+            Group {
+                if reveal { TextField(title, text: $text) } else { SecureField(title, text: $text) }
+            }
+            .textContentType(.password)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            Button { reveal.toggle() } label: {
+                Image(systemName: reveal ? "eye.slash" : "eye").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(reveal ? "Hide password" : "Show password")
+        }
+    }
+}
+
+/// Four-segment strength bar for the sign-up password.
+private struct StrengthMeter: View {
+    let score: Int // 0…4
+
+    private var tint: Color {
+        switch score { case 0, 1: return .negative; case 2: return .attention; default: return .positive }
+    }
+    private var label: String {
+        switch score { case 0: return " "; case 1: return "Weak"; case 2: return "Fair"; case 3: return "Good"; default: return "Strong" }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                ForEach(0..<4, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(i < score ? tint : Color(.tertiarySystemFill))
+                        .frame(height: 5)
+                }
+            }
+            Text(label).font(.caption2).foregroundStyle(tint)
         }
     }
 }

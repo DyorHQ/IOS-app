@@ -16,13 +16,14 @@ final class Session {
     }
 
     enum Method: String, Codable, Equatable {
-        case apple, google, email, passkey, meraPasskey, imported, watchOnly
+        case apple, google, email, emailPassword, passkey, meraPasskey, imported, watchOnly
 
         var title: String {
             switch self {
             case .apple: return "Apple"
             case .google: return "Google"
             case .email: return "Email"
+            case .emailPassword: return "Email & Password"
             case .passkey: return "Passkey (Privy)"
             case .meraPasskey: return "Passkey"
             case .imported: return "Imported wallet"
@@ -100,7 +101,11 @@ final class Session {
         }
         if let account = ImportedWalletStore.loadAccount() {
             wallet = LocalWallet(account: account)
-            state = .signedIn(Account(address: account.address, method: .imported, label: nil))
+            if let meta = LocalWalletMeta.load(), meta.kind == .emailPassword {
+                state = .signedIn(Account(address: account.address, method: .emailPassword, label: meta.email))
+            } else {
+                state = .signedIn(Account(address: account.address, method: .imported, label: nil))
+            }
             return true
         }
         if let watched = WatchOnlyStore.load() {
@@ -216,6 +221,27 @@ final class Session {
         state = .signedIn(Account(address: account.address, method: .imported, label: nil))
     }
 
+    /// Email + password: deterministically derive a device-local wallet from the two (see `PasswordWallet`) and make
+    /// it the signer, superseding any Privy/watch-only session. Same email + password always yield the same wallet;
+    /// no code is sent, nothing but the derived key (in the Keychain) is stored. The derivation is CPU-heavy, so it
+    /// runs off the main actor.
+    func signInWithPassword(email: String, password: String) async throws {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let derived = await Task.detached(priority: .userInitiated) {
+            PasswordWallet.deriveAccount(email: normalizedEmail, password: password)
+        }.value
+        guard let account = derived else { throw SessionError.passwordDerivationFailed }
+        ImportedWalletStore.save(privateKey: account.privateKey) // clears the local-wallet tag…
+        LocalWalletMeta.setEmailPassword(email: normalizedEmail) // …then tags it as an email+password wallet
+        WatchOnlyStore.clear()
+        mera.forget()
+        if let privy, case .authenticated(let user) = await privy.getAuthState() {
+            await user.logout()
+        }
+        wallet = LocalWallet(account: account)
+        state = .signedIn(Account(address: account.address, method: .emailPassword, label: normalizedEmail))
+    }
+
     func signOut() async {
         WatchOnlyStore.clear()
         ImportedWalletStore.clear()
@@ -267,12 +293,14 @@ enum SessionError: LocalizedError {
     case privyNotConfigured
     case invalidWalletAddress
     case readOnly
+    case passwordDerivationFailed
 
     var errorDescription: String? {
         switch self {
         case .privyNotConfigured: return "Sign-in is not set up in this build. Add the Privy keys to Secrets.xcconfig."
         case .invalidWalletAddress: return "The wallet address returned by Privy is not valid."
         case .readOnly: return "You are watching this address. Sign in to trade."
+        case .passwordDerivationFailed: return "Couldn't create your wallet from that email and password. Please try again."
         }
     }
 }
