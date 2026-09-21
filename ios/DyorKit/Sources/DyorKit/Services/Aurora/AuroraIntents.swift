@@ -201,7 +201,9 @@ public struct AuroraSwapState: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        status = try c.decode(AuroraSwapStatus.self, forKey: .status)
+        // An unrecognized status (a new value, casing drift) must never throw and stall the poll — treat it as still
+        // in progress and let the settlement poll (and the destination-balance check) resolve it.
+        status = (try? c.decode(AuroraSwapStatus.self, forKey: .status)) ?? .processing
         updatedAt = try? c.decodeIfPresent(String.self, forKey: .updatedAt)
         // `swapDetails` is secondary (formatted amount, refund reason). The poll only needs `status` to advance, so a
         // decode failure or schema drift in `swapDetails` must NEVER stall settlement tracking — swallow it to nil.

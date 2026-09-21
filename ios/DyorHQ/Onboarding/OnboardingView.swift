@@ -56,6 +56,7 @@ struct WelcomeView: View {
             // An auto-advancing tour of what you can do.
             FeatureTour()
                 .frame(maxHeight: .infinity)
+                .padding(.bottom, 32) // keep the page dots clear of the Get Started button
                 .opacity(appeared ? 1 : 0)
 
             VStack(spacing: 14) {
@@ -96,7 +97,8 @@ private struct Feature {
     init(_ symbol: String, _ title: String, _ detail: String) { self.symbol = symbol; self.title = title; self.detail = detail }
 }
 
-/// A gentle, swipeable carousel of the four things DyorHQ does. Auto-advances unless the user prefers reduced motion.
+/// A gentle, swipeable carousel of the four things DyorHQ does. Auto-advances (unless the user prefers reduced motion)
+/// and loops forward seamlessly — it never visibly rewinds to the first card.
 private struct FeatureTour: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var index = 0
@@ -107,31 +109,44 @@ private struct FeatureTour: View {
         Feature("arrow.left.arrow.right", "Swap at the best price", "Kuru, Uniswap and Monday Trade — compared on every swap."),
         Feature("chart.line.uptrend.xyaxis", "Trade perpetuals", "Perpl’s on-chain order book, signed by your own wallet."),
     ]
+    // A copy of the first card is appended so the tour can slide FORWARD off the last card into it, then snap back to
+    // the real first with no animation — an invisible seam, so the loop never rewinds backwards to the start.
+    private var loop: [Feature] { features + [features[0]] }
+    private var activeDot: Int { index % features.count }
     private let advance = Timer.publish(every: 3.8, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 22) {
             TabView(selection: $index) {
-                ForEach(features.indices, id: \.self) { i in
-                    FeatureCard(feature: features[i]).tag(i).padding(.horizontal, 28)
+                ForEach(loop.indices, id: \.self) { i in
+                    FeatureCard(feature: loop[i]).tag(i).padding(.horizontal, 28)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .animation(.easeInOut(duration: 0.5), value: index)
 
             HStack(spacing: 7) {
                 ForEach(features.indices, id: \.self) { i in
                     Capsule()
-                        .fill(i == index ? Color.brand : Color.secondary.opacity(0.28))
-                        .frame(width: i == index ? 22 : 7, height: 7)
+                        .fill(i == activeDot ? Color.brand : Color.secondary.opacity(0.28))
+                        .frame(width: i == activeDot ? 22 : 7, height: 7)
                 }
             }
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: index)
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: activeDot)
             .accessibilityHidden(true)
         }
         .onReceive(advance) { _ in
             guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 0.5)) { index = (index + 1) % features.count }
+            withAnimation(.easeInOut(duration: 0.5)) { index += 1 }
+        }
+        .onChange(of: index) { _, new in
+            // Once we slide onto the duplicated first card, jump back to the real first with animations off. Both show
+            // the same content, so the reset is invisible and the tour keeps moving forward forever.
+            guard new == loop.count - 1 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                guard index == loop.count - 1 else { return } // the user didn't swipe elsewhere in the meantime
+                var tx = Transaction(); tx.disablesAnimations = true
+                withTransaction(tx) { index = 0 }
+            }
         }
     }
 }
