@@ -45,6 +45,15 @@ final class BridgeModel {
     private var pendingFromName: String?
     private var pendingToName: String?
     private var pendingAmountText: String?
+    // For confirming arrival by the destination balance itself — intent bridges often credit the funds before Aurora's
+    // status indexer reports SUCCESS, so the poll also watches the destination token's balance climb past its baseline.
+    private var pendingToToken: AuroraToken?
+    private var pendingDestChain: EVMChain?
+    private var pendingDestBaseline: BigUInt?
+    private var pendingMinOut: BigUInt?
+    /// The block-explorer URL the "View" link opens on a completed bridge — the source deposit tx as soon as it's
+    /// signed, upgraded to the destination arrival tx once Aurora reports it, so the user can verify it on-chain.
+    private(set) var completedTxURL: URL?
 
     init(env: AppEnvironment) {
         self.env = env
@@ -311,6 +320,7 @@ final class BridgeModel {
         }
         if env.settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm bridge")) { return }
         phase = .signing
+        completedTxURL = nil
         // Send EXACTLY what Aurora quoted (`amountIn`) to the deposit address — never a re-parsed value — so the
         // deposit always matches the quote. `amount` is only the fallback if the quote didn't echo a parsable amountIn.
         let sendAmount = BigUInt(quote.amountIn) ?? amount
@@ -329,8 +339,15 @@ final class BridgeModel {
             pendingFromName = fromChain.name
             pendingToName = toChain.name
             pendingAmountText = amountText
+            // Snapshot the destination balance now, before any credit, so the poll can confirm the arrival on-chain even
+            // if Aurora's status lags. Uses the balance already loaded for the picker — no extra call on the send path.
+            pendingToToken = toToken
+            pendingDestChain = toChain
+            pendingMinOut = quote.minAmountOut.flatMap { BigUInt($0) }
+            pendingDestBaseline = toToken.flatMap { balances[$0.assetId] } ?? 0
             let hash = try await env.sender(for: fromChain).send(request, from: wallet)
             pendingHash = hash.hexString
+            completedTxURL = fromChain.explorerTx(hash.hexString) // source deposit tx — a verifiable link straight away
             phase = .submitting
             _ = try? await env.aurora.submitDeposit(txHash: hash.hexString, depositAddress: deposit, memo: quote.depositMemo)
             // Bridge fee (USD) = the value the route consumed: input value − output value, when the quote priced both.
@@ -357,6 +374,11 @@ final class BridgeModel {
                 let state = try await env.aurora.status(depositAddress: deposit, depositMemo: memo)
                 guard generation == pollGeneration else { return } // the user started over while this was in flight
                 consecutiveFailures = 0
+                // Once Aurora surfaces the destination-chain settlement tx, upgrade the "View" link from the source
+                // deposit to the arrival tx — that's the on-chain proof the funds actually landed.
+                if let ref = state.swapDetails?.destinationChainTxHashes?.last {
+                    completedTxURL = ref.explorerUrl.flatMap(URL.init(string:)) ?? pendingDestChain?.explorerTx(ref.hash) ?? completedTxURL
+                }
                 switch state.status {
                 case .success:
                     let out = state.swapDetails?.amountOutFormatted.map { "\($0) \(pendingOutSymbol ?? toToken?.symbol ?? "")" } ?? expectedOut ?? ""
@@ -374,10 +396,15 @@ final class BridgeModel {
                     phase = .failed(state.swapDetails?.refundReason ?? "The bridge failed.")
                     return
                 default:
+                    // Aurora still says "in progress", but the funds may already be on the destination — confirm by the
+                    // balance itself so the screen doesn't spin forever after the credit has actually landed.
+                    if await finishIfCredited(generation: generation) { return }
                     phase = .bridging(state.status)
                 }
             } catch {
                 guard generation == pollGeneration else { return } // started over during the failed request
+                // Aurora's status read failed, but the credit may still have landed — check the balance before deciding.
+                if await finishIfCredited(generation: generation) { return }
                 // Don't stall silently: after several straight failures, tell the user it's still settling (and it's
                 // recorded in Activity) rather than spinning forever on a status we can't read.
                 consecutiveFailures += 1
@@ -390,6 +417,26 @@ final class BridgeModel {
         guard generation == pollGeneration else { return }
         // Past the polling window and still not terminal: the deposit is on its way; hand it off to Activity/balances.
         phase = .settling("Taking longer than usual — your funds are on their way. This will show in your balance and Activity when it lands.")
+    }
+
+    /// If the destination token's balance has climbed past its pre-bridge baseline by (about) the promised minimum, the
+    /// funds have landed — finish the bridge even when Aurora's status indexer hasn't caught up yet. Returns whether it
+    /// finished, so the caller stops polling.
+    private func finishIfCredited(generation: Int) async -> Bool {
+        guard let owner = env.session.address, let token = pendingToToken, let chain = pendingDestChain,
+              let baseline = pendingDestBaseline, let minOut = pendingMinOut, minOut > 0 else { return false }
+        let bals = await env.chainBalances.balances(owner: owner, chain: chain, tokens: [token])
+        guard generation == pollGeneration else { return false } // the user started over while this read was in flight
+        guard let now = bals[token.assetId], now > baseline else { return false }
+        let credited = now - baseline
+        // Require (about) the guaranteed minimum output to have arrived — a small tolerance for rounding, but enough
+        // that unrelated dust can never trip a false "arrived".
+        guard credited * 100 >= minOut * 95 else { return false }
+        recordCompletion(usd: pendingUsd)
+        resetQuote()
+        phase = .done("\(NumberStyle.units(credited, decimals: token.decimals)) \(token.symbol)")
+        Task { await loadBalances(force: true) }
+        return true
     }
 
     /// Persist a completed bridge (for Portfolio volume) and post the completion notification. Idempotent per tx hash.
@@ -412,6 +459,7 @@ final class BridgeModel {
     func reset() {
         pollGeneration += 1 // stop any poll still running from the previous bridge
         phase = .idle
+        completedTxURL = nil
         resetQuote()
         if amountRaw != nil { refreshQuoteSoon() }
     }

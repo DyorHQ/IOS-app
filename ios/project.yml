@@ -49,7 +49,7 @@ targets:
         CFBundleDisplayName: DyorHQ
         CFBundleName: DyorHQ
         CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "5"
+        CFBundleVersion: "7"
         UILaunchScreen:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
@@ -70,6 +70,12 @@ targets:
         PrivyClientID: "$(PRIVY_CLIENT_ID)"
         MonadRPCURL: "$(MONAD_RPC_URL)"
         PasskeyRelyingParty: "$(PASSKEY_RP_ID)"
+        # Set SOCIAL_LOGINS_ENABLED=YES in Secrets.xcconfig once Apple/Google are enabled in the Privy dashboard;
+        # until then onboarding hides them so no one taps a disallowed method. Unset resolves to false.
+        SocialLoginsEnabled: "$(SOCIAL_LOGINS_ENABLED)"
+        # Set PASSKEYS_ENABLED=YES once passkeys are live (associated-domains entitlement restored, the App ID
+        # capabilities enabled, and the AASA hosted). Until then the UI hides passkey options. Unset resolves to false.
+        PasskeysEnabled: "$(PASSKEYS_ENABLED)"
         PerplBuilderID: "$(PERPL_BUILDER_ID)"
         LaunchpadFactory: "$(LAUNCHPAD_FACTORY)"
         LaunchRouter: "$(LAUNCH_ROUTER)"
@@ -80,20 +86,17 @@ targets:
         AuroraFeeRecipient: "$(AURORA_FEE_RECIPIENT)"
     entitlements:
       path: DyorHQ/DyorHQ.entitlements
-      # Sign in with Apple (Guideline 4.8) + Associated Domains (Mera passkeys). These require the paid Apple
-      # Developer team's ID in DEVELOPMENT_TEAM and both capabilities enabled on the fun.dyorhq.app App ID at
-      # developer.apple.com. Passkeys additionally need the AASA file live at
-      # https://$(PASSKEY_RP_ID)/.well-known/apple-app-site-association (PASSKEY_RP_ID = dyorhq.fun) before they
-      # associate on a device or in TestFlight — there is no ?mode=developer suffix, so the real hosted file is
-      # required. Simulator builds compile without any of this; only device/archive signing needs the paid team.
-      # To ENABLE for TestFlight, once (a) DEVELOPMENT_TEAM is the paid team id, (b) Sign in with Apple + Associated
-      # Domains are enabled on the fun.dyorhq.app App ID, and (c) the AASA is hosted at
-      # https://$(PASSKEY_RP_ID)/.well-known/apple-app-site-association: uncomment applesignin and remove the
-      # ?mode=developer suffix. Until then, ?mode=developer lets a Developer-Mode device read the AASA from the
-      # origin directly. Passkeys stay broken until the AASA is live regardless — that is the owner's hosting step.
-      properties:
-        # com.apple.developer.applesignin: [Default]
-        com.apple.developer.associated-domains: ["webcredentials:$(PASSKEY_RP_ID)?mode=developer"]
+      # Passkey entitlements (Sign in with Apple + Associated Domains) are DISABLED — they made the TestFlight/App Store
+      # binary INVALID (builds 5 & 6 came back "Invalid Binary"). Two reasons: a `?mode=developer` associated domain is
+      # never allowed in a DISTRIBUTION build, and the capabilities aren't enabled on the fun.dyorhq.app App ID / the
+      # AASA isn't hosted — all pending owner steps. Passkeys don't work until the AASA is live regardless, so an empty
+      # entitlements set loses nothing right now and yields a valid binary.
+      # TO RE-ENABLE PASSKEYS later, once (a) Sign in with Apple + Associated Domains are enabled on the App ID at
+      # developer.apple.com and (b) the AASA is hosted at https://$(PASSKEY_RP_ID)/.well-known/apple-app-site-association,
+      # set properties back to (note: NO ?mode=developer suffix in a distribution build):
+      #   com.apple.developer.applesignin: [Default]
+      #   com.apple.developer.associated-domains: ["webcredentials:$(PASSKEY_RP_ID)"]
+      properties: {}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fun.dyorhq.app

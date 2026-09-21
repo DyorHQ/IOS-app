@@ -23,6 +23,28 @@ public struct EVMChain: Sendable, Hashable, Identifiable {
 
     private static func url(_ s: String) -> URL { URL(string: s)! }
 
+    /// The block-explorer transaction URL for this chain — used by the Bridge's "View" link so the user can confirm the
+    /// on-chain deposit / arrival themselves (like the explorer link on a swap). Keyed by `auroraId`; Monad uses
+    /// monadscan. Returns nil for a chain we don't have an explorer for.
+    public func explorerTx(_ hash: String) -> URL? {
+        let base: String
+        switch auroraId {
+        case "eth": base = "https://etherscan.io"
+        case "base": base = "https://basescan.org"
+        case "arb": base = "https://arbiscan.io"
+        case "op": base = "https://optimistic.etherscan.io"
+        case "pol": base = "https://polygonscan.com"
+        case "bsc": base = "https://bscscan.com"
+        case "avax": base = "https://snowtrace.io"
+        case "gnosis": base = "https://gnosisscan.io"
+        case "scroll": base = "https://scrollscan.com"
+        case "bera": base = "https://berascan.com"
+        case "monad": base = Monad.explorer.absoluteString
+        default: return nil
+        }
+        return URL(string: "\(base)/tx/\(hash)")
+    }
+
     /// The EVM chains the Bridge supports, keyed to Aurora's `blockchain` ids so a `/tokens` row maps straight to a
     /// chain we can sign on. Public RPCs (publicnode) for the sources; Monad here is a placeholder whose RPC the app
     /// replaces with its configured endpoint.

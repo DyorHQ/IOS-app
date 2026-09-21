@@ -10,14 +10,24 @@ session automatically as soon as a wallet that can sign is in use, so nothing be
 | --- | --- | --- | --- |
 | `profiles` | handle, display name, bio, avatar URL | **auto-created on sign-in** (`SocialSession.ensureProfile`, on every sign-in/restore) so creating an account, importing a PK, or using a passkey all seed a profile; the user edits it on the Social profile screen | yes (read) |
 | `sessions` | one row per app sign-in — `signed_in_at`, `signed_out_at` | `SocialSession.openSession` on sign-in, `closeSession` on sign-out | – (analytics) |
-| `email_accounts` (mig. 15) | one binding per **OTP-verified** email → the wallet address it derived | `EmailPasswordView` after Privy email-OTP sign-up (authenticated write) | gates login |
+| `email_accounts` (mig. 15, 16) | one binding per **OTP-verified** email → the wallet address it derived | **the `email-rebind` edge function only** (service role), after it verifies a Privy email-OTP token + a wallet signature; direct client writes are revoked | gates login |
 
 **Email + password (OTP on sign-up, none on login):** Privy sends a one-time code at sign-up to prove the email is
 owned (adoption suppressed so Privy's own wallet never takes over); only then is the deterministic wallet created and
 the email → address binding written. **Log in re-derives the wallet with no code, but signs in only when
 `email_account_matches(email, address)` is true** — so a fake/unverified email can't get a working account, and a
-wrong password (which derives a different address) is rejected instead of silently opening a new wallet. Requires
-**Email login enabled in the Privy dashboard** (same place as Apple/Google).
+wrong password (which derives a different address) is rejected instead of silently opening a new wallet. Email login
+is enabled in the Privy dashboard.
+
+**The binding is written server-side only (mig. 16).** Both sign-up and forgot-password go through the same
+`email-rebind` edge function: it verifies the Privy email-OTP access token (proves the email) *and* a signature from
+the derived wallet (proves the key), then upserts with the service role. `INSERT/UPDATE/DELETE` on `email_accounts`
+are **revoked** from `authenticated`/`anon`, so a self-minted `wallet-auth` session can no longer POST arbitrary
+`email → self` rows to PostgREST and squat emails — the OTP requirement is enforced on the backend, not just the app.
+Because ownership is re-proven by OTP every time, whoever verifies an email owns its binding (no "first-verified-wins"
+dead-end): a forgotten password is recovered by verifying the email again onto a new password/wallet. This moves the
+login identity, not the coins — the old wallet's funds still need the old password. Needs `PRIVY_APP_SECRET` on the
+function (set).
 | `activity` | every action with kind, section, title, tx hash, USD size, USD fee, time | `ActivityLog.record` → `BackendSync` (swaps `spot`, curve buys/sells + launches `launch`, perps orders `perps`, Moment publish/collect/claim `moments`, bridge `bridge`, Perps funding `deposit`/`withdraw`, external sends `withdraw`) | feeds Portfolio history + the journey rollup |
 | `strategies` | delta-neutral, market-making and copied-trader records (JSON) | `DNStore` / `MMStore` / `CopyStore` saves | yes |
 | `notifications` | the in-app notification center | `NotificationStore.save` | yes |
@@ -47,7 +57,10 @@ The classification depends on the clean `kind`/`section` the app now emits (brid
 Platform-wide volume: `platform_volume(since)` (security definer, callable with the publishable key) sums `activity.usd`
 by section with no wallet exposed; the Portfolio shows it as "Everyone on DyorHQ, all time".
 
-Account deletion removes the `profiles` row; every table above cascades from it.
+Account deletion removes the `profiles` row; every table above cascades from it — **except `email_accounts`, which has
+no FK and is deleted explicitly** (migration 17 restores an owner-scoped DELETE for exactly this). Without it, a
+deleted email+password account could log straight back in, since the same email+password re-derives the same wallet
+and the stale binding would still satisfy the login gate.
 
 ## Storage
 
@@ -60,6 +73,11 @@ Account deletion removes the `profiles` row; every table above cascades from it.
 
 - `wallet-auth` — signature → session JWT.
 - `delete-account` — deletes the Privy user for account deletion (needs `PRIVY_APP_SECRET`).
+- `email-rebind` — the forgot-password path: moves an email to a NEW password/wallet. Takes two proofs — the Privy
+  access token from a fresh email OTP (proves the email) and an EIP-191 signature from the new wallet (proves the
+  key) — then overwrites the `email_accounts` binding with the service role (the only path past the owner RLS). Deploy
+  `--no-verify-jwt` (the bearer is a Privy token); needs `PRIVY_APP_SECRET`. Inert until that secret is set + Email is
+  enabled in Privy.
 - Next: `pin-media` (IPFS pinning for Moment media, needs a Pinata key) and `opensea-refresh` (metadata refresh
   after a Moment graduates, needs an OpenSea API key). See `ios/docs/moments/NFT-OPENSEA-PLAN.md`.
 
