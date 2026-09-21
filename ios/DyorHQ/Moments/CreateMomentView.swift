@@ -33,6 +33,9 @@ struct CreateMomentView: View {
     @State private var isVideo = false
     /// A fast https mirror of the picked media for the create-screen preview; the on-chain URI is the ipfs:// CID.
     @State private var mediaMirror = ""
+    /// The locally picked photo (or a video's poster frame), shown as the preview immediately — an IPFS gateway can
+    /// take a while to serve a freshly pinned CID, so we never wait on the network to show the user their own media.
+    @State private var previewImage: UIImage?
     @State private var showConfirm = false
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
@@ -140,9 +143,22 @@ struct CreateMomentView: View {
     private var mediaSection: some View {
         Section {
             HStack(spacing: 16) {
-                MomentArtwork(provenance: MomentProvenance(mediaURI: mediaMirror.isEmpty ? mediaURI : mediaMirror, mediaHash: Data(), place: "", date: 0, animationURI: ""), symbol: symbol.isEmpty ? "?" : symbol)
-                    .frame(width: 84, height: 84)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                ZStack {
+                    if let previewImage {
+                        Image(uiImage: previewImage).resizable().scaledToFill()
+                    } else {
+                        MomentArtwork(provenance: MomentProvenance(mediaURI: mediaMirror.isEmpty ? mediaURI : mediaMirror, mediaHash: Data(), place: "", date: 0, animationURI: ""), symbol: symbol.isEmpty ? "?" : symbol)
+                    }
+                    if uploading {
+                        ZStack { Color.black.opacity(0.35); ProgressView().controlSize(.small).tint(.white) }
+                    } else if isVideo, previewImage != nil {
+                        Image(systemName: "play.circle.fill")
+                            .font(.title2).foregroundStyle(.white)
+                            .shadow(radius: 3)
+                    }
+                }
+                .frame(width: 84, height: 84)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 VStack(alignment: .leading, spacing: 6) {
                     PhotosPicker(selection: $photoItem, matching: .any(of: [.images, .videos])) {
                         Label(mediaHash == nil ? "Choose Photo or Video" : (isVideo ? "Change Video" : "Change Photo"), systemImage: isVideo ? "video" : "photo").font(.subheadline.weight(.medium))
@@ -163,7 +179,7 @@ struct CreateMomentView: View {
             .padding(.vertical, 4)
             TextField("Or paste an image link (ipfs:// or https://)", text: $mediaURI)
                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                .onChange(of: mediaURI) { old, new in if old != new, mediaHash != nil, !new.hasPrefix("https://") { mediaHash = nil; isVideo = false; mediaMirror = "" } }
+                .onChange(of: mediaURI) { old, new in if old != new, mediaHash != nil, !new.hasPrefix("https://") { mediaHash = nil; isVideo = false; mediaMirror = ""; previewImage = nil } }
             TextField("Video link (optional)", text: $animationURI)
                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
         } header: {
@@ -244,7 +260,9 @@ struct CreateMomentView: View {
                 defer { try? FileManager.default.removeItem(at: movie.url) }
                 let data = try Data(contentsOf: movie.url)
                 guard data.count <= 50 * 1024 * 1024 else { imageError = "Videos up to 50 MB."; return }
-                guard let poster = try await MovieFile.coverFrame(url: movie.url)?.avatarJPEG(maxDimension: 2048, quality: 0.9) else { imageError = "Could not read a frame from that video."; return }
+                guard let posterImage = try await MovieFile.coverFrame(url: movie.url) else { imageError = "Could not read a frame from that video."; return }
+                previewImage = posterImage; isVideo = true // show the video's poster frame immediately, before the pin
+                guard let poster = posterImage.avatarJPEG(maxDimension: 2048, quality: 0.9) else { imageError = "Could not read a frame from that video."; return }
                 let type = UTType(filenameExtension: movie.url.pathExtension) ?? .quickTimeMovie
                 let isMP4 = type.conforms(to: .mpeg4Movie)
                 let posterPin = try await social.uploadAndPinMomentMedia(poster, contentType: "image/jpeg", fileExtension: "jpg")
@@ -259,12 +277,12 @@ struct CreateMomentView: View {
                     imageError = "That photo could not be read."
                     return
                 }
+                previewImage = image; isVideo = false // show the picked photo immediately, before the pin returns
                 let uploaded = try await social.uploadAndPinMomentMedia(jpeg, contentType: "image/jpeg", fileExtension: "jpg")
                 mediaURI = uploaded.onchain
                 mediaMirror = uploaded.mirror.absoluteString
-                if isVideo { animationURI = "" }
+                animationURI = ""
                 mediaHash = Keccak.hash256(jpeg)
-                isVideo = false
             }
             Haptics.success()
         } catch {
