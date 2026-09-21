@@ -28,7 +28,7 @@ struct RootView: View {
         // Wallet), it would land in that snapshot. Covering the whole hierarchy the instant we're not active means the
         // snapshot only ever captures the cover, never a secret.
         .overlay { PrivacyCover(active: scenePhase == .active) }
-        .task { session.start(); settings.appearance.apply() }
+        .task { session.start(); settings.appearance.apply(); Notifications.configure() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 settings.appearance.apply()
@@ -48,6 +48,10 @@ struct RootView: View {
             if env.social.isSignedIn, let address = session.address { await env.sync.restore(owner: address) }
             env.perplTrading.refresh(address: session.address)
             NotificationHub.shared.bind(owner: session.address)
+            // Ask for notification permission once the user is signed in and can act (so swaps, fills and price
+            // alerts actually reach the lock screen). notificationsEnabled defaults on, but the Settings toggle only
+            // requests when flipped — so a user who never opened Settings was never prompted.
+            if session.canSign, settings.notificationsEnabled { await Notifications.requestAuthorizationIfUndetermined() }
         }
         .task { env.alertWatcher.start(env: env, settings: settings) }
         .task { await env.refreshVenueTokens() }

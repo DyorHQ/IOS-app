@@ -34,6 +34,11 @@ enum AccountDeletion {
             try await social.client.deleteObjects(bucket: "avatars", prefix: wallet)
             // The profile row is the root: every other table references it with ON DELETE CASCADE.
             try await social.client.delete("profiles", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
+            // The email → wallet binding has NO FK to profiles, so it doesn't cascade. Delete it explicitly: an
+            // email+password wallet is deterministic, so leaving the binding would let the same credentials log back
+            // in through the gate (email_account_matches) after "deletion". Owner-scoped DELETE (migration 17) only
+            // touches this wallet's own row; other account types simply have no row here.
+            try await social.client.delete("email_accounts", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
             if let token = try await session.privyAccessToken() {
                 do {
                     _ = try await social.client.invoke(function: "delete-account", bearer: token)

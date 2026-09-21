@@ -57,7 +57,10 @@ The classification depends on the clean `kind`/`section` the app now emits (brid
 Platform-wide volume: `platform_volume(since)` (security definer, callable with the publishable key) sums `activity.usd`
 by section with no wallet exposed; the Portfolio shows it as "Everyone on DyorHQ, all time".
 
-Account deletion removes the `profiles` row; every table above cascades from it.
+Account deletion removes the `profiles` row; every table above cascades from it — **except `email_accounts`, which has
+no FK and is deleted explicitly** (migration 17 restores an owner-scoped DELETE for exactly this). Without it, a
+deleted email+password account could log straight back in, since the same email+password re-derives the same wallet
+and the stale binding would still satisfy the login gate.
 
 ## Storage
 
