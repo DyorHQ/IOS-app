@@ -250,6 +250,9 @@ struct BridgeView: View {
                 ProgressView().controlSize(.small)
                 Text(progressText).font(.subheadline)
                 Spacer()
+                if let url = model.completedTxURL {
+                    Link("View", destination: url).font(.subheadline.weight(.semibold))
+                }
             }
             .padding(14).background(Color.brand.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         case .done(let out):
@@ -260,6 +263,9 @@ struct BridgeView: View {
                     if !out.isEmpty { Text("Received \(out)").font(.caption).foregroundStyle(.secondary) }
                 }
                 Spacer()
+                if let url = model.completedTxURL {
+                    Link("View", destination: url).font(.subheadline.weight(.semibold))
+                }
             }
             .padding(14).background(Color.positive.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         case .settling(let message):
@@ -267,6 +273,9 @@ struct BridgeView: View {
                 Image(systemName: "clock.arrow.circlepath").font(.title3).foregroundStyle(Color.attention)
                 Text(message).font(.caption)
                 Spacer()
+                if let url = model.completedTxURL {
+                    Link("View", destination: url).font(.footnote.weight(.semibold))
+                }
             }
             .padding(14).background(Color.attention.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         case .failed(let message):

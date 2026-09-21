@@ -51,6 +51,9 @@ final class BridgeModel {
     private var pendingDestChain: EVMChain?
     private var pendingDestBaseline: BigUInt?
     private var pendingMinOut: BigUInt?
+    /// The block-explorer URL the "View" link opens on a completed bridge — the source deposit tx as soon as it's
+    /// signed, upgraded to the destination arrival tx once Aurora reports it, so the user can verify it on-chain.
+    private(set) var completedTxURL: URL?
 
     init(env: AppEnvironment) {
         self.env = env
@@ -317,6 +320,7 @@ final class BridgeModel {
         }
         if env.settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm bridge")) { return }
         phase = .signing
+        completedTxURL = nil
         // Send EXACTLY what Aurora quoted (`amountIn`) to the deposit address — never a re-parsed value — so the
         // deposit always matches the quote. `amount` is only the fallback if the quote didn't echo a parsable amountIn.
         let sendAmount = BigUInt(quote.amountIn) ?? amount
@@ -343,6 +347,7 @@ final class BridgeModel {
             pendingDestBaseline = toToken.flatMap { balances[$0.assetId] } ?? 0
             let hash = try await env.sender(for: fromChain).send(request, from: wallet)
             pendingHash = hash.hexString
+            completedTxURL = fromChain.explorerTx(hash.hexString) // source deposit tx — a verifiable link straight away
             phase = .submitting
             _ = try? await env.aurora.submitDeposit(txHash: hash.hexString, depositAddress: deposit, memo: quote.depositMemo)
             // Bridge fee (USD) = the value the route consumed: input value − output value, when the quote priced both.
@@ -369,6 +374,11 @@ final class BridgeModel {
                 let state = try await env.aurora.status(depositAddress: deposit, depositMemo: memo)
                 guard generation == pollGeneration else { return } // the user started over while this was in flight
                 consecutiveFailures = 0
+                // Once Aurora surfaces the destination-chain settlement tx, upgrade the "View" link from the source
+                // deposit to the arrival tx — that's the on-chain proof the funds actually landed.
+                if let ref = state.swapDetails?.destinationChainTxHashes?.last {
+                    completedTxURL = ref.explorerUrl.flatMap(URL.init(string:)) ?? pendingDestChain?.explorerTx(ref.hash) ?? completedTxURL
+                }
                 switch state.status {
                 case .success:
                     let out = state.swapDetails?.amountOutFormatted.map { "\($0) \(pendingOutSymbol ?? toToken?.symbol ?? "")" } ?? expectedOut ?? ""
@@ -449,6 +459,7 @@ final class BridgeModel {
     func reset() {
         pollGeneration += 1 // stop any poll still running from the previous bridge
         phase = .idle
+        completedTxURL = nil
         resetQuote()
         if amountRaw != nil { refreshQuoteSoon() }
     }
