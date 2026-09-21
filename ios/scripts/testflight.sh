@@ -17,8 +17,18 @@ TEAM=$(sed -n 's/^DEVELOPMENT_TEAM *= *//p' DyorHQ/Config/Secrets.xcconfig | tr 
 if [[ -z "$TEAM" ]]; then echo "DEVELOPMENT_TEAM is not set in DyorHQ/Config/Secrets.xcconfig" >&2; exit 1; fi
 if grep -q "127.0.0.1" DyorHQ/Config/Secrets.xcconfig; then echo "Secrets.xcconfig points at a local fork; restore the mainnet RPC first" >&2; exit 1; fi
 
+# Bump the build number so every upload is unique — App Store Connect rejects a duplicate CFBundleVersion, which is
+# the most common first-timer failure. Pin an exact number with BUILD=<n>; keep the current one with NO_BUMP=1.
 VERSION=$(sed -n 's/.*CFBundleShortVersionString: "\(.*\)"/\1/p' project.yml)
-BUILD=$(sed -n 's/.*CFBundleVersion: "\(.*\)"/\1/p' project.yml)
+CURRENT_BUILD=$(sed -n 's/.*CFBundleVersion: "\(.*\)"/\1/p' project.yml)
+if [[ -n "${BUILD:-}" ]]; then NEW_BUILD="$BUILD"
+elif [[ -n "${NO_BUMP:-}" ]]; then NEW_BUILD="$CURRENT_BUILD"
+else NEW_BUILD=$(( CURRENT_BUILD + 1 )); fi
+if [[ "$NEW_BUILD" != "$CURRENT_BUILD" ]]; then
+  sed -i '' "s/CFBundleVersion: \"$CURRENT_BUILD\"/CFBundleVersion: \"$NEW_BUILD\"/" project.yml
+  echo "Build number: $CURRENT_BUILD → $NEW_BUILD (project.yml updated — commit it with the release)."
+fi
+BUILD="$NEW_BUILD"
 echo "DyorHQ $VERSION ($BUILD) · team $TEAM"
 
 xcodegen generate >/dev/null
