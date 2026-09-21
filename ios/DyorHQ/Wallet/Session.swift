@@ -167,7 +167,7 @@ final class Session {
     /// otherwise onboarding hides them so no one taps a method that returns `disallowed_login_method`.
     var hasSocialLogins: Bool { privy != nil && config.enableSocialLogins }
     /// Mera passkey accounts need only a relying party (the domain that serves the passkey association file).
-    var hasMera: Bool { !config.passkeyRelyingParty.isEmpty }
+    var hasMera: Bool { config.enablePasskeys && !config.passkeyRelyingParty.isEmpty }
 
     /// One passkey ceremony creates (or signs into) a Mera account and makes it the app's signer. Supersedes any
     /// Privy, imported or watch-only session.

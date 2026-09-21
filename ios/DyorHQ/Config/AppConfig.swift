@@ -11,6 +11,10 @@ struct AppConfig: Sendable {
     /// Apple / Google sign-in through Privy. Off unless `SocialLoginsEnabled=YES` in Secrets.xcconfig; the methods must
     /// also be enabled in the Privy dashboard. When off, onboarding hides them so no one taps a disallowed method.
     let enableSocialLogins: Bool
+    /// Passkey sign-in (Mera + Privy). Off unless `PasskeysEnabled=YES` in Secrets.xcconfig — passkeys need the
+    /// associated-domains entitlement, the App ID capability, and a hosted AASA (owner steps), none live yet, so the
+    /// UI hides passkey options until then rather than offering a flow that can't complete.
+    let enablePasskeys: Bool
     let perplBuilderID: Int
     let launchpad: LaunchpadAddresses
     /// Moments (v1.1) is live on Monad mainnet; the addresses are the verified deployment, baked into DyorKit.
@@ -29,7 +33,7 @@ struct AppConfig: Sendable {
 
     var hasPrivy: Bool { !privyAppID.isEmpty && !privyClientID.isEmpty }
     var hasBridge: Bool { !auroraApiKey.isEmpty }
-    var hasPasskeys: Bool { hasPrivy && !passkeyRelyingParty.isEmpty }
+    var hasPasskeys: Bool { hasPrivy && enablePasskeys && !passkeyRelyingParty.isEmpty }
     var hasSupabase: Bool { !supabaseKey.isEmpty }
 
     static let current: AppConfig = {
@@ -50,6 +54,7 @@ struct AppConfig: Sendable {
             rpcURL: rpc,
             passkeyRelyingParty: string("PasskeyRelyingParty"),
             enableSocialLogins: bool("SocialLoginsEnabled"),
+            enablePasskeys: bool("PasskeysEnabled"),
             perplBuilderID: Int(string("PerplBuilderID")) ?? 0,
             // The audited mainnet launchpad is baked into DyorKit (checked against contracts/deployments/143.json by
             // its tests). Setting LAUNCHPAD_FACTORY in Secrets.xcconfig points a build at another deployment — a fork

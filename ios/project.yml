@@ -49,7 +49,7 @@ targets:
         CFBundleDisplayName: DyorHQ
         CFBundleName: DyorHQ
         CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "6"
+        CFBundleVersion: "7"
         UILaunchScreen:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
@@ -73,6 +73,9 @@ targets:
         # Set SOCIAL_LOGINS_ENABLED=YES in Secrets.xcconfig once Apple/Google are enabled in the Privy dashboard;
         # until then onboarding hides them so no one taps a disallowed method. Unset resolves to false.
         SocialLoginsEnabled: "$(SOCIAL_LOGINS_ENABLED)"
+        # Set PASSKEYS_ENABLED=YES once passkeys are live (associated-domains entitlement restored, the App ID
+        # capabilities enabled, and the AASA hosted). Until then the UI hides passkey options. Unset resolves to false.
+        PasskeysEnabled: "$(PASSKEYS_ENABLED)"
         PerplBuilderID: "$(PERPL_BUILDER_ID)"
         LaunchpadFactory: "$(LAUNCHPAD_FACTORY)"
         LaunchRouter: "$(LAUNCH_ROUTER)"
