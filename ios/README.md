@@ -10,6 +10,8 @@ signed on the device and broadcast by the app itself, so Monad never needs to be
 ```
 ios/
 ├─ project.yml            XcodeGen spec (run `xcodegen generate` after editing)
+├─ Package.resolved       package pins the Xcode Cloud build uses (see Xcode Cloud below)
+├─ ci_scripts/            Xcode Cloud post-clone script that generates the project in the cloud checkout
 ├─ DyorHQ/                the app target (SwiftUI, iOS 18+)
 │  ├─ App/                entry point, environment, root view, cross-tab router
 │  ├─ Config/             Secrets.example.xcconfig → Secrets.xcconfig (git-ignored), AppConfig
@@ -41,6 +43,20 @@ xcodebuild -project DyorHQ.xcodeproj -scheme DyorHQ -destination 'platform=iOS S
 Package tests (fast, no simulator): `cd DyorKit && swift test`. The fixtures under `Tests/DyorKitTests/Fixtures`
 were generated with viem and real `eth_call`s against Monad mainnet, so encoders are checked against the reference
 implementation and decoders against live contract output.
+
+## Xcode Cloud
+
+The DyorHQ workflow archives `ios/DyorHQ.xcodeproj` on every push to `main`. That project is git-ignored, so
+`ci_scripts/ci_post_clone.sh` creates it in the cloud checkout: it installs the pinned XcodeGen, writes
+`Secrets.xcconfig` from the workflow's environment variables, runs `xcodegen generate`, and copies the pinned
+`Package.resolved` into the project (Xcode Cloud never resolves packages on its own).
+
+- Environment variables: App Store Connect → Xcode Cloud → Manage Workflows → DyorHQ → Environment. Add
+  `PRIVY_APP_ID`, `PRIVY_CLIENT_ID` and `AURORA_API_KEY` with Secret ticked, plus any optional key the script lists.
+  Enter plain values (no quotes, URLs as-is). An archive fails without the two Privy ids, because sign-up needs them;
+  any other missing value switches its feature off, exactly as in a local build.
+- After changing a package requirement in `project.yml` or `DyorKit/Package.swift`, run `scripts/pin-packages.sh`
+  and commit `Package.resolved`; the cloud build fails with an out-of-date resolved file until the pins match.
 
 ## Design rules
 
