@@ -34,7 +34,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>5</string>
+	<string>7</string>
 	<key>FeeEscrow</key>
 	<string>$(FEE_ESCROW)</string>
 	<key>HolderFeeSharing</key>
@@ -61,12 +61,16 @@
 	<string>DyorHQ uses your photos to add a token image when you launch a coin.</string>
 	<key>PasskeyRelyingParty</key>
 	<string>$(PASSKEY_RP_ID)</string>
+	<key>PasskeysEnabled</key>
+	<string>$(PASSKEYS_ENABLED)</string>
 	<key>PerplBuilderID</key>
 	<string>$(PERPL_BUILDER_ID)</string>
 	<key>PrivyAppID</key>
 	<string>$(PRIVY_APP_ID)</string>
 	<key>PrivyClientID</key>
 	<string>$(PRIVY_CLIENT_ID)</string>
+	<key>SocialLoginsEnabled</key>
+	<string>$(SOCIAL_LOGINS_ENABLED)</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
