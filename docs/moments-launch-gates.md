@@ -24,8 +24,9 @@ after every step, and schedule the audit before the threshold is raised.
 (`THRESHOLD_USDC=771428571`), every other policy field unchanged, still before the audit. Exposure per Moment
 becomes ≈ $771.43 of USDC in each graduated pool (≈ $1,028.57 collected). The change was rehearsed end to end on an
 anvil fork the same day (propose → 48 h → apply → publish → terminal collect → atomic graduation: the pool opened at
-$1,999.999999 FDV with 38,571,428.57 coins + 771.428571 USDC, `supplyCheck` intact). Procedure: "Raising the
-threshold" below.
+$1,999.999999 FDV with 38,571,428.57 coins + 771.428571 USDC, `supplyCheck` intact). The owner then chose to
+execute it as a **fresh deployment with the policy in the constructor** rather than the timelocked proposal, retiring
+the cohort-1 stack: procedure in `docs/moments-mainnet-runbook.md` §1b (also rehearsed on a fork end to end).
 
 ## Validation launch — run of show
 

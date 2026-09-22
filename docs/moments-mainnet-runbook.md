@@ -70,6 +70,46 @@ cd contracts && PLATFORM=0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48 TREASURY=0x5
 27 KB, which Monad allows (128 KB limit; the Launchpad factory deployed the same way). The Launchpad's
 `deployments/143.json` is never touched.
 
+## 1b. Cohort-2 redeploy — the $2,000 graduation FDV baked in (2026-09-22)
+
+The owner chose a fresh deployment over the timelocked policy change (ruling 20): the new stack starts with the
+cohort-2 policy in its constructor (threshold 771.428571 USDC, everything else as before) and the cohort-1 stack is
+retired. Rehearsed end to end on an anvil fork the same day — deploy → publish → terminal collect → atomic
+graduation at $1,999.999999 FDV → `scripts/moments-status.mjs` all invariants OK. Two fork gotchas that are not
+mainnet problems: anvil needs `--code-size-limit 200000` as well or it rejects the 66 KB factory at 24 KB, and
+forge's own size lint must be silenced with `--non-interactive` (it otherwise waits for a confirmation).
+Estimated cost 24.2M gas ≈ 4.9 MON at 202 gwei; the governance wallet held 27.6 MON.
+
+1. Deploy, signed on the Ledger. `--sender` pins the governance address: if the Ledger presents any other
+   account forge aborts before sending anything. The cohort-1 record is kept as `deployments/moments-143-cohort1.json`;
+   the script overwrites `deployments/moments-143.json` with the new stack.
+
+```bash
+cd /Users/jerry/Hackathon-moments/contracts && THRESHOLD_USDC=771428571 PLATFORM=0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48 TREASURY=0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045 ~/.foundry/bin/forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad --broadcast --non-interactive --code-size-limit 200000 --ledger --sender 0xCf7A9f1DE835a691f969B76e6eb4842BFaA7Fe10
+```
+
+2. Metadata base for the new NFTs' external links (PolicyOps now reads the new factory from the JSON):
+
+```bash
+cd /Users/jerry/Hackathon-moments/contracts && BASE=https://dyorhq.fun/moments/ ~/.foundry/bin/forge script script/moments/PolicyOps.s.sol:PolicyOps --rpc-url monad --broadcast --non-interactive --ledger --sender 0xCf7A9f1DE835a691f969B76e6eb4842BFaA7Fe10 --sig "setBase()"
+```
+
+3. Retire the cohort-1 stack: pause publishing on the OLD factory (explicit address — the JSON now names the new
+   one). Contracts cannot be deleted: Moments 1–3, their coins, NFTs and the Bitcoin Diva pool stay on-chain and
+   tradable; they simply disappear from the app once it points at the new factory.
+
+```bash
+~/.foundry/bin/cast send 0x64698c7702d85F87f43a6dFF7D495CDD2327C020 "setPublishingPaused(bool)" true --rpc-url monad --ledger
+```
+
+4. Verify on Sourcify, no key: `cd /Users/jerry/Hackathon-moments/contracts && ./script/moments/verify-moments-143.sh`.
+
+5. Wire the app: `MomentsAddresses.monadMainnet` in `ios/DyorKit/Sources/DyorKit/Services/Moments/MomentsModels.swift`
+   (all seven module addresses plus `deployBlock` = the factory-creation block in
+   `broadcast/Deploy.s.sol/143/run-latest.json`), `npm run sync:moments` for the web app, then
+   `node scripts/moments-status.mjs` and the app's Moments tab: empty feed, Publish screen reading
+   "Graduates at $771.43 reserve · $2,000 FDV".
+
 ## 2. Verify on Sourcify — done
 
 ```bash

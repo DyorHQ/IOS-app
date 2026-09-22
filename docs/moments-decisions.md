@@ -144,5 +144,8 @@ contract that implements it so a reviewer can check the code against the ruling.
     (≈ $1,028.57 collected per Moment). Rehearsed on an anvil fork the same day: propose → early apply reverts
     (`TimelockNotElapsed`) → 48 h → apply → publish → terminal collect (clamped to exactly the threshold) → atomic
     graduation at $1,999.999999 FDV with the supply identity intact. Live execution is the owner's, from the
-    governance wallet through `PolicyOps` (ruling 13); the app shows the resulting FDV on the Publish and Moment
-    screens so nobody has to derive it.
+    governance wallet (ruling 13); the app shows the resulting FDV on the Publish and Moment screens so nobody
+    has to derive it. Later the same day the owner ruled to execute it as a **redeploy** — a fresh stack with the
+    cohort-2 policy in its constructor, signed on the Ledger like the original deployment — and to retire the
+    cohort-1 stack (publishing paused; Moments 1–3 stay on-chain but leave the app), since the product is still in
+    development. Fork-rehearsed end to end; procedure in `docs/moments-mainnet-runbook.md` §1b.
