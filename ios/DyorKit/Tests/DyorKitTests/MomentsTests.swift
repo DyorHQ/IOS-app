@@ -193,7 +193,7 @@ final class MomentsTests: XCTestCase {
         XCTAssertEqual(stats.topHolderBps, 6_250) // 25 of 40
     }
 
-    // MARK: Math (live factory bundleRate at the $10 policy)
+    // MARK: Math (factory bundleRate at the cohort-1 $10 policy and the cohort-2 $2,000-FDV policy)
 
     func testBundleRateMatchesFactory() {
         let rate = MomentsMath.bundleRate(threshold: 10_000_000, reserveBps: 7_500, creatorAllocBps: 1_000)
@@ -201,6 +201,12 @@ final class MomentsTests: XCTestCase {
         XCTAssertEqual(rate.den, BigUInt("1750000000000000"))
         // One 1 USDC collect at that rate: floor(1e6 · num / den) coin wei.
         XCTAssertEqual(MomentsMath.entitlement(gross: 1_000_000, rateNum: rate.num, rateDen: rate.den), BigUInt("3857142857142857142857142"))
+        // Cohort 2 (factory 0xc12B…a581, threshold 771.428571 USDC): what the live factory stored for a 10%-allocation
+        // Moment, and the terminal collect that lands the reserve exactly on the threshold (from the fork rehearsal).
+        let cohort2 = MomentsMath.bundleRate(threshold: 771_428_571, reserveBps: 7_500, creatorAllocBps: 1_000)
+        XCTAssertEqual(cohort2.num, BigUInt("6750000000000000000000000000000000"))
+        XCTAssertEqual(cohort2.den, BigUInt("134999999925000000"))
+        XCTAssertEqual(MomentsMath.entitlement(gross: 1_028_571_428, rateNum: cohort2.num, rateDen: cohort2.den), BigUInt("51428571428571428571428571"))
     }
 
     func testVestingSchedule() {
@@ -228,7 +234,8 @@ final class MomentsTests: XCTestCase {
     }
 
     func testMediaURLRewrite() {
-        XCTAssertEqual(MomentsMath.url("ipfs://bafy123/photo.jpg")?.absoluteString, "https://ipfs.io/ipfs/bafy123/photo.jpg")
+        // ipfs:// goes through DyorHQ's dedicated Pinata gateway first (see MomentsMediaTests for the full order).
+        XCTAssertEqual(MomentsMath.url("ipfs://bafy123/photo.jpg")?.absoluteString, "https://scarlet-secure-kangaroo-820.mypinata.cloud/ipfs/bafy123/photo.jpg")
         XCTAssertEqual(MomentsMath.url("https://example.com/a.png")?.absoluteString, "https://example.com/a.png")
         XCTAssertNil(MomentsMath.url("javascript:alert(1)"))
         XCTAssertNil(MomentsMath.url(""))
