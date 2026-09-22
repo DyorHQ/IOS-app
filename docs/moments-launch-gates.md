@@ -20,6 +20,16 @@ owner action each one needs. The contracts (v1.1) are live and verified; nothing
 holds at most $10 of USDC plus trading proceeds), keep the cohort small, run `scripts/moments-status.mjs` before and
 after every step, and schedule the audit before the threshold is raised.
 
+**Cohort 2 (ruling 20, 2026-09-22): the owner raised the graduation FDV to $2,000** — threshold 771.428571 USDC
+(`THRESHOLD_USDC=771428571`), every other policy field unchanged, still before the audit. Exposure per Moment
+becomes ≈ $771.43 of USDC in each graduated pool (≈ $1,028.57 collected). The change was rehearsed end to end on an
+anvil fork the same day (propose → 48 h → apply → publish → terminal collect → atomic graduation: the pool opened at
+$1,999.999999 FDV with 38,571,428.57 coins + 771.428571 USDC, `supplyCheck` intact). The owner then chose to
+execute it as a **fresh deployment with the policy in the constructor** rather than the timelocked proposal, retiring
+the cohort-1 stack: procedure in `docs/moments-mainnet-runbook.md` §1b (also rehearsed on a fork end to end).
+**Done 2026-09-22:** cohort-2 factory `0xc12B6b6948185cef75F861c5327702c30CB8a581` (block 106 984 957), verified
+on Sourcify, invariants OK; cohort-1 factory `0x6469…C020` paused, its Moments 1–3 remain on-chain.
+
 ## Validation launch — run of show
 
 Cohort: one creator wallet and three to five collector wallets, all dedicated and low-value (a few USDC and a little
@@ -51,17 +61,27 @@ seven days. The only governance switch is pausing publishing; nothing else is pa
 
 ## Raising the threshold after the validation cohort
 
-Policy changes apply to future Moments only and sit behind a 48-hour timelock:
+Policy changes apply to future Moments only and sit behind a 48-hour timelock. The policy field is the reserve
+threshold in USDC; the number people quote is the FDV the coin opens at. Price continuity makes the two exact
+functions of each other: `FDV = threshold · (1 + 1/reserveFrac) / (1 − creatorAlloc)`, so at the 75% reserve share
+and the app's default 10% creator allocation `threshold = FDV × 0.385714…`. A creator who takes a smaller allocation
+opens lower ($1,800 at 0%), because the untaken coins go to the pool at the same rate. Cohort 2 targets
+**$2,000 FDV → 771.428571 USDC** (`771428571` units; at $0.10 editions that is ≈ 10,286 collects, at $1 ≈ 1,029):
 
 ```bash
-cd /Users/jerry/Hackathon-moments/contracts && THRESHOLD_USDC=1000000000 ~/.foundry/bin/forge script script/moments/PolicyOps.s.sol:PolicyOps --rpc-url monad --broadcast --non-interactive --account owner --sig "proposePolicy()"
+cd /Users/jerry/Hackathon-moments/contracts && THRESHOLD_USDC=771428571 ~/.foundry/bin/forge script script/moments/PolicyOps.s.sol:PolicyOps --rpc-url monad --broadcast --non-interactive --account owner --sig "proposePolicy()"
 ```
 
-then, two days later, from any wallet:
+The script copies the live policy and changes only the threshold; its console prints the full proposed struct and
+the earliest apply time (`pendingPolicyAt`). Then, 48 hours later, from any wallet:
 
 ```bash
 cd /Users/jerry/Hackathon-moments/contracts && ~/.foundry/bin/forge script script/moments/PolicyOps.s.sol:PolicyOps --rpc-url monad --broadcast --non-interactive --account owner --sig "applyPolicy()"
 ```
+
+Before publishing anything under the new policy, `--sig "show()"` must print `threshold (USDC units) 771428571`,
+and the app's Publish screen reads "Graduates at $771.43 reserve · $2,000 FDV". Afterwards update `thresholdUsdc`
+in `contracts/deployments/moments-143.json`. Moments published earlier keep their own snapshot ($10).
 
 `show()` prints the live policy without a key; `cancelPolicy()`, `setPaused()` (`PAUSED=true|false`) and `setBase()`
 (`BASE=…`) cover the other governance calls.
