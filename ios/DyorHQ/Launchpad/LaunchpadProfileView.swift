@@ -218,7 +218,8 @@ struct LaunchpadProfileView: View {
             ConfirmationSheet(
                 title: "Claim \(asset.symbol) Fees", confirmTitle: "Claim \(asset.symbol)",
                 build: { env.launchpad.claimEscrowPlan(native: asset.isNative, tokens: asset.isNative ? [] : [asset.token]) },
-                onDone: { Task { await model.load(env: env, address: session.address) } }
+                onDone: { Task { await model.load(env: env, address: session.address) } },
+                onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected \(asset.symbol) creator fees", subtitle: asset.amountText, hash: hash, section: "launch"), owner: session.address) }
             ) {
                 DetailRow("Creator fees", asset.amountText)
                 DetailRow("To", session.address?.short ?? "—")
@@ -227,7 +228,8 @@ struct LaunchpadProfileView: View {
             ConfirmationSheet(
                 title: "Claim \(reward.launch.symbol) Rewards", confirmTitle: "Claim",
                 build: { env.launchpad.claimRewardsPlan(launch: reward.launch, view: nil) },
-                onDone: { Task { await model.load(env: env, address: session.address) } }
+                onDone: { Task { await model.load(env: env, address: session.address) } },
+                onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed \(reward.launch.symbol) rewards", subtitle: reward.amountText, hash: hash, section: "launch"), owner: session.address) }
             ) {
                 DetailRow("Holder rewards", reward.amountText)
                 DetailRow("To", session.address?.short ?? "—")
@@ -236,7 +238,8 @@ struct LaunchpadProfileView: View {
             ConfirmationSheet(
                 title: "Claim All Fees", confirmTitle: "Claim All",
                 build: { await model.claimAllPlan(env: env) },
-                onDone: { Task { await model.load(env: env, address: session.address) } }
+                onDone: { Task { await model.load(env: env, address: session.address) } },
+                onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Claimed all Launch earnings", subtitle: "\(model.claimableCount) \(model.claimableCount == 1 ? "claim" : "claims") · fees and rewards", hash: hash, section: "launch"), owner: session.address) }
             ) {
                 ForEach(model.creatorClaimables) { asset in DetailRow("Creator · \(asset.symbol)", asset.amountText) }
                 ForEach(model.rewardClaimables) { reward in DetailRow("\(reward.launch.symbol) rewards", reward.amountText) }

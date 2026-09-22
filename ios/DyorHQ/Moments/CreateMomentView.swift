@@ -120,7 +120,7 @@ struct CreateMomentView: View {
                         build: { await env.moments.publishPlan(input) },
                         onDone: { dismiss(); onPublished(nil) },
                         onCompleted: { hash in
-                            ActivityLog.record(ActivityRecord(kind: .moment, title: "Published \(input.name)", subtitle: "$\(input.symbol) · \(MomentsFormat.usdc(input.price)) per edition", hash: hash), owner: session.address)
+                            Activity.record(ActivityRecord(kind: .moment, title: "Published \(input.name)", subtitle: "$\(input.symbol) · \(MomentsFormat.usdc(input.price)) per edition", hash: hash, section: "moments"), owner: session.address)
                             Task {
                                 // Resolve the new Moment from the receipt and open it.
                                 guard let result = (try? await env.moments.publishResult(transaction: hash)) ?? nil,

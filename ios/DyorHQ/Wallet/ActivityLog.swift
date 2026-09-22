@@ -7,6 +7,18 @@ import Foundation
 struct ActivityRecord: Codable, Identifiable, Hashable {
     enum Kind: String, Codable, Hashable {
         case swap, launch, buy, sell, perp, send, moment, bridge, deposit, withdraw
+        /// Claiming vested coins or holder rewards (Moments claim, Launchpad rewards).
+        case claim
+        /// Collecting fees or proceeds (a creator's collect proceeds and pool fees, a platform/treasury share,
+        /// Launchpad creator fees) — money the action pulls into the wallet.
+        case fees
+        /// A coin's lifecycle event the user triggered on-chain: graduation (or its retry), a buyback, an expiry.
+        case graduate
+
+        /// Tolerates rows written by future builds (a new case) so a forward row never breaks decoding on an old app.
+        init(from decoder: Decoder) throws {
+            self = Kind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .moment
+        }
 
         var symbol: String {
             switch self {
@@ -20,6 +32,9 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
             case .bridge: return "point.3.connected.trianglepath.dotted"
             case .deposit: return "tray.and.arrow.down.fill"
             case .withdraw: return "tray.and.arrow.up.fill"
+            case .claim: return "arrow.down.circle.fill"
+            case .fees: return "dollarsign.circle.fill"
+            case .graduate: return "checkmark.seal.fill"
             }
         }
     }
@@ -36,8 +51,11 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
     var usd: Double?
     /// Fee paid for the action in USD, when known (e.g. the bridge spread) — feeds the backend journey's fee totals.
     var feeUsd: Double?
+    /// An id the matching notification can deep-link to (a Moment id, a coin address). Optional and backward
+    /// compatible: rows written before this field decode with `nil`.
+    var reference: String?
 
-    init(kind: Kind, title: String, subtitle: String, hash: Data?, time: Date = Date(), section: String? = nil, usd: Double? = nil, feeUsd: Double? = nil) {
+    init(kind: Kind, title: String, subtitle: String, hash: Data?, time: Date = Date(), section: String? = nil, usd: Double? = nil, feeUsd: Double? = nil, reference: String? = nil) {
         self.kind = kind
         self.title = title
         self.subtitle = subtitle
@@ -46,6 +64,7 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
         self.section = section ?? Self.defaultSection(kind)
         self.usd = usd
         self.feeUsd = feeUsd
+        self.reference = reference
     }
 
     private static func defaultSection(_ kind: Kind) -> String {
@@ -53,13 +72,35 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
         case .swap: return "spot"
         case .launch, .buy, .sell: return "launch"
         case .perp: return "perps"
-        case .moment: return "moments"
+        case .moment, .graduate: return "moments"
         case .bridge: return "bridge"
-        case .send, .deposit, .withdraw: return "wallet"
+        case .send, .deposit, .withdraw, .claim, .fees: return "wallet"
         }
     }
 
     var txHash: Data? { txHashHex.flatMap { Data(hex: $0) } }
+
+    /// The notification category to file this action under, derived from its `section` so a claim/fee/graduate in
+    /// Moments reads as a Moments notification and the same action in Launch reads as a plain transaction.
+    var notificationKind: AppNotification.Kind {
+        switch section {
+        case "moments": return .moments
+        case "perps": return .perp
+        case "spot", "bridge": return .swap
+        default: return .transaction
+        }
+    }
+
+    /// Where tapping the action's notification should take the user.
+    var notificationRoute: AppNotification.Route {
+        switch section {
+        case "moments": return .moments
+        case "perps": return .perps
+        case "launch": return .launch
+        case "spot": return .trade
+        default: return .home
+        }
+    }
 }
 
 /// Local per-wallet record of the user's actions. Recent Activity merges this (the source of truth for perps and the
@@ -85,5 +126,20 @@ enum ActivityLog {
         if list.count > cap { list = Array(list.prefix(cap)) }
         UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: key(owner))
         onRecord?(record, owner)
+    }
+}
+
+/// The single entry point for a completed user action: it records the action in the Recent Activity feed AND
+/// surfaces it in the notification center (and as a system banner when allowed), so nothing is ever recorded
+/// without being surfaced, or surfaced without being recorded. Every settled write's `onCompleted` should call
+/// this. `notify: false` records only — for the few flows (swap, bridge, perp) that post their own bespoke
+/// notification with tailored copy and so must not double-post.
+@MainActor
+enum Activity {
+    static func record(_ record: ActivityRecord, owner: Address?, notify: Bool = true) {
+        ActivityLog.record(record, owner: owner)
+        guard notify, owner != nil else { return }
+        NotificationHub.shared.post(kind: record.notificationKind, title: record.title, body: record.subtitle,
+                                    route: record.notificationRoute, reference: record.reference)
     }
 }

@@ -285,7 +285,7 @@ struct SendSheet: View {
                         // A send out of the wallet is a withdrawal in the journey. USD is exact for the USD stables the
                         // send picker offers; left unknown otherwise rather than guessed.
                         let stable = ["USDC", "USDT0", "USDT", "AUSD", "USDe", "USD1", "mUSD"].contains(token.symbol)
-                        ActivityLog.record(ActivityRecord(kind: .withdraw, title: "Sent \(token.symbol)",
+                        Activity.record(ActivityRecord(kind: .withdraw, title: "Sent \(token.symbol)",
                             subtitle: "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol) → \(to.short)",
                             hash: hash, section: "wallet", usd: stable ? Amount.units(raw, decimals: token.decimals) : nil), owner: session.address)
                     }) {

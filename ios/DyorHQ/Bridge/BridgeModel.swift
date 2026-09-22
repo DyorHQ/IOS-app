@@ -389,10 +389,14 @@ final class BridgeModel {
                     return
                 case .refunded:
                     resetQuote()
+                    // Correct the optimistic source-send row (same hash → replaces it) and tell the user, so the feed
+                    // and notifications never leave a failed bridge looking like it succeeded.
+                    correctBridge(title: "Bridge refunded", detail: "\(pendingInSymbol ?? "Funds") returned on \(fromChain.name)")
                     phase = .failed("Bridge refunded — \(state.swapDetails?.refundReason ?? "the swap couldn't complete"). Your funds were returned on \(fromChain.name).")
                     return
                 case .failed:
                     resetQuote()
+                    correctBridge(title: "Bridge failed", detail: state.swapDetails?.refundReason ?? "The bridge could not complete on \(toChain.name)")
                     phase = .failed(state.swapDetails?.refundReason ?? "The bridge failed.")
                     return
                 default:
@@ -452,6 +456,14 @@ final class BridgeModel {
                                owner: env.session.address)
         }
         Notifications.bridge(amount: "\(pendingAmountText ?? amountText) \(pendingInSymbol ?? "")", from: from, to: to)
+    }
+
+    /// Replaces the optimistic source-send activity row (matched by the same source-tx hash) with a terminal-failure
+    /// row and notifies — so a refunded or failed bridge is corrected in Recent Activity, the backend mirror, and
+    /// platform volume (usd cleared) instead of lingering as a success.
+    private func correctBridge(title: String, detail: String) {
+        let hash = pendingHash.flatMap { Data(hex: $0) }
+        Activity.record(ActivityRecord(kind: .bridge, title: title, subtitle: detail, hash: hash, section: "bridge"), owner: env.session.address)
     }
 
     /// Return to a clean state to start another bridge, keeping the entered amount and re-quoting it (so a

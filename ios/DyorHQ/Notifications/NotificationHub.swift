@@ -109,13 +109,24 @@ final class NotificationHub {
         items = NotificationStore.all(owner: owner)
     }
 
-    /// Records the notification and delivers it as a system notification when `deliver` is true and permission is granted.
+    /// Records the notification and delivers it as a system notification when `deliver` is true, the in-app master
+    /// toggle is on, and OS permission is granted. The in-app center always keeps the record either way.
     func post(_ notification: AppNotification, deliver: Bool = true) {
+        // Dedupe: a settled action recorded through two paths, or a retried transaction, can post twice. The activity
+        // log already dedupes by tx hash, so the center must not double either — drop a repeat of the same
+        // title+body that arrived within the last few seconds.
+        if let recent = items.first, recent.title == notification.title, recent.body == notification.body,
+           notification.time.timeIntervalSince(recent.time) < 8 { return }
         items.insert(notification, at: 0)
         if items.count > 300 { items = Array(items.prefix(300)) }
         NotificationStore.save(items, owner: owner)
-        if deliver { Self.deliverLocally(title: notification.title, body: notification.body, id: notification.id.uuidString) }
+        // The system BANNER respects the in-app "Enable Notifications" toggle (Profile → Notifications), not just OS
+        // permission — so turning notifications off silences banners while the center still logs every event.
+        if deliver, Self.bannersEnabled { Self.deliverLocally(title: notification.title, body: notification.body, id: notification.id.uuidString) }
     }
+
+    /// The in-app notifications master toggle, persisted by AppSettings under this key (default on).
+    private static var bannersEnabled: Bool { UserDefaults.standard.object(forKey: "settings.notifications") as? Bool ?? true }
 
     func post(kind: AppNotification.Kind, title: String, body: String, route: AppNotification.Route = .none, reference: String? = nil, deliver: Bool = true) {
         post(AppNotification(kind: kind, title: title, body: body, route: route, reference: reference), deliver: deliver)
