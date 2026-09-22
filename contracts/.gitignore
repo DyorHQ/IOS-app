@@ -1,3 +1,6 @@
 out/
 cache/
 broadcast/
+
+# redeploy script logs (kept locally, not in git)
+deployments/*.log

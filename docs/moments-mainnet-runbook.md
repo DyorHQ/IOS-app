@@ -80,6 +80,19 @@ mainnet problems: anvil needs `--code-size-limit 200000` as well or it rejects t
 forge's own size lint must be silenced with `--non-interactive` (it otherwise waits for a confirmation).
 Estimated cost 24.2M gas ≈ 4.9 MON at 202 gwei; the governance wallet held 27.6 MON.
 
+**One-command form:** `script/moments/redeploy-cohort2.sh` does steps 1–5 below in order with a confirmation
+before the real deployment, signing with `PRIVATE_KEY` from the shell (or the repo `.env`) exactly as every
+deployment here is signed — or `LEDGER=1` for the hardware wallet; `DRY_RUN=1` simulates only. It refuses any
+signer other than the cohort-1 governance wallet, checks the chain and the balance, keeps the cohort-1 record, and
+never prints the key. Because CREATE addresses depend only on the deployer's nonce, the addresses the dry run prints
+are the ones the real run lands on unless that wallet sends something else first.
+
+```bash
+cd /Users/jerry/Hackathon-moments/contracts && ./script/moments/redeploy-cohort2.sh
+```
+
+The individual steps, for reference:
+
 1. Deploy, signed on the Ledger. `--sender` pins the governance address: if the Ledger presents any other
    account forge aborts before sending anything. The cohort-1 record is kept as `deployments/moments-143-cohort1.json`;
    the script overwrites `deployments/moments-143.json` with the new stack.
