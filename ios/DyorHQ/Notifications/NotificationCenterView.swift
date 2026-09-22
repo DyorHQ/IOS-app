@@ -41,7 +41,7 @@ struct NotificationCenterView: View {
         NavigationStack {
             Group {
                 if hub.items.isEmpty {
-                    ContentUnavailableView("No Notifications", systemImage: "bell", description: Text(settings.notificationsEnabled ? "Swaps, fills and price alerts show up here." : "Notifications are off. Turn them on in Profile → Notifications to be alerted; events are still recorded here."))
+                    ContentUnavailableView("No Notifications", systemImage: "bell", description: Text(settings.notificationsEnabled ? "Trades, claims, fees, fills and price alerts show up here." : "Notifications are off. Turn them on in Profile → Notifications to be alerted; events are still recorded here."))
                 } else {
                     List {
                         if presentKinds.count > 1 {

@@ -402,24 +402,28 @@ struct LaunchDetailView: View {
         .task(id: "\(side)-\(rawAmount)") { await quote() }
         .sheet(isPresented: $showConfirm) { confirmation }
         .sheet(isPresented: $showGraduate) {
-            ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Graduate", build: { env.launchpad.graduatePlan(launch: launch) }, onDone: { Task { await load() } }) {
+            ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Graduate", build: { env.launchpad.graduatePlan(launch: launch) }, onDone: { Task { await load() } },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "\(launch.symbol) graduated", subtitle: launch.graduationVenue.title, hash: hash, section: "launch"), owner: session.address) }) {
                 DetailRow("Venue", launch.graduationVenue.title)
                 DetailRow("Who pays", "You (gas only)")
             }
         }
         .sheet(isPresented: $showFallback) {
-            ConfirmationSheet(title: "Graduate on Uniswap v4", confirmTitle: "Graduate", build: { env.launchpad.graduateFallbackPlan(launch: launch) }, onDone: { Task { await load() } }) {
+            ConfirmationSheet(title: "Graduate on Uniswap v4", confirmTitle: "Graduate", build: { env.launchpad.graduateFallbackPlan(launch: launch) }, onDone: { Task { await load() } },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "\(launch.symbol) graduated on Uniswap v4", subtitle: "Uniswap v4 (fallback)", hash: hash, section: "launch"), owner: session.address) }) {
                 DetailRow("Venue", "Uniswap v4 (fallback)")
                 DetailRow("Who pays", "You (gas only)")
             }
         }
         .sheet(isPresented: $showClaim) {
-            ConfirmationSheet(title: "Claim Rewards", confirmTitle: "Claim", build: { await env.launchpad.claimRewardsPlan(launch: launch, view: account) }, onDone: { Task { await load() } }) {
+            ConfirmationSheet(title: "Claim Rewards", confirmTitle: "Claim", build: { await env.launchpad.claimRewardsPlan(launch: launch, view: account) }, onDone: { Task { await load() } },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed \(launch.symbol) rewards", subtitle: account.map { "\(NumberStyle.units($0.pendingRewards, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? "holder rewards", hash: hash, section: "launch"), owner: session.address) }) {
                 if let account { DetailRow("Pending rewards", "\(NumberStyle.units(account.pendingRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
         }
         .sheet(isPresented: $showCreatorClaim) {
-            ConfirmationSheet(title: "Claim Creator Fees", confirmTitle: "Claim Fees", build: { env.launchpad.claimEscrowPlan(launch: launch) }, onDone: { Task { await load() } }) {
+            ConfirmationSheet(title: "Claim Creator Fees", confirmTitle: "Claim Fees", build: { env.launchpad.claimEscrowPlan(launch: launch) }, onDone: { Task { await load() } },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected \(launch.symbol) creator fees", subtitle: account.map { "\(NumberStyle.units($0.escrowBalance, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? "creator fees", hash: hash, section: "launch"), owner: session.address) }) {
                 if let account { DetailRow("Claimable", "\(NumberStyle.units(account.escrowBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
                 DetailRow("To", session.address?.short ?? "—")
             }
@@ -641,7 +645,7 @@ struct LaunchDetailView: View {
         if let address = session.address {
             if side == .buy, let q = buyQuote {
                 ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
-                    ActivityLog.record(ActivityRecord(kind: .buy, title: "Bought \(launch.symbol)", subtitle: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 }), owner: session.address)
+                    Activity.record(ActivityRecord(kind: .buy, title: "Bought \(launch.symbol)", subtitle: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }) {
                     DetailRow("You pay", "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
                     DetailRow("You receive", "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
@@ -649,7 +653,7 @@ struct LaunchDetailView: View {
                 }
             } else if side == .sell, let q = sellQuote {
                 ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: q.quoteOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
-                    ActivityLog.record(ActivityRecord(kind: .sell, title: "Sold \(launch.symbol)", subtitle: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 }), owner: session.address)
+                    Activity.record(ActivityRecord(kind: .sell, title: "Sold \(launch.symbol)", subtitle: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }) {
                     DetailRow("You sell", "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol)")
                     DetailRow("You receive", "\(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
@@ -847,7 +851,7 @@ struct CreateLaunchView: View {
                         build: { try await env.launchpad.launchPlan(input, from: address) },
                         onDone: { dismiss(); onLaunched() },
                         onCompleted: { hash in
-                            ActivityLog.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
+                            Activity.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
                         },
                         onView: { hash in
                             // Route to the coin's in-app page instead of the block explorer (the explorer link lives

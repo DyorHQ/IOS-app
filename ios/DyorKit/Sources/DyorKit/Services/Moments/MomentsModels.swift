@@ -47,20 +47,23 @@ public struct MomentsAddresses: Sendable, Hashable {
     /// Moments v1.1 on Monad mainnet (chain 143) — `contracts/deployments/moments-143.json`, deployed and
     /// Sourcify-verified on 2026-09-16. Governance is the DyorHQ owner wallet; platform and treasury are the
     /// beneficiaries snapshotted into every Moment at publish.
+    /// The cohort-2 stack (deployed 2026-09-22, `contracts/deployments/moments-143.json`): the $2,000 graduation FDV
+    /// policy is in its constructor. The cohort-1 stack (factory 0x6469…C020, `moments-143-cohort1.json`) is
+    /// retired — publishing paused; its three Moments stay on-chain but are no longer shown.
     public static let monadMainnet = MomentsAddresses(
-        factory: Address(literal: "0x64698c7702d85F87f43a6dFF7D495CDD2327C020"),
-        collect: Address(literal: "0xb4EE9e67d9e1772BC6949748e3755EA7C1DFE32c"),
-        vesting: Address(literal: "0x360E2068eAEc5b5A9AF60A7c4059Bd4b30B7209C"),
-        graduation: Address(literal: "0x307De00950F039969855eFb859A6088d695e76b1"),
-        locker: Address(literal: "0x832851A42Bf1FD1aF7a19c82cF132290c605E406"),
-        hook: Address(literal: "0x8Aa322471Bef2996D3B50cB12F63C6A0054460Cc"),
-        buyback: Address(literal: "0x03282D5421a3bE3ff79c5962819c9a6e5E0b52d2"),
+        factory: Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581"),
+        collect: Address(literal: "0x8f65ea0236b5fa6351a45Bd48244c3525Fb92493"),
+        vesting: Address(literal: "0xe087eff01C567F88a7cb6BDBDBF04B46Fee56C99"),
+        graduation: Address(literal: "0x353F245A2458B994a65116A4c69643cf6608045b"),
+        locker: Address(literal: "0x995735cF317656a10de52b73AB50A2aAdc069a8a"),
+        hook: Address(literal: "0x501D703588c4feAbBeE5A9a77408c7FCbD3a20Cc"),
+        buyback: Address(literal: "0xacae95377513C54DA9ff549DFE5cB77001F6c6F5"),
         usdc: Address(literal: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"),
         permit2: Address(literal: "0x000000000022D473030F116dDEE9F6B43aC78BA3"),
         poolManager: Address(literal: "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e"),
         platform: Address(literal: "0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48"),
         treasury: Address(literal: "0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045"),
-        deployBlock: 105_347_754
+        deployBlock: 106_984_957
     )
 
     /// Protocol addresses that hold Moment coins without being "holders" (the pool, the locker, vesting, …).
@@ -749,20 +752,58 @@ public enum MomentsMath {
         return Int(clamping: reserve * BigUInt(MomentsConstants.bps) / threshold)
     }
 
+    /// The coin's fully diluted value when it graduates, in USD. The pool opens at the collect price (price
+    /// continuity), so FDV = threshold · (1 + 1/reserveFrac) / (1 − creatorAlloc): a $771.43 reserve at a 75% reserve
+    /// share and the default 10% creator allocation opens at $2,000; an allocation the creator leaves untaken goes
+    /// to the pool at the same rate instead, which lowers the FDV (to $1,800 at 0%).
+    public static func graduationFDV(threshold: BigUInt, reserveBps: Int, creatorAllocBps: Int) -> Double {
+        guard reserveBps > 0, creatorAllocBps < MomentsConstants.bps else { return 0 }
+        let reserve = Amount.units(threshold, decimals: MomentsConstants.usdcDecimals)
+        return reserve * Double(MomentsConstants.bps + reserveBps) / Double(reserveBps) * Double(MomentsConstants.bps) / Double(MomentsConstants.bps - creatorAllocBps)
+    }
+
     /// Whole coins as a display number.
     public static func coins(_ wei: BigUInt) -> Double { Amount.units(wei, decimals: MomentsConstants.coinDecimals) }
     /// Whole USDC as a display number.
     public static func usdc(_ units: BigUInt) -> Double { Amount.units(units, decimals: MomentsConstants.usdcDecimals) }
 
-    /// A media link the app can load: `ipfs://` is rewritten to a public gateway; `https://` passes through.
-    public static func url(_ uri: String) -> URL? {
+    /// IPFS gateways in the order the app tries them: DyorHQ's dedicated Pinata gateway first (every Moment pin lives
+    /// on Pinata, so it serves a fresh CID within a second and is not throttled like the public gateways), then
+    /// Pinata's public gateway, then the general public gateways — which rate-limit aggressively (ipfs.io and
+    /// dweb.link answer 429 under modest load), so they are last resorts, never the only path.
+    public static let ipfsGateways = [
+        "https://scarlet-secure-kangaroo-820.mypinata.cloud/ipfs/",
+        "https://gateway.pinata.cloud/ipfs/",
+        "https://ipfs.io/ipfs/",
+        "https://dweb.link/ipfs/",
+    ]
+
+    /// A media link the app can load: `ipfs://` is rewritten to the primary gateway; `https://` passes through.
+    public static func url(_ uri: String) -> URL? { gatewayURLs(uri).first }
+
+    /// Every URL worth trying for a media link, in order: an `ipfs://` URI through each of `ipfsGateways` (a path
+    /// after the CID, e.g. `ipfs://<cid>/photo.jpg`, is kept); an https link is just itself. Empty for anything else.
+    public static func gatewayURLs(_ uri: String) -> [URL] {
         let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty else { return [] }
         if trimmed.lowercased().hasPrefix("ipfs://") {
             let path = trimmed.dropFirst("ipfs://".count).replacingOccurrences(of: "ipfs/", with: "", options: [.anchored])
-            return URL(string: "https://ipfs.io/ipfs/\(path)")
+            return ipfsGateways.compactMap { URL(string: $0 + path) }
         }
-        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return nil }
-        return url
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return [] }
+        return [url]
+    }
+
+    /// The bucket object name for Moment media, derived from the keccak-256 of the bytes (`moment-<64 hex>`), so the
+    /// public mirror of a Moment's image can be found again from its on-chain provenance alone — see `mirrorURL`.
+    public static func mediaName(hash: Data) -> String { "moment-" + hash.map { String(format: "%02x", $0) }.joined() }
+
+    /// The Supabase public mirror of a Moment's image, derivable from on-chain data alone: the creator's folder in the
+    /// public `launch-media` bucket holds `moment-<mediaHash>.jpg` (the photo, or a video's poster frame — both are
+    /// named after the provenance hash at upload). Nil unless the hash is a keccak-256 digest. The mirror is the
+    /// app's first choice for display because it is infrastructure DyorHQ controls; the IPFS gateways come after.
+    public static func mirrorURL(creator: Address, mediaHash: Data, supabaseURL: URL) -> URL? {
+        guard mediaHash.count == 32 else { return nil }
+        return supabaseURL.appending(path: "storage/v1/object/public/launch-media/\(creator.hex)/\(mediaName(hash: mediaHash)).jpg")
     }
 }

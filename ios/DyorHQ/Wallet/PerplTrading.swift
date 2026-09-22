@@ -235,7 +235,8 @@ final class PerplTrading {
     /// doesn't arrive — every reconnect spends one of the wallet's 4 connection slots.
     func enableForwarding(env: AppEnvironment, wallet: Wallet) async throws {
         let data = try ABI.encodeCall("allowOrderForwarding(bool)", [.bool(true)])
-        _ = try await env.sender.run([.call(TransactionRequest(to: Perpl.exchange, data: data), label: "Enable one-click trading")], from: wallet) { _ in }
+        let hash = try await env.sender.run([.call(TransactionRequest(to: Perpl.exchange, data: data), label: "Enable one-click trading")], from: wallet) { _ in }
+        Activity.record(ActivityRecord(kind: .perp, title: "One-click trading enabled", subtitle: "Order forwarding authorized on Perpl", hash: hash, section: "perps"), owner: wallet.address)
         // The tx confirmed, so forwarding is now enabled on-chain — the authority. Reflect it immediately instead of
         // waiting on Perpl's WS `fw` echo, which can lag the keeper by seconds and left the user stuck on
         // "Enable one-click" even after the grant landed.

@@ -767,7 +767,7 @@ struct PerpTradeView: View {
 
     private var confirmSheet: some View {
         ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { env.perpl.orderPlan(ticket.input(market: market, refPrice: refPrice)) }, onDone: { ticket.sizeText = ""; sizePercent = 0; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
-            ActivityLog.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
+            Activity.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }) {
             DetailRow("Market", "\(market.asset)-PERP")
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
@@ -784,7 +784,8 @@ struct PerpTradeView: View {
     }
 
     private func cancelOrderSheet(_ order: PerpOrder) -> some View {
-        ConfirmationSheet(title: "Cancel Order", confirmTitle: "Cancel Order", build: { env.perpl.cancelPlan(perpId: order.perpId, orderId: order.orderId) }, onDone: { Task { await model.load(env: env, address: session.address) } }) {
+        ConfirmationSheet(title: "Cancel Order", confirmTitle: "Cancel Order", build: { env.perpl.cancelPlan(perpId: order.perpId, orderId: order.orderId) }, onDone: { Task { await model.load(env: env, address: session.address) } },
+                          onCompleted: { hash in Activity.record(ActivityRecord(kind: .perp, title: "Cancelled \(order.symbol) order", subtitle: "\(order.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(order.size)) at \(NumberStyle.number(order.price))", hash: hash, section: "perps"), owner: session.address) }) {
             DetailRow("Market", order.symbol)
             DetailRow("Order", "\(order.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(order.size)) at \(NumberStyle.number(order.price))")
         }
@@ -1901,8 +1902,12 @@ private struct ClosePositionSheet: View {
 
     private func finish() {
         let done = run.isDone
+        let hash = run.doneHash
         dismiss()
-        if done { onDone() }
+        if done {
+            Activity.record(ActivityRecord(kind: .perp, title: isLimit ? "Close order placed" : "Closed \(position.symbol)", subtitle: "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)\(isLimit ? " · Limit" : "")", hash: hash, section: "perps", usd: position.notional > 0 ? position.notional : nil), owner: session.address)
+            onDone()
+        }
     }
 }
 
@@ -2003,8 +2008,13 @@ private struct AddMarginSheet: View {
 
     private func finish() {
         let done = run.isDone
+        let hash = run.doneHash
+        let added = amount
         dismiss()
-        if done { onDone() }
+        if done {
+            Activity.record(ActivityRecord(kind: .deposit, title: "Added \(position.symbol) margin", subtitle: "\(NumberStyle.number(added)) AUSD", hash: hash, section: "perps", usd: added), owner: session.address)
+            onDone()
+        }
     }
 }
 
@@ -2114,7 +2124,9 @@ struct AuthedOrderSheet: View {
             } else {
                 phase = .done
             }
-            ActivityLog.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address)
+            // notify:false — this advanced path posts its own fills-gated notification just below, so a unified
+            // notification here would double it.
+            Activity.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address, notify: false)
             if settings.notificationsEnabled, settings.notifyFills {
                 Notifications.perpOrder(side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP", filled: input.kind == .market)
             }

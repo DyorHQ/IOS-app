@@ -4,22 +4,38 @@ import SwiftUI
 
 // Shared pieces of the Moments screens: artwork, state badges, the discovery card, number formatting.
 
-/// A Moment's media: the image behind its `mediaURI` (IPFS links go through a gateway), or a monogram on the brand
-/// tint when there is none or it fails to load.
+/// A Moment's media: the image behind its `mediaURI`, or a monogram on the brand tint when there is none or it
+/// fails to load. Loading tries every source in order — the Supabase mirror derived from on-chain provenance when
+/// the creator is known, then each IPFS gateway — so a gateway that is rate-limiting (ipfs.io and dweb.link answer
+/// 429 freely) never leaves a Moment blank while another source has the bytes.
 struct MomentArtwork: View {
     let provenance: MomentProvenance
     let symbol: String
+    /// The Moment's creator, when known: unlocks the derived Supabase mirror as the first source.
+    var creator: Address? = nil
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    private var sources: [URL] { MomentMediaLoader.imageSources(provenance: provenance, creator: creator) }
 
     var body: some View {
-        if let url = provenance.mediaURL {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image { image.resizable().scaledToFill() }
-                else if phase.error != nil { placeholder }
-                else { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } }
-            }
-        } else {
-            placeholder
+        ZStack {
+            if let image { Image(uiImage: image).resizable().scaledToFill() }
+            else if failed || sources.isEmpty { placeholder }
+            else { Color(.tertiarySystemFill); ProgressView().controlSize(.small) }
         }
+        .task(id: provenance.mediaURI + "|" + (creator?.hex ?? "")) { await load() }
+    }
+
+    private func load() async {
+        let sources = self.sources
+        guard !sources.isEmpty else { return }
+        let key = provenance.mediaURI
+        if let cached = MomentMediaLoader.shared.cached(key) { image = cached; failed = false; return }
+        image = nil; failed = false
+        let loaded = await MomentMediaLoader.shared.load(key: key, sources: sources)
+        guard !Task.isCancelled else { return }
+        if let loaded { image = loaded } else { failed = true }
     }
 
     private var placeholder: some View {
@@ -29,6 +45,59 @@ struct MomentArtwork: View {
                 .font(.system(size: 36, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.brand)
         }
+    }
+}
+
+/// Fetches Moment images from an ordered list of sources and remembers the outcome per media URI for the session —
+/// hits for good, misses for a minute — so a feed neither re-downloads an image on every scroll nor re-probes a dead
+/// link (an unrecoverable directory CID, say) on every appearance. One in-flight fetch is shared by every view
+/// showing the same Moment.
+@MainActor
+final class MomentMediaLoader {
+    static let shared = MomentMediaLoader()
+    private let images = NSCache<NSString, UIImage>()
+    private var misses: [String: Date] = [:]
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 12
+        config.requestCachePolicy = .returnCacheDataElseLoad
+        return URLSession(configuration: config)
+    }()
+
+    /// Where to look for a Moment's image, best first: the Supabase mirror derived from the creator + media hash
+    /// (only meaningful for an `ipfs://` pointer — an https pointer *is* the mirror), then every IPFS gateway.
+    static func imageSources(provenance: MomentProvenance, creator: Address?) -> [URL] {
+        var urls: [URL] = []
+        if let creator, provenance.mediaURI.lowercased().hasPrefix("ipfs://"),
+           let mirror = MomentsMath.mirrorURL(creator: creator, mediaHash: provenance.mediaHash, supabaseURL: AppConfig.current.supabaseURL) {
+            urls.append(mirror)
+        }
+        urls += MomentsMath.gatewayURLs(provenance.mediaURI)
+        return urls
+    }
+
+    func cached(_ key: String) -> UIImage? { images.object(forKey: key as NSString) }
+
+    func load(key: String, sources: [URL]) async -> UIImage? {
+        if let hit = cached(key) { return hit }
+        if let missed = misses[key], Date().timeIntervalSince(missed) < 60 { return nil }
+        if let task = inFlight[key] { return await task.value }
+        let session = self.session
+        let task = Task<UIImage?, Never>.detached(priority: .userInitiated) { // decode off the main thread
+            for url in sources {
+                guard let (data, response) = try? await session.data(from: url),
+                      let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                      let image = UIImage(data: data) else { continue } // an HTML directory listing never decodes
+                return image
+            }
+            return nil
+        }
+        inFlight[key] = task
+        let result = await task.value
+        inFlight[key] = nil
+        if let result { images.setObject(result, forKey: key as NSString); misses[key] = nil } else { misses[key] = Date() }
+        return result
     }
 }
 
@@ -91,7 +160,7 @@ struct MomentCard: View {
             ZStack(alignment: .topLeading) {
                 Color(.tertiarySystemFill)
                     .aspectRatio(1, contentMode: .fit)
-                    .overlay { MomentArtwork(provenance: info.provenance, symbol: info.symbol) }
+                    .overlay { MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: info.moment.creator) }
                     .clipped()
                 MomentStateBadge(info: info, now: now, onMedia: true).padding(8)
             }
@@ -156,6 +225,11 @@ enum MomentsFormat {
     static func usd(_ value: Double) -> String {
         if value >= 1_000 { return "US$" + NumberStyle.number(value, compact: true) }
         return value.formatted(.currency(code: "USD").precision(.fractionLength(value < 1 ? 2...4 : 0...2)))
+    }
+
+    /// A valuation stated in full ("$2,000", never "US$2K"): the graduation FDV is a number people quote exactly.
+    static func fdv(_ value: Double) -> String {
+        value.formatted(.currency(code: "USD").precision(.fractionLength(value < 100 ? 2 : 0)))
     }
 
     /// "2d 3h left", "45m left", "closed"; `short` drops the word for tight spaces ("2d 3h").

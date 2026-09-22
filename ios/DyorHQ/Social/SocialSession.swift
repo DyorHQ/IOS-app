@@ -189,9 +189,12 @@ final class SocialSession {
     /// `ipfs://` CID that outlives DyorHQ's servers. Returns the URI to write on-chain — the `ipfs://` CID, or the
     /// Supabase https URL as a fallback when pinning is unavailable (e.g. the Pinata secret is not set yet) — plus
     /// the Supabase URL as a fast in-app mirror. The provenance hash is of these exact bytes regardless of storage.
-    func uploadAndPinMomentMedia(_ data: Data, contentType: String, fileExtension: String) async throws -> (onchain: String, mirror: URL) {
+    /// The object is named after the keccak-256 of `data` (`moment-<hash>`), so the mirror can be derived later from
+    /// the on-chain provenance alone (`MomentsMath.mirrorURL`); pass `name` to file it under another hash — a video's
+    /// poster frame is stored under the video's hash, which is the hash the NFT records.
+    func uploadAndPinMomentMedia(_ data: Data, contentType: String, fileExtension: String, name: String? = nil) async throws -> (onchain: String, mirror: URL) {
         guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
-        let name = "moment-" + UUID().uuidString.lowercased()
+        let name = name ?? MomentsMath.mediaName(hash: Keccak.hash256(data))
         let path = "\(wallet)/\(name).\(fileExtension)"
         let url = try await client.uploadPublic(bucket: "launch-media", path: path, data: data, contentType: contentType)
         let onchain = (try? await client.pinToIPFS(bucket: "launch-media", path: path)) ?? url.absoluteString
