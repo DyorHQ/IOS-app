@@ -124,6 +124,9 @@ struct MomentDetailView: View {
                 } else {
                     stat("Per edition", MomentsFormat.usdc(m.price))
                     Divider().frame(height: 34)
+                    // The pool opens at the collect price, so this is fixed at publish — the coin's valuation on day one.
+                    stat("Graduation FDV", MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: m.threshold, reserveBps: m.reserveBps, creatorAllocBps: m.creatorAllocBps)))
+                    Divider().frame(height: 34)
                     stat("Editions", "\(info.editions)")
                     Divider().frame(height: 34)
                     stat("Collects", "\(info.ledger.collects)")

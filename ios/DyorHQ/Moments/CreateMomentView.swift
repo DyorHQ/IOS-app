@@ -131,7 +131,7 @@ struct CreateMomentView: View {
                     ) {
                         DetailRow("Moment", "\(input.name) ($\(input.symbol))")
                         DetailRow("Collect price", MomentsFormat.usdc(input.price))
-                        DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve")
+                        DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: input.creatorAllocBps))) FDV")
                         DetailRow("Your coins", "\(NumberStyle.basisPoints(input.creatorAllocBps)) · \(MomentsFormat.coins(MomentsConstants.supply * BigUInt(input.creatorAllocBps) / BigUInt(MomentsConstants.bps)))")
                         DetailRow("Window", "\(windowDays) \(windowDays == 1 ? "day" : "days")")
                         DetailRow("Media", mediaHash == nil ? "link, hashed" : (isVideo ? "video, fingerprinted" : "photo, fingerprinted"))
@@ -225,7 +225,8 @@ struct CreateMomentView: View {
                 if let policy, let price, price > 0 {
                     let reservePerCollect = price * BigUInt(policy.reserveBps) / BigUInt(MomentsConstants.bps)
                     let collects = reservePerCollect > 0 ? (policy.threshold + reservePerCollect - 1) / reservePerCollect : 0
-                    Text("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdc(policy.threshold)) reserve. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
+                    let fdv = MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps ?? maxAllocBps)
+                    Text("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdc(policy.threshold)) reserve, and the coin graduates at a \(MomentsFormat.fdv(fdv)) FDV. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
                 } else if policy == nil {
                     Text("Loading the current policy…")
                 }
@@ -239,7 +240,7 @@ struct CreateMomentView: View {
                 let creatorCoins = MomentsConstants.supply * BigUInt(allocBps) / BigUInt(MomentsConstants.bps)
                 DetailRows {
                     DetailRow("Collect price", MomentsFormat.usdc(price))
-                    DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve")
+                    DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps))) FDV")
                     DetailRow("Each collect", "\(NumberStyle.basisPoints(policy.reserveBps)) reserve · \(NumberStyle.basisPoints(policy.creatorBps)) you · \(NumberStyle.basisPoints(policy.platformBps)) DyorHQ")
                     DetailRow("Your coins", "\(MomentsFormat.coins(creatorCoins)) (\(NumberStyle.basisPoints(allocBps)))")
                     DetailRow("Collectors + pool", "\(MomentsFormat.coins(MomentsConstants.supply - creatorCoins)) at one price")

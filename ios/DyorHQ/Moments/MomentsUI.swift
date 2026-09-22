@@ -227,6 +227,11 @@ enum MomentsFormat {
         return value.formatted(.currency(code: "USD").precision(.fractionLength(value < 1 ? 2...4 : 0...2)))
     }
 
+    /// A valuation stated in full ("$2,000", never "US$2K"): the graduation FDV is a number people quote exactly.
+    static func fdv(_ value: Double) -> String {
+        value.formatted(.currency(code: "USD").precision(.fractionLength(value < 100 ? 2 : 0)))
+    }
+
     /// "2d 3h left", "45m left", "closed"; `short` drops the word for tight spaces ("2d 3h").
     static func countdown(_ seconds: Int, short: Bool = false) -> String {
         guard seconds > 0 else { return "closed" }

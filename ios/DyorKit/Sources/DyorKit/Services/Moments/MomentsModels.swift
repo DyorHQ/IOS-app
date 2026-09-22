@@ -749,6 +749,16 @@ public enum MomentsMath {
         return Int(clamping: reserve * BigUInt(MomentsConstants.bps) / threshold)
     }
 
+    /// The coin's fully diluted value when it graduates, in USD. The pool opens at the collect price (price
+    /// continuity), so FDV = threshold · (1 + 1/reserveFrac) / (1 − creatorAlloc): a $771.43 reserve at a 75% reserve
+    /// share and the default 10% creator allocation opens at $2,000; an allocation the creator leaves untaken goes
+    /// to the pool at the same rate instead, which lowers the FDV (to $1,800 at 0%).
+    public static func graduationFDV(threshold: BigUInt, reserveBps: Int, creatorAllocBps: Int) -> Double {
+        guard reserveBps > 0, creatorAllocBps < MomentsConstants.bps else { return 0 }
+        let reserve = Amount.units(threshold, decimals: MomentsConstants.usdcDecimals)
+        return reserve * Double(MomentsConstants.bps + reserveBps) / Double(reserveBps) * Double(MomentsConstants.bps) / Double(MomentsConstants.bps - creatorAllocBps)
+    }
+
     /// Whole coins as a display number.
     public static func coins(_ wei: BigUInt) -> Double { Amount.units(wei, decimals: MomentsConstants.coinDecimals) }
     /// Whole USDC as a display number.
