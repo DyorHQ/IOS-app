@@ -27,9 +27,13 @@ settings:
 packages:
   DyorKit:
     path: DyorKit
+  # 2.16.2+ is REQUIRED for TestFlight external testing / App Store: 2.15.0 statically bundled SwiftyJSON (on
+  # Apple's list of SDKs that must ship a privacy manifest + signature) without either, so every build was marked
+  # Invalid Binary by Beta App Review (ITMS-91061 / ITMS-91065) while internal testing — which skips that check —
+  # kept working. 2.16.2 removes the SwiftyJSON dependency (privy-io/privy-ios#86).
   Privy:
     url: https://github.com/privy-io/privy-ios
-    from: 2.15.0
+    from: 2.16.2
 
 targets:
   DyorHQ:
@@ -49,7 +53,7 @@ targets:
         CFBundleDisplayName: DyorHQ
         CFBundleName: DyorHQ
         CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "9"
+        CFBundleVersion: "10"
         UILaunchScreen:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
@@ -86,11 +90,12 @@ targets:
         AuroraFeeRecipient: "$(AURORA_FEE_RECIPIENT)"
     entitlements:
       path: DyorHQ/DyorHQ.entitlements
-      # Passkey entitlements (Sign in with Apple + Associated Domains) are DISABLED — they made the TestFlight/App Store
-      # binary INVALID (builds 5 & 6 came back "Invalid Binary"). Two reasons: a `?mode=developer` associated domain is
-      # never allowed in a DISTRIBUTION build, and the capabilities aren't enabled on the fun.dyorhq.app App ID / the
-      # AASA isn't hosted — all pending owner steps. Passkeys don't work until the AASA is live regardless, so an empty
-      # entitlements set loses nothing right now and yields a valid binary.
+      # Passkey entitlements (Sign in with Apple + Associated Domains) are DISABLED. They were first suspected for the
+      # "Invalid Binary" builds, but builds 7–9 shipped with this empty set and were still invalid — the real cause was
+      # PrivySDK 2.15.0's bundled SwiftyJSON (see the Privy package note above). The entitlements stay empty anyway:
+      # a `?mode=developer` associated domain is never allowed in a DISTRIBUTION build, and the capabilities aren't
+      # enabled on the fun.dyorhq.app App ID / the AASA isn't hosted — all pending owner steps. Passkeys don't work
+      # until the AASA is live regardless, so an empty entitlements set loses nothing right now.
       # TO RE-ENABLE PASSKEYS later, once (a) Sign in with Apple + Associated Domains are enabled on the App ID at
       # developer.apple.com and (b) the AASA is hosted at https://$(PASSKEY_RP_ID)/.well-known/apple-app-site-association,
       # set properties back to (note: NO ?mode=developer suffix in a distribution build):
