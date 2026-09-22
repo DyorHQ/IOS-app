@@ -71,7 +71,7 @@ struct MomentDetailView: View {
     private var headerSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 12) {
-                MomentArtwork(provenance: info.provenance, symbol: info.symbol)
+                MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: info.moment.creator)
                     .frame(maxWidth: .infinity)
                     .frame(height: 240)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

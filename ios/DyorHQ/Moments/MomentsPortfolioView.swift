@@ -93,7 +93,7 @@ private struct PortfolioRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            MomentArtwork(provenance: row.moment.provenance, symbol: row.moment.symbol)
+            MomentArtwork(provenance: row.moment.provenance, symbol: row.moment.symbol, creator: row.moment.moment.creator)
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {

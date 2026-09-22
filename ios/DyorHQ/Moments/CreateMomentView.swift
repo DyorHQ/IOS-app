@@ -272,13 +272,16 @@ struct CreateMomentView: View {
                 guard let poster = posterImage.avatarJPEG(maxDimension: 2048, quality: 0.9) else { imageError = "Could not read a frame from that video."; return }
                 let type = UTType(filenameExtension: movie.url.pathExtension) ?? .quickTimeMovie
                 let isMP4 = type.conforms(to: .mpeg4Movie)
-                let posterPin = try await social.uploadAndPinMomentMedia(poster, contentType: "image/jpeg", fileExtension: "jpg")
+                // The video's hash is the provenance hash; its poster is filed under that same hash so the app can
+                // find the poster mirror again from on-chain data (MomentsMath.mirrorURL).
+                let videoHash = Keccak.hash256(data)
+                let posterPin = try await social.uploadAndPinMomentMedia(poster, contentType: "image/jpeg", fileExtension: "jpg", name: MomentsMath.mediaName(hash: videoHash))
                 let videoPin = try await social.uploadAndPinMomentMedia(data, contentType: isMP4 ? "video/mp4" : "video/quicktime", fileExtension: isMP4 ? "mp4" : "mov")
                 mediaURI = posterPin.onchain
                 lastUploadedURI = posterPin.onchain
                 animationURI = videoPin.onchain
                 mediaMirror = posterPin.mirror.absoluteString
-                mediaHash = Keccak.hash256(data)
+                mediaHash = videoHash
                 isVideo = true
             } else {
                 guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data), let jpeg = image.avatarJPEG(maxDimension: 4096, quality: 0.92) else {

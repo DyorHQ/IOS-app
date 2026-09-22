@@ -754,15 +754,43 @@ public enum MomentsMath {
     /// Whole USDC as a display number.
     public static func usdc(_ units: BigUInt) -> Double { Amount.units(units, decimals: MomentsConstants.usdcDecimals) }
 
-    /// A media link the app can load: `ipfs://` is rewritten to a public gateway; `https://` passes through.
-    public static func url(_ uri: String) -> URL? {
+    /// IPFS gateways in the order the app tries them: DyorHQ's dedicated Pinata gateway first (every Moment pin lives
+    /// on Pinata, so it serves a fresh CID within a second and is not throttled like the public gateways), then
+    /// Pinata's public gateway, then the general public gateways — which rate-limit aggressively (ipfs.io and
+    /// dweb.link answer 429 under modest load), so they are last resorts, never the only path.
+    public static let ipfsGateways = [
+        "https://scarlet-secure-kangaroo-820.mypinata.cloud/ipfs/",
+        "https://gateway.pinata.cloud/ipfs/",
+        "https://ipfs.io/ipfs/",
+        "https://dweb.link/ipfs/",
+    ]
+
+    /// A media link the app can load: `ipfs://` is rewritten to the primary gateway; `https://` passes through.
+    public static func url(_ uri: String) -> URL? { gatewayURLs(uri).first }
+
+    /// Every URL worth trying for a media link, in order: an `ipfs://` URI through each of `ipfsGateways` (a path
+    /// after the CID, e.g. `ipfs://<cid>/photo.jpg`, is kept); an https link is just itself. Empty for anything else.
+    public static func gatewayURLs(_ uri: String) -> [URL] {
         let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty else { return [] }
         if trimmed.lowercased().hasPrefix("ipfs://") {
             let path = trimmed.dropFirst("ipfs://".count).replacingOccurrences(of: "ipfs/", with: "", options: [.anchored])
-            return URL(string: "https://ipfs.io/ipfs/\(path)")
+            return ipfsGateways.compactMap { URL(string: $0 + path) }
         }
-        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return nil }
-        return url
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return [] }
+        return [url]
+    }
+
+    /// The bucket object name for Moment media, derived from the keccak-256 of the bytes (`moment-<64 hex>`), so the
+    /// public mirror of a Moment's image can be found again from its on-chain provenance alone — see `mirrorURL`.
+    public static func mediaName(hash: Data) -> String { "moment-" + hash.map { String(format: "%02x", $0) }.joined() }
+
+    /// The Supabase public mirror of a Moment's image, derivable from on-chain data alone: the creator's folder in the
+    /// public `launch-media` bucket holds `moment-<mediaHash>.jpg` (the photo, or a video's poster frame — both are
+    /// named after the provenance hash at upload). Nil unless the hash is a keccak-256 digest. The mirror is the
+    /// app's first choice for display because it is infrastructure DyorHQ controls; the IPFS gateways come after.
+    public static func mirrorURL(creator: Address, mediaHash: Data, supabaseURL: URL) -> URL? {
+        guard mediaHash.count == 32 else { return nil }
+        return supabaseURL.appending(path: "storage/v1/object/public/launch-media/\(creator.hex)/\(mediaName(hash: mediaHash)).jpg")
     }
 }

@@ -859,7 +859,7 @@ private struct MomentHoldingRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            MomentArtwork(provenance: row.moment.provenance, symbol: row.moment.symbol)
+            MomentArtwork(provenance: row.moment.provenance, symbol: row.moment.symbol, creator: row.moment.moment.creator)
                 .frame(width: 34, height: 34)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {

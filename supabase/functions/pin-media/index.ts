@@ -4,16 +4,22 @@
 // additionally require role 'authenticated' so the public anon/publishable key (which passes verify_jwt but carries
 // role 'anon') cannot be used to drain the Pinata quota. Only a signed-in DyorHQ wallet session qualifies.
 //
-// CRITICAL — return a FILE uri, never a DIRECTORY. Pinata's pinFileToIPFS wraps the uploaded file in a UnixFS
-// directory and returns the DIRECTORY CID (and if the file name contains a "/", it builds nested directories). A
-// directory CID written on-chain as an NFT "image" resolves to an HTML listing, not the image — OpenSea and the app
-// then show a broken/placeholder image (this is exactly what broke Moment #3 "0N1 Force NFT"). So: pin with
-// wrapWithDirectory:false and a bare basename, then VERIFY the returned CID actually serves the file bytes; if it
-// resolves to a directory, point the uri at the file inside it; if neither works, fail (the app falls back to the
-// working https URL). The on-chain URI is immutable, so it MUST be a resolvable file the first time.
+// CRITICAL — return a FILE cid, never a DIRECTORY. Pinata's pinFileToIPFS treats a "/" in `pinataMetadata.name` (and
+// in the multipart filename) as a FOLDER PATH: it builds those directories around the file and returns the ROOT
+// directory's CID. That is exactly what broke Moment #3 "0N1 Force NFT" — the old code named the pin
+// `dyorhq/<wallet>/<file>`, so the on-chain image was a directory listing (HTML), which OpenSea and the app cannot
+// render, and the on-chain URI is immutable. Verified directly against the API (2026-09-22): a slash-free metadata
+// name + a bare basename + wrapWithDirectory:false returns the bare file CID with MimeType image/jpeg; a name with a
+// slash returns a directory CID even with wrapWithDirectory:false. Belt and braces, the returned CID is then checked
+// to actually serve file bytes on the account's dedicated gateway before it is handed to the app; a CID that only
+// resolves as a directory is pointed at the file inside it, and one that resolves as neither is refused (502) so the
+// app falls back to the working https URL rather than writing a broken URI on-chain.
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "https://fmnjqrguvopusfufmirs.supabase.co";
 const PINATA = "https://api.pinata.cloud/pinning/pinFileToIPFS";
-const GATEWAY = "https://gateway.pinata.cloud/ipfs"; // Pinata serves its own pins immediately
+// The account's dedicated gateway (restricted to this account's pins) serves a fresh pin within a second; the public
+// gateway is the fallback when the dedicated one is unavailable. PINATA_GATEWAY overrides the dedicated hostname.
+const DEDICATED_GATEWAY = Deno.env.get("PINATA_GATEWAY") ?? "scarlet-secure-kangaroo-820.mypinata.cloud";
+const PUBLIC_GATEWAY = "gateway.pinata.cloud";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -36,15 +42,26 @@ function claims(auth: string): Record<string, unknown> {
   } catch { return {}; }
 }
 
-// True if the URL serves actual file bytes (not a UnixFS directory index, which Pinata's gateway renders as HTML).
-async function servesFile(url: string): Promise<boolean> {
+// True if the URL serves actual file bytes (not a UnixFS directory index, which gateways render as HTML). Bounded so
+// a slow gateway can never stall the app's publish flow (the app gives the whole call 30 s).
+async function servesFile(url: string, timeoutMs = 8_000): Promise<boolean> {
   try {
-    const r = await fetch(url, { method: "GET", headers: { Range: "bytes=0-0" } });
-    if (!r.ok && r.status !== 206) { await r.body?.cancel(); return false; }
+    const r = await fetch(url, { method: "GET", headers: { Range: "bytes=0-0" }, signal: AbortSignal.timeout(timeoutMs) });
     const ct = (r.headers.get("content-type") || "").toLowerCase();
     await r.body?.cancel();
+    if (!r.ok && r.status !== 206) return false;
     return !ct.includes("text/html") && !ct.includes("application/x-directory");
   } catch { return false; }
+}
+
+// The first of `paths` (relative to a CID) that serves file bytes on the dedicated gateway, else on the public one.
+async function resolvableFilePath(cid: string, paths: string[]): Promise<string | null> {
+  for (const host of [DEDICATED_GATEWAY, PUBLIC_GATEWAY]) {
+    for (const p of paths) {
+      if (await servesFile(`https://${host}/ipfs/${cid}${p}`)) return p;
+    }
+  }
+  return null;
 }
 
 Deno.serve(async (req) => {
@@ -65,37 +82,42 @@ Deno.serve(async (req) => {
 
   // Pull the bytes from the public bucket (the app already uploaded them there).
   const src = `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
-  const obj = await fetch(src);
+  let obj: Response;
+  try { obj = await fetch(src, { signal: AbortSignal.timeout(20_000) }); } catch { return json({ error: "could not read the object", src }, 502); }
   if (!obj.ok) return json({ error: `object not found (${obj.status})`, src }, 404);
   const bytes = new Uint8Array(await obj.arrayBuffer());
   const contentType = obj.headers.get("content-type") ?? "application/octet-stream";
-  // Bare basename with NO slash — a "/" would make Pinata build nested wrapper directories.
+  // Bare basename with NO slash, used for both the multipart filename and the pin's metadata name — a "/" in either
+  // makes Pinata build wrapper directories and return the directory's CID instead of the file's.
   const name = (path.split("/").pop() || "media").replace(/[^A-Za-z0-9._-]/g, "_");
 
   const form = new FormData();
   form.append("file", new Blob([bytes], { type: contentType }), name);
-  // wrapWithDirectory:false asks Pinata for the FILE's CID, not a wrapping directory.
   form.append("pinataOptions", JSON.stringify({ cidVersion: 1, wrapWithDirectory: false }));
-  form.append("pinataMetadata", JSON.stringify({ name: `dyorhq/${path}` }));
+  // The bucket path goes in keyvalues (free-form tags), never in `name`.
+  form.append("pinataMetadata", JSON.stringify({ name, keyvalues: { app: "dyorhq", bucket, path } }));
 
-  const res = await fetch(PINATA, { method: "POST", headers: { Authorization: `Bearer ${jwt}` }, body: form });
-  const text = await res.text();
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetch(PINATA, { method: "POST", headers: { Authorization: `Bearer ${jwt}` }, body: form, signal: AbortSignal.timeout(60_000) });
+    text = await res.text();
+  } catch (e) {
+    return json({ error: "pinata did not answer", detail: String(e).slice(0, 200) }, 502);
+  }
   if (!res.ok) return json({ error: `pinata responded ${res.status}`, detail: text.slice(0, 300) }, 502);
   let cid = "";
-  try { cid = JSON.parse(text).IpfsHash ?? ""; } catch { /* fall through */ }
+  let mime = "";
+  try { const parsed = JSON.parse(text); cid = parsed.IpfsHash ?? ""; mime = parsed.MimeType ?? ""; } catch { /* fall through */ }
   if (!cid) return json({ error: "pinata returned no CID", detail: text.slice(0, 300) }, 502);
 
-  // Guarantee the on-chain URI resolves to the image itself, not a directory listing.
-  let uri = `ipfs://${cid}`;
-  if (!(await servesFile(`${GATEWAY}/${cid}`))) {
-    if (await servesFile(`${GATEWAY}/${cid}/${name}`)) {
-      uri = `ipfs://${cid}/${name}`;
-    } else {
-      // The pin didn't yield a resolvable file — refuse it so the app falls back to the (working) https URL rather
-      // than writing a broken directory URI on-chain, which is immutable.
-      return json({ error: "pinned content did not resolve to a file", cid }, 502);
-    }
+  // Guarantee the on-chain URI resolves to the media itself. Pinata reports MimeType "directory" when it wrapped the
+  // file; either way the gateway is the arbiter.
+  const filePath = await resolvableFilePath(cid, mime === "directory" ? [`/${name}`, ""] : ["", `/${name}`]);
+  if (filePath === null) {
+    // Nothing resolvable — refuse, so the app writes the (working) https URL on-chain instead of a broken URI.
+    return json({ error: "pinned content did not resolve to a file", cid, mime }, 502);
   }
-
-  return json({ cid, uri, contentType });
+  const uri = `ipfs://${cid}${filePath}`;
+  return json({ cid, uri, contentType, wrapped: filePath !== "" });
 });
