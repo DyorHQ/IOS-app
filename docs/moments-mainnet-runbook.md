@@ -70,7 +70,14 @@ cd contracts && PLATFORM=0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48 TREASURY=0x5
 27 KB, which Monad allows (128 KB limit; the Launchpad factory deployed the same way). The Launchpad's
 `deployments/143.json` is never touched.
 
-## 1b. Cohort-2 redeploy — the $2,000 graduation FDV baked in (2026-09-22)
+## 1b. Cohort-2 redeploy — the $2,000 graduation FDV baked in (2026-09-22) — DONE
+
+**Executed 2026-09-22 with `script/moments/redeploy-cohort2.sh`** from the governance wallet: factory
+`0xc12B6b6948185cef75F861c5327702c30CB8a581` (block 106 984 957), collect `0x8f65…2493`, vesting `0xe087…6C99`,
+graduation `0x353F…045b`, locker `0x9957…9a8a`, hook `0x501D…20Cc`, buyback `0xacae…c6F5`; 8 transactions,
+24.52M gas; policy threshold 771 428 571 read back from the chain; `externalBaseURI` set; cohort-1 factory
+`0x6469…C020` paused (tx `0xb1d5cd08…9d852`); all seven contracts verified on Sourcify; `moments-status.mjs` all
+invariants OK. Record: `deployments/moments-143.json` (cohort 1 kept in `moments-143-cohort1.json`).
 
 The owner chose a fresh deployment over the timelocked policy change (ruling 20): the new stack starts with the
 cohort-2 policy in its constructor (threshold 771.428571 USDC, everything else as before) and the cohort-1 stack is

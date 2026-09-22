@@ -22,7 +22,7 @@ Design principle: **the product must be lovable with the money turned off.** The
 | Coin supply per Moment `S` | 100,000,000 (100M), fixed |
 | Collect price | Creator-set, **min $0.10 (0.10 USDC)**, fixed per Moment |
 | Collect proceeds split | **creator 20% / platform 5% / reserve 75%** |
-| Graduation threshold | **$10 USDC for the validation launch (Moments 1–3); 771.428571 USDC = a $2,000 opening FDV from cohort 2** (ruling 20, 2026-09-22), raised via factory policy (no redeploy). |
+| Graduation threshold | **$10 USDC for the validation launch (cohort-1 factory `0x6469…C020`, Moments 1–3, now paused); 771.428571 USDC = a $2,000 opening FDV on the cohort-2 factory `0xc12B…a581`** (ruling 20, deployed 2026-09-22 with the policy in its constructor). |
 | Emergent allocation at graduation | collectors **51.4%** / pool **38.6%** / creator **10%** |
 | Creator coin allocation | ≤ **10%** of `S`, creator-chosen; **20% unlocks at graduation, then 16% of the allocation per month × 5** |
 | Collector coin vesting | **60% liquid at graduation, +20% at month 1, +20% at month 2** (monthly cliffs) |

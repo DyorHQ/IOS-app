@@ -27,6 +27,8 @@ anvil fork the same day (propose → 48 h → apply → publish → terminal col
 $1,999.999999 FDV with 38,571,428.57 coins + 771.428571 USDC, `supplyCheck` intact). The owner then chose to
 execute it as a **fresh deployment with the policy in the constructor** rather than the timelocked proposal, retiring
 the cohort-1 stack: procedure in `docs/moments-mainnet-runbook.md` §1b (also rehearsed on a fork end to end).
+**Done 2026-09-22:** cohort-2 factory `0xc12B6b6948185cef75F861c5327702c30CB8a581` (block 106 984 957), verified
+on Sourcify, invariants OK; cohort-1 factory `0x6469…C020` paused, its Moments 1–3 remain on-chain.
 
 ## Validation launch — run of show
 

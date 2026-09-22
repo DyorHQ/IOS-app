@@ -148,4 +148,6 @@ contract that implements it so a reviewer can check the code against the ruling.
     has to derive it. Later the same day the owner ruled to execute it as a **redeploy** — a fresh stack with the
     cohort-2 policy in its constructor, signed on the Ledger like the original deployment — and to retire the
     cohort-1 stack (publishing paused; Moments 1–3 stay on-chain but leave the app), since the product is still in
-    development. Fork-rehearsed end to end; procedure in `docs/moments-mainnet-runbook.md` §1b.
+    development. Fork-rehearsed end to end; procedure in `docs/moments-mainnet-runbook.md` §1b. Executed the same
+    day: cohort-2 factory `0xc12B6b6948185cef75F861c5327702c30CB8a581` (block 106 984 957), Sourcify-verified,
+    cohort-1 factory paused.
