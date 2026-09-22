@@ -134,3 +134,15 @@ contract that implements it so a reviewer can check the code against the ruling.
     Interim posture recorded in `docs/moments-launch-gates.md`: threshold stays at $10 (bounded exposure per
     Moment), small cohort, monitor before and after each step, audit before any threshold raise. Nothing in the
     contracts or the app blocks the launch any more.
+
+20. **Graduation FDV raised to $2,000 for cohort 2 (2026-09-22), before the audit.** The owner rules that Moments
+    published under the next policy graduate at a $2,000 fully diluted valuation: threshold 771.428571 USDC
+    (`THRESHOLD_USDC=771428571`); split, minimum price, allocation cap, expiry share, royalty and beneficiaries
+    unchanged. Convention: the FDV is stated at the app's default 10% creator allocation — a creator who takes
+    less opens lower ($1,800 at 0%) because the untaken coins go to the pool at the same rate. This supersedes the
+    "$10 until audited" interim posture of ruling 19; exposure becomes ≈ $771.43 of USDC per graduated pool
+    (≈ $1,028.57 collected per Moment). Rehearsed on an anvil fork the same day: propose → early apply reverts
+    (`TimelockNotElapsed`) → 48 h → apply → publish → terminal collect (clamped to exactly the threshold) → atomic
+    graduation at $1,999.999999 FDV with the supply identity intact. Live execution is the owner's, from the
+    governance wallet through `PolicyOps` (ruling 13); the app shows the resulting FDV on the Publish and Moment
+    screens so nobody has to derive it.

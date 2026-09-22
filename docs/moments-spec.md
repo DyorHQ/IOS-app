@@ -22,7 +22,7 @@ Design principle: **the product must be lovable with the money turned off.** The
 | Coin supply per Moment `S` | 100,000,000 (100M), fixed |
 | Collect price | Creator-set, **min $0.10 (0.10 USDC)**, fixed per Moment |
 | Collect proceeds split | **creator 20% / platform 5% / reserve 75%** |
-| Graduation threshold | **$10 USDC — initial small-cap validation launch.** Raised for later cohorts via factory policy (no redeploy). |
+| Graduation threshold | **$10 USDC for the validation launch (Moments 1–3); 771.428571 USDC = a $2,000 opening FDV from cohort 2** (ruling 20, 2026-09-22), raised via factory policy (no redeploy). |
 | Emergent allocation at graduation | collectors **51.4%** / pool **38.6%** / creator **10%** |
 | Creator coin allocation | ≤ **10%** of `S`, creator-chosen; **20% unlocks at graduation, then 16% of the allocation per month × 5** |
 | Collector coin vesting | **60% liquid at graduation, +20% at month 1, +20% at month 2** (monthly cliffs) |
@@ -126,6 +126,11 @@ Monthly cliffs are deliberate: they give collectors a reason to return each mont
 - Pool at open: 10 USDC + 38.57M coins; opening price ≈ $2.59e-7; FDV ≈ **$26**.
 - Allocation (threshold-independent): collectors 51.43M / pool 38.57M / creator 10M.
 - **Purpose is mechanism validation, not a market.** A $10 pool has no real depth; any non-trivial trade craters it, and a high collect price can graduate with ~1 holder. These coins are validation/low-cap by design — see containment in §12–13. Every contract path (collect → graduate → claim → buyback) executes identically to production.
+
+**Cohort 2 — $2,000 opening FDV (771.428571 USDC threshold, ruling 20):**
+- Total collected ≈ **$1,028.57**; creator earns **$205.71**, platform **$51.43**, pool reserve **$771.43**.
+- Pool at open: 771.43 USDC + 38.57M coins; opening price $2.0e-5; FDV **$2,000.00** at the default 10% creator allocation ($1,800 if the creator takes none — the untaken coins go to the pool at the same rate).
+- Allocation unchanged: collectors 51.43M / pool 38.57M / creator 10M. Verified on a fork 2026-09-22 (Graduated event: 38,571,428.5714 coins + 771.428571 USDC, FDV $1,999.999999).
 
 **Later cohorts (candidate $10,000 threshold, same design):**
 - Total collected ≈ **$13,333**; creator **$2,667**, platform **$667**, pool reserve **$10,000**.
