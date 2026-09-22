@@ -7,6 +7,10 @@ public enum Monad {
     public static let chainId = 143
     public static let chainIdHex = "0x8f"
     public static let defaultRPC = URL(string: "https://rpc.monad.xyz")!
+    /// Keyless public Monad RPC endpoints in failover order (docs.monad.xyz → Network information): QuickNode's
+    /// rpc.monad.xyz (25 rps, batch ≤ 100) then Alchemy's rpc1.monad.xyz (15 rps, batch ≤ 100). Limits are per client
+    /// IP, so every phone has its own budget — and no provider API key ever ships inside the app.
+    public static let publicRPCs = [defaultRPC, URL(string: "https://rpc1.monad.xyz")!]
     public static let explorer = URL(string: "https://monadscan.com")!
     public static let blocksPerDay: UInt64 = 216_000 // ~0.4 s blocks
     public static let nativeSymbol = "MON"

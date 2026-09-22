@@ -38,6 +38,30 @@ xcodebuild -project DyorHQ.xcodeproj -scheme DyorHQ -configuration Release \
   -destination 'generic/platform=iOS' -archivePath "$ARCHIVE" -derivedDataPath DerivedDataDevice \
   -allowProvisioningUpdates -skipMacroValidation -skipPackagePluginValidation archive | grep -E "error:|ARCHIVE (SUCCEEDED|FAILED)"
 
+# SECURITY GATE — nothing secret may ship. Everything in the app bundle is readable by anyone who has the IPA, so the
+# archive is checked for (1) the value of every Secrets.xcconfig variable that is not a public identifier and (2) any
+# keyed RPC-provider URL. A hit stops the release before anything is uploaded. Values are never printed.
+APP="$ARCHIVE/Products/Applications/DyorHQ.app"
+[[ -d "$APP" ]] || { echo "Archive has no app bundle at $APP" >&2; exit 1; }
+PUBLIC_VARS=(DEVELOPMENT_TEAM DYOR_SLASH PRIVY_APP_ID PRIVY_CLIENT_ID PASSKEY_RP_ID PERPL_BUILDER_ID SOCIAL_LOGINS_ENABLED
+  PASSKEYS_ENABLED LAUNCHPAD_FACTORY LAUNCH_ROUTER FEE_ESCROW HOLDER_FEE_SHARING MEME_HOOK AURORA_FEE_RECIPIENT)
+LEAKS=()
+while IFS= read -r line; do
+  name=${line%%=*}; name=${name//[[:space:]]/}
+  (( ${PUBLIC_VARS[(Ie)$name]} )) && continue
+  # xcconfig: strip a trailing // comment, trim, then expand $(DYOR_SLASH) (how URLs write "//" in xcconfig).
+  value=$(printf '%s' "${line#*=}" | sed -e 's:[[:space:]]//.*$::' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/\$(DYOR_SLASH)/\//g')
+  (( ${#value} >= 8 )) || continue
+  if grep -rqF -- "$value" "$APP"; then LEAKS+=("$name"); fi
+done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=' DyorHQ/Config/Secrets.xcconfig)
+if grep -rqE 'alchemy\.com/v2/[A-Za-z0-9_-]|infura\.io/v3/[0-9a-f]|quiknode\.pro/[0-9a-f]' "$APP"; then LEAKS+=("keyed RPC provider URL"); fi
+if (( ${#LEAKS[@]} )); then
+  echo "REFUSING TO UPLOAD — the archive contains secret values from: ${LEAKS[*]}" >&2
+  echo "Keep secrets server-side (see the notes in project.yml). Nothing was uploaded." >&2
+  exit 1
+fi
+echo "Security gate: no secrets found in the archive ✓"
+
 OPTIONS=build/ExportOptions-$BUILD.plist
 sed "s/TEAM_ID/$TEAM/" ExportOptions.plist > "$OPTIONS"
 AUTH=()

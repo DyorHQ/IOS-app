@@ -110,15 +110,27 @@ struct SecurityView: View {
             }
 
             Section {
-                if BiometricGate.isAvailable {
-                    Toggle("Require \(BiometricGate.typeName)", isOn: $settings.requireBiometrics)
+                // Stays visible while the lock is on, even if biometrics were since removed, so it can always be managed.
+                if BiometricGate.isAvailable || settings.requireBiometrics {
+                    Toggle("Require \(BiometricGate.typeName)", isOn: Binding(
+                        get: { settings.requireBiometrics },
+                        set: { on in
+                            if on { settings.requireBiometrics = true; return }
+                            // Turning App Lock OFF needs the owner too — otherwise anyone holding the unlocked phone
+                            // could simply switch it off.
+                            Task { if await BiometricGate.authenticate(reason: "Turn off App Lock") { settings.requireBiometrics = false } }
+                        }))
                 } else {
                     Label("No biometrics enrolled on this device.", systemImage: "faceid").foregroundStyle(.secondary).font(.subheadline)
                 }
             } header: {
                 Text("App Lock")
             } footer: {
-                Text("Asks for \(BiometricGate.typeName) before every transaction is signed.")
+                if settings.requireBiometrics, !BiometricGate.canAuthenticateOwner {
+                    Text("Set a device passcode in iOS Settings — App Lock can't confirm transactions without one.").foregroundStyle(Color.attention)
+                } else {
+                    Text("Asks for \(BiometricGate.typeName) (or your passcode) before every transaction is signed, and before App Lock can be turned off.")
+                }
             }
         }
         .navigationTitle("Security")
@@ -207,6 +219,7 @@ struct PerplTradingView: View {
     @Environment(PerplTrading.self) private var trading
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
+    @Environment(AppSettings.self) private var settings
     @State private var busy = false
     @State private var error: String?
 
@@ -293,11 +306,15 @@ struct PerplTradingView: View {
 
     private func enroll() async throws {
         guard let wallet = session.wallet as? DigestSigner, let address = session.address else { throw SessionError.readOnly }
+        // Enrollment signs with the wallet and creates a trading key — App Lock applies.
+        if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Connect Perpl trading")) { throw SessionError.authenticationRequired }
         try await trading.enroll(wallet: wallet, address: address)
     }
 
     private func enableForwarding() async throws {
         guard let wallet = session.wallet else { throw SessionError.readOnly }
+        // An on-chain transaction sent without a confirmation sheet — App Lock applies.
+        if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Enable one-click trading")) { throw SessionError.authenticationRequired }
         try await trading.enableForwarding(env: env, wallet: wallet)
     }
 

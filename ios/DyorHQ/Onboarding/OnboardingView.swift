@@ -598,10 +598,28 @@ struct EmailPasswordView: View {
 
     // MARK: Backend gate (email_accounts)
 
-    /// Login gate: does this email map to exactly the derived address?
-    private func verifyBinding(_ email: String, _ address: Address) async throws -> Bool {
-        try await env.social.client.rpc("email_account_matches",
-                                        ["p_email": email, "p_wallet": address.checksummed.lowercased()], authed: false)
+    /// Login gate: is this email bound to exactly the derived wallet? The derived wallet proves itself by signing in to
+    /// the backend (wallet-auth), then reads ITS OWN binding under row-level security. There is deliberately no
+    /// anonymous "does this email match this wallet" lookup — that would let anyone confirm a guessed password online.
+    /// A wrong password derives a wallet with no binding: it reads nothing, the temporary session is dropped, and no
+    /// profile row is created for it.
+    private func verifyBinding(_ email: String, _ account: Secp256k1Account) async throws -> Bool {
+        let signer = LocalWallet(account: account)
+        let backend = env.social.client
+        _ = try await backend.signIn(address: account.address.checksummed) { message in try await signer.signMessage(message) }
+        struct Binding: Decodable { let email: String }
+        let wallet = account.address.checksummed.lowercased()
+        let rows: [Binding]
+        do {
+            rows = try await backend.read("email_accounts", query: [URLQueryItem(name: "select", value: "email"),
+                                                                    URLQueryItem(name: "wallet", value: "eq.\(wallet)")], authed: true)
+        } catch {
+            await backend.signOut()
+            throw error
+        }
+        let matches = rows.contains { $0.email == email }
+        if !matches { await backend.signOut() } // never leave a session for a wallet that isn't the user's
+        return matches
     }
 }
 

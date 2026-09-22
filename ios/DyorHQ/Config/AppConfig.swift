@@ -6,7 +6,11 @@ import Foundation
 struct AppConfig: Sendable {
     let privyAppID: String
     let privyClientID: String
-    let rpcURL: URL
+    /// Monad RPC endpoints in failover order: the keyless public endpoints (`Monad.publicRPCs`). A Debug build may point
+    /// at one override (a local fork); a Release build never reads an override, so no keyed provider URL can ship.
+    let rpcURLs: [URL]
+    /// The primary endpoint (Settings display, Privy's embedded-wallet chain).
+    var rpcURL: URL { rpcURLs[0] }
     let passkeyRelyingParty: String
     /// Apple / Google sign-in through Privy. Off unless `SocialLoginsEnabled=YES` in Secrets.xcconfig; the methods must
     /// also be enabled in the Privy dashboard. When off, onboarding hides them so no one taps a disallowed method.
@@ -26,13 +30,12 @@ struct AppConfig: Sendable {
     /// Privy-hosted key-export page (Privy React SDK) loaded in a WebView to export an embedded wallet's key — the
     /// only supported path, since Privy's iOS SDK has no native export. Its origin must be a Privy allowed origin.
     let walletExportURL: URL?
-    /// Aurora Intents Swap API key (studio.aurora.dev) powering the cross-chain Bridge, and an optional NEAR account
-    /// to receive the integrator fee. The key is required for the Bridge to work; without it the button explains why.
-    let auroraApiKey: String
+    /// Optional NEAR account to receive the Bridge's integrator fee. The Aurora API key itself is NOT in the app: it
+    /// lives server-side in the `aurora-proxy` Edge Function (Supabase secret AURORA_API_KEY).
     let auroraFeeRecipient: String?
 
     var hasPrivy: Bool { !privyAppID.isEmpty && !privyClientID.isEmpty }
-    var hasBridge: Bool { !auroraApiKey.isEmpty }
+    var hasBridge: Bool { hasSupabase }
     var hasPasskeys: Bool { hasPrivy && enablePasskeys && !passkeyRelyingParty.isEmpty }
     var hasSupabase: Bool { !supabaseKey.isEmpty }
 
@@ -45,13 +48,19 @@ struct AppConfig: Sendable {
         }
         func bool(_ key: String) -> Bool { ["yes", "true", "1"].contains(string(key).lowercased()) }
         func address(_ key: String) -> Address { Address(string(key)) ?? .zero }
-        let rpc = URL(string: string("MonadRPCURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil } ?? Monad.defaultRPC
+        #if DEBUG
+        // Development only (e.g. an anvil fork at 127.0.0.1). project.yml empties MonadRPCURL for Release as well.
+        let rpcOverride = URL(string: string("MonadRPCURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil }
+        #else
+        let rpcOverride: URL? = nil
+        #endif
+        let rpcURLs = rpcOverride.map { [$0] } ?? Monad.publicRPCs
         let supabaseURL = URL(string: string("SupabaseURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil } ?? URL(string: "https://fmnjqrguvopusfufmirs.supabase.co")!
         let supabaseKey = { let key = string("SupabaseKey"); return key.isEmpty ? "sb_publishable_s1G3ns-jmzTfnFs7rTvdbQ_8FJYODhT" : key }()
         return AppConfig(
             privyAppID: string("PrivyAppID"),
             privyClientID: string("PrivyClientID"),
-            rpcURL: rpc,
+            rpcURLs: rpcURLs,
             passkeyRelyingParty: string("PasskeyRelyingParty"),
             enableSocialLogins: bool("SocialLoginsEnabled"),
             enablePasskeys: bool("PasskeysEnabled"),
@@ -71,7 +80,6 @@ struct AppConfig: Sendable {
             supabaseURL: supabaseURL,
             supabaseKey: supabaseKey,
             walletExportURL: URL(string: string("WalletExportURL")).flatMap { $0.scheme?.hasPrefix("http") == true ? $0 : nil },
-            auroraApiKey: string("AuroraApiKey"),
             auroraFeeRecipient: { let r = string("AuroraFeeRecipient"); return r.isEmpty ? nil : r }()
         )
     }()

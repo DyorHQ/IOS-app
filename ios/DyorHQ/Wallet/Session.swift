@@ -256,13 +256,15 @@ final class Session {
     }
 
     /// Log in (no OTP): derive the wallet, then sign in ONLY if `verify` confirms the email is a verified account
-    /// bound to exactly this derived address. A wrong password derives a different address and fails verification.
+    /// bound to exactly this derived wallet. A wrong password derives a different wallet and fails verification. The
+    /// derived account is handed to `verify` so the wallet can prove itself (sign in to the backend and read its own
+    /// binding) — there is no anonymous lookup that could confirm a guessed password.
     func logInWithPassword(email: String, password: String,
-                           verify: (_ email: String, _ address: Address) async throws -> Bool) async throws {
+                           verify: (_ email: String, _ account: Secp256k1Account) async throws -> Bool) async throws {
         guard let (account, normalizedEmail) = await derivePassword(email: email, password: password) else {
             throw SessionError.passwordDerivationFailed
         }
-        guard try await verify(normalizedEmail, account.address) else { throw SessionError.emailNotVerified }
+        guard try await verify(normalizedEmail, account) else { throw SessionError.emailNotVerified }
         await commitPasswordWallet(account, email: normalizedEmail)
     }
 
@@ -361,9 +363,11 @@ enum SessionError: LocalizedError {
     case readOnly
     case passwordDerivationFailed
     case emailNotVerified
+    case authenticationRequired
 
     var errorDescription: String? {
         switch self {
+        case .authenticationRequired: return "Confirm with Face ID, Touch ID or your passcode to continue."
         case .privyNotConfigured: return "Sign-in is not set up in this build. Add the Privy keys to Secrets.xcconfig."
         case .invalidWalletAddress: return "The wallet address returned by Privy is not valid."
         case .readOnly: return "You are watching this address. Sign in to trade."

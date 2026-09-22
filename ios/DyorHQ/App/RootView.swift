@@ -30,6 +30,9 @@ struct RootView: View {
         .overlay { PrivacyCover(active: scenePhase == .active) }
         .task { session.start(); settings.appearance.apply(); Notifications.configure() }
         .onChange(of: scenePhase) { _, phase in
+            // An unlocked passkey (Mera) signing session must not outlive the user leaving the app: whoever picks the
+            // phone up next has to present the passkey again.
+            if phase == .background { session.mera.lock() }
             if phase == .active {
                 settings.appearance.apply()
                 // Reconnect the trading socket the instant the app returns (iOS drops it while suspended), so TP/SL is

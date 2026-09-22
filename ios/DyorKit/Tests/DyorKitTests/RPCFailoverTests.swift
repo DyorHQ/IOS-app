@@ -1,0 +1,262 @@
+import BigInt
+import XCTest
+@testable import DyorKit
+
+/// The keyless-RPC transport: failover between public endpoints on transport errors and 429/5xx (never on a request
+/// error), batch splitting at the endpoint's cap, and a transaction resend that the network already knows resolving to
+/// its hash instead of an error.
+final class RPCFailoverTests: XCTestCase {
+    private let primary = URL(string: "https://primary.test")!
+    private let secondary = URL(string: "https://secondary.test")!
+
+    override func setUp() {
+        super.setUp()
+        RPCStub.reset()
+    }
+
+    private func client(maxBatch: Int = 100) -> RPCClient {
+        RPCClient(urls: [primary, secondary], session: RPCStub.session(), maxBatch: maxBatch)
+    }
+
+    func testFailsOverOn429() async throws {
+        RPCStub.status["primary.test"] = 429
+        let block = try await client().blockNumber()
+        XCTAssertEqual(block, 0x10)
+        XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"])
+    }
+
+    func testFailsOverOnServerErrorAndTransportFailure() async throws {
+        RPCStub.status["primary.test"] = 503
+        _ = try await client().blockNumber()
+        XCTAssertEqual(RPCStub.hosts.last, "secondary.test")
+
+        RPCStub.reset()
+        RPCStub.transportFailure.insert("primary.test")
+        _ = try await client().blockNumber()
+        XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"])
+    }
+
+    func testDoesNotFailOverOnARequestError() async {
+        RPCStub.status["primary.test"] = 400
+        do {
+            _ = try await client().blockNumber()
+            XCTFail("expected badStatus(400)")
+        } catch NetworkError.badStatus(let code) {
+            XCTAssertEqual(code, 400)
+        } catch { XCTFail("unexpected \(error)") }
+        XCTAssertEqual(RPCStub.hosts, ["primary.test"])
+    }
+
+    func testThrowsWhenEveryEndpointFails() async {
+        RPCStub.status["primary.test"] = 429
+        RPCStub.status["secondary.test"] = 502
+        do {
+            _ = try await client().blockNumber()
+            XCTFail("expected failure")
+        } catch NetworkError.badStatus(let code) {
+            XCTAssertEqual(code, 502)
+        } catch { XCTFail("unexpected \(error)") }
+    }
+
+    func testBacksOffWhenEveryEndpointThrottlesAtOnce() async throws {
+        // Measured live: under a burst both public endpoints can answer 429 to the same request.
+        RPCStub.failFirst = ["primary.test": 1, "secondary.test": 1]
+        let block = try await client().blockNumber()
+        XCTAssertEqual(block, 0x10)
+        XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test", "primary.test"], "one full round throttled, then a retry after backoff")
+    }
+
+    func testFailsFastWhenOffline() async {
+        RPCStub.transportFailure = ["primary.test", "secondary.test"]
+        let start = Date()
+        do { _ = try await client().blockNumber(); XCTFail("expected a transport error") } catch {}
+        XCTAssertEqual(RPCStub.hosts.count, 2, "no backoff rounds when nothing answered at all")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+    }
+
+    func testPrefersTheEndpointThatAnswered() async throws {
+        let rpc = client()
+        RPCStub.status["primary.test"] = 429
+        _ = try await rpc.blockNumber()
+        RPCStub.hosts = []
+        _ = try await rpc.blockNumber()
+        XCTAssertEqual(RPCStub.hosts, ["secondary.test"], "a throttled primary is not retried on every call")
+    }
+
+    func testSplitsBatchesAtTheCapAndKeepsOrder() async throws {
+        let rpc = client(maxBatch: 3)
+        let calls = (0..<7).map { i in (method: "echo", params: [JSON.number(Double(i))]) }
+        let results = try await rpc.batch(calls)
+        XCTAssertEqual(RPCStub.requestSizes, [3, 3, 1])
+        XCTAssertEqual(results.map { try? $0.get().number }, (0..<7).map { Double($0) })
+    }
+
+    func testRetriesOnlyTheItemsTheEndpointThrottled() async throws {
+        // rpc.monad.xyz behaviour: HTTP 200, the items over its per-second budget fail with a rate-limit message.
+        RPCStub.itemBudget["primary.test"] = 2
+        let calls = (0..<5).map { i in (method: "echo", params: [JSON.number(Double(i))]) }
+        let results = try await client().batch(calls)
+        XCTAssertEqual(results.map { try? $0.get().number }, (0..<5).map { Double($0) }, "every call answered, in order")
+        XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"])
+        XCTAssertEqual(RPCStub.requestSizes, [5, 3], "only the 3 throttled calls are re-sent")
+    }
+
+    func testGivesUpAfterBoundedRetriesWhenEverythingThrottles() async throws {
+        RPCStub.itemBudget["primary.test"] = 0
+        RPCStub.itemBudget["secondary.test"] = 0
+        let results = try await client().batch([(method: "echo", params: [.number(1)])])
+        guard case .failure(let error) = results[0] else { return XCTFail("expected the throttle error to surface") }
+        XCTAssertTrue(RPCClient.isRateLimited(error))
+        XCTAssertEqual(RPCStub.hosts.count, 5, "1 attempt + 4 bounded retries, never an endless loop")
+    }
+
+    func testThrottleClassificationNeverSwallowsRealErrors() {
+        func e(_ code: Int, _ m: String) -> RPCError { RPCError(code: code, message: m) }
+        // Throttling, as the live endpoints phrase it (measured 2026-09-22).
+        XCTAssertTrue(RPCClient.isRateLimited(e(-32007, "50/second request limit reached - reduce calls per second or upgrade your account")))
+        XCTAssertTrue(RPCClient.isRateLimited(e(-32000, "Too many requests, reason: call rate limit exhausted, retry in 10s")))
+        XCTAssertTrue(RPCClient.isRateLimited(e(-32005, "limit exceeded")))
+        XCTAssertTrue(RPCClient.isRateLimited(e(429, "Your app has exceeded its compute units per second capacity")))
+        // Real answers about the call — must never be retried as throttling.
+        for m in ["execution reverted", "execution reverted: ERC20: transfer amount exceeds balance", "nonce too low",
+                  "gas required exceeds allowance (30000000)", "insufficient funds for gas * price + value",
+                  "max fee per gas less than block base fee", "intrinsic gas too low", "already known", "out of gas"] {
+            XCTAssertFalse(RPCClient.isRateLimited(e(-32000, m)), m)
+        }
+        XCTAssertFalse(RPCClient.isRateLimited(e(3, "execution reverted")))
+    }
+
+    /// Live burst against Monad's real public endpoints — opt-in (DYORHQ_NETWORK_TESTS=1) so CI stays offline. Mixes the
+    /// shapes that trip each endpoint's limit: an oversized batch, a burst of concurrent single calls, and concurrent
+    /// batches. The client must answer every call.
+    func testLiveBurstAgainstPublicMonadRPC() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["DYORHQ_NETWORK_TESTS"] == "1", "set DYORHQ_NETWORK_TESTS=1")
+        let rpc = RPCClient(urls: Monad.publicRPCs, maxBatch: 40)
+        let big = try await rpc.batch((0..<150).map { _ in (method: "eth_chainId", params: []) })
+        let singles = try await withThrowingTaskGroup(of: Int.self) { group in
+            for _ in 0..<60 { group.addTask { try await rpc.chainId() } }
+            return try await group.reduce(into: [Int]()) { $0.append($1) }
+        }
+        let batches = try await withThrowingTaskGroup(of: [Result<JSON, RPCError>].self) { group in
+            for _ in 0..<6 { group.addTask { try await rpc.batch((0..<30).map { _ in (method: "eth_blockNumber", params: []) }) } }
+            return try await group.reduce(into: [Result<JSON, RPCError>]()) { $0 += $1 }
+        }
+        let failures = (big + batches).filter { if case .failure = $0 { return true }; return false }.count
+        XCTAssertEqual(failures, 0, "\(failures) of \(big.count + batches.count) batched calls failed")
+        XCTAssertEqual(singles.count, 60)
+        XCTAssertTrue(singles.allSatisfy { $0 == Monad.chainId })
+    }
+
+    func testResendTheNetworkAlreadyKnowsResolvesToTheHash() async throws {
+        let signed = Data(hex: "0x02f86b818f8085174876e800850ba43b7400825208941111111111111111111111111111111111111111880de0b6b3a764000080c001a0aaaa")!
+        RPCStub.sendError = "already known"
+        let hash = try await client().sendRawTransaction(signed)
+        XCTAssertEqual(hash, Keccak.hash256(signed))
+    }
+
+    func testNonceTooLowIsSuccessOnlyForThisVeryTransaction() async throws {
+        let signed = Data(hex: "0x02f86b818f0185174876e800850ba43b7400825208942222222222222222222222222222222222222222880de0b6b3a764000080c001a0bbbb")!
+        RPCStub.sendError = "nonce too low"
+        RPCStub.knownTransactions = [Keccak.hash256(signed).hexString]
+        let hash = try await client().sendRawTransaction(signed)
+        XCTAssertEqual(hash, Keccak.hash256(signed))
+
+        RPCStub.knownTransactions = []
+        do {
+            _ = try await client().sendRawTransaction(signed)
+            XCTFail("another transaction used the nonce — must stay an error")
+        } catch let error as RPCError {
+            XCTAssertTrue(error.message.contains("nonce too low"))
+        }
+    }
+}
+
+/// A JSON-RPC endpoint stub keyed by host: a status per host, transport failures, and per-method replies.
+final class RPCStub: URLProtocol {
+    nonisolated(unsafe) static var status: [String: Int] = [:]
+    nonisolated(unsafe) static var transportFailure: Set<String> = []
+    nonisolated(unsafe) static var hosts: [String] = []
+    nonisolated(unsafe) static var requestSizes: [Int] = []
+    nonisolated(unsafe) static var sendError: String?
+    nonisolated(unsafe) static var knownTransactions: [String] = []
+    /// Items per request the host answers before failing the rest with rpc.monad.xyz's throttle message (HTTP 200).
+    nonisolated(unsafe) static var itemBudget: [String: Int] = [:]
+    /// The first N requests to a host answer HTTP 429, then it serves normally.
+    nonisolated(unsafe) static var failFirst: [String: Int] = [:]
+
+    static func reset() {
+        status = [:]; transportFailure = []; hosts = []; requestSizes = []; sendError = nil; knownTransactions = []; itemBudget = [:]; failFirst = [:]
+    }
+
+    static func session() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RPCStub.self]
+        return URLSession(configuration: configuration)
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        let host = request.url?.host ?? ""
+        Self.hosts.append(host)
+        if Self.transportFailure.contains(host) {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
+        var code = Self.status[host] ?? 200
+        if let remaining = Self.failFirst[host], remaining > 0 { Self.failFirst[host] = remaining - 1; code = 429 }
+        var body = Data()
+        if code == 200 {
+            let payload = Self.bodyData(request)
+            let decoded = (try? JSONDecoder().decode(JSON.self, from: payload)) ?? .null
+            let calls = decoded.array ?? [decoded]
+            Self.requestSizes.append(calls.count)
+            let budget = Self.itemBudget[host] ?? Int.max
+            let replies = calls.enumerated().map { i, call -> JSON in
+                guard i < budget else {
+                    return .object(["jsonrpc": .string("2.0"), "id": call["id"], "error": .object([
+                        "code": .number(-32007), "message": .string("50/second request limit reached - reduce calls per second")])])
+                }
+                return Self.reply(call)
+            }
+            body = (try? JSONEncoder().encode(decoded.array == nil ? replies[0] : .array(replies))) ?? Data()
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    private static func reply(_ call: JSON) -> JSON {
+        let id = call["id"]
+        func result(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
+        func failure(_ message: String) -> JSON {
+            .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(-32000), "message": .string(message)])])
+        }
+        switch call["method"].string {
+        case "eth_blockNumber": return result(.string("0x10"))
+        case "echo": return result(call["params"].array?.first ?? .null)
+        case "eth_sendRawTransaction": return sendError.map(failure) ?? result(.string("0x" + String(repeating: "ab", count: 32)))
+        case "eth_getTransactionByHash":
+            let asked = call["params"].array?.first?.string ?? ""
+            return knownTransactions.contains(asked) ? result(.object(["hash": .string(asked)])) : result(.null)
+        default: return failure("method not found")
+        }
+    }
+
+    private static func bodyData(_ request: URLRequest) -> Data {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open(); defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let n = stream.read(&buffer, maxLength: buffer.count)
+            if n <= 0 { break }
+            data.append(buffer, count: n)
+        }
+        return data
+    }
+}

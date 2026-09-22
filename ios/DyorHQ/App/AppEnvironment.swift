@@ -39,10 +39,16 @@ final class AppEnvironment {
     init(config: AppConfig) {
         self.config = config
         social = SocialSession(config: config)
-        rpc = RPCClient(url: config.rpcURL)
+        // Keyless public endpoints with failover. Batches stay under rpc.monad.xyz's 50-items-per-second budget; calls
+        // it throttles are retried on rpc1, which limits requests rather than items.
+        rpc = RPCClient(urls: config.rpcURLs, maxBatch: 40)
         multicall = Multicall(rpc: rpc)
         sender = TransactionSender(rpc: rpc)
-        aurora = AuroraIntents(apiKey: config.auroraApiKey, feeRecipient: config.auroraFeeRecipient)
+        // The Aurora API key never ships in the app: bridge calls go through the aurora-proxy Edge Function, which
+        // holds the key and only serves a signed-in wallet.
+        let backend = social.client
+        aurora = AuroraIntents(proxy: backend.functionURL("aurora-proxy"), feeRecipient: config.auroraFeeRecipient,
+                               authorize: { try await backend.sessionHeaders() })
         prices = PriceService(rpc: rpc)
         // Graduated launchpad and Moment pools become swap routes on Uniswap v4.
         swap = SwapEngine(rpc: rpc, launchpadFactory: config.launchpad.isDeployed ? config.launchpad.factory : nil, moments: config.moments)

@@ -43,6 +43,16 @@ public actor SupabaseClient {
     public var currentSession: SupabaseSession? { current?.isValid == true ? current : nil }
     public var signedInWallet: String? { currentSession?.wallet }
 
+    /// The URL of one of the project's Edge Functions.
+    public nonisolated func functionURL(_ name: String) -> URL { baseURL.appending(path: "functions/v1/\(name)") }
+
+    /// Headers that authenticate a request to an Edge Function as the signed-in wallet (publishable key + session
+    /// JWT). Throws when there is no valid session.
+    public func sessionHeaders() throws -> [String: String] {
+        guard let token = currentSession?.accessToken else { throw SupabaseError.notSignedIn }
+        return ["apikey": anonKey, "Authorization": "Bearer \(token)"]
+    }
+
     /// Reuse a stored session if it's still valid.
     public func restore(_ stored: SupabaseSession?) {
         current = (stored?.isValid == true) ? stored : nil

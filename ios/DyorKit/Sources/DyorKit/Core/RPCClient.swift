@@ -30,15 +30,36 @@ public enum NetworkError: Error, LocalizedError {
     }
 }
 
-/// Ethereum JSON-RPC over HTTPS with request batching. One instance per endpoint.
+/// Ethereum JSON-RPC over HTTPS with request batching and endpoint failover. `urls` are tried in order when an
+/// endpoint fails at the transport level or answers HTTP 429 / 5xx, and calls an endpoint throttles inside an HTTP 200
+/// are re-sent to the next endpoint, so one throttled or down public endpoint never takes the app offline. After a
+/// failover the answering endpoint is preferred for 30 s, then the primary is tried again. Batches are split into
+/// requests of at most `maxBatch` calls.
 public actor RPCClient {
+    /// The primary endpoint — shown in Settings and handed to Privy's embedded wallet.
     public let url: URL
+    public let urls: [URL]
     private let session: URLSession
+    private let maxBatch: Int
     private var nextId = 1
+    private var preferred = 0
+    private var preferredSince = Date.distantPast
+    private static let stickiness: TimeInterval = 30
 
-    public init(url: URL, session: URLSession = .shared) {
+    public init(url: URL, session: URLSession = .shared, maxBatch: Int = 100) {
         self.url = url
+        self.urls = [url]
         self.session = session
+        self.maxBatch = max(1, maxBatch)
+    }
+
+    /// Several interchangeable endpoints for the same chain, in preference order.
+    public init(urls: [URL], session: URLSession = .shared, maxBatch: Int = 100) {
+        precondition(!urls.isEmpty, "RPCClient needs at least one endpoint")
+        self.url = urls[0]
+        self.urls = urls
+        self.session = session
+        self.maxBatch = max(1, maxBatch)
     }
 
     // MARK: Raw calls
@@ -48,9 +69,96 @@ public actor RPCClient {
         return try results[0].get()
     }
 
-    /// Sends several requests in one HTTP round trip. Results keep the request order.
+    /// Sends several requests, `maxBatch` per HTTP round trip. Results keep the request order.
     public func batch(_ calls: [(method: String, params: [JSON])]) async throws -> [Result<JSON, RPCError>] {
         guard !calls.isEmpty else { return [] }
+        guard calls.count > maxBatch else { return try await batchChunk(calls) }
+        var results: [Result<JSON, RPCError>] = []
+        results.reserveCapacity(calls.count)
+        var start = 0
+        while start < calls.count {
+            let end = min(start + maxBatch, calls.count)
+            results += try await batchChunk(Array(calls[start..<end]))
+            start = end
+        }
+        return results
+    }
+
+    /// Whether an HTTP status means "this endpoint, not this request" — worth retrying on the next endpoint.
+    static func shouldFailOver(status: Int) -> Bool { status == 429 || (500...599).contains(status) }
+
+    /// POSTs `body` to the preferred endpoint, failing over to the next on a transport error or a 429 / 5xx answer.
+    /// When every endpoint is throttling at once (a burst, measured on the live public endpoints) it backs off and tries
+    /// again in bounded rounds; when every endpoint is simply unreachable (offline) it fails at once instead.
+    private func post(_ body: Data) async throws -> Data {
+        if preferred != 0, Date().timeIntervalSince(preferredSince) > Self.stickiness { preferred = 0 }
+        var failure: Error = NetworkError.malformedResponse
+        for round in 0...Self.throttleRetries {
+            if round > 0 { try await Task.sleep(for: .milliseconds(400 * round)) }
+            var throttled = false
+            for attempt in 0..<urls.count {
+                let index = (preferred + attempt) % urls.count
+                var request = URLRequest(url: urls[index])
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "content-type")
+                request.httpBody = body
+                request.timeoutInterval = 30
+                let data: Data
+                let response: URLResponse
+                do {
+                    (data, response) = try await session.data(for: request)
+                } catch {
+                    // A cancelled task must stop here, not go on to hit the next endpoint.
+                    if error is CancellationError || (error as? URLError)?.code == .cancelled { throw NetworkError.transport(error) }
+                    failure = NetworkError.transport(error)
+                    continue
+                }
+                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                    failure = NetworkError.badStatus(http.statusCode)
+                    if Self.shouldFailOver(status: http.statusCode) { throttled = true; continue }
+                    throw failure
+                }
+                if index != preferred { preferred = index; preferredSince = Date() }
+                return data
+            }
+            if !throttled { break } // nothing answered at all (offline / unreachable): waiting won't help
+        }
+        throw failure
+    }
+
+    /// Whether a per-call error is the endpoint throttling us rather than an answer about the call itself. Public
+    /// endpoints report throttling inside an HTTP 200: QuickNode's rpc.monad.xyz counts batch items (≤ 50/s) and fails
+    /// the overflow items with "50/second request limit reached"; others use code -32005 / 429 or "rate limit" text.
+    /// Deliberately narrow: execution reverts, gas and nonce errors never match.
+    static func isRateLimited(_ error: RPCError) -> Bool {
+        if error.code == 429 || error.code == -32005 { return true }
+        let message = error.message.lowercased()
+        return message.contains("request limit") || message.contains("rate limit") || message.contains("too many requests")
+            || message.contains("per second") || message.contains("throughput")
+    }
+
+    /// One batch, plus bounded retries of just the calls the endpoint throttled: each retry goes to the next endpoint
+    /// (the public endpoints limit differently — items vs. requests — so the other one usually has room), with a short
+    /// backoff from the second retry on. A throttled call is never executed, so re-sending it is always safe.
+    private func batchChunk(_ calls: [(method: String, params: [JSON])]) async throws -> [Result<JSON, RPCError>] {
+        var results = try await exchange(calls)
+        var throttled = results.indices.filter { if case .failure(let e) = results[$0] { return Self.isRateLimited(e) }; return false }
+        var round = 0
+        while !throttled.isEmpty, round < Self.throttleRetries {
+            round += 1
+            if urls.count > 1 { preferred = (preferred + 1) % urls.count; preferredSince = Date() }
+            if round > 1 { try await Task.sleep(for: .milliseconds(350 * (round - 1))) }
+            let retried = try await exchange(throttled.map { calls[$0] })
+            for (k, i) in throttled.enumerated() { results[i] = retried[k] }
+            throttled = throttled.filter { if case .failure(let e) = results[$0] { return Self.isRateLimited(e) }; return false }
+        }
+        return results
+    }
+
+    private static let throttleRetries = 4
+
+    /// Sends `calls` as one JSON-RPC request (with endpoint failover) and maps the answers back to request order.
+    private func exchange(_ calls: [(method: String, params: [JSON])]) async throws -> [Result<JSON, RPCError>] {
         var payload: [JSON] = []
         let firstId = nextId
         for (i, call) in calls.enumerated() {
@@ -58,21 +166,7 @@ public actor RPCClient {
         }
         nextId += calls.count
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = try JSONEncoder().encode(calls.count == 1 ? payload[0] : .array(payload))
-        request.timeoutInterval = 30
-
-        let (data, response): (Data, URLResponse)
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw NetworkError.transport(error)
-        }
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw NetworkError.badStatus(http.statusCode)
-        }
+        let data = try await post(try JSONEncoder().encode(calls.count == 1 ? payload[0] : .array(payload)))
         let decoded = try JSONDecoder().decode(JSON.self, from: data)
         let responses = calls.count == 1 ? [decoded] : (decoded.array ?? [])
         guard responses.count == calls.count else { throw NetworkError.malformedResponse }
@@ -133,8 +227,20 @@ public actor RPCClient {
         try quantity(await call("eth_estimateGas", [tx.json]))
     }
 
+    /// Submits a signed transaction and returns its hash. The hash is keccak-256 of the signed bytes, so when the network
+    /// says it already has this exact transaction — a failover resend after the first endpoint accepted it but its
+    /// answer was lost — that is success, not an error. "Nonce too low" is success only if this very transaction is
+    /// known; otherwise another transaction used the nonce and the error stands.
     public func sendRawTransaction(_ signed: Data) async throws -> Data {
-        try bytes(await call("eth_sendRawTransaction", [.string(signed.hexString)]))
+        let hash = Keccak.hash256(signed)
+        do {
+            return try bytes(await call("eth_sendRawTransaction", [.string(signed.hexString)]))
+        } catch let error as RPCError {
+            let message = error.message.lowercased()
+            if message.contains("already known") || message.contains("known transaction") || message.contains("already imported") { return hash }
+            if message.contains("nonce too low"), let known = try? await call("eth_getTransactionByHash", [.string(hash.hexString)]), !known.isNull { return hash }
+            throw error
+        }
     }
 
     public func transactionReceipt(_ hash: Data) async throws -> TransactionReceipt? {

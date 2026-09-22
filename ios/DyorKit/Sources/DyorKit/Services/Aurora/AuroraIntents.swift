@@ -1,31 +1,35 @@
+import BigInt
 import Foundation
 
 /// Aurora Intents (NEAR Intents) Swap API — the cross-chain bridge behind the Home "Bridge" button. The app requests
 /// a quote, sends the origin-chain deposit itself (same wallet, any EVM chain), reports the tx, then polls status.
-/// The API key is a URL path segment on every call (no header); the integrator fee is configured on the key in
-/// Aurora Studio. Docs: https://docs.intents.aurora.dev/api-reference/swap-api-reference.
+/// Every call goes through DyorHQ's `aurora-proxy` Edge Function, which holds the Aurora API key server-side and
+/// forwards only these four endpoints for a signed-in wallet — the key never ships in the app. The integrator fee is
+/// configured on the key in Aurora Studio. Docs: https://docs.intents.aurora.dev/api-reference/swap-api-reference.
 public struct AuroraIntents: Sendable {
+    /// The proxy's base URL (…/functions/v1/aurora-proxy); endpoint paths are appended to it.
     public let base: URL
-    public let apiKey: String
     /// Optional NEAR account to receive the integrator fee, sent as `appFees` on each quote. When nil the key's own
     /// Studio fee configuration applies instead.
     public let feeRecipient: String?
     public let feeBps: Int
+    /// Headers that authenticate a call to the proxy as the signed-in wallet (throws when there is no session).
+    private let authorize: @Sendable () async throws -> [String: String]
     private let session: URLSession
 
-    public init(apiKey: String,
+    public init(proxy: URL,
                 feeRecipient: String? = nil,
                 feeBps: Int = 10,
-                base: URL = URL(string: "https://intents-api.aurora.dev/api")!,
+                authorize: @escaping @Sendable () async throws -> [String: String],
                 session: URLSession = .shared) {
-        self.apiKey = apiKey
+        self.base = proxy
         self.feeRecipient = feeRecipient
         self.feeBps = feeBps
-        self.base = base
+        self.authorize = authorize
         self.session = session
     }
 
-    public var isConfigured: Bool { !apiKey.isEmpty }
+    public var isConfigured: Bool { true }
 
     // MARK: Endpoints
 
@@ -51,7 +55,10 @@ public struct AuroraIntents: Sendable {
             recipient: recipient, recipientType: "DESTINATION_CHAIN", referral: "dyorhq",
             appFees: feeRecipient.map { [AuroraAppFee(recipient: $0, fee: feeBps)] }
         )
-        return try await post("quote", body: body, as: AuroraQuoteResponse.self).quote
+        let response = try await post("quote", body: body, as: AuroraQuoteResponse.self)
+        var quote = response.quote
+        quote.request = response.quoteRequest
+        return quote
     }
 
     /// Tells Aurora the deposit was sent, so it starts settling without waiting to observe the tx itself.
@@ -70,7 +77,7 @@ public struct AuroraIntents: Sendable {
     // MARK: Transport
 
     private func url(_ path: String, query: [URLQueryItem] = []) -> URL {
-        var comps = URLComponents(url: base.appendingPathComponent(path).appendingPathComponent(apiKey), resolvingAgainstBaseURL: false)!
+        var comps = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { comps.queryItems = query }
         return comps.url!
     }
@@ -92,14 +99,18 @@ public struct AuroraIntents: Sendable {
     }
 
     private func run<T: Decodable>(_ request: URLRequest) async throws -> T {
-        guard isConfigured else { throw AuroraError.notConfigured }
+        var request = request
+        let headers: [String: String]
+        do { headers = try await authorize() } catch { throw AuroraError.signInRequired }
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw AuroraError.transport("No response") }
         guard (200..<300).contains(http.statusCode) else {
-            // Surface only Aurora's decoded `message` — never the raw body, whose error shape can echo the request
-            // path (which carries the API key).
-            let message = (try? JSONDecoder().decode(AuroraErrorBody.self, from: data))?.message
-            throw AuroraError.api(status: http.statusCode, message: message ?? "Aurora request failed (\(http.statusCode)).")
+            // Aurora's own `message`, or the proxy's `error` (bridge not configured, sign-in required, bad route).
+            let body = try? JSONDecoder().decode(AuroraErrorBody.self, from: data)
+            if http.statusCode == 503 { throw AuroraError.notConfigured }
+            if http.statusCode == 401 || http.statusCode == 403 { throw AuroraError.signInRequired }
+            throw AuroraError.api(status: http.statusCode, message: body?.message ?? body?.error ?? "Aurora request failed (\(http.statusCode)).")
         }
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw AuroraError.decoding(error.localizedDescription) }
@@ -108,13 +119,15 @@ public struct AuroraIntents: Sendable {
 
 public enum AuroraError: LocalizedError {
     case notConfigured
+    case signInRequired
     case api(status: Int, message: String)
     case transport(String)
     case decoding(String)
 
     public var errorDescription: String? {
         switch self {
-        case .notConfigured: return "Bridge isn't configured yet — the Aurora API key is missing."
+        case .notConfigured: return "The bridge is temporarily unavailable. Please try again shortly."
+        case .signInRequired: return "Connect your wallet to DyorHQ to use the bridge."
         case .api(_, let message): return message
         case .transport(let m): return m
         case .decoding(let m): return "Couldn't read Aurora's response: \(m)"
@@ -122,7 +135,7 @@ public enum AuroraError: LocalizedError {
     }
 }
 
-private struct AuroraErrorBody: Decodable { let message: String? }
+private struct AuroraErrorBody: Decodable { let message: String?; let error: String? }
 
 // MARK: - Models
 
@@ -163,7 +176,38 @@ struct AuroraSubmitRequest: Encodable, Sendable {
     let memo: String?
 }
 
-struct AuroraQuoteResponse: Decodable, Sendable { let quote: AuroraQuote }
+struct AuroraQuoteResponse: Decodable, Sendable { let quote: AuroraQuote; let quoteRequest: AuroraQuoteEcho? }
+
+/// The request as Aurora echoes it back with the quote (`quoteRequest`) — what the deposit address will actually
+/// settle. The app checks it against what the user asked for before signing anything.
+public struct AuroraQuoteEcho: Decodable, Sendable, Equatable {
+    public let amount: String?
+    public let originAsset: String?
+    public let destinationAsset: String?
+    public let recipient: String?
+    public let refundTo: String?
+    public let swapType: String?
+
+    public init(amount: String?, originAsset: String?, destinationAsset: String?, recipient: String?, refundTo: String?, swapType: String?) {
+        self.amount = amount
+        self.originAsset = originAsset
+        self.destinationAsset = destinationAsset
+        self.recipient = recipient
+        self.refundTo = refundTo
+        self.swapType = swapType
+    }
+
+    /// Whether this quote settles exactly the request: the typed amount, EXACT_INPUT, the chosen assets, and the
+    /// user's own address as both recipient and refund address.
+    public func matches(amount: BigUInt, originAsset: String, destinationAsset: String, owner: Address) -> Bool {
+        self.amount.flatMap { BigUInt($0) } == amount
+            && swapType == "EXACT_INPUT"
+            && self.originAsset == originAsset
+            && self.destinationAsset == destinationAsset
+            && recipient.flatMap { Address($0) } == owner
+            && refundTo.flatMap { Address($0) } == owner
+    }
+}
 
 /// The actionable part of a quote: where to send on the origin chain, and the amounts.
 public struct AuroraQuote: Decodable, Sendable {
@@ -180,6 +224,8 @@ public struct AuroraQuote: Decodable, Sendable {
     public let withdrawFee: String?
     public let deadline: String?
     public let timeEstimate: Double?
+    /// Aurora's echo of the request this quote answers (set by `AuroraIntents.quote`).
+    public var request: AuroraQuoteEcho?
 }
 
 public enum AuroraSwapStatus: String, Decodable, Sendable {

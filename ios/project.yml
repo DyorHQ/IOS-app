@@ -53,7 +53,7 @@ targets:
         CFBundleDisplayName: DyorHQ
         CFBundleName: DyorHQ
         CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "10"
+        CFBundleVersion: "11"
         UILaunchScreen:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
@@ -69,10 +69,14 @@ targets:
           - CFBundleURLName: fun.dyorhq.app
             CFBundleURLSchemes: [dyorhq]
         LSApplicationQueriesSchemes: [https]
-        # Values below are filled from Secrets.xcconfig at build time and read by Config.swift.
+        # Values below are filled from Secrets.xcconfig at build time and read by Config.swift. EVERYTHING here ships
+        # in plaintext inside the IPA, so only PUBLIC identifiers belong here — never an API key or a keyed URL
+        # (scripts/testflight.sh refuses to upload an archive that contains one).
         PrivyAppID: "$(PRIVY_APP_ID)"
         PrivyClientID: "$(PRIVY_CLIENT_ID)"
-        MonadRPCURL: "$(MONAD_RPC_URL)"
+        # Debug-only RPC override (a local anvil fork). Empty in Release by DYOR_DEBUG_RPC_OVERRIDE below, and ignored
+        # by Release code anyway: shipped builds use the keyless public Monad RPCs (Monad.publicRPCs).
+        MonadRPCURL: "$(DYOR_DEBUG_RPC_OVERRIDE)"
         PasskeyRelyingParty: "$(PASSKEY_RP_ID)"
         # Set SOCIAL_LOGINS_ENABLED=YES in Secrets.xcconfig once Apple/Google are enabled in the Privy dashboard;
         # until then onboarding hides them so no one taps a disallowed method. Unset resolves to false.
@@ -86,7 +90,8 @@ targets:
         FeeEscrow: "$(FEE_ESCROW)"
         HolderFeeSharing: "$(HOLDER_FEE_SHARING)"
         MemeHook: "$(MEME_HOOK)"
-        AuroraApiKey: "$(AURORA_API_KEY)"
+        # The Aurora API key is NOT here: it lives server-side in the aurora-proxy Edge Function (Supabase secret
+        # AURORA_API_KEY). The fee recipient is a public NEAR account name.
         AuroraFeeRecipient: "$(AURORA_FEE_RECIPIENT)"
     entitlements:
       path: DyorHQ/DyorHQ.entitlements
@@ -112,4 +117,11 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         SWIFT_OBJC_BRIDGING_HEADER: ""
+      configs:
+        # MONAD_RPC_URL (Secrets.xcconfig) reaches Info.plist in Debug only — a Release/TestFlight/App Store build
+        # can never bake a provider URL, keyed or not.
+        Debug:
+          DYOR_DEBUG_RPC_OVERRIDE: "$(MONAD_RPC_URL)"
+        Release:
+          DYOR_DEBUG_RPC_OVERRIDE: ""
     preBuildScripts: []

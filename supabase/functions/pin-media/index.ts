@@ -68,20 +68,29 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
 
-  const role = claims(req.headers.get("authorization") ?? "").role;
-  if (role !== "authenticated") return json({ error: "a signed-in wallet session is required" }, 403);
+  const session = claims(req.headers.get("authorization") ?? "");
+  if (session.role !== "authenticated") return json({ error: "a signed-in wallet session is required" }, 403);
+  const wallet = typeof session.wallet_address === "string" ? session.wallet_address.toLowerCase() : "";
+  if (!/^0x[0-9a-f]{40}$/.test(wallet)) return json({ error: "a signed-in wallet session is required" }, 403);
 
   const jwt = Deno.env.get("PINATA_JWT");
   if (!jwt) return json({ error: "PINATA_JWT is not configured" }, 500);
 
   let payload: { bucket?: string; path?: string };
   try { payload = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-  const bucket = payload.bucket ?? "launch-media";
-  const path = (payload.path ?? "").replace(/^\/+/, "");
-  if (!path || path.includes("..")) return json({ error: "a bucket-relative object path is required" }, 400);
+  // Only Moment media, and only the CALLER's own folder: `<their wallet>/<plain file name>`. No other bucket, no
+  // nested or encoded segments — so a session can never pin another wallet's objects, or point the fetch below at any
+  // other URL on this host.
+  if ((payload.bucket ?? "launch-media") !== "launch-media") return json({ error: "only launch-media can be pinned" }, 400);
+  const bucket = "launch-media";
+  const path = String(payload.path ?? "");
+  const match = /^(0x[0-9a-f]{40})\/([A-Za-z0-9_-][A-Za-z0-9._-]{0,127})$/.exec(path);
+  if (!match || match[2].includes("..")) return json({ error: "path must be <your wallet>/<file name>" }, 400);
+  if (match[1] !== wallet) return json({ error: "you can only pin your own uploads" }, 403);
 
   // Pull the bytes from the public bucket (the app already uploaded them there).
   const src = `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
+  if (!new URL(src).pathname.startsWith(`/storage/v1/object/public/${bucket}/${wallet}/`)) return json({ error: "invalid path" }, 400);
   let obj: Response;
   try { obj = await fetch(src, { signal: AbortSignal.timeout(20_000) }); } catch { return json({ error: "could not read the object", src }, 502); }
   if (!obj.ok) return json({ error: `object not found (${obj.status})`, src }, 404);
