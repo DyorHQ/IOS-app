@@ -11,6 +11,7 @@
 # Create the API key at App Store Connect → Users and Access → Integrations → App Store Connect API (role: App
 # Manager). The .p8 file downloads once; keep it outside the repo.
 set -euo pipefail
+set +x # never trace: the security gate below holds secret values in variables
 cd "$(dirname "$0")/.."
 
 TEAM=$(sed -n 's/^DEVELOPMENT_TEAM *= *//p' DyorHQ/Config/Secrets.xcconfig | tr -d ' ')
@@ -39,22 +40,34 @@ xcodebuild -project DyorHQ.xcodeproj -scheme DyorHQ -configuration Release \
   -allowProvisioningUpdates -skipMacroValidation -skipPackagePluginValidation archive | grep -E "error:|ARCHIVE (SUCCEEDED|FAILED)"
 
 # SECURITY GATE — nothing secret may ship. Everything in the app bundle is readable by anyone who has the IPA, so the
-# archive is checked for (1) the value of every Secrets.xcconfig variable that is not a public identifier and (2) any
-# keyed RPC-provider URL. A hit stops the release before anything is uploaded. Values are never printed.
+# archive is checked for (1) the value of every Secrets.xcconfig variable that is not a public identifier, (2) any
+# keyed RPC-provider URL and (3) anywhere in the whole .xcarchive, every secret value from the repo's .env (every
+# non-NEXT_PUBLIC_, non-address value) and Secrets.xcconfig plus private-key patterns, via scripts/dev/secret-scan.sh.
+# A hit stops the release before anything is uploaded. Values are never printed.
 APP="$ARCHIVE/Products/Applications/DyorHQ.app"
 [[ -d "$APP" ]] || { echo "Archive has no app bundle at $APP" >&2; exit 1; }
 PUBLIC_VARS=(DEVELOPMENT_TEAM DYOR_SLASH PRIVY_APP_ID PRIVY_CLIENT_ID PASSKEY_RP_ID PERPL_BUILDER_ID SOCIAL_LOGINS_ENABLED
   PASSKEYS_ENABLED LAUNCHPAD_FACTORY LAUNCH_ROUTER FEE_ESCROW HOLDER_FEE_SHARING MEME_HOOK AURORA_FEE_RECIPIENT)
 LEAKS=()
 while IFS= read -r line; do
-  name=${line%%=*}; name=${name//[[:space:]]/}
+  name=${line%%=*}; name=${name%%\[*}; name=${name//[[:space:]]/}
   (( ${PUBLIC_VARS[(Ie)$name]} )) && continue
-  # xcconfig: strip a trailing // comment, trim, then expand $(DYOR_SLASH) (how URLs write "//" in xcconfig).
-  value=$(printf '%s' "${line#*=}" | sed -e 's:[[:space:]]//.*$::' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/\$(DYOR_SLASH)/\//g')
+  # xcconfig: drop NAME[conditions] =, strip a trailing // comment, trim, then expand $(DYOR_SLASH) (how URLs write
+  # "//" in xcconfig).
+  value=$(printf '%s' "$line" | sed -e 's/^[A-Za-z_][A-Za-z0-9_]*\(\[[^]]*\]\)*[[:space:]]*=//' -e 's:[[:space:]]//.*$::' \
+    -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/\$(DYOR_SLASH)/\//g')
   (( ${#value} >= 8 )) || continue
   if grep -rqF -- "$value" "$APP"; then LEAKS+=("$name"); fi
-done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=' DyorHQ/Config/Secrets.xcconfig)
+done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])*[[:space:]]*=' DyorHQ/Config/Secrets.xcconfig)
 if grep -rqE 'alchemy\.com/v2/[A-Za-z0-9_-]|infura\.io/v3/[0-9a-f]|quiknode\.pro/[0-9a-f]' "$APP"; then LEAKS+=("keyed RPC provider URL"); fi
+# The scanner prints file:line and variable names only. The source overrides it honours for its own tests are unset
+# so a stray variable in this shell cannot narrow the gate, and so are BASH_ENV / SHELLOPTS, which could trace the
+# values it holds; a missing scanner or any scan error also refuses.
+SCANNER=../scripts/dev/secret-scan.sh
+if [[ ! -f "$SCANNER" ]]; then LEAKS+=("(secret-scan.sh missing — cannot check the .env values)")
+elif ! env -u SECRET_SCAN_ENV -u SECRET_SCAN_XCCONFIG -u BASH_ENV -u SHELLOPTS /bin/bash "$SCANNER" --path "$ARCHIVE" >&2; then
+  LEAKS+=(".env / Secrets.xcconfig values or key patterns listed above by secret-scan")
+fi
 if (( ${#LEAKS[@]} )); then
   echo "REFUSING TO UPLOAD — the archive contains secret values from: ${LEAKS[*]}" >&2
   echo "Keep secrets server-side (see the notes in project.yml). Nothing was uploaded." >&2
