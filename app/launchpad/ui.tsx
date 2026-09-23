@@ -28,6 +28,12 @@ export function PhaseBadge({ launch }: { launch: Pick<LaunchInfo, "phase" | "com
   return <em className="badge up">Bonding</em>;
 }
 
+/** Launches on a factory the owner has since retired keep trading, claiming and graduating through their own contracts. */
+export function RetiredBadge({ launch }: { launch: Pick<LaunchInfo, "stack"> }) {
+  if (!launch.stack.retired) return null;
+  return <em className="badge" title="Launched on a retired launchpad factory. Trading, claims and graduation still run through its own contracts.">Retired launchpad</em>;
+}
+
 export function Progress({ bps }: { bps: number }) {
   const pct = Math.min(100, bps / 100);
   return <div className="progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${pct}%` }} /></div>;
@@ -87,6 +93,7 @@ export function LaunchCard({ launch, now }: { launch: LaunchInfo; now: number })
         <PhaseBadge launch={launch} />
       </div>
       <div className="trust">
+        <RetiredBadge launch={launch} />
         {launch.holderFeeSharing && <em className="badge accent">Holder rewards</em>}
         {launch.creatorTaxBps > 0 && <em className="badge">Creator tax {bpsToPct(launch.creatorTaxBps)}</em>}
         <em className="badge">LP locks at graduation</em>

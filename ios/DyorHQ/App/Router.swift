@@ -36,7 +36,10 @@ final class Router {
     /// A Moment to open on the Moments tab's detail page.
     var pendingMoment: MomentInfo?
 
+    /// Opens Swap on a pair. A retired cohort's Moment coin on either side opens nothing: trading it is closed
+    /// everywhere in the app (its pool pays the retired platform wallet), and the engine refuses it too.
     func openSwap(tokenIn: Token? = nil, tokenOut: Token? = nil) {
+        guard SwapEngine.isTradablePair(tokenIn, tokenOut) else { return }
         pendingSwap = (tokenIn, tokenOut)
         tradeMode = .swap
         tab = .trade

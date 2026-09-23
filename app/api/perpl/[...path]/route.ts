@@ -1,16 +1,32 @@
-/* Read-only proxy for Perpl's public REST endpoints (context, candles, funding). Perpl's API does not send CORS
-   headers for these routes, so the browser reaches them through this Worker route instead. */
+/* Read-only proxy for the one public Perpl REST endpoint the web app reads: the market context (24h reference price and
+   volume per market, app/lib/perps/perpl.ts). Perpl's API does not send CORS headers for it, so the browser reaches it
+   through this Worker route instead. Nothing else is relayed: no other upstream path, no query string, and no request
+   from another site (Origin / Sec-Fetch-Site), so the route cannot be used as a general Perpl proxy. */
 const UPSTREAM = "https://app.perpl.xyz/api";
+const ALLOWED_ROUTES = new Set(["v1/pub/context"]);
+
+function fromThisSite(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (origin !== null && origin !== new URL(request.url).origin) return false;
+  const site = request.headers.get("sec-fetch-site");
+  return site === null || site === "same-origin" || site === "none";
+}
 
 export async function GET(request: Request, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;
-  const publicRoute = path[0] === "v1" && (path[1] === "pub" || path[1] === "market-data");
-  if (!publicRoute) return Response.json({ error: "Only public Perpl routes are proxied." }, { status: 404 });
-  const url = new URL(request.url);
-  const upstream = await fetch(`${UPSTREAM}/${path.map(encodeURIComponent).join("/")}${url.search}`, { headers: { accept: "application/json" } });
+  const route = path.join("/");
+  if (!ALLOWED_ROUTES.has(route)) return Response.json({ error: "Only the Perpl market context is proxied." }, { status: 404 });
+  if (!fromThisSite(request)) return Response.json({ error: "Cross-site requests are not proxied." }, { status: 403 });
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${UPSTREAM}/${route}`, { headers: { accept: "application/json" } });
+  } catch {
+    return Response.json({ error: "Perpl is unreachable." }, { status: 502 });
+  }
   const body = await upstream.text();
+  // Always served as JSON (never Perpl's own content type), so an upstream error page cannot render on this origin.
   return new Response(body, {
     status: upstream.status,
-    headers: { "content-type": upstream.headers.get("content-type") ?? "application/json", "cache-control": "public, max-age=3" },
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3" },
   });
 }

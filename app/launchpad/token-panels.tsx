@@ -118,7 +118,7 @@ export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: (
         <div className="flow-actions" style={{ marginTop: 4 }}>
           <Link className="btn primary" href={`/swap?in=${launch.pair.native ? "MON" : launch.pairToken}&out=${launch.token}`}>Trade ${launch.symbol} <Icon name="arrow-ur" /></Link>
           {pending > 0n && wallet.client && (
-            <button type="button" className="btn secondary" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run("Distribute pool fees", (onSent) => sweepPoolFees(client, launch.poolId, launch.pairToken, onSent), onDone); }}>Distribute pool fees</button>
+            <button type="button" className="btn secondary" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run("Distribute pool fees", (onSent) => sweepPoolFees(client, launch.stack.hook, launch.poolId, launch.pairToken, onSent), onDone); }}>Distribute pool fees</button>
           )}
         </div>
       </div>
@@ -137,7 +137,7 @@ export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: (
       <h3>Graduation pending</h3>
       <p>The curve is complete but the {venue} pool has not opened yet. Anyone can retry the migration; if it keeps failing, the owner can enable refunds after seven days.</p>
       <TxStatus tx={tx} onDismiss={reset} />
-      <ActionButton ready={!busy} busy={busy} label="Retry graduation" className="btn secondary" onClick={() => { const client = wallet.client; if (client) void run("Graduate", (onSent) => retryGraduation(client, launch.token, onSent), onDone); }} />
+      <ActionButton ready={!busy} busy={busy} label="Retry graduation" className="btn secondary" onClick={() => { const client = wallet.client; if (client) void run("Graduate", (onSent) => retryGraduation(client, launch.factory, launch.token, onSent), onDone); }} />
     </div>
   );
 }
@@ -157,13 +157,13 @@ export function Position({ launch, view, onDone }: { launch: LaunchDetail; view:
       {(launch.holderFeeSharing || view.pendingRewards > 0n) && (
         <div className="claim" style={{ marginTop: 10 }}>
           <div><span>Holder rewards</span><b>{fmtAmount(view.pendingRewards, pair.decimals, pair.symbol)}</b></div>
-          <button type="button" className="btn secondary sm" disabled={busy || view.pendingRewards === 0n} onClick={() => { const client = wallet.client; if (client) void run("Claim holder rewards", (onSent) => claimHolderRewards(client, launch.token, onSent), onDone); }}>Claim</button>
+          <button type="button" className="btn secondary sm" disabled={busy || view.pendingRewards === 0n} onClick={() => { const client = wallet.client; if (client) void run("Claim holder rewards", (onSent) => claimHolderRewards(client, launch.stack.holderFeeSharing, launch.token, onSent), onDone); }}>Claim</button>
         </div>
       )}
       {view.escrowBalance > 0n && (
         <div className="claim" style={{ marginTop: 10 }}>
           <div><span>Creator fees in escrow</span><b>{fmtAmount(view.escrowBalance, pair.decimals, pair.symbol)}</b></div>
-          <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run("Claim creator fees", (onSent) => claimEscrow(client, launch.pairToken, pair.native, onSent), onDone); }}>Claim</button>
+          <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run("Claim creator fees", (onSent) => claimEscrow(client, launch.stack.escrow, launch.pairToken, pair.native, onSent), onDone); }}>Claim</button>
         </div>
       )}
       <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={reset} /></div>

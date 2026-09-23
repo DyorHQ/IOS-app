@@ -15,6 +15,10 @@ final class AppEnvironment {
     let perpl: PerplService
     let launchpad: LaunchpadService
     let moments: MomentsService
+    /// The retired Moments cohorts (2, then 1), one service each, CLAIM-ONLY: holders claim vested coins and creators
+    /// withdraw their own proceeds and pool fees; nothing else is reachable. They never feed the Moments board, the
+    /// feeds, publishing or swap routing — those stay on `moments`.
+    let retiredMoments: [RetiredMoments]
     let news: NewsService
     let activity: TokenActivityService
     let swapHistory: SwapHistoryService
@@ -39,16 +43,25 @@ final class AppEnvironment {
     init(config: AppConfig) {
         self.config = config
         social = SocialSession(config: config)
-        rpc = RPCClient(url: config.rpcURL)
+        // Keyless public endpoints with failover. Batches stay under rpc.monad.xyz's 50-items-per-second budget; calls
+        // it throttles are retried on rpc1, which limits requests rather than items.
+        rpc = RPCClient(urls: config.rpcURLs, maxBatch: 40)
         multicall = Multicall(rpc: rpc)
         sender = TransactionSender(rpc: rpc)
-        aurora = AuroraIntents(apiKey: config.auroraApiKey, feeRecipient: config.auroraFeeRecipient)
+        // The Aurora API key never ships in the app: bridge calls go through the aurora-proxy Edge Function, which
+        // holds the key and only serves a signed-in wallet.
+        let backend = social.client
+        aurora = AuroraIntents(proxy: backend.functionURL("aurora-proxy"), feeRecipient: config.auroraFeeRecipient,
+                               authorize: { try await backend.sessionHeaders() })
         prices = PriceService(rpc: rpc)
-        // Graduated launchpad and Moment pools become swap routes on Uniswap v4.
-        swap = SwapEngine(rpc: rpc, launchpadFactory: config.launchpad.isDeployed ? config.launchpad.factory : nil, moments: config.moments)
+        // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools and those of
+        // the retired factories with the current record (the legacy 0xad3d… launches all graduate on Monday Trade).
+        let retiredFactories = LaunchpadAddresses.retiredStacks.filter { !$0.legacyRecord && $0.factory != config.launchpad.factory }.map(\.factory)
+        swap = SwapEngine(rpc: rpc, launchpadFactories: config.launchpad.isDeployed ? [config.launchpad.factory] + retiredFactories : [], moments: config.moments)
         perpl = PerplService(rpc: rpc)
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
         moments = MomentsService(rpc: rpc, addresses: config.moments)
+        retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc] in RetiredMoments(rpc: rpc, addresses: $0) }
         news = NewsService()
         // History reads want the larger log-chunk RPC (rpc1), like the launchpad does. A local fork keeps its own
         // logs, so a development build pointed at 127.0.0.1 scans the fork instead.
@@ -73,6 +86,11 @@ final class AppEnvironment {
     /// transfer there.
     func sender(for chain: EVMChain) -> TransactionSender {
         chain.isMonad ? sender : TransactionSender(rpc: RPCClient(url: chain.rpcURL), chainId: chain.chainId)
+    }
+
+    /// The retired Moments cohort whose factory is `factory`, or nil (the live cohort, or anything else).
+    func retiredMoments(for factory: Address) -> RetiredMoments? {
+        retiredMoments.first { $0.factory == factory }
     }
 
     /// The Bridge's Monad chain descriptor, pointed at the app's configured RPC rather than the public default.

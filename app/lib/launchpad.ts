@@ -1,6 +1,6 @@
-import { encodeAbiParameters, erc20Abi, keccak256, type Address, type Hex } from "viem";
+import { encodeAbiParameters, erc20Abi, keccak256, parseAbi, type Address, type Hex } from "viem";
 import { BondingCurveAbi, FeeEscrowAbi, HolderFeeSharingAbi, LaunchTokenAbi, LaunchpadFactoryAbi, MemeHookAbi } from "./abi";
-import { ADDRESSES, DEPLOYED, EXTRA_PAIR_TOKENS, ZERO_ADDRESS, publicClient } from "./chain";
+import { ADDRESSES, DEPLOYED, EXTRA_PAIR_TOKENS, FACTORIES, ZERO_ADDRESS, publicClient, type LaunchpadStack } from "./chain";
 
 /* Read side of the launchpad: everything the pages show comes straight from the contracts through multicall. */
 
@@ -20,6 +20,8 @@ export type ProtocolInfo = {
   whitelistEnabled: boolean;
   protocolFeeShareBps: number;
   launchCount: number;
+  /** Launches on the retired factories, which the lists keep showing. */
+  retiredLaunchCount: number;
   pairs: PairEconomics[];
 };
 export type LaunchRecord = {
@@ -40,6 +42,9 @@ export type LaunchRecord = {
   sweptAt: bigint;
   poolId: Hex;
   exists: boolean;
+  /** The factory that launched the token, and the escrow, holder sharing and hook its fees settle through. */
+  factory: Address;
+  stack: LaunchpadStack;
 };
 export type LaunchInfo = LaunchRecord & {
   name: string;
@@ -83,6 +88,7 @@ export type AccountView = {
 export type BuyQuote = { tokensOut: bigint; used: bigint; fee: bigint; tax: bigint; snipe: bigint; refund: bigint };
 export type SellQuote = { quoteOut: bigint; fee: bigint; tax: bigint };
 
+/** The live factory: new launches and the protocol settings always come from it. */
 export const factoryContract = { address: ADDRESSES.factory, abi: LaunchpadFactoryAbi } as const;
 export const curveContract = (address: Address) => ({ address, abi: BondingCurveAbi }) as const;
 export const tokenContract = (address: Address) => ({ address, abi: LaunchTokenAbi }) as const;
@@ -108,6 +114,9 @@ export function pairInfo(address: Address): Promise<PairInfo> {
 
 export async function fetchProtocol(): Promise<ProtocolInfo | null> {
   if (!DEPLOYED) return null;
+  const retiredCounts = Promise.all(
+    FACTORIES.filter((s) => s.retired).map((s) => publicClient.readContract({ address: s.factory, abi: LaunchpadFactoryAbi, functionName: "launchCount" }).catch(() => 0n)),
+  );
   const [launchFee, configCount, maxCreatorTaxBps, whitelistEnabled, policy, launchCount] = await publicClient.multicall({
     contracts: [
       { ...factoryContract, functionName: "launchFee" },
@@ -148,6 +157,7 @@ export async function fetchProtocol(): Promise<ProtocolInfo | null> {
     whitelistEnabled,
     protocolFeeShareBps: policy.protocolFeeShareBps,
     launchCount: Number(launchCount),
+    retiredLaunchCount: (await retiredCounts).reduce((sum, n) => sum + Number(n), 0),
     pairs,
   };
 }
@@ -196,27 +206,66 @@ async function hydrate(record: LaunchRecord): Promise<LaunchInfo> {
   };
 }
 
-/** The newest launches first. */
-export async function fetchLaunches(limit = 48): Promise<LaunchInfo[]> {
-  if (!DEPLOYED) return [];
-  const total = Number(await publicClient.readContract({ ...factoryContract, functionName: "launchCount" }));
-  if (total === 0) return [];
-  const offset = Math.max(0, total - limit);
-  const tokens = await publicClient.readContract({ ...factoryContract, functionName: "getLaunches", args: [BigInt(offset), BigInt(total - offset)] });
+/* The first factory (0xad3d…) predates the venue choice: its `getLaunchedToken` returns a 16-field record with no
+   `graduationVenue`. Every launch on it graduates on Monday Trade, so the venue reads as Monday. */
+const LegacyFactoryAbi = parseAbi([
+  "struct LaunchedTokenV1 { address token; address curve; address deployer; address creatorFeeRecipient; address pairToken; uint256 graduationThreshold; uint16 creatorTaxBps; uint16 poolFeeBps; int24 tickSpacing; bool holderFeeSharing; uint8 phase; uint256 sweptQuote; uint256 sweptTokens; uint256 sweptAt; bytes32 poolId; bool exists; }",
+  "function getLaunchedToken(address token) view returns (LaunchedTokenV1)",
+]);
+const VENUE_MONDAY = 1;
+
+/** Launch records for `tokens` as `stack`'s factory stores them, tagged with the stack. */
+async function readRecords(stack: LaunchpadStack, tokens: readonly Address[]): Promise<LaunchRecord[]> {
+  if (stack.legacyRecord) {
+    const records = await publicClient.multicall({
+      contracts: tokens.map((token) => ({ address: stack.factory, abi: LegacyFactoryAbi, functionName: "getLaunchedToken", args: [token] }) as const),
+      allowFailure: false,
+    });
+    return records.map((r) => ({ ...r, graduationVenue: VENUE_MONDAY, factory: stack.factory, stack }));
+  }
   const records = await publicClient.multicall({
-    contracts: tokens.map((token) => ({ ...factoryContract, functionName: "getLaunchedToken", args: [token] }) as const),
+    contracts: tokens.map((token) => ({ address: stack.factory, abi: LaunchpadFactoryAbi, functionName: "getLaunchedToken", args: [token] }) as const),
     allowFailure: false,
   });
-  const launches = await Promise.all(records.map((r) => hydrate({ ...r })));
+  return records.map((r) => ({ ...r, factory: stack.factory, stack }));
+}
+
+/** Up to `limit` of one factory's launches, newest first. */
+async function stackLaunches(stack: LaunchpadStack, limit: number): Promise<LaunchInfo[]> {
+  const factory = { address: stack.factory, abi: LaunchpadFactoryAbi } as const;
+  const total = Number(await publicClient.readContract({ ...factory, functionName: "launchCount" }));
+  if (total === 0) return [];
+  const offset = Math.max(0, total - limit);
+  const tokens = await publicClient.readContract({ ...factory, functionName: "getLaunches", args: [BigInt(offset), BigInt(total - offset)] });
+  const launches = await Promise.all((await readRecords(stack, tokens)).map(hydrate));
   return launches.reverse();
+}
+
+/** The newest launches first, across the live factory and the retired ones. */
+export async function fetchLaunches(limit = 48): Promise<LaunchInfo[]> {
+  if (!DEPLOYED) return [];
+  // A retired factory that fails to answer drops its launches instead of blanking the list; the live one still throws.
+  const perFactory = await Promise.all(FACTORIES.map((stack) => stackLaunches(stack, limit).catch((e) => (stack.retired ? [] : Promise.reject(e)))));
+  return perFactory.flat().sort((a, b) => b.launchedAt - a.launchedAt).slice(0, limit);
+}
+
+/** The record of whichever factory launched `token`, trying the live one first. `null` only when every factory
+    answered and none launched it: a failed read throws rather than passing a real launch off as unknown. */
+async function findRecord(token: Address): Promise<LaunchRecord | null> {
+  const reads = await Promise.allSettled(FACTORIES.map((stack) => readRecords(stack, [token]).then(([r]) => r)));
+  for (const read of reads) if (read.status === "fulfilled" && read.value.exists) return read.value;
+  const failed = reads.find((read) => read.status === "rejected");
+  if (failed) throw failed.reason;
+  return null;
 }
 
 export async function fetchLaunch(tokenAddress: Address): Promise<LaunchDetail | null> {
   if (!DEPLOYED) return null;
-  const record = await publicClient.readContract({ ...factoryContract, functionName: "getLaunchedToken", args: [tokenAddress] });
-  if (!record.exists) return null;
-  const info = await hydrate({ ...record });
+  const record = await findRecord(tokenAddress);
+  if (!record) return null;
+  const info = await hydrate(record);
   const curve = curveContract(record.curve);
+  const factory = { address: record.factory, abi: LaunchpadFactoryAbi } as const;
   const graduated = record.phase >= 2;
   const [feeBps, snipeSchedule, reserves, sellableTokens, phantomQuote, reservedTokens, swept, stuckSince, poolKey] = await publicClient.multicall({
     contracts: [
@@ -227,15 +276,15 @@ export async function fetchLaunch(tokenAddress: Address): Promise<LaunchDetail |
       { ...curve, functionName: "phantomQuote" },
       { ...curve, functionName: "reservedTokens" },
       { ...curve, functionName: "swept" },
-      { ...factoryContract, functionName: "stuckSince", args: [tokenAddress] },
-      { ...factoryContract, functionName: "poolKeyOf", args: [tokenAddress] },
+      { ...factory, functionName: "stuckSince", args: [tokenAddress] },
+      { ...factory, functionName: "poolKeyOf", args: [tokenAddress] },
     ],
     allowFailure: false,
   });
   let hookPendingFees = 0n;
   let hookPendingTax = 0n;
-  if (graduated && ADDRESSES.hook !== ZERO_ADDRESS) {
-    const hook = { address: ADDRESSES.hook, abi: MemeHookAbi } as const;
+  if (graduated && record.stack.hook !== ZERO_ADDRESS) {
+    const hook = { address: record.stack.hook, abi: MemeHookAbi } as const;
     [hookPendingFees, hookPendingTax] = await publicClient.multicall({
       contracts: [
         { ...hook, functionName: "pendingFees", args: [record.poolId, record.pairToken] },
@@ -264,8 +313,9 @@ export async function fetchLaunch(tokenAddress: Address): Promise<LaunchDetail |
 export async function fetchAccountView(launch: LaunchInfo, account: Address): Promise<AccountView> {
   const token = tokenContract(launch.token);
   const curve = curveContract(launch.curve);
-  const escrow = { address: ADDRESSES.escrow, abi: FeeEscrowAbi } as const;
-  const sharing = { address: ADDRESSES.holderFeeSharing, abi: HolderFeeSharingAbi } as const;
+  // Fees settle through the launch's own stack, which for a retired launch is not the live escrow or sharing.
+  const escrow = { address: launch.stack.escrow, abi: FeeEscrowAbi } as const;
+  const sharing = { address: launch.stack.holderFeeSharing, abi: HolderFeeSharingAbi } as const;
   const pairErc20 = { address: launch.pairToken, abi: erc20Abi } as const;
   const [tokenBalance, snipeTaxBps, pendingRewards, escrowBalance, pairBalance, allowance] = await Promise.all([
     publicClient.readContract({ ...token, functionName: "balanceOf", args: [account] }),

@@ -243,13 +243,14 @@ enum MomentsABI {
 
     // MARK: Decoding
 
-    static func moment(id: BigUInt, _ tuple: ABIValue) -> Moment {
+    /// `factory` is the cohort the tuple was read from (it is not part of the tuple).
+    static func moment(id: BigUInt, _ tuple: ABIValue, factory: Address) -> Moment {
         let m = tuple.elements
         return Moment(
             id: id, creator: m[0].address, platform: m[1].address, treasury: m[2].address, coin: m[3].address, nft: m[4].address,
             price: m[5].uint, threshold: m[6].uint, rateNum: m[7].uint, rateDen: m[8].uint,
             creatorBps: int(m[9]), platformBps: int(m[10]), reserveBps: int(m[11]), creatorAllocBps: int(m[12]), expiryCreatorBps: int(m[13]), royaltyBps: int(m[14]),
-            publishedAt: int(m[15]), deadline: int(m[16])
+            publishedAt: int(m[15]), deadline: int(m[16]), factory: factory
         )
     }
 

@@ -282,9 +282,11 @@ struct SwapView: View {
 
     private func applyPending() {
         guard let pending = router.pendingSwap else { return }
+        router.pendingSwap = nil
+        // A retired cohort's Moment coin never becomes a side (Router.openSwap refuses it first).
+        guard SwapEngine.isTradablePair(pending.tokenIn, pending.tokenOut) else { return }
         if let tokenIn = pending.tokenIn { model.tokenIn = tokenIn }
         if let tokenOut = pending.tokenOut { model.tokenOut = tokenOut }
-        router.pendingSwap = nil
     }
 }
 
@@ -348,6 +350,8 @@ final class SwapModel {
     }
 
     func select(_ token: Token, for side: Side) {
+        // Trading a retired cohort's Moment coin is closed: the picker never offers one, and it is refused here too.
+        guard SwapEngine.isTradable(token) else { return }
         switch side {
         case .pay:
             if token == tokenOut { tokenOut = tokenIn }
@@ -538,6 +542,9 @@ struct TokenPickerSheet: View {
     let selected: Token
     let balances: [Address: BigUInt]
     var universe: [Token] = Token.core
+    /// Choosing a swap side (the default): a retired cohort's Moment coin is never offered. Home's search passes false —
+    /// it only opens a token's page, which shows such a coin as "Past cohort · trading closed" with no swap.
+    var tradableOnly = true
     let onPick: (Token) -> Void
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
@@ -547,7 +554,8 @@ struct TokenPickerSheet: View {
     @State private var remoteResults: [Token] = []
 
     private var tokens: [Token] {
-        let base = universe
+        // A retired cohort's Moment coin is never offered as a swap side: trading it is closed in the app.
+        let base = tradableOnly ? universe.filter(SwapEngine.isTradable) : universe
         let filtered = query.isEmpty ? base : base.filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
         // Assets the wallet holds float to the top, keeping the curated order within each group.
         return filtered.enumerated().sorted { a, b in
@@ -565,7 +573,7 @@ struct TokenPickerSheet: View {
         if let custom { seen.insert(custom.address) }
         let venueHits = VenueTokenStore.all().filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
         var out: [Token] = []
-        for token in venueHits + remoteResults where seen.insert(token.address).inserted { out.append(token) }
+        for token in venueHits + remoteResults where (!tradableOnly || SwapEngine.isTradable(token)) && seen.insert(token.address).inserted { out.append(token) }
         return out
     }
 
@@ -573,7 +581,9 @@ struct TokenPickerSheet: View {
         NavigationStack {
             List {
                 if let custom {
-                    Section("By address") { row(custom) }
+                    Section("By address") {
+                        if tradableOnly, !SwapEngine.isTradable(custom) { closedRow(custom) } else { row(custom) }
+                    }
                 }
                 Section {
                     ForEach(tokens) { row($0) }
@@ -609,6 +619,20 @@ struct TokenPickerSheet: View {
         }
     }
 
+    /// A pasted past-cohort Moment coin: named so the address is not a dead end, never pickable.
+    private func closedRow(_ token: Token) -> some View {
+        HStack(spacing: 12) {
+            TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(token.symbol).font(.headline)
+                Text("Past cohort · trading closed").font(.footnote).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+    }
+
     private func row(_ token: Token) -> some View {
         Button {
             Haptics.selection()
@@ -619,7 +643,8 @@ struct TokenPickerSheet: View {
                 TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(token.symbol).font(.headline)
-                    Text(token.name).font(.footnote).foregroundStyle(.secondary)
+                    // Only Home's search lists a retired coin; its page has no swap either.
+                    Text(SwapEngine.isTradable(token) ? token.name : "Past cohort · trading closed").font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if let balance = balances[token.address], balance > 0 {

@@ -47,7 +47,7 @@ struct LaunchpadProfileView: View {
         case all
         var id: String {
             switch self {
-            case .creator(let a): return "creator-\(a.token.hex)"
+            case .creator(let a): return "creator-\(a.id)"
             case .rewards(let r): return "rewards-\(r.launch.token.hex)"
             case .all: return "all"
             }
@@ -111,9 +111,9 @@ struct LaunchpadProfileView: View {
             if !model.hasClaimable {
                 Text("Nothing to claim yet.").font(.subheadline).foregroundStyle(.secondary)
             } else {
-                // Creator fees — one row per pair asset, each claimed on its own.
+                // Creator fees — one row per pair asset and launchpad escrow, each claimed on its own.
                 ForEach(model.creatorClaimables) { asset in
-                    claimRow(icon: "banknote", title: "Creator fees · \(asset.symbol)", amount: asset.amountText, usd: asset.usd) {
+                    claimRow(icon: "banknote", title: "Creator fees · \(asset.symbol)", amount: asset.amountText, usd: asset.usd, caption: asset.retired ? "Retired launchpad" : nil) {
                         claimTarget = .creator(asset)
                     }
                 }
@@ -138,13 +138,14 @@ struct LaunchpadProfileView: View {
         }
     }
 
-    private func claimRow(icon: String, title: String, amount: String, usd: Double?, action: @escaping () -> Void) -> some View {
+    private func claimRow(icon: String, title: String, amount: String, usd: Double?, caption: String? = nil, action: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon).font(.subheadline.weight(.semibold)).frame(width: 30, height: 30)
                 .background(Color.brand.opacity(0.14), in: Circle()).foregroundStyle(Color.brand)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.medium))
                 Text(amount + (usd.map { " · \($0.formatted(.currency(code: "USD")))" } ?? "")).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                if let caption { Text(caption).font(.caption2).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 8)
             Button("Claim", action: action).buttonStyle(.bordered).controlSize(.small).tint(.brand).disabled(!session.canSign)
@@ -217,7 +218,7 @@ struct LaunchpadProfileView: View {
         case .creator(let asset):
             ConfirmationSheet(
                 title: "Claim \(asset.symbol) Fees", confirmTitle: "Claim \(asset.symbol)",
-                build: { env.launchpad.claimEscrowPlan(native: asset.isNative, tokens: asset.isNative ? [] : [asset.token]) },
+                build: { env.launchpad.claimEscrowPlan(native: asset.isNative, tokens: asset.isNative ? [] : [asset.token], escrow: asset.escrow) },
                 onDone: { Task { await model.load(env: env, address: session.address) } },
                 onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected \(asset.symbol) creator fees", subtitle: asset.amountText, hash: hash, section: "launch"), owner: session.address) }
             ) {
@@ -241,7 +242,7 @@ struct LaunchpadProfileView: View {
                 onDone: { Task { await model.load(env: env, address: session.address) } },
                 onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Claimed all Launch earnings", subtitle: "\(model.claimableCount) \(model.claimableCount == 1 ? "claim" : "claims") · fees and rewards", hash: hash, section: "launch"), owner: session.address) }
             ) {
-                ForEach(model.creatorClaimables) { asset in DetailRow("Creator · \(asset.symbol)", asset.amountText) }
+                ForEach(model.creatorClaimables) { asset in DetailRow("Creator · \(asset.symbol)\(asset.retired ? " (retired launchpad)" : "")", asset.amountText) }
                 ForEach(model.rewardClaimables) { reward in DetailRow("\(reward.launch.symbol) rewards", reward.amountText) }
             }
         }
@@ -359,9 +360,18 @@ final class LaunchpadProfileModel {
         var id: Address { launch.token }
     }
 
+    /// One launchpad stack's fee escrow and what the wallet can claim from it. Each stack (the live one and every
+    /// retired one) keeps its own escrow, so creator fees are claimed per escrow.
+    struct EscrowHolding: Hashable {
+        let escrow: Address
+        let retired: Bool
+        let balances: EscrowBalances
+    }
+
     private(set) var positions: [Position] = []
     private(set) var created: [Created] = []
-    private(set) var escrow = EscrowBalances(native: 0, tokens: [:])
+    /// The live stack's escrow first, then the retired stacks'.
+    private(set) var escrows: [EscrowHolding] = []
     private(set) var activity: [FeedItem] = []
     private(set) var loading = false
 
@@ -369,15 +379,17 @@ final class LaunchpadProfileModel {
     private var pairUSD: [Address: Double] = [:]
     private var pairMeta: [Address: (symbol: String, decimals: Int)] = [:]
 
-    /// One claimable creator-fee balance, in a single pair asset (native MON is `token == .zero`). Claimed on its own
-    /// so the user always knows which asset they're withdrawing.
+    /// One claimable creator-fee balance, in a single pair asset (native MON is `token == .zero`) of one escrow.
+    /// Claimed on its own so the user always knows which asset they're withdrawing.
     struct ClaimableAsset: Identifiable, Hashable {
+        let escrow: Address
+        let retired: Bool
         let token: Address
         let symbol: String
         let amount: BigUInt
         let decimals: Int
         let usd: Double
-        var id: Address { token }
+        var id: String { "\(escrow.hex)-\(token.hex)" }
         var isNative: Bool { token.isZero }
         var amountText: String { "\(NumberStyle.units(amount, decimals: decimals, compact: true)) \(symbol)" }
     }
@@ -393,15 +405,18 @@ final class LaunchpadProfileModel {
     var isEmpty: Bool { positions.isEmpty && created.isEmpty && activity.isEmpty }
     var portfolioValueUSD: Double { positions.reduce(0) { $0 + $1.valueUSD } }
 
-    /// Creator fees claimable, one entry per pair asset (MON first, then each token).
+    /// Creator fees claimable, one entry per escrow and pair asset (MON first, then each token), largest first.
     var creatorClaimables: [ClaimableAsset] {
         var out: [ClaimableAsset] = []
-        if escrow.native > 0 {
-            out.append(ClaimableAsset(token: .zero, symbol: "MON", amount: escrow.native, decimals: 18, usd: Amount.units(escrow.native, decimals: 18) * (pairUSD[Monad.native] ?? 0)))
-        }
-        for (token, amount) in escrow.tokens where amount > 0 {
-            let meta = pairMeta[token] ?? ("", 18)
-            out.append(ClaimableAsset(token: token, symbol: meta.symbol, amount: amount, decimals: meta.decimals, usd: Amount.units(amount, decimals: meta.decimals) * (pairUSD[token] ?? 0)))
+        for holding in escrows {
+            let escrow = holding.balances
+            if escrow.native > 0 {
+                out.append(ClaimableAsset(escrow: holding.escrow, retired: holding.retired, token: .zero, symbol: "MON", amount: escrow.native, decimals: 18, usd: Amount.units(escrow.native, decimals: 18) * (pairUSD[Monad.native] ?? 0)))
+            }
+            for (token, amount) in escrow.tokens where amount > 0 {
+                let meta = pairMeta[token] ?? ("", 18)
+                out.append(ClaimableAsset(escrow: holding.escrow, retired: holding.retired, token: token, symbol: meta.symbol, amount: amount, decimals: meta.decimals, usd: Amount.units(amount, decimals: meta.decimals) * (pairUSD[token] ?? 0)))
+            }
         }
         return out.sorted { $0.usd > $1.usd }
     }
@@ -421,19 +436,23 @@ final class LaunchpadProfileModel {
         return "\(claimableCount) to claim"
     }
 
-    /// Claims everything at once: creator escrow across every asset, plus every coin's holder rewards.
+    /// Claims everything at once: every escrow across every asset, plus every coin's holder rewards (each on its
+    /// launch's own stack).
     func claimAllPlan(env: AppEnvironment) async -> [TransactionStep] {
-        var steps = await env.launchpad.claimEscrowPlan(native: escrow.hasNative, tokens: escrow.claimableTokens)
+        var steps: [TransactionStep] = []
+        for holding in escrows where !holding.balances.isEmpty {
+            steps += await env.launchpad.claimEscrowPlan(native: holding.balances.hasNative, tokens: holding.balances.claimableTokens, escrow: holding.escrow)
+        }
         for reward in rewardClaimables { steps += await env.launchpad.claimRewardsPlan(launch: reward.launch, view: nil) }
         return steps
     }
 
     func load(env: AppEnvironment, address: Address?) async {
-        guard let address, env.config.launchpad.isDeployed else { positions = []; created = []; escrow = EscrowBalances(native: 0, tokens: [:]); activity = []; return }
+        guard let address, env.config.launchpad.isDeployed else { positions = []; created = []; escrows = []; activity = []; return }
         loading = true
         defer { loading = false }
 
-        let launches = (try? await env.launchpad.launches(limit: 100)) ?? []
+        let launches = (try? await env.launchpad.allLaunches(limit: 100)) ?? []
         guard !launches.isEmpty else { positions = []; created = []; return }
 
         // Pair-asset prices (MON priced live; USDC/AUSD pinned to 1 by the price service).
@@ -461,8 +480,25 @@ final class LaunchpadProfileModel {
         }
         .sorted { ($0.mcapUSD ?? 0) > ($1.mcapUSD ?? 0) }
 
-        // Escrow (claimable creator fees), keyed by the pair assets of the coins you created.
-        escrow = (try? await env.launchpad.escrowBalances(account: address, pairTokens: created.map(\.launch.pairToken))) ?? EscrowBalances(native: 0, tokens: [:])
+        // Escrow (claimable creator fees): each stack's escrow, keyed by the pair assets of the coins you created on it.
+        var pairsByEscrow: [Address: [Address]] = [:]
+        for item in created {
+            let escrow = await env.launchpad.stack(for: item.launch).escrow
+            pairsByEscrow[escrow, default: []].append(item.launch.pairToken)
+        }
+        let stacks = await env.launchpad.stacks.enumerated().filter { !$0.element.escrow.isZero }
+        let pairs = pairsByEscrow
+        escrows = await withTaskGroup(of: (Int, EscrowHolding).self) { group in
+            for (i, stack) in stacks {
+                group.addTask {
+                    let balances = (try? await env.launchpad.escrowBalances(account: address, pairTokens: pairs[stack.escrow] ?? [], escrow: stack.escrow)) ?? EscrowBalances(native: 0, tokens: [:])
+                    return (i, EscrowHolding(escrow: stack.escrow, retired: i > 0, balances: balances))
+                }
+            }
+            var out: [(Int, EscrowHolding)] = []
+            for await entry in group { out.append(entry) }
+            return out.sorted { $0.0 < $1.0 }.map(\.1)
+        }
 
         // Held coins → position with on-curve PnL and holder rewards, computed concurrently.
         let held = launches.filter { (balances[$0.token] ?? 0) > 0 }

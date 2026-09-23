@@ -34,6 +34,16 @@ struct MomentDetailView: View {
     private var canCollect: Bool { info.isCollecting(at: now) }
 
     var body: some View {
+        // A Moment of a retired cohort never reaches the collect / expire / retry / buyback / beneficiary / trade
+        // controls below, nor the live service (its id names a different Moment there): it gets the claim-only page.
+        if let cohort = env.retiredMoments(for: m.factory) {
+            RetiredMomentDetailView(cohort: cohort, info: info, onChanged: onChanged)
+        } else {
+            page
+        }
+    }
+
+    private var page: some View {
         List {
             headerSection
             if !info.graduated, info.state != .expired { progressSection }
@@ -306,11 +316,16 @@ struct MomentDetailView: View {
             } else if pool.lastBuyback > 0 {
                 LabeledContent("Last buyback", value: MomentsFormat.date(pool.lastBuyback))
             }
-            Button {
-                Haptics.tap()
-                router.openSwap(tokenIn: .usdc, tokenOut: info.coinToken)
-            } label: {
-                Label("Trade $\(info.symbol)", systemImage: "arrow.left.arrow.right").fontWeight(.semibold)
+            if SwapEngine.isTradable(info.coinToken) {
+                Button {
+                    Haptics.tap()
+                    router.openSwap(tokenIn: .usdc, tokenOut: info.coinToken)
+                } label: {
+                    Label("Trade $\(info.symbol)", systemImage: "arrow.left.arrow.right").fontWeight(.semibold)
+                }
+            } else {
+                // A retired cohort's coin (never expected on this live-cohort page): no trade is offered.
+                Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
             }
         } header: {
             Text("Pool")
@@ -452,7 +467,8 @@ struct MomentDetailView: View {
 
     private func load() async {
         do {
-            if let fresh = try await env.moments.info(id: m.id) { info = fresh }
+            // Only ever the same Moment (factory, id) back: the live service's id could name a different cohort's Moment.
+            if let fresh = try await env.moments.info(id: m.id), fresh.key == info.key { info = fresh }
             async let detailTask = env.moments.moment(id: m.id)
             async let holdersTask = env.moments.nftHolders(nft: m.nft, editions: info.editions)
             async let accountTask = loadAccount()

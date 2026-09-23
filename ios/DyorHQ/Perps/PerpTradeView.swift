@@ -2099,6 +2099,8 @@ struct AuthedOrderSheet: View {
     }
 
     private func place() async {
+        // App Lock covers leveraged orders too (this path signs with the Perpl API key, not a confirmation sheet).
+        if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm order")) { return }
         phase = .placing
         do {
             // Bracket placement reports per-frame acceptance, so we record only the TP/SL Perpl actually admitted and

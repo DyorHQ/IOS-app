@@ -19,6 +19,12 @@ final class AssetsModel {
     private(set) var nfts: [NFTAsset] = []
     /// Moments by their NFT contract, so a Moment edition opens its own page instead of a generic link.
     private(set) var momentsByNFT: [Address: MomentInfo] = [:]
+    /// Retired-cohort Moments by their coin: such a coin opens its claim-only page, never a swap (a trade on a retired
+    /// pool pays the retired fee wallet). Entries are only ever added — a failed read keeps the ones already known —
+    /// and a coin in `MomentsAddresses.retiredMainnetCoins` gets no swap even before its Moment has been read.
+    private(set) var retiredByCoin: [Address: MomentInfo] = [:]
+    /// Retired-cohort Moments by their NFT contract, so a past-cohort edition opens its claim-only page.
+    private(set) var retiredByNFT: [Address: MomentInfo] = [:]
     private(set) var loading = false
     private(set) var loadedFor: Address?
 
@@ -32,6 +38,7 @@ final class AssetsModel {
 
         async let nftTask = env.nftDiscovery.heldNFTs(wallet: address)
         async let momentsTask = env.moments.moments(limit: 200)
+        async let retiredTask = PastMomentsModel.allMoments(env: env)
 
         var universe = KnownTokenStore.universe(owner: address)
         let known = Set(universe.map(\.address))
@@ -39,6 +46,11 @@ final class AssetsModel {
         let balances = (try? await ERC20.balances(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
         let held = universe.filter { (balances[$0.address] ?? 0) > 0 }
         let prices = (try? await env.prices.prices(for: held)) ?? [:]
+        // Known before the token list shows, so a retired coin is never offered a swap in between.
+        for info in await retiredTask {
+            retiredByCoin[info.moment.coin] = info
+            retiredByNFT[info.moment.nft] = info
+        }
         tokens = held.map { TokenAsset(token: $0, balance: balances[$0.address] ?? 0, usd: prices[$0.address]?.usd) }
             .sorted { ($0.value ?? 0, Amount.units($0.balance, decimals: $0.token.decimals)) > ($1.value ?? 0, Amount.units($1.balance, decimals: $1.token.decimals)) }
 
@@ -96,23 +108,17 @@ struct AssetsCard: View {
                 let shown = showAllTokens ? model.tokens : Array(model.tokens.prefix(6))
                 VStack(spacing: 0) {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, asset in
-                        Button { router.openSwap(tokenIn: asset.token, tokenOut: asset.token.symbol == "USDC" ? .mon : .usdc); dismiss() } label: {
-                            HStack(spacing: 12) {
-                                TokenLogo(symbol: asset.token.symbol, url: asset.token.logoURL, size: 34)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(asset.token.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                                    Text(asset.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                                Spacer()
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text(NumberStyle.units(asset.balance, decimals: asset.token.decimals, compact: true)).font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(.primary)
-                                    if let value = asset.value { Text(value, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
-                                }
-                            }
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
+                        if let retired = model.retiredByCoin[asset.token.address] {
+                            // A retired cohort's coin is never offered a swap: it opens its claim-only page.
+                            NavigationLink(value: PastMomentRoute(info: retired)) { tokenRow(asset) }
+                                .buttonStyle(.plain)
+                        } else if MomentsAddresses.isRetiredCoin(asset.token.address) {
+                            // Its cohort could not be read yet: still no swap, just the row.
+                            tokenRow(asset, note: "Past cohort · trading closed")
+                        } else {
+                            Button { router.openSwap(tokenIn: asset.token, tokenOut: asset.token.symbol == "USDC" ? .mon : .usdc); dismiss() } label: { tokenRow(asset) }
+                                .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                         if index < shown.count - 1 { Divider().padding(.leading, 46) }
                     }
                 }
@@ -124,35 +130,61 @@ struct AssetsCard: View {
             if kind == .nfts, !model.nfts.isEmpty {
                 LazyVGrid(columns: columns, spacing: 10) {
                     ForEach(model.nfts) { nft in
-                        Button { open(nft) } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Color(.tertiarySystemFill)
-                                    .aspectRatio(1, contentMode: .fit)
-                                    .overlay {
-                                        if let url = nft.imageURL {
-                                            AsyncImage(url: url) { phase in
-                                                if let image = phase.image { image.resizable().scaledToFill() }
-                                                else if phase.error != nil { Image(systemName: "photo").foregroundStyle(.secondary) }
-                                                else { ProgressView().controlSize(.small) }
-                                            }
-                                        } else {
-                                            Image(systemName: "seal").foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                Text(nft.name).font(.caption.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
-                                Text(model.momentsByNFT[nft.contract] != nil ? "Moment · OpenSea" : "OpenSea").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                            .contentShape(Rectangle())
+                        if let retired = model.retiredByNFT[nft.contract] {
+                            // A past-cohort edition opens its claim-only page, here in the Portfolio.
+                            NavigationLink(value: PastMomentRoute(info: retired)) { nftTile(nft, caption: "Past cohort Moment") }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(nft.name), \(nft.collection)")
+                        } else {
+                            Button { open(nft) } label: { nftTile(nft, caption: model.momentsByNFT[nft.contract] != nil ? "Moment · OpenSea" : "OpenSea") }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(nft.name), \(nft.collection)")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("\(nft.name), \(nft.collection)")
                     }
                 }
             }
         }
         .padding(16)
         .cardBackground()
+    }
+
+    private func nftTile(_ nft: NFTAsset, caption: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Color(.tertiarySystemFill)
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    if let url = nft.imageURL {
+                        AsyncImage(url: url) { phase in
+                            if let image = phase.image { image.resizable().scaledToFill() }
+                            else if phase.error != nil { Image(systemName: "photo").foregroundStyle(.secondary) }
+                            else { ProgressView().controlSize(.small) }
+                        }
+                    } else {
+                        Image(systemName: "seal").foregroundStyle(.secondary)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Text(nft.name).font(.caption.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+            Text(caption).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func tokenRow(_ asset: AssetsModel.TokenAsset, note: String? = nil) -> some View {
+        HStack(spacing: 12) {
+            TokenLogo(symbol: asset.token.symbol, url: asset.token.logoURL, size: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(asset.token.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                Text(note ?? asset.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(NumberStyle.units(asset.balance, decimals: asset.token.decimals, compact: true)).font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(.primary)
+                if let value = asset.value { Text(value, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+            }
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 
     private func open(_ nft: NFTAsset) {

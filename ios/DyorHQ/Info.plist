@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>AuroraApiKey</key>
-	<string>$(AURORA_API_KEY)</string>
 	<key>AuroraFeeRecipient</key>
 	<string>$(AURORA_FEE_RECIPIENT)</string>
 	<key>CFBundleDevelopmentRegion</key>
@@ -34,7 +32,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>9</string>
+	<string>13</string>
 	<key>FeeEscrow</key>
 	<string>$(FEE_ESCROW)</string>
 	<key>HolderFeeSharing</key>
@@ -52,7 +50,7 @@
 	<key>MemeHook</key>
 	<string>$(MEME_HOOK)</string>
 	<key>MonadRPCURL</key>
-	<string>$(MONAD_RPC_URL)</string>
+	<string>$(DYOR_DEBUG_RPC_OVERRIDE)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>DyorHQ uses the camera to scan wallet addresses and QR codes.</string>
 	<key>NSFaceIDUsageDescription</key>

@@ -76,7 +76,7 @@ public actor MomentsService {
         let first = max(1, total - limit + 1)
         let ids = stride(from: total, through: first, by: -1).map { BigUInt($0) }
         let raws = try await multicall.readAll(ids.map { MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint($0)], returns: MomentsABI.momentTuple) })
-        let moments = zip(ids, raws).map { MomentsABI.moment(id: $0, $1[0]) }
+        let moments = zip(ids, raws).map { MomentsABI.moment(id: $0, $1[0], factory: addresses.factory) }
         return try await hydrate(moments)
     }
 
@@ -88,7 +88,7 @@ public actor MomentsService {
         ])
         guard id <= head[0][0].uint else { return nil }
         let raw = try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint(id)], returns: MomentsABI.momentTuple)])[0][0]
-        let m = MomentsABI.moment(id: id, raw)
+        let m = MomentsABI.moment(id: id, raw, factory: addresses.factory)
         guard let info = try await hydrate([m]).first else { return nil }
         let extras = try await multicall.readAll([
             MomentsABI.call(addresses.collect, MomentsABI.Collect.supplyCheck, [.uint(id)], returns: "uint256,uint256,uint256,uint256,uint256"),
@@ -106,7 +106,7 @@ public actor MomentsService {
         guard isDeployed, id > 0 else { return nil }
         let raw = try await multicall.read([MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint(id)], returns: MomentsABI.momentTuple)])[0]
         guard case .success(let values) = raw else { return nil }
-        return try await hydrate([MomentsABI.moment(id: id, values[0])]).first
+        return try await hydrate([MomentsABI.moment(id: id, values[0], factory: addresses.factory)]).first
     }
 
     /// The Moment id of a coin, 0 when the address is not a Moment coin.
@@ -157,6 +157,8 @@ public actor MomentsService {
 
     public func accountView(_ info: MomentInfo, account: Address) async throws -> MomentAccountView {
         guard isDeployed else { throw MomentsError.notDeployed }
+        // Moment ids restart at 1 on every factory: another cohort's Moment is refused, never read under this one's id.
+        guard info.moment.factory == addresses.factory else { throw MomentsError.unknownMoment }
         let m = info.moment
         let id = m.id
         let usdc = addresses.usdc
@@ -201,6 +203,8 @@ public actor MomentsService {
 
     /// Same, over an already-loaded list of Moments (saves the board re-read).
     public func portfolio(account: Address, moments: [MomentInfo]) async throws -> MomentPortfolio {
+        // Only this cohort's Moments: another cohort's id names a different Moment here.
+        let moments = moments.filter { $0.moment.factory == addresses.factory }
         guard isDeployed, !moments.isEmpty else { return .empty }
         var calls: [ContractCall] = []
         for info in moments {

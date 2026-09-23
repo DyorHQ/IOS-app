@@ -19,6 +19,8 @@ struct WalletExportView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var revealedKey: String?
+    /// The screen is being recorded, mirrored or AirPlayed — the key is hidden meanwhile.
+    @State private var isCaptured = false
     @State private var working = false
     @State private var error: String?
     @State private var copied = false
@@ -52,11 +54,16 @@ struct WalletExportView: View {
     @ViewBuilder private var importedSections: some View {
         Section {
             if let key = revealedKey {
-                Text(key)
+                // Hidden while the screen is being recorded or mirrored; no system text selection (its Copy has no
+                // expiry and syncs to other devices) — the Copy button below is the only, expiring, local-only path.
+                Text(isCaptured ? "Hidden while the screen is being recorded" : key)
                     .font(.footnote.monospaced())
-                    .textSelection(.enabled)
                     .privacySensitive()
                     .padding(.vertical, 4)
+                    .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
+                        isCaptured = UIScreen.main.isCaptured
+                    }
+                    .onAppear { isCaptured = UIScreen.main.isCaptured }
                 Button(copied ? "Copied" : "Copy Private Key", systemImage: copied ? "checkmark" : "doc.on.doc") {
                     copyKey(key)
                 }
@@ -139,9 +146,15 @@ struct WalletExportView: View {
         working = true
         error = nil
         Task {
+            // Always gated, whatever the App Lock setting: revealing the key hands over the wallet.
+            guard BiometricGate.canAuthenticateOwner else {
+                error = "Set a device passcode in iOS Settings to reveal your key — it protects the key if your phone is lost."
+                working = false
+                return
+            }
             let ok = await BiometricGate.authenticate(reason: "Reveal your wallet's private key")
             guard ok else {
-                error = "\(BiometricGate.typeName) is required to reveal your key."
+                error = "\(BiometricGate.typeName) or your passcode is required to reveal your key."
                 working = false
                 return
             }
@@ -157,10 +170,11 @@ struct WalletExportView: View {
     }
 
     private func copyKey(_ key: String) {
-        // Auto-expiring clipboard so a copied key doesn't linger for other apps to read.
+        // Auto-expiring, device-local clipboard: the key doesn't linger for other apps to read, and never syncs to the
+        // user's other devices through Universal Clipboard.
         UIPasteboard.general.setItems(
             [[UTType.utf8PlainText.identifier: key]],
-            options: [.expirationDate: Date().addingTimeInterval(90)]
+            options: [.expirationDate: Date().addingTimeInterval(90), .localOnly: true]
         )
         copied = true
         Haptics.selection()

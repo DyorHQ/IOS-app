@@ -27,9 +27,13 @@ settings:
 packages:
   DyorKit:
     path: DyorKit
+  # 2.16.2+ is REQUIRED for TestFlight external testing / App Store: 2.15.0 statically bundled SwiftyJSON (on
+  # Apple's list of SDKs that must ship a privacy manifest + signature) without either, so every build was marked
+  # Invalid Binary by Beta App Review (ITMS-91061 / ITMS-91065) while internal testing — which skips that check —
+  # kept working. 2.16.2 removes the SwiftyJSON dependency (privy-io/privy-ios#86).
   Privy:
     url: https://github.com/privy-io/privy-ios
-    from: 2.15.0
+    from: 2.16.2
 
 targets:
   DyorHQ:
@@ -49,7 +53,7 @@ targets:
         CFBundleDisplayName: DyorHQ
         CFBundleName: DyorHQ
         CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "9"
+        CFBundleVersion: "13"
         UILaunchScreen:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
@@ -65,10 +69,14 @@ targets:
           - CFBundleURLName: fun.dyorhq.app
             CFBundleURLSchemes: [dyorhq]
         LSApplicationQueriesSchemes: [https]
-        # Values below are filled from Secrets.xcconfig at build time and read by Config.swift.
+        # Values below are filled from Secrets.xcconfig at build time and read by Config.swift. EVERYTHING here ships
+        # in plaintext inside the IPA, so only PUBLIC identifiers belong here — never an API key or a keyed URL
+        # (scripts/testflight.sh refuses to upload an archive that contains one).
         PrivyAppID: "$(PRIVY_APP_ID)"
         PrivyClientID: "$(PRIVY_CLIENT_ID)"
-        MonadRPCURL: "$(MONAD_RPC_URL)"
+        # Debug-only RPC override (a local anvil fork). Empty in Release by DYOR_DEBUG_RPC_OVERRIDE below, and ignored
+        # by Release code anyway: shipped builds use the keyless public Monad RPCs (Monad.publicRPCs).
+        MonadRPCURL: "$(DYOR_DEBUG_RPC_OVERRIDE)"
         PasskeyRelyingParty: "$(PASSKEY_RP_ID)"
         # Set SOCIAL_LOGINS_ENABLED=YES in Secrets.xcconfig once Apple/Google are enabled in the Privy dashboard;
         # until then onboarding hides them so no one taps a disallowed method. Unset resolves to false.
@@ -82,15 +90,17 @@ targets:
         FeeEscrow: "$(FEE_ESCROW)"
         HolderFeeSharing: "$(HOLDER_FEE_SHARING)"
         MemeHook: "$(MEME_HOOK)"
-        AuroraApiKey: "$(AURORA_API_KEY)"
+        # The Aurora API key is NOT here: it lives server-side in the aurora-proxy Edge Function (Supabase secret
+        # AURORA_API_KEY). The fee recipient is a public NEAR account name.
         AuroraFeeRecipient: "$(AURORA_FEE_RECIPIENT)"
     entitlements:
       path: DyorHQ/DyorHQ.entitlements
-      # Passkey entitlements (Sign in with Apple + Associated Domains) are DISABLED — they made the TestFlight/App Store
-      # binary INVALID (builds 5 & 6 came back "Invalid Binary"). Two reasons: a `?mode=developer` associated domain is
-      # never allowed in a DISTRIBUTION build, and the capabilities aren't enabled on the fun.dyorhq.app App ID / the
-      # AASA isn't hosted — all pending owner steps. Passkeys don't work until the AASA is live regardless, so an empty
-      # entitlements set loses nothing right now and yields a valid binary.
+      # Passkey entitlements (Sign in with Apple + Associated Domains) are DISABLED. They were first suspected for the
+      # "Invalid Binary" builds, but builds 7–9 shipped with this empty set and were still invalid — the real cause was
+      # PrivySDK 2.15.0's bundled SwiftyJSON (see the Privy package note above). The entitlements stay empty anyway:
+      # a `?mode=developer` associated domain is never allowed in a DISTRIBUTION build, and the capabilities aren't
+      # enabled on the fun.dyorhq.app App ID / the AASA isn't hosted — all pending owner steps. Passkeys don't work
+      # until the AASA is live regardless, so an empty entitlements set loses nothing right now.
       # TO RE-ENABLE PASSKEYS later, once (a) Sign in with Apple + Associated Domains are enabled on the App ID at
       # developer.apple.com and (b) the AASA is hosted at https://$(PASSKEY_RP_ID)/.well-known/apple-app-site-association,
       # set properties back to (note: NO ?mode=developer suffix in a distribution build):
@@ -107,6 +117,13 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         SWIFT_OBJC_BRIDGING_HEADER: ""
+      configs:
+        # MONAD_RPC_URL (Secrets.xcconfig) reaches Info.plist in Debug only — a Release/TestFlight/App Store build
+        # can never bake a provider URL, keyed or not.
+        Debug:
+          DYOR_DEBUG_RPC_OVERRIDE: "$(MONAD_RPC_URL)"
+        Release:
+          DYOR_DEBUG_RPC_OVERRIDE: ""
     preBuildScripts: []
     # Share the DyorHQ scheme (archive builds Release) for the Xcode Cloud workflow, as Apple's setup guide asks. XcodeGen
     # writes no scheme unless asked; locally Xcode auto-creates one, which is why `-scheme DyorHQ` works there.

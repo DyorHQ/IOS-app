@@ -72,12 +72,17 @@ enum BiometricGate {
         }
     }
 
-    /// Prompts for biometrics; returns true to proceed. If the device has no biometrics enrolled, it does not block.
+    /// Whether the device can verify its owner at all — biometrics or the device passcode.
+    static var canAuthenticateOwner: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) }
+
+    /// Verifies the device owner before a sensitive action: Face ID / Touch ID, falling back to the device passcode
+    /// (after a biometric lockout, or when no biometrics are enrolled). FAILS CLOSED — if the owner can't be verified
+    /// at all (no passcode set) or verification fails, it returns false and the action must not proceed.
     static func authenticate(reason: String) async -> Bool {
         let context = LAContext()
-        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else { return true }
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else { return false }
         return await withCheckedContinuation { continuation in
-            context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, _ in
+            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, _ in
                 continuation.resume(returning: success)
             }
         }

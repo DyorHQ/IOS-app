@@ -16,7 +16,7 @@ import { usePerplFeed } from "../lib/perps/ws";
 import { useAsync, useNow } from "../lib/use-async";
 import { useWallet } from "../lib/wallet";
 import { fmtAmount, fmtUnits, shortAddress, timeAgo } from "../lib/format";
-import { LaunchCard as WebLaunchCard, PhaseBadge, Progress, Skeleton, TokenLogo } from "../launchpad/ui";
+import { LaunchCard as WebLaunchCard, PhaseBadge, Progress, RetiredBadge, Skeleton, TokenLogo } from "../launchpad/ui";
 import { Position, StatePanel, TradePanel } from "../launchpad/token-panels";
 import Create from "../launchpad/create/page";
 import Swap from "../swap/page";
@@ -53,9 +53,11 @@ function TokenRowLive({ row, i, onClick }: { row: MarketRow; i: number; onClick:
 }
 
 function ActivityRow({ item, launches, now }: { item: ActivityItem; launches: LaunchInfo[]; now: number }) {
-  const sym = (token: Address | null) => launches.find((l) => token && l.token.toLowerCase() === token.toLowerCase())?.symbol ?? (token ? shortAddress(token) : "token");
+  const find = (token: Address | null) => launches.find((l) => token && l.token.toLowerCase() === token.toLowerCase());
+  const sym = (token: Address | null) => find(token)?.symbol ?? (token ? shortAddress(token) : "token");
+  const venue = (token: Address | null) => { const l = find(token); return l ? ` to ${l.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4"}` : ""; };
   const icon: IconName = item.kind === "launch" ? "rocket" : item.kind === "graduated" ? "graduate" : item.side === "buy" ? "trend-up" : "trend-down";
-  const title = item.kind === "launch" ? `Launched $${sym(item.token)}` : item.kind === "graduated" ? `$${sym(item.token)} graduated to Uniswap v4` : `${item.side === "buy" ? "Bought" : "Sold"} $${sym(item.token)}`;
+  const title = item.kind === "launch" ? `Launched $${sym(item.token)}` : item.kind === "graduated" ? `$${sym(item.token)} graduated${venue(item.token)}` : `${item.side === "buy" ? "Bought" : "Sold"} $${sym(item.token)}`;
   const who = item.kind === "launch" ? shortAddress(item.deployer) : item.kind === "trade" ? shortAddress(item.trader) : "";
   return (
     <a className="act-row" href={explorerTx(item.tx)} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>
@@ -233,9 +235,9 @@ function LaunchDetail({ token, onBack }: { token: Address; onBack: () => void })
   return (
     <>
       <button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Launchpad</button>
-      <div className="detail-head"><TokenLogo src={data.logo} name={data.name} address={data.token} size="lg" /><div><h1>{data.name}<small>${data.symbol}</small></h1><div className="detail-price">{fmtNum(priceNumber(data), 6)} MON</div><PhaseBadge launch={data} /></div></div>
+      <div className="detail-head"><TokenLogo src={data.logo} name={data.name} address={data.token} size="lg" /><div><h1>{data.name}<small>${data.symbol}</small></h1><div className="detail-price">{fmtNum(priceNumber(data), 6)} MON</div><PhaseBadge launch={data} /> <RetiredBadge launch={data} /></div></div>
       {candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={220} precision={8} /></div> : <div className="card"><p className="hint">{trades.loading ? "Reading curve trades…" : "No trades in the last two hours yet."}</p></div>}
-      <div className="progress-label" style={{ marginTop: 12 }}><span>{data.phase === 2 ? "Graduated to Uniswap v4" : "Graduation progress"}</span><b>{(data.progressBps / 100).toFixed(1)}%</b></div>
+      <div className="progress-label" style={{ marginTop: 12 }}><span>{data.phase === 2 ? `Graduated to ${data.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4"}` : "Graduation progress"}</span><b>{(data.progressBps / 100).toFixed(1)}%</b></div>
       <Progress bps={data.progressBps} />
       <div className="stack-cards">
         {trading ? <TradePanel launch={data} view={view.data ?? null} onDone={refresh} /> : data.rescued || data.phase === 3 ? <><StatePanel launch={data} onDone={refresh} /><TradePanel launch={data} view={view.data ?? null} onDone={refresh} /></> : <StatePanel launch={data} onDone={refresh} />}

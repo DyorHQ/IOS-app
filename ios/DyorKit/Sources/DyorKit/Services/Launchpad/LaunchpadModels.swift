@@ -12,35 +12,84 @@ public struct LaunchpadAddresses: Sendable, Hashable {
     public var hook: Address
     /// Uniswap v4 PoolManager (`Uniswap.poolManager` on Monad). Graduated launches are priced from its storage.
     public var poolManager: Address
+    /// The factory returns the first deployment's 16-field `getLaunchedToken` record (no `graduationVenue`).
+    public var legacyRecord: Bool
+    /// The fee-sharing contract has `queuedRewards` (audit fix H-1); on the pre-audit stacks the call reverts.
+    public var hasQueuedRewards: Bool
 
-    public init(factory: Address = .zero, router: Address = .zero, escrow: Address = .zero, holderFeeSharing: Address = .zero, hook: Address = .zero, poolManager: Address = .zero) {
+    public init(factory: Address = .zero, router: Address = .zero, escrow: Address = .zero, holderFeeSharing: Address = .zero, hook: Address = .zero, poolManager: Address = .zero, legacyRecord: Bool = false, hasQueuedRewards: Bool = true) {
         self.factory = factory
         self.router = router
         self.escrow = escrow
         self.holderFeeSharing = holderFeeSharing
         self.hook = hook
         self.poolManager = poolManager
+        self.legacyRecord = legacyRecord
+        self.hasQueuedRewards = hasQueuedRewards
     }
 
     public var isDeployed: Bool { !factory.isZero }
 
+    /// The factory has `graduateFallback` (audit fix H-3). It shipped together with `queuedRewards`, so the
+    /// pre-audit stacks have neither.
+    public var hasGraduateFallback: Bool { hasQueuedRewards }
+
     public static let none = LaunchpadAddresses()
 
-    /// Factories that were retired (nothing new launches there) but whose launches and trades stay part of a
-    /// wallet's history: the pre-audit 2026-09-12 deployment.
-    public static let retiredFactories: [Address] = [Address(literal: "0x2F02972E166dE71097EEAC8303cE7Fe6B6Ebe9f4")]
-
-    /// The launchpad on Monad mainnet (chain 143): the 2026-09-16 redeploy carrying every 2026-09-15 audit fix
-    /// (the pre-audit factory 0x2F02… is retired). Mirrors `contracts/deployments/143.json`, and
-    /// `LaunchpadDeploymentTests` fails whenever the two drift apart.
+    /// The launchpad on Monad mainnet (chain 143): the 2026-09-23 relaunch with the rotated treasury and fee wallets
+    /// (the earlier factories 0x10F3…, 0x2F02… and 0xad3d… are retired, see `retiredStacks`). Mirrors
+    /// `contracts/deployments/143.json`, and `LaunchpadDeploymentTests` fails whenever the two drift apart.
     public static let monadMainnet = LaunchpadAddresses(
-        factory: Address(literal: "0x10F34A174d9C393a90aFf94BDED7E1Db185446D7"),
-        router: Address(literal: "0x3eE688C3b3aCd652914aD49d8Ee5ae1004bF3690"),
-        escrow: Address(literal: "0xbc70ba9D66F761FFb7647D6B52C8Cf65a49E47fc"),
-        holderFeeSharing: Address(literal: "0x70F8f64c6A4A76A507e322BCef19E6E37abe4eF6"),
-        hook: Address(literal: "0x51A240c13164BcDF3FC11053FddEaC626A4160cc"),
+        factory: Address(literal: "0x6B1C8769a8d6745955aC35b91FF1F37AB76859dB"),
+        router: Address(literal: "0x454822dc56072696ab7cf8Bac357FFd3315477Fc"),
+        escrow: Address(literal: "0x5EDA8765934fE22fa63d671465eF914Cd196968e"),
+        holderFeeSharing: Address(literal: "0xc618bB26bBc3C84c30519F31e32eE52EA2BFac52"),
+        hook: Address(literal: "0xf2b849B3FC4a2b19B39DA3F707Fc32b801eea0Cc"),
         poolManager: Uniswap.poolManager
     )
+
+    /// Retired launchpads, newest first. Nothing new launches there (whitelist on, config 0 off), but their curves
+    /// keep trading and their launches, claims and trades stay part of a wallet's history, so every per-launch read
+    /// and write goes to the launch's own stack.
+    public static let retiredStacks: [LaunchpadAddresses] = [
+        // The 2026-09-16 audit-fix redeploy, retired by the 2026-09-23 relaunch (`143-retired-0x10F3.json`).
+        LaunchpadAddresses(
+            factory: Address(literal: "0x10F34A174d9C393a90aFf94BDED7E1Db185446D7"),
+            router: Address(literal: "0x3eE688C3b3aCd652914aD49d8Ee5ae1004bF3690"),
+            escrow: Address(literal: "0xbc70ba9D66F761FFb7647D6B52C8Cf65a49E47fc"),
+            holderFeeSharing: Address(literal: "0x70F8f64c6A4A76A507e322BCef19E6E37abe4eF6"),
+            hook: Address(literal: "0x51A240c13164BcDF3FC11053FddEaC626A4160cc"),
+            poolManager: Uniswap.poolManager
+        ),
+        // The pre-audit 2026-09-12 deployment: no `queuedRewards`, no `graduateFallback`.
+        LaunchpadAddresses(
+            factory: Address(literal: "0x2F02972E166dE71097EEAC8303cE7Fe6B6Ebe9f4"),
+            router: Address(literal: "0xbaEa633e9Ba5d927bfD6a0f5b3FB3982784DA30D"),
+            escrow: Address(literal: "0xeDC73b06BE454714b6Bd0C1c742e51e605664B2A"),
+            holderFeeSharing: Address(literal: "0x1413CB051f78a4605cD150d4E97B1B06f81e2Bdf"),
+            hook: Address(literal: "0x22957b1d794A7Ca37D054acB5e993e026826E0Cc"),
+            poolManager: Uniswap.poolManager,
+            hasQueuedRewards: false
+        ),
+        // The first deployment: the 16-field record, and every one of its launches graduates on Monday Trade.
+        LaunchpadAddresses(
+            factory: Address(literal: "0xad3d3Cb821279E52cFD499D15b26f77976eBA1Ea"),
+            router: Address(literal: "0xd5862DfB44831868CF8f459aA270d05d32031CE1"),
+            escrow: Address(literal: "0x1253b18077E8b52FC2522F5B62Ebd2B176383231"),
+            holderFeeSharing: Address(literal: "0x0C7a1F7625696bAbF9a7309ed3c4A9086eFEE8dd"),
+            hook: Address(literal: "0xB0c2Fa59aA9f30BC0907bcD785bFf068fEb0E0Cc"),
+            poolManager: Uniswap.poolManager,
+            legacyRecord: true,
+            hasQueuedRewards: false
+        ),
+    ]
+
+    public static var retiredFactories: [Address] { retiredStacks.map(\.factory) }
+
+    /// The retired stack whose factory is `factory`, or nil when it is not a retired one.
+    public static func retiredStack(for factory: Address) -> LaunchpadAddresses? {
+        retiredStacks.first { $0.factory == factory }
+    }
 }
 
 /// `Types.Phase` in the contracts: NotGraduated, Swept, PoolCreated, Rescued.
@@ -201,8 +250,10 @@ public struct Launch: Identifiable, Hashable, Sendable {
     public let supply: BigUInt
     public let marketCap: BigUInt
     public let progressBps: Int
+    /// The factory that recorded the launch: the live one or a retired one. `.zero` means the live one.
+    public let factory: Address
 
-    public init(token: Address, curve: Address, deployer: Address, creatorFeeRecipient: Address, pairToken: Address, graduationThreshold: BigUInt, creatorTaxBps: Int, poolFeeBps: Int, tickSpacing: Int, holderFeeSharing: Bool, graduationVenue: GraduationVenue, phase: LaunchPhase, sweptQuote: BigUInt, sweptTokens: BigUInt, sweptAt: Int, poolId: Data, name: String, symbol: String, logo: String, description: String, socials: Socials, pair: PairInfo, price: BigUInt, realQuoteReserve: BigUInt, completed: Bool, rescued: Bool, launchedAt: Int, supply: BigUInt, marketCap: BigUInt, progressBps: Int) {
+    public init(token: Address, curve: Address, deployer: Address, creatorFeeRecipient: Address, pairToken: Address, graduationThreshold: BigUInt, creatorTaxBps: Int, poolFeeBps: Int, tickSpacing: Int, holderFeeSharing: Bool, graduationVenue: GraduationVenue, phase: LaunchPhase, sweptQuote: BigUInt, sweptTokens: BigUInt, sweptAt: Int, poolId: Data, name: String, symbol: String, logo: String, description: String, socials: Socials, pair: PairInfo, price: BigUInt, realQuoteReserve: BigUInt, completed: Bool, rescued: Bool, launchedAt: Int, supply: BigUInt, marketCap: BigUInt, progressBps: Int, factory: Address = .zero) {
         self.token = token
         self.curve = curve
         self.deployer = deployer
@@ -233,7 +284,14 @@ public struct Launch: Identifiable, Hashable, Sendable {
         self.supply = supply
         self.marketCap = marketCap
         self.progressBps = progressBps
+        self.factory = factory
     }
+
+    /// The launch was made on a retired launchpad (it still trades; nothing new launches there).
+    public var isRetiredLaunchpad: Bool { LaunchpadAddresses.retiredStack(for: factory) != nil }
+
+    /// Its factory has `graduateFallback` (the pre-audit retired stacks do not).
+    public var hasGraduateFallback: Bool { LaunchpadAddresses.retiredStack(for: factory)?.hasGraduateFallback ?? true }
 
     /// Quote raised towards graduation, capped at the threshold (what the token page shows as "Raised").
     public var raised: BigUInt { realQuoteReserve > graduationThreshold ? graduationThreshold : realQuoteReserve }

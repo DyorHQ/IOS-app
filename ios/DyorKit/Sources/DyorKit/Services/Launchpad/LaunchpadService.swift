@@ -35,6 +35,21 @@ public actor LaunchpadService {
 
     public var isDeployed: Bool { addresses.isDeployed }
 
+    /// The live stack followed by every retired one (skipping a retired stack the build is configured to as live).
+    public var stacks: [LaunchpadAddresses] {
+        [addresses] + LaunchpadAddresses.retiredStacks.filter { $0.factory != addresses.factory }
+    }
+
+    /// The stack whose factory is `factory`: the live one (also for `.zero`), a retired one, or — for a factory the
+    /// app does not know — that factory alone, so no per-launch call is ever sent to another stack's modules.
+    public func stack(for factory: Address) -> LaunchpadAddresses {
+        if factory.isZero || factory == addresses.factory { return addresses }
+        return LaunchpadAddresses.retiredStack(for: factory) ?? LaunchpadAddresses(factory: factory, poolManager: addresses.poolManager)
+    }
+
+    /// The stack that recorded `launch`; every per-launch read and write goes to it.
+    public func stack(for launch: Launch) -> LaunchpadAddresses { stack(for: launch.factory) }
+
     // MARK: - Pair assets
 
     /// Symbol and decimals of a pair asset; native MON needs no read. Cached for the life of the service.
@@ -127,24 +142,51 @@ public actor LaunchpadService {
     /// Launches recorded by a specific factory — the live one or a retired one whose history still counts.
     public func launches(limit: Int = 48, factory: Address) async throws -> [Launch] {
         guard !factory.isZero, limit > 0 else { return [] }
+        let legacy = stack(for: factory).legacyRecord
         let total = LaunchpadABI.int(try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.launchCount, returns: "uint256")])[0][0])
         guard total > 0 else { return [] }
         let offset = max(0, total - limit)
         let page = try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunches, [.uint(offset), .uint(total - offset)], returns: "address[]")])[0][0].elements.map(\.address)
         guard !page.isEmpty else { return [] }
-        let records = try await multicall.readAll(page.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenTuple) })
-            .map { LaunchpadABI.LaunchRecord($0[0]) }
-        return try await hydrate(records).reversed()
+        let records = try await multicall.readAll(page.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)) })
+            .map { LaunchpadABI.LaunchRecord($0[0], legacy: legacy) }
+        return try await hydrate(records, factory: factory).reversed()
     }
 
-    /// One launch with its curve state, or nil when `token` was not launched here (or nothing is deployed).
-    public func launch(token: Address) async throws -> LaunchDetail? {
+    /// The newest `limit` launches of the live factory followed by those of each retired factory (newest stack
+    /// first), so the whole list stays newest first. A factory that fails to answer is left out rather than failing
+    /// the others; the live factory's error is only thrown when no retired launch came back either.
+    public func allLaunches(limit: Int = 48) async throws -> [Launch] {
+        guard addresses.isDeployed else { return [] }
+        let retiredStacks = Array(stacks.dropFirst())
+        async let live = launches(limit: limit, factory: addresses.factory)
+        let retired = await withTaskGroup(of: (Int, [Launch]).self) { group in
+            for (i, stack) in retiredStacks.enumerated() {
+                group.addTask { (i, (try? await self.launches(limit: limit, factory: stack.factory)) ?? []) }
+            }
+            var out = Array(repeating: [Launch](), count: retiredStacks.count)
+            for await (i, list) in group { out[i] = list }
+            return out.flatMap { $0 }
+        }
+        do {
+            return try await live + retired
+        } catch {
+            if retired.isEmpty { throw error }
+            return retired
+        }
+    }
+
+    /// One launch with its curve state, or nil when `token` was not launched on `factory` (the live factory when
+    /// nil) or nothing is deployed. Every read goes to that factory's own stack.
+    public func launch(token: Address, factory: Address? = nil) async throws -> LaunchDetail? {
         guard addresses.isDeployed else { return nil }
-        let factory = addresses.factory
+        let stack = stack(for: factory ?? addresses.factory)
+        let factory = stack.factory
         typealias F = LaunchpadABI.Factory
         typealias C = LaunchpadABI.Curve
-        let record = LaunchpadABI.LaunchRecord(try await multicall.readAll([LaunchpadABI.call(factory, F.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenTuple)])[0][0])
-        guard record.exists, let info = try await hydrate([record]).first else { return nil }
+        let tuple = try await multicall.readAll([LaunchpadABI.call(factory, F.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: stack.legacyRecord))])[0][0]
+        let record = LaunchpadABI.LaunchRecord(tuple, legacy: stack.legacyRecord)
+        guard record.exists, let info = try await hydrate([record], factory: factory).first else { return nil }
         let curve = record.curve
         // Like the web app, "graduated" here includes refund mode: the pool key is reported for both.
         let graduated = record.phase.rawValue >= LaunchPhase.graduated.rawValue
@@ -159,14 +201,15 @@ public actor LaunchpadService {
             LaunchpadABI.call(factory, F.stuckSince, [.address(token)], returns: "uint256"),
             LaunchpadABI.call(factory, F.poolKeyOf, [.address(token)], returns: LaunchpadABI.poolKeyTuple),
         ]
-        let readsHook = graduated && !addresses.hook.isZero
+        let readsHook = graduated && !stack.hook.isZero
         if readsHook {
-            calls.append(LaunchpadABI.call(addresses.hook, LaunchpadABI.Hook.pendingFees, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
-            calls.append(LaunchpadABI.call(addresses.hook, LaunchpadABI.Hook.pendingCreatorTax, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
+            calls.append(LaunchpadABI.call(stack.hook, LaunchpadABI.Hook.pendingFees, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
+            calls.append(LaunchpadABI.call(stack.hook, LaunchpadABI.Hook.pendingCreatorTax, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
         }
-        let readsQueue = info.holderFeeSharing && !addresses.holderFeeSharing.isZero
+        // The pre-audit sharing contracts have no `queuedRewards`; the call reverts and would fail the whole read.
+        let readsQueue = info.holderFeeSharing && !stack.holderFeeSharing.isZero && stack.hasQueuedRewards
         if readsQueue {
-            calls.append(LaunchpadABI.call(addresses.holderFeeSharing, LaunchpadABI.Sharing.queuedRewards, [.address(token)], returns: "uint256,uint256"))
+            calls.append(LaunchpadABI.call(stack.holderFeeSharing, LaunchpadABI.Sharing.queuedRewards, [.address(token)], returns: "uint256,uint256"))
         }
         let r = try await multicall.readAll(calls)
         return LaunchDetail(
@@ -187,9 +230,11 @@ public actor LaunchpadService {
         )
     }
 
-    /// Balances, allowance, snipe-tax status and claimables of `account` for one launch, in one round trip.
+    /// Balances, allowance, snipe-tax status and claimables of `account` for one launch, in one round trip. Rewards
+    /// and escrow come from the launch's own stack.
     public func accountView(_ launch: Launch, account: Address) async throws -> LaunchAccountView {
         let native = launch.pair.isNative
+        let stack = stack(for: launch)
         var calls: [ContractCall] = [
             LaunchpadABI.call(launch.token, LaunchpadABI.Token.balanceOf, [.address(account)], returns: "uint256"),
             LaunchpadABI.call(launch.curve, LaunchpadABI.Curve.currentSnipeTaxBps, [.address(account)], returns: "uint256"),
@@ -199,13 +244,13 @@ public actor LaunchpadService {
         ]
         let readsAllowance = !native
         if readsAllowance { calls.append(LaunchpadABI.call(launch.pairToken, LaunchpadABI.Token.allowance, [.address(account), .address(launch.curve)], returns: "uint256")) }
-        let readsRewards = launch.holderFeeSharing && !addresses.holderFeeSharing.isZero
-        if readsRewards { calls.append(LaunchpadABI.call(addresses.holderFeeSharing, LaunchpadABI.Sharing.pendingRewards, [.address(launch.token), .address(account)], returns: "uint256")) }
-        let readsEscrow = !addresses.escrow.isZero
+        let readsRewards = launch.holderFeeSharing && !stack.holderFeeSharing.isZero
+        if readsRewards { calls.append(LaunchpadABI.call(stack.holderFeeSharing, LaunchpadABI.Sharing.pendingRewards, [.address(launch.token), .address(account)], returns: "uint256")) }
+        let readsEscrow = !stack.escrow.isZero
         if readsEscrow {
             calls.append(native
-                ? LaunchpadABI.call(addresses.escrow, LaunchpadABI.Escrow.balanceOf, [.address(account)], returns: "uint256")
-                : LaunchpadABI.call(addresses.escrow, LaunchpadABI.Escrow.balanceOfToken, [.address(account), .address(launch.pairToken)], returns: "uint256"))
+                ? LaunchpadABI.call(stack.escrow, LaunchpadABI.Escrow.balanceOf, [.address(account)], returns: "uint256")
+                : LaunchpadABI.call(stack.escrow, LaunchpadABI.Escrow.balanceOfToken, [.address(account), .address(launch.pairToken)], returns: "uint256"))
         }
         let r = try await multicall.readAll(calls)
         var index = 3
@@ -257,9 +302,9 @@ public actor LaunchpadService {
 
     // MARK: - Hydration
 
-    /// Token metadata and live curve state for a page of records, in one multicall (plus one PoolManager read
-    /// for graduated launches, and one metadata read for pair assets not seen before).
-    private func hydrate(_ records: [LaunchpadABI.LaunchRecord]) async throws -> [Launch] {
+    /// Token metadata and live curve state for a page of records from `factory`, in one multicall (plus one
+    /// PoolManager read for graduated launches, and one metadata read for pair assets not seen before).
+    private func hydrate(_ records: [LaunchpadABI.LaunchRecord], factory: Address) async throws -> [Launch] {
         guard !records.isEmpty else { return [] }
         typealias T = LaunchpadABI.Token
         typealias C = LaunchpadABI.Curve
@@ -302,22 +347,30 @@ public actor LaunchpadService {
                 launchedAt: LaunchpadABI.int(results[base + 7][0]),
                 supply: supply,
                 marketCap: LaunchpadMath.marketCap(price: price, supply: supply),
-                progressBps: LaunchpadMath.progressBps(phase: r.phase, realQuoteReserve: realQuoteReserve, sweptQuote: r.sweptQuote, threshold: r.graduationThreshold)
+                progressBps: LaunchpadMath.progressBps(phase: r.phase, realQuoteReserve: realQuoteReserve, sweptQuote: r.sweptQuote, threshold: r.graduationThreshold),
+                factory: factory
             )
         }
     }
 
     /// Live pool prices for graduated launches, keyed by token. Any failure leaves the curve's final price in place.
+    /// A Uniswap v4 pool's slot0 is read from the PoolManager; a Monday Trade graduation records its v3-style pool
+    /// address as the `poolId`, whose own `slot0()` pairs the token with WMON in place of native MON.
     private func poolPrices(for records: [LaunchpadABI.LaunchRecord]) async -> [Address: BigUInt] {
-        guard !addresses.poolManager.isZero else { return [:] }
-        let graduated = records.filter { $0.phase == .graduated }
-        guard !graduated.isEmpty else { return [:] }
-        let calls = graduated.map { LaunchpadABI.call(addresses.poolManager, LaunchpadABI.PoolManager.extsload, [.bytes(LaunchpadABI.slot0(of: $0.poolId))], returns: "bytes32") }
-        guard let results = try? await multicall.read(calls) else { return [:] }
+        var reads: [(record: LaunchpadABI.LaunchRecord, pair: Address, call: ContractCall)] = []
+        for record in records where record.phase == .graduated {
+            if record.graduationVenue == .monday {
+                guard let pool = Address(data: record.poolId.suffix(20)), !pool.isZero else { continue }
+                reads.append((record, record.pairToken.isZero ? Monad.wmon : record.pairToken, LaunchpadABI.call(pool, "slot0()", returns: "bytes32")))
+            } else if !addresses.poolManager.isZero {
+                reads.append((record, record.pairToken, LaunchpadABI.call(addresses.poolManager, LaunchpadABI.PoolManager.extsload, [.bytes(LaunchpadABI.slot0(of: record.poolId))], returns: "bytes32")))
+            }
+        }
+        guard !reads.isEmpty, let results = try? await multicall.read(reads.map(\.call)) else { return [:] }
         var out: [Address: BigUInt] = [:]
-        for (record, result) in zip(graduated, results) {
-            guard case .success(let values) = result, let price = LaunchpadMath.poolPrice(slot0: values[0].bytes, token: record.token, pairToken: record.pairToken) else { continue }
-            out[record.token] = price
+        for (read, result) in zip(reads, results) {
+            guard case .success(let values) = result, let price = LaunchpadMath.poolPrice(slot0: values[0].bytes, token: read.record.token, pairToken: read.pair) else { continue }
+            out[read.record.token] = price
         }
         return out
     }
@@ -377,14 +430,14 @@ public actor LaunchpadService {
         return launchPlan(filled, launchFee: try await fee[0][0].uint, from: from)
     }
 
-    /// `HolderFeeSharing.claim(token)`: the caller's share of the fees routed to holders. With a `view`, the
-    /// creator-fee escrow claim is appended when it holds anything, and the holder claim is skipped when
-    /// nothing is pending (each claim reverts with `NothingToClaim` otherwise).
+    /// `HolderFeeSharing.claim(token)` on the launch's own stack: the caller's share of the fees routed to holders.
+    /// With a `view`, the creator-fee escrow claim is appended when it holds anything, and the holder claim is
+    /// skipped when nothing is pending (each claim reverts with `NothingToClaim` otherwise).
     public func claimRewardsPlan(launch: Launch, view: LaunchAccountView? = nil) -> [TransactionStep] {
         var steps: [TransactionStep] = []
         if view == nil || (view?.pendingRewards ?? 0) > 0 {
             let data = LaunchpadABI.calldata(LaunchpadABI.Sharing.claim, [.address(launch.token)])
-            steps.append(.call(TransactionRequest(to: addresses.holderFeeSharing, data: data), label: "Claim holder rewards"))
+            steps.append(.call(TransactionRequest(to: stack(for: launch).holderFeeSharing, data: data), label: "Claim holder rewards"))
         }
         if let view, view.escrowBalance > 0 {
             steps += claimEscrowPlan(launch: launch)
@@ -392,57 +445,66 @@ public actor LaunchpadService {
         return steps
     }
 
-    /// `FeeEscrow.claim()` / `claimToken(pair)`: creator fees (and the protocol's) held in escrow for the caller.
+    /// `FeeEscrow.claim()` / `claimToken(pair)` on the launch's own stack: creator fees (and the protocol's) held in
+    /// escrow for the caller.
     public func claimEscrowPlan(launch: Launch) -> [TransactionStep] {
         let data = launch.pair.isNative
             ? LaunchpadABI.calldata(LaunchpadABI.Escrow.claim)
             : LaunchpadABI.calldata(LaunchpadABI.Escrow.claimToken, [.address(launch.pairToken)])
-        return [.call(TransactionRequest(to: addresses.escrow, data: data), label: "Claim creator fees")]
+        return [.call(TransactionRequest(to: stack(for: launch).escrow, data: data), label: "Claim creator fees")]
     }
 
-    /// The caller's claimable fee-escrow balances — native MON plus each queried pair token. Creator fees (and, for
-    /// the treasury address, protocol fees) accrue here per recipient across ALL of that wallet's launches, so this
-    /// is the true "claimable creator fees" figure, keyed by pair asset rather than by coin.
-    public func escrowBalances(account: Address, pairTokens: [Address]) async throws -> EscrowBalances {
-        guard addresses.isDeployed, !addresses.escrow.isZero else { return EscrowBalances(native: 0, tokens: [:]) }
+    /// The caller's claimable fee-escrow balances in `escrow` (the live stack's when nil) — native MON plus each
+    /// queried pair token. Creator fees (and, for the treasury address, protocol fees) accrue here per recipient
+    /// across ALL of that wallet's launches on the stack, so this is the true "claimable creator fees" figure, keyed
+    /// by pair asset rather than by coin.
+    public func escrowBalances(account: Address, pairTokens: [Address], escrow: Address? = nil) async throws -> EscrowBalances {
+        let escrow = escrow ?? addresses.escrow
+        guard addresses.isDeployed, !escrow.isZero else { return EscrowBalances(native: 0, tokens: [:]) }
         let tokens = Array(Set(pairTokens.filter { !$0.isZero }))
-        var calls: [ContractCall] = [LaunchpadABI.call(addresses.escrow, LaunchpadABI.Escrow.balanceOf, [.address(account)], returns: "uint256")]
-        for token in tokens { calls.append(LaunchpadABI.call(addresses.escrow, LaunchpadABI.Escrow.balanceOfToken, [.address(account), .address(token)], returns: "uint256")) }
+        var calls: [ContractCall] = [LaunchpadABI.call(escrow, LaunchpadABI.Escrow.balanceOf, [.address(account)], returns: "uint256")]
+        for token in tokens { calls.append(LaunchpadABI.call(escrow, LaunchpadABI.Escrow.balanceOfToken, [.address(account), .address(token)], returns: "uint256")) }
         let r = try await multicall.readAll(calls)
         var byToken: [Address: BigUInt] = [:]
         for (i, token) in tokens.enumerated() { byToken[token] = r[i + 1][0].uint }
         return EscrowBalances(native: r[0][0].uint, tokens: byToken)
     }
 
-    /// Sweeps the caller's escrow: the native balance (when `native` is true) and each listed token, in one plan —
-    /// so a creator withdraws their fees across every launch in a single confirmation.
-    public func claimEscrowPlan(native: Bool, tokens: [Address]) -> [TransactionStep] {
+    /// Sweeps the caller's balance in `escrow` (the live stack's when nil): the native balance (when `native` is
+    /// true) and each listed token, in one plan — so a creator withdraws their fees across every launch on that stack
+    /// in a single confirmation.
+    public func claimEscrowPlan(native: Bool, tokens: [Address], escrow: Address? = nil) -> [TransactionStep] {
+        let escrow = escrow ?? addresses.escrow
         var steps: [TransactionStep] = []
-        if native { steps.append(.call(TransactionRequest(to: addresses.escrow, data: LaunchpadABI.calldata(LaunchpadABI.Escrow.claim)), label: "Claim MON fees")) }
+        if native { steps.append(.call(TransactionRequest(to: escrow, data: LaunchpadABI.calldata(LaunchpadABI.Escrow.claim)), label: "Claim MON fees")) }
         for token in tokens where !token.isZero {
-            steps.append(.call(TransactionRequest(to: addresses.escrow, data: LaunchpadABI.calldata(LaunchpadABI.Escrow.claimToken, [.address(token)])), label: "Claim fees"))
+            steps.append(.call(TransactionRequest(to: escrow, data: LaunchpadABI.calldata(LaunchpadABI.Escrow.claimToken, [.address(token)])), label: "Claim fees"))
         }
         return steps
     }
 
-    /// `LaunchpadFactory.graduate(token)`: retries a stuck migration. Anyone may call it.
+    /// `LaunchpadFactory.graduate(token)` on the launch's own factory: retries a stuck migration. Anyone may call it.
     public func graduatePlan(launch: Launch) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduate, [.address(launch.token)])
-        return [.call(TransactionRequest(to: addresses.factory, data: data), label: "Graduate")]
+        return [.call(TransactionRequest(to: stack(for: launch).factory, data: data), label: "Graduate")]
     }
 
     /// `LaunchpadFactory.graduateFallback(token)`, the audit's rescue for a stuck Monday graduation: it retries the
     /// creator's venue first and, only if Monday still fails, graduates on Uniswap v4 right away (no rescue delay).
-    /// Anyone may call it; a Monday-only quote asset needs the owner's `allowV4Fallback` first.
+    /// Anyone may call it; a Monday-only quote asset needs the owner's `allowV4Fallback` first. Empty for a launch
+    /// whose factory predates it (the pre-audit retired stacks).
     public func graduateFallbackPlan(launch: Launch) -> [TransactionStep] {
+        let stack = stack(for: launch)
+        guard stack.hasGraduateFallback else { return [] }
         let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduateFallback, [.address(launch.token)])
-        return [.call(TransactionRequest(to: addresses.factory, data: data), label: "Graduate on Uniswap v4")]
+        return [.call(TransactionRequest(to: stack.factory, data: data), label: "Graduate on Uniswap v4")]
     }
 
-    /// `MemeHook.sweepPoolFees(poolId, currency)`: pays out the fees the hook collected for a graduated pool.
+    /// `MemeHook.sweepPoolFees(poolId, currency)` on the launch's own hook: pays out the fees the hook collected for
+    /// a graduated pool.
     public func sweepPoolFeesPlan(launch: Launch, currency: Address? = nil) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Hook.sweepPoolFees, [.bytes(LaunchpadABI.word(launch.poolId)), .address(currency ?? launch.pairToken)])
-        return [.call(TransactionRequest(to: addresses.hook, data: data), label: "Distribute pool fees")]
+        return [.call(TransactionRequest(to: stack(for: launch).hook, data: data), label: "Distribute pool fees")]
     }
 
     // MARK: - Display helpers

@@ -41,6 +41,16 @@ delete; a 401 mid-flow can leave a half-deleted account) — those are on the en
 
 ## 2. Treasury / fee wallets — bigger than the launchpad doc said
 
+**Done (2026-09-23) — superseded by the relaunch, `docs/relaunch-2026-09-23.md`.** Steps 1 and 7 were executed
+on all three old factories and all three old fee vaults (fees → `0x5aDb…`, LP fees → `0x15ED…`). Steps 2, 3 and 6
+were overtaken by redeploys instead of a timelocked policy change: cohort 2 (2026-09-22) and then cohort 3
+(2026-09-23, factory `0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26`, new wallets in its constructor); cohorts 1 and
+2 are paused with their original policies. Step 8 is moot (the launchpad was also redeployed:
+`0x6B1C8769a8d6745955aC35b91FF1F37AB76859dB`). Still open: step 5, the `0x5282…` sweep — but NOT with its fixed
+`0.24ether`, which was sized for the 0.254 MON of 2026-09-17: the wallet held 5.429 MON on 2026-09-23 (more after an
+optional escrow `claim()`), so send the balance read right before signing, minus gas — command in follow-up 1 of
+`docs/relaunch-2026-09-23.md`. The commands below are historical — do not re-run them.
+
 The leaked key (`0x5282cC04…`) is **owner/governance of nothing** — governance everywhere is `0xCf7A9f1D…`, so this
 is a revenue-routing fix, not an emergency. Residual funds in the wallet are 0.254 MON and nothing else. BUT the
 same address is the **Moments treasury** on the live v1.1 factory, which the launchpad doc never covered, and that
@@ -75,7 +85,7 @@ All commands are **owner-executed by you** from an encrypted keystore or Ledger 
    ~0.16 USDC could ever route there if it expires. Trying to graduate it to avoid that is not worth it: it would
    cost ~$12.63, needs 7 transactions (batch cap is 20 editions), and a stuck graduation would hand the leaked key
    ~3 USDC instead. Let it be.
-5. **Sweep the residual MON** (leave real gas headroom — send ~0.24, not 0.25, since fees are ~202 gwei):
+5. **Sweep the residual MON** (**amount stale since 2026-09-23 — see the note at the top of §2**; leave real gas headroom — send ~0.24, not 0.25, since fees are ~202 gwei):
    ```bash
    cast send $NEW_TREASURY --value 0.24ether --rpc-url $RPC   # signed by the LEAKED key, its last-ever use
    ```

@@ -44,27 +44,91 @@ public struct MomentsAddresses: Sendable, Hashable {
 
     public static let none = MomentsAddresses()
 
-    /// Moments v1.1 on Monad mainnet (chain 143) — `contracts/deployments/moments-143.json`, deployed and
-    /// Sourcify-verified on 2026-09-16. Governance is the DyorHQ owner wallet; platform and treasury are the
-    /// beneficiaries snapshotted into every Moment at publish.
-    /// The cohort-2 stack (deployed 2026-09-22, `contracts/deployments/moments-143.json`): the $2,000 graduation FDV
-    /// policy is in its constructor. The cohort-1 stack (factory 0x6469…C020, `moments-143-cohort1.json`) is
-    /// retired — publishing paused; its three Moments stay on-chain but are no longer shown.
+    /// Moments v1.1 on Monad mainnet (chain 143) — cohort 3, `contracts/deployments/moments-143.json`, deployed and
+    /// Sourcify-verified on 2026-09-23 with the rotated wallets: platform = the fees wallet 0x15ED…, treasury = the new
+    /// treasury 0x5aDb… (the beneficiaries snapshotted into every Moment at publish); $2,000-FDV graduation policy in
+    /// the constructor. Governance is the DyorHQ owner wallet. Cohorts 1 (0x6469…C020) and 2 (0xc12B…a581, records
+    /// `moments-143-cohort1.json` / `moments-143-cohort2.json`) paid the retired wallets and are paused.
     public static let monadMainnet = MomentsAddresses(
-        factory: Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581"),
-        collect: Address(literal: "0x8f65ea0236b5fa6351a45Bd48244c3525Fb92493"),
-        vesting: Address(literal: "0xe087eff01C567F88a7cb6BDBDBF04B46Fee56C99"),
-        graduation: Address(literal: "0x353F245A2458B994a65116A4c69643cf6608045b"),
-        locker: Address(literal: "0x995735cF317656a10de52b73AB50A2aAdc069a8a"),
-        hook: Address(literal: "0x501D703588c4feAbBeE5A9a77408c7FCbD3a20Cc"),
-        buyback: Address(literal: "0xacae95377513C54DA9ff549DFE5cB77001F6c6F5"),
+        factory: Address(literal: "0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26"),
+        collect: Address(literal: "0xb53897A4C6280480c267351518D184C2E6591D30"),
+        vesting: Address(literal: "0x05584910ab57d65723eB878D295b3353a4cbb021"),
+        graduation: Address(literal: "0xA2231E39ce7AE4f7d5e56Beae2dD3a8a59F3b9aA"),
+        locker: Address(literal: "0x37C5A2c15d99701CF698B146cdCD1853825Ef455"),
+        hook: Address(literal: "0xD5BFff467FDAe04664357e75bF059986c41260CC"),
+        buyback: Address(literal: "0x3B574312Bb4e1D36C9a1Ba698bf77BbD223ca913"),
         usdc: Address(literal: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"),
         permit2: Address(literal: "0x000000000022D473030F116dDEE9F6B43aC78BA3"),
         poolManager: Address(literal: "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e"),
-        platform: Address(literal: "0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48"),
-        treasury: Address(literal: "0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045"),
-        deployBlock: 106_984_957
+        platform: Address(literal: "0x15ED3bb488231213b141A2f78b62358D52235Cd7"),
+        treasury: Address(literal: "0x5aDbDc19831D0f9dbdfBbA6ee3d618DbB9CEA371"),
+        deployBlock: 107_311_600
     )
+
+    /// Retired Moments cohorts on Monad mainnet, newest first — CLAIM-ONLY. Publishing is paused on both, and every
+    /// Moment in them snapshotted the retired beneficiaries (platform 0xf4D4…, treasury 0x5282… whose key leaked),
+    /// so the app never collects, expires, retries, buys back or trades there: holders claim their vesting and
+    /// creators withdraw their own proceeds and pool fees, through `RetiredMoments` and nothing else. Moment ids
+    /// restart at 1 on every factory, so anything about a retired Moment is keyed by `MomentKey` (factory, id).
+    /// Mirrors `moments-143-cohort2.json` / `moments-143-cohort1.json` (factory getters checked on chain);
+    /// `MomentsRetiredTests` pins the table.
+    public static let retiredMainnet: [MomentsAddresses] = [
+        // Cohort 2 (2026-09-22, the $2,000-FDV policy): 2 Moments.
+        MomentsAddresses(
+            factory: Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581"),
+            collect: Address(literal: "0x8f65ea0236b5fa6351a45Bd48244c3525Fb92493"),
+            vesting: Address(literal: "0xe087eff01C567F88a7cb6BDBDBF04B46Fee56C99"),
+            graduation: Address(literal: "0x353F245A2458B994a65116A4c69643cf6608045b"),
+            locker: Address(literal: "0x995735cF317656a10de52b73AB50A2aAdc069a8a"),
+            hook: Address(literal: "0x501D703588c4feAbBeE5A9a77408c7FCbD3a20Cc"),
+            buyback: Address(literal: "0xacae95377513C54DA9ff549DFE5cB77001F6c6F5"),
+            usdc: Address(literal: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"),
+            permit2: Address(literal: "0x000000000022D473030F116dDEE9F6B43aC78BA3"),
+            poolManager: Address(literal: "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e"),
+            platform: Address(literal: "0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48"),
+            treasury: Address(literal: "0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045"),
+            deployBlock: 106_984_957
+        ),
+        // Cohort 1 (2026-09-16, the $10 small-cap policy): 3 Moments; #2 graduated and vests to its holders into 2027.
+        MomentsAddresses(
+            factory: Address(literal: "0x64698c7702d85F87f43a6dFF7D495CDD2327C020"),
+            collect: Address(literal: "0xb4EE9e67d9e1772BC6949748e3755EA7C1DFE32c"),
+            vesting: Address(literal: "0x360E2068eAEc5b5A9AF60A7c4059Bd4b30B7209C"),
+            graduation: Address(literal: "0x307De00950F039969855eFb859A6088d695e76b1"),
+            locker: Address(literal: "0x832851A42Bf1FD1aF7a19c82cF132290c605E406"),
+            hook: Address(literal: "0x8Aa322471Bef2996D3B50cB12F63C6A0054460Cc"),
+            buyback: Address(literal: "0x03282D5421a3bE3ff79c5962819c9a6e5E0b52d2"),
+            usdc: Address(literal: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"),
+            permit2: Address(literal: "0x000000000022D473030F116dDEE9F6B43aC78BA3"),
+            poolManager: Address(literal: "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e"),
+            platform: Address(literal: "0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48"),
+            treasury: Address(literal: "0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045"),
+            deployBlock: 105_347_754
+        ),
+    ]
+
+    /// The retired cohort whose factory is `factory`, or nil when it is not a retired one.
+    public static func retired(factory: Address) -> MomentsAddresses? {
+        retiredMainnet.first { $0.factory == factory }
+    }
+
+    /// Every coin the retired cohorts minted, by (factory, id) — read on chain (`getMoment` / `momentIdByCoin`).
+    /// Publishing is paused on both, so the set is final and needs no read: a coin here is never offered a trade in
+    /// the app, even when its cohort cannot be read (one of these pools pays the retired platform wallet).
+    public static let retiredMainnetCoins: [Address: MomentKey] = [
+        // Cohort 2
+        Address(literal: "0xC18941ca9fBaa613841c3d31a7Dd1D262a47a2E5"): MomentKey(factory: Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581"), id: 1),
+        Address(literal: "0x01D2c48E3cd38804a643E391421289933ed3D4a7"): MomentKey(factory: Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581"), id: 2),
+        // Cohort 1 (#2 graduated: its pool exists)
+        Address(literal: "0xDc1bC41b7C197DE19f17C7832bec3Bb748D92297"): MomentKey(factory: Address(literal: "0x64698c7702d85F87f43a6dFF7D495CDD2327C020"), id: 1),
+        Address(literal: "0xd6c17E083b53fa1c46b71120D6959303Ae4B8e1F"): MomentKey(factory: Address(literal: "0x64698c7702d85F87f43a6dFF7D495CDD2327C020"), id: 2),
+        Address(literal: "0x8D2AEc229b5A4Fd4D4aB1725c92B6B7f53fBc50f"): MomentKey(factory: Address(literal: "0x64698c7702d85F87f43a6dFF7D495CDD2327C020"), id: 3),
+    ]
+
+    /// Whether `token` is a retired cohort's Moment coin (see `retiredMainnetCoins`): never trade it in the app.
+    public static func isRetiredCoin(_ token: Address) -> Bool {
+        retiredMainnetCoins[token] != nil
+    }
 
     /// Protocol addresses that hold Moment coins without being "holders" (the pool, the locker, vesting, …).
     public var protocolHolders: Set<Address> { [poolManager, locker, vesting, buyback, hook, graduation] }
@@ -173,6 +237,20 @@ public struct MomentProvenance: Sendable, Hashable {
     public var animationURL: URL? { MomentsMath.url(animationURI) }
 }
 
+/// A Moment's identity across cohorts. Ids restart at 1 on every factory, so wherever more than one cohort is in
+/// play — dictionaries, list identities, navigation, history lookups — the key is (factory, id), never the id alone.
+public struct MomentKey: Sendable, Hashable, CustomStringConvertible {
+    public let factory: Address
+    public let id: BigUInt
+
+    public init(factory: Address, id: BigUInt) {
+        self.factory = factory
+        self.id = id
+    }
+
+    public var description: String { "\(factory.hex)/\(id)" }
+}
+
 /// `MomentTypes.Moment`: everything fixed at publish. There is no setter on chain.
 public struct Moment: Sendable, Hashable, Identifiable {
     public let id: BigUInt
@@ -197,8 +275,10 @@ public struct Moment: Sendable, Hashable, Identifiable {
     public let publishedAt: Int
     /// Collecting is possible strictly before this timestamp.
     public let deadline: Int
+    /// The factory (cohort) that published it — not part of the on-chain struct; the service that read it fills it in.
+    public let factory: Address
 
-    public init(id: BigUInt, creator: Address, platform: Address, treasury: Address, coin: Address, nft: Address, price: BigUInt, threshold: BigUInt, rateNum: BigUInt, rateDen: BigUInt, creatorBps: Int, platformBps: Int, reserveBps: Int, creatorAllocBps: Int, expiryCreatorBps: Int, royaltyBps: Int, publishedAt: Int, deadline: Int) {
+    public init(id: BigUInt, creator: Address, platform: Address, treasury: Address, coin: Address, nft: Address, price: BigUInt, threshold: BigUInt, rateNum: BigUInt, rateDen: BigUInt, creatorBps: Int, platformBps: Int, reserveBps: Int, creatorAllocBps: Int, expiryCreatorBps: Int, royaltyBps: Int, publishedAt: Int, deadline: Int, factory: Address = .zero) {
         self.id = id
         self.creator = creator
         self.platform = platform
@@ -217,10 +297,12 @@ public struct Moment: Sendable, Hashable, Identifiable {
         self.royaltyBps = royaltyBps
         self.publishedAt = publishedAt
         self.deadline = deadline
+        self.factory = factory
     }
 
     /// The creator's coin allocation in wei (`SUPPLY · creatorAllocBps / BPS`).
     public var creatorAllocation: BigUInt { MomentsConstants.supply * BigUInt(creatorAllocBps) / BigUInt(MomentsConstants.bps) }
+    public var key: MomentKey { MomentKey(factory: factory, id: id) }
 }
 
 /// `MomentCollect.Ledger`: the live money state of a Moment.
@@ -324,6 +406,8 @@ public struct MomentInfo: Sendable, Hashable, Identifiable {
     public let pool: MomentPool?
 
     public var id: BigUInt { moment.id }
+    /// (factory, id): the identity to key on whenever Moments of more than one cohort meet.
+    public var key: MomentKey { moment.key }
     public var state: MomentState { ledger.state }
 
     public init(moment: Moment, name: String, symbol: String, provenance: MomentProvenance, ledger: MomentLedger, editions: Int, closed: Bool, entitlements: BigUInt, graduated: Bool, progressBps: Int, pool: MomentPool?) {
@@ -608,9 +692,12 @@ public struct MomentCollectRecord: Sendable, Hashable, Identifiable {
     public let reserveIn: BigUInt
     public let creatorIn: BigUInt
     public let platformIn: BigUInt
-    public var id: String { "\(hash.hexString)-\(momentId)-\(firstRank)" }
+    /// The cohort's factory: `momentId` alone is ambiguous across cohorts.
+    public let factory: Address
+    public var id: String { "\(hash.hexString)-\(factory.hex)-\(momentId)-\(firstRank)" }
+    public var key: MomentKey { MomentKey(factory: factory, id: momentId) }
 
-    public init(hash: Data, block: UInt64, time: Date, momentId: BigUInt, collector: Address, gross: BigUInt, editions: Int, firstRank: Int, entitlement: BigUInt, reserveIn: BigUInt, creatorIn: BigUInt, platformIn: BigUInt) {
+    public init(hash: Data, block: UInt64, time: Date, momentId: BigUInt, collector: Address, gross: BigUInt, editions: Int, firstRank: Int, entitlement: BigUInt, reserveIn: BigUInt, creatorIn: BigUInt, platformIn: BigUInt, factory: Address = .zero) {
         self.hash = hash
         self.block = block
         self.time = time
@@ -623,6 +710,7 @@ public struct MomentCollectRecord: Sendable, Hashable, Identifiable {
         self.reserveIn = reserveIn
         self.creatorIn = creatorIn
         self.platformIn = platformIn
+        self.factory = factory
     }
 }
 
@@ -634,16 +722,19 @@ public struct MomentClaimRecord: Sendable, Hashable, Identifiable {
     public let momentId: BigUInt
     public let collectorAmount: BigUInt
     public let creatorAmount: BigUInt
-    public var id: String { "\(hash.hexString)-\(momentId)-claim" }
+    public let factory: Address
+    public var id: String { "\(hash.hexString)-\(factory.hex)-\(momentId)-claim" }
+    public var key: MomentKey { MomentKey(factory: factory, id: momentId) }
     public var total: BigUInt { collectorAmount + creatorAmount }
 
-    public init(hash: Data, block: UInt64, time: Date, momentId: BigUInt, collectorAmount: BigUInt, creatorAmount: BigUInt) {
+    public init(hash: Data, block: UInt64, time: Date, momentId: BigUInt, collectorAmount: BigUInt, creatorAmount: BigUInt, factory: Address = .zero) {
         self.hash = hash
         self.block = block
         self.time = time
         self.momentId = momentId
         self.collectorAmount = collectorAmount
         self.creatorAmount = creatorAmount
+        self.factory = factory
     }
 }
 
@@ -656,15 +747,18 @@ public struct MomentWithdrawalRecord: Sendable, Hashable, Identifiable {
     public let momentId: BigUInt
     public let kind: Kind
     public let amount: BigUInt
-    public var id: String { "\(hash.hexString)-\(momentId)-\(kind)" }
+    public let factory: Address
+    public var id: String { "\(hash.hexString)-\(factory.hex)-\(momentId)-\(kind)" }
+    public var key: MomentKey { MomentKey(factory: factory, id: momentId) }
 
-    public init(hash: Data, block: UInt64, time: Date, momentId: BigUInt, kind: Kind, amount: BigUInt) {
+    public init(hash: Data, block: UInt64, time: Date, momentId: BigUInt, kind: Kind, amount: BigUInt, factory: Address = .zero) {
         self.hash = hash
         self.block = block
         self.time = time
         self.momentId = momentId
         self.kind = kind
         self.amount = amount
+        self.factory = factory
     }
 }
 
@@ -675,14 +769,17 @@ public struct MomentPublishRecord: Sendable, Hashable, Identifiable {
     public let time: Date
     public let momentId: BigUInt
     public let coin: Address
-    public var id: String { "\(hash.hexString)-publish-\(momentId)" }
+    public let factory: Address
+    public var id: String { "\(hash.hexString)-\(factory.hex)-publish-\(momentId)" }
+    public var key: MomentKey { MomentKey(factory: factory, id: momentId) }
 
-    public init(hash: Data, block: UInt64, time: Date, momentId: BigUInt, coin: Address) {
+    public init(hash: Data, block: UInt64, time: Date, momentId: BigUInt, coin: Address, factory: Address = .zero) {
         self.hash = hash
         self.block = block
         self.time = time
         self.momentId = momentId
         self.coin = coin
+        self.factory = factory
     }
 }
 
@@ -701,6 +798,17 @@ public struct MomentsAccountHistory: Sendable, Hashable {
     }
 
     public static let empty = MomentsAccountHistory(collects: [], claims: [], withdrawals: [], publishes: [])
+
+    /// Several cohorts' histories as one, newest first. Every record keeps its factory, so equal Moment ids from
+    /// different cohorts stay apart — look Moments up by `key`, never by `momentId`.
+    public static func merged(_ histories: [MomentsAccountHistory]) -> MomentsAccountHistory {
+        MomentsAccountHistory(
+            collects: histories.flatMap(\.collects).sorted { $0.block > $1.block },
+            claims: histories.flatMap(\.claims).sorted { $0.block > $1.block },
+            withdrawals: histories.flatMap(\.withdrawals).sorted { $0.block > $1.block },
+            publishes: histories.flatMap(\.publishes).sorted { $0.block > $1.block }
+        )
+    }
 }
 
 // MARK: - Math

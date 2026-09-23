@@ -89,6 +89,13 @@ Also tightened `Z_MyMondayFork.t.sol::test_F2a` to prove the realign completes i
 The regression tests live in `contracts/test/audit/`. Worktree: `/Users/jerry/Hackathon-launchpad-fix` (uncommitted).
 
 ## Deployed (2026-09-16)
+**Superseded 2026-09-23:** this stack is retired (closed to new launches, protocol fees repointed to the new
+treasury). The live launchpad is the byte-identical relaunch with the rotated wallets, factory
+`0x6B1C8769a8d6745955aC35b91FF1F37AB76859dB` (deploy block 107,311,243) — `docs/relaunch-2026-09-23.md`. The
+`0x2F02972E…` factory below was already closed to new launches; the same run repointed its fees too.
+`Z_LiveDeployment.t.sol` now reads the live stack from
+`deployments/143.json`.
+
 Redeployed by the owner from commit `94e0fb1` (Monad mainnet, 18/18 txs, 3.09 MON): factory
 `0x10F34A174d9C393a90aFf94BDED7E1Db185446D7`, hook `0x51A240c1…60cc`, escrow `0xbc70ba9D…47fc`, holderFeeSharing
 `0x70F8f64c…4eF6`, locker `0x86d5143A…8902`, v4 executor `0x787e49e7…45DA`, Monday executor `0x5c83D582…8fEd`,

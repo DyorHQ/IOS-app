@@ -6,15 +6,16 @@ import Foundation
 struct UniswapVenue: Sendable {
     let multicall: Multicall
     let v3: V3Router
-    /// The launchpad factory whose graduated pools are routable; nil until it is deployed.
-    let launchpadFactory: Address?
+    /// The launchpad factories (live and retired, all with the 17-field record) whose graduated pools are routable;
+    /// empty until one is deployed.
+    let launchpadFactories: [Address]
     /// The Moments contracts whose graduated coin ↔ USDC pools are routable; nil when Moments are not live.
     let moments: MomentsAddresses?
 
-    init(multicall: Multicall, v3: V3Router, launchpadFactory: Address?, moments: MomentsAddresses? = nil) {
+    init(multicall: Multicall, v3: V3Router, launchpadFactories: [Address] = [], moments: MomentsAddresses? = nil) {
         self.multicall = multicall
         self.v3 = v3
-        self.launchpadFactory = launchpadFactory
+        self.launchpadFactories = launchpadFactories.filter { !$0.isZero }
         self.moments = moments
     }
 
@@ -32,6 +33,7 @@ struct UniswapVenue: Sendable {
     }
 
     func quote(_ req: SwapRequest) async throws -> VenueQuote? {
+        try SwapEngine.ensureTradable([req.tokenIn.address, req.tokenOut.address])
         let tokenIn = req.tokenIn.wrappedAddress
         let tokenOut = req.tokenOut.wrappedAddress
         guard tokenIn != tokenOut else { return nil }
@@ -236,22 +238,24 @@ struct UniswapVenue: Sendable {
         return out
     }
 
-    /// Pool keys of graduated launchpad tokens among `tokens`, in input order.
+    /// Pool keys of launchpad tokens among `tokens` that graduated on Uniswap v4, in input order. Each token's key
+    /// comes from the factory that recorded it, since each factory's pools carry its own hook.
     private func launchpadKeys(_ tokens: [Address]) async throws -> [(token: Address, key: PoolKey)] {
-        guard let factory = launchpadFactory, !factory.isZero else { return [] }
+        guard !launchpadFactories.isEmpty else { return [] }
         let candidates = tokens.filter { !$0.isZero && $0 != Monad.wmon }
         if candidates.isEmpty { return [] }
-        let records = try await multicall.read(try candidates.map { try SwapCalldata.launchedToken(factory: factory, token: $0) })
-        let graduated = zip(candidates, records).compactMap { token, record -> Address? in
-            guard case .success(let values) = record else { return nil }
-            let launched = values[0]
-            return launched[15].bool && launched[10].uint == 2 ? token : nil
+        let pairs = candidates.flatMap { token in launchpadFactories.map { (token: token, factory: $0) } }
+        let records = try await multicall.read(try pairs.map { try SwapCalldata.launchedToken(factory: $0.factory, token: $0.token) })
+        var graduated: [(token: Address, factory: Address)] = []
+        for (pair, record) in zip(pairs, records) {
+            guard case .success(let values) = record, SwapCalldata.graduatedOnV4(values[0]), !graduated.contains(where: { $0.token == pair.token }) else { continue }
+            graduated.append(pair)
         }
         if graduated.isEmpty { return [] }
-        let keys = try await multicall.readAll(try graduated.map { try SwapCalldata.launchpadPoolKey(factory: factory, token: $0) })
-        return zip(graduated, keys).map { token, values in
+        let keys = try await multicall.readAll(try graduated.map { try SwapCalldata.launchpadPoolKey(factory: $0.factory, token: $0.token) })
+        return zip(graduated, keys).map { pair, values in
             let key = values[0]
-            return (token, PoolKey(currency0: key[0].address, currency1: key[1].address, fee: Int(key[2].uint), tickSpacing: Int(key[3].int), hooks: key[4].address))
+            return (pair.token, PoolKey(currency0: key[0].address, currency1: key[1].address, fee: Int(key[2].uint), tickSpacing: Int(key[3].int), hooks: key[4].address))
         }
     }
 

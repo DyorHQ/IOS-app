@@ -206,7 +206,10 @@ struct LaunchCard: View {
                             .font(.footnote.weight(.semibold)).monospacedDigit()
                     }
                     Spacer()
-                    Text(RelativeTime.short(launch.launchedAt)).font(.caption2).foregroundStyle(.tertiary)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        if launch.isRetiredLaunchpad { Text("Retired launchpad").font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                        Text(RelativeTime.short(launch.launchedAt)).font(.caption2).foregroundStyle(.tertiary)
+                    }
                 }
                 if launch.phase == .bonding {
                     progress
@@ -338,7 +341,7 @@ final class LaunchpadModel {
         defer { loading = false }
         do {
             async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets)
-            launches = try await env.launchpad.launches(limit: 60)
+            launches = try await env.launchpad.allLaunches(limit: 60)
             protocolInfo = try? await info
             error = nil
         } catch {
@@ -464,7 +467,7 @@ struct LaunchDetailView: View {
                     TokenLogo(symbol: launch.symbol, url: URL(string: launch.logo), size: 48)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(launch.name).font(.title3.weight(.semibold))
-                        Text(launch.phase.title).font(.subheadline).foregroundStyle(.secondary)
+                        Text(launch.isRetiredLaunchpad ? "\(launch.phase.title) · Retired launchpad" : launch.phase.title).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
                 HStack(alignment: .firstTextBaseline) {
@@ -580,13 +583,15 @@ struct LaunchDetailView: View {
             Button("Swap \(launch.symbol) on \(launch.graduationVenue.title)", systemImage: "arrow.left.arrow.right") {
                 router.openSwap(tokenIn: pairToken.isNative ? Token.mon : pairToken, tokenOut: token)
             }
-            if let detail, let key = detail.poolKey {
-                LabeledContent("Pool fee", value: NumberStyle.basisPoints(key.fee / 100))
+            if launch.phase == .graduated {
+                // The v4 pool key carries fee 0 (the hook levies the launch's poolFeeBps); a Monday Trade pool uses
+                // the graduation executor's fixed 1% tier (MondayGraduationExecutor.FEE).
+                LabeledContent("Pool fee", value: NumberStyle.basisPoints(launch.graduationVenue == .monday ? 100 : launch.poolFeeBps))
             }
             if isStuck, let detail {
                 LabeledContent("Stuck since", value: Date(timeIntervalSince1970: TimeInterval(detail.stuckSince)).formatted(date: .abbreviated, time: .shortened))
                 Button("Retry Graduation", systemImage: "arrow.clockwise") { showGraduate = true }.disabled(!session.canSign)
-                if launch.graduationVenue == .monday {
+                if offersFallback {
                     Button("Graduate on Uniswap v4 Instead", systemImage: "arrow.triangle.branch") { showFallback = true }.disabled(!session.canSign)
                 }
             }
@@ -596,7 +601,7 @@ struct LaunchDetailView: View {
             if launch.phase == .graduated {
                 Text("The curve's liquidity is permanently locked in a \(launch.graduationVenue.title) pool — trades now route through the Swap screen. Ongoing pool swap fees stay with the locked liquidity and aren't distributed to holders or the creator.")
             } else if isStuck {
-                Text(launch.graduationVenue == .monday
+                Text(offersFallback
                      ? "The last graduation attempt failed. Anyone can retry it; if Monday Trade keeps rejecting it, the launch can graduate into a locked Uniswap v4 pool right away instead."
                      : "The last graduation attempt failed. Anyone can retry it; you only pay the gas.")
             } else {
@@ -607,6 +612,9 @@ struct LaunchDetailView: View {
 
     /// A completed curve whose migration reverted (the factory records `stuckSince`): the audit's rescue paths apply.
     private var isStuck: Bool { launch.phase != .graduated && (detail?.stuckSince ?? 0) > 0 }
+
+    /// A stuck Monday graduation can fall back to Uniswap v4, where the launch's factory has `graduateFallback`.
+    private var offersFallback: Bool { launch.graduationVenue == .monday && launch.hasGraduateFallback }
 
     private func holdingsSection(_ account: LaunchAccountView) -> some View {
         Section("Your Holdings") {
@@ -664,7 +672,7 @@ struct LaunchDetailView: View {
     }
 
     private func load() async {
-        async let d = env.launchpad.launch(token: launch.token)
+        async let d = env.launchpad.launch(token: launch.token, factory: launch.factory)
         async let t = env.launchpad.trades(curve: launch.curve, pair: launch.pair)
         async let h = env.launchpad.holderCount(token: launch.token, excluding: [launch.curve])
         async let pu = pairUSDPrice()

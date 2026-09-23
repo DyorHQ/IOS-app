@@ -95,10 +95,17 @@ final class BridgeModel {
 
     // MARK: Loading
 
+    /// The bridge's backend proxy serves a signed-in wallet only. RootView signs in as soon as the wallet can sign;
+    /// this covers the moment right after launch before that sign-in has landed.
+    private func ensureBackendSession() async {
+        if !env.social.isSignedIn, env.session.canSign { await env.social.signIn(session: env.session) }
+    }
+
     func load() async {
         guard isConfigured else { loadError = AuroraError.notConfigured.errorDescription; return }
         guard tokens.isEmpty else { return }
         loadingTokens = true; defer { loadingTokens = false }
+        await ensureBackendSession()
         do {
             tokens = try await env.aurora.tokens().filter { EVMChain.byAuroraId($0.blockchain) != nil }
             if fromToken == nil { fromToken = preferred(on: fromChain) }
@@ -236,6 +243,7 @@ final class BridgeModel {
     func getQuote() async {
         guard let from = fromToken, let to = toToken, let owner = env.session.address, let amount = amountRaw else { return }
         quoting = true; quoteError = nil; defer { quoting = false }
+        await ensureBackendSession()
         do {
             quote = try await env.aurora.quote(
                 amount: String(amount), originAsset: from.assetId, destinationAsset: to.assetId,
@@ -321,9 +329,19 @@ final class BridgeModel {
         if env.settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm bridge")) { return }
         phase = .signing
         completedTxURL = nil
-        // Send EXACTLY what Aurora quoted (`amountIn`) to the deposit address — never a re-parsed value — so the
-        // deposit always matches the quote. `amount` is only the fallback if the quote didn't echo a parsable amountIn.
-        let sendAmount = BigUInt(quote.amountIn) ?? amount
+        // The quote is EXACT_INPUT for the amount the user typed, delivered back to the user's own address. Refuse to
+        // sign anything else — a quote whose input amount, recipient or refund address differs from the request (a
+        // compromised proxy or API) must never move the user's funds.
+        guard let quotedIn = BigUInt(quote.amountIn), quotedIn == amount else {
+            phase = .failed("The bridge quote didn't match the amount you entered, so nothing was sent. Get a new quote.")
+            return
+        }
+        guard let owner = env.session.address, let to = toToken,
+              quote.request?.matches(amount: amount, originAsset: from.assetId, destinationAsset: to.assetId, owner: owner) == true else {
+            phase = .failed("The bridge quote didn't match your request (amount, tokens or your address), so nothing was sent. Get a new quote.")
+            return
+        }
+        let sendAmount = quotedIn
         do {
             let request: TransactionRequest
             if from.isNative {

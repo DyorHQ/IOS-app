@@ -16,6 +16,8 @@ actor KuruFlowClient {
     init(session: URLSession) { self.session = session }
 
     func quote(_ req: SwapRequest) async throws -> VenueQuote? {
+        // A retired Moment coin never reaches the API: its calldata comes back ready-made, so refuse before asking.
+        try SwapEngine.ensureTradable([req.tokenIn.address, req.tokenOut.address])
         let user = req.account
         let body = try JSONEncoder().encode(JSON.object([
             "userAddress": .string(user.checksummed),
@@ -41,7 +43,16 @@ actor KuruFlowClient {
         var calldataHex = transaction["calldata"].string ?? ""
         if !calldataHex.hasPrefix("0x") { calldataHex = "0x" + calldataHex }
         guard let calldata = Data(hex: calldataHex) else { throw SwapError.venue("Kuru Flow returned an invalid transaction.") }
-        let tx = TransactionRequest(to: to, data: calldata, value: Self.quantity(transaction["value"]) ?? 0)
+        // Never approve or call a contract the API chose: the only acceptable target is Kuru Flow's entrypoint (verified
+        // live — native and ERC-20 routes both go through it), and the value must be exactly the input for a native
+        // swap and zero otherwise. A compromised or spoofed API could otherwise point the approval at a drainer.
+        let value = Self.quantity(transaction["value"]) ?? 0
+        guard to == Kuru.entrypoint, value == (req.tokenIn.isNative ? req.amountIn : 0) else {
+            throw SwapError.venue("Kuru Flow returned an unexpected transaction, so it was blocked for your safety.")
+        }
+        // Kuru chooses the route, so an ordinary pair could still hop through a retired cohort's coin or pool.
+        try SwapEngine.ensureNoRetired(in: calldata)
+        let tx = TransactionRequest(to: to, data: calldata, value: value)
         let inToken = req.tokenIn
         let amountIn = req.amountIn
 
