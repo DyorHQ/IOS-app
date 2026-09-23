@@ -102,10 +102,14 @@ final class PerplTrading {
     }
 
     /// Full one-time enrollment: generate a key, sign the server's typed data with the wallet, store, and connect.
-    /// Any wallet that can sign a digest (Privy embedded or an imported local wallet) can enroll.
+    /// Any wallet that can sign a digest (Privy embedded or an imported local wallet) can enroll. The typed data is
+    /// validated before the wallet sees anything (`PerplEnrollment`): it must register exactly this key for exactly
+    /// this wallet on the terms the app asked for, and the digest signed is recomputed on device.
     func enroll(wallet: any DigestSigner, address: Address) async throws {
         status = .connecting
         do {
+            // The payload is bound to `address`; only that wallet may sign it.
+            guard wallet.address == address else { throw PerplEnrollmentError.foreignSigner }
             // A Mera account derives its trading key from the passkey (utility namespace, purpose-scoped): the same
             // key reappears on every device and is never generated at random or backed up anywhere.
             let secret: Data

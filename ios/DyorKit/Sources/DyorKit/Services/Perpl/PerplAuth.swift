@@ -82,10 +82,15 @@ public enum PerplAuth {
 /// (the app asks Privy to `secp256k1Sign` the same digest), so this stays free of any wallet dependency.
 public actor PerplAuthClient {
     public struct Payload: Sendable {
+        /// The server's typed data, echoed back unchanged to `/enroll` (its `mac` covers it). Validated, never signed as is.
         public let typedData: [String: Any]
         public let mac: String
-        /// The 32-byte EIP-712 digest the wallet must sign and the Ed25519 PoP must cover.
+        /// The 32-byte EIP-712 digest the wallet must sign and the Ed25519 PoP must cover — recomputed on device from
+        /// the validated typed data (`PerplEnrollment.validate`), never taken from the server.
         public let digest: Data
+        /// The wallet and Ed25519 public key the typed data was validated against.
+        public let address: String
+        public let publicKeyHex: String
     }
 
     private let chainId: Int
@@ -98,19 +103,29 @@ public actor PerplAuthClient {
         self.session = session
     }
 
-    /// Step 1: ask the server for the typed data to sign, and compute its digest locally.
-    public func requestPayload(address: String, publicKeyHex: String, scopeMask: Int, label: String) async throws -> Payload {
+    /// Step 1: ask the server for the typed data to sign, validate it strictly against this request (this wallet, this
+    /// key, these terms — see `PerplEnrollment`), and compute its digest locally. Throws before anything can be signed.
+    public func requestPayload(address: String, publicKeyHex: String, scopeMask: Int, label: String, now: Date = Date()) async throws -> Payload {
         let body: [String: Any] = ["chain_id": chainId, "address": address, "public_key": publicKeyHex, "scope_mask": scopeMask, "label": label]
         let json = try await post("v1/api-key/payload", body: body)
-        guard let typedData = json["typed_data"] as? [String: Any], let mac = json["mac"] as? String else {
+        guard let typedData = json["typed_data"] as? [String: Any], let mac = json["mac"] as? String, !mac.isEmpty else {
             throw PerplError.malformedResponse("api-key payload")
         }
-        let digest = try EIP712.digest(EIP712.parse(typedData))
-        return Payload(typedData: typedData, mac: mac, digest: digest)
+        let validated = try PerplEnrollment.validate(typedData, chainId: chainId, address: address, publicKeyHex: publicKeyHex,
+                                                     scopeMask: scopeMask, label: label, now: now)
+        // The documented response carries no digest, and one is never used. If the server sends one anyway and it
+        // names a different message than the typed data, it is asking for a blind signature: refuse outright.
+        for field in ["digest", "hash"] where json[field] != nil {
+            guard let claimed = json[field] as? String, Data(hex: claimed) == validated.digest else { throw PerplEnrollmentError.digestMismatch }
+        }
+        return Payload(typedData: typedData, mac: mac, digest: validated.digest, address: address, publicKeyHex: publicKeyHex)
     }
 
     /// Step 2: submit both signatures and receive the API-key token.
     public func enroll(address: String, secret: Data, payload: Payload, walletSignature: String, scopeMask: Int) async throws -> PerplApiKey {
+        // The payload was validated for one wallet and one key; never prove possession for another over it.
+        guard Address(address) != nil, Address(address) == Address(payload.address) else { throw PerplEnrollmentError.foreignSigner }
+        guard try PerplAuth.publicKeyHex(secret: secret).lowercased() == payload.publicKeyHex.lowercased() else { throw PerplEnrollmentError.foreignKey }
         let pop = try PerplAuth.proofOfPossession(digest: payload.digest, secret: secret)
         let body: [String: Any] = [
             "chain_id": chainId, "address": address, "typed_data": payload.typedData, "mac": payload.mac,
