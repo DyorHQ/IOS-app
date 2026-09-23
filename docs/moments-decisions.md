@@ -151,3 +151,12 @@ contract that implements it so a reviewer can check the code against the ruling.
     development. Fork-rehearsed end to end; procedure in `docs/moments-mainnet-runbook.md` §1b. Executed the same
     day: cohort-2 factory `0xc12B6b6948185cef75F861c5327702c30CB8a581` (block 106 984 957), Sourcify-verified,
     cohort-1 factory paused.
+
+21. **Cohort 3: relaunch with the rotated wallets (2026-09-23).** After the treasury key `0x5282…` leaked, the
+    owner rotated the money wallets and relaunched Moments with them rather than changing policies behind the 48 h
+    timelock: cohort 3 is the cohort-2 code and policy byte for byte, with platform = the new fees wallet
+    `0x15ED3bb488231213b141A2f78b62358D52235Cd7` and treasury = `0x5aDbDc19831D0f9dbdfBbA6ee3d618DbB9CEA371`.
+    Executed by the governance wallet through the launchpad repo's `script/relaunch/relaunch-new-wallets.sh`:
+    factory `0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26` (block 107 311 600), Sourcify-verified, cohort 2 paused.
+    Cohort-1 and cohort-2 Moments keep the old wallets they snapshotted. Record: `docs/moments-mainnet-runbook.md`
+    §1c.

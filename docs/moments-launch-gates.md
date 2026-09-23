@@ -30,6 +30,12 @@ the cohort-1 stack: procedure in `docs/moments-mainnet-runbook.md` §1b (also re
 **Done 2026-09-22:** cohort-2 factory `0xc12B6b6948185cef75F861c5327702c30CB8a581` (block 106 984 957), verified
 on Sourcify, invariants OK; cohort-1 factory `0x6469…C020` paused, its Moments 1–3 remain on-chain.
 
+**Cohort 3 (ruling 21, 2026-09-23): the live stack.** Same code and policy as cohort 2 with the rotated wallets
+(platform `0x15ED…5Cd7`, treasury `0x5aDb…A371`) after the treasury-key leak: factory
+`0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26` (block 107 311 600), Sourcify-verified, `Relaunch.t.sol` 5/5 against
+mainnet; cohort 2 paused, its two Moments remain on-chain. The run of show below applies unchanged except for the
+amounts (reserve 771.428571 USDC per graduation). Procedure: `docs/moments-mainnet-runbook.md` §1c.
+
 ## Validation launch — run of show
 
 Cohort: one creator wallet and three to five collector wallets, all dedicated and low-value (a few USDC and a little

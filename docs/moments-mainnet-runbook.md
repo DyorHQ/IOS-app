@@ -1,9 +1,18 @@
 # Moments — Monad mainnet runbook
 
-## Status (2026-09-16)
+## Status (2026-09-23)
 
-**v1.1 is live on Monad mainnet (chain 143)**, deployed by the owner at nonce 67 (24,520,475 gas / 2.501 MON), recorded
-in `contracts/deployments/moments-143.json`, source tag `moments-mainnet-v1.1`:
+**Cohort 3 is live on Monad mainnet (chain 143):** factory `0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26` (deploy
+block 107 311 600), recorded in `contracts/deployments/moments-143.json`. Platform = the new fees wallet
+`0x15ED…5Cd7`, treasury = the new treasury `0x5aDb…A371`, threshold 771.428571 USDC ($2,000 FDV), every other
+policy field as before; code byte-identical to cohort 2. Deployed by the 2026-09-23 relaunch that followed the
+treasury-key leak: §1c. Cohort 2 (`0xc12B…a581`, §1b), cohort 1 (`0x6469…C020`, below) and v1 are paused; their
+Moments (3 on cohort 1, 2 on cohort 2) stay on-chain with the old wallets snapshotted.
+
+### Cohort 1 — v1.1 (2026-09-16), retired
+
+v1.1 went live on 2026-09-16, deployed by the owner at nonce 67 (24,520,475 gas / 2.501 MON), record now
+`contracts/deployments/moments-143-cohort1.json`, source tag `moments-mainnet-v1.1`:
 
 | contract | address |
 |---|---|
@@ -15,15 +24,15 @@ in `contracts/deployments/moments-143.json`, source tag `moments-mainnet-v1.1`:
 | hook | `0x8Aa322471Bef2996D3B50cB12F63C6A0054460Cc` (salt `0x11a2b`, permission bits `0x20cc`) |
 | buyback | `0x03282D5421a3bE3ff79c5962819c9a6e5E0b52d2` |
 
-Governance = the deployer `0xCf7A…7e10` (nothing pending); platform `0xf4D4…Cfb48`; treasury `0x5282…f045`; policy
+Governance = the deployer `0xCf7A…Fe10` (nothing pending); platform `0xf4D4…Cfb48`; treasury `0x5282…f045`; policy
 $10 threshold / $0.10 minimum / 20-5-75 / 10% max allocation / 70% expiry creator share / 5% ERC-2981 royalty;
 `externalBaseURI` = `https://dyorhq.fun/moments/` (corrected 2026-09-17, tx `0x7f0757eb…3b75`, from the unregistered
 `dyorhq.app` originally set 2026-09-16 tx `0xd4930561…4c75e6`; metadata only, changeable by governance any time).
 
 Verified 2026-09-16: on-chain wiring, policy and constants read back correctly; all seven runtime bytecodes match the
 source at `optimizer_runs = 44444444` (via_ir, cancun, solc 0.8.26 — the `v4core` profile); all seven are verified on
-Sourcify; `test/moments/fork/LiveDeployment.t.sol` runs the whole $10 lifecycle through the deployed contracts on a
-fresh mainnet fork (terminal collect + graduation 989,002 gas).
+Sourcify; `test/moments/fork/LiveDeployment.t.sol` ran the whole $10 lifecycle through the deployed contracts on a
+fresh mainnet fork (terminal collect + graduation 989,002 gas). That test now targets cohort 3 (§1c).
 
 **v1** (factory `0x47D989a54232D3bCdB7A7760D10E596647D986BA`, record `contracts/deployments/moments-143-v1.json`, tag
 `moments-mainnet-v1`) is superseded: no Moments were published on it and its publishing is paused (tx `0xe7cc3d8e…37f714`, 2026-09-16).
@@ -49,7 +58,7 @@ the NFT appends the Moment id; can be changed any time by governance, touches no
 
 ## Wallet hygiene (non-negotiable)
 
-- The **owner / governance wallet** (`0xCf7A…7e10`) does governance only: `proposePolicy`, `applyPolicy`,
+- The **owner / governance wallet** (`0xCf7A…Fe10`) does governance only: `proposePolicy`, `applyPolicy`,
   `cancelPolicy`, `setPublishingPaused`, `transferGovernance`. It never publishes, collects, trades, approves USDC
   or holds allowances to any Moments contract. The platform and treasury wallets only ever *pull* their USDC.
 - Governance transactions are signed with a hardware wallet or an encrypted keystore, not a raw key in the shell:
@@ -62,6 +71,8 @@ the NFT appends the Moment id; can be changed any time by governance, touches no
 
 ## 1. Deploy — done
 
+Historical (cohort 1): this command names the OLD wallets (`0xf4D4…` / the leaked `0x5282…`) — never re-run it.
+
 ```bash
 cd contracts && PLATFORM=0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48 TREASURY=0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045 ~/.foundry/bin/forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad --broadcast --non-interactive --ledger --code-size-limit 200000
 ```
@@ -71,6 +82,9 @@ cd contracts && PLATFORM=0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48 TREASURY=0x5
 `deployments/143.json` is never touched.
 
 ## 1b. Cohort-2 redeploy — the $2,000 graduation FDV baked in (2026-09-22) — DONE
+
+Historical: cohort 2 is paused since 2026-09-23 (§1c). `redeploy-cohort2.sh` and the commands below hard-code the
+OLD wallets (`0xf4D4…` / the leaked `0x5282…`) — never re-run them.
 
 **Executed 2026-09-22 with `script/moments/redeploy-cohort2.sh`** from the governance wallet: factory
 `0xc12B6b6948185cef75F861c5327702c30CB8a581` (block 106 984 957), collect `0x8f65…2493`, vesting `0xe087…6C99`,
@@ -130,6 +144,36 @@ cd /Users/jerry/Hackathon-moments/contracts && BASE=https://dyorhq.fun/moments/ 
    `node scripts/moments-status.mjs` and the app's Moments tab: empty feed, Publish screen reading
    "Graduates at $771.43 reserve · $2,000 FDV".
 
+## 1c. Cohort-3 relaunch (2026-09-23) — DONE
+
+The treasury key `0x5282…` leaked on 2026-09-17 and the owner rotated the money wallets (treasury → `0x5aDb…A371`,
+fees → `0x15ED…5Cd7`). Moments policies are snapshotted per stack and per Moment, so the fix was a fresh stack with
+the new wallets in its constructor.
+
+- **How it ran:** as steps 4–5 of the launchpad repo's one-command relaunch,
+  `/Users/jerry/Hackathon/contracts/script/relaunch/relaunch-new-wallets.sh`, signed by the governance wallet
+  `0xCf7A…Fe10`, from this worktree's source at `3db2294` (`script/moments/Deploy.s.sol:DeployMoments`,
+  `THRESHOLD_USDC=771428571 PLATFORM=0x15ED3bb488231213b141A2f78b62358D52235Cd7 TREASURY=0x5aDbDc19831D0f9dbdfBbA6ee3d618DbB9CEA371`).
+  Log: `/Users/jerry/Hackathon/contracts/deployments/relaunch-20260923-113538.log`; full record with every tx hash:
+  `/Users/jerry/Hackathon/docs/relaunch-2026-09-23.md`.
+- **Stack** (8 transactions, blocks 107 311 600–107 311 630, 24.37M gas estimated): factory
+  `0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26` (tx `0x10f15e0a…2c2efa`), collect `0xb538…1D30`, vesting
+  `0x0558…b021`, graduation `0xA223…b9aA`, locker `0x37C5…f455`, hook `0xD5BF…60CC` (salt `0x36fa`), buyback
+  `0x3B57…a913`. Record: `deployments/moments-143.json` (cohort 2 kept in `moments-143-cohort2.json`).
+- **Governance calls:** `setExternalBaseURI("https://dyorhq.fun/moments/")` on cohort 3 (tx `0x0f181132…2dcd12`)
+  and `setPublishingPaused(true)` on cohort 2 (tx `0x5c8e5908…b34ebe`); cohort 1 and v1 were already paused.
+- **Verification:** all seven contracts verified on Sourcify; chain read-back PASS (governance, platform, treasury,
+  full policy, open, base URI; v1 and cohorts 1–2 paused); runtime code byte-identical to cohort 2 after swapping
+  addresses. Smoke test: `test/moments/fork/Relaunch.t.sol` against mainnet, 5/5 — the record, wiring and policy,
+  the paused cohorts, and a full lifecycle (10 × $100 + a terminal 28.571428 USDC collect → graduation at exactly
+  771.428571 USDC → trade → payouts) that pays only the new wallets; the leaked treasury and the old platform
+  wallet cannot withdraw. `test/moments/fork/LiveDeployment.t.sol` runs the same stack end to end (vesting,
+  Universal Router, buyback, expiry), 2/2.
+- **Not fixable:** cohort-1 and cohort-2 Moments keep platform `0xf4D4…` and treasury `0x5282…` (snapshotted at
+  publish). All three factories share `externalBaseURI` `https://dyorhq.fun/moments/` while Moment ids restart at 1,
+  so their NFT links collide — owner follow-up: `setExternalBaseURI` on cohorts 1 and 2 to per-cohort bases plus
+  read-only web routes.
+
 ## 2. Verify on Sourcify — done
 
 ```bash
@@ -143,9 +187,12 @@ No key and no transaction: it uploads source + metadata and Sourcify matches the
 The build plan's order is: Phase 4 security self-review → Phase 5 web app (`app/moments`) verified against a fork →
 Phase 6 deploy gates and the curated small-cap validation launch. The validation launch *is* the live lifecycle:
 
-1. A creator (dedicated wallet, via the app) publishes a Moment with a $1 collect price and a 30-day window.
-2. A few collectors (dedicated wallets, via the app, Permit2-signed) collect until the reserve reaches $10 —
-   14 collects at $1: 13 full ones and one clamped to 0.333334 USDC. The last collect graduates the Moment on the
+1. A creator (dedicated wallet, via the app) publishes a Moment with a collect price (e.g. $100 on cohort 3; $1
+   would take ~1,029 editions to graduate) and a 30-day window.
+2. A few collectors (dedicated wallets, via the app, Permit2-signed) collect until the reserve reaches the
+   threshold. On cohort 3 that is 771.428571 USDC — e.g. 10 collects of $100 and a terminal one clamped to
+   28.571428 USDC; under the cohort-1 $10 policy it was 14 collects at $1: 13 full ones and one clamped to
+   0.333334 USDC (§4's figures are that $10 policy). The last collect graduates the Moment on the
    real PoolManager in the same transaction; the app shows the pool, the fixed edition and the vesting schedule.
 3. Collectors claim 60% at graduation and the rest at the 30- and 60-day cliffs; the creator claims 20% then
    16% per month; the app's portfolio view drives `claim` / `claimAll`.
@@ -154,8 +201,9 @@ Phase 6 deploy gates and the curated small-cap validation launch. The validation
    trigger the buyback from the app; it can only add to the locked position.
 5. The platform and treasury wallets pull their USDC when they choose.
 
-No step above involves the owner wallet, a private key in a shell, or an unlimited approval. Total exposure of the
-validation launch is the collectors' ~$13.34 of USDC plus gas, on contracts that — per spec §14 — should be audited
+No step above involves the owner wallet, a private key in a shell, or an unlimited approval. Total exposure of a
+graduated Moment on cohort 3 is the collectors' ≈ $1,028.57 of USDC (≈ $771.43 reserve) plus gas (it was ~$13.34 under the
+cohort-1 $10 policy), on contracts that — per spec §14 — should be audited
 first; that remains the owner's decision.
 
 `script/moments/Lifecycle.s.sol` is a **fork-only** rehearsal of the same steps for app development against
