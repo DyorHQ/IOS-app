@@ -45,6 +45,30 @@ final class EmailWalletTests: XCTestCase {
         XCTAssertEqual(hex(second.t), "b9ac5338b8356ebc97b0dccfbfa9bc797fc5c27d3e41be74d41f5057cfecd7aa")
     }
 
+    /// e as the `email-pepper` function recomputes it from the email Privy attests (its normalizeEmail/emailHash):
+    /// the same fixture drives the server's tests, so the verified budget opens only when both sides agree byte for
+    /// byte — including where Swift's trim/lowercase differ from JavaScript's (U+200B, U+FEFF, final sigma).
+    func testEmailHashMatchesTheServerVectors() throws {
+        struct Fixture: Decodable {
+            struct Vector: Decodable { let email: String; let normalized: String; let e: String }
+            let label: String
+            let vectors: [Vector]
+        }
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "email-pepper", withExtension: "json", subdirectory: "Fixtures"))
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.label, "dyorhq/email-pepper/v1/email:")
+        XCTAssertEqual(fixture.vectors.count, 6)
+        for vector in fixture.vectors {
+            XCTAssertEqual(EmailWallet.normalize(vector.email), vector.normalized, vector.e)
+            XCTAssertEqual(hex(EmailWallet.emailHash(vector.email)), vector.e)
+            XCTAssertEqual(EmailWallet.pepperInput(email: vector.email, seed: Data(count: 32)).e, EmailWallet.emailHash(vector.email))
+        }
+        // Spot-check that the fixture decodes the invisible characters it is about.
+        XCTAssertTrue(fixture.vectors[2].email.unicodeScalars.contains("\u{200B}"))
+        XCTAssertTrue(fixture.vectors[3].normalized.unicodeScalars.last == "\u{FEFF}")
+        XCTAssertEqual(EmailWallet.normalize("ΟΔΥΣΣΕΥΣ"), "οδυσσευσ")
+    }
+
     /// Fixed S = 00 01 … 1f and p = a5 × 32: HKDF-SHA256(S || p, salt "dyorhq/email-wallet/v2", info "secp256k1").
     private let fixedSeed = Data(0..<32)
     private let fixedPepper = Data(repeating: 0xA5, count: 32)

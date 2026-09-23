@@ -383,8 +383,10 @@ private struct PressableStyle: ButtonStyle {
 /// Email + password onboarding. Sign up **verifies the email with a one-time code** (Privy), then sets a strong
 /// password that deterministically becomes the wallet; log in re-derives the same wallet — no code — but only when the
 /// email is a verified account matching the derived address. An account created before v2 upgrades once at log-in:
-/// a new password and an email re-verify move it to a v2 wallet. See `EmailWallet` (DyorKit), PasswordWallet.swift and
-/// `Session`.
+/// a new password and an email re-verify move it to a v2 wallet. If log-in finds the email's anonymous `email-pepper`
+/// budget spent (anyone who knows the address can spend it), it offers the one-time code instead: its Privy token
+/// opens the email's separate verified budget and log-in runs again. See `EmailWallet` (DyorKit), PasswordWallet.swift
+/// and `Session`.
 struct EmailPasswordView: View {
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
@@ -403,6 +405,11 @@ struct EmailPasswordView: View {
     @State private var upgrade: Upgrade?
     /// The user confirmed a used legacy wallet (`Upgrade.used`) holds nothing they want to keep.
     @State private var movedOut = false
+    /// Log-in stopped on an `EmailPepperError` (the email's anonymous budget is spent, or a proof went stale): offer
+    /// the email one-time code, whose token pays from the email's verified budget.
+    @State private var offerVerification = false
+    /// The code step is proving the email for log-in (not for sign-up or a reset); log-in runs again once it is done.
+    @State private var verifyingLogIn = false
     @State private var email = ""
     @State private var password = ""
     @State private var confirm = ""
@@ -431,7 +438,7 @@ struct EmailPasswordView: View {
         if let upgrade, password == upgrade.oldPassword { return "Choose a new password — your current one can’t be reused." }
         return PasswordStrength.rejection(password, email: email)
     }
-    private var otpStage: Bool { setsPassword && stage == .otp }
+    private var otpStage: Bool { (setsPassword || verifyingLogIn) && stage == .otp }
     private var formValid: Bool {
         guard emailValid else { return false }
         if setsPassword {
@@ -525,6 +532,8 @@ struct EmailPasswordView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         if let upgrade {
                             Text("One-time security upgrade: enter the code we emailed to \(email). Your account then moves to the new wallet your new password creates. Your previous wallet (\(upgrade.legacy.short)) stays behind, and so does its public profile.")
+                        } else if verifyingLogIn {
+                            Text("Enter the code we emailed to \(email). It proves the email is yours, so you can log in even while others are making attempts on it. We’ll log you in right after.")
                         } else if reset {
                             Text("Enter the code we emailed to \(email). This confirms it’s you before your new password takes over your wallet.")
                         } else {
@@ -532,7 +541,7 @@ struct EmailPasswordView: View {
                         }
                         HStack(spacing: 16) {
                             Button("Send a new code") { startSignUp() }.disabled(busy)
-                            Button("Change details") { stage = .form; code = "" }.disabled(busy)
+                            Button("Change details") { stage = .form; code = ""; verifyingLogIn = false }.disabled(busy)
                         }
                         .font(.footnote)
                     }
@@ -541,6 +550,14 @@ struct EmailPasswordView: View {
 
             if let error {
                 Section { InlineError(message: error) }.listRowBackground(Color.clear)
+            }
+
+            if offerVerification, !otpStage {
+                Section {
+                    Button("Verify Email", systemImage: "envelope.badge") { startLogInVerification() }
+                } footer: {
+                    Text("We’ll email a one-time code to \(email). Entering it proves the email is yours, then we log you in.")
+                }
             }
         }
         .navigationTitle(otpStage ? "Verify Email" : (upgrade != nil ? "Security Upgrade" : reset ? "Reset Password" : "Email & Password"))
@@ -552,13 +569,16 @@ struct EmailPasswordView: View {
             }
             ToolbarItem(placement: .confirmationAction) {
                 if busy { ProgressView() }
+                else if otpStage { Button("Verify") { completeVerification() }.disabled(code.count != 6) }
                 else if mode == .logIn, !reset { Button("Log In") { logIn() }.disabled(!formValid) }
-                else if stage == .form { Button("Continue") { startSignUp() }.disabled(!formValid) }
-                else { Button("Verify") { completeVerification() }.disabled(code.count != 6) }
+                else { Button("Continue") { startSignUp() }.disabled(!formValid) }
             }
         }
         .onAppear { focus = .email }
-        .onChange(of: mode) { _, _ in stage = .form; code = ""; error = nil }
+        // Email proofs only live for this screen's flow; they never outlast it.
+        .onDisappear { let backend = env.social.client; Task { await backend.forgetEmailProofs() } }
+        .onChange(of: mode) { _, _ in stage = .form; code = ""; error = nil; offerVerification = false; verifyingLogIn = false }
+        .onChange(of: email) { _, _ in offerVerification = false }
     }
 
     // MARK: Actions
@@ -574,11 +594,12 @@ struct EmailPasswordView: View {
     }
 
     private func logIn() {
-        focus = nil; busy = true; error = nil
+        focus = nil; busy = true; error = nil; offerVerification = false
         Task {
             do {
                 let outcome = try await session.logInWithPassword(email: email, password: password, pepper: fetchPepper,
                                                                   verify: verifyBinding, holdsFunds: legacyHoldsFunds)
+                if outcome == .signedIn { await env.social.client.forgetEmailProofs() }
                 if case .needsUpgrade(let legacy) = outcome {
                     await env.social.client.signOut() // the legacy wallet's check-in session is not the user's session
                     let used: Bool
@@ -588,8 +609,23 @@ struct EmailPasswordView: View {
                 }
             } catch {
                 await env.social.client.signOut() // never leave a check-in session behind a failed log-in
+                // The email's anonymous budget is spent (or a proof went stale): offer the one-time code, not a wait.
+                offerVerification = error is EmailPepperError
                 self.error = describe(error)
             }
+            busy = false
+        }
+    }
+
+    /// Log-in hit `EmailPepperError`: email the one-time code (the same Privy OTP as sign-up), then the code step's
+    /// token opens the email's verified budget and log-in runs again (`completeVerification`).
+    private func startLogInVerification() {
+        focus = nil; busy = true; error = nil
+        Task {
+            do {
+                try await session.sendSignUpCode(to: email)
+                verifyingLogIn = true; offerVerification = false; stage = .otp; code = ""; focus = .code
+            } catch { self.error = describe(error) }
             busy = false
         }
     }
@@ -599,6 +635,7 @@ struct EmailPasswordView: View {
     /// Switch the Log In form into the reset flow: same fields, but a fresh new password and a required email re-verify.
     private func beginReset() {
         reset = true; stage = .form; password = ""; confirm = ""; code = ""; acknowledged = false; error = nil; focus = .email
+        offerVerification = false; verifyingLogIn = false
     }
 
     private func cancelReset() {
@@ -613,16 +650,25 @@ struct EmailPasswordView: View {
     /// Verify the email OTP, then bind it to the wallet the password derives — server-side, through the `email-rebind`
     /// function. Sign-up, forgot-password and the pre-v2 upgrade all land here; only the upgrade names a legacy wallet
     /// to check first. Nothing is committed until the server re-verifies both proofs, so a failed attempt leaves any
-    /// current session untouched.
+    /// current session untouched. The OTP's Privy token also pays for this email's pepper from its verified budget,
+    /// so these flows never meet the anonymous limit; a log-in that did (`verifyingLogIn`) just runs again with it.
     private func completeVerification() {
         guard code.count == 6, !busy else { return }
         focus = nil; busy = true; error = nil
         Task {
             do {
                 let token = try await session.verifyEmailCapturingToken(email: email, code: code)
+                // Sent only to `email-pepper` (for this email's e) and `email-rebind` — nowhere else.
+                await env.social.client.rememberEmailProof(token, forEmail: email)
+                if verifyingLogIn {
+                    verifyingLogIn = false; stage = .form; code = ""; busy = false
+                    logIn()
+                    return
+                }
                 try await session.bindEmailPassword(email: email, password: password, token: token,
                                                     upgradingFrom: upgrade?.legacy, pepper: fetchPepper,
                                                     holdsFunds: legacyHoldsFunds, bind: bindViaServer)
+                await env.social.client.forgetEmailProofs()
             } catch {
                 self.error = describe(error)
                 code = ""
@@ -654,7 +700,8 @@ struct EmailPasswordView: View {
 
     // MARK: v2 derivation inputs
 
-    /// The server pepper for (e, t) — the `email-pepper` function, called with the publishable key before sign-in.
+    /// The server pepper for (e, t) — the `email-pepper` function, called before sign-in: from the email's verified
+    /// budget when this screen holds its one-time-code token (`rememberEmailProof`), else the anonymous one.
     private func fetchPepper(_ e: Data, _ t: Data) async throws -> Data {
         try await env.social.client.emailPepper(e: e, t: t)
     }

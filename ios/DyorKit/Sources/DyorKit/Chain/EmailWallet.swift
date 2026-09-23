@@ -31,7 +31,8 @@ public enum EmailWallet {
     /// bound is never reached in practice; it only keeps a broken validity check from looping forever.
     static let maxV2Attempts = 256
 
-    /// The email exactly as the derivation sees it: trimmed and lowercased.
+    /// The email exactly as the derivation sees it: trimmed and lowercased. The `email-pepper` function replicates
+    /// this exactly (its `normalizeEmail`); change neither.
     public static func normalize(_ email: String) -> String {
         email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
@@ -58,9 +59,15 @@ public enum EmailWallet {
 
     /// What the `email-pepper` function is sent: e names the email, t commits to S. Both are one-way hashes.
     public static func pepperInput(email: String, seed: Data) -> (e: Data, t: Data) {
-        let e = Data(SHA256.hash(data: Data((pepperEmailLabel + normalize(email)).utf8)))
         let t = Data(SHA256.hash(data: Data(pepperSeedLabel.utf8) + seed))
-        return (e, t)
+        return (emailHash(email), t)
+    }
+
+    /// e alone: SHA256("dyorhq/email-pepper/v1/email:" + normalized email). `email-pepper` recomputes it from the
+    /// email a Privy one-time-code token attests before it lets that token pay from the email's verified budget, so
+    /// the server's normalisation must equal `normalize` byte for byte — Fixtures/email-pepper.json pins both sides.
+    public static func emailHash(_ email: String) -> Data {
+        Data(SHA256.hash(data: Data((pepperEmailLabel + normalize(email)).utf8)))
     }
 
     /// The v2 private key: HKDF-SHA256(S || p). A candidate that is not a valid secp256k1 scalar (0 or ≥ n) is

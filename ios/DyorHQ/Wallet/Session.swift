@@ -324,7 +324,9 @@ final class Session {
     /// Verify a fresh email OTP and RETURN the Privy access token, captured before the Privy session is dropped.
     /// Adoption stays suppressed so Privy's own wallet never becomes the signer. The token is the server's proof that
     /// the caller owns this email — the `email-rebind` function verifies it before writing the binding, so the
-    /// OTP requirement is enforced on the backend, not just in this app. Used by both sign-up and forgot-password.
+    /// OTP requirement is enforced on the backend, not just in this app, and `email-pepper` accepts it to pay for this
+    /// email's pepper from its verified budget. Used by sign-up, forgot-password and a rate-limited log-in. The token
+    /// goes to those two functions only.
     func verifyEmailCapturingToken(email: String, code: String) async throws -> String {
         let privy = try requirePrivy()
         suppressPrivyAdoption = true

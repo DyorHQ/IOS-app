@@ -40,11 +40,35 @@ public enum SupabaseError: LocalizedError {
     }
 }
 
+/// Why `email-pepper` wants this email proven before it answers (see `SupabaseClient.emailPepper`). Every case is
+/// resolved the same way: run the email one-time-code flow, `rememberEmailProof` its Privy token, and try again.
+public enum EmailPepperError: LocalizedError, Equatable {
+    /// The email's anonymous budget is spent — possibly by someone else who knows the address — while the client
+    /// network's limit is not. Its verified budget is separate, and a fresh one-time code opens it.
+    case verificationRequired(retryAfter: Int?)
+    /// The server refused the remembered proof (401: expired or invalid). It has been forgotten.
+    case verificationExpired
+    /// The remembered proof attests a different email than the one asked about (400). It has been forgotten.
+    case verificationMismatch
+
+    public var errorDescription: String? {
+        switch self {
+        case .verificationRequired: return "Too many attempts for this email. Verify your email to continue."
+        case .verificationExpired: return "Your email verification expired. Verify your email again to continue."
+        case .verificationMismatch: return "That verification was for a different email. Verify this email to continue."
+        }
+    }
+}
+
 public actor SupabaseClient {
     public let baseURL: URL
     private let anonKey: String
     private let session: URLSession
     private var current: SupabaseSession?
+    /// Privy access tokens from a fresh email one-time code, keyed by the email hash e they prove
+    /// (`EmailWallet.emailHash`). Memory only, and only ever sent to `email-pepper` for that same e — never to any other
+    /// function, table or host.
+    private var emailProofs: [Data: String] = [:]
 
     public init(url: URL, anonKey: String, session: URLSession = .shared) {
         baseURL = url
@@ -234,17 +258,81 @@ public actor SupabaseClient {
 
     /// The email-wallet pepper (see `EmailWallet`): posts e and t — hashes, never the email, password or seed — to the
     /// `email-pepper` function, which answers an HMAC of them under a key only the server holds. Called before
-    /// sign-in, with the publishable key alone. Throws `SupabaseError.rateLimited` (with the wait) on a 429.
+    /// sign-in. Each email has two budgets there: an anonymous one (publishable key only), which anyone who knows the
+    /// address can spend, and a separate verified one, paid for by a Privy email one-time-code token for that email
+    /// (`rememberEmailProof`), sent as the bearer; the client network's limit counts both. Throws
+    /// `EmailPepperError.verificationRequired` when the anonymous budget is spent (verify the email, remember its token,
+    /// retry), `.verificationExpired` / `.verificationMismatch` when the remembered token is refused (it is forgotten),
+    /// and `SupabaseError.rateLimited` (with the wait) when only waiting helps: the network's limit is spent, or both
+    /// budgets are. A spent verified budget drops the proof and falls back to the anonymous one (see `afterRateLimit`).
     public func emailPepper(e: Data, t: Data) async throws -> Data {
         let body = try JSONSerialization.data(withJSONObject: ["e": String(e.hexString.dropFirst(2)), "t": String(t.hexString.dropFirst(2))])
+        let proof = emailProofs[e]
         let data: Data
-        do { data = try await send(method: "POST", path: "functions/v1/email-pepper", query: [], body: body, prefer: nil, authed: false) }
-        catch SupabaseError.http(429, let text) { throw SupabaseError.rateLimited(retryAfter: Self.retryAfter(text)) }
+        do {
+            data = try await pepperRequest(body, proof: proof)
+        } catch SupabaseError.http(429, let text) {
+            data = try await afterRateLimit(text, body: body, e: e, proof: proof)
+        } catch SupabaseError.http(401, _) where proof != nil {
+            forgetEmailProof(proof, for: e)
+            throw EmailPepperError.verificationExpired
+        } catch SupabaseError.http(400, let text) where proof != nil && Self.isProofMismatch(text) {
+            forgetEmailProof(proof, for: e)
+            throw EmailPepperError.verificationMismatch
+        }
         struct Response: Decodable { let p: String }
         guard let p = try? JSONDecoder().decode(Response.self, from: data).p, Self.isHex32Bytes(p), let pepper = Data(hex: p) else {
             throw SupabaseError.decoding("the email pepper")
         }
         return pepper
+    }
+
+    /// One `email-pepper` request: with `proof` as the bearer (verified budget), or with no Authorization (anonymous).
+    private func pepperRequest(_ body: Data, proof: String?) async throws -> Data {
+        try await send(method: "POST", path: "functions/v1/email-pepper", query: [], body: body, prefer: nil, authed: false,
+                       authorization: proof.map { .bearer($0) } ?? .none)
+    }
+
+    /// `email-pepper` answered 429 (`text`). The client network's limit (`"limit": "network"`) counts every request,
+    /// proven or not, so it only means wait. Otherwise the request's own budget for e is spent. Without a proof, the
+    /// verified budget may still have room: ask for the one-time code. With one, the anonymous budget may: the proof is
+    /// dropped and the request made once more without it, and if that is refused too, wait for whichever budget frees
+    /// first — never a loop back to "verify", which could not help.
+    private func afterRateLimit(_ text: String, body: Data, e: Data, proof: String?) async throws -> Data {
+        let wait = Self.retryAfter(text)
+        if Self.isNetworkLimit(text) { throw SupabaseError.rateLimited(retryAfter: wait) }
+        guard let proof else { throw EmailPepperError.verificationRequired(retryAfter: wait) }
+        forgetEmailProof(proof, for: e)
+        do {
+            return try await pepperRequest(body, proof: nil)
+        } catch SupabaseError.http(429, let text) {
+            let anonymousWait = Self.retryAfter(text)
+            if Self.isNetworkLimit(text) { throw SupabaseError.rateLimited(retryAfter: anonymousWait) }
+            throw SupabaseError.rateLimited(retryAfter: [wait, anonymousWait].compactMap { $0 }.min())
+        }
+    }
+
+    /// A 429 from `email-pepper` caused by the client network's limit, which no email proof changes.
+    private static func isNetworkLimit(_ text: String) -> Bool { serverField(text, "limit") as? String == "network" }
+
+    /// Remember the Privy access token a fresh email one-time code produced for `email`: `emailPepper` then pays for
+    /// that email's peppers from its verified budget. It is never sent anywhere else.
+    public func rememberEmailProof(_ privyAccessToken: String, forEmail email: String) {
+        emailProofs[EmailWallet.emailHash(email)] = privyAccessToken
+    }
+
+    /// Drop every remembered email proof (the flow that obtained them is over).
+    public func forgetEmailProofs() { emailProofs = [:] }
+
+    /// Drop a refused proof — unless a newer one replaced it while the request was in flight.
+    private func forgetEmailProof(_ proof: String?, for e: Data) {
+        if emailProofs[e] == proof { emailProofs[e] = nil }
+    }
+
+    /// `email-pepper`'s 400s for a proof that doesn't cover the e it was sent with.
+    private static func isProofMismatch(_ text: String) -> Bool {
+        let reason = serverField(text, "error") as? String
+        return reason == "the verified email does not match" || reason == "no verified email on this Privy account"
     }
 
     /// Calls an Edge Function that authenticates the caller with its own bearer token (not a Supabase session) —
@@ -267,15 +355,27 @@ public actor SupabaseClient {
 
     // MARK: Transport
 
-    private func send(method: String, path: String, query: [URLQueryItem], body: Data?, prefer: String?, authed: Bool) async throws -> Data {
+    /// What a request carries in `Authorization`: the session token when `authed`, else the publishable key (the
+    /// default); a caller's own bearer token; or nothing (the publishable key still goes in `apikey`).
+    private enum AuthorizationHeader { case standard, bearer(String), none }
+
+    private func send(method: String, path: String, query: [URLQueryItem], body: Data?, prefer: String?, authed: Bool,
+                      authorization: AuthorizationHeader = .standard) async throws -> Data {
         var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { components.queryItems = query }
         var request = URLRequest(url: components.url!)
         request.httpMethod = method
         request.httpBody = body
         request.setValue(anonKey, forHTTPHeaderField: "apikey")
-        let bearer = (authed ? currentSession?.accessToken : nil) ?? anonKey
-        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        switch authorization {
+        case .standard:
+            let bearer = (authed ? currentSession?.accessToken : nil) ?? anonKey
+            request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        case .bearer(let token):
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        case .none:
+            break
+        }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }

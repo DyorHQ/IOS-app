@@ -133,38 +133,198 @@ final class WalletAuthClientTests: XCTestCase {
 
     // MARK: email-pepper
 
+    private let pepperHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    private let privyToken = "eyJhbGciOiJFUzI1NiJ9.privy-access-token.signature"
+    private let alice = "  Alice.Test@Example.com \n"
+
     func testEmailPepperSendsOnlyTheHashes() async throws {
         let e = Data(repeating: 0xE0, count: 32), t = Data(repeating: 0x0F, count: 32)
-        let p = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        WalletAuthCapture.replies = [(200, #"{"p":"\#(p)"}"#)]
+        WalletAuthCapture.replies = [(200, #"{"p":"\#(pepperHex)"}"#)]
         let pepper = try await backend.emailPepper(e: e, t: t)
-        XCTAssertEqual(pepper, Data(hex: p))
+        XCTAssertEqual(pepper, Data(hex: pepperHex))
 
         let request = try XCTUnwrap(WalletAuthCapture.requests.first)
         XCTAssertEqual(request.url?.absoluteString, "\(base)/functions/v1/email-pepper")
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "sb_publishable_test")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer sb_publishable_test")
+        // Anonymous budget: no Authorization at all — a bearer there is always read as an email proof.
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
         let body = json(request)
         XCTAssertEqual(body.count, 2)
         XCTAssertEqual(body["e"] as? String, String(repeating: "e0", count: 32))
         XCTAssertEqual(body["t"] as? String, String(repeating: "0f", count: 32))
     }
 
-    func testEmailPepperRateLimitCarriesTheWait() async {
-        for (retryAfter, text) in [(600, "Too many attempts. Try again in 10 min."), (61, "Too many attempts. Try again in 2 min."),
-                                   (5, "Too many attempts. Try again in 1 min.")] {
+    /// The anonymous budget is spent (maybe by someone who knows the email): the caller is asked to verify the email,
+    /// not to wait — waiting would let whoever spends it keep the owner out. (A 429 without `limit` reads as "email".)
+    func testAnonymousRateLimitAsksForEmailVerification() async {
+        for body in [#"{"error":"too many attempts","retryAfter":873,"limit":"email"}"#, #"{"error":"too many attempts","retryAfter":873}"#] {
             WalletAuthCapture.reset()
-            WalletAuthCapture.replies = [(429, #"{"error":"too many attempts","retryAfter":\#(retryAfter)}"#)]
+            WalletAuthCapture.replies = [(429, body)]
             do {
-                _ = try await backend.emailPepper(e: Data(count: 32), t: Data(count: 32))
+                _ = try await backend.emailPepper(e: EmailWallet.emailHash(alice), t: Data(count: 32))
+                XCTFail("expected verificationRequired")
+            } catch let error as EmailPepperError {
+                XCTAssertEqual(error, .verificationRequired(retryAfter: 873))
+                XCTAssertEqual(error.errorDescription, "Too many attempts for this email. Verify your email to continue.")
+            } catch { XCTFail("unexpected \(error)") }
+            XCTAssertEqual(WalletAuthCapture.requests.count, 1)
+        }
+    }
+
+    /// The client network's limit counts proven and anonymous requests alike, so a one-time code can't help: wait —
+    /// whether or not a proof was sent, and without dropping the proof or retrying.
+    func testNetworkLimitMeansWaitNotVerification() async {
+        let network = #"{"error":"too many attempts","retryAfter":420,"limit":"network"}"#
+        for proven in [false, true] {
+            WalletAuthCapture.reset()
+            await backend.forgetEmailProofs()
+            if proven { await backend.rememberEmailProof(privyToken, forEmail: alice) }
+            WalletAuthCapture.replies = [(429, network), (200, #"{"p":"\#(pepperHex)"}"#)]
+            do {
+                _ = try await backend.emailPepper(e: EmailWallet.emailHash(alice), t: Data(count: 32))
                 XCTFail("expected rateLimited")
             } catch let error as SupabaseError {
                 guard case .rateLimited(let wait) = error else { return XCTFail("unexpected \(error)") }
-                XCTAssertEqual(wait, retryAfter)
+                XCTAssertEqual(wait, 420)
+                XCTAssertEqual(error.errorDescription, "Too many attempts. Try again in 7 min.")
+            } catch { XCTFail("unexpected \(error)") }
+            XCTAssertEqual(WalletAuthCapture.requests.count, 1)
+            // The proof (if any) is kept for the next attempt.
+            _ = try? await backend.emailPepper(e: EmailWallet.emailHash(alice), t: Data(count: 32))
+            XCTAssertEqual(WalletAuthCapture.requests[1].value(forHTTPHeaderField: "Authorization"), proven ? "Bearer \(privyToken)" : nil)
+        }
+    }
+
+    /// The log-in path end to end at the client: anonymous 429 → the email one-time code's Privy token is remembered →
+    /// the retry carries it as the bearer (verified budget) with the very same e and t, and yields the pepper.
+    func testAnonymousLimitThenOTPRetryUsesTheVerifiedBudget() async throws {
+        let seed = try XCTUnwrap(Data(hex: "ae3a32efcd63fdefae6f1777ac66baf43ce15c0b76da6741cca91f435b52cb2c"))
+        let input = EmailWallet.pepperInput(email: alice, seed: seed)
+        WalletAuthCapture.replies = [(429, #"{"error":"too many attempts","retryAfter":600,"limit":"email"}"#), (200, #"{"p":"\#(pepperHex)"}"#)]
+
+        do {
+            _ = try await backend.emailPepper(e: input.e, t: input.t)
+            XCTFail("expected verificationRequired")
+        } catch EmailPepperError.verificationRequired(let wait) { XCTAssertEqual(wait, 600) }
+
+        // The user verifies the email they typed (any spacing/case — it is the same normalized email).
+        await backend.rememberEmailProof(privyToken, forEmail: "alice.test@EXAMPLE.com")
+        let pepper = try await backend.emailPepper(e: input.e, t: input.t)
+        XCTAssertEqual(pepper, Data(hex: pepperHex))
+
+        let requests = WalletAuthCapture.requests
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertNil(requests[0].value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer \(privyToken)")
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "apikey"), "sb_publishable_test")
+        XCTAssertEqual(requests[1].url?.absoluteString, "\(base)/functions/v1/email-pepper")
+        XCTAssertEqual(json(requests[1]) as NSDictionary, json(requests[0]) as NSDictionary)
+        XCTAssertEqual(json(requests[1])["e"] as? String, "2ecf504cb940af9ff3e0171edd90a0849991bb2273583a0cb2e46391cecc63ee")
+    }
+
+    /// A proof only ever travels with the e of the email it proves — never for another email, never after it is
+    /// forgotten, and never to any other endpoint.
+    func testEmailProofIsSentOnlyForItsOwnEmail() async throws {
+        await backend.rememberEmailProof(privyToken, forEmail: alice)
+        WalletAuthCapture.replies = [(200, #"{"p":"\#(pepperHex)"}"#), (200, #"{"nonce":"\#(serverNonce)","expiresAt":1}"#), (401, "{}")]
+        _ = try await backend.emailPepper(e: EmailWallet.emailHash("vector@dyorhq.test"), t: Data(count: 32))
+        _ = try? await backend.signIn(address: account.address.checksummed) { try self.account.signMessage($0) }
+        XCTAssertNil(WalletAuthCapture.requests[0].value(forHTTPHeaderField: "Authorization"))
+        for request in WalletAuthCapture.requests {
+            XCTAssertFalse((request.allHTTPHeaderFields ?? [:]).values.contains { $0.contains(privyToken) })
+            XCTAssertFalse(String(decoding: WalletAuthCapture.body(request), as: UTF8.self).contains(privyToken))
+        }
+
+        WalletAuthCapture.reset()
+        await backend.forgetEmailProofs()
+        WalletAuthCapture.replies = [(200, #"{"p":"\#(pepperHex)"}"#)]
+        _ = try await backend.emailPepper(e: EmailWallet.emailHash(alice), t: Data(count: 32))
+        XCTAssertNil(WalletAuthCapture.requests[0].value(forHTTPHeaderField: "Authorization"))
+    }
+
+    /// With a proof, a 429 for the email means the verified budget (or this Privy user's lookups) is spent — but the
+    /// anonymous budget is separate and may have recovered: the proof is dropped and the request made once more
+    /// without it. No lock-out until the token expires, and nothing more than one extra request.
+    func testSpentVerifiedBudgetFallsBackToAnonymousOnce() async throws {
+        let e = EmailWallet.emailHash(alice)
+        for limit in ["email", "proof"] {
+            WalletAuthCapture.reset()
+            await backend.rememberEmailProof(privyToken, forEmail: alice)
+            WalletAuthCapture.replies = [(429, #"{"error":"too many attempts","retryAfter":86000,"limit":"\#(limit)"}"#),
+                                         (200, #"{"p":"\#(pepperHex)"}"#), (200, #"{"p":"\#(pepperHex)"}"#)]
+            let pepper = try await backend.emailPepper(e: e, t: Data(count: 32))
+            XCTAssertEqual(pepper, Data(hex: pepperHex))
+            let requests = WalletAuthCapture.requests
+            XCTAssertEqual(requests.count, 2)
+            XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer \(privyToken)")
+            XCTAssertNil(requests[1].value(forHTTPHeaderField: "Authorization"))
+            XCTAssertEqual(json(requests[1]) as NSDictionary, json(requests[0]) as NSDictionary)
+            // The spent proof is gone: the next request is anonymous straight away.
+            _ = try await backend.emailPepper(e: e, t: Data(count: 32))
+            XCTAssertNil(WalletAuthCapture.requests[2].value(forHTTPHeaderField: "Authorization"))
+        }
+    }
+
+    /// Both of the email's budgets spent: wait for whichever frees first — asking to verify again would only loop.
+    func testBothBudgetsSpentMeansWait() async {
+        let e = EmailWallet.emailHash(alice)
+        for (verifiedWait, anonymousWait, expected, text) in [(86_000, 600, 600, "Too many attempts. Try again in 10 min."),
+                                                              (61, 900, 61, "Too many attempts. Try again in 2 min."),
+                                                              (5, 7, 5, "Too many attempts. Try again in 1 min.")] {
+            WalletAuthCapture.reset()
+            await backend.rememberEmailProof(privyToken, forEmail: alice)
+            WalletAuthCapture.replies = [(429, #"{"error":"too many attempts","retryAfter":\#(verifiedWait),"limit":"email"}"#),
+                                         (429, #"{"error":"too many attempts","retryAfter":\#(anonymousWait),"limit":"email"}"#)]
+            do {
+                _ = try await backend.emailPepper(e: e, t: Data(count: 32))
+                XCTFail("expected rateLimited")
+            } catch let error as SupabaseError {
+                guard case .rateLimited(let wait) = error else { return XCTFail("unexpected \(error)") }
+                XCTAssertEqual(wait, expected)
                 XCTAssertEqual(error.errorDescription, text)
             } catch { XCTFail("unexpected \(error)") }
+            XCTAssertEqual(WalletAuthCapture.requests.count, 2)
+            XCTAssertEqual(WalletAuthCapture.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer \(privyToken)")
+            XCTAssertNil(WalletAuthCapture.requests[1].value(forHTTPHeaderField: "Authorization"))
         }
+        // The anonymous retry hitting the network's limit: that wait, whatever the verified one was.
+        WalletAuthCapture.reset()
+        await backend.rememberEmailProof(privyToken, forEmail: alice)
+        WalletAuthCapture.replies = [(429, #"{"error":"too many attempts","retryAfter":86000,"limit":"email"}"#),
+                                     (429, #"{"error":"too many attempts","retryAfter":300,"limit":"network"}"#)]
+        do { _ = try await backend.emailPepper(e: e, t: Data(count: 32)); XCTFail("expected rateLimited") }
+        catch SupabaseError.rateLimited(let wait) { XCTAssertEqual(wait, 300) } catch { XCTFail("unexpected \(error)") }
+    }
+
+    /// A refused proof (expired → 401, or for another email → 400) is forgotten and turns into "verify again" — the
+    /// next request is anonymous, never a silent retry with the bad token.
+    func testRefusedProofIsForgottenAndAsksToVerifyAgain() async throws {
+        let e = EmailWallet.emailHash(alice)
+        for (status, body, expected) in [(401, #"{"error":"invalid Privy access token"}"#, EmailPepperError.verificationExpired),
+                                         (400, #"{"error":"the verified email does not match"}"#, EmailPepperError.verificationMismatch),
+                                         (400, #"{"error":"no verified email on this Privy account"}"#, EmailPepperError.verificationMismatch)] {
+            WalletAuthCapture.reset()
+            await backend.rememberEmailProof(privyToken, forEmail: alice)
+            WalletAuthCapture.replies = [(status, body), (200, #"{"p":"\#(pepperHex)"}"#)]
+            do {
+                _ = try await backend.emailPepper(e: e, t: Data(count: 32))
+                XCTFail("expected \(expected)")
+            } catch let error as EmailPepperError {
+                XCTAssertEqual(error, expected)
+            } catch { XCTFail("unexpected \(error)") }
+            _ = try await backend.emailPepper(e: e, t: Data(count: 32))
+            XCTAssertEqual(WalletAuthCapture.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer \(privyToken)")
+            XCTAssertNil(WalletAuthCapture.requests[1].value(forHTTPHeaderField: "Authorization"))
+        }
+        // Any other 400 (e.g. malformed input) is not about the proof: it stays.
+        WalletAuthCapture.reset()
+        await backend.rememberEmailProof(privyToken, forEmail: alice)
+        WalletAuthCapture.replies = [(400, #"{"error":"e and t must each be 64 lowercase hex characters"}"#), (200, #"{"p":"\#(pepperHex)"}"#)]
+        do { _ = try await backend.emailPepper(e: e, t: Data(count: 32)); XCTFail("expected http 400") }
+        catch SupabaseError.http(400, _) {} catch { XCTFail("unexpected \(error)") }
+        _ = try await backend.emailPepper(e: e, t: Data(count: 32))
+        XCTAssertEqual(WalletAuthCapture.requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer \(privyToken)")
     }
 
     /// `retryAfter` is network input: huge, negative or non-numeric values must clamp or drop, never trap.
