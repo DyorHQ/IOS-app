@@ -41,7 +41,8 @@ export default function Explore() {
           <Link className="btn primary" href="/launchpad/create">Create a token <Icon name="arrow-ur" /></Link>
         </div>
         <div className="stat-strip">
-          <Tile label="Launches" value={protocol.data ? protocol.data.launchCount.toLocaleString("en-US") : DEPLOYED ? <Skeleton h={24} w={48} /> : "—"} sub="on this factory" />
+          {/* The grid lists retired factories' launches too, so the count includes them. */}
+          <Tile label="Launches" value={protocol.data ? (protocol.data.launchCount + protocol.data.retiredLaunchCount).toLocaleString("en-US") : DEPLOYED ? <Skeleton h={24} w={48} /> : "—"} sub={protocol.data?.retiredLaunchCount ? `incl. ${protocol.data.retiredLaunchCount.toLocaleString("en-US")} on retired launchpads` : "on this factory"} />
           <Tile label="Launch fee" value={protocol.data ? fmtAmount(protocol.data.launchFee, 18, "MON") : DEPLOYED ? <Skeleton h={24} w={80} /> : "—"} sub={protocol.data ? `Trade fee ${bpsToPct(protocol.data.curveFeeBps)}` : "set by the owner"} />
           <Tile label="Graduates at" value={native ? fmtAmount(native.graduationThreshold, 18, "MON", { compact: true }) : DEPLOYED ? <Skeleton h={24} w={90} /> : "—"} sub={protocol.data ? `${seconds(protocol.data.snipeSchedule.length)} anti-snipe window` : "raised on the curve"} />
         </div>

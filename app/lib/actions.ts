@@ -5,7 +5,9 @@ import { factoryContract, type Socials } from "./launchpad";
 import { waitFor } from "./use-tx";
 import type { Wallet } from "./wallet";
 
-/* Write side: every call is simulated first so reverts surface as readable errors before the wallet opens. */
+/* Write side: every call is simulated first so reverts surface as readable errors before the wallet opens. New
+   launches always go to the live factory; claims, graduation and fee sweeps go to the stack that launched the token
+   (`LaunchRecord.factory` / `.stack`), which for a retired launch is not the live one. */
 
 type OnSent = (hash: Hex) => void;
 
@@ -116,16 +118,16 @@ export async function sell(wallet: Wallet, token: Address, curve: Address, token
   return hash;
 }
 
-export async function claimHolderRewards(wallet: Wallet, token: Address, onSent: OnSent) {
-  const { request } = await publicClient.simulateContract({ address: ADDRESSES.holderFeeSharing, abi: HolderFeeSharingAbi, functionName: "claim", args: [token], account: wallet.account });
+export async function claimHolderRewards(wallet: Wallet, sharing: Address, token: Address, onSent: OnSent) {
+  const { request } = await publicClient.simulateContract({ address: sharing, abi: HolderFeeSharingAbi, functionName: "claim", args: [token], account: wallet.account });
   const hash = await wallet.writeContract(request);
   onSent(hash);
   await waitFor(hash);
   return hash;
 }
 
-export async function claimEscrow(wallet: Wallet, pairToken: Address, pairNative: boolean, onSent: OnSent) {
-  const escrow = { address: ADDRESSES.escrow, abi: FeeEscrowAbi } as const;
+export async function claimEscrow(wallet: Wallet, escrowAddress: Address, pairToken: Address, pairNative: boolean, onSent: OnSent) {
+  const escrow = { address: escrowAddress, abi: FeeEscrowAbi } as const;
   let hash: Hex;
   if (pairNative) {
     const { request } = await publicClient.simulateContract({ ...escrow, functionName: "claim", account: wallet.account });
@@ -139,16 +141,16 @@ export async function claimEscrow(wallet: Wallet, pairToken: Address, pairNative
   return hash;
 }
 
-export async function retryGraduation(wallet: Wallet, token: Address, onSent: OnSent) {
-  const { request } = await publicClient.simulateContract({ ...factoryContract, functionName: "graduate", args: [token], account: wallet.account });
+export async function retryGraduation(wallet: Wallet, factory: Address, token: Address, onSent: OnSent) {
+  const { request } = await publicClient.simulateContract({ address: factory, abi: LaunchpadFactoryAbi, functionName: "graduate", args: [token], account: wallet.account });
   const hash = await wallet.writeContract(request);
   onSent(hash);
   await waitFor(hash);
   return hash;
 }
 
-export async function sweepPoolFees(wallet: Wallet, poolId: Hex, currency: Address, onSent: OnSent) {
-  const { request } = await publicClient.simulateContract({ address: ADDRESSES.hook, abi: MemeHookAbi, functionName: "sweepPoolFees", args: [poolId, currency], account: wallet.account });
+export async function sweepPoolFees(wallet: Wallet, hook: Address, poolId: Hex, currency: Address, onSent: OnSent) {
+  const { request } = await publicClient.simulateContract({ address: hook, abi: MemeHookAbi, functionName: "sweepPoolFees", args: [poolId, currency], account: wallet.account });
   const hash = await wallet.writeContract(request);
   onSent(hash);
   await waitFor(hash);

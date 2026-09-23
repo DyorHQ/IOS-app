@@ -9,7 +9,7 @@ import { fetchAccountView, fetchLaunch, priceNumber } from "../../lib/launchpad"
 import { useAsync, useNow } from "../../lib/use-async";
 import { useWallet } from "../../lib/wallet";
 import { bpsToPct, fmtAmount, fmtDate, fmtNumber, fmtUnits, seconds, shortAddress, timeAgo } from "../../lib/format";
-import { AddressChip, DeployNotice, PhaseBadge, Progress, Skeleton, Tile, TokenLogo } from "../ui";
+import { AddressChip, DeployNotice, PhaseBadge, Progress, RetiredBadge, Skeleton, Tile, TokenLogo } from "../ui";
 import { Position, Row, StatePanel, TradePanel } from "../token-panels";
 
 export default function TokenPage() {
@@ -52,7 +52,7 @@ export default function TokenPage() {
       <section className="token-hero">
         <TokenLogo src={data.logo} name={data.name} address={data.token} size="lg" />
         <div className="token-who">
-          <h1>{data.name} <span className="ticker">${data.symbol}</span> <PhaseBadge launch={data} /></h1>
+          <h1>{data.name} <span className="ticker">${data.symbol}</span> <PhaseBadge launch={data} /> <RetiredBadge launch={data} /></h1>
           <div className="meta">
             <AddressChip address={data.token} label="Token" />
             <AddressChip address={data.deployer} label="Creator" />

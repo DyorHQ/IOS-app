@@ -1,6 +1,6 @@
 import { createPublicClient, http, parseAbiItem, type Address, type Hex } from "viem";
 import { monad } from "viem/chains";
-import { ADDRESSES, DEPLOYED, RPC_URL, publicClient } from "../chain";
+import { DEPLOYED, FACTORIES, RPC_URL, publicClient } from "../chain";
 import type { Candle } from "../../ui/tradingview";
 
 /* On-chain history without an indexer: `eth_getLogs` over recent blocks in chunks. Monad's public endpoints cap
@@ -89,7 +89,8 @@ export async function fetchLaunchpadActivity(curves: Map<string, Address>, block
   if (!DEPLOYED) return [];
   const a = await anchor();
   const from = a.block > blocks ? a.block - blocks : 0n;
-  const factory = ADDRESSES.factory;
+  // Retired factories still graduate their curves, so launch and graduation logs come from every factory.
+  const factory = FACTORIES.map((s) => s.factory);
   const [launches, grads, buys, sells] = await Promise.all([
     chunkedLogs(from, a.block, (x, y) => logsClient.getLogs({ address: factory, event: EVENTS.launched, fromBlock: x, toBlock: y })),
     chunkedLogs(from, a.block, (x, y) => logsClient.getLogs({ address: factory, event: EVENTS.graduated, fromBlock: x, toBlock: y })),

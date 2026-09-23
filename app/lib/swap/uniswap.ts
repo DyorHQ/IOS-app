@@ -1,5 +1,5 @@
 import { encodeAbiParameters, encodeFunctionData, encodePacked, keccak256, type Address, type Hex } from "viem";
-import { ADDRESSES, DEPLOYED, publicClient } from "../chain";
+import { DEPLOYED, FACTORIES, publicClient } from "../chain";
 import { LaunchpadFactoryAbi } from "../abi";
 import { bpsToPct } from "../format";
 import { quoterV2Abi, stateViewAbi, swapRouter02Abi, universalRouterAbi, v3FactoryAbi, v3PoolAbi, v4QuoterAbi } from "./abis";
@@ -120,12 +120,30 @@ async function launchpadKeys(tokens: Address[]): Promise<Map<string, { token: Ad
   if (!DEPLOYED) return keys;
   const candidates = tokens.filter((t) => !isNative(t) && !sameToken(t, WMON));
   if (candidates.length === 0) return keys;
-  const factory = { address: ADDRESSES.factory, abi: LaunchpadFactoryAbi } as const;
-  const records = await publicClient.multicall({ contracts: candidates.map((t) => ({ ...factory, functionName: "getLaunchedToken", args: [t] }) as const), allowFailure: true });
-  const graduated = candidates.filter((_, i) => records[i].status === "success" && (records[i].result as { exists: boolean; phase: number }).exists && (records[i].result as { phase: number }).phase === 2);
+  // Pools graduated by the live factory or a retired one; each pool key carries its own factory's hook. The legacy
+  // factory is skipped: its 16-field record does not decode here, and all of its launches graduate on Monday Trade.
+  const factories = FACTORIES.filter((s) => !s.legacyRecord).map((s) => ({ address: s.factory, abi: LaunchpadFactoryAbi }) as const);
+  const records = await publicClient.multicall({
+    contracts: factories.flatMap((factory) => candidates.map((t) => ({ ...factory, functionName: "getLaunchedToken", args: [t] }) as const)),
+    allowFailure: true,
+  });
+  const graduated: { token: Address; factory: (typeof factories)[number] }[] = [];
+  candidates.forEach((token, j) => {
+    const at = factories.findIndex((_, f) => {
+      const r = records[f * candidates.length + j];
+      return r.status === "success" && (r.result as { exists: boolean }).exists;
+    });
+    if (at < 0) return;
+    // Only Uniswap v4 graduations (venue 0, index 10 of the 17-field record) have a pool at `poolKeyOf`.
+    const record = records[at * candidates.length + j].result as { phase: number; graduationVenue: number };
+    if (record.phase === 2 && record.graduationVenue === 0) graduated.push({ token, factory: factories[at] });
+  });
   if (graduated.length === 0) return keys;
-  const poolKeys = await publicClient.multicall({ contracts: graduated.map((t) => ({ ...factory, functionName: "poolKeyOf", args: [t] }) as const), allowFailure: false });
-  graduated.forEach((t, i) => keys.set(t.toLowerCase(), { token: t, key: { ...poolKeys[i] } }));
+  const poolKeys = await publicClient.multicall({ contracts: graduated.map(({ token, factory }) => ({ ...factory, functionName: "poolKeyOf", args: [token] }) as const), allowFailure: true });
+  graduated.forEach(({ token }, i) => {
+    const r = poolKeys[i];
+    if (r.status === "success") keys.set(token.toLowerCase(), { token, key: { ...r.result } });
+  });
   return keys;
 }
 
