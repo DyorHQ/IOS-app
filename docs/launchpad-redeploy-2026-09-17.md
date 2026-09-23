@@ -1,5 +1,11 @@
 # Launchpad: new treasury and fee wallets (2026-09-17)
 
+**Status (2026-09-23): executed via the relaunch script** `contracts/script/relaunch/relaunch-new-wallets.sh` — it
+repointed all three old factories and fee vaults and deployed a fresh stack (factory
+`0x6B1C8769a8d6745955aC35b91FF1F37AB76859dB`, deploy block 107,311,243). Record, tx hashes and what is left:
+`docs/relaunch-2026-09-23.md`. Path A below is superseded (it only covered `0x10F3…`); Path B's predicted
+addresses and prices are stale (the owner's nonce moved) — do not reuse them. Kept for the record.
+
 Why: the private key of the treasury wallet `0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045` was printed into a
 Claude Code session log on 2026-09-17, so the owner rotated the money roles. New wallets (from the local `.env`,
 public addresses only):
