@@ -108,3 +108,6 @@ targets:
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         SWIFT_OBJC_BRIDGING_HEADER: ""
     preBuildScripts: []
+    # Share the DyorHQ scheme (archive builds Release) for the Xcode Cloud workflow, as Apple's setup guide asks. XcodeGen
+    # writes no scheme unless asked; locally Xcode auto-creates one, which is why `-scheme DyorHQ` works there.
+    scheme: {}
