@@ -81,6 +81,9 @@ public enum SwapError: Error, LocalizedError, Equatable {
     case differentWallet
     case malformedRoute
     case amountTooLarge
+    /// A retired Moments cohort's coin (or its pool's hook) is on the trade: its pool pays the retired platform
+    /// wallet, so no venue quotes, routes or builds it (see `SwapEngine.tradingClosed`).
+    case tradingClosed(Address)
     /// A venue's own message, already readable.
     case venue(String)
 
@@ -90,6 +93,9 @@ public enum SwapError: Error, LocalizedError, Equatable {
         case .differentWallet: return "This quote was made for a different wallet. Refresh the quote."
         case .malformedRoute: return "The route is malformed."
         case .amountTooLarge: return "The amount is too large for this venue."
+        case .tradingClosed(let address):
+            let what = MomentsAddresses.isRetiredCoin(address) ? "coin" : "pool"
+            return "Past cohort · trading closed. \(address.short) is a retired Moment \(what), so DyorHQ never trades it."
         case .venue(let message): return message
         }
     }

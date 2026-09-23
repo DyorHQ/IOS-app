@@ -9,6 +9,7 @@ struct MondayVenue: Sendable {
     static let venue = V3Venue(factory: MondayTrade.factory, quoter: MondayTrade.quoterV2, tiers: MondayTrade.feeTiers)
 
     func quote(_ req: SwapRequest) async throws -> VenueQuote? {
+        try SwapEngine.ensureTradable([req.tokenIn.address, req.tokenOut.address])
         let tokenIn = req.tokenIn.wrappedAddress
         let tokenOut = req.tokenOut.wrappedAddress
         guard tokenIn != tokenOut else { return nil }

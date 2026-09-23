@@ -55,7 +55,7 @@ struct HomeView: View {
             .sheet(isPresented: $showSend) { SendSheet() }
             .sheet(isPresented: $showTransfer) { TransferSheet() }
             .sheet(isPresented: $showSearch) {
-                TokenPickerSheet(selected: .mon, balances: Dictionary(uniqueKeysWithValues: model.rows.map { ($0.token.address, $0.balance) }), universe: KnownTokenStore.universe(owner: session.address)) { token in
+                TokenPickerSheet(selected: .mon, balances: Dictionary(uniqueKeysWithValues: model.rows.map { ($0.token.address, $0.balance) }), universe: KnownTokenStore.universe(owner: session.address), tradableOnly: false) { token in
                     // Open the token's page; a token outside the priced list gets a bare row (price loads on the page).
                     searchTarget = model.rows.first { $0.token.address == token.address } ?? MarketRow(token: token, usd: nil, change24h: nil, balance: 0)
                 }
@@ -702,8 +702,13 @@ struct TokenDetailView: View {
                 LabeledContent("Decimals", value: String(row.token.decimals))
             }
             Section {
-                Button("Swap \(row.token.symbol)", systemImage: "arrow.left.arrow.right") {
-                    router.openSwap(tokenIn: row.token.symbol == "USDC" ? Token.mon : Token.usdc, tokenOut: row.token)
+                if SwapEngine.isTradable(row.token) {
+                    Button("Swap \(row.token.symbol)", systemImage: "arrow.left.arrow.right") {
+                        router.openSwap(tokenIn: row.token.symbol == "USDC" ? Token.mon : Token.usdc, tokenOut: row.token)
+                    }
+                } else {
+                    // A retired cohort's Moment coin: its pool pays the retired platform wallet, so no swap is offered.
+                    Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
                 }
                 if let url = row.token.isNative ? nil : Monad.explorerToken(row.token.address) {
                     Link(destination: url) { Label("View on Monadscan", systemImage: "safari") }

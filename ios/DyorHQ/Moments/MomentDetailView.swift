@@ -316,11 +316,16 @@ struct MomentDetailView: View {
             } else if pool.lastBuyback > 0 {
                 LabeledContent("Last buyback", value: MomentsFormat.date(pool.lastBuyback))
             }
-            Button {
-                Haptics.tap()
-                router.openSwap(tokenIn: .usdc, tokenOut: info.coinToken)
-            } label: {
-                Label("Trade $\(info.symbol)", systemImage: "arrow.left.arrow.right").fontWeight(.semibold)
+            if SwapEngine.isTradable(info.coinToken) {
+                Button {
+                    Haptics.tap()
+                    router.openSwap(tokenIn: .usdc, tokenOut: info.coinToken)
+                } label: {
+                    Label("Trade $\(info.symbol)", systemImage: "arrow.left.arrow.right").fontWeight(.semibold)
+                }
+            } else {
+                // A retired cohort's coin (never expected on this live-cohort page): no trade is offered.
+                Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
             }
         } header: {
             Text("Pool")

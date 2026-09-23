@@ -209,12 +209,14 @@ public enum SwapCalldata {
 
     public static func swapRouter02ExactInputSingle(route: V3Route, amountIn: BigUInt, minOut: BigUInt, recipient: Address) throws -> Data {
         guard route.path.count >= 2, let fee = route.fees.first else { throw SwapError.malformedRoute }
+        try SwapEngine.ensureTradable(route.path)
         return try ABI.encodeCall("exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
                                   [.tuple([.address(route.path[0]), .address(route.path[1]), .uint(fee), .address(recipient), .uint(amountIn), .uint(minOut), .uint(0)])])
     }
 
     public static func swapRouter02ExactInput(route: V3Route, amountIn: BigUInt, minOut: BigUInt, recipient: Address) throws -> Data {
-        try ABI.encodeCall("exactInput((bytes,address,uint256,uint256))", [.tuple([.bytes(route.packed), .address(recipient), .uint(amountIn), .uint(minOut)])])
+        try SwapEngine.ensureTradable(route.path)
+        return try ABI.encodeCall("exactInput((bytes,address,uint256,uint256))", [.tuple([.bytes(route.packed), .address(recipient), .uint(amountIn), .uint(minOut)])])
     }
 
     /// The full SwapRouter02 transaction: native MON in rides on `value` (with `refundETH`), native out goes
@@ -234,12 +236,14 @@ public enum SwapCalldata {
 
     public static func mondayExactInputSingle(route: V3Route, amountIn: BigUInt, minOut: BigUInt, recipient: Address, deadline: BigUInt) throws -> Data {
         guard route.path.count >= 2, let fee = route.fees.first else { throw SwapError.malformedRoute }
+        try SwapEngine.ensureTradable(route.path)
         return try ABI.encodeCall("exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))",
                                   [.tuple([.address(route.path[0]), .address(route.path[1]), .uint(fee), .address(recipient), .uint(deadline), .uint(amountIn), .uint(minOut), .uint(0)])])
     }
 
     public static func mondayExactInput(route: V3Route, amountIn: BigUInt, minOut: BigUInt, recipient: Address, deadline: BigUInt) throws -> Data {
-        try ABI.encodeCall("exactInput((bytes,address,uint256,uint256,uint256))", [.tuple([.bytes(route.packed), .address(recipient), .uint(deadline), .uint(amountIn), .uint(minOut)])])
+        try SwapEngine.ensureTradable(route.path)
+        return try ABI.encodeCall("exactInput((bytes,address,uint256,uint256,uint256))", [.tuple([.bytes(route.packed), .address(recipient), .uint(deadline), .uint(amountIn), .uint(minOut)])])
     }
 
     /// The v1 router treats recipient address(0) as itself, which is what `unwrapWETH9` needs afterwards.
@@ -261,6 +265,8 @@ public enum SwapCalldata {
     public static func universalRouterV4(currencyIn: Address, currencyOut: Address, hops: [V4Hop], amountIn: BigUInt, minOut: BigUInt, deadline: BigUInt) throws -> TransactionRequest {
         guard let first = hops.first else { throw SwapError.malformedRoute }
         guard amountIn.bitWidth <= 128, minOut.bitWidth <= 128 else { throw SwapError.amountTooLarge }
+        // Never encode a swap through a retired Moments cohort's coin or pool, whatever route was chosen.
+        try SwapEngine.ensureTradable([currencyIn, currencyOut] + hops.flatMap { [$0.key.currency0, $0.key.currency1, $0.key.hooks] })
         let swap: Data
         if hops.count == 1 {
             swap = try ABI.encode([.tuple([first.key.abiValue, .bool(first.zeroForOne), .uint(amountIn), .uint(minOut), .bytes(Data())])],
