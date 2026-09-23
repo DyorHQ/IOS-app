@@ -3,7 +3,8 @@ import DyorKit
 import SwiftUI
 
 /// My Moments: every Moment the wallet has a stake in — editions collected, coins promised, claimable now, still
-/// vesting, claimed — with one Claim All for everything vested.
+/// vesting, claimed — with one Claim All for everything vested. Moments of the retired cohorts follow as Past Cohorts:
+/// outside the totals and Claim All, each opens its own claim-only page.
 struct MomentsPortfolioView: View {
     let moments: [MomentInfo]
     let onOpen: (MomentInfo) -> Void
@@ -13,6 +14,7 @@ struct MomentsPortfolioView: View {
     @State private var portfolio: MomentPortfolio?
     @State private var error: String?
     @State private var showClaimAll = false
+    @State private var past = PastMomentsModel()
 
     var body: some View {
         NavigationStack {
@@ -35,7 +37,7 @@ struct MomentsPortfolioView: View {
                         Text("Coins across every Moment. Vesting unlocks at the monthly cliffs.")
                     }
                     if portfolio.rows.isEmpty {
-                        ContentUnavailableView("No Moments Yet", systemImage: "camera.aperture", description: Text("Collect a Moment and it shows up here with its editions and coins."))
+                        if past.positions.isEmpty { ContentUnavailableView("No Moments Yet", systemImage: "camera.aperture", description: Text("Collect a Moment and it shows up here with its editions and coins.")) }
                     } else {
                         Section("Your Moments") {
                             ForEach(portfolio.rows) { row in
@@ -47,6 +49,18 @@ struct MomentsPortfolioView: View {
                     InlineError(message: error)
                 } else {
                     HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading your Moments…").foregroundStyle(.secondary) }
+                }
+                if !past.positions.isEmpty || past.error != nil {
+                    Section {
+                        if let error = past.error { InlineError(message: "Couldn't read every past cohort (pull to refresh): \(error)") }
+                        ForEach(past.positions) { position in
+                            Button { Haptics.tap(); onOpen(position.info) } label: { PastMomentRow(position: position) }.buttonStyle(.plain)
+                        }
+                    } header: {
+                        Text("Past Cohorts")
+                    } footer: {
+                        Text("Earlier DyorHQ Moments contracts. Collecting is closed; claim your vested coins and, as a creator, withdraw your own proceeds.")
+                    }
                 }
             }
             .listStyle(.insetGrouped)
@@ -78,6 +92,12 @@ struct MomentsPortfolioView: View {
     }
 
     private func load() async {
+        async let live: () = loadLive()
+        async let pastLoad: () = past.load(env: env, address: session.address, force: true)
+        _ = await (live, pastLoad)
+    }
+
+    private func loadLive() async {
         guard let address = session.address else { portfolio = .empty; return }
         do {
             portfolio = try await env.moments.portfolio(account: address, moments: moments.isEmpty ? (try await env.moments.moments(limit: 200)) : moments)

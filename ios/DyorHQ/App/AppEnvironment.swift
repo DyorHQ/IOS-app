@@ -15,6 +15,10 @@ final class AppEnvironment {
     let perpl: PerplService
     let launchpad: LaunchpadService
     let moments: MomentsService
+    /// The retired Moments cohorts (2, then 1), one service each, CLAIM-ONLY: holders claim vested coins and creators
+    /// withdraw their own proceeds and pool fees; nothing else is reachable. They never feed the Moments board, the
+    /// feeds, publishing or swap routing — those stay on `moments`.
+    let retiredMoments: [RetiredMoments]
     let news: NewsService
     let activity: TokenActivityService
     let swapHistory: SwapHistoryService
@@ -57,6 +61,7 @@ final class AppEnvironment {
         perpl = PerplService(rpc: rpc)
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
         moments = MomentsService(rpc: rpc, addresses: config.moments)
+        retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc] in RetiredMoments(rpc: rpc, addresses: $0) }
         news = NewsService()
         // History reads want the larger log-chunk RPC (rpc1), like the launchpad does. A local fork keeps its own
         // logs, so a development build pointed at 127.0.0.1 scans the fork instead.
@@ -81,6 +86,11 @@ final class AppEnvironment {
     /// transfer there.
     func sender(for chain: EVMChain) -> TransactionSender {
         chain.isMonad ? sender : TransactionSender(rpc: RPCClient(url: chain.rpcURL), chainId: chain.chainId)
+    }
+
+    /// The retired Moments cohort whose factory is `factory`, or nil (the live cohort, or anything else).
+    func retiredMoments(for factory: Address) -> RetiredMoments? {
+        retiredMoments.first { $0.factory == factory }
     }
 
     /// The Bridge's Monad chain descriptor, pointed at the app's configured RPC rather than the public default.

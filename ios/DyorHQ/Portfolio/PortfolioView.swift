@@ -13,6 +13,7 @@ struct PortfolioView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showAll = false
     @State private var assets = AssetsModel()
+    @State private var pastMoments = PastMomentsModel()
 
     private var model: PortfolioModel { env.portfolio }
 
@@ -29,6 +30,7 @@ struct PortfolioView: View {
                         breakdownCard
                         ForEach(PortfolioModel.Section.allCases) { section in sectionCard(section) }
                         AssetsCard(model: assets)
+                        PastCohortsCard(model: pastMoments)
                         activityCard
                     }
                 }
@@ -38,6 +40,13 @@ struct PortfolioView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Portfolio")
             .navigationBarTitleDisplayMode(.inline)
+            // A retired-cohort Moment opens its claim-only page, read from its own cohort (keyed by factory, id).
+            .navigationDestination(for: PastMomentRoute.self) { route in
+                if let cohort = env.retiredMoments(for: route.key.factory) {
+                    // A claim or withdrawal moves balances and history too, not just the past-cohort positions.
+                    RetiredMomentDetailView(cohort: cohort, info: route.info, onChanged: { Task { await reload(force: true) } })
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }.accessibilityLabel("Close")
@@ -56,17 +65,17 @@ struct PortfolioView: View {
                     .accessibilityLabel("Period")
                 }
             }
-            .refreshable {
-                async let portfolio: () = model.load(env: env, address: session.address, perplKey: perplTrading.key, force: true)
-                async let holdings: () = assets.load(env: env, address: session.address, force: true)
-                _ = await (portfolio, holdings)
-            }
-            .task(id: session.address) {
-                async let portfolio: () = model.load(env: env, address: session.address, perplKey: perplTrading.key, force: false)
-                async let holdings: () = assets.load(env: env, address: session.address, force: false)
-                _ = await (portfolio, holdings)
-            }
+            .refreshable { await reload(force: true) }
+            .task(id: session.address) { await reload(force: false) }
         }
+    }
+
+    /// The Portfolio's three reads — volume / history, My Holdings and Past Cohorts — side by side.
+    private func reload(force: Bool) async {
+        async let portfolio: () = model.load(env: env, address: session.address, perplKey: perplTrading.key, force: force)
+        async let holdings: () = assets.load(env: env, address: session.address, force: force)
+        async let past: () = pastMoments.load(env: env, address: session.address, force: force)
+        _ = await (portfolio, holdings, past)
     }
 
     // MARK: Hero

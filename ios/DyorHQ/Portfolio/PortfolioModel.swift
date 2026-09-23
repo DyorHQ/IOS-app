@@ -89,7 +89,8 @@ final class PortfolioModel {
     private var launchesByCurve: [Address: Launch] = [:]
     private var launchesByToken: [Address: Launch] = [:]
     private var momentsByCoin: [Address: MomentInfo] = [:]
-    private var momentsById: [BigUInt: MomentInfo] = [:]
+    /// Moments of every cohort — the live one and the retired ones — by (factory, id): ids restart at 1 per factory.
+    private var momentsByKey: [MomentKey: MomentInfo] = [:]
     private var tokens: [Address: Token] = [:]
     /// Current USD price per whole unit, for every token that could be priced.
     private var prices: [Address: Double] = [:]
@@ -148,19 +149,19 @@ final class PortfolioModel {
             out.append(Activity(id: "lclaim-\(c.id)", section: .launch, title: c.kind == .creatorFees ? "Claimed creator fees" : "Claimed holder rewards", subtitle: c.launchToken.flatMap { launchesByToken[$0]?.symbol }.map { "$\($0)" } ?? "", time: c.time, usd: usd, hash: c.hash))
         }
         for c in momentsHistory.collects where c.time >= since {
-            let m = momentsById[c.momentId]
+            let m = momentsByKey[c.key]
             out.append(Activity(id: "collect-\(c.id)", section: .moments, title: "Collected \(m?.name ?? "Moment #\(c.momentId)")", subtitle: "\(c.editions) \(c.editions == 1 ? "edition" : "editions") · \(NumberStyle.number(MomentsMath.coins(c.entitlement), compact: true)) \(m?.symbol ?? "coins")", time: c.time, usd: MomentsMath.usdc(c.gross), hash: c.hash))
         }
         for c in momentsHistory.claims where c.time >= since {
-            let m = momentsById[c.momentId]
+            let m = momentsByKey[c.key]
             out.append(Activity(id: "mclaim-\(c.id)", section: .moments, title: "Claimed \(m?.symbol ?? "coins")", subtitle: "\(NumberStyle.number(MomentsMath.coins(c.total), compact: true)) \(m?.symbol ?? "") vested", time: c.time, usd: m?.pool.map { MomentsMath.coins(c.total) * $0.usdcPerCoin }, hash: c.hash))
         }
         for w in momentsHistory.withdrawals where w.time >= since {
-            let m = momentsById[w.momentId]
+            let m = momentsByKey[w.key]
             out.append(Activity(id: "mwd-\(w.id)", section: .moments, title: w.kind == .poolFees ? "Withdrew pool fees" : "Withdrew proceeds", subtitle: m?.name ?? "Moment #\(w.momentId)", time: w.time, usd: MomentsMath.usdc(w.amount), hash: w.hash))
         }
         for p in momentsHistory.publishes where p.time >= since {
-            let m = momentsById[p.momentId]
+            let m = momentsByKey[p.key]
             out.append(Activity(id: "pub-\(p.id)", section: .moments, title: "Published \(m?.name ?? "Moment #\(p.momentId)")", subtitle: m.map { "$\($0.symbol)" } ?? "", time: p.time, usd: nil, hash: p.hash))
         }
         for b in BridgeStore.all(owner: loadedFor) where b.time >= since {
@@ -284,7 +285,7 @@ final class PortfolioModel {
             stats.volume += gross
             stats.fees += MomentsMath.usdc(collect.platformIn)
             // A collect's coins only have a price once the pool exists; until then the collect is pending, not a loss.
-            if let pool = momentsById[collect.momentId]?.pool {
+            if let pool = momentsByKey[collect.key]?.pool {
                 stats.pnl += MomentsMath.coins(collect.entitlement) * pool.usdcPerCoin - gross
             }
         }
@@ -312,12 +313,14 @@ final class PortfolioModel {
         // Launches on retired factories are history too: the coins and trades stay part of the wallet's record.
         async let launchesTask = env.launchpad.allLaunches(limit: 200)
         async let momentsTask = env.moments.moments(limit: 200)
+        // Moments of the retired cohorts are history too (their collects, claims and withdrawals); keyed by (factory, id).
+        async let retiredMomentsTask = PastMomentsModel.allMoments(env: env)
         let launches = (try? await launchesTask) ?? []
-        let moments = (try? await momentsTask) ?? []
+        let moments = ((try? await momentsTask) ?? []) + (await retiredMomentsTask)
         launchesByCurve = Dictionary(launches.map { ($0.curve, $0) }, uniquingKeysWith: { first, _ in first })
         launchesByToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
         momentsByCoin = Dictionary(moments.map { ($0.moment.coin, $0) }, uniquingKeysWith: { first, _ in first })
-        momentsById = Dictionary(moments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        momentsByKey = Dictionary(moments.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
 
         var universe = KnownTokenStore.universe(owner: address)
         universe += launches.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
@@ -336,13 +339,14 @@ final class PortfolioModel {
         async let swapsTask = env.swapHistory.swaps(wallet: address, fromBlock: 0, toBlock: head, decimals: decimals, limit: 2000)
         async let launchTask = env.launchpad.walletHistory(wallet: address, lookbackBlocks: UInt64.max, curves: Set(launchesByCurve.keys))
         async let momentsHistoryTask = env.moments.history(account: address)
+        async let retiredHistoryTask = Self.retiredHistory(env: env, address: address)
         let priceable = universe.filter { !$0.isLaunchpad && momentsByCoin[$0.address] == nil }
         async let pricesTask = env.prices.prices(for: priceable)
         async let perpsTask = loadPerps(env: env, key: perplKey)
 
         swaps = await swapsTask
         launchHistory = await launchTask
-        momentsHistory = await momentsHistoryTask
+        momentsHistory = MomentsAccountHistory.merged([await momentsHistoryTask] + (await retiredHistoryTask))
         Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio scans for \(address.short, privacy: .public): head \(head) swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count)")
         var priced: [Address: Double] = [:]
         if let map = try? await pricesTask { for (address, info) in map { priced[address] = info.usd } }
@@ -367,9 +371,16 @@ final class PortfolioModel {
     private func reset() {
         swaps = []; fills = []; closed = []
         launchHistory = .empty; momentsHistory = .empty
-        launchesByCurve = [:]; launchesByToken = [:]; momentsByCoin = [:]; momentsById = [:]
+        launchesByCurve = [:]; launchesByToken = [:]; momentsByCoin = [:]; momentsByKey = [:]
         tokens = [:]; prices = [:]
         hasLoaded = false; updatedAt = nil; loadedFor = nil; perpsNote = nil
+    }
+
+    /// The wallet's history on each retired cohort, each scanned from that cohort's own deployment block.
+    private static func retiredHistory(env: AppEnvironment, address: Address) async -> [MomentsAccountHistory] {
+        var out: [MomentsAccountHistory] = []
+        for cohort in env.retiredMoments { out.append(await cohort.history(account: address)) }
+        return out
     }
 
     /// Perpl history needs the account's API key (one-click trading); up to 1,000 fills and 1,000 closed events.
