@@ -382,7 +382,9 @@ private struct PressableStyle: ButtonStyle {
 
 /// Email + password onboarding. Sign up **verifies the email with a one-time code** (Privy), then sets a strong
 /// password that deterministically becomes the wallet; log in re-derives the same wallet — no code — but only when the
-/// email is a verified account matching the derived address. See `PasswordWallet` and `Session`.
+/// email is a verified account matching the derived address. An account created before v2 upgrades once at log-in:
+/// a new password and an email re-verify move it to a v2 wallet. See `EmailWallet` (DyorKit), PasswordWallet.swift and
+/// `Session`.
 struct EmailPasswordView: View {
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
@@ -395,6 +397,12 @@ struct EmailPasswordView: View {
     /// Forgot-password: re-verify the email by OTP, then bind it to a NEW password/wallet. Reuses the sign-up form and
     /// verify UI (it collects a new password the same way), but finishes through the `email-rebind` function.
     @State private var reset = false
+    /// Log-in found an account created before v2, bound to an empty legacy wallet. It upgrades through the reset flow
+    /// (`reset` is on): a NEW password — the old one's S stays guessable offline against the public legacy address —
+    /// then the OTP, then that password's v2 wallet takes over the binding.
+    @State private var upgrade: Upgrade?
+    /// The user confirmed a used legacy wallet (`Upgrade.used`) holds nothing they want to keep.
+    @State private var movedOut = false
     @State private var email = ""
     @State private var password = ""
     @State private var confirm = ""
@@ -406,21 +414,42 @@ struct EmailPasswordView: View {
 
     private enum Field { case email, password, confirm, code }
 
+    private struct Upgrade {
+        /// The legacy wallet the email is bound to (already public in `profiles`).
+        let legacy: Address
+        /// It has sent transactions, so it may hold what the balance check can't see (Perpl collateral, launchpad or
+        /// Moment holdings): the user confirms they've moved everything out (`movedOut`).
+        let used: Bool
+        /// The password log-in used, refused as the new one.
+        let oldPassword: String
+    }
+
     /// Sign-up and reset share the same "set a password" form and OTP verification; only login is different.
     private var setsPassword: Bool { mode == .signUp || reset }
     private var emailValid: Bool { email.contains("@") && email.contains(".") && !email.hasSuffix(".") }
-    private var rejection: String? { PasswordStrength.rejection(password, email: email) }
+    private var rejection: String? {
+        if let upgrade, password == upgrade.oldPassword { return "Choose a new password — your current one can’t be reused." }
+        return PasswordStrength.rejection(password, email: email)
+    }
     private var otpStage: Bool { setsPassword && stage == .otp }
     private var formValid: Bool {
         guard emailValid else { return false }
-        if setsPassword { return rejection == nil && !confirm.isEmpty && password == confirm && acknowledged }
+        if setsPassword {
+            return rejection == nil && !confirm.isEmpty && password == confirm && acknowledged && (upgrade?.used != true || movedOut)
+        }
         return !password.isEmpty
     }
 
     var body: some View {
         Form {
             if !otpStage {
-                if reset {
+                if let upgrade {
+                    Section {
+                        Text("Your account was created before our email-wallet security upgrade. Choose a new password: it becomes a new wallet that can’t be guessed offline, and we’ll email a code to confirm it’s you. Your previous wallet (\(upgrade.legacy.short)) has no MON or token balance left.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } header: { Text("Security upgrade") }
+                    .listRowBackground(Color.clear)
+                } else if reset {
                     Section {
                         Text("Enter your email and a new password. We’ll email a code to confirm it’s you, then this new password becomes your wallet.")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -439,6 +468,7 @@ struct EmailPasswordView: View {
                         .textContentType(.emailAddress).keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .focused($focus, equals: .email)
+                        .disabled(upgrade != nil) // the upgrade moves this email's account, found at log-in
                     PasswordField(title: reset ? "New password" : "Password", text: $password).focused($focus, equals: .password)
                     if setsPassword {
                         PasswordField(title: "Confirm password", text: $confirm).focused($focus, equals: .confirm)
@@ -474,6 +504,10 @@ struct EmailPasswordView: View {
                         }
                         .font(.footnote)
                         Toggle("I understand my password is the only way back to my wallet", isOn: $acknowledged).font(.footnote)
+                        if let upgrade, upgrade.used {
+                            Toggle("I’ve moved everything I want to keep out of my previous wallet (\(upgrade.legacy.short)). Anything left there won’t be reachable in DyorHQ after the upgrade.", isOn: $movedOut)
+                                .font(.footnote)
+                        }
                     }
                 }
             } else {
@@ -489,7 +523,9 @@ struct EmailPasswordView: View {
                     Text("Verify your email")
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
-                        if reset {
+                        if let upgrade {
+                            Text("One-time security upgrade: enter the code we emailed to \(email). Your account then moves to the new wallet your new password creates. Your previous wallet (\(upgrade.legacy.short)) stays behind, and so does its public profile.")
+                        } else if reset {
                             Text("Enter the code we emailed to \(email). This confirms it’s you before your new password takes over your wallet.")
                         } else {
                             Text("Enter the code we emailed to \(email). This proves the email is yours — your wallet is created after you verify, so no fake or unowned emails can register.")
@@ -507,7 +543,7 @@ struct EmailPasswordView: View {
                 Section { InlineError(message: error) }.listRowBackground(Color.clear)
             }
         }
-        .navigationTitle(otpStage ? "Verify Email" : (reset ? "Reset Password" : "Email & Password"))
+        .navigationTitle(otpStage ? "Verify Email" : (upgrade != nil ? "Security Upgrade" : reset ? "Reset Password" : "Email & Password"))
         .navigationBarTitleDisplayMode(.inline)
         .disabled(busy)
         .toolbar {
@@ -540,8 +576,20 @@ struct EmailPasswordView: View {
     private func logIn() {
         focus = nil; busy = true; error = nil
         Task {
-            do { try await session.logInWithPassword(email: email, password: password, verify: verifyBinding) }
-            catch { self.error = describe(error) }
+            do {
+                let outcome = try await session.logInWithPassword(email: email, password: password, pepper: fetchPepper,
+                                                                  verify: verifyBinding, holdsFunds: legacyHoldsFunds)
+                if case .needsUpgrade(let legacy) = outcome {
+                    await env.social.client.signOut() // the legacy wallet's check-in session is not the user's session
+                    let used: Bool
+                    do { used = try await env.rpc.transactionCount(of: legacy) > 0 }
+                    catch { throw SessionError.legacyBalanceUnavailable }
+                    beginUpgrade(Upgrade(legacy: legacy, used: used, oldPassword: password))
+                }
+            } catch {
+                await env.social.client.signOut() // never leave a check-in session behind a failed log-in
+                self.error = describe(error)
+            }
             busy = false
         }
     }
@@ -554,19 +602,27 @@ struct EmailPasswordView: View {
     }
 
     private func cancelReset() {
-        reset = false; stage = .form; code = ""; error = nil
+        reset = false; stage = .form; code = ""; error = nil; upgrade = nil; movedOut = false
+    }
+
+    /// The pre-v2 upgrade is a reset of this email's account onto a new password (see `upgrade`).
+    private func beginUpgrade(_ found: Upgrade) {
+        beginReset(); upgrade = found; movedOut = false; focus = .password
     }
 
     /// Verify the email OTP, then bind it to the wallet the password derives — server-side, through the `email-rebind`
-    /// function. Both sign-up and forgot-password land here; the only difference is copy. Nothing is committed until the
-    /// server re-verifies both proofs, so a failed attempt leaves any current session untouched.
+    /// function. Sign-up, forgot-password and the pre-v2 upgrade all land here; only the upgrade names a legacy wallet
+    /// to check first. Nothing is committed until the server re-verifies both proofs, so a failed attempt leaves any
+    /// current session untouched.
     private func completeVerification() {
         guard code.count == 6, !busy else { return }
         focus = nil; busy = true; error = nil
         Task {
             do {
                 let token = try await session.verifyEmailCapturingToken(email: email, code: code)
-                try await session.bindEmailPassword(email: email, password: password, token: token, bind: bindViaServer)
+                try await session.bindEmailPassword(email: email, password: password, token: token,
+                                                    upgradingFrom: upgrade?.legacy, pepper: fetchPepper,
+                                                    holdsFunds: legacyHoldsFunds, bind: bindViaServer)
             } catch {
                 self.error = describe(error)
                 code = ""
@@ -594,6 +650,28 @@ struct EmailPasswordView: View {
         }
         let capped = msg.prefix(1).uppercased() + String(msg.dropFirst())
         return capped.hasSuffix(".") ? capped : capped + "."
+    }
+
+    // MARK: v2 derivation inputs
+
+    /// The server pepper for (e, t) — the `email-pepper` function, called with the publishable key before sign-in.
+    private func fetchPepper(_ e: Data, _ t: Data) async throws -> Data {
+        try await env.social.client.emailPepper(e: e, t: t)
+    }
+
+    /// Does a legacy (pre-v2) wallet hold anything? Native MON or any curated token (`Token.core`: USDC, AUSD, USDT0,
+    /// WMON, …) — any non-zero balance keeps the email on it. Only ever asked about the bound legacy wallet log-in
+    /// found, whose address is already public. What balances can't show (Perpl collateral, launchpad or Moment
+    /// holdings) takes transactions from the wallet, which log-in turns into an explicit confirmation (`Upgrade.used`).
+    private func legacyHoldsFunds(_ legacy: Address) async throws -> Bool {
+        let rpc = env.rpc, multicall = env.multicall
+        let calls = try Token.core.filter { !$0.isNative }.map { try ERC20.balanceOf($0.address, legacy) }
+        async let native = rpc.balance(of: legacy)
+        async let tokens = multicall.readAll(calls)
+        let (mon, results) = try await (native, tokens)
+        let balances = results.compactMap { $0.first?.uintOrNil }
+        guard balances.count == calls.count else { throw SessionError.legacyBalanceUnavailable }
+        return mon > 0 || balances.contains { $0 > 0 }
     }
 
     // MARK: Backend gate (email_accounts)

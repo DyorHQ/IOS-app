@@ -1,7 +1,8 @@
 import Foundation
 
-/* A small Supabase client for DyorHQ's backend: signs in by having the user's wallet personal_sign a fresh nonce
-   (verified by the wallet-auth Edge Function, which mints a session), then reads and writes tables over PostgREST.
+/* A small Supabase client for DyorHQ's backend: signs in by having the user's wallet personal_sign a single-use nonce
+   the wallet-auth Edge Function issued (it verifies the signature, consumes the nonce and mints a session), then reads
+   and writes tables over PostgREST.
    Public data reads with the publishable key alone; writes carry the wallet session token, and row-level security
    ties every row to the signed-in wallet. No private keys are ever sent — only a signature over a nonce. */
 
@@ -16,6 +17,11 @@ public enum SupabaseError: LocalizedError {
     case http(Int, String)
     case notSignedIn
     case decoding(String)
+    /// wallet-auth refused a signed sign-in (401): the single-use nonce was invalid, expired or already used, or the
+    /// signature didn't match. Carries the server's reason.
+    case signInRejected(String)
+    /// Too many attempts (429). `retryAfter` is the server's wait in seconds, when it sends one.
+    case rateLimited(retryAfter: Int?)
 
     public var errorDescription: String? {
         switch self {
@@ -24,6 +30,12 @@ public enum SupabaseError: LocalizedError {
             return "Supabase request failed (\(code))."
         case .notSignedIn: return "Sign in to DyorHQ to continue."
         case .decoding(let what): return "Could not read \(what) from the server."
+        case .signInRejected(let reason):
+            if reason.contains("nonce") { return "That sign-in expired or was already used. Please try again." }
+            return reason.isEmpty ? "Sign-in was refused. Please try again." : "Sign-in was refused (\(reason)). Please try again."
+        case .rateLimited(let retryAfter):
+            guard let seconds = retryAfter, seconds > 0 else { return "Too many attempts. Please wait a few minutes and try again." }
+            return "Too many attempts. Try again in \(max(1, (seconds + 59) / 60)) min."
         }
     }
 }
@@ -60,20 +72,44 @@ public actor SupabaseClient {
 
     public func signOut() { current = nil }
 
-    /// Signs in: builds a nonce message, has the wallet sign it, and exchanges the signature for a session at the
-    /// wallet-auth function. `sign` is the wallet's `signMessage` (EIP-191 personal_sign).
+    /// Signs in: asks wallet-auth for a single-use nonce bound to this address, has the wallet sign the exact sign-in
+    /// message around it, and exchanges the signature for a session. The server consumes the nonce on success, so a
+    /// captured signature can never be replayed. `sign` is the wallet's `signMessage` (EIP-191 personal_sign).
     public func signIn(address: String, sign: (Data) async throws -> Data) async throws -> SupabaseSession {
-        let nonce = Data((0..<12).map { _ in UInt8.random(in: 0...255) }).hexString
-        let issued = Int(Date().timeIntervalSince1970 * 1000)
-        let message = "DyorHQ Sign-In\n\nWallet: \(address)\nNonce: \(nonce)\nIssued At: \(issued)"
+        let nonce = try await signInNonce(address: address)
+        let message = Self.signInMessage(address: address, nonce: nonce, issuedAt: Int(Date().timeIntervalSince1970 * 1000))
         let signature = try await sign(Data(message.utf8)).hexString
         let body = try JSONSerialization.data(withJSONObject: ["address": address, "message": message, "signature": signature])
-        let data = try await send(method: "POST", path: "functions/v1/wallet-auth", query: [], body: body, prefer: nil, authed: false)
+        let data = try await walletAuth(body)
         struct AuthResponse: Decodable { let access_token: String; let expires_in: Int; let wallet: String }
         guard let response = try? JSONDecoder().decode(AuthResponse.self, from: data) else { throw SupabaseError.decoding("the sign-in response") }
         let created = SupabaseSession(accessToken: response.access_token, wallet: response.wallet, expiresAt: Date().addingTimeInterval(Double(response.expires_in)))
         current = created
         return created
+    }
+
+    /// The exact message wallet-auth verifies. Its template match is anchored, so not a byte may differ: `address` as
+    /// sent in the request, the server's nonce, and the signing time in unix milliseconds.
+    public static func signInMessage(address: String, nonce: String, issuedAt: Int) -> String {
+        "DyorHQ Sign-In\n\nWallet: \(address)\nNonce: \(nonce)\nIssued At: \(issuedAt)"
+    }
+
+    /// A fresh single-use nonce from wallet-auth (32 random bytes as 64 lowercase hex), bound to `address` for 5 minutes.
+    private func signInNonce(address: String) async throws -> String {
+        let body = try JSONSerialization.data(withJSONObject: ["action": "nonce", "address": address])
+        let data = try await walletAuth(body)
+        struct NonceResponse: Decodable { let nonce: String }
+        guard let nonce = try? JSONDecoder().decode(NonceResponse.self, from: data).nonce, Self.isHex32Bytes(nonce) else {
+            throw SupabaseError.decoding("the sign-in nonce")
+        }
+        return nonce
+    }
+
+    /// POSTs to wallet-auth, turning its refusals into errors a person can act on.
+    private func walletAuth(_ body: Data) async throws -> Data {
+        do { return try await send(method: "POST", path: "functions/v1/wallet-auth", query: [], body: body, prefer: nil, authed: false) }
+        catch SupabaseError.http(401, let text) { throw SupabaseError.signInRejected(Self.serverField(text, "error") as? String ?? "") }
+        catch SupabaseError.http(429, let text) { throw SupabaseError.rateLimited(retryAfter: Self.retryAfter(text)) }
     }
 
     // MARK: PostgREST
@@ -196,6 +232,21 @@ public actor SupabaseClient {
         return response.uri
     }
 
+    /// The email-wallet pepper (see `EmailWallet`): posts e and t — hashes, never the email, password or seed — to the
+    /// `email-pepper` function, which answers an HMAC of them under a key only the server holds. Called before
+    /// sign-in, with the publishable key alone. Throws `SupabaseError.rateLimited` (with the wait) on a 429.
+    public func emailPepper(e: Data, t: Data) async throws -> Data {
+        let body = try JSONSerialization.data(withJSONObject: ["e": String(e.hexString.dropFirst(2)), "t": String(t.hexString.dropFirst(2))])
+        let data: Data
+        do { data = try await send(method: "POST", path: "functions/v1/email-pepper", query: [], body: body, prefer: nil, authed: false) }
+        catch SupabaseError.http(429, let text) { throw SupabaseError.rateLimited(retryAfter: Self.retryAfter(text)) }
+        struct Response: Decodable { let p: String }
+        guard let p = try? JSONDecoder().decode(Response.self, from: data).p, Self.isHex32Bytes(p), let pepper = Data(hex: p) else {
+            throw SupabaseError.decoding("the email pepper")
+        }
+        return pepper
+    }
+
     /// Calls an Edge Function that authenticates the caller with its own bearer token (not a Supabase session) —
     /// e.g. `delete-account`, which takes the Privy access token. Returns the response body.
     public func invoke(function: String, bearer: String, body: Data? = nil) async throws -> Data {
@@ -236,6 +287,23 @@ public actor SupabaseClient {
             throw SupabaseError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
         return data
+    }
+
+    /// Exactly 64 lowercase hex characters (32 bytes), as the server's nonces and peppers are.
+    private static func isHex32Bytes(_ text: String) -> Bool {
+        text.utf8.count == 64 && text.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
+    /// One top-level field of a JSON error body, if the body is a JSON object.
+    private static func serverField(_ text: String, _ key: String) -> Any? {
+        (try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])?[key]
+    }
+
+    /// The `retryAfter` seconds a 429 body carries, rounded up and clamped to a day — it comes off the network, and
+    /// `Int(Double)` traps on anything non-finite or out of range.
+    static func retryAfter(_ text: String) -> Int? {
+        guard let seconds = (serverField(text, "retryAfter") as? NSNumber)?.doubleValue, seconds.isFinite else { return nil }
+        return Int(min(max(0, seconds.rounded(.up)), 86_400))
     }
 
     private func decode<T: Decodable>(_ data: Data, as type: T.Type) throws -> T {

@@ -1,58 +1,24 @@
-import CommonCrypto
-import CryptoKit
-import DyorKit
 import Foundation
 
-/// Deterministic email + password wallet. The private key is derived from the password (email as salt) with a slow
-/// KDF and NEVER stored anywhere but this device's Keychain — the same email + password always regenerate the same
-/// wallet on any device, so there is no server, no backup, and no verification code.
-///
-/// This is a "brainwallet": its security is exactly the strength of the password, and a wrong password silently
-/// derives a *different* wallet. That is why sign-up enforces a strong password (`PasswordStrength`) and the UI is
-/// blunt that the password IS the wallet and cannot be reset. Users who want stronger guarantees use a passkey or
-/// import their own key.
-enum PasswordWallet {
-    /// Domain separation + version. Bump only with a migration — changing it changes every derived address.
-    private static let version = "dyorhq.email-password.v1"
-    /// PBKDF2-HMAC-SHA256 rounds. High enough that an offline guess costs ~a second on commodity hardware, while a
-    /// single on-device derivation stays well under a second. (Memory-hard scrypt/Argon2 would be stronger but isn't
-    /// in this build's crypto stack; the dominant defense here is the enforced password strength.)
-    private static let iterations: UInt32 = 1_000_000
+/* Deterministic email + password wallet. The private key is derived from the email + password and NEVER stored
+   anywhere but this device's Keychain — the same email + password always regenerate the same wallet on any device,
+   so there is no backup and no verification code at log-in. The derivation lives in DyorKit's `EmailWallet` (moved
+   there unchanged from this file so its vectors are pinned by `swift test`):
 
-    /// Derive the wallet for `(email, password)`. Pure and deterministic. Run off the main actor — it takes ~a second.
-    static func deriveAccount(email: String, password: String) -> Secp256k1Account? {
-        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalizedEmail.isEmpty, !password.isEmpty else { return nil }
-        // Salt binds the key to this app + version + the exact email, so the same password under different emails
-        // yields different wallets and a single rainbow table can't cover every user.
-        let salt = Data(SHA256.hash(data: Data("\(version)|\(normalizedEmail)".utf8)))
-        guard let seed = pbkdf2(password: Data(password.utf8), salt: salt, keyLength: 32) else { return nil }
-        // seed (32 bytes) → BIP-39 (24 words) → seed → BIP-32 m/44'/60'/0'/0/0 — DyorKit's proven derivation.
-        return Mera.evmAccount(prf: seed)
-    }
+     v2      every new account: the password's slow seed mixed with a server pepper (the `email-pepper` Edge
+             Function), so a password can't be tested offline — each guess is a rate-limited server round-trip.
+     legacy  accounts created before v2: the seed alone (a "brainwallet"). Log-in still finds them, then moves the
+             email to the v2 wallet of a NEW password once the user re-verifies it (`Session.logInWithPassword` →
+             `bindEmailPassword(upgradingFrom:)`), and only while the legacy wallet is empty. The old password can't
+             carry over: its legacy address is public, so its seed stays guessable offline.
 
-    private static func pbkdf2(password: Data, salt: Data, keyLength: Int) -> Data? {
-        var derived = Data(count: keyLength)
-        let status = derived.withUnsafeMutableBytes { out in
-            salt.withUnsafeBytes { saltPtr in
-                password.withUnsafeBytes { passPtr in
-                    CCKeyDerivationPBKDF(
-                        CCPBKDFAlgorithm(kCCPBKDF2),
-                        passPtr.baseAddress?.assumingMemoryBound(to: Int8.self), password.count,
-                        saltPtr.baseAddress?.assumingMemoryBound(to: UInt8.self), salt.count,
-                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
-                        iterations,
-                        out.baseAddress?.assumingMemoryBound(to: UInt8.self), keyLength)
-                }
-            }
-        }
-        return status == kCCSuccess ? derived : nil
-    }
-}
+   A wrong password silently derives a *different* wallet, and the password cannot be reset into the same wallet.
+   That is why sign-up enforces a strong password (`PasswordStrength`) and the UI is blunt that the password IS the
+   wallet. Users who want stronger guarantees use a passkey or import their own key. */
 
-/// Sign-up password rules. Because the password IS the wallet key and can be brute-forced offline by anyone who
-/// knows the email, weak passwords are rejected outright — enforcement is the main thing standing between a user and
-/// a drained wallet.
+/// Sign-up password rules. The password is the wallet's only secret the user holds: v2 keeps it from being guessed
+/// offline, but a weak one still falls to patient online guessing (or to offline guessing if the server key ever
+/// leaked), so weak passwords are rejected outright.
 enum PasswordStrength {
     static let minLength = 12
 
