@@ -44,26 +44,25 @@ public struct MomentsAddresses: Sendable, Hashable {
 
     public static let none = MomentsAddresses()
 
-    /// Moments v1.1 on Monad mainnet (chain 143) — `contracts/deployments/moments-143.json`, deployed and
-    /// Sourcify-verified on 2026-09-16. Governance is the DyorHQ owner wallet; platform and treasury are the
-    /// beneficiaries snapshotted into every Moment at publish.
-    /// The cohort-2 stack (deployed 2026-09-22, `contracts/deployments/moments-143.json`): the $2,000 graduation FDV
-    /// policy is in its constructor. The cohort-1 stack (factory 0x6469…C020, `moments-143-cohort1.json`) is
-    /// retired — publishing paused; its three Moments stay on-chain but are no longer shown.
+    /// Moments v1.1 on Monad mainnet (chain 143) — cohort 3, `contracts/deployments/moments-143.json`, deployed and
+    /// Sourcify-verified on 2026-09-23 with the rotated wallets: platform = the fees wallet 0x15ED…, treasury = the new
+    /// treasury 0x5aDb… (the beneficiaries snapshotted into every Moment at publish); $2,000-FDV graduation policy in
+    /// the constructor. Governance is the DyorHQ owner wallet. Cohorts 1 (0x6469…C020) and 2 (0xc12B…a581, records
+    /// `moments-143-cohort1.json` / `moments-143-cohort2.json`) paid the retired wallets and are paused.
     public static let monadMainnet = MomentsAddresses(
-        factory: Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581"),
-        collect: Address(literal: "0x8f65ea0236b5fa6351a45Bd48244c3525Fb92493"),
-        vesting: Address(literal: "0xe087eff01C567F88a7cb6BDBDBF04B46Fee56C99"),
-        graduation: Address(literal: "0x353F245A2458B994a65116A4c69643cf6608045b"),
-        locker: Address(literal: "0x995735cF317656a10de52b73AB50A2aAdc069a8a"),
-        hook: Address(literal: "0x501D703588c4feAbBeE5A9a77408c7FCbD3a20Cc"),
-        buyback: Address(literal: "0xacae95377513C54DA9ff549DFE5cB77001F6c6F5"),
+        factory: Address(literal: "0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26"),
+        collect: Address(literal: "0xb53897A4C6280480c267351518D184C2E6591D30"),
+        vesting: Address(literal: "0x05584910ab57d65723eB878D295b3353a4cbb021"),
+        graduation: Address(literal: "0xA2231E39ce7AE4f7d5e56Beae2dD3a8a59F3b9aA"),
+        locker: Address(literal: "0x37C5A2c15d99701CF698B146cdCD1853825Ef455"),
+        hook: Address(literal: "0xD5BFff467FDAe04664357e75bF059986c41260CC"),
+        buyback: Address(literal: "0x3B574312Bb4e1D36C9a1Ba698bf77BbD223ca913"),
         usdc: Address(literal: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"),
         permit2: Address(literal: "0x000000000022D473030F116dDEE9F6B43aC78BA3"),
         poolManager: Address(literal: "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e"),
-        platform: Address(literal: "0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48"),
-        treasury: Address(literal: "0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045"),
-        deployBlock: 106_984_957
+        platform: Address(literal: "0x15ED3bb488231213b141A2f78b62358D52235Cd7"),
+        treasury: Address(literal: "0x5aDbDc19831D0f9dbdfBbA6ee3d618DbB9CEA371"),
+        deployBlock: 107_311_600
     )
 
     /// Protocol addresses that hold Moment coins without being "holders" (the pool, the locker, vesting, …).

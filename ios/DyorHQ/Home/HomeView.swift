@@ -608,7 +608,7 @@ final class HomeModel {
         let tokens = KnownTokenStore.universe(owner: address).filter { $0.symbol != "WMON" }
         async let prices = env.prices.prices(for: tokens)
         async let balances = walletBalances(env: env, address: address, tokens: tokens)
-        async let launches = env.launchpad.launches(limit: 30)
+        async let launches = env.launchpad.allLaunches(limit: 30)
         async let perps = loadPerps(env: env, address: address)
         async let moments = loadMoments(env: env, address: address)
         var priceMap: [Address: PriceInfo] = [:]

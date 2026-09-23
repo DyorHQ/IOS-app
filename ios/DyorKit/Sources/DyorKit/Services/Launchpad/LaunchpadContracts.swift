@@ -9,6 +9,8 @@ enum LaunchpadABI {
 
     static let tokenParams = "(string,string,string,string,(string,string,string,string,string),address,uint16,bool,uint8,bytes32,bytes32)"
     static let launchedTokenTuple = "(address,address,address,address,address,uint256,uint16,uint16,int24,bool,uint8,uint8,uint256,uint256,uint256,bytes32,bool)"
+    /// The first deployment's (0xad3d…) 16-field record: `launchedTokenTuple` without `graduationVenue`.
+    static let legacyLaunchedTokenTuple = "(address,address,address,address,address,uint256,uint16,uint16,int24,bool,uint8,uint256,uint256,uint256,bytes32,bool)"
     static let launchConfigTuple = "(uint256,uint16,uint16,int24,uint16[],bool)"
     static let poolKeyTuple = "(address,address,uint24,int24,address)"
     static let socialsTuple = "(string,string,string,string,string)"
@@ -200,7 +202,8 @@ enum LaunchpadABI {
 
     // MARK: Decoding
 
-    /// `Types.LaunchedToken`, including `exists`; the service drops records that do not exist.
+    /// `Types.LaunchedToken`, including `exists`; the service drops records that do not exist. `legacy` decodes the
+    /// 16-field `legacyLaunchedTokenTuple`, whose launches all graduate on Monday Trade.
     struct LaunchRecord {
         let token: Address
         let curve: Address
@@ -220,7 +223,7 @@ enum LaunchpadABI {
         let poolId: Data
         let exists: Bool
 
-        init(_ tuple: ABIValue) {
+        init(_ tuple: ABIValue, legacy: Bool = false) {
             token = tuple[0].address
             curve = tuple[1].address
             deployer = tuple[2].address
@@ -231,15 +234,20 @@ enum LaunchpadABI {
             poolFeeBps = int(tuple[7])
             tickSpacing = int(tuple[8])
             holderFeeSharing = tuple[9].bool
-            graduationVenue = GraduationVenue(raw: tuple[10].uint)
-            phase = LaunchPhase(raw: tuple[11].uint)
-            sweptQuote = tuple[12].uint
-            sweptTokens = tuple[13].uint
-            sweptAt = int(tuple[14])
-            poolId = tuple[15].bytes
-            exists = tuple[16].bool
+            // The legacy record has no `graduationVenue`, so every later field sits one slot earlier.
+            let at = legacy ? 10 : 11
+            graduationVenue = legacy ? .monday : GraduationVenue(raw: tuple[10].uint)
+            phase = LaunchPhase(raw: tuple[at].uint)
+            sweptQuote = tuple[at + 1].uint
+            sweptTokens = tuple[at + 2].uint
+            sweptAt = int(tuple[at + 3])
+            poolId = tuple[at + 4].bytes
+            exists = tuple[at + 5].bool
         }
     }
+
+    /// The `getLaunchedToken` return type for a factory's record layout.
+    static func launchedTokenReturns(legacy: Bool) -> String { legacy ? legacyLaunchedTokenTuple : launchedTokenTuple }
 
     struct LaunchConfig {
         let supply: BigUInt

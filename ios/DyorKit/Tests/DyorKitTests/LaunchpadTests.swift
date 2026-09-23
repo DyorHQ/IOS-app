@@ -295,6 +295,195 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(Amount.units(abilEcon.graduationThreshold, decimals: abilEcon.pair.decimals), 2_000, accuracy: 1e-6)
     }
 
+    // MARK: - Retired stacks (real mainnet return blobs, fetched with `cast call` on 2026-09-23)
+
+    /// `getLaunchedToken(0x73F9…)` on the first factory 0xad3d…: the legacy 16-field record of a MON launch that
+    /// graduated to the Monday pool 0x7248…, whose address is the record's `poolId`.
+    private static let legacyRecordWords = [
+        "00000000000000000000000073f942e084ab047a94e4e3b5d6ae571e23a51856",
+        "00000000000000000000000074e552a81eef9ccc77eba745164755a64f216002",
+        "00000000000000000000000090f3e7c3b4e32494b06814fd2f4556671f5f4c47",
+        "00000000000000000000000090f3e7c3b4e32494b06814fd2f4556671f5f4c47",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "000000000000000000000000000000000000000000000015af1d78b58c400000",
+        "0000000000000000000000000000000000000000000000000000000000000032",
+        "0000000000000000000000000000000000000000000000000000000000000064",
+        "000000000000000000000000000000000000000000000000000000000000003c",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000002",
+        "000000000000000000000000000000000000000000000015af1d78b58c400000",
+        "000000000000000000000000000000000000000000a56fa5b99019a5c8240e13",
+        "000000000000000000000000000000000000000000000000000000006aa3c618",
+        "00000000000000000000000072484c6c9f2a41dd9f34c61584bcd2b72eeef325",
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    ]
+
+    /// `getLaunchedToken(0xA4D9…)` on the retired factory 0x10F3…: the current 17-field record of a bonding MON launch.
+    private static let currentRecordWords = [
+        "000000000000000000000000a4d9b2697254292ad30e06ce968a7e18de6ff884",
+        "000000000000000000000000be36bd571e1f4d7e25f4fc891fc8407460feb9e6",
+        "0000000000000000000000006115caf237026b45b037191b20056d1e4afaffa3",
+        "0000000000000000000000006115caf237026b45b037191b20056d1e4afaffa3",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000029b2e31f32c7b0fc4bf8",
+        "0000000000000000000000000000000000000000000000000000000000000064",
+        "0000000000000000000000000000000000000000000000000000000000000064",
+        "000000000000000000000000000000000000000000000000000000000000003c",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    ]
+
+    /// The record as one return blob, with small integer `overrides` (word index → value) written in.
+    private func blob(_ words: [String], replacing overrides: [Int: Int] = [:]) -> Data {
+        var words = words
+        for (index, value) in overrides {
+            let digits = String(value, radix: 16)
+            words[index] = String(repeating: "0", count: 64 - digits.count) + digits
+        }
+        return hex("0x" + words.joined())
+    }
+
+    func testDecodeLegacyRecordFromMainnet() throws {
+        let tuple = try ABI.decode(blob(Self.legacyRecordWords), LaunchpadABI.launchedTokenReturns(legacy: true))[0]
+        let r = LaunchpadABI.LaunchRecord(tuple, legacy: true)
+        XCTAssertEqual(r.token, Address(literal: "0x73F942e084Ab047a94e4E3B5D6ae571e23A51856"))
+        XCTAssertEqual(r.curve, Address(literal: "0x74E552A81eeF9ccC77Eba745164755a64f216002"))
+        XCTAssertEqual(r.deployer, Address(literal: "0x90f3e7c3B4E32494b06814Fd2F4556671F5F4C47"))
+        XCTAssertEqual(r.creatorFeeRecipient, r.deployer)
+        XCTAssertEqual(r.pairToken, .zero)
+        XCTAssertEqual(r.graduationThreshold, e18(400))
+        XCTAssertEqual(r.creatorTaxBps, 50)
+        XCTAssertEqual(r.poolFeeBps, 100)
+        XCTAssertEqual(r.tickSpacing, 60)
+        XCTAssertFalse(r.holderFeeSharing)
+        XCTAssertEqual(r.graduationVenue, .monday, "the legacy record has no venue field; every launch on that factory is Monday")
+        XCTAssertEqual(r.phase, .graduated)
+        XCTAssertEqual(r.sweptQuote, e18(400))
+        XCTAssertEqual(r.sweptTokens, bn("200000000000000000002362899"))
+        XCTAssertEqual(r.sweptAt, 1_789_117_976)
+        XCTAssertEqual(r.poolId.hexString, "0x00000000000000000000000072484c6c9f2a41dd9f34c61584bcd2b72eeef325")
+        XCTAssertTrue(r.exists)
+        // Read as the current 17-field tuple, the 16-word blob does not decode, which is why the stack is flagged.
+        XCTAssertThrowsError(try ABI.decode(blob(Self.legacyRecordWords), LaunchpadABI.launchedTokenTuple))
+    }
+
+    /// QT's Monday Trade pool (0x7248…, the record's poolId) prices it from its own `slot0()` (mainnet word,
+    /// 2026-09-23; token0 = WMON): ~2.084e-6 MON per QT, not the curve's final 2.5e-6.
+    func testMondayGraduatedPoolPrice() {
+        let slot0 = hex("0x00000000000000000000000000000000000002b4afdc075311eaca037b2aef49")
+        let price = LaunchpadMath.poolPrice(slot0: slot0, token: Address(literal: "0x73F942e084Ab047a94e4E3B5D6ae571e23A51856"), pairToken: Monad.wmon)
+        XCTAssertEqual(price, 2_084_135_672_368)
+    }
+
+    func testDecodeCurrentRecordFromMainnet() throws {
+        let tuple = try ABI.decode(blob(Self.currentRecordWords), LaunchpadABI.launchedTokenReturns(legacy: false))[0]
+        let r = LaunchpadABI.LaunchRecord(tuple)
+        XCTAssertEqual(r.token, Address(literal: "0xA4D9b2697254292AD30E06ce968a7E18DE6fF884"))
+        XCTAssertEqual(r.curve, Address(literal: "0xbe36BD571e1f4d7E25f4Fc891fC8407460fEb9e6"))
+        XCTAssertEqual(r.pairToken, .zero)
+        XCTAssertEqual(r.graduationThreshold, bn("196916912098179890826232"))
+        XCTAssertEqual(r.creatorTaxBps, 100)
+        XCTAssertEqual(r.poolFeeBps, 100)
+        XCTAssertEqual(r.tickSpacing, 60)
+        XCTAssertFalse(r.holderFeeSharing)
+        XCTAssertEqual(r.graduationVenue, .uniswapV4)
+        XCTAssertEqual(r.phase, .bonding)
+        XCTAssertEqual(r.sweptQuote, 0)
+        XCTAssertTrue(r.exists)
+    }
+
+    /// The swap venue reads `exists` at [16], `phase` at [11] and `graduationVenue` at [10] of the 17-field record.
+    func testSwapLaunchedTokenIndices() throws {
+        let returns = try SwapCalldata.launchedToken(factory: factory, token: token).returnTypes
+        func record(_ overrides: [Int: Int]) throws -> ABIValue { try ABI.decode(blob(Self.currentRecordWords, replacing: overrides), returns)[0] }
+
+        let bonding = try record([:])
+        XCTAssertTrue(bonding[16].bool)
+        XCTAssertEqual(bonding[11].uint, 0)
+        XCTAssertEqual(bonding[10].uint, 0)
+        XCTAssertFalse(SwapCalldata.graduatedOnV4(bonding), "still on the curve: no pool to route through")
+
+        XCTAssertTrue(SwapCalldata.graduatedOnV4(try record([11: 2])), "PoolCreated on Uniswap v4")
+        XCTAssertFalse(SwapCalldata.graduatedOnV4(try record([11: 2, 10: 1])), "PoolCreated on Monday Trade is not a v4 pool")
+        XCTAssertFalse(SwapCalldata.graduatedOnV4(try record([11: 1])), "Swept (migrating) has no pool yet")
+        XCTAssertFalse(SwapCalldata.graduatedOnV4(try record([11: 2, 16: 0])), "an unknown token does not exist")
+
+        // The synthetic viem fixture (venue Monday, phase PoolCreated) decodes the same way.
+        let synthetic = try ABI.decode(hex(f["returns"]["getLaunchedToken"].string!), returns)[0]
+        XCTAssertEqual(synthetic[10].uint, 1)
+        XCTAssertEqual(synthetic[11].uint, 2)
+        XCTAssertTrue(synthetic[16].bool)
+        XCTAssertFalse(SwapCalldata.graduatedOnV4(synthetic))
+    }
+
+    /// Every per-launch plan goes to the launch's own stack; `.zero` and the live factory mean the live stack.
+    func testPlansTargetTheLaunchStack() async throws {
+        let service = makeService()
+        let retired = try XCTUnwrap(LaunchpadAddresses.retiredStacks.first)
+        let legacy = try XCTUnwrap(LaunchpadAddresses.retiredStacks.last)
+        func launch(on factory: Address) -> Launch {
+            let l = makeLaunch(pairToken: usdc, pair: usdcPair, poolId: poolId)
+            return Launch(token: l.token, curve: l.curve, deployer: l.deployer, creatorFeeRecipient: l.creatorFeeRecipient, pairToken: l.pairToken,
+                          graduationThreshold: l.graduationThreshold, creatorTaxBps: l.creatorTaxBps, poolFeeBps: l.poolFeeBps, tickSpacing: l.tickSpacing,
+                          holderFeeSharing: l.holderFeeSharing, graduationVenue: .monday, phase: l.phase, sweptQuote: 0, sweptTokens: 0, sweptAt: 0, poolId: l.poolId,
+                          name: l.name, symbol: l.symbol, logo: "", description: "", socials: .none, pair: l.pair, price: 0, realQuoteReserve: 0,
+                          completed: false, rescued: false, launchedAt: 0, supply: 0, marketCap: 0, progressBps: 0, factory: factory)
+        }
+
+        for live in [launch(on: .zero), launch(on: factory)] {
+            XCTAssertFalse(live.isRetiredLaunchpad)
+            let rewards = await service.claimRewardsPlan(launch: live)
+            XCTAssertEqual(rewards[0].request?.to, sharing)
+            let fallback = await service.graduateFallbackPlan(launch: live)
+            XCTAssertEqual(fallback.first?.request?.to, factory)
+        }
+
+        let old = launch(on: retired.factory)
+        XCTAssertTrue(old.isRetiredLaunchpad)
+        XCTAssertTrue(old.hasGraduateFallback)
+        let rewards = await service.claimRewardsPlan(launch: old, view: LaunchAccountView(tokenBalance: 0, pairBalance: 0, allowance: 0, snipeTaxBps: 0, pendingRewards: 1, escrowBalance: 1))
+        XCTAssertEqual(rewards.map { $0.request?.to }, [retired.holderFeeSharing, retired.escrow])
+        XCTAssertEqual(rewards[1].request?.data.hexString, cd("claimEscrowToken"))
+        let graduate = await service.graduatePlan(launch: old)
+        XCTAssertEqual(graduate[0].request?.to, retired.factory)
+        let fallback = await service.graduateFallbackPlan(launch: old)
+        XCTAssertEqual(fallback.first?.request?.to, retired.factory)
+        let sweep = await service.sweepPoolFeesPlan(launch: old)
+        XCTAssertEqual(sweep[0].request?.to, retired.hook)
+        XCTAssertEqual(sweep[0].request?.data.hexString, cd("sweepPoolFees"))
+
+        // The pre-audit stacks have no `graduateFallback`: no plan, and the screen offers none.
+        for stack in LaunchpadAddresses.retiredStacks.dropFirst() {
+            let preAudit = launch(on: stack.factory)
+            XCTAssertFalse(preAudit.hasGraduateFallback)
+            let none = await service.graduateFallbackPlan(launch: preAudit)
+            XCTAssertTrue(none.isEmpty)
+        }
+        let legacyEscrow = await service.claimEscrowPlan(launch: launch(on: legacy.factory))
+        XCTAssertEqual(legacyEscrow[0].request?.to, legacy.escrow)
+
+        // Escrow sweeps default to the live escrow and take another stack's on request.
+        let liveSweep = await service.claimEscrowPlan(native: true, tokens: [usdc])
+        XCTAssertEqual(liveSweep.map { $0.request?.to }, [escrow, escrow])
+        let retiredSweep = await service.claimEscrowPlan(native: true, tokens: [usdc], escrow: retired.escrow)
+        XCTAssertEqual(retiredSweep.map { $0.request?.to }, [retired.escrow, retired.escrow])
+
+        // Stacks: live first, then every retired one; an unknown factory resolves to itself alone.
+        let stacks = await service.stacks
+        XCTAssertEqual(stacks.map(\.factory), [factory] + LaunchpadAddresses.retiredFactories)
+        let unknown = Address(literal: "0x00000000000000000000000000000000000f00d0")
+        let alone = await service.stack(for: unknown)
+        XCTAssertEqual(alone.factory, unknown)
+        XCTAssertTrue(alone.escrow.isZero)
+        XCTAssertTrue(alone.holderFeeSharing.isZero)
+    }
+
     // MARK: - Derived quantities (checked against the web formulas)
 
     func testMarketCapAndProgress() {

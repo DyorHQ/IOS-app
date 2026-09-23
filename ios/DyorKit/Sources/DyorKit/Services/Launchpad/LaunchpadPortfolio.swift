@@ -85,19 +85,39 @@ extension LaunchpadABI.Events {
 
 public extension LaunchpadService {
     /// The wallet's curve fills and fee claims over the last `lookbackBlocks` blocks, newest first. Fills are
-    /// matched to `curves` (curve → token) so only this factory's launches count.
+    /// matched to `curves` (curve → token) so only these factories' launches count; claims are read from the escrow
+    /// and fee-sharing contracts of the live stack and of every retired one.
     func walletHistory(wallet: Address, lookbackBlocks: UInt64, curves: Set<Address>) async -> LaunchpadWalletHistory {
         guard addresses.isDeployed, let anchor = try? await logsRPC.block(.latest) else { return .empty }
         let from = anchor.number > lookbackBlocks ? anchor.number - lookbackBlocks : 0
         let word = wallet.data.leftPadded(to: 32)
+        let escrows = Self.unique(stacks.map(\.escrow))
+        let sharings = Self.unique(stacks.map(\.holderFeeSharing))
         // CurveBuy/CurveSell index the trader first; the escrow indexes the recipient; fee sharing indexes (token, account).
         async let buys = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.buyTopic, word], fromBlock: from, toBlock: anchor.number)
         async let sells = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.sellTopic, word], fromBlock: from, toBlock: anchor.number)
-        async let escrowNative = logsRPC.chunkedLogs(address: addresses.escrow, topics: [LaunchpadABI.Events.escrowClaimedTopic, word], fromBlock: from, toBlock: anchor.number)
-        async let escrowToken = logsRPC.chunkedLogs(address: addresses.escrow, topics: [LaunchpadABI.Events.escrowClaimedTokenTopic, word], fromBlock: from, toBlock: anchor.number)
-        async let sharing = logsRPC.chunkedLogs(address: addresses.holderFeeSharing, topics: [LaunchpadABI.Events.sharingClaimedTopic, nil, word], fromBlock: from, toBlock: anchor.number)
+        async let escrowNative = logs(from: escrows, topics: [LaunchpadABI.Events.escrowClaimedTopic, word], fromBlock: from, toBlock: anchor.number)
+        async let escrowToken = logs(from: escrows, topics: [LaunchpadABI.Events.escrowClaimedTokenTopic, word], fromBlock: from, toBlock: anchor.number)
+        async let sharing = logs(from: sharings, topics: [LaunchpadABI.Events.sharingClaimedTopic, nil, word], fromBlock: from, toBlock: anchor.number)
         let (buyLogs, sellLogs, escrowNativeLogs, escrowTokenLogs, sharingLogs) = await (buys, sells, escrowNative, escrowToken, sharing)
         return Self.walletHistory(buys: buyLogs, sells: sellLogs, escrowNative: escrowNativeLogs, escrowToken: escrowTokenLogs, sharing: sharingLogs, anchor: anchor, curves: curves)
+    }
+
+    /// `chunkedLogs` over each of `contracts`, merged.
+    private func logs(from contracts: [Address], topics: [Data?], fromBlock: UInt64, toBlock: UInt64) async -> [Log] {
+        let rpc = logsRPC
+        return await withTaskGroup(of: [Log].self) { group in
+            for contract in contracts { group.addTask { await rpc.chunkedLogs(address: contract, topics: topics, fromBlock: fromBlock, toBlock: toBlock) } }
+            var out: [Log] = []
+            for await logs in group { out += logs }
+            return out
+        }
+    }
+
+    /// The non-zero addresses of `list`, first occurrence kept.
+    private nonisolated static func unique(_ list: [Address]) -> [Address] {
+        var seen = Set<Address>()
+        return list.filter { !$0.isZero && seen.insert($0).inserted }
     }
 
     /// Pure half of `walletHistory`.

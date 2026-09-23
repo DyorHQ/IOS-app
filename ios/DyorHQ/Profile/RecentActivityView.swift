@@ -92,7 +92,7 @@ final class RecentActivityModel {
         defer { loading = false }
 
         let tokenMap = Dictionary(KnownTokenStore.universe(owner: address).map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
-        async let launchesTask = env.launchpad.launches(limit: 60)
+        async let launchesTask = env.launchpad.allLaunches(limit: 60)
         async let swapsTask = env.swapHistory.swaps(wallet: address, window: .week, decimals: tokenMap.mapValues(\.decimals))
         let launches = (try? await launchesTask) ?? []
         async let lpActivityTask = env.launchpad.activity(limit: 100, lookbackBlocks: Monad.blocksPerDay * 7, launches: launches)

@@ -106,21 +106,26 @@ public extension LaunchpadService {
 
     /// Everything that happened on the launchpad in the last `lookbackBlocks` blocks (9 000 ≈ one hour):
     /// launches, curve trades and graduations, newest first, at most `limit` rows. Trades are matched against
-    /// `launches` (the explore list) so only curves this factory created count; when nil, the newest 60 launches
-    /// are read first. Empty until the contracts are deployed.
+    /// `launches` (the explore list) so only curves these factories created count; when nil, the newest 60 launches
+    /// of every stack are read first. Launch and graduation events come from the live and the retired factories
+    /// (whose curves still trade and graduate). Empty until the contracts are deployed.
     func activity(limit: Int = 50, lookbackBlocks: UInt64 = 9_000, launches known: [Launch]? = nil) async throws -> [ActivityItem] {
         guard addresses.isDeployed, limit > 0 else { return [] }
         let launches: [Launch]
-        if let known { launches = known } else { launches = try await self.launches(limit: 60) }
+        if let known { launches = known } else { launches = try await allLaunches(limit: 60) }
         let curves = Dictionary(launches.map { ($0.curve, $0.token) }, uniquingKeysWith: { first, _ in first })
         let anchor = try await rpc.block(.latest)
         let from = anchor.number > lookbackBlocks ? anchor.number - lookbackBlocks : 0
-        let factory = addresses.factory
-        async let launched = logsRPC.chunkedLogs(address: factory, topics: [LaunchpadABI.Events.launchedTopic], fromBlock: from, toBlock: anchor.number)
-        async let graduated = logsRPC.chunkedLogs(address: factory, topics: [LaunchpadABI.Events.graduatedTopic], fromBlock: from, toBlock: anchor.number)
+        // One scan per event across every factory, kept to the factories of this launchpad's stacks.
+        let factories = Set(stacks.map(\.factory))
+        async let launched = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.launchedTopic], fromBlock: from, toBlock: anchor.number)
+        async let graduated = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.graduatedTopic], fromBlock: from, toBlock: anchor.number)
         async let buys = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.buyTopic], fromBlock: from, toBlock: anchor.number)
         async let sells = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.sellTopic], fromBlock: from, toBlock: anchor.number)
-        let items = Self.activity(launched: await launched, graduated: await graduated, buys: await buys, sells: await sells, anchor: anchor, curves: curves)
+        let items = Self.activity(
+            launched: await launched.filter { factories.contains($0.address) }, graduated: await graduated.filter { factories.contains($0.address) },
+            buys: await buys, sells: await sells, anchor: anchor, curves: curves
+        )
         return Array(items.prefix(limit))
     }
 

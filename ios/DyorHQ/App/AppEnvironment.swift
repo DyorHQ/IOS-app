@@ -50,8 +50,10 @@ final class AppEnvironment {
         aurora = AuroraIntents(proxy: backend.functionURL("aurora-proxy"), feeRecipient: config.auroraFeeRecipient,
                                authorize: { try await backend.sessionHeaders() })
         prices = PriceService(rpc: rpc)
-        // Graduated launchpad and Moment pools become swap routes on Uniswap v4.
-        swap = SwapEngine(rpc: rpc, launchpadFactory: config.launchpad.isDeployed ? config.launchpad.factory : nil, moments: config.moments)
+        // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools and those of
+        // the retired factories with the current record (the legacy 0xad3d… launches all graduate on Monday Trade).
+        let retiredFactories = LaunchpadAddresses.retiredStacks.filter { !$0.legacyRecord && $0.factory != config.launchpad.factory }.map(\.factory)
+        swap = SwapEngine(rpc: rpc, launchpadFactories: config.launchpad.isDeployed ? [config.launchpad.factory] + retiredFactories : [], moments: config.moments)
         perpl = PerplService(rpc: rpc)
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
         moments = MomentsService(rpc: rpc, addresses: config.moments)

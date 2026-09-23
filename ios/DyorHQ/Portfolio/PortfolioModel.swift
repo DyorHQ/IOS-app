@@ -309,13 +309,10 @@ final class PortfolioModel {
         defer { loading = false }
 
         // Reference data first: the launch list (curves + pair assets), the Moments list (coins + pools), the token universe.
-        async let launchesTask = env.launchpad.launches(limit: 200)
-        async let momentsTask = env.moments.moments(limit: 200)
-        var launches = (try? await launchesTask) ?? []
         // Launches on retired factories are history too: the coins and trades stay part of the wallet's record.
-        for factory in LaunchpadAddresses.retiredFactories {
-            launches += (try? await env.launchpad.launches(limit: 200, factory: factory)) ?? []
-        }
+        async let launchesTask = env.launchpad.allLaunches(limit: 200)
+        async let momentsTask = env.moments.moments(limit: 200)
+        let launches = (try? await launchesTask) ?? []
         let moments = (try? await momentsTask) ?? []
         launchesByCurve = Dictionary(launches.map { ($0.curve, $0) }, uniquingKeysWith: { first, _ in first })
         launchesByToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })

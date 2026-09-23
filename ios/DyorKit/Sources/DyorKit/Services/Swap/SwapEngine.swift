@@ -12,14 +12,15 @@ public actor SwapEngine {
     private let uniswap: UniswapVenue
     private let monday: MondayVenue
 
-    /// `launchpadFactory` enables routes through graduated launchpad pools on Uniswap v4 once the factory is deployed;
-    /// `moments` enables routes through graduated Moment pools (coin ↔ USDC, hooked, 1.5% all-in).
-    public init(rpc: RPCClient, session: URLSession = .shared, launchpadFactory: Address? = nil, moments: MomentsAddresses? = nil) {
+    /// `launchpadFactories` enables routes through graduated launchpad pools on Uniswap v4 — the live factory plus any
+    /// retired one with the current 17-field record; each token's pool key is read from its own factory. `moments`
+    /// enables routes through graduated Moment pools (coin ↔ USDC, hooked, 1.5% all-in).
+    public init(rpc: RPCClient, session: URLSession = .shared, launchpadFactories: [Address] = [], moments: MomentsAddresses? = nil) {
         self.rpc = rpc
         let multicall = Multicall(rpc: rpc)
         let v3 = V3Router(multicall: multicall)
         kuru = KuruFlowClient(session: session)
-        uniswap = UniswapVenue(multicall: multicall, v3: v3, launchpadFactory: launchpadFactory, moments: moments)
+        uniswap = UniswapVenue(multicall: multicall, v3: v3, launchpadFactories: launchpadFactories, moments: moments)
         monday = MondayVenue(v3: v3)
     }
 

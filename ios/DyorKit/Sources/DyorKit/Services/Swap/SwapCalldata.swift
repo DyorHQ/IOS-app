@@ -181,10 +181,16 @@ public enum SwapCalldata {
         try ContractCall(to: Uniswap.permit2, "allowance(address,address,address)", [.address(owner), .address(token), .address(spender)], returns: "uint160,uint48,uint48")
     }
 
-    /// Launchpad factory `getLaunchedToken(token)`; `exists` is field 15 and `phase` field 10 of the tuple.
+    /// Launchpad factory `getLaunchedToken(token)`: the 17-field `Types.LaunchedToken` (`graduationVenue` is field 10,
+    /// `phase` field 11, `exists` field 16). Only for factories with the current record, never the legacy 16-field one.
     public static func launchedToken(factory: Address, token: Address) throws -> ContractCall {
-        try ContractCall(to: factory, "getLaunchedToken(address)", [.address(token)],
-                         returns: "(address,address,address,address,address,uint256,uint16,uint16,int24,bool,uint8,uint256,uint256,uint256,bytes32,bool)")
+        try ContractCall(to: factory, "getLaunchedToken(address)", [.address(token)], returns: LaunchpadABI.launchedTokenTuple)
+    }
+
+    /// Whether a decoded `launchedToken` record is a launch whose pool sits on Uniswap v4: it exists, its phase is
+    /// PoolCreated (2) and its graduation venue is UniswapV4 (0).
+    static func graduatedOnV4(_ record: ABIValue) -> Bool {
+        record[16].bool && record[11].uint == 2 && record[10].uint == 0
     }
 
     public static func launchpadPoolKey(factory: Address, token: Address) throws -> ContractCall {
