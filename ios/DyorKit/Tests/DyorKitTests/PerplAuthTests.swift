@@ -61,7 +61,10 @@ final class PerplAuthTests: XCTestCase {
         XCTAssertEqual(frame["ms"] as? Int, 50)
         XCTAssertEqual(frame["fl"] as? Int, 4)         // IOC
         XCTAssertEqual(frame["lv"] as? Int, 1000)      // 10x
-        XCTAssertEqual(frame["lb"] as? Int, 12345778)  // head + 100
+        // `lb:0` on purpose, not `head + 100`: Perpl substitutes the market's own `order_ttl_blocks` window. A
+        // computed `head + ttl` from the RPC head (which runs ahead of Perpl's) overshot that ceiling and every
+        // entry was rejected with `last exec block too high` (b828fad). `head` no longer affects the frame.
+        XCTAssertEqual(frame["lb"] as? Int, 0)
         XCTAssertNil(frame["tp"])
     }
 
