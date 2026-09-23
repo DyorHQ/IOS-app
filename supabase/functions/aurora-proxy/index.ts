@@ -2,8 +2,8 @@
 // (Supabase secret AURORA_API_KEY) so the key never ships inside the app, and forwards ONLY the four endpoints the
 // bridge uses. verify_jwt=true gates to a valid Supabase JWT; we additionally require role 'authenticated' so the
 // public anon/publishable key (role 'anon') cannot use it — only a signed-in DyorHQ wallet session qualifies (the same
-// rule as pin-media). The key is appended as Aurora's path segment here, and scrubbed from every response body, since
-// Aurora's error bodies can echo the request path.
+// rule as pin-media). The key is appended as Aurora's path segment here, and scrubbed from every response body (raw
+// and percent-encoded), since Aurora's error bodies can echo the request path.
 const AURORA = "https://intents-api.aurora.dev/api";
 const ROUTES: Record<string, "GET" | "POST"> = {
   "tokens": "GET",
@@ -75,6 +75,7 @@ Deno.serve(async (req) => {
   } catch {
     return json({ error: "Aurora did not answer" }, 502);
   }
-  const text = (await upstream.text()).split(key).join("[redacted]");
+  // Scrub the key both as-is and in the percent-encoded form it had in the request path.
+  const text = (await upstream.text()).split(key).join("[redacted]").split(encodeURIComponent(key)).join("[redacted]");
   return new Response(text, { status: upstream.status, headers: { ...cors, "Content-Type": "application/json" } });
 });
