@@ -28,9 +28,10 @@ Copy `Secrets.example.xcconfig` to `Secrets.xcconfig` and fill in:
 | `PRIVY_APP_ID` | Yes | Same Privy app as above |
 | `PRIVY_CLIENT_ID` | Yes | Privy dashboard → **Clients** → add a *mobile* client for bundle id `fun.dyorhq.app`, URL scheme `dyorhq` |
 | `MONAD_RPC_URL` | Optional | A dedicated Monad mainnet RPC (Alchemy, QuickNode, …). Defaults to `https://rpc.monad.xyz`. |
+| `SOCIAL_LOGINS_ENABLED` | For Apple / Google sign-in | `YES` shows both buttons (they always appear together). Needs, in Privy: Apple and Google enabled under **Login methods → Socials** with DyorHQ's own credentials (Apple Client ID = bundle id `fun.dyorhq.app`; Google = the Web-application client whose redirect URI is `https://auth.privy.io/api/v1/oauth/callback`), and `dyorhq` in the mobile client's allowed URL schemes. The Sign in with Apple entitlement is set in `ios/project.yml`. Empty hides both. |
 | `PERPL_BUILDER_ID` | Optional | Same as above |
 | `LAUNCHPAD_FACTORY`, `LAUNCH_ROUTER`, `FEE_ESCROW`, `HOLDER_FEE_SHARING`, `MEME_HOOK` | After you deploy | `contracts/deployments/143.json` |
-| `DEVELOPMENT_TEAM` | For device builds | Xcode → Settings → Accounts → your team's **Team ID** (Personal Team while the paid enrollment is pending). Read at build time, survives `xcodegen generate`. |
+| `DEVELOPMENT_TEAM` | For device builds | Xcode → Settings → Accounts → your team's **Team ID**. Must be a paid Apple Developer Program team: the app carries the Sign in with Apple entitlement, which a Personal Team can't sign (Simulator builds need no team). Read at build time, survives `xcodegen generate`. |
 | `PASSKEY_RP_ID` | Paid team only | `accounts.dyorhq.fun`, once the AASA is hosted at `https://accounts.dyorhq.fun/.well-known/apple-app-site-association`. Leave empty on a Personal Team (Associated Domains can't be signed) and keep the entitlement block in `ios/project.yml` commented out. |
 
 ## 3. Web app — `.env.local`

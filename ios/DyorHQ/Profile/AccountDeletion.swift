@@ -86,6 +86,16 @@ struct DeleteAccountView: View {
                     Text("Transactions, tokens and Moments you created stay on the Monad blockchain — nothing can remove them — and images you published for coins or Moments stay online because those tokens point to them.")
                 }
 
+                if method == .apple {
+                    Section {
+                        // Apple's fallback when the app can't revoke the Sign in with Apple token itself (TN3194); the
+                        // steps are Apple's own (support.apple.com/102571).
+                        Text("Also stop using Sign in with Apple for DyorHQ: open Settings, tap your name, tap Sign in with Apple, select DyorHQ, then tap Delete.")
+                    } header: {
+                        Text("Sign in with Apple")
+                    }
+                }
+
                 if session.canSign {
                     Section {
                         switch method {

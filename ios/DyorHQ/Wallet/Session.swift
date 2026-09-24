@@ -1,3 +1,4 @@
+import AuthenticationServices
 import DyorKit
 import Foundation
 import Observation
@@ -89,7 +90,7 @@ final class Session {
             if !loadStoredSession() { state = .signedOut }
         case .authenticated(let user):
             if suppressPrivyAdoption { return } // email verification only — don't adopt the Privy wallet
-            await adopt(user)
+            try? await adoptOnce(user) // a failure is already recorded in lastError and the Privy session ended
         }
     }
 
@@ -120,8 +121,22 @@ final class Session {
         return false
     }
 
-    /// Makes sure the user has an embedded wallet, then exposes it as the app's signer.
-    private func adopt(_ user: any PrivyUser) async {
+    /// The adoption in flight. An Apple/Google sign-in awaits its own adoption while the auth-state stream sees the same
+    /// login, so both share one task: at most one wallet is created, and both callers get the same outcome.
+    private var adoption: Task<Void, Error>?
+
+    private func adoptOnce(_ user: any PrivyUser) async throws {
+        if let adoption { return try await adoption.value }
+        let task = Task { try await self.adopt(user) }
+        adoption = task
+        defer { adoption = nil }
+        try await task.value
+    }
+
+    /// Makes sure the user has an embedded wallet, then exposes it as the app's signer. If that fails, the Privy session
+    /// is ended too, so no half-signed-in state lingers: the user is back on onboarding with the reason, and the next
+    /// attempt starts clean.
+    private func adopt(_ user: any PrivyUser) async throws {
         do {
             let embedded: any EmbeddedEthereumWallet
             if let existing = user.embeddedEthereumWallets.first {
@@ -131,32 +146,57 @@ final class Session {
             }
             guard let address = Address(embedded.address) else { throw SessionError.invalidWalletAddress }
             await embedded.provider.switchChain(chainId: Monad.chainId, rpcUrl: config.rpcURL.absoluteString)
-            let (method, label) = Self.describe(user)
+            let (method, label) = signInIdentity(of: user)
             wallet = PrivyWallet(address: address, provider: embedded.provider)
             WatchOnlyStore.clear()
             ImportedWalletStore.clear() // a fresh Privy sign-in supersedes any imported wallet
             mera.forget()
+            lastError = nil
             state = .signedIn(Account(address: address, method: method, label: label))
         } catch {
             lastError = error.localizedDescription
-            state = .signedOut
+            await user.logout()
+            wallet = nil
+            if !loadStoredSession() { state = .signedOut }
+            throw error
         }
     }
 
     /// The most recent sign-in problem, for the onboarding screens to show.
     var lastError: String?
 
-    private static func describe(_ user: any PrivyUser) -> (Method, String?) {
+    /// The method the user just tapped (Apple / Google), while that sign-in is in flight.
+    private var pendingMethod: Method?
+
+    /// How the Privy user signed in, for the account rows: the method just tapped if it is linked, otherwise the most
+    /// recently verified sign-in account (a user merged by email can hold several). The label is that account's email,
+    /// except an Apple "Hide My Email" relay address or an empty one, which reads as nothing rather than as a name.
+    private func signInIdentity(of user: any PrivyUser) -> (Method, String?) {
+        var candidates: [(method: Method, label: String?, verified: Date?)] = []
         for account in user.linkedAccounts {
             switch account {
-            case .apple(let apple): return (.apple, apple.email)
-            case .google(let google): return (.google, google.email)
-            case .email(let email): return (.email, email.email)
-            case .passkey: return (.passkey, nil)
+            case .apple(let apple): candidates.append((.apple, Self.displayEmail(apple.email), apple.latestVerifiedAt))
+            case .google(let google): candidates.append((.google, Self.displayEmail(google.email), google.latestVerifiedAt))
+            case .email(let email): candidates.append((.email, Self.displayEmail(email.email), email.latestVerifiedAt))
+            case .passkey(let passkey): candidates.append((.passkey, nil, passkey.latestVerifiedAt))
             default: continue
             }
         }
-        return (.email, nil)
+        if let pendingMethod, let tapped = candidates.first(where: { $0.method == pendingMethod }) {
+            return (tapped.method, tapped.label)
+        }
+        // Newest verification wins; ties (or no dates) keep Privy's order.
+        let newest = candidates.reduce(nil as (method: Method, label: String?, verified: Date?)?) { best, next in
+            guard let best else { return next }
+            return (next.verified ?? .distantPast) > (best.verified ?? .distantPast) ? next : best
+        }
+        return newest.map { ($0.method, $0.label) } ?? (.email, nil)
+    }
+
+    private static func displayEmail(_ email: String) -> String? {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed.lowercased().hasSuffix("@privaterelay.appleid.com") { return nil }
+        return trimmed
     }
 
     // MARK: Sign-in methods
@@ -179,6 +219,7 @@ final class Session {
             await user.logout()
         }
         wallet = MeraWallet(address: address, session: mera)
+        lastError = nil
         state = .signedIn(Account(address: address, method: .meraPasskey, label: "Passkey"))
     }
 
@@ -191,11 +232,28 @@ final class Session {
     }
 
     func signInWithApple() async throws {
-        _ = try await requirePrivy().oAuth.login(with: .apple, appUrlScheme: "dyorhq")
+        do {
+            try await signInWithOAuth(.apple, as: .apple)
+        } catch where authenticationServicesError(in: error).map({
+            $0.domain == ASAuthorizationError.errorDomain && $0.code == ASAuthorizationError.unknown.rawValue
+        }) == true {
+            // Apple's "unknown" (1000) is what closing its "Sign in to your Apple Account" prompt returns on a device
+            // with no Apple Account — say that instead of the raw system error.
+            throw SessionError.appleSignInUnavailable
+        }
     }
 
-    func signInWithGoogle() async throws {
-        _ = try await requirePrivy().oAuth.login(with: .google, appUrlScheme: "dyorhq")
+    func signInWithGoogle() async throws { try await signInWithOAuth(.google, as: .google) }
+
+    /// Apple / Google through Privy (Privy drives Apple's native sheet or Google's web sheet), then the embedded wallet —
+    /// awaited here so a failure reaches the button that started it. The scheme matches Info.plist's CFBundleURLTypes
+    /// and the Privy app client's allowed URL schemes.
+    private func signInWithOAuth(_ provider: OAuthProvider, as method: Method) async throws {
+        lastError = nil
+        pendingMethod = method
+        defer { pendingMethod = nil }
+        let user = try await requirePrivy().oAuth.login(with: provider, appUrlScheme: "dyorhq")
+        try await adoptOnce(user)
     }
 
     func signInWithPasskey() async throws {
@@ -211,6 +269,7 @@ final class Session {
         let account = Account(address: address, method: .watchOnly, label: nil)
         WatchOnlyStore.save(account)
         wallet = nil
+        lastError = nil
         state = .signedIn(account)
     }
 
@@ -225,6 +284,7 @@ final class Session {
             await user.logout()
         }
         wallet = LocalWallet(account: account)
+        lastError = nil
         state = .signedIn(Account(address: account.address, method: .imported, label: nil))
     }
 
@@ -283,6 +343,7 @@ final class Session {
         mera.forget()
         if let privy, case .authenticated(let user) = await privy.getAuthState() { await user.logout() }
         wallet = LocalWallet(account: account)
+        lastError = nil
         state = .signedIn(Account(address: account.address, method: .emailPassword, label: email))
     }
 
@@ -381,6 +442,7 @@ final class Session {
         if let privy, case .authenticated(let user) = await privy.getAuthState() {
             await user.logout()
         }
+        lastError = nil
         state = .signedOut
     }
 
@@ -409,6 +471,7 @@ final class Session {
         for itemClass in [kSecClassGenericPassword, kSecClassInternetPassword, kSecClassKey] {
             SecItemDelete([kSecClass as String: itemClass] as CFDictionary)
         }
+        lastError = nil
         state = .signedOut
     }
 
@@ -430,9 +493,11 @@ enum SessionError: LocalizedError {
     case legacyWalletHasFunds(Address)
     case legacyBalanceUnavailable
     case upgradeNeedsNewPassword
+    case appleSignInUnavailable
 
     var errorDescription: String? {
         switch self {
+        case .appleSignInUnavailable: return "Sign in with Apple couldn’t start. Make sure this iPhone is signed in to an Apple Account in Settings, then try again."
         case .legacyWalletHasFunds(let legacy):
             return "Your account’s original wallet (\(legacy.checksummed)) still holds funds. To keep them safe, the security upgrade can’t finish until they’re moved out — send them to another wallet from a device where you’re still signed in, then log in again. Don’t reset your password before then: a reset moves your account to a new wallet and leaves those funds behind."
         case .legacyBalanceUnavailable: return "Couldn’t check your wallet’s balance. Check your connection and try again."
@@ -445,6 +510,29 @@ enum SessionError: LocalizedError {
         case .emailNotVerified: return "We couldn't find a verified account for that email and password. If you're new, tap Sign Up to verify your email first."
         }
     }
+}
+
+/// Whether a sign-in error only means the person backed out — closed Apple's sheet or Google's web sheet — which is
+/// not a failure to show.
+func isUserCancellation(_ error: Error) -> Bool {
+    if error is CancellationError { return true }
+    if let privy = error as? PrivyError, case .authenticationFailure(.passkeyUserCancelled) = privy.errorCode { return true }
+    guard let system = authenticationServicesError(in: error) else { return false }
+    return (system.domain == ASAuthorizationError.errorDomain && system.code == ASAuthorizationError.canceled.rawValue)
+        || (system.domain == ASWebAuthenticationSessionError.errorDomain
+            && system.code == ASWebAuthenticationSessionError.canceledLogin.rawValue)
+}
+
+/// The AuthenticationServices error behind a sign-in failure. PrivySDK wraps the system error in
+/// `failureDuringAuthentication`, and system errors can nest under NSUnderlyingErrorKey, so this looks through both.
+func authenticationServicesError(in error: Error) -> NSError? {
+    if let privy = error as? PrivyError, case .authenticationFailure(.failureDuringAuthentication(let underlying)) = privy.errorCode {
+        return authenticationServicesError(in: underlying)
+    }
+    let ns = error as NSError
+    if ns.domain == ASAuthorizationError.errorDomain || ns.domain == ASWebAuthenticationSessionError.errorDomain { return ns }
+    if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error { return authenticationServicesError(in: underlying) }
+    return nil
 }
 
 /// Remembers a watch-only address between launches.

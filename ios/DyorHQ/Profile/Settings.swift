@@ -30,6 +30,8 @@ struct ManageWalletsView: View {
                          ? "You are watching this address. Sign in to create a wallet you can sign with."
                          : account.method == .meraPasskey
                          ? "This wallet is derived from your passkey every time you sign in; nothing is stored on this device or on a server. The same passkey gives the same wallet on any device."
+                         : [.apple, .google, .email, .passkey].contains(account.method)
+                         ? "This is a Privy embedded wallet, secured by your \(account.method.title) sign-in. The same sign-in opens it on any device. DyorHQ never holds your keys."
                          : "This wallet was created on this device and is secured by your \(account.method.title) account. DyorHQ never holds your keys.")
                 }
 
