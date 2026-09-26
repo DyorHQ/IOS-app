@@ -113,7 +113,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
     : collatAmt === null || collatAmt === 0n ? "Enter an AUSD amount, like 25."
     : !accountKnown ? (accountError ? "Couldn't read your Perpl account; deposits wait until it loads." : "Reading your Perpl account…")
     : !acct && collatAmt < PERPL.minDeposit ? `The first deposit opens your account and must be at least ${formatUnits(PERPL.minDeposit, 6)} AUSD.`
-    : walletAusd !== null && collatAmt > walletAusd ? `Your wallet holds ${fmtUnits(walletAusd, 6)} AUSD.`
+    : walletAusd !== null && collatAmt > walletAusd ? `Your wallet holds ${fmtUnits(walletAusd, 6)} AUSD, less than this deposit.`
     : null;
   const withdrawIssue = !!acct && collatAmt !== null && collatAmt > freeCNS;
   const accountText = acct ? null : !account ? "—" : accountKnown ? null : accountError ? "Couldn't read" : "Reading…";
@@ -224,7 +224,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
             <>
               <div className="inline-form"><input inputMode="decimal" placeholder="AUSD amount" value={collatAmount} onChange={(e) => setCollatAmount(e.target.value)} /><button type="button" className="btn primary sm" disabled={busy || !accountKnown || !collatAmt || !!depositIssue} onClick={doDeposit}>{acct ? "Deposit" : "Open account"}</button><button type="button" className="btn secondary sm" disabled={busy || !acct || !collatAmt || withdrawIssue} onClick={doWithdraw}>Withdraw</button></div>
               {depositIssue && <p className="hint err" style={{ marginTop: 8 }}>{depositIssue}</p>}
-              {acct && <p className={`hint ${withdrawIssue ? "err" : ""}`} style={{ marginTop: 8 }}>${fmtNum(fromCNS(freeCNS))} is free to withdraw (the rest backs open positions and orders).</p>}
+              {acct && <p className={`hint ${withdrawIssue ? "err" : ""}`} style={{ marginTop: 8 }}>${fmtNum(fromCNS(freeCNS))} is available to withdraw.</p>}
               <p className="hint" style={{ marginTop: 8 }}>Collateral is AUSD. First deposit opens your account (minimum 10 AUSD). Need AUSD? <button type="button" className="link" style={{ color: "var(--accent-ink)", fontWeight: 600 }} onClick={() => toast("Swap MON to AUSD on the Swap tab")}>Swap for it</button>.</p>
               <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={dismiss} /></div>
             </>
