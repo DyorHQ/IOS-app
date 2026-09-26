@@ -76,7 +76,8 @@ The DyorHQ workflow archives `ios/DyorHQ.xcodeproj` on every push to `main`. Tha
 `Package.resolved` into the project (Xcode Cloud never resolves packages on its own).
 
 - Environment variables: App Store Connect → Xcode Cloud → Manage Workflows → DyorHQ → Environment. Add
-  `PRIVY_APP_ID`, `PRIVY_CLIENT_ID` and `AURORA_API_KEY` with Secret ticked, plus any optional key the script lists.
+  `PRIVY_APP_ID` and `PRIVY_CLIENT_ID` with Secret ticked, plus any optional key the script lists. The Aurora API key
+  is not a build variable: it lives only in the `aurora-proxy` Edge Function's secrets, so it never ships in the app.
   Enter plain values (no quotes, URLs as-is). An archive fails without the two Privy ids, because sign-up needs them;
   any other missing value switches its feature off, exactly as in a local build.
 - After changing a package requirement in `project.yml` or `DyorKit/Package.swift`, run `scripts/pin-packages.sh`

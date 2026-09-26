@@ -49,3 +49,12 @@ next-env.d.ts
 
 # example env is safe to commit
 !.env.example
+
+# secrets and signing material that must never be committed (security audit 2026-09-26)
+.dev.vars
+.dev.vars.*
+*.p8
+*.p12
+*.mobileprovision
+*.keystore
+.claude/settings.local.json
