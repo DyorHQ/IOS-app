@@ -12,12 +12,13 @@ import * as Glass from "./ui/liquid-glass";
 import { Wordmark } from "./ui/wordmark";
 import { useWallet } from "./lib/wallet";
 import { useMarkets } from "./lib/app-data";
-import { DEPLOYED, EXPLORER, explorerAddress } from "./lib/chain";
+import { DEPLOYED, EXPLORER, explorerAddress, publicClient } from "./lib/chain";
 import { fetchLaunchpadActivity } from "./lib/launchpad/events";
 import { useAsync, useNow } from "./lib/use-async";
 import { useTx } from "./lib/use-tx";
 import { waitFor } from "./lib/use-tx";
 import { fmtUnits, parseAmount, shortAddress, timeAgo } from "./lib/format";
+import { checkRecipient } from "./lib/send-checks";
 import { TxStatus } from "./launchpad/ui";
 import "./launchpad/launchpad.css";
 
@@ -161,18 +162,36 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
   const [token, setToken] = useState<string>("0x0000000000000000000000000000000000000000");
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("");
+  const [confirmedContract, setConfirmedContract] = useState<string | null>(null);
   const { tx, run, dismiss, busy } = useTx();
   const row = markets.rows.find((r) => r.address.toLowerCase() === token.toLowerCase()) ?? owned[0];
   const parsed = row ? parseAmount(amount, row.decimals) : null;
-  const valid = !!row && !!parsed && parsed > 0n && parsed <= row.balance && isAddress(to);
+  const recipient = to.trim();
+  // The recipient's bytecode: a contract recipient must be confirmed (app/lib/send-checks.ts).
+  const code = useAsync(async () => (isAddress(recipient) ? (await publicClient.getCode({ address: recipient })) ?? "0x" : null), `code:${recipient}`);
+  const check = row ? checkRecipient(recipient, row, wallet.account, code.loading ? null : code.data ?? undefined) : null;
+  const unconfirmed = !!check?.contract && confirmedContract !== recipient;
+  // Why Send is disabled, in the order the user fills the form.
+  const reason = !markets.balancesReady ? "Reading your balances…"
+    : !row ? "This wallet holds nothing to send yet."
+    : !recipient ? "Enter the recipient's address."
+    : check?.block ? null // shown under the address
+    : !amount.trim() ? "Enter an amount."
+    : parsed === null ? "Enter the amount as a plain number, like 2.5."
+    : parsed === 0n ? "Enter an amount above zero."
+    : parsed > row.balance ? `That is more than your ${row.symbol} balance.`
+    : code.loading ? "Checking the address…"
+    : unconfirmed ? "Confirm the contract recipient first."
+    : null;
+  const valid = !!row && !!parsed && !check?.block && reason === null;
   const send = async () => {
     const client = wallet.client;
-    if (!client || !row || !parsed || !isAddress(to)) return;
+    if (!client || !row || !parsed || !valid || !isAddress(recipient)) return;
     const shown = formatUnits(parsed, row.decimals); // what is signed, not what was typed
     const done = await run(`Send ${shown} ${row.symbol}`, async (onSent) => {
       const hash = row.native
-        ? await client.sendTransaction({ account: client.account, chain: client.chain, to: getAddress(to), value: parsed })
-        : await client.sendTransaction({ account: client.account, chain: client.chain, to: row.address, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [getAddress(to), parsed] }) });
+        ? await client.sendTransaction({ account: client.account, chain: client.chain, to: getAddress(recipient), value: parsed })
+        : await client.sendTransaction({ account: client.account, chain: client.chain, to: row.address, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [getAddress(recipient), parsed] }) });
       onSent(hash);
       await waitFor(hash);
       return hash;
@@ -183,10 +202,17 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
   return (
     <>
       <SheetHead title="Send" onClose={onClose} />
-      <label className="field">Asset<select className="select" value={row?.address ?? token} onChange={(e) => setToken(e.target.value)}>{owned.map((r) => <option key={r.address} value={r.address}>{r.symbol} · {fmtUnits(r.balance, r.decimals, { compact: true })}</option>)}{owned.length === 0 && <option value="">No balances</option>}</select></label>
-      <label className="field">To address<input placeholder="0x…" value={to} onChange={(e) => setTo(e.target.value)} /></label>
-      <label className="field">Amount<input inputMode="decimal" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />{row && <span className="help">Balance {fmtUnits(row.balance, row.decimals)} {row.symbol}</span>}</label>
+      <label className="field">Asset<select className="select" value={row?.address ?? token} onChange={(e) => setToken(e.target.value)}>{owned.map((r) => <option key={r.address} value={r.address}>{r.symbol} · {fmtUnits(r.balance, r.decimals, { compact: true })}</option>)}{owned.length === 0 && <option value="">{markets.balancesReady ? "No balances" : "Reading balances…"}</option>}</select></label>
+      <label className="field">To address<input placeholder="0x…" value={to} onChange={(e) => setTo(e.target.value)} />{recipient && check?.block && <span className="hint err">{check.block}</span>}{code.error && <span className="help">Couldn&apos;t check whether this address is a contract.</span>}</label>
+      {check?.warn && (
+        <div className="warnbox">
+          {check.warn}
+          {check.contract && row && <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}><input type="checkbox" checked={confirmedContract === recipient} onChange={(e) => setConfirmedContract(e.target.checked ? recipient : null)} />I know this contract can receive {row.symbol}.</label>}
+        </div>
+      )}
+      <label className="field">Amount<input inputMode="decimal" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />{row && <span className="help">{markets.balancesReady ? `Balance ${fmtUnits(row.balance, row.decimals)} ${row.symbol}` : "Reading balance…"}</span>}</label>
       <TxStatus tx={tx} onDismiss={dismiss} />
+      {wallet.onMonad && reason && <p className="hint">{reason}</p>}
       <button type="button" className="btn primary big" disabled={!valid || busy || !wallet.onMonad} onClick={send}>{wallet.onMonad ? `Send ${row?.symbol ?? ""}` : "Switch to Monad first"}</button>
     </>
   );
