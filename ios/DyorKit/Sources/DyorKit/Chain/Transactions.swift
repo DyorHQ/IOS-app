@@ -128,9 +128,13 @@ public struct TransactionSender: Sendable {
         }
         async let nonce = rpc.transactionCount(of: wallet.address)
         async let estimate = rpc.estimateGas(call)
-        async let fees = feeParameters()
+        async let fees = feeQuote()
         let gasLimit = Self.gasLimit(estimate: try await estimate)
-        let (maxFee, tip) = try await fees
+        let (maxFee, tip, baseFee) = try await fees
+        // The RPC set every one of these: refuse, never clamp, a fee outside the chain's bounds (IOST-1).
+        if let violation = NetworkFeeLimits.violation(gasLimit: gasLimit, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip, baseFee: baseFee, chainId: chainId) {
+            throw TransactionError.rejected(NetworkFeeLimits.refusal(violation, gasLimit: gasLimit, maxFeePerGas: maxFee, chainId: chainId))
+        }
         return PreparedTransaction(from: wallet.address, to: request.to, data: request.data, value: request.value, nonce: try await nonce, gasLimit: gasLimit, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip, chainId: chainId)
     }
 
@@ -164,13 +168,63 @@ public struct TransactionSender: Sendable {
     /// still lands if the base fee doubles. Monad charges gas limit × min(maxFee, base + tip); tipping the whole gas
     /// price (the old rule) roughly doubled every fee there. Falls back to the gas price when a node can't answer.
     func feeParameters() async throws -> (maxFee: BigUInt, tip: BigUInt) {
+        let quote = try await feeQuote()
+        return (quote.maxFee, quote.tip)
+    }
+
+    /// `feeParameters` with the base fee they were derived from — nil on the gas-price fallback, whose fee doesn't come
+    /// from it — for `NetworkFeeLimits`' checks against the base fee.
+    func feeQuote() async throws -> (maxFee: BigUInt, tip: BigUInt, baseFee: BigUInt?) {
         async let baseFee = rpc.latestBaseFee()
         async let suggestedTip = rpc.maxPriorityFeePerGas()
         let base = (try? await baseFee) ?? nil
         let tip = try? await suggestedTip
-        if let base, let tip { return (base * 2 + tip, tip) }
+        if let base, let tip { return (base * 2 + tip, tip, base) }
         let price = try await rpc.gasPrice()
-        return (price * 2, price)
+        return (price * 2, price, nil)
+    }
+
+    /// The most a plan's network fees can come to at today's fees, for the confirmation sheet: each step the node can
+    /// estimate now, at the gas limit and max fee `prepare` would set. A step that depends on an earlier one (a swap
+    /// after its approval) can't be estimated until that one lands, so it is counted in `unestimated` instead; every
+    /// step is still checked against `NetworkFeeLimits` when it is prepared. Approvals the allowance already covers
+    /// are left out, as `run` skips them. Nil when the fees can't be read.
+    public func feePreview(_ steps: [TransactionStep], from: Address) async -> FeePreview? {
+        guard let fees = try? await feeQuote() else { return nil }
+        var total: BigUInt = 0
+        var unestimated = 0
+        for step in steps {
+            let request: TransactionRequest?
+            do { request = try await self.request(for: step, owner: from) } catch { unestimated += 1; continue }
+            guard let request else { continue }
+            if let limit = await gasLimit(for: request, from: from) { total += limit * fees.maxFee } else { unestimated += 1 }
+        }
+        return FeePreview(maxFee: total, unestimated: unestimated, chainId: chainId)
+    }
+
+    public struct FeePreview: Sendable, Equatable {
+        /// The most the estimated steps can be charged, in the chain's native coin (wei).
+        public let maxFee: BigUInt
+        /// Steps that can't be estimated before an earlier one lands.
+        public let unestimated: Int
+        public let chainId: Int
+    }
+
+    /// The transaction `step` sends from `owner` now, or nil when it has nothing to send: an approval the allowance
+    /// already covers (a Permit2 one for at least another minute), or a call step without a request.
+    func request(for step: TransactionStep, owner: Address) async throws -> TransactionRequest? {
+        switch step.kind {
+        case .approve(let token, let spender, let amount):
+            let allowance = try await multicall.readAll([try ERC20.allowance(token, owner: owner, spender: spender)])[0][0].uint
+            if allowance >= amount { return nil }
+            return TransactionRequest(to: token, data: try ERC20.approveCalldata(spender: spender, amount: amount))
+        case .permit2Approve(let token, let spender, let amount, _):
+            let allowance = try await multicall.readAll([try SwapCalldata.permit2Allowance(owner: owner, token: token, spender: spender)])[0]
+            if allowance[0].uint >= amount, allowance[1].uint > BigUInt(Int(Date().timeIntervalSince1970) + 60) { return nil }
+            return try step.request(at: Date())
+        case .call:
+            return step.request
+        }
     }
 
     public func send(_ request: TransactionRequest, from wallet: Wallet) async throws -> Data {
@@ -271,21 +325,7 @@ public struct TransactionSender: Sendable {
         var previousBlock: UInt64?
         for step in steps {
             onEvent(.preparing(step.label))
-            let request: TransactionRequest
-            switch step.kind {
-            case .approve(let token, let spender, let amount):
-                let allowance = try await multicall.readAll([try ERC20.allowance(token, owner: wallet.address, spender: spender)])[0][0].uint
-                if allowance >= amount { continue }
-                request = TransactionRequest(to: token, data: try ERC20.approveCalldata(spender: spender, amount: amount))
-            case .permit2Approve(let token, let spender, let amount, _):
-                let allowance = try await multicall.readAll([try SwapCalldata.permit2Allowance(owner: wallet.address, token: token, spender: spender)])[0]
-                if allowance[0].uint >= amount, allowance[1].uint > BigUInt(Int(Date().timeIntervalSince1970) + 60) { continue }
-                guard let r = try step.request(at: Date()) else { continue }
-                request = r
-            case .call:
-                guard let r = step.request else { continue }
-                request = r
-            }
+            guard let request = try await self.request(for: step, owner: wallet.address) else { continue }
             try await waitForReserveSpacing(value: request.value, after: previousBlock, from: wallet.address)
             let hash: Data
             do {

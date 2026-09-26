@@ -98,6 +98,8 @@ struct ConfirmationSheet<Details: View>: View {
     /// or ends, so expiry changes the badge and the button in place — no pop-up, and nothing typed is lost.
     @State private var assessment: MeraSession.Assessment?
     @State private var approving = false
+    /// The most the plan's network fees can come to at today's fees, read once the plan is built (IOST-1).
+    @State private var fee: TransactionSender.FeePreview?
 
     private var confirmLabel: String {
         session.isPasskeyAccount && assessment?.needsFaceID == true ? "Confirm with \(BiometricGate.promptName)" : confirmTitle
@@ -107,6 +109,13 @@ struct ConfirmationSheet<Details: View>: View {
         NavigationStack {
             List {
                 Section { details }
+                if let fee, !run.isDone {
+                    Section {
+                        DetailRow("Max network fee", Self.feeText(fee))
+                    } footer: {
+                        Text("The most the network can charge. Each transaction's fee is checked again before it's signed, and refused if it's unusually high.")
+                    }
+                }
                 if session.isPasskeyAccount, !preparing, buildError == nil, !run.isRunning, !run.isDone, let assessment {
                     Section { SessionScopeBadge(assessment: assessment) }
                 }
@@ -173,8 +182,18 @@ struct ConfirmationSheet<Details: View>: View {
         .task {
             do { steps = try await build() } catch { buildError = describe(error) }
             preparing = false
+            if buildError == nil, let address = session.address { fee = await env.sender.feePreview(steps, from: address) }
         }
         .task(id: scopeKey) { await reassess() }
+    }
+
+    /// "Up to 0.061 MON", plus any steps that can only be priced once an earlier one lands (a swap after its approval).
+    static func feeText(_ fee: TransactionSender.FeePreview) -> String {
+        let symbol = NetworkFeeLimits.nativeSymbol(chainId: fee.chainId)
+        let more = fee.unestimated == 1 ? "1 more step" : "\(fee.unestimated) more steps"
+        if fee.unestimated == 0 { return "Up to \(NumberStyle.units(fee.maxFee, decimals: 18)) \(symbol)" }
+        if fee.maxFee == 0 { return "Priced as each step is signed" }
+        return "Up to \(NumberStyle.units(fee.maxFee, decimals: 18)) \(symbol) + \(more)"
     }
 
     /// Changes whenever the badge could: the plan arrives, or the passkey session opens, ends or is replaced.

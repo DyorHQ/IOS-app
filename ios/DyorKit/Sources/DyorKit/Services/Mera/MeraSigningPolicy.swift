@@ -212,10 +212,11 @@ extension Mera {
         /// The most gas fee any Monad transaction a passkey account signs may commit to: 5 MON (gas limit × max fee per
         /// gas, the most Monad can charge, since it bills the gas limit). A normal swap pays about 0.07 MON; the largest
         /// transaction the app sends, a launch with its first buy (~5.2M gas used on mainnet, ~6.2M limit), about 1.3 MON.
-        public static let maxNetworkFee = BigUInt(5) * BigUInt(10).power(18)
+        /// The same bound every wallet's transactions get (`NetworkFeeLimits.monad`).
+        public static let maxNetworkFee = NetworkFeeLimits.monad.maxNetworkFee
         /// The highest gas limit such a transaction may carry: half Monad's per-transaction limit, over twice the largest
         /// the app sends. A graduating Moment collect (`MomentCollect.GRADUATION_GAS` reserves 3M) sits well inside it.
-        public static let maxGasLimit = BigUInt(15_000_000)
+        public static let maxGasLimit = NetworkFeeLimits.monad.maxGasLimit
 
         /// One transaction as the wallet sees it.
         public struct Call: Sendable, Equatable {
@@ -350,13 +351,15 @@ extension Mera {
         }
 
         /// The fee comes from the RPC (`eth_estimateGas`, the base fee, `eth_maxPriorityFeePerGas`), so a buggy or hostile
-        /// node could otherwise have a transaction commit the whole balance to gas. It must stay within `maxNetworkFee`
-        /// and `maxGasLimit`, with a tip no higher than the max fee. A preview carries no fee and passes here; a fee
-        /// given only in part fails closed.
+        /// node could otherwise have a transaction commit the whole balance to gas. It must stay within Monad's
+        /// `NetworkFeeLimits` (`maxNetworkFee`, `maxGasLimit`, the fee-per-gas ceiling), with a tip no higher than the
+        /// max fee — what `TransactionSender.prepare` already enforced, checked again by the wallet. A preview carries no
+        /// fee and passes here; a fee given only in part fails closed.
         static func feeWithinLimits(_ call: Call) -> Bool {
             switch (call.gasLimit, call.maxFeePerGas, call.maxPriorityFeePerGas) {
             case (nil, nil, nil): return true
-            case let (gasLimit?, maxFee?, tip?): return gasLimit <= maxGasLimit && tip <= maxFee && gasLimit * maxFee <= maxNetworkFee
+            case let (gasLimit?, maxFee?, tip?):
+                return NetworkFeeLimits.violation(gasLimit: gasLimit, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip, baseFee: nil, chainId: Monad.chainId) == nil
             default: return false
             }
         }
