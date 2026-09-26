@@ -208,6 +208,7 @@ final class PerplTrading: MeraSessionLifecycle {
     /// never stored, never backed up), and the session validates the typed data and signs its digest itself. Only the
     /// token and its nonce are stored, so a new device, or this one after it forgot the token, simply enrols again.
     func enroll(wallet: any Wallet, address: Address) async throws {
+        let passkeyWallet = wallet is MeraWallet
         status = .connecting
         do {
             // The payload is bound to `address`; only that wallet may sign it.
@@ -218,7 +219,9 @@ final class PerplTrading: MeraSessionLifecycle {
                 // it forgot its token — enrols again with one passkey prompt at most, none inside a live session.
                 let enrolled = try await passkey.session.enrollPerpl(label: "DyorHQ")
                 let token = PerplToken(enrolled.key, keyNonce: enrolled.keyNonce)
+                // Stored under the address it was enrolled for, whoever is signed in now (the Keychain is per address).
                 PerplKeychain.saveToken(token, address: address.checksummed)
+                try requireBound(to: address, passkey: true)
                 storedToken = token
                 // From the live session, not the enrolment's copy: nothing outlives a session that ended meanwhile.
                 key = sessionKey()
@@ -231,6 +234,9 @@ final class PerplTrading: MeraSessionLifecycle {
                 let walletSignature = try await signer.signDigest(payload.digest)
                 let enrolled = try await auth.enroll(address: address.checksummed, secret: secret, payload: payload, walletSignature: walletSignature, scopeMask: PerplScope.trade)
                 PerplKeychain.save(enrolled, address: address.checksummed)
+                // The user may have signed out or switched wallets while the wallet signed: this key belongs to
+                // `address`, and must never become the key of whichever account is bound now.
+                try requireBound(to: address, passkey: false)
                 key = enrolled
             } else {
                 throw PerplTradeError.notSignedIn
@@ -240,8 +246,21 @@ final class PerplTrading: MeraSessionLifecycle {
             startKeepAlive()
             try await connect()
         } catch {
-            status = .failed(describe(error))
+            // A failure that belongs to another account (the wallet changed mid-enrolment) doesn't overwrite this one's.
+            if isBound(to: address, passkey: passkeyWallet) { status = .failed(describe(error)) }
             throw error
+        }
+    }
+
+    /// The trading session is still bound to `address` (and the same kind of account) — checked after every await
+    /// that a sign-out or wallet switch could have outlived.
+    private func isBound(to address: Address, passkey: Bool) -> Bool {
+        boundAddress == address.checksummed && boundToPasskey == passkey
+    }
+
+    private func requireBound(to address: Address, passkey: Bool) throws {
+        guard isBound(to: address, passkey: passkey) else {
+            throw PerplTradeError.unavailable("You switched accounts while this was in progress. Nothing was applied to the account you're signed in to now.")
         }
     }
 
@@ -359,9 +378,13 @@ final class PerplTrading: MeraSessionLifecycle {
     /// AccountUpdate on the live socket, so wait for that first and only reconnect (for a fresh snapshot) if it
     /// doesn't arrive — every reconnect spends one of the wallet's 4 connection slots.
     func enableForwarding(env: AppEnvironment, wallet: Wallet) async throws {
+        let passkey = boundToPasskey
         let data = try ABI.encodeCall("allowOrderForwarding(bool)", [.bool(true)])
         let hash = try await env.sender.run([.call(TransactionRequest(to: Perpl.exchange, data: data), label: "Enable one-click trading")], from: wallet) { _ in }
         Activity.record(ActivityRecord(kind: .perp, title: "One-click trading enabled", subtitle: "Order forwarding authorized on Perpl", hash: hash, section: "perps"), owner: wallet.address)
+        // The grant is for `wallet`'s Perpl account. If the user switched accounts while it confirmed, the account bound
+        // now must not be marked as forwarding (its orders would be sent and refused), nor reconnected on its behalf.
+        try requireBound(to: wallet.address, passkey: passkey)
         // The tx confirmed, so forwarding is now enabled on-chain — the authority. Reflect it immediately instead of
         // waiting on Perpl's WS `fw` echo, which can lag the keeper by seconds and left the user stuck on
         // "Enable one-click" even after the grant landed.
@@ -373,7 +396,9 @@ final class PerplTrading: MeraSessionLifecycle {
             try await connect()
         }
         // Best-effort: let the WS echo the new `fw` so the flag becomes redundant. Status is already connected.
-        for _ in 0..<8 where client?.forwardingEnabled != true { try? await Task.sleep(for: .seconds(1)) }
+        for _ in 0..<8 where client?.forwardingEnabled != true && isBound(to: wallet.address, passkey: passkey) {
+            try? await Task.sleep(for: .seconds(1))
+        }
         syncStatus()
     }
 
