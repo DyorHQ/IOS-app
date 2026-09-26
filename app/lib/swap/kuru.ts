@@ -1,4 +1,5 @@
 import { getAddress, isAddress, type Address, type Hex } from "viem";
+import { findRetiredAddress, isRetiredMomentCoin, RetiredMomentError } from "../moments/retired";
 import { KURU, NATIVE } from "./config";
 import { isNative } from "./tokens";
 import { minAfterSlippage, nowSeconds, type PlanStep, type SwapRequest, type VenueQuote } from "./types";
@@ -32,6 +33,8 @@ async function jwtFor(address: Address): Promise<string> {
 }
 
 export async function quoteKuru(req: SwapRequest): Promise<VenueQuote | null> {
+  // A retired Moment coin never reaches the API: its calldata comes back ready-made, so refuse before asking.
+  for (const side of [req.tokenIn.address, req.tokenOut.address]) if (isRetiredMomentCoin(side)) throw new RetiredMomentError(getAddress(side));
   const user = req.account;
   const body = JSON.stringify({
     userAddress: user,
@@ -67,12 +70,15 @@ export async function quoteKuru(req: SwapRequest): Promise<VenueQuote | null> {
   if (typeof to !== "string" || !isAddress(to) || getAddress(to) !== getAddress(KURU.entrypoint)) throw blocked();
   const value = BigInt(json.transaction.value || "0");
   if (value !== (isNative(req.tokenIn.address) ? req.amountIn : 0n)) throw blocked();
+  // Kuru chooses the route, so an ordinary pair could still hop through a retired cohort's coin or pool.
+  const retired = findRetiredAddress(calldata);
+  if (retired) throw new RetiredMomentError(retired);
   const swap = decodeKuruFlowSwap(calldata);
   const slippage = Math.min(10_000, Math.max(1, req.slippageBps)); // as sent
   const expectedIn = isNative(req.tokenIn.address) ? NATIVE : getAddress(req.tokenIn.address);
   const expectedOut = isNative(req.tokenOut.address) ? NATIVE : getAddress(req.tokenOut.address);
   if (!swap || getAddress(swap.recipient ?? user) !== getAddress(user) || swap.tokenIn !== expectedIn || swap.tokenOut !== expectedOut ||
-      swap.amountIn !== req.amountIn || swap.minAmountOut < minAfterSlippage(amountOut, slippage)) throw blocked();
+      swap.amountIn !== req.amountIn || swap.minAmountOut < minAfterSlippage(amountOut, slippage) || !kuruFeeAllowed(swap.fee)) throw blocked();
   const minOut = swap.minAmountOut;
   const tx = { to: KURU.entrypoint, data: calldata as Hex, value };
   return {
@@ -99,12 +105,22 @@ export async function quoteKuru(req: SwapRequest): Promise<VenueQuote | null> {
                    (address feeRecipient, uint256 feeBps, address referrer, uint256 referrerFeeBps, bool feeOnOutput),
                    bytes route)                                      → output paid to msg.sender
       0x31343b21  the same arguments, then (address recipient)       → output paid to `recipient`
-    Native MON is the zero address on either side. Null for any other selector, a short payload, or an address word
-    with dirty high bytes. */
-export type KuruFlowSwap = { tokenOut: Address; minAmountOut: bigint; tokenIn: Address; amountIn: bigint; recipient: Address | null };
+    Native MON is the zero address on either side. Null for any other selector, a short payload, an address word
+    with dirty high bytes, or a fee flag that is not a clean bool. */
+export type KuruFlowFee = { recipient: Address; bps: bigint; referrer: Address; referrerBps: bigint; onOutput: boolean };
+export type KuruFlowSwap = { tokenOut: Address; minAmountOut: bigint; tokenIn: Address; amountIn: bigint; fee: KuruFlowFee; recipient: Address | null };
 
 const PAY_CALLER = "0xce1e7030";
 const PAY_RECIPIENT = "0x31343b21";
+
+/** Whether the swap's fee tuple is one the wallet signs. The app never asks Kuru for an integrator or referral fee
+    (the quote request carries no referrer fields), so any basis points on either side are a skim a spoofed or
+    compromised API slipped in. The entrypoint enforces `minAmountOut` net of fees, so such a fee could take at most
+    the slippage tolerance, but the wallet refuses it outright. The recipient and referrer addresses are not pinned:
+    with both rates at zero they receive nothing (and the iOS fixtures carry a non-zero fee recipient at 0 bps). */
+export function kuruFeeAllowed(fee: KuruFlowFee): boolean {
+  return fee.bps === 0n && fee.referrerBps === 0n;
+}
 
 export function decodeKuruFlowSwap(calldata: string): KuruFlowSwap | null {
   if (!/^0x[0-9a-fA-F]*$/.test(calldata) || (calldata.length - 2) % 2 !== 0 || calldata.length < 10) return null;
@@ -123,7 +139,11 @@ export function decodeKuruFlowSwap(calldata: string): KuruFlowSwap | null {
   };
   const tokenOut = address(0);
   const tokenIn = address(2);
+  const feeRecipient = address(4);
+  const referrer = address(6);
+  const onOutput = uint(8);
   const recipient = explicitRecipient ? address(10) : null;
-  if (!tokenOut || !tokenIn || (explicitRecipient && !recipient)) return null;
-  return { tokenOut, minAmountOut: uint(1), tokenIn, amountIn: uint(3), recipient };
+  if (!tokenOut || !tokenIn || !feeRecipient || !referrer || onOutput > 1n || (explicitRecipient && !recipient)) return null;
+  const fee: KuruFlowFee = { recipient: feeRecipient, bps: uint(5), referrer, referrerBps: uint(7), onOutput: onOutput === 1n };
+  return { tokenOut, minAmountOut: uint(1), tokenIn, amountIn: uint(3), fee, recipient };
 }
