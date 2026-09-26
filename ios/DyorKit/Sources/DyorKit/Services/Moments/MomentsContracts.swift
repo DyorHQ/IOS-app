@@ -274,7 +274,8 @@ enum MomentsABI {
 
     static func poolKey(_ tuple: ABIValue) -> PoolKey {
         let k = tuple.elements
-        return PoolKey(currency0: k[0].address, currency1: k[1].address, fee: Int(k[2].uint), tickSpacing: Int(k[3].int), hooks: k[4].address)
+        // Clamped, never trapping: an out-of-range word from a hostile RPC makes a key that matches no pool.
+        return PoolKey(currency0: k[0].address, currency1: k[1].address, fee: Int(clamping: k[2].uint), tickSpacing: Int(clamping: k[3].int), hooks: k[4].address)
     }
 
     /// `(key, sqrtPriceX96, liquidity, reserve, poolCoins, usedUsdc, usedCoin, at)`.

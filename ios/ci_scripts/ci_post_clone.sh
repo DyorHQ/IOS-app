@@ -10,8 +10,9 @@
 # tick Secret on each, enter plain values without quotes):
 #   PRIVY_APP_ID, PRIVY_CLIENT_ID   sign-in and the embedded wallet — an archive fails without them, since sign-up
 #                                   needs Privy and a build without it can't onboard anyone
-#   AURORA_API_KEY                  the Bridge (without it the button explains why)
 #   optional: MONAD_RPC_URL PERPL_BUILDER_ID AURORA_FEE_RECIPIENT SOCIAL_LOGINS_ENABLED PASSKEYS_ENABLED
+# The Aurora API key is NOT a build variable: it lives only in the aurora-proxy Edge Function (Supabase secret
+# AURORA_API_KEY), so it never ships inside the app. Remove it from the workflow environment if it is still set.
 # The passkey rpId is the constant Mera.relyingParty (accounts.dyorhq.fun), not a variable.
 # Any other missing value degrades its feature exactly as in a local build (see AppConfig).
 set -euo pipefail
@@ -41,14 +42,13 @@ else
     echo "error: ${missing[*]} not set in the workflow environment; an archive without Privy can't sign anyone up." >&2
     exit 1
   fi
-  [[ -n ${AURORA_API_KEY:-} ]] || echo "warning: AURORA_API_KEY is not set in the workflow environment; the Bridge is off."
   : ${DEVELOPMENT_TEAM:=${CI_TEAM_ID:-}}
   {
     echo "// Written by ci_scripts/ci_post_clone.sh from the Xcode Cloud workflow's environment variables."
     echo "// xcconfig reads // as the start of a comment, so URLs spell it /\$(DYOR_SLASH)."
     echo "DYOR_SLASH = /"
     for key in PRIVY_APP_ID PRIVY_CLIENT_ID MONAD_RPC_URL PERPL_BUILDER_ID DEVELOPMENT_TEAM \
-               AURORA_API_KEY AURORA_FEE_RECIPIENT SOCIAL_LOGINS_ENABLED PASSKEYS_ENABLED; do
+               AURORA_FEE_RECIPIENT SOCIAL_LOGINS_ENABLED PASSKEYS_ENABLED; do
       value=${(P)key:-}
       value=${value//[$'\r\n']/}   # a stray newline in a pasted value would start a new xcconfig line
       print -r -- "$key = $(print -r -- "$value" | sed 's#//#/$(DYOR_SLASH)#g')"

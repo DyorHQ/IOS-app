@@ -16,7 +16,7 @@ struct MomentArtwork: View {
     @State private var image: UIImage?
     @State private var failed = false
 
-    private var sources: [URL] { MomentMediaLoader.imageSources(provenance: provenance, creator: creator) }
+    private var sources: [MomentImageSource] { MomentMediaLoader.imageSources(provenance: provenance, creator: creator) }
 
     var body: some View {
         ZStack {
@@ -30,7 +30,9 @@ struct MomentArtwork: View {
     private func load() async {
         let sources = self.sources
         guard !sources.isEmpty else { return }
-        let key = provenance.mediaURI
+        // The cache is keyed by everything the sources depend on, not the pointer alone: `mediaURI` is not unique, so
+        // another Moment reusing this CID with its own hash and mirror must never fill this Moment's entry.
+        let key = [provenance.mediaURI, creator?.hex ?? "", provenance.mediaHash.map { String(format: "%02x", $0) }.joined()].joined(separator: "|")
         if let cached = MomentMediaLoader.shared.cached(key) { image = cached; failed = false; return }
         image = nil; failed = false
         let loaded = await MomentMediaLoader.shared.load(key: key, sources: sources)
@@ -46,6 +48,13 @@ struct MomentArtwork: View {
                 .foregroundStyle(Color.brand)
         }
     }
+}
+
+/// One place to look for a Moment's image. `keccak`, when set, is what the downloaded bytes must hash to (the Moment's
+/// on-chain provenance hash); a source whose bytes don't match is skipped like a failed one.
+struct MomentImageSource: Sendable {
+    let url: URL
+    var keccak: Data? = nil
 }
 
 /// Fetches Moment images from an ordered list of sources and remembers the outcome per media URI for the session —
@@ -65,29 +74,44 @@ final class MomentMediaLoader {
         return URLSession(configuration: config)
     }()
 
-    /// Where to look for a Moment's image, best first: the Supabase mirror derived from the creator + media hash
-    /// (only meaningful for an `ipfs://` pointer — an https pointer *is* the mirror), then every IPFS gateway.
-    static func imageSources(provenance: MomentProvenance, creator: Address?) -> [URL] {
-        var urls: [URL] = []
-        if let creator, provenance.mediaURI.lowercased().hasPrefix("ipfs://"),
-           let mirror = MomentsMath.mirrorURL(creator: creator, mediaHash: provenance.mediaHash, supabaseURL: AppConfig.current.supabaseURL) {
-            urls.append(mirror)
+    /// Where to look for a Moment's image, best first. The Supabase mirror derived from the creator + media hash (only
+    /// meaningful for an `ipfs://` pointer — an https pointer *is* the mirror) is an object its creator can overwrite
+    /// after publishing, so it is never trusted blindly:
+    /// - a photo Moment's provenance hash is the keccak-256 of the very JPEG in the mirror, so the mirror goes first (it
+    ///   is fast and DyorHQ-run) but its bytes count only while they still match that hash;
+    /// - a video Moment's hash is the video's, while the mirror holds its poster frame, which cannot be checked — so the
+    ///   content-addressed IPFS copy goes first and the mirror is only the last fallback.
+    static func imageSources(provenance: MomentProvenance, creator: Address?) -> [MomentImageSource] {
+        let gateways = MomentsMath.gatewayURLs(provenance.mediaURI).map { MomentImageSource(url: $0) }
+        guard let creator,
+              let mirror = MomentsMath.mirrorURL(creator: creator, mediaHash: provenance.mediaHash, supabaseURL: AppConfig.current.supabaseURL) else {
+            return gateways
         }
-        urls += MomentsMath.gatewayURLs(provenance.mediaURI)
-        return urls
+        guard provenance.mediaURI.lowercased().hasPrefix("ipfs://") else {
+            // An https pointer that is this photo's own mirror (published when pinning failed) is checked the same way.
+            if provenance.animationURI.isEmpty, gateways.count == 1, gateways[0].url == mirror {
+                return [MomentImageSource(url: mirror, keccak: provenance.mediaHash)]
+            }
+            return gateways
+        }
+        if provenance.animationURI.isEmpty {
+            return [MomentImageSource(url: mirror, keccak: provenance.mediaHash)] + gateways
+        }
+        return gateways + [MomentImageSource(url: mirror)]
     }
 
     func cached(_ key: String) -> UIImage? { images.object(forKey: key as NSString) }
 
-    func load(key: String, sources: [URL]) async -> UIImage? {
+    func load(key: String, sources: [MomentImageSource]) async -> UIImage? {
         if let hit = cached(key) { return hit }
         if let missed = misses[key], Date().timeIntervalSince(missed) < 60 { return nil }
         if let task = inFlight[key] { return await task.value }
         let session = self.session
         let task = Task<UIImage?, Never>.detached(priority: .userInitiated) { // decode off the main thread
-            for url in sources {
-                guard let (data, response) = try? await session.data(from: url),
+            for source in sources {
+                guard let (data, response) = try? await session.data(from: source.url),
                       let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                      source.keccak.map({ Keccak.hash256(data) == $0 }) ?? true, // a swapped mirror falls through to IPFS
                       let image = UIImage(data: data) else { continue } // an HTML directory listing never decodes
                 return image
             }

@@ -172,12 +172,13 @@ public actor RPCClient {
         guard responses.count == calls.count else { throw NetworkError.malformedResponse }
 
         var byId: [Int: JSON] = [:]
-        for r in responses { if let id = r["id"].number { byId[Int(id)] = r } }
+        // `Int(exactly:)`: a hostile or broken RPC can send any JSON number as an id; a non-integer one matches nothing.
+        for r in responses { if let id = r["id"].number, let key = Int(exactly: id) { byId[key] = r } }
         return (0..<calls.count).map { i in
             guard let r = byId[firstId + i] else { return .failure(RPCError(code: -1, message: "Missing response")) }
             let error = r["error"]
             if !error.isNull {
-                return .failure(RPCError(code: Int(error["code"].number ?? -1), message: error["message"].string ?? "RPC error", data: error["data"].string))
+                return .failure(RPCError(code: error["code"].number.flatMap { Int(exactly: $0) } ?? -1, message: error["message"].string ?? "RPC error", data: error["data"].string))
             }
             return .success(r["result"])
         }
@@ -185,12 +186,18 @@ public actor RPCClient {
 
     // MARK: Typed helpers
 
+    // Quantities from the RPC are converted with `init(exactly:)`: an out-of-range answer is a malformed response, not a
+    // crash.
     public func chainId() async throws -> Int {
-        Int(try quantity(await call("eth_chainId")))
+        let raw = try quantity(await call("eth_chainId"))
+        guard let id = Int(exactly: raw) else { throw NetworkError.malformedResponse }
+        return id
     }
 
     public func blockNumber() async throws -> UInt64 {
-        UInt64(try quantity(await call("eth_blockNumber")))
+        let raw = try quantity(await call("eth_blockNumber"))
+        guard let number = UInt64(exactly: raw) else { throw NetworkError.malformedResponse }
+        return number
     }
 
     public func balance(of address: Address, block: BlockTag = .latest) async throws -> BigUInt {
@@ -202,7 +209,9 @@ public actor RPCClient {
     }
 
     public func transactionCount(of address: Address, block: BlockTag = .pending) async throws -> UInt64 {
-        UInt64(try quantity(await call("eth_getTransactionCount", [.string(address.hex), block.json])))
+        let raw = try quantity(await call("eth_getTransactionCount", [.string(address.hex), block.json]))
+        guard let count = UInt64(exactly: raw) else { throw NetworkError.malformedResponse }
+        return count
     }
 
     public func gasPrice() async throws -> BigUInt {
@@ -259,14 +268,22 @@ public actor RPCClient {
         let json = try await call("eth_getTransactionReceipt", [.string(hash.hexString)])
         if json.isNull { return nil }
         guard let status = json["status"].string, let block = json["blockNumber"].string, let gasUsed = json["gasUsed"].string else { throw NetworkError.malformedResponse }
-        return TransactionReceipt(hash: hash, success: status == "0x1", blockNumber: UInt64(BigUInt(hexQuantity: block) ?? 0), gasUsed: BigUInt(hexQuantity: gasUsed) ?? 0)
+        return TransactionReceipt(hash: hash, success: status == "0x1", blockNumber: UInt64(exactly: BigUInt(hexQuantity: block) ?? 0) ?? 0, gasUsed: BigUInt(hexQuantity: gasUsed) ?? 0)
     }
 
     /// Polls until the transaction is mined. Monad blocks every ~0.4 s, so the interval is short.
     public func waitForReceipt(_ hash: Data, timeout: TimeInterval = 90) async throws -> TransactionReceipt {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let receipt = try await transactionReceipt(hash) { return receipt }
+            do {
+                if let receipt = try await transactionReceipt(hash) { return receipt }
+            } catch let error as CancellationError {
+                throw error
+            } catch {
+                // A failed poll (a dropped connection, every endpoint throttled, a malformed answer) says nothing about
+                // the transaction, which is already broadcast: keep polling until the deadline instead of reporting a
+                // failure the user would answer by sending it again.
+            }
             try await Task.sleep(for: .milliseconds(500))
         }
         throw TransactionError.timedOut(hash)

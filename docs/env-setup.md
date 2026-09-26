@@ -38,9 +38,11 @@ Copy `Secrets.example.xcconfig` to `Secrets.xcconfig` and fill in:
 
 | Variable | Required | Where it comes from |
 | --- | --- | --- |
-| `NEXT_PUBLIC_MONAD_RPC` | Optional | Dedicated RPC URL; the public one is rate-limited on `eth_getLogs` |
+| `NEXT_PUBLIC_MONAD_RPC` | Optional | Dedicated RPC URL; the public one is rate-limited on `eth_getLogs`. Every `NEXT_PUBLIC_*` value is compiled into the public browser bundle, so use a keyless endpoint (or one restricted by origin) — never a URL with an embedded API key |
 | `NEXT_PUBLIC_LAUNCHPAD_FACTORY`, `NEXT_PUBLIC_LAUNCH_ROUTER`, `NEXT_PUBLIC_FEE_ESCROW`, `NEXT_PUBLIC_HOLDER_FEE_SHARING`, `NEXT_PUBLIC_MEME_HOOK`, `NEXT_PUBLIC_POOL_MANAGER` | No | Fork rehearsals only. `app/lib/deployment.json` (written by `npm run sync:deployment` from `contracts/deployments/143.json`) is the source of truth; these variables are ignored unless `NEXT_PUBLIC_LAUNCHPAD_OVERRIDE=1` is also set, so a stale value in a hosting dashboard can never point production at a retired deployment |
 | `NEXT_PUBLIC_LAUNCHPAD_OVERRIDE` | No | `1` makes the six variables above win over the deployment record (anvil fork). Never set it for a production build |
+| `NEXT_PUBLIC_MOMENTS_FACTORY`, `…_COLLECT`, `…_VESTING`, `…_GRADUATION`, `…_LOCKER`, `…_HOOK`, `…_BUYBACK`, `NEXT_PUBLIC_USDC`, `NEXT_PUBLIC_PERMIT2` | No | Fork rehearsals only. `app/lib/moments-deployment.json` (written by `npm run sync:moments`) is the source of truth; these variables are ignored unless `NEXT_PUBLIC_MOMENTS_OVERRIDE=1` is also set |
+| `NEXT_PUBLIC_MOMENTS_OVERRIDE` | No | `1` makes the Moments variables above (and `NEXT_PUBLIC_POOL_MANAGER`) win over the deployment record (anvil fork). Never set it for a production build |
 | `NEXT_PUBLIC_PAIR_TOKENS` | Optional | Comma-separated ERC-20 pair tokens you approved with `setPairEconomics` |
 
 ## 4. Contract deployment — shell environment for `forge script` (you run this; nothing is stored)

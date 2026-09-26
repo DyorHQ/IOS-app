@@ -37,6 +37,11 @@ struct PerpTradeView: View {
 
     // Sheets
     @State private var showConfirm = false
+    /// Which path the open order confirmation uses, fixed when Long/Short is tapped: non-nil is the one-click
+    /// (keeper-forwarded) path for that Perpl account, nil the on-chain path. The socket's status changes in the
+    /// background (keep-alive, reconnects, drops), and re-deciding inside the sheet would swap a sheet with an order in
+    /// flight for a fresh one with an enabled button — a second order (security audit 2026-09-26).
+    @State private var authedOrderAccount: Int?
     @State private var showLeverage = false
     @State private var showOrderType = false
     @State private var showUnitPref = false
@@ -493,7 +498,8 @@ struct PerpTradeView: View {
             Spacer()
             TextField("0.5", text: Binding(
                 get: { ticket.slippageBps == 0 ? "" : NumberStyle.number(Double(ticket.slippageBps) / 100, maximumFractionDigits: 2) },
-                set: { ticket.slippageBps = Int(($0.perpDouble ?? 0) * 100) }
+                // 0 (the default) to 50%, as the swap slippage sheet: never negative, never past 100%, never a trap.
+                set: { ticket.slippageBps = min(5_000, max(0, Int(exactly: (($0.perpDouble ?? 0) * 100).rounded(.towardZero)) ?? 0)) }
             ))
             .keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
             .font(.caption.weight(.medium)).frame(width: 60)
@@ -587,6 +593,9 @@ struct PerpTradeView: View {
         }
         ticketError = nil
         Haptics.commit()
+        // Use the authenticated path when the socket is live, OR when the wallet has an enrolled key and the user wants
+        // TP/SL (its submit awaits ensureConnected()); otherwise the on-chain path. Decided here, once per confirmation.
+        authedOrderAccount = (perplTrading.isReady || (perplTrading.isEnrolled && wantsTriggers)) ? model.account?.accountId : nil
         showConfirm = true
     }
 
@@ -756,7 +765,7 @@ struct PerpTradeView: View {
         // and the user wants TP/SL — its submit() awaits ensureConnected(), so a socket that idled to `.enrolled` still
         // reconnects and carries the triggers instead of silently dropping to a bare on-chain entry. A plain order with
         // no triggers still falls through to the on-chain path when not live, so trading never depends on one-click.
-        if let accountId = model.account?.accountId, perplTrading.isReady || (perplTrading.isEnrolled && wantsTriggers) {
+        if let accountId = authedOrderAccount {
             AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1)) {
                 ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""; sizePercent = 0
                 Task { await model.load(env: env, address: session.address) }
@@ -1888,6 +1897,10 @@ private struct ClosePositionSheet: View {
                 VStack(spacing: 8) {
                     if run.isDone {
                         PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+                    } else if case .failed = run.phase, run.sentSomething {
+                        // Already on the network: no re-confirm (it would replay the plan), as in ConfirmationSheet.
+                        Text(TransactionRun.alreadySent).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
                     } else if !session.canSign {
                         Text(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     } else {
@@ -1992,6 +2005,10 @@ private struct AddMarginSheet: View {
                 VStack(spacing: 8) {
                     if run.isDone {
                         PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+                    } else if case .failed = run.phase, run.sentSomething {
+                        // Already on the network: no re-confirm (it would replay the plan), as in ConfirmationSheet.
+                        Text(TransactionRun.alreadySent).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
                     } else if !session.canSign {
                         Text(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     } else {
@@ -2048,7 +2065,10 @@ struct AuthedOrderSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .review
 
-    enum Phase: Equatable { case review, placing, done, doneWarning(String), failed(String) }
+    enum Phase: Equatable { case review, placing, done, doneWarning(String), failed(String), unknown(String) }
+
+    /// The order was sent but Perpl never confirmed it: it may be live, so there is no resend from this sheet.
+    private var isUnknown: Bool { if case .unknown = phase { return true }; return false }
 
     /// The entry was placed (with or without every trigger) — the sheet closes on "Done" and reloads.
     private var isPlaced: Bool { if case .done = phase { return true }; if case .doneWarning = phase { return true }; return false }
@@ -2084,6 +2104,11 @@ struct AuthedOrderSheet: View {
                 if case .failed(let message) = phase {
                     Section { InlineError(message: message) }.listRowBackground(Color.clear)
                 }
+                if case .unknown(let message) = phase {
+                    Section {
+                        Label(message, systemImage: "questionmark.circle.fill").foregroundStyle(Color.attention).font(.footnote)
+                    }
+                }
                 if phase == .done {
                     Section { Label("Order sent to Perpl.", systemImage: "checkmark.circle.fill").foregroundStyle(Color.positive) }
                 }
@@ -2099,12 +2124,12 @@ struct AuthedOrderSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(isPlaced ? "Done" : "Cancel") { let done = isPlaced; dismiss(); if done { onDone() } }
+                    Button(isPlaced ? "Done" : isUnknown ? "Close" : "Cancel") { let reload = isPlaced || isUnknown; dismiss(); if reload { onDone() } }
                         .disabled(phase == .placing)
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                if !isPlaced {
+                if !isPlaced, !isUnknown {
                     PrimaryButton(title: scopeAssessment?.needsFaceID == true ? "Confirm with \(BiometricGate.promptName)" : (input.side == .long ? "Long \(market.asset)" : "Short \(market.asset)"), isBusy: phase == .placing, foreground: .onStatus) {
                         Task { await place() }
                     }
@@ -2167,6 +2192,10 @@ struct AuthedOrderSheet: View {
             } catch {
                 phase = .failed(describe(error))
             }
+        } catch let error as PerplTradeError where error.outcomeUnknown {
+            // The entry frame went out but was never acknowledged: it may be live. Resending would place a second
+            // order, so this sheet only closes (and reloads orders and positions) from here.
+            phase = .unknown("Perpl didn't confirm this order in time, so it may have been placed. Check Open Orders and Positions before placing it again.")
         } catch {
             phase = .failed(describe(error))
         }
@@ -2223,14 +2252,15 @@ struct OrderTicket {
 }
 
 extension String {
-    /// Parses a user-typed decimal. The decimal pad shows the locale separator ("," across much of Europe/LatAm) but
-    /// our own writers (`plainSize`) emit POSIX "." — so try the fast POSIX path first, then normalize the locale's
-    /// grouping/decimal separators. Purely additive: en_US "." input still parses via `Double(_:)` unchanged.
+    /// Parses a user-typed decimal. The decimal pad shows the locale separator ("," across much of Europe/LatAm) while
+    /// our own writers (`plainSize`) emit POSIX "." — both are read by the token-amount rules, whatever the device's
+    /// locale (the old locale-grouping strip turned a pasted "0,5" into 5 in en_US). ASCII digits and separators only,
+    /// finite values only: no "inf", "nan", "1e400" or signs, which no field here means.
     var perpDouble: Double? {
-        if let d = Double(self) { return d }
-        var s = self
-        if let g = Locale.current.groupingSeparator, !g.isEmpty { s = s.replacingOccurrences(of: g, with: "") }
-        if let dec = Locale.current.decimalSeparator, dec != "." { s = s.replacingOccurrences(of: dec, with: ".") }
-        return Double(s)
+        // Same rules as token amounts (Amount.decimalPoint): "0,5" is one half in every locale, never 5.
+        let s = trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty, s.allSatisfy({ $0 == "." || $0 == "," || ($0.isASCII && $0.isNumber) }),
+              let normalized = Amount.decimalPoint(s), normalized != "." else { return nil }
+        return Double(normalized).flatMap { $0.isFinite ? $0 : nil }
     }
 }

@@ -17,9 +17,12 @@ import { bpsToPct, fmtNumber, fmtUnits, shortAddress, timeAgo } from "../lib/for
 export const usd = (units: bigint, opts?: { compact?: boolean; dp?: number }) => `$${fmtUnits(units, USDC.decimals, opts)}`;
 export const coinsOf = (wei: bigint, symbol: string, compact = true) => `${fmtUnits(wei, 18, { compact })} $${symbol}`;
 
+/** A gateway URL for an ipfs:// URI, the URI itself when it is http(s), and "" for anything else: media URIs are
+    creator-controlled on-chain strings (MomentsFactory.publish takes any string), so a javascript:, data: or custom
+    scheme must never reach an href or src. */
 export function ipfsToHttp(uri: string): string {
   if (/^ipfs:\/\//i.test(uri)) return `https://ipfs.io/ipfs/${uri.slice(7).replace(/^ipfs\//, "")}`;
-  return uri;
+  return /^https?:\/\//i.test(uri) ? uri : "";
 }
 const isVideo = (uri: string) => /\.(mp4|webm|mov|m4v)(\?|$)/i.test(uri);
 

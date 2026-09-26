@@ -321,9 +321,14 @@ final class Session {
     }
 
     /// Imports the user's own wallet: the key is stored in this device's Keychain, becomes the app's signer, and
-    /// supersedes any Privy or watch-only session. The raw key never leaves the device.
-    func importWallet(_ account: Secp256k1Account) async {
-        ImportedWalletStore.save(privateKey: account.privateKey)
+    /// supersedes any Privy or watch-only session. The raw key never leaves the device. False (with `lastError` set,
+    /// and the session not switched to it) when the Keychain refused the key, so the caller keeps the user's input.
+    @discardableResult
+    func importWallet(_ account: Secp256k1Account) async -> Bool {
+        guard ImportedWalletStore.save(privateKey: account.privateKey) else {
+            lastError = "Couldn't save the key in this iPhone's Keychain. Unlock your iPhone and try again."
+            return false
+        }
         WatchOnlyStore.clear()
         mera.forget()
         // If a Privy session is lingering, end it so it can't override the imported wallet on the next auth event.
@@ -333,6 +338,7 @@ final class Session {
         wallet = LocalWallet(account: account)
         lastError = nil
         state = .signedIn(Account(address: account.address, method: .imported, label: nil))
+        return true
     }
 
     // MARK: Email + password (deterministic device-local wallet — see DyorKit's EmailWallet and PasswordWallet.swift)
@@ -384,8 +390,9 @@ final class Session {
 
     /// Store the derived key (Keychain, like an import) and make it the signer, superseding any other session.
     private func commitPasswordWallet(_ account: Secp256k1Account, email: String) async {
-        ImportedWalletStore.save(privateKey: account.privateKey) // clears the local-wallet tag…
-        LocalWalletMeta.setEmailPassword(email: email)           // …then tags it as an email+password wallet
+        // save clears the local-wallet tag, then it's tagged as an email+password wallet. A refused save keeps the
+        // previous key and its tag, so that tag must not be rewritten (this session still signs in memory).
+        if ImportedWalletStore.save(privateKey: account.privateKey) { LocalWalletMeta.setEmailPassword(email: email) }
         WatchOnlyStore.clear()
         mera.forget()
         if let privy, case .authenticated(let user) = await privy.getAuthState() { await user.logout() }

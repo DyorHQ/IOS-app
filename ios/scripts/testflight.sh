@@ -57,7 +57,8 @@ while IFS= read -r line; do
   value=$(printf '%s' "$line" | sed -e 's/^[A-Za-z_][A-Za-z0-9_]*\(\[[^]]*\]\)*[[:space:]]*=//' -e 's:[[:space:]]//.*$::' \
     -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/\$(DYOR_SLASH)/\//g')
   (( ${#value} >= 8 )) || continue
-  if grep -rqF -- "$value" "$APP"; then LEAKS+=("$name"); fi
+  # The value goes to grep through a pipe (-f), never on its command line, where `ps` would show it.
+  if grep -rqF -f <(print -r -- "$value") "$APP"; then LEAKS+=("$name"); fi
 done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])*[[:space:]]*=' DyorHQ/Config/Secrets.xcconfig)
 if grep -rqE 'alchemy\.com/v2/[A-Za-z0-9_-]|infura\.io/v3/[0-9a-f]|quiknode\.pro/[0-9a-f]' "$APP"; then LEAKS+=("keyed RPC provider URL"); fi
 # The scanner prints file:line and variable names only. The source overrides it honours for its own tests are unset

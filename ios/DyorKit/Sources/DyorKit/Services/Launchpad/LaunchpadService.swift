@@ -441,14 +441,18 @@ public actor LaunchpadService {
     }
 
     /// `launchPlan` with the launch fee and the economics hash read from the factory first, so the input only
-    /// needs what the form collected.
-    public func launchPlan(_ input: LaunchInput, from: Address) async throws -> [TransactionStep] {
+    /// needs what the form collected. `expectedLaunchFee` is the fee the screen showed: the factory's owner can change
+    /// `launchFee` at any time with no cap, and the transaction must pay exactly the current one, so a fee that moved
+    /// since the screen loaded is refused rather than signed unseen (security audit 2026-09-26, IOST-2).
+    public func launchPlan(_ input: LaunchInput, from: Address, expectedLaunchFee: BigUInt? = nil) async throws -> [TransactionStep] {
         guard addresses.isDeployed else { throw LaunchpadError.notDeployed }
         async let fee = multicall.readAll([LaunchpadABI.call(addresses.factory, LaunchpadABI.Factory.launchFee, returns: "uint256")])
         async let economics = previewLaunchEconomics(configId: input.configId, pairToken: input.pairToken)
         var filled = input
         filled.expectedEconomics = try await economics
-        return launchPlan(filled, launchFee: try await fee[0][0].uint, from: from)
+        let launchFee = try await fee[0][0].uint
+        if let expectedLaunchFee, launchFee != expectedLaunchFee { throw LaunchpadError.launchFeeChanged(launchFee) }
+        return launchPlan(filled, launchFee: launchFee, from: from)
     }
 
     /// `HolderFeeSharing.claim(token)` on the launch's own stack: the caller's share of the fees routed to holders.

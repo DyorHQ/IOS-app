@@ -57,9 +57,11 @@ export default function MomentPage() {
           <div className="kvlist" style={{ marginTop: 12 }}>
             <KV label="Place" value={prov.place} />
             <KV label="Date" value={fmtDate(prov.date)} />
-            <KV label="Media" value={<a href={ipfsToHttp(prov.mediaURI)} target="_blank" rel="noreferrer" className="mono" style={{ textDecoration: "none" }}>{prov.mediaURI.length > 34 ? `${prov.mediaURI.slice(0, 34)}…` : prov.mediaURI}</a>} />
+            <KV label="Media" value={ipfsToHttp(prov.mediaURI)
+              ? <a href={ipfsToHttp(prov.mediaURI)} target="_blank" rel="noreferrer" className="mono" style={{ textDecoration: "none" }}>{prov.mediaURI.length > 34 ? `${prov.mediaURI.slice(0, 34)}…` : prov.mediaURI}</a>
+              : <span className="mono">{prov.mediaURI.length > 34 ? `${prov.mediaURI.slice(0, 34)}…` : prov.mediaURI}</span>} />
             <KV label="Media hash" value={<span className="mono-sm">{prov.mediaHash}</span>} />
-            {prov.animationURI && <KV label="Video" value={<a href={ipfsToHttp(prov.animationURI)} target="_blank" rel="noreferrer" className="mono" style={{ textDecoration: "none" }}>open</a>} />}
+            {prov.animationURI && ipfsToHttp(prov.animationURI) && <KV label="Video" value={<a href={ipfsToHttp(prov.animationURI)} target="_blank" rel="noreferrer" className="mono" style={{ textDecoration: "none" }}>open</a>} />}
             {data.externalUrl && <KV label="Page" value={<a href={data.externalUrl} target="_blank" rel="noreferrer">{data.externalUrl}</a>} />}
           </div>
         </div>

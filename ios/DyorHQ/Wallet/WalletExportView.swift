@@ -5,8 +5,8 @@ import WebKit
 
 /// The self-custody escape hatch: export the private key of the wallet you're signed in with.
 ///
-/// - **Imported wallets** — the raw secp256k1 key already lives in this device's Keychain (`ImportedWalletStore`),
-///   so it is revealed natively behind a biometric prompt. Nothing leaves the device.
+/// - **Imported and email + password wallets** — the raw secp256k1 key already lives in this device's Keychain
+///   (`ImportedWalletStore`), so it is revealed natively behind a biometric prompt. Nothing leaves the device.
 /// - **Privy embedded wallets** (email / Apple / Google / passkey) — Privy's iOS SDK has **no** native key export;
 ///   export is only offered through Privy's React SDK. Per Privy's mobile key-export recipe we load a Privy-hosted
 ///   export page in a **non-persistent** `WKWebView`; the key is reconstructed off-device and shown inside Privy's
@@ -40,7 +40,10 @@ struct WalletExportView: View {
 
     private var keyExport: some View {
         List {
-            if method == .imported {
+            // An email + password wallet's key is derived on this device and kept in the same Keychain item as an
+            // imported key (`Session.commitPasswordWallet`), so it is revealed the same way — not through Privy, which
+            // never held it.
+            if method == .imported || method == .emailPassword {
                 importedSections
             } else if method == nil || method == .watchOnly {
                 watchOnlySection

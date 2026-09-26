@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useState } from "react";
+import { formatUnits } from "viem";
 import { Empty, Seg, Subtabs, opts } from "./ui/components";
 import { compact, fmtNum, fmtPct, fmtUSD } from "./ui/data";
 import type { Go, Preset, Toast } from "./ui/nav";
@@ -74,13 +75,13 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
   const doDeposit = async () => {
     const client = wallet.client; const amt = parseAmount(collatAmount, 6);
     if (!client || !amt) return;
-    const done = await run(`Deposit ${collatAmount} AUSD`, (onSent) => deposit(client, amt, !!acct, onSent));
+    const done = await run(`Deposit ${formatUnits(amt, 6)} AUSD`, (onSent) => deposit(client, amt, !!acct, onSent));
     if (done) { setCollatAmount(""); refreshAll(); }
   };
   const doWithdraw = async () => {
     const client = wallet.client; const amt = parseAmount(collatAmount, 6);
     if (!client || !amt) return;
-    const done = await run(`Withdraw ${collatAmount} AUSD`, (onSent) => withdraw(client, amt, onSent));
+    const done = await run(`Withdraw ${formatUnits(amt, 6)} AUSD`, (onSent) => withdraw(client, amt, onSent));
     if (done) { setCollatAmount(""); refreshAll(); }
   };
 

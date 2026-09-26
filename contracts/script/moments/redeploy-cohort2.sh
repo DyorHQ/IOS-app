@@ -21,6 +21,14 @@
 #   5. print the new addresses + deploy block and run the invariant monitor against them
 # Rehearsed end to end on an anvil fork on 2026-09-22 (see docs/moments-mainnet-runbook.md §1b).
 set -euo pipefail
+
+# RETIRED (security audit 2026-09-26). Cohort 2 is itself retired (publishing paused 2026-09-23), and this script would
+# deploy a new stack whose treasury is 0x5282… — the wallet whose key leaked — and then overwrite
+# deployments/moments-143.json, which now records the live cohort 3. The live stack was deployed by
+# script/relaunch/relaunch-new-wallets.sh. The rest of the file is kept for the record only.
+echo "redeploy-cohort2.sh is retired: it would deploy a Moments stack paying the leaked treasury 0x5282… and overwrite the cohort-3 record." >&2
+exit 1
+
 cd "$(dirname "$0")/../.."   # contracts/
 
 FORGE=~/.foundry/bin/forge; CAST=~/.foundry/bin/cast

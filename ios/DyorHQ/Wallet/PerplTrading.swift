@@ -380,7 +380,7 @@ final class PerplTrading: MeraSessionLifecycle {
     /// The connected, forwarding-enabled client — or the most specific error for why there isn't one.
     private func liveClient() throws -> PerplTradeClient {
         guard let client, status == .connected else {
-            if let failureMessage { throw PerplTradeError.closed(failureMessage) }
+            if let failureMessage { throw PerplTradeError.unavailable(failureMessage) } // nothing was sent
             if status == .needsForwarding { throw PerplTradeError.forwardingDisabled }
             throw PerplTradeError.notSignedIn
         }

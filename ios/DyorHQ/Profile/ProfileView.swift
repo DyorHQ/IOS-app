@@ -23,6 +23,21 @@ struct ProfileView: View {
     @State private var signingOut = false
     @State private var showDeleteAccount = false
 
+    /// Sign-out removes the signing key from this device, so say what that means for each kind of wallet: an imported
+    /// key exists nowhere else unless the user saved it, so it must never read as "your wallet stays with your account".
+    private var signOutMessage: String {
+        switch session.account?.method {
+        case .watchOnly?, nil:
+            return "Balances and positions for this address will no longer be shown."
+        case .imported?:
+            return "This removes the imported key from this iPhone. You'll need its recovery phrase or private key to use this wallet again — export it first (Manage Wallets → Export Wallet) if you haven't saved it."
+        case .emailPassword?:
+            return "Sign in again with your email and password to use this wallet."
+        default:
+            return "Your wallet stays with your account. Sign in again to use it."
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -129,10 +144,16 @@ struct ProfileView: View {
             .confirmationDialog(session.canSign ? "Sign out of DyorHQ?" : "Stop watching this address?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button(session.canSign ? "Sign Out" : "Stop Watching", role: .destructive) {
                     signingOut = true
-                    Task { await session.signOut(); signingOut = false }
+                    let address = session.address
+                    Task { @MainActor in
+                        // The Perpl trading key on this device is a delegate for this wallet: it goes with the session.
+                        if let address { perplTrading.forget(address: address) }
+                        await session.signOut()
+                        signingOut = false
+                    }
                 }
             } message: {
-                Text(session.canSign ? "Your wallet stays with your account. Sign in again to use it." : "Balances and positions for this address will no longer be shown.")
+                Text(signOutMessage)
             }
             .confirmationDialog("Forget this device?", isPresented: $confirmForget, titleVisibility: .visible) {
                 Button("Forget This Device", role: .destructive) {
@@ -265,7 +286,8 @@ struct SendSheet: View {
     @State private var balance: BigUInt?
     @State private var showConfirm = false
 
-    private var recipientAddress: Address? { Address(recipient) }
+    /// Nil for a mixed-case address whose EIP-55 checksum is wrong: a mistyped character must never become the recipient.
+    private var recipientAddress: Address? { Address.hasValidChecksum(recipient) ? Address(recipient) : nil }
     private var rawAmount: BigUInt? { Amount.parse(amount, decimals: token.decimals) }
     private var valid: Bool {
         guard let recipientAddress, !recipientAddress.isZero, let rawAmount, rawAmount > 0 else { return false }
@@ -292,7 +314,11 @@ struct SendSheet: View {
                     Text("Amount")
                 } footer: {
                     if let balance { Text("Available: \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)") }
-                    if !recipient.isEmpty, recipientAddress == nil { Text("Enter a 42-character address starting with 0x.") }
+                    if !recipient.isEmpty, recipientAddress == nil {
+                        Text(Address(recipient) == nil
+                             ? "Enter a 42-character address starting with 0x."
+                             : "This address's capital letters don't match its checksum, so it may contain a typo. Copy it again from the source.")
+                    }
                 }
             }
             .navigationTitle("Send")
@@ -316,7 +342,7 @@ struct SendSheet: View {
                             subtitle: "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol) → \(to.short)",
                             hash: hash, section: "wallet", usd: stable ? Amount.units(raw, decimals: token.decimals) : nil), owner: session.address)
                     }, intent: .alwaysAsks(.send)) {
-                        DetailRow("To", to.short)
+                        DetailRow("To", to.checksummed) // in full: this review is the last check before funds leave
                         DetailRow("Amount", "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol)")
                         DetailRow("Network", "Monad")
                     }

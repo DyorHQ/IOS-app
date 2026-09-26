@@ -168,7 +168,10 @@ public final class RSSParser: NSObject, XMLParserDelegate {
     }
 
     private func finish() {
-        guard let title = current["title"], !title.isEmpty, let linkText = current["link"] ?? current["guid"], let link = URL(string: linkText.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+        // Only web links: the article opens in SFSafariViewController, which raises on any other scheme (a feed's guid
+        // fallback can be a `tag:` URI or a bare number).
+        guard let title = current["title"], !title.isEmpty, let linkText = current["link"] ?? current["guid"], let link = URL(string: linkText.trimmingCharacters(in: .whitespacesAndNewlines)),
+              ["https", "http"].contains(link.scheme?.lowercased() ?? "") else { return }
         let summary = Self.stripHTML(current["summary"] ?? "")
         let id = (current["guid"]?.isEmpty == false ? current["guid"]! : link.absoluteString)
         articles.append(NewsArticle(id: id, title: Self.decodeEntities(title), link: link, source: source, published: Self.date(current["date"]), summary: summary, imageURL: (imageCandidate ?? inlineImage).flatMap { URL(string: $0) }))

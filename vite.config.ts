@@ -21,6 +21,14 @@ function refusePublicPrivateKeys(mode: string) {
   if (offending.length > 0) {
     throw new Error(`Refusing a production build: ${offending.join(", ")} would ship a private key in the browser bundle. Unset it; the dev wallet is for \`vinext dev\` against a local fork only.`);
   }
+  // The fork-rehearsal switches let NEXT_PUBLIC_ address variables replace the deployment records (app/lib/chain.ts,
+  // app/lib/moments/config.ts); a production bundle built with one set could point users' approvals at a fork address.
+  const overrides = Object.entries(loadEnv(mode, process.cwd(), "NEXT_PUBLIC_"))
+    .filter(([name, value]) => /^NEXT_PUBLIC_[A-Z0-9_]*_OVERRIDE$/.test(name) && value.trim() === "1")
+    .map(([name]) => name);
+  if (overrides.length > 0) {
+    throw new Error(`Refusing a production build: ${overrides.join(", ")}=1 is a fork-rehearsal switch. Unset it; use \`vinext dev\` against the fork.`);
+  }
 }
 
 const localBindingConfig = {

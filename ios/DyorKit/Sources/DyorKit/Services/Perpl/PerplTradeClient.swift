@@ -59,8 +59,10 @@ public struct PerplOrderFrame: Sendable {
 
 /// Builds the order frames for a ticket: the entry order, plus optional take-profit and stop-loss triggers.
 public enum PerplOrders {
-    private static func scalePrice(_ price: Double, _ market: PerpMarket) -> Int { Int((price * pow(10, Double(market.priceDecimals))).rounded()) }
-    private static func scaleSize(_ size: Double, _ market: PerpMarket) -> Int { Int((size * pow(10, Double(market.lotDecimals))).rounded()) }
+    // `Int(exactly:)`, not `Int(_:)`: a non-finite or out-of-range value (a pasted "1e300") becomes 0 — an order Perpl
+    // refuses — instead of trapping.
+    private static func scalePrice(_ price: Double, _ market: PerpMarket) -> Int { Int(exactly: (price * pow(10, Double(market.priceDecimals))).rounded()) ?? 0 }
+    private static func scaleSize(_ size: Double, _ market: PerpMarket) -> Int { Int(exactly: (size * pow(10, Double(market.lotDecimals))).rounded()) ?? 0 }
 
     /// The entry order. A market order is a marketable-limit IOC at the slippage bound (`p:0`, `ms`, `fl:4`).
     ///
@@ -122,6 +124,16 @@ public struct PerplOrderAck: Sendable {
 
 public enum PerplTradeError: LocalizedError {
     case notSignedIn, noAccount, forwardingDisabled, timeout, closed(String)
+    /// The trading socket is not connected, so nothing was sent (the message says why).
+    case unavailable(String)
+    /// The order frame was already sent when this happened (no acknowledgement, or the socket closed while waiting),
+    /// so Perpl may have placed it: the caller must not offer an immediate resend.
+    public var outcomeUnknown: Bool {
+        switch self {
+        case .timeout, .closed: return true
+        case .notSignedIn, .noAccount, .forwardingDisabled, .unavailable: return false
+        }
+    }
     public var errorDescription: String? {
         switch self {
         case .notSignedIn: return "Not connected to Perpl trading."
@@ -129,6 +141,7 @@ public enum PerplTradeError: LocalizedError {
         case .forwardingDisabled: return "Enable one-click trading (order forwarding) on your Perpl account first."
         case .timeout: return "Perpl did not acknowledge the order in time."
         case .closed(let why): return why // already a full sentence from PerplClose.message
+        case .unavailable(let why): return why
         }
     }
 }
@@ -318,10 +331,21 @@ public final class PerplTradeClient {
         guard signedIn, accountId != nil else { throw PerplTradeError.notSignedIn }
         guard forwardingEnabled else { throw PerplTradeError.forwardingDisabled }
         var acks: [PerplOrderAck] = []
-        for frame in frames {
-            let ack = try await send(frame)
+        for (index, frame) in frames.enumerated() {
+            let ack: PerplOrderAck
+            do {
+                ack = try await send(frame)
+            } catch where index > 0 {
+                // The entry was already acknowledged: this trigger's outcome is unknown, so report it as not accepted
+                // (the caller warns that the position may be unprotected) instead of failing the whole bracket, which
+                // the order sheet would show as a failed order — inviting a second entry.
+                acks.append(PerplOrderAck(code: -1, error: (error as? LocalizedError)?.errorDescription ?? "Perpl did not confirm this trigger."))
+                continue
+            }
             acks.append(ack)
-            if !ack.accepted { break }
+            // Only a rejected ENTRY ends the bracket. A rejected take-profit must not keep the stop-loss from being sent
+            // — the position would open with no stop at all.
+            if !ack.accepted, index == 0 { break }
         }
         return acks
     }

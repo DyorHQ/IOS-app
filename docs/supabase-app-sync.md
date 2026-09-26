@@ -14,10 +14,12 @@ session automatically as soon as a wallet that can sign is in use, so nothing be
 
 **Email + password (OTP on sign-up, none on login):** Privy sends a one-time code at sign-up to prove the email is
 owned (adoption suppressed so Privy's own wallet never takes over); only then is the deterministic wallet created and
-the email → address binding written. **Log in re-derives the wallet with no code, but signs in only when
-`email_account_matches(email, address)` is true** — so a fake/unverified email can't get a working account, and a
-wrong password (which derives a different address) is rejected instead of silently opening a new wallet. Email login
-is enabled in the Privy dashboard.
+the email → address binding written. **Log in re-derives the wallet with no code, but signs in only when the email's
+binding names that address** — so a fake/unverified email can't get a working account, and a wrong password (which
+derives a different address) is rejected instead of silently opening a new wallet. The client reads its own
+`email_accounts` row after the wallet signs in (owner-only SELECT); `email_account_matches(email, address)` exists but is
+service-role only since migration 18 — do not re-grant it to anon/authenticated (it would let anyone probe which email
+belongs to which wallet). Email login is enabled in the Privy dashboard.
 
 **The binding is written server-side only (mig. 16).** Both sign-up and forgot-password go through the same
 `email-rebind` edge function: it verifies the Privy email-OTP access token (proves the email) *and* a signature from
@@ -47,15 +49,16 @@ function (set).
   `moments`, `bridge`, `deposits`, `withdrawals`, `transfers`, `total_volume_usd` (the four trading surfaces only),
   `total_fees_usd`, `notifications_count`, first/last activity. **Internal analytics only** — `EXECUTE`/`SELECT` are
   revoked from `anon`/`authenticated`; query it with the service role (Supabase MCP / dashboard), not from the app.
-- **`platform_journey(since)`** (security definer, publishable key) — platform totals by domain with no wallet
-  exposed, mirroring `platform_volume`. The domain buckets are derived from `kind`/`section`, so bridges,
+- **`platform_journey(since)`** (security definer; **service role only** since migration 18 — not callable with the
+  publishable key) — platform totals by domain with no wallet exposed, mirroring `platform_volume`. The domain buckets are derived from `kind`/`section`, so bridges,
   deposits and withdrawals are counted separately from trading volume.
 
 The classification depends on the clean `kind`/`section` the app now emits (bridge → `bridge`, Perps funding →
 `deposit`/`withdraw`, external send → `withdraw`); `section='bridge'` is allowed by migration `13`.
 
-Platform-wide volume: `platform_volume(since)` (security definer, callable with the publishable key) sums `activity.usd`
-by section with no wallet exposed; the Portfolio shows it as "Everyone on DyorHQ, all time".
+Platform-wide volume: `platform_volume(since)` (security definer; **service role only** since migration 18) sums
+`activity.usd` by section with no wallet exposed. Any app surface that shows it needs a server-side path (an edge
+function), not a direct RPC with the publishable key.
 
 Account deletion removes the `profiles` row; every table above cascades from it — **except `email_accounts`, which has
 no FK and is deleted explicitly** (migration 17 restores an owner-scoped DELETE for exactly this). Without it, a

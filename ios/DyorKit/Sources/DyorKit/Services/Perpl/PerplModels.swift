@@ -270,7 +270,7 @@ public struct PerplAccountEvent: Identifiable, Sendable, Hashable {
         let block = (at?["b"] as? NSNumber)?.intValue ?? 0
         let market = (j["m"] as? NSNumber)?.intValue
         self.init(
-            id: "\(et)-\(Int(ms))-\(block)-\(market ?? 0)",
+            id: "\(et)-\(Int(exactly: ms.rounded(.towardZero)) ?? 0)-\(block)-\(market ?? 0)",
             time: Date(timeIntervalSince1970: ms / 1000),
             kind: Kind(rawValue: et) ?? .other,
             rawType: et,

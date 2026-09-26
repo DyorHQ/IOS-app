@@ -287,7 +287,7 @@ struct LaunchArtwork: View {
     let logo: String
 
     var body: some View {
-        if let url = URL(string: logo), url.scheme != nil {
+        if let url = URL(string: logo), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
             AsyncImage(url: url) { phase in
                 if let image = phase.image { image.resizable().scaledToFill() }
                 else if phase.error != nil { placeholder }
@@ -555,7 +555,9 @@ struct LaunchDetailView: View {
             .pickerStyle(.segmented)
             AmountField(title: "0", text: $amountText, token: side == .buy ? pairToken : token) {
                 guard let account else { return }
-                amountText = side == .buy ? Amount.exact(account.pairBalance, decimals: launch.pair.decimals) : Amount.exact(account.tokenBalance, decimals: 18)
+                // A native-MON buy keeps the network fee back (as Swap, Send and Bridge Max do), or the buy cannot pay gas.
+                let buyable = launch.pair.isNative ? NetworkFeeReserve.spendable(balance: account.pairBalance, reserve: NetworkFeeReserve.monadFallback) : account.pairBalance
+                amountText = side == .buy ? Amount.exact(buyable, decimals: launch.pair.decimals) : Amount.exact(account.tokenBalance, decimals: 18)
             }
             if side == .buy, let q = buyQuote, rawAmount > 0 {
                 DetailRow("You receive", "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
@@ -568,7 +570,8 @@ struct LaunchDetailView: View {
                 DetailRow("Curve fee", "\(NumberStyle.units(q.fee, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
                 if q.tax > 0 { DetailRow("Creator tax", "\(NumberStyle.units(q.tax, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
-            PrimaryButton(title: side == .buy ? "Buy \(launch.symbol)" : "Sell \(launch.symbol)", isDisabled: rawAmount == 0 || !session.canSign) { showConfirm = true }
+            PrimaryButton(title: side == .buy ? "Buy \(launch.symbol)" : "Sell \(launch.symbol)",
+                          isDisabled: rawAmount == 0 || !session.canSign || (side == .buy ? buyQuote == nil : sellQuote == nil)) { showConfirm = true }
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         } header: {
             Text("Trade on the Curve")
@@ -646,7 +649,8 @@ struct LaunchDetailView: View {
 
     private var socialLinks: [(String, URL)] {
         [("Website", launch.socials.website), ("X", launch.socials.twitter), ("Telegram", launch.socials.telegram), ("Discord", launch.socials.discord), ("Farcaster", launch.socials.farcaster)]
-            .compactMap { label, value in URL(string: value).flatMap { $0.scheme != nil ? ($0.host() != nil ? (label, $0) : nil) : nil } }
+            // Creator-set strings: only web links, never another app's URL scheme (a wallet's dapp link, say).
+            .compactMap { label, value in URL(string: value).flatMap { ["https", "http"].contains($0.scheme?.lowercased() ?? "") && $0.host() != nil ? (label, $0) : nil } }
     }
 
     @ViewBuilder private var confirmation: some View {
@@ -708,13 +712,20 @@ struct LaunchDetailView: View {
     }
 
     private func quote() async {
-        guard rawAmount > 0, launch.phase == .bonding else { buyQuote = nil; sellQuote = nil; return }
+        // Drop the previous amount's quote first: until this amount's quote lands, Buy/Sell stays disabled, so the
+        // minimum-out the sheet signs can never come from a quote for a different amount. `.task(id:)` cancels this
+        // task when the amount changes, and a cancelled task's answer is discarded.
+        buyQuote = nil
+        sellQuote = nil
+        guard rawAmount > 0, launch.phase == .bonding else { return }
         try? await Task.sleep(for: .milliseconds(300))
         if Task.isCancelled { return }
         if side == .buy {
-            buyQuote = try? await env.launchpad.quoteBuy(curve: launch.curve, quoteIn: rawAmount, recipient: session.address ?? .zero)
+            let fresh = try? await env.launchpad.quoteBuy(curve: launch.curve, quoteIn: rawAmount, recipient: session.address ?? .zero)
+            if !Task.isCancelled { buyQuote = fresh }
         } else {
-            sellQuote = try? await env.launchpad.quoteSell(curve: launch.curve, tokensIn: rawAmount)
+            let fresh = try? await env.launchpad.quoteSell(curve: launch.curve, tokensIn: rawAmount)
+            if !Task.isCancelled { sellQuote = fresh }
         }
     }
 }
@@ -856,7 +867,7 @@ struct CreateLaunchView: View {
                     // requires (`expectedEconomics`). The sync overload leaves that hash zero → LaunchEconomicsMismatch.
                     ConfirmationSheet(
                         title: "Launch \(symbol)", confirmTitle: "Launch \(symbol)",
-                        build: { try await env.launchpad.launchPlan(input, from: address) },
+                        build: { try await env.launchpad.launchPlan(input, from: address, expectedLaunchFee: info.launchFee) },
                         onDone: { dismiss(); onLaunched() },
                         onCompleted: { hash in
                             Activity.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
@@ -886,7 +897,8 @@ struct CreateLaunchView: View {
                         DetailRow("Creator tax", NumberStyle.basisPoints(creatorTaxBps))
                         DetailRow("Fee sharing", holderFeeSharing ? "On" : "Off")
                         DetailRow("Launch fee", "\(NumberStyle.units(info.launchFee, decimals: 18)) MON")
-                        if initialBuy > 0 { DetailRow("Developer buy", "\(initialBuyText) \(pairInfo?.symbol ?? "MON")") }
+                        // The parsed amount — what is signed — not the typed text.
+                        if initialBuy > 0 { DetailRow("Developer buy", "\(NumberStyle.units(initialBuy, decimals: pairInfo?.decimals ?? 18)) \(pairInfo?.symbol ?? "MON")") }
                     }
                 }
             }

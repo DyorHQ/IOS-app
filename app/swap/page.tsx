@@ -14,7 +14,7 @@ import { useAsync, useNow } from "../lib/use-async";
 import { useDebounced } from "../lib/use-debounced";
 import { useTx } from "../lib/use-tx";
 import { useWallet } from "../lib/wallet";
-import { bpsToPct, fmtNumber, fmtUnits, parseAmount, shortAddress } from "../lib/format";
+import { bpsToPct, exactDown, fmtNumber, fmtUnits, parseAmount, shortAddress } from "../lib/format";
 import { ActionButton, TokenLogo, TxStatus } from "../launchpad/ui";
 
 const PLACEHOLDER: Address = "0x0000000000000000000000000000000000000001";
@@ -144,9 +144,16 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const submit = async () => {
     const client = wallet.client;
     if (!client || !selected || !account) return;
-    const quote: VenueQuote = quoteAgeSeconds(selected) > 45 ? (await fetchQuotes({ tokenIn, tokenOut, amountIn, slippageBps, account })).quotes.find((q) => q.venue === selected.venue) ?? selected : selected;
     setStep(null);
     const done = await run(`Swap ${fmtUnits(amountIn, tokenIn.decimals)} ${tokenIn.symbol} → ${tokenOut.symbol}`, async (onSent) => {
+      // Refresh a stale quote inside the run, so the button is already busy (a second click cannot start another
+      // swap), and never fall back to the stale quote when the venue no longer answers.
+      let quote: VenueQuote = selected;
+      if (quoteAgeSeconds(selected) > 45) {
+        const fresh = (await fetchQuotes({ tokenIn, tokenOut, amountIn, slippageBps, account })).quotes.find((q) => q.venue === selected.venue);
+        if (!fresh) throw new Error("This quote expired and the venue did not quote again. Refresh and try again.");
+        quote = fresh;
+      }
       const steps = await quote.build(account);
       return runPlan(client, steps, (label, hash) => { setStep({ label, hash }); if (hash) onSent(hash); });
     });
@@ -165,7 +172,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
             <div className="slip"><span style={{ marginRight: 0 }}>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
           </div>
           <div className="swap-field">
-            <div className="lbl"><span>You pay</span>{balIn !== undefined && <button type="button" onClick={() => setAmount(fmtUnits(balIn, tokenIn.decimals, { dp: 8 }).replace(/,/g, ""))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
+            <div className="lbl"><span>You pay</span>{balIn !== undefined && <button type="button" onClick={() => setAmount(exactDown(balIn, tokenIn.decimals, 8))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
             <div className="rowin">
               <input inputMode="decimal" placeholder="0" aria-label="Amount to pay" value={amount} onChange={(e) => { setAmount(e.target.value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } }} />
               <button type="button" className="tokbtn" onClick={() => setPicking("in")}><TokenLogo src={tokenIn.logo} name={tokenIn.symbol} address={tokenIn.address} size="sm" />{tokenIn.symbol}<Icon name="chev-down" /></button>
@@ -194,7 +201,8 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
           {highImpact && <div className="warnbox"><b>High price impact.</b> This trade moves the market by {bpsToPct(impact)}. Consider a smaller amount or a different venue.</div>}
           {step && busy && <p className="hint">{step.label}{step.hash ? " · sent" : "…"}</p>}
           <TxStatus tx={tx} onDismiss={() => { reset(); setStep(null); }} />
-          <ActionButton ready={!!selected && amountIn > 0n && !insufficient} busy={busy} label={buttonLabel} onClick={submit} requireLaunchpad={false} />
+          {/* Not ready until the typed amount has settled: the quote and the swap use the debounced amount. */}
+          <ActionButton ready={!!selected && amountIn > 0n && !insufficient && amount === debouncedAmount} busy={busy} label={buttonLabel} onClick={submit} requireLaunchpad={false} />
           <p className="hint">Quotes are compared live across Kuru Flow, Uniswap (v3 and v4) and Monday Trade. You trade from your own wallet; DyorHQ never holds funds.</p>
         </section>
 

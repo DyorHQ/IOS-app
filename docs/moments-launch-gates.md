@@ -96,6 +96,7 @@ in `contracts/deployments/moments-143.json`. Moments published earlier keep thei
 ## Web app deployment notes
 
 `cd contracts && forge build` → `npm run abis` → `npm run sync:moments` → `npm run build` → deploy through the
-existing hosting pipeline. Optional `NEXT_PUBLIC_MOMENTS_*` address overrides, `NEXT_PUBLIC_ONRAMP_URL` and
+existing hosting pipeline. Optional `NEXT_PUBLIC_MOMENTS_*` address overrides (fork rehearsals only: ignored unless
+`NEXT_PUBLIC_MOMENTS_OVERRIDE=1` is also set — never set it for production), `NEXT_PUBLIC_ONRAMP_URL` and
 `NEXT_PUBLIC_MONAD_LOGS_RPC` (default rpc1.monad.xyz for holder statistics). Never set `NEXT_PUBLIC_DEV_WALLET_KEY`
 for a production build.

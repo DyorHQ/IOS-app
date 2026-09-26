@@ -23,16 +23,22 @@ import {MomentNFT} from "../../../src/moments/MomentNFT.sol";
 import {MockUSDC} from "../mocks/MockUSDC.sol";
 import {MockPermit2} from "../mocks/MockPermit2.sol";
 
-/// Smoke test of the LIVE Monad mainnet deployment (deployments/moments-143.json): nothing of ours is redeployed;
-/// the whole $10 lifecycle runs through the deployed factory / collect / vesting / graduation / locker / hook /
-/// buyback against the real PoolManager, USDC, Permit2 and Universal Router, on a fresh fork.
-///   forge test --code-size-limit 100000000 --match-path test/moments/fork/LiveDeployment.t.sol --fork-url monad -vv
+/// Smoke test of the LIVE Monad mainnet deployment (deployments/moments-143.json — cohort 3, the 2026-09-23 relaunch
+/// with the rotated wallets: factory 0x0FD4…7E26, platform 0x15ED…, treasury 0x5aDb…): nothing of ours is redeployed;
+/// the whole $2,000-FDV lifecycle (threshold 771.428571 USDC: 10 collects of $100 + a clamped terminal one) runs
+/// through the deployed factory / collect / vesting / graduation / locker / hook / buyback against the real
+/// PoolManager, USDC, Permit2 and Universal Router, on a fresh fork. Relaunch.t.sol checks the same stack against
+/// the retired cohorts and the old wallets.
+///   forge test --code-size-limit 100000000 --match-path test/moments/fork/LiveDeployment.t.sol -vv
 contract LiveDeploymentTest is MomentsForkBase {
     using PoolIdLibrary for PoolKey;
+
+    uint256 constant COLLECT_PRICE = 100_000_000; // $100 per edition: 10 full collects + the terminal remainder
 
     address liveGovernance;
     address livePlatform;
     address liveTreasury;
+    uint256 liveThreshold;
 
     function setUp() public override {
         vm.createSelectFork("monad");
@@ -47,6 +53,7 @@ contract LiveDeploymentTest is MomentsForkBase {
         liveGovernance = vm.parseJsonAddress(json, ".governance");
         livePlatform = vm.parseJsonAddress(json, ".platform");
         liveTreasury = vm.parseJsonAddress(json, ".treasury");
+        liveThreshold = vm.parseJsonUint(json, ".thresholdUsdc");
         manager = IPoolManager(PM_ADDR);
         usdc = MockUSDC(USDC_ADDR);
         permit2 = MockPermit2(PERMIT2_ADDR);
@@ -76,7 +83,8 @@ contract LiveDeploymentTest is MomentsForkBase {
         assertFalse(factory.publishingPaused());
         assertEq(factory.pendingPolicyAt(), 0);
         (uint256 threshold, uint256 minPrice, uint16 cBps, uint16 pBps, uint16 rBps, uint16 maxAlloc, uint16 expBps, uint16 royBps, address plat, address treas) = factory.policy();
-        assertEq(threshold, 10_000_000);
+        assertEq(threshold, liveThreshold);
+        assertEq(threshold, 771_428_571, "cohort 3: $2,000 FDV at the default 10% creator allocation");
         assertEq(minPrice, 100_000);
         assertEq(cBps, 2_000);
         assertEq(pBps, 500);
@@ -87,9 +95,9 @@ contract LiveDeploymentTest is MomentsForkBase {
         assertEq(factory.MIN_THRESHOLD(), 1_000_000, "v1.1 policy floors");
         assertEq(factory.MIN_MIN_PRICE(), 10_000);
         assertEq(plat, livePlatform);
-        assertEq(plat, 0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48);
+        assertEq(plat, 0x15ED3bb488231213b141A2f78b62358D52235Cd7, "platform = the new fees wallet");
         assertEq(treas, liveTreasury);
-        assertEq(treas, 0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045);
+        assertEq(treas, 0x5aDbDc19831D0f9dbdfBbA6ee3d618DbB9CEA371, "treasury = the new treasury");
         assertEq(address(collect.USDC()), USDC_ADDR);
         assertEq(address(collect.PERMIT2()), PERMIT2_ADDR);
         assertEq(address(collect.factory()), address(factory));
@@ -115,7 +123,7 @@ contract LiveDeploymentTest is MomentsForkBase {
     /// deployed v1 creation code, not from a local prediction: v1.1 changed the coin bytecode.
     function test_live_lifecycle_through_the_deployed_contracts() public {
         uint256 nextId = factory.momentCount() + 1;
-        (uint256 id, MomentCoin coin, MomentNFT nft) = _publish(creator, PRICE, MAX_ALLOC_BPS, 1001);
+        (uint256 id, MomentCoin coin, MomentNFT nft) = _publish(creator, COLLECT_PRICE, MAX_ALLOC_BPS, 1001);
         bool usdcIs0 = address(usdc) < address(coin);
         assertEq(id, nextId);
         assertEq(coin.graduation(), address(executor));
@@ -123,17 +131,17 @@ contract LiveDeploymentTest is MomentsForkBase {
         assertEq(nft.collect(), address(collect));
         _assertSupply(id);
 
-        for (uint256 i = 0; i < 13; i++) _collect(id, alice, 1);
+        for (uint256 i = 0; i < 10; i++) _collect(id, alice, 1);
         vm.prank(bob);
         uint256 g = gasleft();
         MomentCollect.Quote memory q = collect.collect(id, 1);
         console2.log("live terminal collect + graduation gas:", g - gasleft());
         assertTrue(q.terminal);
-        assertEq(q.gross, 333_334);
+        assertEq(q.gross, 28_571_428, "clamped: its 75% reserve share is exactly the remaining 21.428571 USDC");
         assertEq(uint8(_state(id)), uint8(MomentTypes.State.Graduated), "graduated on the live executor");
         MomentGraduation.Record memory r = executor.record(id);
-        assertEq(r.reserve, THRESHOLD);
-        assertEq(r.poolCoins, 38571426000000000000000012);
+        assertEq(r.reserve, liveThreshold, "graduates at exactly the $2,000-FDV reserve");
+        assertEq(r.poolCoins, 38571428571428571428571436);
         assertEq(r.poolCoins + vesting.totalEntitlement(id) + 1e25, S);
         assertEq(address(r.key.hooks), address(hook));
         assertEq(r.key.fee, 5_000);
@@ -157,11 +165,12 @@ contract LiveDeploymentTest is MomentsForkBase {
         vesting.claim(id);
         assertEq(coin.balanceOf(creator), 2_000_000e18);
         uint256 p0 = usdc.balanceOf(livePlatform);
+        assertEq(collect.ledger(id).platformClaimable, 51_428_571, "5% of the 1,028.571428 USDC collected");
         vm.startPrank(livePlatform);
         collect.withdrawPlatform(id);
         hook.withdrawPlatform(id);
         vm.stopPrank();
-        assertGt(usdc.balanceOf(livePlatform) - p0, 666_666, "live platform address received its share");
+        assertGt(usdc.balanceOf(livePlatform) - p0, 51_428_571, "live platform address received its collect + hook shares");
 
         // fees -> buyback through the live module
         _approveCoin(coin, bob);

@@ -52,7 +52,7 @@ public struct PerplFill: Identifiable, Sendable, Hashable {
         let priceScaled = (j["p"] as? NSNumber)?.doubleValue ?? 0
         let sizeScaled = (j["s"] as? NSNumber)?.doubleValue ?? 0
         self.init(
-            id: "\(mkt)-\(oid)-\(Int(ms))-\(log)",
+            id: "\(mkt)-\(oid)-\(Int(exactly: ms.rounded(.towardZero)) ?? 0)-\(log)",
             time: Date(timeIntervalSince1970: ms / 1000),
             marketId: mkt,
             symbol: market.asset,
@@ -99,7 +99,7 @@ public struct PerplPositionRecord: Identifiable, Sendable, Hashable {
         let entryScaled = (j["ep"] as? NSNumber)?.doubleValue ?? 0
         let exitScaled = (j["xp"] as? NSNumber)?.doubleValue
         let sizeScaled = (j["s"] as? NSNumber)?.doubleValue ?? 0
-        self.id = "\(mkt)-\(pid)-\(Int(ms))"
+        self.id = "\(mkt)-\(pid)-\(Int(exactly: ms.rounded(.towardZero)) ?? 0)"
         self.time = Date(timeIntervalSince1970: ms / 1000)
         self.marketId = mkt
         self.symbol = market.asset

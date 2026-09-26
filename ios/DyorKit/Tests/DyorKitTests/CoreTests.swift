@@ -40,6 +40,19 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Address(" 0x34B6552d57a35a1D042CcAe1951BD1C370112a6F "), address)
     }
 
+    /// EIP-55's own examples: mixed case must match the checksum; single-case input carries none and passes as typed.
+    func testAddressChecksumValidation() {
+        for valid in ["0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed", "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+                      "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB", "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+                      "0x5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED", " 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed\n"] {
+            XCTAssertTrue(Address.hasValidChecksum(valid), valid)
+        }
+        // One character's case flipped (a → A), and a non-address.
+        XCTAssertFalse(Address.hasValidChecksum("0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"))
+        XCTAssertFalse(Address.hasValidChecksum("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD"))
+        XCTAssertFalse(Address.hasValidChecksum("0x1234"))
+    }
+
     func testHexQuantities() {
         XCTAssertEqual(BigUInt(hexQuantity: "0x0"), 0)
         XCTAssertEqual(BigUInt(hexQuantity: "0x8f"), 143)
@@ -167,6 +180,29 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(Amount.parse("1e5", decimals: 6))
         XCTAssertNil(Amount.parse("", decimals: 6))
         XCTAssertNil(Amount.parse("1.2.3", decimals: 6))
+    }
+
+    /// A decimal comma (what the decimal pad types in much of Europe and Latin America) is a decimal point, never a
+    /// thousands separator to delete: "0,5" must not become 5. Same vectors as the web app's parseAmount.
+    func testAmountParseDecimalComma() {
+        let e17 = BigUInt(10).power(17)
+        XCTAssertEqual(Amount.parse("0,5", decimals: 18), 5 * e17)
+        XCTAssertEqual(Amount.parse("0,05", decimals: 6), 50_000)
+        XCTAssertEqual(Amount.parse("1,25", decimals: 6), 1_250_000)
+        XCTAssertEqual(Amount.parse("0,001", decimals: 6), 1_000)
+        XCTAssertEqual(Amount.parse("1,234", decimals: 6), 1_234_000, "a single comma is a decimal point")
+        XCTAssertEqual(Amount.parse("1.234,5", decimals: 6), 1_234_500_000)
+        XCTAssertEqual(Amount.parse("1.234.567,89", decimals: 2), 123_456_789)
+        XCTAssertEqual(Amount.parse("1,234,567", decimals: 0), 1_234_567)
+        XCTAssertEqual(Amount.parse("1,234,567.5", decimals: 1), 12_345_675)
+        XCTAssertEqual(Amount.parse(" 2,5 ", decimals: 6), 2_500_000)
+        XCTAssertEqual(Amount.parse(",5", decimals: 6), 500_000)
+        XCTAssertEqual(Amount.parse("5,", decimals: 6), 5_000_000)
+        XCTAssertEqual(Amount.parse("0.9999999", decimals: 6), 999_999)
+        for bad in [".", ",", "1,,5", "12,3456,789.1", "1,234.567.8", "1.234,567,8", "-1", "1 000", "1٫5", "１", "0.001,5", "0,500.25", "0,500,000"] {
+            XCTAssertNil(Amount.parse(bad, decimals: 6), bad)
+        }
+        XCTAssertNil(Amount.parse("1", decimals: -1))
         XCTAssertEqual(Amount.exact(1_234_500_000, decimals: 6), "1234.5")
         XCTAssertEqual(Amount.exact(1, decimals: 6), "0.000001")
         XCTAssertEqual(Amount.exact(0, decimals: 18), "0")

@@ -92,7 +92,9 @@ public actor KuruTokenListClient {
         guard !symbol.isEmpty else { return nil }
         var name = (row["name"].string ?? symbol).trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty { name = symbol }
-        let decimals = row["decimal"].number.map { Int($0) } ?? Int(row["decimal"].string ?? "") ?? 18
+        let decimals = row["decimal"].number.flatMap { Int(exactly: $0) } ?? Int(row["decimal"].string ?? "") ?? 18
+        // The API's word, not the chain's: never trap on it, and drop rows no ERC-20 could have (0…36, as ERC20.metadata).
+        guard (0...36).contains(decimals) else { return nil }
         let logo = row["imageurl"].string.flatMap { URL(string: $0) }
         return Token(address: address, symbol: symbol, name: name, decimals: decimals, logoURL: logo)
     }

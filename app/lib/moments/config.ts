@@ -1,8 +1,9 @@
 import { getAddress, isAddress, type Address } from "viem";
 import deployment from "../moments-deployment.json";
 
-/* Moments contracts on Monad mainnet (clean-room set, separate from the launchpad). Environment variables win
-   over app/lib/moments-deployment.json, which `npm run sync:moments` writes from contracts/deployments. */
+/* Moments contracts on Monad mainnet (clean-room set, separate from the launchpad). app/lib/moments-deployment.json,
+   which `npm run sync:moments` writes from contracts/deployments, is the source of truth; environment variables win
+   only for fork rehearsals (NEXT_PUBLIC_MOMENTS_OVERRIDE=1, below). */
 
 const ZERO: Address = "0x0000000000000000000000000000000000000000";
 
@@ -19,17 +20,24 @@ const addr = (value: string | undefined, fallback?: string): Address => {
   return candidate && isAddress(candidate) ? getAddress(candidate) : ZERO;
 };
 
+/* The address variables only apply when NEXT_PUBLIC_MOMENTS_OVERRIDE=1 is also set — the fork-rehearsal switch, as
+   NEXT_PUBLIC_LAUNCHPAD_OVERRIDE is for the launchpad (app/lib/chain.ts) — so a stale variable in a hosting dashboard
+   or an old env file can never point production at a retired cohort, or aim the unlimited USDC approval at anything
+   but the canonical Permit2. */
+const overrideMoments = publicEnv(() => process.env.NEXT_PUBLIC_MOMENTS_OVERRIDE) === "1";
+const momentsEnv = (read: () => string | undefined): string | undefined => (overrideMoments ? publicEnv(read) : undefined);
+
 export const MOMENTS = {
-  factory: addr(publicEnv(() => process.env.NEXT_PUBLIC_MOMENTS_FACTORY), deployment.factory),
-  collect: addr(publicEnv(() => process.env.NEXT_PUBLIC_MOMENTS_COLLECT), deployment.collect),
-  vesting: addr(publicEnv(() => process.env.NEXT_PUBLIC_MOMENTS_VESTING), deployment.vesting),
-  graduation: addr(publicEnv(() => process.env.NEXT_PUBLIC_MOMENTS_GRADUATION), deployment.graduation),
-  locker: addr(publicEnv(() => process.env.NEXT_PUBLIC_MOMENTS_LOCKER), deployment.locker),
-  hook: addr(publicEnv(() => process.env.NEXT_PUBLIC_MOMENTS_HOOK), deployment.hook),
-  buyback: addr(publicEnv(() => process.env.NEXT_PUBLIC_MOMENTS_BUYBACK), deployment.buyback),
-  usdc: addr(publicEnv(() => process.env.NEXT_PUBLIC_USDC), deployment.usdc),
-  permit2: addr(publicEnv(() => process.env.NEXT_PUBLIC_PERMIT2), deployment.permit2),
-  poolManager: addr(publicEnv(() => process.env.NEXT_PUBLIC_POOL_MANAGER), deployment.poolManager),
+  factory: addr(momentsEnv(() => process.env.NEXT_PUBLIC_MOMENTS_FACTORY), deployment.factory),
+  collect: addr(momentsEnv(() => process.env.NEXT_PUBLIC_MOMENTS_COLLECT), deployment.collect),
+  vesting: addr(momentsEnv(() => process.env.NEXT_PUBLIC_MOMENTS_VESTING), deployment.vesting),
+  graduation: addr(momentsEnv(() => process.env.NEXT_PUBLIC_MOMENTS_GRADUATION), deployment.graduation),
+  locker: addr(momentsEnv(() => process.env.NEXT_PUBLIC_MOMENTS_LOCKER), deployment.locker),
+  hook: addr(momentsEnv(() => process.env.NEXT_PUBLIC_MOMENTS_HOOK), deployment.hook),
+  buyback: addr(momentsEnv(() => process.env.NEXT_PUBLIC_MOMENTS_BUYBACK), deployment.buyback),
+  usdc: addr(momentsEnv(() => process.env.NEXT_PUBLIC_USDC), deployment.usdc),
+  permit2: addr(momentsEnv(() => process.env.NEXT_PUBLIC_PERMIT2), deployment.permit2),
+  poolManager: addr(momentsEnv(() => process.env.NEXT_PUBLIC_POOL_MANAGER), deployment.poolManager),
   platform: addr(undefined, deployment.platform),
   treasury: addr(undefined, deployment.treasury),
   governance: addr(undefined, deployment.governance),

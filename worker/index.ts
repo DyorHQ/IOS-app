@@ -54,10 +54,20 @@ function perplClientMessage(data: unknown): string | null {
   return JSON.stringify({ mt: 5, subs });
 }
 
+/* The app's socket carries one market (three streams) and a new socket replaces it on a market switch, so a socket
+   that keeps more distinct streams open than this is not the app: it is using the Worker as a market-data firehose. */
+const MAX_STREAMS_PER_SOCKET = 8;
+
 async function proxyPerplSocket(): Promise<Response> {
-  const upstream = await fetch(PERPL_WS, { headers: { Upgrade: "websocket" } });
+  let upstream: Response;
+  try {
+    upstream = await fetch(PERPL_WS, { headers: { Upgrade: "websocket" } });
+  } catch {
+    return new Response("Perpl did not answer", { status: 502 });
+  }
   const remote = (upstream as Response & { webSocket?: WebSocket | null }).webSocket;
   if (!remote) return new Response(`Perpl refused the socket (${upstream.status})`, { status: 502 });
+  const streams = new Set<string>();
   const pair = new WebSocketPair();
   const [client, server] = [pair[0], pair[1]];
   const accept = (socket: WebSocket) => (socket as WebSocket & { accept?: () => void }).accept?.();
@@ -65,7 +75,14 @@ async function proxyPerplSocket(): Promise<Response> {
   accept(remote);
   server.addEventListener("message", (e) => {
     const allowed = perplClientMessage(e.data);
-    if (allowed === null) {
+    if (allowed !== null) {
+      const { subs } = JSON.parse(allowed) as { subs?: { stream: string; subscribe: boolean }[] };
+      for (const sub of subs ?? []) {
+        if (sub.subscribe) streams.add(sub.stream);
+        else streams.delete(sub.stream);
+      }
+    }
+    if (allowed === null || streams.size > MAX_STREAMS_PER_SOCKET) {
       try { server.close(1008, "Message not allowed"); } catch { /* already closing */ }
       try { remote.close(); } catch { /* already closing */ }
       return;

@@ -131,6 +131,8 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
   const { errors, input } = validate(form, protocol.data, pair, account, balance.data ?? null);
   const firstError = touched ? Object.values(errors)[0] : undefined;
   const creatorTaxBps = input?.creatorTaxBps ?? (Math.round(Number(form.creatorTax || "0") * 100) || 0);
+  // The amount as read (a "," can be the decimal point), shown under the field so "1,000" can't silently mean 1.
+  const devBuyRead = pair && form.devBuy.trim() ? parseAmount(form.devBuy, pair.decimals) : null;
   const estimate = input && pair && protocol.data && input.devBuy > 0n ? estimateDevBuy(input.devBuy, pair, protocol.data, input.creatorTaxBps) : null;
   const fee = protocol.data ? fmtAmount(protocol.data.launchFee, 18, "MON") : "—";
   // aBIL (any Monday-only pair) can only graduate on Monday Trade; the factory reverts `PairRequiresMonday`
@@ -197,7 +199,7 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
 
           <label className="field">Developer buy (optional)
             <div className="prefix suffix"><input inputMode="decimal" placeholder="0" value={form.devBuy} onChange={(e) => set({ devBuy: e.target.value })} /><span className="unit">{pair?.symbol ?? "MON"}</span></div>
-            <span className="help">Bought in the same transaction as the launch, before anyone else, with no snipe tax.{account && balance.data !== null && pair ? ` Balance: ${fmtAmount(balance.data ?? 0n, pair.decimals, pair.symbol)}.` : ""}</span>
+            <span className="help">{devBuyRead !== null && pair ? `Read as ${fmtAmount(devBuyRead, pair.decimals, pair.symbol)}. ` : ""}Bought in the same transaction as the launch, before anyone else, with no snipe tax.{account && balance.data !== null && pair ? ` Balance: ${fmtAmount(balance.data ?? 0n, pair.decimals, pair.symbol)}.` : ""}</span>
             {touched && errors.devBuy && <span className="hint err">{errors.devBuy}</span>}
           </label>
 

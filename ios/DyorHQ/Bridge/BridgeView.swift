@@ -285,6 +285,8 @@ struct BridgeView: View {
                 summaryRow("Slippage", model.slippageText)
                 if let secs = quote.timeEstimate, secs > 0 { summaryRow("Estimated time", "≈ \(Int(secs))s") }
                 summaryRow("Route", "\(model.fromChain.name) → \(model.toChain.name)")
+                // Where the funds actually go on the source chain: Aurora's one-time deposit address for this quote.
+                if let deposit = quote.depositAddress.flatMap(Address.init) { summaryRow("Deposit to", deposit.short) }
             }
             .padding(.horizontal, 16).padding(.vertical, 6)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))

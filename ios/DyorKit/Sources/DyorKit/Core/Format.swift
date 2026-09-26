@@ -22,17 +22,52 @@ public enum Amount {
         return parse(text, decimals: decimals) ?? 0
     }
 
-    /// Parses user input like "1,234.5" into raw units. Returns nil for anything that is not a plain decimal.
+    /// Parses user input into raw units. Returns nil for anything that is not a plain positive decimal. The decimal pad
+    /// types the region's separator ("," across much of Europe and Latin America) while the app's own writers emit ".",
+    /// so a decimal comma is read as a decimal point — "0,5" is one half, never 5 (see `decimalPoint`). Digits beyond
+    /// `decimals` are truncated, not rounded. Same rules as the web app's parseAmount.
     public static func parse(_ input: String, decimals: Int) -> BigUInt? {
-        let cleaned = input.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "")
-        guard !cleaned.isEmpty, cleaned != ".", cleaned.allSatisfy({ $0.isNumber || $0 == "." }), cleaned.filter({ $0 == "." }).count <= 1 else { return nil }
-        let parts = cleaned.split(separator: ".", omittingEmptySubsequences: false)
+        guard decimals >= 0 else { return nil } // a token's decimals can come from an API; negative ones would trap below
+        let cleaned = input.trimmingCharacters(in: .whitespaces)
+        guard !cleaned.isEmpty, cleaned.allSatisfy({ $0 == "." || $0 == "," || ($0.isASCII && $0.isNumber) }),
+              let normalized = decimalPoint(cleaned) else { return nil }
+        let parts = normalized.split(separator: ".", omittingEmptySubsequences: false)
         let whole = parts.first.map(String.init) ?? ""
         var fraction = parts.count > 1 ? String(parts[1]) : ""
+        guard !(whole.isEmpty && fraction.isEmpty) else { return nil }
         if fraction.count > decimals { fraction = String(fraction.prefix(decimals)) }
         fraction += String(repeating: "0", count: decimals - fraction.count)
         let digits = (whole.isEmpty ? "0" : whole) + fraction
         return BigUInt(digits, radix: 10)
+    }
+
+    /// `s` (ASCII digits, "." and "," only) with one "." as its decimal point and no grouping, or nil when ambiguous:
+    /// - one separator of either kind is the decimal point ("0,5" and "0.5");
+    /// - both kinds ("1,234.5", "1.234,5"): the last is the decimal point and the other must group thousands exactly;
+    /// - one kind more than once ("1,234,567"): thousands grouping only, else nil.
+    public static func decimalPoint(_ s: String) -> String? {
+        let dots = s.filter { $0 == "." }.count
+        let commas = s.filter { $0 == "," }.count
+        func grouped(_ part: Substring, by separator: Character) -> String? {
+            let groups = part.split(separator: separator, omittingEmptySubsequences: false)
+            // More than one group: the first can't start with 0 ("0.001,5" is not 1.5, "0,500" alone is one half).
+            guard let first = groups.first, (1...3).contains(first.count), groups.count == 1 || first.first != "0",
+                  groups.dropFirst().allSatisfy({ $0.count == 3 }) else { return nil }
+            return groups.joined()
+        }
+        if dots + commas == 0 { return s }
+        if dots + commas == 1 { return s.replacingOccurrences(of: ",", with: ".") }
+        if dots > 0, commas > 0 {
+            guard let lastDot = s.lastIndex(of: "."), let lastComma = s.lastIndex(of: ",") else { return nil }
+            let decimalSeparator: Character = lastDot > lastComma ? "." : ","
+            let at = max(lastDot, lastComma)
+            guard s.firstIndex(of: decimalSeparator) == at,
+                  let whole = grouped(s[..<at], by: decimalSeparator == "." ? "," : ".") else { return nil }
+            let fraction = String(s[s.index(after: at)...])
+            guard !fraction.contains("."), !fraction.contains(",") else { return nil }
+            return whole + "." + fraction
+        }
+        return grouped(Substring(s), by: dots > 0 ? "." : ",")
     }
 
     /// A share of a balance for an amount field (25 / 50 / 75 %, a native Max after its fee): rounded DOWN to
