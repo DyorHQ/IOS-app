@@ -157,11 +157,32 @@ test("LP-2: sweeps holder-sharing quote fees; leaves creator-only token fees bel
       [`${lp.hook}:pendingFees:${l.poolId},${tok}`]: 9n,
       [`${lp.hook}:pendingCreatorTax:${l.poolId},${tok}`]: 0n,
     },
+    sims: { [`${lp.hook}:sweepPoolFees:${l.poolId},${ZERO}`.toLowerCase()]: null },
   });
   const h = harness();
   await sweepsJob({ client, launchpads: [lp], ...h, minOther: 10n });
   assert.equal(h.sender.sent.length, 1);
   assert.deepEqual(h.sender.sent[0].argv.slice(0, 5), ["send", lp.hook, "sweepPoolFees(bytes32,address)", l.poolId, ZERO]);
+});
+
+test("LP-2: a sweep that would revert is not sent (it would still pay gas) and raises an alert", async () => {
+  const tok = a(0x7001);
+  const l = launch({});
+  const client = mockClient({
+    reads: {
+      [`${lp.factory}:launchCount:`]: 1n,
+      [`${lp.factory}:getLaunches:0,100`]: [tok],
+      [`${lp.factory}:getLaunchedToken:${tok}`]: l,
+      [`${lp.hook}:pendingFees:${l.poolId},${ZERO}`]: 3n,
+      [`${lp.hook}:pendingCreatorTax:${l.poolId},${ZERO}`]: 0n,
+      [`${lp.hook}:pendingFees:${l.poolId},${tok}`]: 0n,
+      [`${lp.hook}:pendingCreatorTax:${l.poolId},${tok}`]: 0n,
+    },
+  });
+  const h = harness();
+  await sweepsJob({ client, launchpads: [lp], ...h, minOther: 10n });
+  assert.equal(h.sender.sent.length, 0);
+  assert.equal(h.reporter.alerts.length, 1);
 });
 
 test("LP-2: Monday-venue and not-yet-graduated launches are not swept", async () => {

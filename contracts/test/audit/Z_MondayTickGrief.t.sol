@@ -133,7 +133,9 @@ contract Z_MondayTickGriefTest is LaunchpadBase {
         assertEq(uint8(l.phase), uint8(Types.Phase.PoolCreated), "graduated");
         assertEq(uint8(l.graduationVenue), uint8(Types.GraduationVenue.UniswapV4), "fell back to v4");
         assertEq(factory.stuckSince(t), 0);
-        assertLt(used, 2 * factory.GRADUATION_GAS() + factory.GRADUATION_GAS() / 32, "never needs more than the two budgets");
+        // The Monday retry may burn everything above the reserved v4 budget (the caller chose to bring 30M); what
+        // matters is that the reserve survives it and v4 still graduates within the call.
+        assertLt(used, 30_000_000, "graduates on v4 within the gas the caller brought");
         emit log_named_uint("gas used by graduateFallback", used);
     }
 
@@ -152,6 +154,17 @@ contract Z_MondayTickGriefTest is LaunchpadBase {
 
     /// A light squat (a handful of dust ticks) is realignable within the budget, so the creator's Monday venue is
     /// still honoured by the fallback entry point.
+    /// A heavy squat the automatic 2M budget cannot realign, but a caller bringing more gas can: the fallback's retry
+    /// gets all the gas above the reserved v4 budget, so the creator's Monday venue still wins.
+    function test_heavySquat_fallbackHonoursMondayWithMoreGas() public {
+        address t = _squattedStuckLaunch(150, 76);
+        assertGt(factory.stuckSince(t), 0, "the automatic 2M graduation could not realign it");
+        factory.graduateFallback{gas: 30_000_000}(t);
+        Types.LaunchedToken memory l = factory.getLaunchedToken(t);
+        assertEq(uint8(l.phase), uint8(Types.Phase.PoolCreated), "graduated");
+        assertEq(uint8(l.graduationVenue), uint8(Types.GraduationVenue.Monday), "stayed on Monday");
+    }
+
     function test_lightSquat_fallbackHonoursMonday() public {
         Types.TokenParams memory p = _params(address(usd), 0, false, 75);
         p.graduationVenue = Types.GraduationVenue.Monday;

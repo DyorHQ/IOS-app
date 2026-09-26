@@ -428,9 +428,9 @@ contract LaunchpadFactory {
     ///         the 7-day rescue lock-up. Monday-only quote assets (aBIL) keep their rule unless the owner has
     ///         explicitly allowed the fallback for that launch with `allowV4Fallback`.
     ///
-    ///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), LP-1: the Monday retry is capped at
-    ///         `GRADUATION_GAS`, the same budget the automatic graduation gets, and the call must carry enough gas for
-    ///         that retry AND a full `GRADUATION_GAS` Uniswap v4 graduation after it. Before, the retry was forwarded
+    ///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), LP-1: a full `GRADUATION_GAS` budget (+1/32) is
+    ///         reserved for the Uniswap v4 graduation before the Monday retry runs, and the call must carry at least
+    ///         that reserve plus `GRADUATION_GAS` for the retry. Before, the retry was forwarded
     ///         63/64 of all gas, so a squatted Monday pool full of dust-liquidity ticks (every tick crossed by the
     ///         realign swap costs gas) could burn it and leave the v4 path starving on the last 1/64.
     function graduateFallback(address token) external {
@@ -438,10 +438,11 @@ contract LaunchpadFactory {
         if (gasleft() < 2 * GRADUATION_GAS + GRADUATION_GAS / 32) revert InsufficientGasForGraduation();
         // The creator's venue is honoured whenever it works within the automatic graduation's gas budget: if the
         // Monday graduation succeeds now (e.g. the squat was realignable, or an earlier attempt merely hit a
-        // transient failure), that is the result. Only a Monday path that still reverts — or cannot finish within
-        // `GRADUATION_GAS` — falls back to Uniswap v4, so nobody can use this entry point to override a venue
-        // choice that is still viable.
-        try this.graduate{gas: GRADUATION_GAS}(token) {
+        // transient failure), that is the result. The retry gets all the gas above the reserved v4 budget (at least
+        // `GRADUATION_GAS`), so a caller who brings more gas lets a heavy-but-realignable Monday pool still graduate on
+        // Monday. Only a Monday path that still reverts with that gas falls back to Uniswap v4, and the reserve is
+        // never spent by the retry, so a squatted pool can no longer starve the fallback.
+        try this.graduate{gas: gasleft() - (GRADUATION_GAS + GRADUATION_GAS / 32)}(token) {
             return;
         } catch {}
         _graduate(token, true);

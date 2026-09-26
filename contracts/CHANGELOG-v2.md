@@ -65,12 +65,13 @@ not reachable from the sandbox. Before relying on the table, run `script/verify-
 ### LP-1: the Monday→v4 fallback always keeps enough gas for v4 (Medium)
 
 - **`LaunchpadFactory.graduateFallback`**:
-  - The Monday retry is capped at `GRADUATION_GAS` (2M, the automatic graduation's own budget). v1 forwarded 63/64
-    of all gas, so a squatted pool full of dust ticks could burn it all.
-  - The call now requires `2 × GRADUATION_GAS + GRADUATION_GAS/32` gas up front (`InsufficientGasForGraduation`),
-    so the v4 path always has a full `GRADUATION_GAS` after a failed retry.
-  - A Monday path that cannot finish within the automatic budget falls back to v4. The fallback is only reachable
-    after the automatic attempt with the same budget has already failed, so the rule is unchanged.
+  - A full `GRADUATION_GAS + GRADUATION_GAS/32` is reserved for the v4 path, and the Monday retry gets all the gas
+    above that reserve. v1 forwarded 63/64 of all gas to the retry, so a squatted pool full of dust ticks could burn
+    it all and starve v4.
+  - The call requires `2 × GRADUATION_GAS + GRADUATION_GAS/32` gas up front (`InsufficientGasForGraduation`), so the
+    retry gets at least `GRADUATION_GAS`, and the v4 path always keeps its full budget after a failed retry.
+  - A caller who brings more gas lets a heavy-but-realignable Monday pool still graduate on Monday (the creator's
+    venue), which the post-merge adversarial review asked for; only a Monday path that still reverts falls back.
 - Tests: `test/audit/Z_MondayTickGrief.t.sol` uses a v3-style pool that charges a fresh storage write per crossed
   dust tick. With 1,500 ticks, the auto graduation fails and even a 29M-gas Monday retry runs out of gas. The v2
   fallback still graduates on v4 within 30M, and with just the reserved budget. It rejects too little gas. A light

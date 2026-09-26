@@ -49,6 +49,17 @@ async function simulate(client, req) {
   }
 }
 
+/** Sends one transaction; a failed send becomes an alert instead of aborting the rest of the run (other targets and
+    other jobs still get their turn). */
+async function safeSend(sender, reporter, job, target, tx) {
+  try {
+    return await sender.call(tx);
+  } catch (e) {
+    reporter.alert({ job, target, severity: "critical", reason: `send failed: ${errText(e)}` });
+    return null;
+  }
+}
+
 async function now(client) {
   return (await client.getBlock()).timestamp;
 }
@@ -93,7 +104,7 @@ export async function momentsGraduationJob({ client, cohorts, sender, reporter, 
       reporter.alert({ job: "moments-graduation", target, severity: d.severity, reason: `${d.reason}; expirable at ${d.expirableAt} (${d.secondsLeft}s left)` });
       if (d.action === "graduate") {
         reporter.action({ job: "moments-graduation", target, what: "graduate(id)" });
-        await sender.call({ to: c.graduation, signature: "graduate(uint256)", args: [id], gasLimit, label: `graduate ${target}` });
+        await safeSend(sender, reporter, "moments-graduation", target, { to: c.graduation, signature: "graduate(uint256)", args: [id], gasLimit, label: `graduate ${target}` });
       }
     }
     if (logsLookback > 0n) {
@@ -139,7 +150,7 @@ export async function buybacksJob({ client, cohorts, sender, reporter, simAccoun
       }
       const minCoinOut = minOutWithSlippage(sim.result.coinBought, slippageBps);
       reporter.action({ job: "buybacks", target, what: `execute(id, ${minCoinOut}) budget ${d.budget}` });
-      await sender.call({ to: c.buyback, signature: "execute(uint256,uint256)", args: [id, minCoinOut], gasLimit, label: `buyback ${target}` });
+      await safeSend(sender, reporter, "buybacks", target, { to: c.buyback, signature: "execute(uint256,uint256)", args: [id, minCoinOut], gasLimit, label: `buyback ${target}` });
     }
     const idle = await client.readContract({ address: c.usdc, abi: erc20Abi, functionName: "balanceOf", args: [c.locker] });
     const li = decideLockerIdle({ lockerUsdc: idle, alertAbove: lockerIdleAlert });
@@ -162,7 +173,7 @@ async function allLaunches(client, factory, page = 100n) {
 // ------------------------------------------------------------------------------------------------ LP-2
 
 /** Sweeps hook fees of every graduated Uniswap v4 pool: always for holder-sharing quote fees, others above a floor. */
-export async function sweepsJob({ client, launchpads, sender, reporter, minOther, gasLimit = 1_500_000n }) {
+export async function sweepsJob({ client, launchpads, sender, reporter, minOther, simAccount = DEFAULT_SIM_ACCOUNT, gasLimit = 1_500_000n }) {
   for (const lp of launchpads) {
     const tokens = await allLaunches(client, lp.factory);
     reporter.info(`${lp.label}: ${tokens.length} launches`);
@@ -178,8 +189,15 @@ export async function sweepsJob({ client, launchpads, sender, reporter, minOther
         const d = decideSweep({ holderFeeSharing: l.holderFeeSharing, isQuote, pending: fee + tax, minOther });
         if (d.action !== "sweep") continue;
         const target = `${lp.label} ${token} (${isQuote ? "quote" : "token"} fees)`;
+        // Simulate first, as the other jobs do: with a fixed gas limit cast skips estimation, so a reverting sweep would
+        // otherwise be broadcast and pay gas.
+        const sim = await simulate(client, { address: lp.hook, abi: memeHookAbi, functionName: "sweepPoolFees", args: [l.poolId, currency], account: simAccount, gas: gasLimit });
+        if (!sim.ok) {
+          reporter.alert({ job: "sweeps", target, severity: "warning", reason: `sweepPoolFees would revert: ${sim.error}` });
+          continue;
+        }
         reporter.action({ job: "sweeps", target, what: `sweepPoolFees ${fee + tax} (${d.reason})` });
-        await sender.call({ to: lp.hook, signature: "sweepPoolFees(bytes32,address)", args: [l.poolId, currency], gasLimit, label: `sweep ${target}` });
+        await safeSend(sender, reporter, "sweeps", target, { to: lp.hook, signature: "sweepPoolFees(bytes32,address)", args: [l.poolId, currency], gasLimit, label: `sweep ${target}` });
       }
     }
   }
@@ -272,10 +290,10 @@ export async function launchpadGraduationJob({ client, launchpads, sender, repor
       reporter.alert({ job: "launchpad-graduation", target, severity: d.severity, reason: `${d.reason}${d.rescueAt ? `; owner rescue possible from ${d.rescueAt}` : ""}${extra}` });
       if (d.action === "graduate") {
         reporter.action({ job: "launchpad-graduation", target, what: "graduate(token)" });
-        await sender.call({ to: lp.factory, signature: "graduate(address)", args: [token], gasLimit: venue === VENUE.Monday ? mondayGas : v4Gas, label: `graduate ${target}` });
+        await safeSend(sender, reporter, "launchpad-graduation", target, { to: lp.factory, signature: "graduate(address)", args: [token], gasLimit: venue === VENUE.Monday ? mondayGas : v4Gas, label: `graduate ${target}` });
       } else if (d.action === "graduateFallback") {
         reporter.action({ job: "launchpad-graduation", target, what: "graduateFallback(token)" });
-        await sender.call({ to: lp.factory, signature: "graduateFallback(address)", args: [token], gasLimit: mondayGas, label: `fallback ${target}` });
+        await safeSend(sender, reporter, "launchpad-graduation", target, { to: lp.factory, signature: "graduateFallback(address)", args: [token], gasLimit: mondayGas, label: `fallback ${target}` });
       }
     }
   }
