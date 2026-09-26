@@ -6,7 +6,7 @@ import { Icon, type IconName } from "./icons";
 import { Empty, Seg, Subtabs, opts, type SegOpt } from "./components";
 import { compact, fmtNum, fmtPct, fmtUSD } from "./data";
 import type { Go, OpenSheet, Preset, Toast } from "./nav";
-import { LightweightChart, TradingViewChart, TV_SYMBOLS } from "./tradingview";
+import { LightweightChart, PERPL_CHARTS, PerplChart, TV_SYMBOLS, tradingViewUrl } from "./tradingview";
 import { useMarkets, usePerpsAccount, type MarketRow } from "../lib/app-data";
 import { DEPLOYED, EXPLORER, explorerAddress, explorerTx } from "../lib/chain";
 import { fetchAccountView, fetchLaunch, fetchLaunches, priceNumber, type LaunchInfo } from "../lib/launchpad";
@@ -131,7 +131,9 @@ const MFILTERS: SegOpt<MFilter>[] = [{ v: "Popular", l: "Popular", i: "star" }, 
 const STOCKS = [["NVDA", "NVIDIA"], ["TSLA", "Tesla"], ["AAPL", "Apple"], ["MSFT", "Microsoft"], ["GOOGL", "Alphabet"], ["AMZN", "Amazon"]] as const;
 
 function TokenDetail({ row, go, onBack }: { row: MarketRow; go: Go; onBack: () => void }) {
-  const tv = TV_SYMBOLS[row.symbol];
+  // By curated symbol only: a launchpad token can take any ticker ("WBTC") and must never borrow another asset's chart.
+  const perp = row.launchpad ? undefined : PERPL_CHARTS[row.symbol];
+  const tv = row.launchpad ? undefined : TV_SYMBOLS[row.symbol];
   const launch = row.launch;
   const trades = useAsync(async () => (launch ? fetchCurveTrades(launch.curve as Address) : []), `curve:${launch?.curve ?? ""}`, 30_000);
   const candles = launch && trades.data ? candlesFromTrades(trades.data, 300, 1) : [];
@@ -139,7 +141,7 @@ function TokenDetail({ row, go, onBack }: { row: MarketRow; go: Go; onBack: () =
     <>
       <button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Markets</button>
       <div className="detail-head"><TokenLogo src={row.logo} name={row.symbol} address={row.address} size="lg" /><div><h1>{row.symbol}<small>{row.name}</small></h1><div className="detail-price">{row.usd === null ? "—" : fmtUSD(row.usd)}</div>{row.change24h !== null && <span className={`chip ${row.change24h >= 0 ? "up" : "down"}`} style={{ marginTop: 6 }}>{fmtPct(row.change24h)} · 24h</span>}</div></div>
-      {tv ? <TradingViewChart symbol={tv} height={300} /> : launch ? (candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={240} precision={8} /><p className="hint" style={{ padding: "6px 8px 4px" }}>Price in MON per token from curve trades in the last two hours.</p></div> : <div className="card"><p className="hint">{trades.loading ? "Reading curve trades…" : "No curve trades in the last two hours."}</p></div>) : <div className="card"><p className="hint">No TradingView symbol for {row.symbol}. Prices come from its Monad pool.</p></div>}
+      {perp ? <PerplChart marketId={perp.id} height={300} /> : launch ? (candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={240} precision={8} /><p className="hint" style={{ padding: "6px 8px 4px" }}>Price in MON per token from curve trades in the last two hours.</p></div> : <div className="card"><p className="hint">{trades.loading ? "Reading curve trades…" : "No curve trades in the last two hours."}</p></div>) : <div className="card"><p className="hint">No chart for {row.symbol} in the app. Prices come from its Monad pool.{tv && <> <a href={tradingViewUrl(tv)} target="_blank" rel="noopener noreferrer">{tv} on TradingView ↗</a></>}</p></div>}
       <div className="mini-stats">
         <div className="stat"><span>Your balance</span><b>{fmtUnits(row.balance, row.decimals, { compact: true })} {row.symbol}</b></div>
         <div className="stat"><span>Value</span><b>{row.value === null ? "—" : fmtUSD(row.value)}</b></div>
@@ -151,7 +153,7 @@ function TokenDetail({ row, go, onBack }: { row: MarketRow; go: Go; onBack: () =
         <button type="button" className="btn tone-down" style={{ flex: 1 }} onClick={() => go("trade", "swap", { in: row.native ? "USDC" : row.address, out: "MON" })}>Sell {row.symbol}</button>
       </div>
       {launch && <button type="button" className="btn secondary" style={{ width: "100%", marginTop: 8 }} onClick={() => go("launch", undefined, { token: row.address })}>Open on the launchpad</button>}
-      <p className="hint" style={{ marginTop: 10 }}>{tv ? `Chart: TradingView ${tv}. ` : ""}Price source: {row.launch && row.change24h === null ? "bonding curve" : "Uniswap pool on Monad"}. <a href={explorerAddress(row.address === "0x0000000000000000000000000000000000000000" ? "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A" : row.address)} target="_blank" rel="noreferrer">Explorer ↗</a></p>
+      <p className="hint" style={{ marginTop: 10 }}>{perp ? `Chart: Perpl ${perp.symbol}-PERP (perpetual), hourly. ` : ""}Price source: {row.launch && row.change24h === null ? "bonding curve" : "Uniswap pool on Monad"}. <a href={explorerAddress(row.address === "0x0000000000000000000000000000000000000000" ? "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A" : row.address)} target="_blank" rel="noreferrer">Explorer ↗</a></p>
     </>
   );
 }
@@ -161,8 +163,8 @@ function StockDetail({ symbol, name, onBack }: { symbol: string; name: string; o
     <>
       <button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Markets</button>
       <div className="detail-head"><span className="coin lg" style={{ background: "var(--asset-blue, #3B82F6)" }}>{symbol[0]}</span><div><h1>{symbol}<small>{name}</small></h1></div></div>
-      <TradingViewChart symbol={TV_SYMBOLS[symbol]} height={300} />
-      <div className="stock-note">TradingView market data. Tokenised {symbol} is not tradable on Monad yet; when Monday Trade opens its RWA markets, launches can pair with it.</div>
+      <div className="card"><p className="hint">Charts for tokenised stocks arrive with their Monad markets. <a href={tradingViewUrl(TV_SYMBOLS[symbol])} target="_blank" rel="noopener noreferrer">{symbol} on TradingView ↗</a></p></div>
+      <div className="stock-note">Tokenised {symbol} is not tradable on Monad yet; when Monday Trade opens its RWA markets, launches can pair with it.</div>
     </>
   );
 }
@@ -203,7 +205,7 @@ export function MarketsScreen({ go, preset, autoFocus = false }: { go: Go; prese
         </>
       ) : seg === "Stocks" ? (
         <>
-          <div className="meta-row"><span>US equities · TradingView data</span><span className="live"><i />Market hours</span></div>
+          <div className="meta-row"><span>US equities · charts on TradingView</span><span className="live"><i />Market hours</span></div>
           <section className="list">{STOCKS.map(([s, n], i) => <button key={s} type="button" className="tok-row" onClick={() => setStock(s)}><span className="rank">{i + 1}</span><span className="coin" style={{ background: "var(--asset-blue, #3B82F6)" }}>{s[0]}</span><span className="row-main"><b>{s}<em className="badge">RWA soon</em></b><small>{n}</small></span><span className="row-end"><Icon name="chev-right" /></span></button>)}</section>
         </>
       ) : (

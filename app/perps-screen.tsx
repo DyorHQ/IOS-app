@@ -5,7 +5,7 @@ import { formatUnits } from "viem";
 import { Empty, Seg, Subtabs, opts } from "./ui/components";
 import { compact, fmtNum, fmtPct, fmtUSD } from "./ui/data";
 import type { Go, Preset, Toast } from "./ui/nav";
-import { TradingViewChart } from "./ui/tradingview";
+import { PerplChart } from "./ui/tradingview";
 import { usePerpsAccount } from "./lib/app-data";
 import { cancelOrder, closePosition, collateralBalances, deposit, fetchOpenOrders, fetchPerplContext, fromCNS, PERP_MARKETS, placeOrder, withdraw, type PerpInfo } from "./lib/perps/perpl";
 import { usePerplFeed } from "./lib/perps/ws";
@@ -15,10 +15,10 @@ import { useWallet } from "./lib/wallet";
 import { fmtUnits, parseAmount, timeAgo } from "./lib/format";
 import { ActionButton, TxStatus } from "./launchpad/ui";
 
-/* Perps on Perpl: TradingView chart, live order book and tape from Perpl's feed, and orders, positions and
+/* Perps on Perpl: Perpl's own candles, live order book and tape from Perpl's feed, and orders, positions and
    collateral straight from the Exchange contract. */
 
-const PERIODS: [string, string][] = [["1", "1m"], ["5", "5m"], ["15", "15m"], ["60", "1h"], ["240", "4h"], ["D", "1D"]];
+const PERIODS: [string, string][] = [["60", "1m"], ["300", "5m"], ["900", "15m"], ["3600", "1h"], ["14400", "4h"], ["86400", "1D"]];
 const BOOKS = ["Order book", "Trades"] as const;
 const SIDES = ["Long", "Short"] as const;
 const PTABS = ["Positions", "Orders", "Collateral"] as const;
@@ -43,7 +43,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
   const [price, setPrice] = useState("");
   const [book, setBook] = useState<(typeof BOOKS)[number]>("Order book");
   const [tab, setTab] = useState<(typeof PTABS)[number]>("Positions");
-  const [period, setPeriod] = useState("60");
+  const [period, setPeriod] = useState("3600");
   const [collatAmount, setCollatAmount] = useState("");
   const { tx, run, reset, dismiss, busy } = useTx();
   const orders = useAsync(async () => (acct && perps.length ? fetchOpenOrders(acct, perps) : []), `orders:${acct?.accountId ?? 0}:${perps.length}`, 10_000);
@@ -109,7 +109,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
         <div className="stats-mini"><span>Open interest</span><b>{mctx ? compact(Math.round(mctx.openInterest)) : "—"} {market.symbol}</b><span>24h volume</span><b>{mctx ? compact(Math.round(mctx.volume24h)) : "—"} {market.symbol}</b><span>Funding</span><b>{mctx ? `${(mctx.fundingRate * 100).toFixed(4)}%` : "—"}</b><span>Max leverage</span><b>{maxLev}×</b></div>
       </div>
       <Seg options={PERIODS.map(([v, l]) => ({ v, l }))} value={period} onChange={setPeriod} small />
-      <div style={{ marginTop: 12 }}><TradingViewChart symbol={market.tv} interval={period} height={300} compact /></div>
+      <div style={{ marginTop: 12 }}><PerplChart marketId={market.id} resolution={Number(period)} height={300} /></div>
       <div style={{ marginTop: 16 }}><Seg options={opts(BOOKS)} value={book} onChange={setBook} /></div>
       {book === "Order book" ? (
         <>

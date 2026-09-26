@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 /* Security headers and the Perpl relay's limits, exercised on the production Worker in dist/. */
@@ -74,4 +74,32 @@ test("the Perpl WebSocket relay only opens for this app's own pages", async () =
   assert.equal((await call("/api/perpl/ws", { headers: { Upgrade: "websocket", Origin: "https://evil.example" } })).status, 403, "foreign Origin");
   assert.equal((await call("/api/perpl/ws", { method: "POST", body: "x", headers: { Upgrade: "websocket", Origin: ORIGIN } })).status, 405, "POST");
   assert.deepEqual(upstreamCalls, [], "a refused handshake must not dial Perpl");
+});
+
+test("the Perpl REST relay serves the charts' candle windows and nothing near them", async () => {
+  const hour = 3_600_000;
+  const to = Math.ceil(Date.now() / hour) * hour;
+  const path = `/api/perpl/v1/market-data/10/candles/3600/${to - 150 * hour}-${to}`;
+  upstreamCalls = [];
+  const ok = await call(path, { headers: { "sec-fetch-site": "same-origin" } });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get("content-type"), "application/json; charset=utf-8");
+  assert.equal(ok.headers.get("cache-control"), "public, max-age=15");
+  assert.deepEqual(upstreamCalls, [`https://app.perpl.xyz/api${path.slice("/api/perpl".length)}`]);
+
+  upstreamCalls = [];
+  for (const bad of [
+    `/api/perpl/v1/market-data/99/candles/3600/${to - 150 * hour}-${to}`,
+    `/api/perpl/v1/market-data/10/candles/3600/${to - 150 * hour + 1}-${to}`,
+    `/api/perpl/v1/market-data/10/candles/3600/${to - 2000 * hour}-${to}`,
+    `/api/perpl/v1/market-data/10/orders/3600/${to - 150 * hour}-${to}`,
+  ]) assert.equal((await call(bad)).status, 404, bad);
+  assert.equal((await call(path, { headers: { Origin: "https://evil.example" } })).status, 403);
+  assert.deepEqual(upstreamCalls, [], "a refused path must not reach Perpl");
+});
+
+test("no third-party script is loaded into the wallet origin", () => {
+  const assets = new URL("../dist/client/assets/", import.meta.url);
+  const bundle = readdirSync(assets).filter((f) => f.endsWith(".js")).map((f) => readFileSync(new URL(f, assets), "utf8")).join("\n");
+  assert.doesNotMatch(bundle, /tradingview\.com\/tv\.js|s3\.tradingview\.com/);
 });

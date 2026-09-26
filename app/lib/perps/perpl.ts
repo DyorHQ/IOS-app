@@ -4,6 +4,7 @@ import { describeError } from "../errors";
 import { waitFor } from "../use-tx";
 import type { Wallet } from "../wallet";
 import { perplExchangeAbi } from "./abi";
+import { PERP_MARKETS } from "./markets";
 
 /* Perpl: the fully on-chain perpetuals order book on Monad (https://docs.perpl.xyz). Positions, orders and
    collateral live in the Exchange contract; market data streams from Perpl's public WebSocket. Everything the
@@ -19,15 +20,7 @@ export const PERPL = {
   minDeposit: 10_000_000n, // 10 AUSD
 } as const;
 
-export const PERP_MARKETS = [
-  { id: 1, symbol: "BTC", name: "Bitcoin", tv: "BINANCE:BTCUSDT.P" },
-  { id: 10, symbol: "MON", name: "Monad", tv: "BINANCE:MONUSDT.P" },
-  { id: 20, symbol: "ETH", name: "Ether", tv: "BINANCE:ETHUSDT.P" },
-  { id: 31, symbol: "SOL", name: "Solana", tv: "BINANCE:SOLUSDT.P" },
-  { id: 40, symbol: "HYPE", name: "Hyperliquid", tv: "BINANCE:HYPEUSDT.P" },
-  { id: 50, symbol: "ZEC", name: "Zcash", tv: "BINANCE:ZECUSDT.P" },
-] as const;
-export type PerpMarket = (typeof PERP_MARKETS)[number];
+export { PERP_MARKETS, type PerpMarket } from "./markets";
 
 /** OrderDesc.orderType as the SDK encodes it (RequestType as u8). */
 export const ORDER_TYPE = { OpenLong: 0, OpenShort: 1, CloseLong: 2, CloseShort: 3, Cancel: 4, IncreasePositionCollateral: 5, Change: 6 } as const;
