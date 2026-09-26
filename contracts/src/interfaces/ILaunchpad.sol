@@ -204,4 +204,5 @@ interface ILaunchpadFactory {
         address deployer
     ) external payable returns (address token, address curve);
     function launchFee() external view returns (uint256);
+    function getLaunchedToken(address token) external view returns (Types.LaunchedToken memory);
 }

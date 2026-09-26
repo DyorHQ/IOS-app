@@ -7,13 +7,23 @@ import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {Currency, CurrencyLibrary} from "v4-core/src/types/Currency.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/src/types/BalanceDelta.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
-import {ILaunchpadFactory} from "./interfaces/ILaunchpad.sol";
+import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
+import {Position} from "v4-core/src/libraries/Position.sol";
+import {PoolId} from "v4-core/src/types/PoolId.sol";
+import {Types, ILaunchpadFactory} from "./interfaces/ILaunchpad.sol";
 
 /// @notice Holds every graduated pool position and the supply left over at graduation, forever. There is no
 ///         unlock, no owner and no withdrawal: the contract can only add liquidity, never remove it.
+///
+///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), LP-3: `locked[]` is keyed by the LAUNCH token for
+///         every pair. v1 keyed it by currency0 unless currency0 was native, so a launch whose ERC-20 quote asset
+///         sorts below the token (e.g. AUSD, some USDC launches) was recorded under the QUOTE token's address —
+///         `locked(token)` read empty and each such graduation overwrote the previous one's entry.
+///         `lockedLiquidity(token)` reads the live position straight from the PoolManager.
 contract LaunchLocker is IUnlockCallback {
     using CurrencyLibrary for Currency;
     using BalanceDeltaLibrary for BalanceDelta;
+    using StateLibrary for IPoolManager;
 
     IPoolManager public immutable poolManager;
     address public immutable factory;
@@ -60,9 +70,7 @@ contract LaunchLocker is IUnlockCallback {
         );
         uint256 amount0 = _settle(key.currency0, delta.amount0());
         uint256 amount1 = _settle(key.currency1, delta.amount1());
-        address token = key.currency0.isAddressZero() ? Currency.unwrap(key.currency1) : Currency.unwrap(key.currency0);
-        // For custom pairs both currencies are ERC-20s; the launch token is whichever one isn't the quote.
-        // The executor records the mapping through `lockedFor`, so here we only need the position itself.
+        address token = _launchToken(key);
         locked[token] = Locked({poolId: keccak256(abi.encode(key)), tickLower: tickLower, tickUpper: tickUpper, liquidity: liquidity});
         emit LiquidityLocked(keccak256(abi.encode(key)), liquidity, amount0, amount1);
         return "";
@@ -79,6 +87,26 @@ contract LaunchLocker is IUnlockCallback {
             currency.transfer(address(poolManager), paid);
             poolManager.settle();
         }
+    }
+
+    /// @dev v2 (LP-3): the launch token of a graduating pool, whichever way the pair sorts. A native quote is always
+    ///      currency0; for two ERC-20s, currency0 is the launch token exactly when the factory's launch record for it
+    ///      exists and names currency1 as its quote asset.
+    function _launchToken(PoolKey memory key) internal view returns (address) {
+        address c0 = Currency.unwrap(key.currency0);
+        address c1 = Currency.unwrap(key.currency1);
+        if (c0 == address(0)) return c1;
+        Types.LaunchedToken memory l = ILaunchpadFactory(factory).getLaunchedToken(c0);
+        return l.exists && l.pairToken == c1 ? c0 : c1;
+    }
+
+    /// @notice v2 (LP-3): the liquidity of `token`'s locked position as the PoolManager itself reports it (0 if the
+    ///         token has no position here). Proof-of-lock that does not depend on this contract's own bookkeeping.
+    function lockedLiquidity(address token) external view returns (uint128) {
+        Locked storage l = locked[token];
+        if (l.poolId == bytes32(0)) return 0;
+        bytes32 positionKey = Position.calculatePositionKey(address(this), l.tickLower, l.tickUpper, bytes32(0));
+        return poolManager.getPositionLiquidity(PoolId.wrap(l.poolId), positionKey);
     }
 
     /// @notice Launch tokens left in the locker beyond the pool position (excess supply) are visible here.
