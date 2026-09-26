@@ -1,3 +1,4 @@
+import BigInt
 import DyorKit
 import Foundation
 import Observation
@@ -153,6 +154,11 @@ struct ConfirmationSheet<Details: View>: View {
         NavigationStack {
             List {
                 Section { details }
+                if !unlimitedApprovals.isEmpty, !run.isDone {
+                    Section {
+                        ForEach(unlimitedApprovals, id: \.self) { DetailRow("Approval", "Unlimited approval to \($0)", tint: .attention) }
+                    }
+                }
                 if let fee, !run.isDone {
                     Section {
                         DetailRow("Max network fee", Self.feeText(fee))
@@ -235,6 +241,31 @@ struct ConfirmationSheet<Details: View>: View {
             if buildError == nil, let address = session.address { fee = await env.sender.feePreview(steps, from: address) }
         }
         .task(id: scopeKey) { await reassess() }
+    }
+
+    /// Who the plan approves for an effectively unlimited amount (IOST-14). The app's own plans approve exact amounts;
+    /// this keeps one that doesn't from being signed unseen.
+    private var unlimitedApprovals: [String] {
+        steps.compactMap { step in
+            switch step.kind {
+            case .approve(_, let spender, let amount), .permit2Approve(_, let spender, let amount, _):
+                return amount >= BigUInt(1) << 128 ? Self.spenderName(spender) : nil
+            case .call:
+                return nil
+            }
+        }
+    }
+
+    static func spenderName(_ spender: Address) -> String {
+        switch spender {
+        case Uniswap.permit2: return "Permit2"
+        case Uniswap.universalRouter: return "the Uniswap Universal Router"
+        case Uniswap.swapRouter02: return "Uniswap SwapRouter02"
+        case MondayTrade.swapRouter: return "Monday Trade"
+        case Kuru.entrypoint: return "Kuru Flow"
+        case Perpl.exchange: return "the Perpl Exchange"
+        default: return spender.short
+        }
     }
 
     /// "Up to 0.061 MON", plus any steps that can only be priced once an earlier one lands (a swap after its approval).

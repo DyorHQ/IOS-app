@@ -53,7 +53,7 @@ struct SwapView: View {
             .sheet(item: $reviewing) { review in confirmation(review) }
             .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
             .task(id: session.address) { await model.refreshBalances(env: env, address: session.address) }
-            .task(id: model.quoteKey) { await model.quote(env: env, account: session.address, exactApprovals: session.isPasskeyAccount) }
+            .task(id: model.quoteKey) { await model.quote(env: env, account: session.address) }
             .onChange(of: router.pendingSwap?.tokenOut) { _, _ in applyPending() }
             .onAppear { applyPending() }
         }
@@ -475,8 +475,9 @@ final class SwapModel {
     }
 
     /// Debounced by the caller's `.task(id:)`: the task is cancelled and restarted on every keystroke.
-    /// `exactApprovals`: a passkey account's plans approve exactly the input (`SwapRequest.exactApprovals`).
-    func quote(env: AppEnvironment, account: Address?, exactApprovals: Bool = false) async {
+    /// `exactApprovals`: every account's plans approve exactly the input (`SwapRequest.exactApprovals`) — an ERC-20
+    /// into Uniswap v4 costs one approval more per swap, and no unlimited Permit2 allowance is left standing (IOST-14).
+    func quote(env: AppEnvironment, account: Address?, exactApprovals: Bool = true) async {
         guard amountIn > 0, tokenIn != tokenOut else {
             result = nil
             resultKey = nil

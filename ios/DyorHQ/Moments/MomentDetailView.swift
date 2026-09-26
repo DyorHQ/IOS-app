@@ -389,12 +389,11 @@ struct MomentDetailView: View {
             ConfirmationSheet(
                 title: "Collect \(info.symbol)", confirmTitle: quote?.terminal == true ? "Collect and Graduate" : "Collect",
                 build: {
-                    // A passkey account signs no raw digest, so no Permit2 signature: an exact USDC approval, then collect.
-                    if session.isPasskeyAccount {
-                        return await env.moments.collectWithApprovalPlan(momentId: m.id, quantity: quantity, gross: collectGross, symbol: info.symbol)
-                    }
-                    guard let signer = session.wallet as? MomentsPermitSigner else { throw MomentsService.MomentsError.signerRequired }
-                    return try await env.moments.collectPlan(momentId: m.id, quantity: quantity, price: m.price, signer: signer, symbol: info.symbol)
+                    // Every account: an exact USDC approval of the collect contract, then collect. Nothing is signed when
+                    // the sheet opens — the Permit2 path signed its transfer here, before Confirm and App Lock (IOST-6) —
+                    // and Permit2 is never approved for unlimited USDC (IOST-14). The contract pulls at most the quoted
+                    // gross, which the approval covers.
+                    await env.moments.collectWithApprovalPlan(momentId: m.id, quantity: quantity, gross: collectGross, symbol: info.symbol)
                 },
                 onDone: { finished() },
                 onCompleted: { hash in
