@@ -887,7 +887,8 @@ struct CreateLaunchView: View {
                         DetailRow("Creator tax", NumberStyle.basisPoints(creatorTaxBps))
                         DetailRow("Fee sharing", holderFeeSharing ? "On" : "Off")
                         DetailRow("Launch fee", "\(NumberStyle.units(info.launchFee, decimals: 18)) MON")
-                        if initialBuy > 0 { DetailRow("Developer buy", "\(initialBuyText) \(pairInfo?.symbol ?? "MON")") }
+                        // The parsed amount — what is signed — not the typed text.
+                        if initialBuy > 0 { DetailRow("Developer buy", "\(NumberStyle.units(initialBuy, decimals: pairInfo?.decimals ?? 18)) \(pairInfo?.symbol ?? "MON")") }
                     }
                 }
             }

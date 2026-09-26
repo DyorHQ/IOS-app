@@ -1,4 +1,4 @@
-import { formatUnits, parseUnits } from "viem";
+import { formatUnits } from "viem";
 
 export const shortAddress = (address: string, chars = 4) => `${address.slice(0, 2 + chars)}…${address.slice(-chars)}`;
 const trimZeros = (s: string) => (s.includes(".") ? s.replace(/\.?0+$/, "") : s);
@@ -29,15 +29,41 @@ export function fmtNumber(n: number, opts: { compact?: boolean; dp?: number } = 
 export const fmtUnits = (value: bigint, decimals: number, opts?: { compact?: boolean; dp?: number }) => fmtNumber(Number(formatUnits(value, decimals)), opts);
 export const fmtAmount = (value: bigint, decimals: number, symbol: string, opts?: { compact?: boolean; dp?: number }) => `${fmtUnits(value, decimals, opts)} ${symbol}`;
 
-/** Parses a user-typed decimal amount; returns null for anything that is not a plain positive decimal. */
-export function parseAmount(input: string, decimals: number): bigint | null {
-  const s = input.trim().replace(/,/g, "");
-  if (!/^\d*\.?\d*$/.test(s) || s === "" || s === ".") return null;
-  try {
-    return parseUnits(s, decimals);
-  } catch {
-    return null;
+/** The input (ASCII digits, "." and "," only) with one "." as its decimal point and no grouping, or null when it is
+    ambiguous. A phone's decimal keypad types the region's separator ("," across much of Europe and Latin America), so:
+    - one separator of either kind is the decimal point ("0,5" and "0.5" are both one half — never 5);
+    - both kinds ("1,234.5", "1.234,5"): the last is the decimal point and the other must group thousands exactly;
+    - one kind more than once ("1,234,567"): thousands grouping only, else null. Same rules as the iOS Amount.parse. */
+function decimalPoint(s: string): string | null {
+  const dots = (s.match(/\./g) ?? []).length;
+  const commas = (s.match(/,/g) ?? []).length;
+  const grouped = (part: string, sep: string): string | null => {
+    const groups = part.split(sep);
+    return /^\d{1,3}$/.test(groups[0]) && groups.slice(1).every((g) => /^\d{3}$/.test(g)) ? groups.join("") : null;
+  };
+  if (dots + commas === 0) return s;
+  if (dots + commas === 1) return s.replace(",", ".");
+  if (dots > 0 && commas > 0) {
+    const decimalSep = s.lastIndexOf(".") > s.lastIndexOf(",") ? "." : ",";
+    const at = s.lastIndexOf(decimalSep);
+    if (s.indexOf(decimalSep) !== at) return null;
+    const whole = grouped(s.slice(0, at), decimalSep === "." ? "," : ".");
+    const fraction = s.slice(at + 1);
+    return whole === null || /[.,]/.test(fraction) ? null : `${whole}.${fraction}`;
   }
+  return grouped(s, dots > 0 ? "." : ",");
+}
+
+/** Parses a user-typed decimal amount; returns null for anything that is not a plain positive decimal. A decimal
+    comma is read as a decimal point (see decimalPoint), and digits beyond `decimals` are truncated, never rounded up. */
+export function parseAmount(input: string, decimals: number): bigint | null {
+  const s = input.trim();
+  if (!Number.isInteger(decimals) || decimals < 0 || !/^[0-9.,]+$/.test(s)) return null;
+  const normalized = decimalPoint(s);
+  if (normalized === null) return null;
+  const [whole, fraction = ""] = normalized.split(".");
+  if (whole === "" && fraction === "") return null;
+  return BigInt((whole || "0") + fraction.slice(0, decimals).padEnd(decimals, "0"));
 }
 
 export const fmtDate = (ts: number) => new Date(ts * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });

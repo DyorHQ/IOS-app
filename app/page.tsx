@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { encodeFunctionData, erc20Abi, getAddress, isAddress, type Address } from "viem";
+import { encodeFunctionData, erc20Abi, formatUnits, getAddress, isAddress, type Address } from "viem";
 import { Icon, Sprite, type IconName } from "./ui/icons";
 import { Seg, cssVars, type SegOpt } from "./ui/components";
 import type { Preset, SheetName, Tab, TradeMode } from "./ui/nav";
@@ -168,7 +168,8 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
   const send = async () => {
     const client = wallet.client;
     if (!client || !row || !parsed || !isAddress(to)) return;
-    const done = await run(`Send ${amount} ${row.symbol}`, async (onSent) => {
+    const shown = formatUnits(parsed, row.decimals); // what is signed, not what was typed
+    const done = await run(`Send ${shown} ${row.symbol}`, async (onSent) => {
       const hash = row.native
         ? await client.sendTransaction({ account: client.account, chain: client.chain, to: getAddress(to), value: parsed })
         : await client.sendTransaction({ account: client.account, chain: client.chain, to: row.address, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [getAddress(to), parsed] }) });
@@ -176,7 +177,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
       await waitFor(hash);
       return hash;
     });
-    if (done) { toast(`Sent ${amount} ${row.symbol}`); markets.refresh(); setAmount(""); }
+    if (done) { toast(`Sent ${shown} ${row.symbol}`); markets.refresh(); setAmount(""); }
   };
   if (!wallet.account) return <><SheetHead title="Send" onClose={onClose} /><p className="hint">Connect a wallet first.</p></>;
   return (
