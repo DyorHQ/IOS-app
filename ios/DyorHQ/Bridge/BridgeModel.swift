@@ -403,10 +403,11 @@ final class BridgeModel {
                 request = TransactionRequest(to: contract, data: try ERC20.transferCalldata(to: depositAddr, amount: sendAmount))
             } else { localPhase = .failed("This source token can't be bridged."); return }
 
-            // The destination balance, read fresh right before signing (RI-3): the baseline an arrival is measured from.
-            // Never the picker's cached balance, which can be missing or from before an earlier bridge landed; a read
-            // that fails leaves no baseline, and the arrival is then never inferred from the balance.
-            let baseline = await env.chainBalances.balances(owner: owner, chain: destChain, tokens: [to])[to.assetId]
+            // The destination balance, asked for before signing (RI-3): the baseline an arrival is measured from. It can't
+            // include this bridge's credit, which takes the deposit confirming and the bridge settling. Never the
+            // picker's cached balance, which can be missing or from before an earlier bridge landed; a read that fails
+            // leaves no baseline, and the arrival is then never inferred from the balance.
+            async let baselineRead = env.chainBalances.balances(owner: owner, chain: destChain, tokens: [to])
             let hash: Data
             do {
                 hash = try await env.sender(for: sourceChain).send(request, from: wallet)
@@ -414,6 +415,7 @@ final class BridgeModel {
                 // No endpoint said it took the deposit, but it may be live: track it rather than invite a second one.
                 hash = possible
             }
+            let baseline = await baselineRead[to.assetId]
             trackedHash = hash.hexString
             sourceTxURL = sourceChain.explorerTx(hash.hexString) // source deposit tx — a verifiable link straight away
             // Recorded and persisted before anything else can go wrong (GL-5): the funds have left the source chain.
