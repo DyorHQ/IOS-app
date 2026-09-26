@@ -240,7 +240,7 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
               <Row label="Trade fee" value={protocol.data ? bpsToPct(protocol.data.curveFeeBps) : "—"} />
               <Row label="Creator tax" value={bpsToPct(creatorTaxBps)} />
               <Row label="Fees go to" value={form.holderFeeSharing ? "Holders" : "Creator wallet"} />
-              <Row label="Creator wallet" value={isAddress(creatorWallet) ? <span className={creatorIsOther ? "down" : ""}>{shortAddress(creatorWallet)}{creatorIsOther ? " · not you" : " · you"}</span> : "—"} />
+              <Row label="Creator wallet" value={isAddress(creatorWallet) ? <span className={creatorIsOther ? "down" : ""}>{shortAddress(creatorWallet)}{creatorIsOther ? " · not you" : account ? " · you" : ""}</span> : "—"} />
               <Row label="Launch window" value={protocol.data ? `${seconds(protocol.data.snipeSchedule.length)} snipe tax` : "—"} />
               <Row label="Graduation" value={pair ? fmtAmount(pair.graduationThreshold, pair.decimals, pair.symbol, { compact: true }) : "—"} />
               <Row label="Graduation venue" value={venueLabel(effectiveVenue)} />
