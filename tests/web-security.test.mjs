@@ -29,6 +29,7 @@ const SECURITY_HEADERS = {
 };
 const assertSecured = (response) => {
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) assert.equal(response.headers.get(name), value, `${name} on ${response.url || "response"}`);
+  assert.match(response.headers.get("content-security-policy-report-only") ?? "", /script-src 'self' 'nonce-[A-Za-z0-9+/]{22}=='/);
 };
 
 test("every Worker response carries the security headers", async () => {
@@ -42,6 +43,29 @@ test("static files get the same headers and keep the immutable asset cache rule"
   const headers = readFileSync(new URL("../dist/client/_headers", import.meta.url), "utf8");
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) assert.ok(headers.toLowerCase().includes(`${name}: ${value.toLowerCase()}`), `_headers is missing ${name}`);
   assert.match(headers, /\/assets\/\*\n\s+Cache-Control: public, max-age=31536000, immutable/);
+  const policy = headers.match(/Content-Security-Policy-Report-Only: (.*)/)?.[1] ?? "";
+  for (const directive of ["script-src 'self';", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'"]) assert.ok(policy.includes(directive), `static CSP is missing ${directive}`);
+});
+
+test("pages carry a report-only CSP: no third-party script, and a fresh nonce on every inline script", async () => {
+  const first = await call("/");
+  const policy = first.headers.get("content-security-policy-report-only");
+  const nonce = policy.match(/'nonce-([^']+)'/)[1];
+  const scriptSrc = policy.split("; ").find((d) => d.startsWith("script-src "));
+  assert.equal(scriptSrc, `script-src 'self' 'nonce-${nonce}'`, "no host allowlist, no unsafe-inline, no unsafe-eval");
+  for (const directive of ["object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "frame-src 'none'", "form-action 'self'"]) assert.ok(policy.includes(directive), directive);
+  const connect = policy.split("; ").find((d) => d.startsWith("connect-src ")).split(" ");
+  for (const source of ["'self'", "wss://mainstreet-ui.bushy-petal-0744.chatgpt.site", "https://rpc.monad.xyz", "https://rpc1.monad.xyz", "https://ws.kuru.io"]) assert.ok(connect.includes(source), `connect-src ${source}`);
+
+  const html = await first.text();
+  const scripts = [...html.matchAll(/<script\b([^>]*)>/g)].map((m) => m[1]);
+  assert.ok(scripts.length > 0);
+  for (const attrs of scripts) assert.match(attrs, new RegExp(`nonce="${nonce.replace(/[+/=]/g, "\\$&")}"`), `script without the nonce: <script${attrs}>`);
+
+  const again = (await call("/")).headers.get("content-security-policy-report-only");
+  assert.notEqual(again.match(/'nonce-([^']+)'/)[1], nonce, "a new nonce per response");
+  const forged = await call("/", { headers: { "content-security-policy": "script-src 'nonce-chosenbyclient'" } });
+  assert.doesNotMatch(await forged.text(), /chosenbyclient/, "a client can't choose the nonce");
 });
 
 test("the Perpl REST relay serves only the market context, without the query string", async () => {

@@ -1,6 +1,10 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { RPC_URL } from "../app/lib/chain";
+import { LOGS_RPC } from "../app/lib/moments/config";
+import { KURU } from "../app/lib/swap/config";
+import { contentSecurityPolicy, newNonce, sourceOrigin } from "./csp";
 import { createRelayGate } from "./perpl-relay";
 
 interface Env {
@@ -62,8 +66,8 @@ async function proxyPerplSocket(): Promise<Response> {
 }
 
 /* Security headers on every response the Worker generates (static files get the same set from public/_headers).
-   Framing is the only thing the CSP restricts: a script policy would fight the wallet extensions that inject
-   providers and open popups, so none is set. */
+   The enforced CSP restricts framing only; the full policy (worker/csp.ts) ships report-only until a release shows
+   the app itself raises no reports. */
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "strict-origin-when-cross-origin",
@@ -73,18 +77,31 @@ const SECURITY_HEADERS: Record<string, string> = {
   "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
 };
 
-function withSecurityHeaders(response: Response): Response {
+/** Every origin the browser code connects to besides this one: the configured and log-scan Monad RPCs, Kuru Flow. */
+const CONNECT_SOURCES = [RPC_URL, "https://rpc1.monad.xyz", LOGS_RPC, KURU.api].map(sourceOrigin).filter((s): s is string => s !== null);
+
+function withSecurityHeaders(response: Response, policy: string): Response {
   // A WebSocket handshake (101) cannot be rebuilt and serves no document.
   if (response.status === 101) return response;
   const secured = new Response(response.body, response);
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+  for (const [name, value] of Object.entries({ ...SECURITY_HEADERS, "Content-Security-Policy-Report-Only": policy })) {
     if (!secured.headers.has(name)) secured.headers.set(name, value);
   }
   return secured;
 }
 
+/** vinext stamps its inline scripts with the nonce it finds in the request's CSP header (the Next.js convention).
+    The Worker sets that header itself, replacing any the client sent, so a client never chooses the nonce. */
+function withPolicy(request: Request, policy: string): Request {
+  if (request.method !== "GET" && request.method !== "HEAD") return request;
+  const headers = new Headers(request.headers);
+  headers.delete("content-security-policy");
+  headers.set("content-security-policy-report-only", policy);
+  return new Request(request, { headers });
+}
+
 const app = {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext, policy: string): Promise<Response> {
     const url = new URL(request.url);
 
     // Perpl's market-data WebSocket only accepts its own origin, so browsers connect here and the Worker
@@ -106,13 +123,14 @@ const app = {
       }, allowedWidths);
     }
 
-    return handler.fetch(request, env, ctx);
+    return handler.fetch(withPolicy(request, policy), env, ctx);
   },
 };
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    return withSecurityHeaders(await app.fetch(request, env, ctx));
+    const policy = contentSecurityPolicy({ nonce: newNonce(), host: new URL(request.url).host, connect: CONNECT_SOURCES });
+    return withSecurityHeaders(await app.fetch(request, env, ctx, policy), policy);
   },
 };
 

@@ -1,11 +1,13 @@
 # Response headers for static files (Cloudflare Workers static assets). Worker responses get the same security set
 # from worker/index.ts. vinext only writes its own _headers when this file is absent, so its cache rule is kept below.
+# Static files carry no inline script, so their report-only CSP needs no nonce (pages get one per response, worker/csp.ts).
 
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
   Content-Security-Policy: frame-ancestors 'none'
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
   Permissions-Policy: camera=(), microphone=(), geolocation=()
   Strict-Transport-Security: max-age=63072000; includeSubDomains
 
