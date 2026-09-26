@@ -34,20 +34,39 @@ final class TransactionRun {
             return
         }
         let passkey = session.isPasskeyAccount
+        let owner = session.address
         phase = .running
         events = []
         Task {
+            // A lock or an app switch mid-plan suspends it: ask for the time iOS grants so the step in flight can still
+            // broadcast and see its receipt (GL-2).
+            let background = BackgroundTime("Transaction")
+            defer { background.end() }
             do {
                 let hash = try await sender.run(steps, from: wallet) { event in
-                    Task { @MainActor in self.events.append(event) }
+                    Task { @MainActor in self.record(event, owner: owner) }
                 }
                 phase = .done(hash)
             } catch where passkey && isUserCancellation(error) {
                 // A passkey prompt the person dismissed: say plainly what did and didn't happen.
                 phase = .failed(sentSomething ? "Stopped at \(BiometricGate.promptName). Only the steps above were sent." : Self.notSent)
             } catch {
+                if let failure = error as? TransactionError, case .reverted(let hash) = failure { PendingActivity.reverted(hash, owner: owner) }
+                // A step sent but not seen confirmed keeps its hash (the View link above, and a pending row in Recent
+                // Activity that the next foreground re-checks): "Sent — confirmation not seen yet".
                 phase = .failed(describe(error))
             }
+        }
+    }
+
+    /// Each sent step is a pending Activity row until it is seen confirmed (`PendingActivity`), so a plan that fails or
+    /// is killed after a broadcast never loses the transaction.
+    private func record(_ event: TransactionEvent, owner: Address?) {
+        events.append(event)
+        switch event {
+        case .sent(let label, let hash): PendingActivity.sent(hash, label: label, owner: owner)
+        case .confirmed(_, let hash): PendingActivity.confirmed(hash, owner: owner)
+        case .preparing: break
         }
     }
 
@@ -68,6 +87,25 @@ final class TransactionRun {
     }
 }
 
+/// The background time iOS grants an app that leaves the foreground (about 30 s), held while a plan runs. Ends when
+/// the run does, or when the time is up.
+@MainActor
+final class BackgroundTime {
+    private var id: UIBackgroundTaskIdentifier = .invalid
+
+    init(_ name: String) {
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            MainActor.assumeIsolated { self?.end() }
+        }
+    }
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+}
+
 /// The standard confirm → progress → done sheet used by every write in the app. The step plan is built by an
 /// async closure (some builders read the chain or an actor-isolated service), so the sheet shows a brief
 /// "Preparing" state, then the confirm button, then live progress.
@@ -75,8 +113,11 @@ struct ConfirmationSheet<Details: View>: View {
     let title: String
     let confirmTitle: String
     var build: () async throws -> [TransactionStep]
+    /// The caller's cleanup (clear the form, reload) once the plan settled: on Done, or when the settled sheet is
+    /// swiped away.
     let onDone: () -> Void
-    /// Fired with the settled transaction hash when the sheet finishes, for callers that log the action or record it.
+    /// Fired once with the settled transaction hash the moment the plan settles, for callers that log the action or
+    /// record it — not on Done, so a swipe-dismiss or an OS kill on the Done screen can't lose it (GL-3).
     var onCompleted: ((Data) -> Void)? = nil
     /// When set, the confirmed step's "View" control calls this with the tx hash instead of opening the block
     /// explorer — the launch flow uses it to route to the in-app coin page.
@@ -98,6 +139,9 @@ struct ConfirmationSheet<Details: View>: View {
     /// or ends, so expiry changes the badge and the button in place — no pop-up, and nothing typed is lost.
     @State private var assessment: MeraSession.Assessment?
     @State private var approving = false
+    /// `onCompleted` fired / `onDone` ran: each once per sheet.
+    @State private var completed = false
+    @State private var cleanedUp = false
     /// The most the plan's network fees can come to at today's fees, read once the plan is built (IOST-1).
     @State private var fee: TransactionSender.FeePreview?
 
@@ -170,10 +214,16 @@ struct ConfirmationSheet<Details: View>: View {
                 .frame(maxWidth: .infinity)
                 .background(.bar)
             }
-            // Also once done: swiping away a settled sheet skipped `finish()`, so the action was never recorded and the
-            // form kept its amount. Done (or the toolbar button) records and clears it.
-            .interactiveDismissDisabled(run.isRunning || run.isDone)
+            // Only while running. A settled sheet may be swiped away: the action was recorded when it settled, and
+            // `onDisappear` runs the cleanup Done would have.
+            .interactiveDismissDisabled(run.isRunning)
         }
+        .onChange(of: run.doneHash) { _, hash in
+            guard let hash, !completed else { return }
+            completed = true
+            onCompleted?(hash)
+        }
+        .onDisappear { cleanUp() }
         .presentationDetents([.medium, .large])
         // Opaque on purpose: the list fades under the footer, and a translucent sheet would show the presenting
         // screen's dark primary button through that fade.
@@ -232,15 +282,17 @@ struct ConfirmationSheet<Details: View>: View {
         run.start(steps, session: session, sender: env.sender, action: action)
     }
 
-    /// Dismiss and, when the plan settled, notify the caller. `onCompleted` runs BEFORE `onDone` on purpose:
-    /// callers clear their input in `onDone`, and `onCompleted` reads that live input to record the action, so it
-    /// must see the amount before it is cleared.
+    /// Dismiss and, when the plan settled, run the caller's cleanup. `onCompleted` already ran at settlement, before
+    /// this on purpose: callers clear their input in `onDone`, and `onCompleted` reads that live input to record the
+    /// action, so it must see the amount before it is cleared.
     private func finish() {
-        let hash = run.doneHash
         dismiss()
-        if run.isDone {
-            if let hash { onCompleted?(hash) }
-            onDone()
-        }
+        cleanUp()
+    }
+
+    private func cleanUp() {
+        guard run.isDone, !cleanedUp else { return }
+        cleanedUp = true
+        onDone()
     }
 }

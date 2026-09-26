@@ -59,6 +59,9 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
     /// An id the matching notification can deep-link to (a Moment id, a coin address). Optional and backward
     /// compatible: rows written before this field decode with `nil`.
     var reference: String?
+    /// A sent transaction whose outcome isn't settled here yet (`PendingActivity`): "pending" until it is re-checked,
+    /// then "reverted" or "notFound"; nil for every settled row. Optional and backward compatible.
+    var status: String?
 
     init(kind: Kind, title: String, subtitle: String, hash: Data?, time: Date = Date(), section: String? = nil, usd: Double? = nil, feeUsd: Double? = nil, reference: String? = nil) {
         self.kind = kind
@@ -141,6 +144,16 @@ enum ActivityLog {
         onRecord?(record, owner)
     }
 
+    /// Rewrites this wallet's log in place, for `PendingActivity`'s rows. Nothing is mirrored to the backend.
+    static func update(owner: Address, _ change: (inout [ActivityRecord]) -> Void) {
+        let before = all(owner: owner)
+        var list = before
+        change(&list)
+        guard list != before else { return }
+        if list.count > cap { list = Array(list.prefix(cap)) }
+        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: key(owner))
+    }
+
     /// Merges records restored from the backend (`BackendSync.restore`, MERA-PLAN §6) into this wallet's log: nothing
     /// already here is replaced or doubled (same id or same transaction hash), newest first, capped like `record`.
     /// Not mirrored back (`onRecord`): these rows came from the backend.
@@ -164,5 +177,79 @@ enum Activity {
         guard notify, owner != nil else { return }
         NotificationHub.shared.post(kind: record.notificationKind, title: record.title, body: record.subtitle,
                                     route: record.notificationRoute, reference: record.reference)
+    }
+}
+
+/// Transactions sent whose confirmation the app hasn't seen (security audit 2026-09-26, GL-2). Each step a plan sends is
+/// written as a pending row under its hash the moment it is sent, so a plan that fails afterwards — the phone locked
+/// mid-wait, the connection dropped, the app killed — still leaves the transaction in Recent Activity with its View
+/// link. A step seen confirmed while the plan runs drops its row (the plan's own record, written when it settles,
+/// takes the final step's hash); what is left is re-checked on the next launch or return to the foreground and becomes
+/// confirmed, reverted or not found. Local only: these rows are never mirrored to the backend.
+@MainActor
+enum PendingActivity {
+    /// `ActivityRecord.status` values.
+    static let pendingStatus = "pending"
+    static let revertedStatus = "reverted"
+    static let notFoundStatus = "notFound"
+
+    /// A step just sent: a pending row under its hash, unless the hash already has one.
+    static func sent(_ hash: Data, label: String, owner: Address?) {
+        guard let owner else { return }
+        ActivityLog.update(owner: owner) { list in
+            guard !list.contains(where: { $0.txHashHex == hash.hexString }) else { return }
+            var row = ActivityRecord(kind: .send, title: label, subtitle: "Sent — confirmation not seen yet", hash: hash)
+            row.status = pendingStatus
+            list.insert(row, at: 0)
+        }
+    }
+
+    /// A step seen confirmed while its plan runs: its pending row goes.
+    static func confirmed(_ hash: Data, owner: Address?) {
+        guard let owner else { return }
+        ActivityLog.update(owner: owner) { $0.removeAll { $0.txHashHex == hash.hexString && $0.status == pendingStatus } }
+    }
+
+    /// A step seen reverted: its row says so.
+    static func reverted(_ hash: Data, owner: Address?) {
+        guard let owner else { return }
+        resolve(owner: owner, as: revertedStatus) { $0.txHashHex == hash.hexString }
+    }
+
+    /// Re-checks every pending row of `owner`: a receipt settles it as confirmed or reverted; a transaction the network
+    /// doesn't know half an hour after it was sent is not found (it never landed); anything else stays pending for the
+    /// next check.
+    static func recheck(owner: Address?, rpc: RPCClient) async {
+        guard let owner else { return }
+        for row in ActivityLog.all(owner: owner) where row.status == pendingStatus {
+            guard let hash = row.txHash else { continue }
+            let outcome: String?
+            do {
+                if let receipt = try await rpc.transactionReceipt(hash) {
+                    outcome = receipt.success ? nil : revertedStatus
+                } else if Date().timeIntervalSince(row.time) > 30 * 60, await rpc.knowsTransaction(hash) == false {
+                    outcome = notFoundStatus
+                } else {
+                    continue
+                }
+            } catch {
+                continue
+            }
+            resolve(owner: owner, as: outcome) { $0.id == row.id }
+        }
+    }
+
+    /// Rewrites the pending rows `matching` with `outcome` (nil: confirmed), keeping each row's id, title and time.
+    private static func resolve(owner: Address, as outcome: String?, matching: (ActivityRecord) -> Bool) {
+        ActivityLog.update(owner: owner) { list in
+            for i in list.indices where list[i].status == pendingStatus && matching(list[i]) {
+                let subtitle = outcome == revertedStatus ? "Reverted — only the network fee was spent"
+                    : outcome == notFoundStatus ? "Not found on the network — it never confirmed" : "Confirmed"
+                var row = ActivityRecord(kind: list[i].kind, title: list[i].title, subtitle: subtitle, hash: list[i].txHash, time: list[i].time, section: list[i].section)
+                row.id = list[i].id
+                row.status = outcome
+                list[i] = row
+            }
+        }
     }
 }

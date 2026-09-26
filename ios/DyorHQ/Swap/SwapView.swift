@@ -284,6 +284,14 @@ struct SwapView: View {
     private func confirmation(_ review: SwapReview) -> some View {
         SwapConfirmation(review: review, onDone: {
             model.amountText = ""
+            Task { await model.refreshBalances(env: env, address: session.address) }
+        }, onCompleted: { hash in
+            // At settlement, not on Done (GL-3). Record the swap so it shows in Swap History and Recent Activity with
+            // its exact legs (including a native MON leg, which an on-chain Transfer scan can't recover): the ones
+            // reviewed and signed.
+            let text = "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals, compact: true)) \(review.tokenIn.symbol) → \(NumberStyle.units(review.quote.amountOut, decimals: review.tokenOut.decimals, compact: true)) \(review.tokenOut.symbol)"
+            let usd = [review.payUSD, review.receiveUSD].compactMap { $0 }.first { $0 > 0 }
+            ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash, usd: usd), owner: session.address)
             // Remember both sides so they show in holdings and the picker even if they aren't curated: the token
             // just acquired, and the one paid with (a partial swap leaves a balance still worth showing).
             KnownTokenStore.add(review.tokenOut, owner: session.address)
@@ -291,13 +299,6 @@ struct SwapView: View {
             if settings.notificationsEnabled, settings.notifyFills {
                 Notifications.swapped(review.amountIn, review.tokenIn, review.quote.amountOut, review.tokenOut)
             }
-            Task { await model.refreshBalances(env: env, address: session.address) }
-        }, onCompleted: { hash in
-            // Record the swap so it shows in Swap History and Recent Activity with its exact legs (including a
-            // native MON leg, which an on-chain Transfer scan can't recover): the ones reviewed and signed.
-            let text = "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals, compact: true)) \(review.tokenIn.symbol) → \(NumberStyle.units(review.quote.amountOut, decimals: review.tokenOut.decimals, compact: true)) \(review.tokenOut.symbol)"
-            let usd = [review.payUSD, review.receiveUSD].compactMap { $0 }.first { $0 > 0 }
-            ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash, usd: usd), owner: session.address)
         })
     }
 

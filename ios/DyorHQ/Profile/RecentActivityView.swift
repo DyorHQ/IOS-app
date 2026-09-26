@@ -90,6 +90,7 @@ final class RecentActivityModel {
         guard let address else { items = []; return }
         loading = true
         defer { loading = false }
+        await PendingActivity.recheck(owner: address, rpc: env.rpc)
 
         let tokenMap = Dictionary(KnownTokenStore.universe(owner: address).map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
         async let launchesTask = env.launchpad.allLaunches(limit: 60)

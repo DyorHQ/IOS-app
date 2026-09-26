@@ -874,10 +874,8 @@ struct CreateLaunchView: View {
                         },
                         onView: { hash in
                             // Route to the coin's in-app page instead of the block explorer (the explorer link lives
-                            // in Recent Activity). Resolve the new token from the launch tx, then open its page.
-                            // "View" and "Done" are mutually exclusive, so record here too (de-duped by hash) — a
-                            // launch tapped straight through to its page still lands in Recent Activity.
-                            ActivityLog.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
+                            // in Recent Activity). Resolve the new token from the launch tx, then open its page. The
+                            // launch was already recorded when it settled (`onCompleted`).
                             Task {
                                 let detail = (try? await env.launchpad.launchResult(transaction: hash)).flatMap { $0 }
                                 if let result = detail, let launch = (try? await env.launchpad.launch(token: result.token)) ?? nil {

@@ -43,6 +43,8 @@ struct RootView: View {
             if phase == .background { session.mera.end() }
             if phase == .active {
                 settings.appearance.apply()
+                // Transactions sent before the app left the foreground: settle their pending rows (GL-2).
+                Task { await PendingActivity.recheck(owner: session.address, rpc: env.rpc) }
                 // Reconnect the trading socket the instant the app returns (iOS drops it while suspended), so TP/SL is
                 // ready without waiting for the keep-alive loop's next tick. Never a prompt: a passkey account's
                 // socket reconnects only inside a live session, and there is none right after a return.
@@ -67,6 +69,8 @@ struct RootView: View {
             // alerts actually reach the lock screen). notificationsEnabled defaults on, but the Settings toggle only
             // requests when flipped — so a user who never opened Settings was never prompted.
             if session.canSign, settings.notificationsEnabled { await Notifications.requestAuthorizationIfUndetermined() }
+            // Transactions sent in an earlier run of the app whose confirmation it never saw (GL-2).
+            await PendingActivity.recheck(owner: session.address, rpc: env.rpc)
         }
         // Whenever the account's backend session opens — whoever signed in (the rebind above, the reconnect below,
         // Bridge, a screen that uploads) or a stored token was restored — pull what other devices recorded. Idempotent:
