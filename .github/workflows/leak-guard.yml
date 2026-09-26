@@ -1,0 +1,85 @@
+# Leak guard: fails when a push or pull request adds a forbidden path (env files, keys, signing material, internal
+# documents) or a secret. The same checks as the local hooks (scripts/dev/install-hooks.sh), plus gitleaks, for pushes
+# that never ran the hooks: cloud sessions, other clones, the GitHub web editor, --no-verify.
+# IOS-app is private on the GitHub Free plan, so this cannot be made a required check: a failed run is the alert.
+name: leak-guard
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  leak-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # gitleaks v8.30.1 (ghcr.io/gitleaks/gitleaks), pinned by digest. The Docker image, not gitleaks-action, which
+      # needs a paid licence for organisation repositories.
+      GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Work out the commit range
+        id: range
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          base="refs/remotes/origin/$DEFAULT_BRANCH"
+          if [ "$EVENT" = pull_request ]; then
+            range="$PR_BASE..$PR_HEAD"
+          elif [ -n "${BEFORE//0/}" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..$AFTER"
+          elif git rev-parse -q --verify "$base" >/dev/null && [ "$(git rev-parse "$base")" != "$AFTER" ]; then
+            range="$base..$AFTER" # a new branch: its commits that the default branch does not have
+          else
+            range="$AFTER" # the default branch's first push, or a rewrite of it: its whole history
+          fi
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+          echo "Commits to check: $range ($(git rev-list --count "$range") commits)"
+
+      - name: Forbidden paths in the tree
+        if: ${{ !cancelled() }}
+        run: /bin/bash scripts/dev/forbidden-paths.sh
+
+      - name: Forbidden paths in the pushed commits
+        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: /bin/bash scripts/dev/forbidden-paths.sh --history "$RANGE"
+
+      # Pattern mode: CI has no .env or Secrets.xcconfig, so only the patterns and heuristics apply here.
+      - name: Secret patterns in the tree
+        if: ${{ !cancelled() }}
+        run: /bin/bash scripts/dev/secret-scan.sh --all
+
+      - name: Secret patterns in the pushed commits
+        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: /bin/bash scripts/dev/secret-scan.sh --history "$RANGE"
+
+      - name: gitleaks on the pushed commits
+        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$GITHUB_WORKSPACE:/repo" "$GITLEAKS_IMAGE" \
+            git /repo --config /repo/.gitleaks.toml --log-opts="$RANGE" --redact --no-banner --verbose --exit-code 1
+
+      - name: Leak guard self-test
+        if: ${{ !cancelled() }}
+        run: node --test tests/leak-guard.test.mjs
