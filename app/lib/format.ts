@@ -47,7 +47,9 @@ function decimalPoint(s: string): string | null {
   const commas = (s.match(/,/g) ?? []).length;
   const grouped = (part: string, sep: string): string | null => {
     const groups = part.split(sep);
-    return /^\d{1,3}$/.test(groups[0]) && groups.slice(1).every((g) => /^\d{3}$/.test(g)) ? groups.join("") : null;
+    // More than one group: the first can't start with 0 ("0.001,5" is not 1.5, "0,500" alone is one half).
+    const first = groups.length > 1 ? /^[1-9]\d{0,2}$/ : /^\d{1,3}$/;
+    return first.test(groups[0]) && groups.slice(1).every((g) => /^\d{3}$/.test(g)) ? groups.join("") : null;
   };
   if (dots + commas === 0) return s;
   if (dots + commas === 1) return s.replace(",", ".");

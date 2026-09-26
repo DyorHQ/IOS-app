@@ -35,7 +35,8 @@ writes require the wallet's session.
 ∈ spot, perps, launch(pad), moments, bridge, wallet. The whole user journey — username (`profiles.handle`), wallet,
 per-domain volume, deposits/withdrawals, notifications and activities — is stitched by the `user_journey` view.
 
-Every migration applied to the live project is now in `migrations/` (01–23). 01–07 and 11 were restored on 2026-09-26
+Every migration applied to the live project is now in `migrations/` (01–22); 23 (security audit 2026-09-26) is
+written but not yet applied. 01–07 and 11 were restored on 2026-09-26
 from the project's own migration history (`supabase_migrations.schema_migrations.statements`), byte-for-byte — each
 file's md5 equals the recorded statements' md5. Two out-of-band changes are NOT in any migration: the Strategies tables
 below were dropped directly (2026-09-18), and 18's revokes supersede 11's `grant execute … platform_volume … to anon`.

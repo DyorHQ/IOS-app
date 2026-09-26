@@ -20,8 +20,10 @@
 --   grant references, trigger, maintain on all tables in schema public to anon, authenticated;
 --   alter default privileges for role postgres in schema public grant references, trigger, maintain on tables to anon, authenticated;
 -- Verify after apply:
---   select defaclobjtype, defaclacl from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace
---    where n.nspname = 'public' and pg_get_userbyid(d.defaclrole) = 'postgres';   -- f: no anon/authenticated/PUBLIC
+--   select coalesce(n.nspname, '(global)'), defaclobjtype, defaclacl from pg_default_acl d
+--     left join pg_namespace n on n.oid = d.defaclnamespace
+--    where (n.nspname = 'public' or d.defaclnamespace = 0) and pg_get_userbyid(d.defaclrole) = 'postgres';
+--    -- f rows: no anon/authenticated, and no PUBLIC (an "=X/postgres" entry)
 --   select count(*) from information_schema.role_table_grants where table_schema = 'public'
 --    and grantee in ('anon', 'authenticated') and privilege_type in ('REFERENCES', 'TRIGGER');   -- 0
 
@@ -50,7 +52,11 @@ begin
     raise exception 'REFERENCES/TRIGGER still granted: %', leftover;
   end if;
   -- A function created now, as postgres, must not be executable by anon or authenticated (checked for real, then
-  -- dropped, so the global PUBLIC default is covered too).
+  -- dropped, so the global PUBLIC default is covered too). The probe tests the running role's defaults, so the
+  -- migration must run as postgres (CLI db push, the dashboard and apply_migration all do).
+  if current_user <> 'postgres' then
+    raise exception 'apply migration 23 as postgres (running as %)', current_user;
+  end if;
   create function public.zz_migration_23_probe() returns int language sql as 'select 1';
   if has_function_privilege('anon', 'public.zz_migration_23_probe()', 'execute')
      or has_function_privilege('authenticated', 'public.zz_migration_23_probe()', 'execute') then

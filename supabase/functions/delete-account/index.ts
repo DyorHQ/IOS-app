@@ -68,8 +68,13 @@ Deno.serve(async (req) => {
   const db = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const gate = await db.rpc("email_pepper_lookup_gate", { p_subject: await sha256Hex(PRIVY_USER_LABEL + userId), p_ip: null });
   if (gate.error || !gate.data || typeof gate.data !== "object") return json({ error: "account deletion is unavailable right now — try again in a minute" }, 503);
-  if (typeof (gate.data as { retryAfter?: unknown }).retryAfter === "number") {
-    return json({ error: "too many attempts — try again in a few minutes" }, 429);
+  const retryAfter = (gate.data as { retryAfter?: unknown }).retryAfter;
+  if (typeof retryAfter === "number") {
+    const wait = Math.max(1, Math.ceil(retryAfter));
+    return new Response(JSON.stringify({ error: "too many attempts — try again in a few minutes", retryAfter: wait }), {
+      status: 429,
+      headers: { ...cors, "Content-Type": "application/json", "Retry-After": String(wait) },
+    });
   }
   if ((gate.data as { ok?: unknown }).ok !== true) return json({ error: "account deletion is unavailable right now — try again in a minute" }, 503);
 
