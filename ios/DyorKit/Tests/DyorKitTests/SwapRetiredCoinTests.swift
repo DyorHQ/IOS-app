@@ -221,6 +221,12 @@ final class SwapRetiredCoinTests: XCTestCase {
             ("another amount in", SwapNetStub.kuruSwap(amountIn: 2 * amount)),
             ("a minimum below the requested slippage", SwapNetStub.kuruSwap(minOut: 2_586_999)),
             ("not a Kuru Flow swap", "0xdeadbeef"),
+            // The app never asks Kuru for an integrator or referral fee, so any basis points are a skim (IOST-7, as web).
+            ("an integrator fee", SwapNetStub.kuruSwap(feeRecipient: stranger, feeBps: 30)),
+            ("a referral fee", SwapNetStub.kuruSwap(referrer: stranger, referrerBps: 30)),
+            ("a fee on the input side", SwapNetStub.kuruSwap(feeRecipient: stranger, feeBps: 1, feeOnOutput: 0)),
+            ("an enormous fee", SwapNetStub.kuruSwap(feeBps: BigUInt(1) << 255)),
+            ("a fee flag that isn't a bool", SwapNetStub.kuruSwap(feeOnOutput: 2)),
         ]
         for (name, calldata) in blocked {
             SwapNetStub.setKuruCalldata(calldata)
@@ -238,6 +244,10 @@ final class SwapRetiredCoinTests: XCTestCase {
         SwapNetStub.setKuruCalldata(SwapNetStub.kuruSwap(minOut: 2_590_000))
         let stricter = try await kuru.quote(req)
         XCTAssertEqual(stricter?.minOut, 2_590_000, "a stricter minimum than the API's own field")
+        // A fee recipient or referrer named at 0 bps receives nothing: the addresses aren't pinned (as web).
+        SwapNetStub.setKuruCalldata(SwapNetStub.kuruSwap(feeRecipient: stranger, referrer: stranger, feeOnOutput: 1))
+        let named0bps = try await kuru.quote(req)
+        XCTAssertEqual(named0bps?.venue, .kuru)
     }
 
     // MARK: A normal pair still routes
@@ -289,12 +299,13 @@ final class SwapNetStub: URLProtocol {
 
     /// KuruFlowEntrypoint calldata: `0xce1e7030` (pays the caller), or `0x31343b21` with an explicit `recipient`.
     static func kuruSwap(tokenOut: Address = Monad.usdc, minOut: BigUInt = 2_587_000, tokenIn: Address = .zero,
-                             amountIn: BigUInt = BigUInt(10).power(18), recipient: Address? = nil) -> String {
+                             amountIn: BigUInt = BigUInt(10).power(18), recipient: Address? = nil,
+                             feeRecipient: Address = .zero, feeBps: BigUInt = 0, referrer: Address = .zero, referrerBps: BigUInt = 0, feeOnOutput: BigUInt = 0) -> String {
         func pad(_ hex: String) -> String { String(repeating: "0", count: 64 - hex.count) + hex }
         func word(_ value: BigUInt) -> String { pad(String(value, radix: 16)) }
         func word(_ address: Address) -> String { pad(address.data.hexString.replacingOccurrences(of: "0x", with: "")) }
         var words = [word(tokenOut), word(minOut), word(tokenIn), word(amountIn),
-                     word(Address.zero), word(BigUInt(0)), word(Address.zero), word(BigUInt(0)), word(BigUInt(0)), // fee tuple zeroed
+                     word(feeRecipient), word(feeBps), word(referrer), word(referrerBps), word(feeOnOutput), // the fee tuple
                      word(BigUInt(recipient == nil ? 320 : 352))] // the route's offset
         if let recipient { words.append(word(recipient)) }
         words.append(word(BigUInt(0))) // an empty route

@@ -9,7 +9,8 @@ import Foundation
      2. The wallet checks every transaction against that intent from the calldata alone, never trusting the sheet or an
         API: chain 143, the sender, the (to, selector) allowlist, ERC-20 and Permit2 approvals (spender, token, amount
         within the declared input, a Permit2 allowance that ends before the session does, no value), MON within the
-        declared amount, the launchpad curve verified on-chain, and Kuru Flow's recipient and minimum out.
+        declared amount, the launchpad curve verified on-chain, Kuru Flow's recipient, fee and minimum out, and every
+        Uniswap, Monday Trade and Perpl order payload read in full (`MeraCalldata`) — one it can't read in full asks.
      3. The dollar caps (`SpendingCaps`): $100 per action, $250 per session; an unpriced action asks.
 
    Some things no Face ID makes acceptable, so they are refused outright, prompt-free or approved (`refusal`): on Monad,
@@ -55,12 +56,15 @@ extension Mera {
             public let output: TokenAmount?
             /// Launchpad: the launch whose curve is verified on-chain.
             public let launchToken: Address?
+            /// Perpl: the order the sheet shows. An order part without it always asks.
+            public let order: OrderTerms?
 
-            public init(kind: Kind, input: TokenAmount? = nil, output: TokenAmount? = nil, launchToken: Address? = nil) {
+            public init(kind: Kind, input: TokenAmount? = nil, output: TokenAmount? = nil, launchToken: Address? = nil, order: OrderTerms? = nil) {
                 self.kind = kind
                 self.input = input
                 self.output = output
                 self.launchToken = launchToken
+                self.order = order
             }
 
             /// The MON a call in this part may send.
@@ -114,9 +118,39 @@ extension Mera {
             Intent(parts: [Part(kind: .perplDeposit, input: TokenAmount(token: Perpl.collateral, amount: amount))], usd: DyorKit.Amount.units(amount, decimals: Perpl.collateralDecimals))
         }
 
-        /// Opening orders sent on-chain; `usd` is the worst-case notional (`SpendingCaps.notionalUSD`).
-        public static func perplOrder(usd: Double?) -> Intent {
-            Intent(parts: [Part(kind: .perplOrder)], usd: usd)
+        /// An opening order sent on-chain: `order` is the order the sheet shows, and `usd` its worst-case notional
+        /// (`SpendingCaps.notionalUSD`).
+        public static func perplOrder(usd: Double?, order: OrderTerms) -> Intent {
+            Intent(parts: [Part(kind: .perplOrder, order: order)], usd: usd)
+        }
+
+        /// A Perpl order as its `execOrders` desc encodes it: the market, the side, the size and the leverage.
+        public struct OrderTerms: Sendable, Equatable {
+            public let perpId: BigUInt
+            /// `PerpOrderType.openLong` or `.openShort`.
+            public let orderType: BigUInt
+            public let lotLNS: BigUInt
+            public let leverageHdths: BigUInt
+
+            public init(perpId: BigUInt, orderType: BigUInt, lotLNS: BigUInt, leverageHdths: BigUInt) {
+                self.perpId = perpId
+                self.orderType = orderType
+                self.lotLNS = lotLNS
+                self.leverageHdths = leverageHdths
+            }
+
+            /// The terms `PerplExchange.orderDesc` encodes for `order`.
+            public init(_ order: OrderInput) {
+                let desc = PerplExchange.orderDesc(order, descId: 0)
+                self.init(perpId: desc[1].uint, orderType: desc[2].uint, lotLNS: desc[5].uint, leverageHdths: desc[11].uint)
+            }
+
+            /// Whether a signed order stays within these: the same market and side, no higher leverage, and no more
+            /// than 2% over the size (an order sized in dollars is converted at the mark, which can move between the
+            /// sheet opening and the tap).
+            func admits(_ signed: OrderTerms) -> Bool {
+                signed.perpId == perpId && signed.orderType == orderType && signed.leverageHdths <= leverageHdths && signed.lotLNS * 100 <= lotLNS * 102
+            }
         }
 
         /// One action made of several intents, valued as a whole (`usd`), e.g. a swap whose output is then deposited.
@@ -174,6 +208,8 @@ extension Mera {
             case unverifiedCurve
             case recipient
             case minimumOut
+            /// A Kuru Flow swap whose fee tuple takes basis points (`KuruFlowSwap.takesNoFee`).
+            case fee
             case networkFee
             case unpriced, overActionCap, overSessionCap
 
@@ -196,6 +232,7 @@ extension Mera {
                 case .unverifiedCurve: return "a launchpad curve DyorHQ can’t verify"
                 case .recipient: return "the output going to another address"
                 case .minimumOut: return "a minimum received below 99% of the quote"
+                case .fee: return "a swap that pays a fee to someone else"
                 case .networkFee: return "an unusually high network fee"
                 case .unpriced: return "this can’t be priced"
                 case .overActionCap: return "over the $\(Int(SpendingCaps.perActionUSD)) limit per action"
@@ -334,11 +371,13 @@ extension Mera {
         ///   markets and aren't bounded here.)
         /// - `.recipient`: a Kuru Flow swap paying its output to another address, whatever the intent, or a launchpad
         ///   trade the sheet declared doing so. DyorHQ never builds either.
+        /// - `.fee`: a Kuru Flow swap whose fee tuple takes basis points. The quote client blocks one too (IOST-7).
         /// - `.differentToken`: a Kuru Flow swap the sheet declared, trading tokens other than the ones shown.
         public static func refusal(_ call: Call, intent: Intent, account: Address) -> Reason? {
             if call.chainId == Monad.chainId, !feeWithinLimits(call) { return .networkFee }
             if call.to == Kuru.entrypoint, let swap = KuruFlowSwap(calldata: call.data) {
                 if (swap.recipient ?? account) != account { return .recipient }
+                if !swap.takesNoFee { return .fee }
                 let declared = intent.parts.filter { $0.kind == .swap(.kuru) }
                 if !declared.isEmpty, !declared.contains(where: { $0.input?.token == swap.tokenIn && $0.output?.token == swap.tokenOut }) { return .differentToken }
             }
@@ -409,10 +448,13 @@ extension Mera {
             func allow(_ ok: Bool) -> Verdict { ok ? .allowed : .ask(.notAllowlisted) }
             switch part.kind {
             case .swap(.uniswap):
-                return allow((call.to == Uniswap.universalRouter && selector == Selector.universalRouterExecute)
-                    || (call.to == Uniswap.swapRouter02 && selector == Selector.swapRouter02Multicall))
+                // Read in full (`MeraCalldata`): a payload that isn't exactly the swap the app builds asks (IOSK-10).
+                if call.to == Uniswap.universalRouter { return checkSwap(universalRouterSwap(call.data), part: part) }
+                if call.to == Uniswap.swapRouter02 { return checkSwap(swapRouter02Swap(call.data, account: context.account, value: call.value), part: part) }
+                return .ask(.notAllowlisted)
             case .swap(.monday):
-                return allow(call.to == MondayTrade.swapRouter && selector == Selector.mondayMulticall)
+                guard call.to == MondayTrade.swapRouter else { return .ask(.notAllowlisted) }
+                return checkSwap(mondaySwap(call.data, account: context.account, value: call.value), part: part)
             case .swap(.kuru):
                 guard call.to == Kuru.entrypoint else { return .ask(.notAllowlisted) }
                 return checkKuru(call, part: part, context: context)
@@ -445,8 +487,19 @@ extension Mera {
             case .perplWithdraw:
                 return allow(call.to == Perpl.exchange && selector == Selector.perplWithdraw)
             case .perplOrder:
-                return allow(call.to == Perpl.exchange && selector == Selector.perplExecOrders && opensOnly(args.data))
+                guard call.to == Perpl.exchange, let declared = part.order, let signed = perplOpenOrder(call.data) else { return .ask(.notAllowlisted) }
+                return declared.admits(signed) ? .allowed : .ask(.amountOverDeclared)
             }
+        }
+
+        /// A decoded swap against the part: the tokens shown, no more than the declared input, and a minimum of at least
+        /// 99% of the quote, as for Kuru Flow. Nil — a payload the decoder doesn't read in full — asks.
+        private static func checkSwap(_ terms: SwapTerms?, part: Intent.Part) -> Verdict {
+            guard let terms else { return .ask(.notAllowlisted) }
+            guard let input = part.input, let output = part.output, terms.tokenIn == input.token, terms.tokenOut == output.token else { return .ask(.differentToken) }
+            guard terms.amountIn <= input.amount else { return .ask(.amountOverDeclared) }
+            guard terms.minOut >= SwapMath.minAfterSlippage(output.amount, bps: 100) else { return .ask(.minimumOut) }
+            return .allowed
         }
 
         /// Kuru Flow's ready-made calldata: the tokens shown, no more than the declared input, the output to this account,
@@ -455,20 +508,11 @@ extension Mera {
         private static func checkKuru(_ call: Call, part: Intent.Part, context: Context) -> Verdict {
             guard let swap = KuruFlowSwap(calldata: call.data) else { return .ask(.notAllowlisted) }
             guard (swap.recipient ?? call.from) == context.account else { return .ask(.recipient) }
+            guard swap.takesNoFee else { return .ask(.fee) }
             guard let input = part.input, let output = part.output, swap.tokenIn == input.token, swap.tokenOut == output.token else { return .ask(.differentToken) }
             guard swap.amountIn <= input.amount else { return .ask(.amountOverDeclared) }
             guard swap.minAmountOut >= SwapMath.minAfterSlippage(output.amount, bps: 100) else { return .ask(.minimumOut) }
             return .allowed
-        }
-
-        /// `execOrders(descs, revertOnFail)` where every desc opens a position (OpenLong / OpenShort): cancels, closes,
-        /// margin moves and changes are outside the session's scope.
-        private static func opensOnly(_ args: Data) -> Bool {
-            guard let values = try? ABI.decode(args, Selector.execOrdersArguments), let descs = values.first?.elements, !descs.isEmpty else { return false }
-            return descs.allSatisfy { desc in
-                let type = desc.elements.count > 2 ? desc[2].uint : BigUInt(PerpOrderType.cancel.rawValue)
-                return type == BigUInt(PerpOrderType.openLong.rawValue) || type == BigUInt(PerpOrderType.openShort.rawValue)
-            }
         }
 
         private static func isLaunchpad(_ kind: Intent.Kind) -> Bool { kind == .launchpadBuy || kind == .launchpadSell }
@@ -518,7 +562,13 @@ extension Mera {
             static let permit2Approve = ABI.selector("approve(address,address,uint160,uint48)")
             static let universalRouterExecute = ABI.selector("execute(bytes,bytes[],uint256)")
             static let swapRouter02Multicall = ABI.selector("multicall(uint256,bytes[])")
+            static let swapRouter02ExactInputSingle = ABI.selector("exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))")
+            static let swapRouter02ExactInput = ABI.selector("exactInput((bytes,address,uint256,uint256))")
             static let mondayMulticall = ABI.selector("multicall(bytes[])")
+            static let mondayExactInputSingle = ABI.selector("exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))")
+            static let mondayExactInput = ABI.selector("exactInput((bytes,address,uint256,uint256,uint256))")
+            static let unwrapWETH9 = ABI.selector("unwrapWETH9(uint256,address)")
+            static let refundETH = ABI.selector("refundETH()")
             static let wmonDeposit = ABI.selector("deposit()")
             static let wmonWithdraw = ABI.selector("withdraw(uint256)")
             static let curveBuy = ABI.selector(LaunchpadABI.Curve.buy)
@@ -531,7 +581,6 @@ extension Mera {
             static let perplDeposit = ABI.selector(PerplExchange.Signature.depositCollateral)
             static let perplWithdraw = ABI.selector(PerplExchange.Signature.withdrawCollateral)
             static let perplExecOrders = ABI.selector(PerplExchange.Signature.execOrders)
-            static let execOrdersArguments = (try? ABI.parameterTypes(of: PerplExchange.Signature.execOrders)) ?? []
         }
     }
 }

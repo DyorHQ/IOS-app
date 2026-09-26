@@ -793,10 +793,11 @@ struct PerpTradeView: View {
         }
     }
 
-    /// An on-chain opening order, valued at its worst-case notional; a reduce-only close always asks (MERA-PLAN §3).
+    /// An on-chain opening order, valued at its worst-case notional and declared by its terms (market, side, size,
+    /// leverage), which the wallet checks against the calldata it signs; a reduce-only close always asks (MERA-PLAN §3).
     private var orderIntent: Mera.Intent {
         let input = ticket.input(market: market, refPrice: refPrice)
-        return input.reduceOnly ? .alwaysAsks(.closePosition) : .perplOrder(usd: Mera.SpendingCaps.notionalUSD(of: input))
+        return input.reduceOnly ? .alwaysAsks(.closePosition) : .perplOrder(usd: Mera.SpendingCaps.notionalUSD(of: input), order: .init(input))
     }
 
     private func cancelOrderSheet(_ order: PerpOrder) -> some View {
