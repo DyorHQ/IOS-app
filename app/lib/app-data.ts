@@ -38,7 +38,7 @@ export function useMarkets(account: Address | null) {
 export type Portfolio = { total: number | null; holdings: MarketRow[]; perps: { account: PerpAccount | null; positions: PerpPosition[]; perpsInfo: PerpInfo[]; equity: number } | null; loading: boolean };
 
 export function usePerpsAccount(account: Address | null) {
-  const perps = useAsync(fetchPerps, "perps", 10_000);
+  const perps = useAsync(() => fetchPerps(), "perps", 10_000);
   const acct = useAsync(async () => (account ? fetchAccount(account) : null), `perp-account:${account ?? ""}`, 8_000);
   const positions = useAsync(async () => (acct.data && perps.data ? fetchPositions(acct.data, perps.data) : []), `perp-positions:${account ?? ""}:${acct.data?.accountId ?? 0}:${acct.data?.positionPerps.join("/") ?? ""}:${perps.data ? "p" : ""}`, 8_000);
   return { perps: perps.data ?? [], account: acct.data ?? null, positions: positions.data ?? [], loading: perps.loading || acct.loading, refresh: () => { perps.refresh(); acct.refresh(); positions.refresh(); } };

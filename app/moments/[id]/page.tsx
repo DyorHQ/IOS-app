@@ -21,16 +21,19 @@ export default function MomentPage() {
   const now = useNow();
   const moment = useAsync(() => (id ? fetchMoment(id) : Promise.resolve(null)), `moment:${raw}`, 6_000);
   const data = moment.data;
+  // A new edition or state re-reads the position but keeps it (and the panels holding a pending transaction) mounted.
   const view = useAsync(
     () => (wallet.account && data ? fetchAccountView(data, wallet.account) : Promise.resolve(null)),
-    `view:${raw}:${wallet.account ?? ""}:${data ? data.ledger.state : "loading"}:${data?.editions ?? 0}`,
+    `view:${raw}:${wallet.account ?? ""}`,
     8_000,
+    `${data ? data.ledger.state : "loading"}:${data?.editions ?? 0}`,
   );
   const refreshAll = () => { moment.refresh(); view.refresh(); };
 
   if (!id) return <div className="empty"><span className="glyph"><Icon name="search" /></span><b>Not a Moment id</b><p>Open a Moment from the list.</p></div>;
   if (!MOMENTS_DEPLOYED) return <MomentsDeployNotice />;
-  if (moment.error) return <p className="tx bad" role="alert">{moment.error}</p>;
+  // Only a first read that failed replaces the page; a failed refresh keeps the last values and the open panels.
+  if (moment.error && !data) return <p className="tx bad" role="alert">{moment.error}</p>;
   if (!data) {
     if (!moment.loading) return <div className="empty"><span className="glyph"><Icon name="rocket" /></span><b>Unknown Moment</b><p>No Moment with this id has been published.</p><Link className="btn secondary sm" href="/moments">Back to Moments</Link></div>;
     return <div className="token-hero"><Skeleton h={220} w="100%" style={{ borderRadius: 22 }} /></div>;
@@ -67,6 +70,7 @@ export default function MomentPage() {
         </div>
       </section>
 
+      {moment.error && <p className="hint err" role="alert">Couldn&apos;t refresh this Moment ({moment.error}). Showing the last values read; retrying.</p>}
       <div className="stats-4">
         <Tile label={data.graduated && price !== null ? "Coin price" : "Collect price"} value={data.graduated && price !== null ? `$${fmtNumber(price)}` : usd(data.price)} sub={data.graduated && price !== null ? `FDV $${fmtNumber(fdvUsd(price), { compact: true })}` : "per edition, USDC"} />
         <Tile label={data.graduated ? "Seeded" : "Reserve"} value={data.graduated ? usd(data.pool?.reserveSeed ?? data.threshold) : usd(data.ledger.reserve)} sub={data.graduated ? `${usd(data.ledger.totalGross)} collected in total` : `of ${usd(data.threshold)} to graduate`} />

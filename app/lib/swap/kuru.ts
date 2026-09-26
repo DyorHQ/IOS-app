@@ -32,7 +32,7 @@ async function jwtFor(address: Address): Promise<string> {
   return json.token;
 }
 
-export async function quoteKuru(req: SwapRequest): Promise<VenueQuote | null> {
+export async function quoteKuru(req: SwapRequest, signal?: AbortSignal): Promise<VenueQuote | null> {
   // A retired Moment coin never reaches the API: its calldata comes back ready-made, so refuse before asking.
   for (const side of [req.tokenIn.address, req.tokenOut.address]) if (isRetiredMomentCoin(side)) throw new RetiredMomentError(getAddress(side));
   const user = req.account;
@@ -45,7 +45,7 @@ export async function quoteKuru(req: SwapRequest): Promise<VenueQuote | null> {
   });
   const request = async (retry: boolean): Promise<Response> => {
     const token = await jwtFor(user);
-    const res = await fetch(`${KURU.api}/api/quote`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body });
+    const res = await fetch(`${KURU.api}/api/quote`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body, signal });
     if (res.status === 401 && retry) {
       jwtCache.delete(user.toLowerCase());
       return request(false);

@@ -226,7 +226,7 @@ function LaunchDetail({ token, onBack }: { token: Address; onBack: () => void })
   const wallet = useWallet();
   const launch = useAsync(() => fetchLaunch(token), `launch:${token}`, 6_000);
   const data = launch.data;
-  const view = useAsync(() => (wallet.account && data ? fetchAccountView(data, wallet.account) : Promise.resolve(null)), `view:${token}:${wallet.account ?? ""}:${data ? data.phase : "l"}`, 8_000);
+  const view = useAsync(() => (wallet.account && data ? fetchAccountView(data, wallet.account) : Promise.resolve(null)), `view:${token}:${wallet.account ?? ""}`, 8_000, data ? String(data.phase) : "l");
   const trades = useAsync(async () => (data ? fetchCurveTrades(data.curve) : []), `trades:${data?.curve ?? ""}`, 30_000);
   const candles = trades.data ? candlesFromTrades(trades.data, 300, 1) : [];
   const refresh = () => { launch.refresh(); view.refresh(); trades.refresh(); };

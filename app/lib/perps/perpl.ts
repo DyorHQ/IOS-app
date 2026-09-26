@@ -288,8 +288,8 @@ export const perpError = describeError;
 
 /** Perpl's public market context through the app's proxy: 24h reference price and volume per market. */
 export type MarketContext = { id: number; name: string; priceDecimals: number; sizeDecimals: number; mark: number; last: number; prev24h: number; volume24h: number; openInterest: number; fundingRate: number; isOpen: boolean };
-export async function fetchPerplContext(): Promise<MarketContext[]> {
-  const res = await fetch("/api/perpl/v1/pub/context");
+export async function fetchPerplContext(signal?: AbortSignal): Promise<MarketContext[]> {
+  const res = await fetch("/api/perpl/v1/pub/context", { signal });
   if (!res.ok) throw new Error(`Perpl context unavailable (${res.status})`);
   const json = (await res.json()) as { markets?: { id: number; name: string; config?: { price_decimals: number; size_decimals: number; is_open: boolean }; state?: { mrk: number; lst: number; prv: number; dv: number; oi: number }; funding?: { rate: number; div: number } }[] };
   return (json.markets ?? []).filter((m) => m.config && m.state).map((m) => {

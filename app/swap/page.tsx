@@ -114,9 +114,9 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const quoteKey = `${tokenIn.address}:${tokenOut.address}:${amountIn}:${slippageBps}:${account ?? ""}`;
   const wrapping = isWrap(req);
   // Each venue streams in on its own; a slow venue never delays the others.
-  const kuru = useAsync(async () => (amountIn > 0n && !wrapping ? fetchVenueQuote("kuru", req) : null), `kuru:${quoteKey}`, 12_000);
-  const uni = useAsync(async () => (amountIn > 0n && !wrapping ? fetchVenueQuote("uniswap", req) : null), `uniswap:${quoteKey}`, 12_000);
-  const monday = useAsync(async () => (amountIn > 0n && !wrapping ? fetchVenueQuote("monday", req) : null), `monday:${quoteKey}`, 12_000);
+  const kuru = useAsync(async (signal) => (amountIn > 0n && !wrapping ? fetchVenueQuote("kuru", req, signal) : null), `kuru:${quoteKey}`, 12_000);
+  const uni = useAsync(async (signal) => (amountIn > 0n && !wrapping ? fetchVenueQuote("uniswap", req, signal) : null), `uniswap:${quoteKey}`, 12_000);
+  const monday = useAsync(async (signal) => (amountIn > 0n && !wrapping ? fetchVenueQuote("monday", req, signal) : null), `monday:${quoteKey}`, 12_000);
   const wrap = useAsync(async () => (amountIn > 0n && wrapping ? fetchVenueQuote("wmon", req) : null), `wmon:${quoteKey}`);
   const venueState = { kuru, uniswap: uni, monday, wmon: wrap } as const;
   const quotes = {
