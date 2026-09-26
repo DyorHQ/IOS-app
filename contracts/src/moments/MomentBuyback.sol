@@ -29,6 +29,14 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 ///         per Moment. A sandwich has to pay the 1% hook fee plus the 0.5% LP fee twice (3% round trip) to
 ///         capture at most that 1% move, so it loses money — see test/moments/Buyback.t.sol. Callers may still
 ///         pass `minCoinOut`.
+///
+///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), MO-2:
+///         - the round refuses to run (`PriceMoved`) when the pool price is more than `MAX_OPEN_DEVIATION_BPS` away
+///           from where it stood before the first swap of this block (recorded by the fee hook). A same-block
+///           sandwich would have to move the price further than that to matter, and cannot; moving it less costs
+///           more in fees (1% hook + 0.5% LP, each way) than adding liquidity at a price ≤2% off can yield.
+///         - the pairing top-up is sized against the USDC the locker holds for THIS Moment (per-Moment accounting
+///           in MomentLocker), not the locker's whole shared USDC balance.
 contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -42,6 +50,11 @@ contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
     /// @dev sqrt(10000/10100)·1e9 and sqrt(10100/10000)·1e9: the sqrt-price factors for a 1% price move.
     uint256 private constant SQRT_DOWN_1E9 = 995037190;
     uint256 private constant SQRT_UP_1E9 = 1004987562;
+    /// @notice v2 (MO-2): the most the price may have moved within the current block before a round runs (2%).
+    uint256 public constant MAX_OPEN_DEVIATION_BPS = 200;
+    /// @dev sqrt(10000/10200)·1e9 and sqrt(10200/10000)·1e9: the sqrt-price bounds of a 2% price move.
+    uint256 private constant SQRT_OPEN_DOWN_1E9 = 990147542;
+    uint256 private constant SQRT_OPEN_UP_1E9 = 1009950494;
 
     IPoolManager public immutable poolManager;
     IMomentsFactory public immutable factory;
@@ -65,6 +78,7 @@ contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
     error TooSoon();
     error BelowMinimum();
     error Slippage();
+    error PriceMoved();
     error ZeroAddress();
 
     constructor(IPoolManager _poolManager, IMomentsFactory _factory, IERC20 _usdc) {
@@ -79,7 +93,9 @@ contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
         if (block.timestamp < uint256(lastRun[momentId]) + MIN_INTERVAL) revert TooSoon();
         PoolKey memory key = IMomentGraduationRegistry(factory.graduation()).poolKeyOf(momentId); // reverts unless graduated
         address locker = factory.locker();
-        uint256 pulled = IMomentFeeHook(factory.feeHook()).pullBuyback(momentId);
+        IMomentFeeHook hook = IMomentFeeHook(factory.feeHook());
+        _checkBlockOpen(key, hook.blockOpenSqrtPrice(momentId));
+        uint256 pulled = hook.pullBuyback(momentId);
         r.budget = carry[momentId] + pulled;
         if (r.budget < MIN_AMOUNT) revert BelowMinimum();
         // effects
@@ -95,10 +111,11 @@ contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
         r.coinBought = got;
 
         // 2. Pair: the locker adds everything it holds, so size the USDC top-up for ALL the coin it now holds
-        //    (bought + LP-fee coin already folded in) at the post-swap price, net of USDC it already holds.
+        //    (bought + LP-fee coin already folded in) at the post-swap price, net of USDC it already holds for
+        //    THIS Moment (v2, MO-2: other Moments' idle USDC in the shared locker is not ours to pair with).
         uint256 remaining = r.budget - spent;
-        uint256 coinHeld = IERC20(Currency.unwrap(usdcIs0 ? key.currency1 : key.currency0)).balanceOf(locker);
-        uint256 usdcHeld = USDC.balanceOf(locker);
+        uint256 coinHeld = IMomentLocker(locker).available(momentId, usdcIs0 ? key.currency1 : key.currency0);
+        uint256 usdcHeld = IMomentLocker(locker).available(momentId, usdcIs0 ? key.currency0 : key.currency1);
         uint256 needed = _usdcForCoin(key, usdcIs0, sqrtAfter, coinHeld);
         uint256 missing = needed > usdcHeld ? needed - usdcHeld : 0;
         r.usdcToPool = missing < remaining ? missing : remaining;
@@ -137,6 +154,16 @@ contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
         if (got != 0) poolManager.take(coinCurrency, locker, got);
         (uint160 sqrtAfter,,,) = poolManager.getSlot0(id);
         return abi.encode(spent, got, sqrtAfter);
+    }
+
+    /// @dev v2 (MO-2): reverts `PriceMoved` unless the live price is within `MAX_OPEN_DEVIATION_BPS` of the price
+    ///      before the first swap of this block.
+    function _checkBlockOpen(PoolKey memory key, uint160 openSqrtP) private view {
+        (uint160 sqrtP,,,) = poolManager.getSlot0(key.toId());
+        if (
+            uint256(sqrtP) > Math.mulDiv(openSqrtP, SQRT_OPEN_UP_1E9, 1e9)
+                || uint256(sqrtP) < Math.mulDiv(openSqrtP, SQRT_OPEN_DOWN_1E9, 1e9)
+        ) revert PriceMoved();
     }
 
     /// @dev USDC (rounded up) that pairs `coin` in the full-range position at price sqrtP.

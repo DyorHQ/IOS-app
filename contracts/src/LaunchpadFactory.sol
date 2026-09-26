@@ -427,12 +427,21 @@ contract LaunchpadFactory {
     ///         Anyone may graduate it on Uniswap v4 instead, right away, so a squatter can never force holders into
     ///         the 7-day rescue lock-up. Monday-only quote assets (aBIL) keep their rule unless the owner has
     ///         explicitly allowed the fallback for that launch with `allowV4Fallback`.
+    ///
+    ///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), LP-1: the Monday retry is capped at
+    ///         `GRADUATION_GAS`, the same budget the automatic graduation gets, and the call must carry enough gas for
+    ///         that retry AND a full `GRADUATION_GAS` Uniswap v4 graduation after it. Before, the retry was forwarded
+    ///         63/64 of all gas, so a squatted Monday pool full of dust-liquidity ticks (every tick crossed by the
+    ///         realign swap costs gas) could burn it and leave the v4 path starving on the last 1/64.
     function graduateFallback(address token) external {
-        // The creator's venue is honoured whenever it works: if the Monday graduation succeeds now (e.g. the squat
-        // was realignable, or an earlier attempt merely ran out of gas), that is the result. Only a Monday path
-        // that still reverts falls back to Uniswap v4 — so nobody can use this entry point to override a venue
+        // Both budgets are reserved up front; the 1/32 margin covers EIP-150's 63/64 rule on the capped retry.
+        if (gasleft() < 2 * GRADUATION_GAS + GRADUATION_GAS / 32) revert InsufficientGasForGraduation();
+        // The creator's venue is honoured whenever it works within the automatic graduation's gas budget: if the
+        // Monday graduation succeeds now (e.g. the squat was realignable, or an earlier attempt merely hit a
+        // transient failure), that is the result. Only a Monday path that still reverts — or cannot finish within
+        // `GRADUATION_GAS` — falls back to Uniswap v4, so nobody can use this entry point to override a venue
         // choice that is still viable.
-        try this.graduate(token) {
+        try this.graduate{gas: GRADUATION_GAS}(token) {
             return;
         } catch {}
         _graduate(token, true);
