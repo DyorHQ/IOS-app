@@ -161,7 +161,9 @@ struct ConfirmationSheet<Details: View>: View {
                 .frame(maxWidth: .infinity)
                 .background(.bar)
             }
-            .interactiveDismissDisabled(run.isRunning)
+            // Also once done: swiping away a settled sheet skipped `finish()`, so the action was never recorded and the
+            // form kept its amount. Done (or the toolbar button) records and clears it.
+            .interactiveDismissDisabled(run.isRunning || run.isDone)
         }
         .presentationDetents([.medium, .large])
         // Opaque on purpose: the list fades under the footer, and a translucent sheet would show the presenting
