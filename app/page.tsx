@@ -238,7 +238,8 @@ function ActivitySheet({ onClose }: { onClose: () => void }) {
             {a.kind === "trade" && <span className="amt">{fmtUnits(a.quote, 18, { compact: true })} MON</span>}
           </a>
         ))}
-        {activity.data && activity.data.length === 0 && DEPLOYED && <p className="hint">Nothing in the last two hours.</p>}
+        {activity.error && <p className="hint err">Couldn&apos;t read recent activity ({activity.error}). Retrying.</p>}
+        {activity.data && activity.data.length === 0 && DEPLOYED && !activity.error && <p className="hint">Nothing in the last two hours.</p>}
       </div>
     </>
   );

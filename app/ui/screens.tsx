@@ -111,7 +111,8 @@ export function HomeScreen({ go, openSheet }: ScreenProps) {
         <section className="card" style={{ padding: "4px 16px" }}>
           {activity.loading && !activity.data && <p className="hint" style={{ padding: "12px 0" }}>Reading the last hour of launchpad blocks…</p>}
           {(activity.data ?? []).slice(0, 6).map((a) => <ActivityRow key={a.tx + a.kind + a.block} item={a} launches={markets.launches} now={now} />)}
-          {activity.data && activity.data.length === 0 && <p className="hint" style={{ padding: "12px 0" }}>No launchpad activity in the last hour.</p>}
+          {activity.error && <p className="hint err" style={{ padding: "12px 0" }}>Couldn&apos;t read recent launchpad activity ({activity.error}). Retrying.</p>}
+          {activity.data && activity.data.length === 0 && !activity.error && <p className="hint" style={{ padding: "12px 0" }}>No launchpad activity in the last hour.</p>}
         </section>
       ) : (
         <section className="card" style={{ padding: "12px 16px" }}>
@@ -141,7 +142,7 @@ function TokenDetail({ row, go, onBack }: { row: MarketRow; go: Go; onBack: () =
     <>
       <button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Markets</button>
       <div className="detail-head"><TokenLogo src={row.logo} name={row.symbol} address={row.address} size="lg" /><div><h1>{row.symbol}<small>{row.name}</small></h1><div className="detail-price">{row.usd === null ? "—" : fmtUSD(row.usd)}</div>{row.change24h !== null && <span className={`chip ${row.change24h >= 0 ? "up" : "down"}`} style={{ marginTop: 6 }}>{fmtPct(row.change24h)} · 24h</span>}</div></div>
-      {perp ? <PerplChart marketId={perp.id} height={300} /> : launch ? (candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={240} precision={8} /><p className="hint" style={{ padding: "6px 8px 4px" }}>Price in MON per token from curve trades in the last two hours.</p></div> : <div className="card"><p className="hint">{trades.loading ? "Reading curve trades…" : "No curve trades in the last two hours."}</p></div>) : <div className="card"><p className="hint">No chart for {row.symbol} in the app. Prices come from its Monad pool.{tv && <> <a href={tradingViewUrl(tv)} target="_blank" rel="noopener noreferrer">{tv} on TradingView ↗</a></>}</p></div>}
+      {perp ? <PerplChart marketId={perp.id} height={300} /> : launch ? (candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={240} precision={8} /><p className="hint" style={{ padding: "6px 8px 4px" }}>Price in MON per token from curve trades in the last two hours.</p></div> : <div className="card"><p className={`hint ${trades.error ? "err" : ""}`}>{trades.error ? `Couldn't read curve trades (${trades.error}). Retrying.` : trades.loading ? "Reading curve trades…" : "No curve trades in the last two hours."}</p></div>) : <div className="card"><p className="hint">No chart for {row.symbol} in the app. Prices come from its Monad pool.{tv && <> <a href={tradingViewUrl(tv)} target="_blank" rel="noopener noreferrer">{tv} on TradingView ↗</a></>}</p></div>}
       <div className="mini-stats">
         <div className="stat"><span>Your balance</span><b>{fmtUnits(row.balance, row.decimals, { compact: true })} {row.symbol}</b></div>
         <div className="stat"><span>Value</span><b>{row.value === null ? "—" : fmtUSD(row.value)}</b></div>
@@ -238,7 +239,7 @@ function LaunchDetail({ token, onBack }: { token: Address; onBack: () => void })
     <>
       <button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Launchpad</button>
       <div className="detail-head"><TokenLogo src={data.logo} name={data.name} address={data.token} size="lg" /><div><h1>{data.name}<small>${data.symbol}</small></h1><div className="detail-price">{fmtNum(priceNumber(data), 6)} MON</div><PhaseBadge launch={data} /> <RetiredBadge launch={data} /></div></div>
-      {candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={220} precision={8} /></div> : <div className="card"><p className="hint">{trades.loading ? "Reading curve trades…" : "No trades in the last two hours yet."}</p></div>}
+      {candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={220} precision={8} /></div> : <div className="card"><p className={`hint ${trades.error ? "err" : ""}`}>{trades.error ? `Couldn't read curve trades (${trades.error}). Retrying.` : trades.loading ? "Reading curve trades…" : "No trades in the last two hours yet."}</p></div>}
       <div className="progress-label" style={{ marginTop: 12 }}><span>{data.phase === 2 ? `Graduated to ${data.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4"}` : "Graduation progress"}</span><b>{(data.progressBps / 100).toFixed(1)}%</b></div>
       <Progress bps={data.progressBps} />
       <div className="stack-cards">
@@ -344,7 +345,8 @@ export function ProfileScreen({ go, toast, openSheet }: ScreenProps) {
         <section className="card" style={{ marginTop: 12, padding: "4px 16px" }}>
           {activity.loading && !activity.data && <p className="hint" style={{ padding: "12px 0" }}>Reading the last two hours of blocks…</p>}
           {(activity.data ?? []).map((a) => <ActivityRow key={a.tx + a.kind} item={a} launches={markets.launches} now={now} />)}
-          {activity.data && activity.data.length === 0 && <p className="hint" style={{ padding: "12px 0" }}>{DEPLOYED ? "No launchpad activity from this wallet in the last two hours." : "Launchpad activity appears once the contracts are deployed."} <a href={`${EXPLORER}/address/${account}`} target="_blank" rel="noreferrer">Full history on Monadscan ↗</a></p>}
+          {activity.error && <p className="hint err" style={{ padding: "12px 0" }}>Couldn&apos;t read your recent launchpad activity ({activity.error}). Retrying.</p>}
+          {activity.data && activity.data.length === 0 && !activity.error && <p className="hint" style={{ padding: "12px 0" }}>{DEPLOYED ? "No launchpad activity from this wallet in the last two hours." : "Launchpad activity appears once the contracts are deployed."} <a href={`${EXPLORER}/address/${account}`} target="_blank" rel="noreferrer">Full history on Monadscan ↗</a></p>}
         </section>
       )}
       <div className="divider" />
