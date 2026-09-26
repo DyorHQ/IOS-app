@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { keccak256, stringToHex, type Hex } from "viem";
 import { Icon } from "../../ui/icons";
 import { ActionButton, TxStatus } from "../../launchpad/ui";
@@ -19,7 +19,7 @@ const nowLocal = () => { const d = new Date(); d.setSeconds(0, 0); return new Da
 const EMPTY: Form = { name: "", symbol: "", place: "", date: nowLocal(), mediaURI: "", animationURI: "", price: "1", allocPct: "10", windowDays: "30" };
 
 type Validation = { errors: Partial<Record<keyof Form | "media", string>>; input: PublishInput | null };
-function validate(form: Form, policy: Policy | null, mediaHash: Hex | null): Validation {
+function validate(form: Form, policy: Policy | null, mediaHash: Hex | null, fileState: "none" | "hashing" | "failed" | "hashed"): Validation {
   const errors: Validation["errors"] = {};
   const name = form.name.trim();
   const symbol = form.symbol.trim();
@@ -28,6 +28,8 @@ function validate(form: Form, policy: Policy | null, mediaHash: Hex | null): Val
   if (!symbol) errors.symbol = "Pick a ticker for the coin.";
   else if (!/^[A-Z0-9]{1,10}$/.test(symbol)) errors.symbol = "Tickers use 1–10 letters or digits.";
   if (!form.place.trim()) errors.place = "Where was this moment?";
+  if (fileState === "hashing") errors.media = "Fingerprinting the file… Publish waits for its hash.";
+  else if (fileState === "failed") errors.media = "That file couldn't be read. Pick it again.";
   const mediaURI = form.mediaURI.trim();
   if (!mediaURI) errors.mediaURI = "Link the media (ipfs:// or https://).";
   else if (!/^(ipfs:\/\/|https:\/\/)\S+$/i.test(mediaURI)) errors.mediaURI = "Use an ipfs:// or https:// link.";
@@ -55,20 +57,32 @@ export default function Create() {
   const [form, setForm] = useState<Form>(EMPTY);
   const [file, setFile] = useState<File | null>(null);
   const [fileHash, setFileHash] = useState<Hex | null>(null);
+  const [fileFailed, setFileFailed] = useState(false);
+  // Only the latest pick may set the hash: an earlier, larger file that finishes hashing later must not overwrite it.
+  const pickId = useRef(0);
   const [touched, setTouched] = useState(false);
   const { tx, run, dismiss, busy } = useTx();
   const policy = useAsync(fetchPolicy, "moments-policy", 60_000);
   const preview = useMemo(() => (file ? URL.createObjectURL(file) : ""), [file]);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
   const pickFile = (f: File | null) => {
+    const id = ++pickId.current;
     setFile(f);
     setFileHash(null);
-    if (f) f.arrayBuffer().then((buf) => setFileHash(keccak256(new Uint8Array(buf))));
+    setFileFailed(false);
+    if (f) {
+      f.arrayBuffer().then(
+        (buf) => { if (pickId.current === id) setFileHash(keccak256(new Uint8Array(buf))); },
+        () => { if (pickId.current === id) setFileFailed(true); },
+      );
+    }
   };
-  // Provenance hash: the media bytes when a file is chosen (hashed locally, never uploaded here), else the link.
-  const mediaHash: Hex | null = fileHash ?? (form.mediaURI.trim() ? keccak256(stringToHex(form.mediaURI.trim())) : null);
+  // Provenance hash: the media bytes when a file is chosen (hashed locally, never uploaded here), else the link. While a
+  // chosen file is still hashing there is no hash at all, so the link's hash can never stand in for the file's.
+  const fileState = !file ? "none" : fileFailed ? "failed" : fileHash ? "hashed" : "hashing";
+  const mediaHash: Hex | null = file ? fileHash : form.mediaURI.trim() ? keccak256(stringToHex(form.mediaURI.trim())) : null;
   const set = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
-  const { errors, input } = validate(form, policy.data, mediaHash);
+  const { errors, input } = validate(form, policy.data, mediaHash, fileState);
   const firstError = touched ? Object.values(errors)[0] : undefined;
   const p = policy.data;
   const allocBps = input?.creatorAllocBps ?? (Math.round(Number(form.allocPct || "0") * 100) || 0);
@@ -100,6 +114,7 @@ export default function Create() {
                 <input type="file" accept="image/*,video/*" onChange={(e) => pickFile(e.target.files?.[0] ?? null)} />
                 <span className="help">Pick the original file to fingerprint it: its keccak-256 hash goes on-chain as the provenance record. Nothing is uploaded from here.</span>
                 {fileHash && <span className="help mono-sm">hash {fileHash}</span>}
+                {file && !fileHash && <span className={fileFailed ? "hint err" : "help"}>{fileFailed ? "Couldn't read that file." : "Fingerprinting…"}</span>}
               </div>
             </div>
           </div>
