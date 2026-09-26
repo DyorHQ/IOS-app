@@ -26,24 +26,42 @@ function applyLevels(current: Level[], updates: RawLevel[], descending: boolean)
 
 const empty: Feed = { book: { bids: [], asks: [] }, trades: [], state: null, connected: false, error: null };
 
+/** Wait before reconnect attempt `attempt` (0-based): 1 s doubling to 30 s, with up to 20% jitter so a relay restart
+    does not bring every open tab back in the same instant. */
+export const reconnectDelay = (attempt: number, random = Math.random) => {
+  const base = Math.min(30_000, 1_000 * 2 ** Math.max(0, attempt));
+  return Math.round(base * (1 + 0.2 * random()));
+};
+
 export function usePerplFeed(marketId: number | null): Feed {
   const [feed, setFeed] = useState<Feed>(empty);
   useEffect(() => {
     if (marketId === null || typeof window === "undefined") return;
     let ws: WebSocket | null = null;
     let closed = false;
+    let attempt = 0;
     let ping: ReturnType<typeof setInterval> | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
     const connect = () => {
+      retry = null;
       const url = PERPL.ws.startsWith("/") ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${PERPL.ws}` : PERPL.ws;
-      ws = new WebSocket(url);
-      ws.onopen = () => {
-        ws?.send(JSON.stringify({ mt: 5, subs: [{ stream: `order-book@${marketId}`, subscribe: true }, { stream: `trades@${marketId}`, subscribe: true }, { stream: "market-state@143", subscribe: true }] }));
-        ping = setInterval(() => ws?.send(JSON.stringify({ mt: 1 })), 30_000);
+      // Every handler talks to its own socket, never the shared `ws`, so a socket that is being replaced can't write
+      // into the new one or into the feed of the market that replaced it.
+      const socket = new WebSocket(url);
+      ws = socket;
+      socket.onopen = () => {
+        attempt = 0;
+        socket.send(JSON.stringify({ mt: 5, subs: [{ stream: `order-book@${marketId}`, subscribe: true }, { stream: `trades@${marketId}`, subscribe: true }, { stream: "market-state@143", subscribe: true }] }));
+        ping = setInterval(() => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ mt: 1 })); }, 30_000);
         setFeed((f) => ({ ...f, connected: true, error: null }));
       };
-      ws.onmessage = (e) => {
-        const m = JSON.parse(e.data) as Msg;
+      socket.onmessage = (e) => {
+        let m: Msg;
+        try {
+          m = JSON.parse(e.data) as Msg;
+        } catch {
+          return;
+        }
         if (m.mt === 15) setFeed((f) => ({ ...f, book: { bids: applyLevels([], m.bid ?? [], true), asks: applyLevels([], m.ask ?? [], false) } }));
         else if (m.mt === 16) setFeed((f) => ({ ...f, book: { bids: applyLevels(f.book.bids, m.bid ?? [], true), asks: applyLevels(f.book.asks, m.ask ?? [], false) } }));
         else if (m.mt === 17 || m.mt === 18) {
@@ -56,11 +74,12 @@ export function usePerplFeed(marketId: number | null): Feed {
           if (s) setFeed((f) => ({ ...f, state: s }));
         }
       };
-      ws.onerror = () => setFeed((f) => ({ ...f, error: "Perpl market data unavailable" }));
-      ws.onclose = () => {
+      socket.onerror = () => setFeed((f) => ({ ...f, error: "Perpl market data unavailable" }));
+      socket.onclose = () => {
         if (ping) clearInterval(ping);
+        ping = null;
         setFeed((f) => ({ ...f, connected: false }));
-        if (!closed) retry = setTimeout(connect, 3000);
+        if (!closed) retry = setTimeout(connect, reconnectDelay(attempt++));
       };
     };
     connect();
@@ -68,7 +87,11 @@ export function usePerplFeed(marketId: number | null): Feed {
       closed = true;
       if (ping) clearInterval(ping);
       if (retry) clearTimeout(retry);
-      ws?.close();
+      // Detach first: the old socket's late messages and close event must not reach the next market's feed.
+      if (ws) {
+        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+        ws.close();
+      }
       setFeed(empty);
     };
   }, [marketId]);
