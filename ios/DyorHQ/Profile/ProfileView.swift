@@ -295,8 +295,9 @@ struct SendSheet: View {
     /// Sending to a contract (or to an address that couldn't be checked) takes this acknowledgement.
     @State private var sendToContract = false
 
-    /// Nil for a mixed-case address whose EIP-55 checksum is wrong: a mistyped character must never become the recipient.
+    /// What was typed or pasted, without surrounding whitespace or invisible characters (GR-4).
     private var recipientText: String { Address.cleanedInput(recipient).text }
+    /// Nil for a mixed-case address whose EIP-55 checksum is wrong: a mistyped character must never become the recipient.
     private var recipientAddress: Address? { Address.inputProblem(recipientText) == nil ? Address(recipientText) : nil }
     private var rawAmount: BigUInt? { Amount.parse(amount, decimals: token.decimals) }
 
@@ -305,8 +306,8 @@ struct SendSheet: View {
         if let issue = Address.inputProblem(recipientText) { return issue }
         if let to = recipientAddress {
             if to.isZero { return "That's the zero address: anything sent there is lost for good." }
-            // Tokens sent to their own contract are stuck there: no ERC-20 can send them back (GR-3).
-            if !token.isNative, to == token.address { return "That's the \(token.symbol) token contract itself. Tokens sent to it are lost." }
+            // Tokens sent to their own contract are stuck there: almost no token can send them back (GR-3).
+            if !token.isNative, to == token.address { return "That's the \(token.symbol) token contract itself. Tokens sent to it are almost always lost for good." }
         }
         if let rawAmount, let balance, rawAmount > balance {
             return "More than your \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)."
