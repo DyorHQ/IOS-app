@@ -23,6 +23,14 @@ contract PolicyOps is Script {
         factory = MomentsFactory(vm.parseJsonAddress(json, ".factory"));
     }
 
+    /// A basis-point override from the environment. Refuses values above 10,000 instead of letting the uint16 cast
+    /// wrap them (EXPIRY_CREATOR_BPS=70000 would otherwise become 4464 and pass the factory's validation).
+    function _bps(string memory name, uint16 current) internal view returns (uint16) {
+        uint256 value = vm.envOr(name, uint256(current));
+        require(value <= 10_000, string.concat(name, " must be at most 10000 (basis points)"));
+        return uint16(value);
+    }
+
     function _current() internal view returns (MomentTypes.Policy memory p) {
         (p.threshold, p.minPrice, p.creatorBps, p.platformBps, p.reserveBps, p.maxCreatorAllocBps, p.expiryCreatorBps, p.royaltyBps, p.platform, p.treasury) = factory.policy();
     }
@@ -33,12 +41,12 @@ contract PolicyOps is Script {
         MomentTypes.Policy memory p = _current();
         p.threshold = vm.envOr("THRESHOLD_USDC", p.threshold);
         p.minPrice = vm.envOr("MIN_PRICE_USDC", p.minPrice);
-        p.creatorBps = uint16(vm.envOr("CREATOR_BPS", uint256(p.creatorBps)));
-        p.platformBps = uint16(vm.envOr("PLATFORM_BPS", uint256(p.platformBps)));
-        p.reserveBps = uint16(vm.envOr("RESERVE_BPS", uint256(p.reserveBps)));
-        p.maxCreatorAllocBps = uint16(vm.envOr("MAX_CREATOR_ALLOC_BPS", uint256(p.maxCreatorAllocBps)));
-        p.expiryCreatorBps = uint16(vm.envOr("EXPIRY_CREATOR_BPS", uint256(p.expiryCreatorBps)));
-        p.royaltyBps = uint16(vm.envOr("ROYALTY_BPS", uint256(p.royaltyBps)));
+        p.creatorBps = _bps("CREATOR_BPS", p.creatorBps);
+        p.platformBps = _bps("PLATFORM_BPS", p.platformBps);
+        p.reserveBps = _bps("RESERVE_BPS", p.reserveBps);
+        p.maxCreatorAllocBps = _bps("MAX_CREATOR_ALLOC_BPS", p.maxCreatorAllocBps);
+        p.expiryCreatorBps = _bps("EXPIRY_CREATOR_BPS", p.expiryCreatorBps);
+        p.royaltyBps = _bps("ROYALTY_BPS", p.royaltyBps);
         p.platform = vm.envOr("PLATFORM", p.platform);
         p.treasury = vm.envOr("TREASURY", p.treasury);
         vm.startBroadcast();
