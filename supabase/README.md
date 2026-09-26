@@ -35,7 +35,11 @@ writes require the wallet's session.
 ∈ spot, perps, launch(pad), moments, bridge, wallet. The whole user journey — username (`profiles.handle`), wallet,
 per-domain volume, deposits/withdrawals, notifications and activities — is stitched by the `user_journey` view.
 
-The migrations are applied in the live project; export with `supabase db pull` to snapshot them into `migrations/`.
+Every migration applied to the live project is now in `migrations/` (01–23). 01–07 and 11 were restored on 2026-09-26
+from the project's own migration history (`supabase_migrations.schema_migrations.statements`), byte-for-byte — each
+file's md5 equals the recorded statements' md5. Two out-of-band changes are NOT in any migration: the Strategies tables
+below were dropped directly (2026-09-18), and 18's revokes supersede 11's `grant execute … platform_volume … to anon`.
+Record every future schema change as a numbered migration here, so the backend can be rebuilt and audited from source.
 
 > The Strategies feature (copy-trading, market-making, delta-neutral) was removed from the app on 2026-09-18; its
 > tables (`strategies`, `leaders`, `copy_relationships`, `copy_grants`, `copy_events`) were dropped from the project.
