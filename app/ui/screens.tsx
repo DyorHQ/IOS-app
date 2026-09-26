@@ -15,7 +15,7 @@ import { fetchPerplContext } from "../lib/perps/perpl";
 import { usePerplFeed } from "../lib/perps/ws";
 import { useAsync, useNow } from "../lib/use-async";
 import { useWallet } from "../lib/wallet";
-import { fmtAmount, fmtUnits, shortAddress, timeAgo } from "../lib/format";
+import { fmtAmount, fmtNumber, fmtUnits, shortAddress, timeAgo } from "../lib/format";
 import { LaunchCard as WebLaunchCard, PhaseBadge, Progress, RetiredBadge, Skeleton, TokenLogo } from "../launchpad/ui";
 import { Position, StatePanel, TradePanel } from "../launchpad/token-panels";
 import Create from "../launchpad/create/page";
@@ -59,11 +59,13 @@ function ActivityRow({ item, launches, now }: { item: ActivityItem; launches: La
   const icon: IconName = item.kind === "launch" ? "rocket" : item.kind === "graduated" ? "graduate" : item.side === "buy" ? "trend-up" : "trend-down";
   const title = item.kind === "launch" ? `Launched $${sym(item.token)}` : item.kind === "graduated" ? `$${sym(item.token)} graduated${venue(item.token)}` : `${item.side === "buy" ? "Bought" : "Sold"} $${sym(item.token)}`;
   const who = item.kind === "launch" ? shortAddress(item.deployer) : item.kind === "trade" ? shortAddress(item.trader) : "";
+  // A curve trade's amount is in the launch's pair asset (MON, USDC, aBIL…), with that asset's decimals.
+  const pair = item.kind === "trade" ? find(item.token)?.pair : undefined;
   return (
     <a className="act-row" href={explorerTx(item.tx)} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>
       <Icon name={icon} />
       <span className="row-main"><b>{title}</b><small>{who}{who ? " · " : ""}{now ? timeAgo(item.time, now) : ""}</small></span>
-      {item.kind === "trade" && <span className="amt">{fmtAmount(item.quote, 18, "MON", { compact: true })}<small>{fmtUnits(item.tokens, 18, { compact: true })} tokens</small></span>}
+      {item.kind === "trade" && <span className="amt">{pair ? fmtAmount(item.quote, pair.decimals, pair.symbol, { compact: true }) : ""}<small>{fmtUnits(item.tokens, 18, { compact: true })} tokens</small></span>}
     </a>
   );
 }
@@ -137,17 +139,18 @@ function TokenDetail({ row, go, onBack }: { row: MarketRow; go: Go; onBack: () =
   const tv = row.launchpad ? undefined : TV_SYMBOLS[row.symbol];
   const launch = row.launch;
   const trades = useAsync(async () => (launch ? fetchCurveTrades(launch.curve as Address) : []), `curve:${launch?.curve ?? ""}`, 30_000);
-  const candles = launch && trades.data ? candlesFromTrades(trades.data, 300, 1) : [];
+  // Trade prices are raw pair units per raw token unit; 10^(18 - pair decimals) makes them pair per token.
+  const candles = launch && trades.data ? candlesFromTrades(trades.data, 300, 10 ** (18 - launch.pair.decimals)) : [];
   return (
     <>
       <button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Markets</button>
       <div className="detail-head"><TokenLogo src={row.logo} name={row.symbol} address={row.address} size="lg" /><div><h1>{row.symbol}<small>{row.name}</small></h1><div className="detail-price">{row.usd === null ? "—" : fmtUSD(row.usd)}</div>{row.change24h !== null && <span className={`chip ${row.change24h >= 0 ? "up" : "down"}`} style={{ marginTop: 6 }}>{fmtPct(row.change24h)} · 24h</span>}</div></div>
-      {perp ? <PerplChart marketId={perp.id} height={300} /> : launch ? (candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={240} precision={8} /><p className="hint" style={{ padding: "6px 8px 4px" }}>Price in MON per token from curve trades in the last two hours.</p></div> : <div className="card"><p className={`hint ${trades.error ? "err" : ""}`}>{trades.error ? `Couldn't read curve trades (${trades.error}). Retrying.` : trades.loading ? "Reading curve trades…" : "No curve trades in the last two hours."}</p></div>) : <div className="card"><p className="hint">No chart for {row.symbol} in the app. Prices come from its Monad pool.{tv && <> <a href={tradingViewUrl(tv)} target="_blank" rel="noopener noreferrer">{tv} on TradingView ↗</a></>}</p></div>}
+      {perp ? <PerplChart marketId={perp.id} height={300} /> : launch ? (candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={240} precision={8} /><p className="hint" style={{ padding: "6px 8px 4px" }}>Price in {launch.pair.symbol} per token from curve trades in the last two hours.</p></div> : <div className="card"><p className={`hint ${trades.error ? "err" : ""}`}>{trades.error ? `Couldn't read curve trades (${trades.error}). Retrying.` : trades.loading ? "Reading curve trades…" : "No curve trades in the last two hours."}</p></div>) : <div className="card"><p className="hint">No chart for {row.symbol} in the app. Prices come from its Monad pool.{tv && <> <a href={tradingViewUrl(tv)} target="_blank" rel="noopener noreferrer">{tv} on TradingView ↗</a></>}</p></div>}
       <div className="mini-stats">
         <div className="stat"><span>Your balance</span><b>{fmtUnits(row.balance, row.decimals, { compact: true })} {row.symbol}</b></div>
         <div className="stat"><span>Value</span><b>{row.value === null ? "—" : fmtUSD(row.value)}</b></div>
         {launch && <div className="stat"><span>Launch phase</span><b><PhaseBadge launch={launch} /></b></div>}
-        {launch && <div className="stat"><span>Curve price</span><b>{fmtNum(priceNumber(launch), 6)} MON</b></div>}
+        {launch && <div className="stat"><span>Curve price</span><b>{fmtNumber(priceNumber(launch))} {launch.pair.symbol}</b></div>}
       </div>
       <div className="flow-actions" style={{ marginTop: 0 }}>
         <button type="button" className="btn tone-up" style={{ flex: 1 }} onClick={() => go("trade", "swap", { in: "MON", out: row.native ? "USDC" : row.address })}>Buy {row.symbol}</button>
@@ -231,14 +234,14 @@ function LaunchDetail({ token, onBack }: { token: Address; onBack: () => void })
   const data = launch.data;
   const view = useAsync(() => (wallet.account && data ? fetchAccountView(data, wallet.account) : Promise.resolve(null)), `view:${token}:${wallet.account ?? ""}`, 8_000, data ? String(data.phase) : "l");
   const trades = useAsync(async () => (data ? fetchCurveTrades(data.curve) : []), `trades:${data?.curve ?? ""}`, 30_000);
-  const candles = trades.data ? candlesFromTrades(trades.data, 300, 1) : [];
+  const candles = trades.data && data ? candlesFromTrades(trades.data, 300, 10 ** (18 - data.pair.decimals)) : [];
   const refresh = () => { launch.refresh(); view.refresh(); trades.refresh(); };
   if (!data) return <><button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Launchpad</button>{launch.loading ? <Skeleton h={120} /> : <Empty icon="rocket" title="Unknown launch" text={launch.error ?? "This token was not launched here."} />}</>;
   const trading = data.phase === 0 && !data.completed && !data.rescued;
   return (
     <>
       <button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Launchpad</button>
-      <div className="detail-head"><TokenLogo src={data.logo} name={data.name} address={data.token} size="lg" /><div><h1>{data.name}<small>${data.symbol}</small></h1><div className="detail-price">{fmtNum(priceNumber(data), 6)} MON</div><PhaseBadge launch={data} /> <RetiredBadge launch={data} /></div></div>
+      <div className="detail-head"><TokenLogo src={data.logo} name={data.name} address={data.token} size="lg" /><div><h1>{data.name}<small>${data.symbol}</small></h1><div className="detail-price">{fmtNumber(priceNumber(data))} {data.pair.symbol}</div><PhaseBadge launch={data} /> <RetiredBadge launch={data} /></div></div>
       {candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={220} precision={8} /></div> : <div className="card"><p className={`hint ${trades.error ? "err" : ""}`}>{trades.error ? `Couldn't read curve trades (${trades.error}). Retrying.` : trades.loading ? "Reading curve trades…" : "No trades in the last two hours yet."}</p></div>}
       <div className="progress-label" style={{ marginTop: 12 }}><span>{data.phase === 2 ? `Graduated to ${data.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4"}` : "Graduation progress"}</span><b>{(data.progressBps / 100).toFixed(1)}%</b></div>
       <Progress bps={data.progressBps} />

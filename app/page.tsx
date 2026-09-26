@@ -224,7 +224,10 @@ function ActivitySheet({ onClose }: { onClose: () => void }) {
   const now = useNow();
   const curves = new Map(markets.launches.map((l) => [l.curve.toLowerCase(), l.token as Address]));
   const activity = useAsync(async () => (DEPLOYED ? fetchLaunchpadActivity(curves, 18_000n) : []), `activity-sheet:${markets.launches.length}`, 30_000);
-  const symbol = (token: Address | null) => markets.launches.find((l) => token && l.token.toLowerCase() === token.toLowerCase())?.symbol ?? (token ? shortAddress(token) : "token");
+  const launchOf = (token: Address | null) => markets.launches.find((l) => token && l.token.toLowerCase() === token.toLowerCase());
+  const symbol = (token: Address | null) => launchOf(token)?.symbol ?? (token ? shortAddress(token) : "token");
+  // A curve trade's amount is in the launch's pair asset, with that asset's decimals.
+  const tradeAmount = (token: Address | null, quote: bigint) => { const pair = launchOf(token)?.pair; return pair ? `${fmtUnits(quote, pair.decimals, { compact: true })} ${pair.symbol}` : ""; };
   return (
     <>
       <SheetHead title="On-chain activity" onClose={onClose} />
@@ -235,7 +238,7 @@ function ActivitySheet({ onClose }: { onClose: () => void }) {
           <a key={a.tx + a.kind + a.block} className="act-row" href={`${EXPLORER}/tx/${a.tx}`} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>
             <Icon name={a.kind === "launch" ? "rocket" : a.kind === "graduated" ? "graduate" : a.side === "buy" ? "trend-up" : "trend-down"} />
             <span className="row-main"><b>{a.kind === "launch" ? `Launched $${symbol(a.token)}` : a.kind === "graduated" ? `$${symbol(a.token)} graduated` : `${a.side === "buy" ? "Bought" : "Sold"} $${symbol(a.token)}`}</b><small>{now ? timeAgo(a.time, now) : ""}</small></span>
-            {a.kind === "trade" && <span className="amt">{fmtUnits(a.quote, 18, { compact: true })} MON</span>}
+            {a.kind === "trade" && <span className="amt">{tradeAmount(a.token, a.quote)}</span>}
           </a>
         ))}
         {activity.error && <p className="hint err">Couldn&apos;t read recent activity ({activity.error}). Retrying.</p>}
