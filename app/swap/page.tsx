@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isAddress, type Address, type Hex } from "viem";
 import { Icon } from "../ui/icons";
 import { DEPLOYED, explorerToken } from "../lib/chain";
@@ -85,6 +85,12 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const [tokenIn, setTokenIn] = useState<TokenInfo>(CORE_TOKENS[0]);
   const [tokenOut, setTokenOut] = useState<TokenInfo>(CORE_TOKENS[2]);
   const [seeded, setSeeded] = useState(false);
+  // Set by the user's first pick, flip or amount: from then on the link no longer decides the pair or its direction.
+  const edited = useRef(false);
+  // Tokens the link chose that are not on the app's list (anyone can deploy a token called "USDC"), and whether the
+  // user has confirmed checking them.
+  const [linked, setLinked] = useState<Address[]>([]);
+  const [linkChecked, setLinkChecked] = useState(false);
   const [amount, setAmount] = useState("");
   const [slippageBps, setSlippage] = useState(100);
   const [choice, setChoice] = useState<Venue | null>(null);
@@ -94,19 +100,26 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const debouncedAmount = useDebounced(amount, 400);
   const amountIn = parseAmount(debouncedAmount, tokenIn.decimals) ?? 0n;
 
-  // Preselect from ?in= and ?out= (symbols or addresses) once the token list, including graduated launches, is known.
+  // Preselect from ?in= and ?out= (symbols or addresses) once the token list, including graduated launches, is known,
+  // unless the user has already chosen: a slow list or token lookup must never overwrite their pick.
   useEffect(() => {
     if (seeded || (DEPLOYED && !launched.data)) return;
+    let live = true;
     const pick = (raw: string | null): TokenInfo | undefined => raw ? tokens.find((t) => t.symbol.toLowerCase() === raw.toLowerCase() || t.address.toLowerCase() === raw.toLowerCase()) : undefined;
     const wantIn = initialIn ?? params.get("in");
     const wantOut = initialOut ?? params.get("out");
     const inTok = pick(wantIn);
     const outTok = pick(wantOut);
     Promise.all([inTok ?? (wantIn && isAddress(wantIn) ? loadToken(wantIn) : null), outTok ?? (wantOut && isAddress(wantOut) ? loadToken(wantOut) : null)]).then(([i, o]) => {
-      if (i) setTokenIn(i);
-      if (o) setTokenOut(o);
+      if (!live) return;
+      if (!edited.current) {
+        if (i) setTokenIn(i);
+        if (o) setTokenOut(o);
+        setLinked([!inTok && i ? i.address : null, !outTok && o ? o.address : null].filter((a): a is Address => a !== null));
+      }
       setSeeded(true);
     });
+    return () => { live = false; };
   }, [seeded, launched.data, params, tokens, initialIn, initialOut]);
 
   const balances = useAsync(async (): Promise<Record<string, bigint>> => (account ? loadBalances(tokens, account) : {}), `balances:${account ?? ""}:${tokens.length}`, 15_000);
@@ -132,9 +145,15 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const insufficient = balIn !== undefined && amountIn > balIn;
   const impact = selected?.priceImpactBps ?? null;
   const highImpact = impact !== null && impact > 300;
+  // Selected tokens that are not on the list (pasted in the picker or chosen by a link). A link's choice must be
+  // confirmed before the swap is offered: the link, not the user, picked that contract.
+  const unlisted = [tokenIn, tokenOut].filter((t) => !t.native && !findToken(tokens, t.address));
+  const fromLink = unlisted.some((t) => linked.some((a) => sameToken(a, t.address)));
+  const needsCheck = fromLink && !linkChecked;
 
-  const flip = () => { setTokenIn(tokenOut); setTokenOut(tokenIn); setAmount(""); setChoice(null); reset(); };
+  const flip = () => { edited.current = true; setTokenIn(tokenOut); setTokenOut(tokenIn); setAmount(""); setChoice(null); reset(); };
   const pickToken = (t: TokenInfo) => {
+    edited.current = true;
     if (picking === "in") { if (sameToken(t.address, tokenOut.address)) setTokenOut(tokenIn); setTokenIn(t); }
     else if (picking === "out") { if (sameToken(t.address, tokenIn.address)) setTokenIn(tokenOut); setTokenOut(t); }
     setPicking(null);
@@ -161,7 +180,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   };
 
   const outText = selected ? fmtUnits(selected.amountOut, tokenOut.decimals) : amountIn > 0n && quotes.loading ? "…" : "0";
-  const buttonLabel = !amountIn ? "Enter an amount" : insufficient ? `Not enough ${tokenIn.symbol}` : quotes.loading && !selected ? "Finding the best price…" : !selected ? "No route found" : highImpact ? `Swap anyway via ${VENUE_LABEL[selected.venue]}` : selected.venue === "wmon" ? selected.route.split(",")[0] : `Swap via ${VENUE_LABEL[selected.venue]}`;
+  const buttonLabel = !amountIn ? "Enter an amount" : needsCheck ? "Check the unlisted token first" : insufficient ? `Not enough ${tokenIn.symbol}` : quotes.loading && !selected ? "Finding the best price…" : !selected ? "No route found" : highImpact ? `Swap anyway via ${VENUE_LABEL[selected.venue]}` : selected.venue === "wmon" ? selected.route.split(",")[0] : `Swap via ${VENUE_LABEL[selected.venue]}`;
 
   return (
     <>
@@ -174,7 +193,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
           <div className="swap-field">
             <div className="lbl"><span>You pay</span>{balIn !== undefined && <button type="button" onClick={() => setAmount(exactDown(balIn, tokenIn.decimals, 8))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
             <div className="rowin">
-              <input inputMode="decimal" placeholder="0" aria-label="Amount to pay" value={amount} onChange={(e) => { setAmount(e.target.value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } }} />
+              <input inputMode="decimal" placeholder="0" aria-label="Amount to pay" value={amount} onChange={(e) => { edited.current = true; setAmount(e.target.value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } }} />
               <button type="button" className="tokbtn" onClick={() => setPicking("in")}><TokenLogo src={tokenIn.logo} name={tokenIn.symbol} address={tokenIn.address} size="sm" />{tokenIn.symbol}<Icon name="chev-down" /></button>
             </div>
             <div className="sub">{insufficient ? <span className="impact-bad">Insufficient balance</span> : ""}</div>
@@ -198,11 +217,17 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
               <div><span>Quote age</span><b>{now ? `${Math.max(0, now - selected.at)}s` : "—"}</b></div>
             </div>
           )}
+          {unlisted.length > 0 && (
+            <div className="warnbox">
+              <b>{fromLink ? "Unlisted token from a link." : "Unlisted token."}</b> {unlisted.map((t, i) => <span key={t.address}>{i > 0 ? " and " : ""}{t.symbol} (<a href={explorerToken(t.address)} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>{shortAddress(t.address)}</a>)</span>)} {unlisted.length === 1 ? "is" : "are"} not on DyorHQ&apos;s token list{fromLink ? ", and the link you opened chose it" : ""}. Anyone can deploy a token with any name and symbol: check the contract before you swap.
+              {fromLink && <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}><input type="checkbox" checked={linkChecked} onChange={(e) => setLinkChecked(e.target.checked)} />I checked this contract address.</label>}
+            </div>
+          )}
           {highImpact && <div className="warnbox"><b>High price impact.</b> This trade moves the market by {bpsToPct(impact)}. Consider a smaller amount or a different venue.</div>}
           {step && busy && <p className="hint">{step.label}{step.hash ? " · sent" : "…"}</p>}
           <TxStatus tx={tx} onDismiss={() => { dismiss(); setStep(null); }} />
           {/* Not ready until the typed amount has settled: the quote and the swap use the debounced amount. */}
-          <ActionButton ready={!!selected && amountIn > 0n && !insufficient && amount === debouncedAmount} busy={busy} label={buttonLabel} onClick={submit} requireLaunchpad={false} />
+          <ActionButton ready={!!selected && amountIn > 0n && !insufficient && !needsCheck && amount === debouncedAmount} busy={busy} label={buttonLabel} onClick={submit} requireLaunchpad={false} />
           <p className="hint">Quotes are compared live across Kuru Flow, Uniswap (v3 and v4) and Monday Trade. You trade from your own wallet; DyorHQ never holds funds.</p>
         </section>
 
