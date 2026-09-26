@@ -1,0 +1,66 @@
+# Paths that must never be committed to or pushed from this repository. Checked by scripts/dev/forbidden-paths.sh from
+# the .githooks/ hooks and the leak-guard workflow, on top of its built-in list (env files, keys, signing material,
+# .xcarchive/.ipa, local Claude settings).
+#
+# One glob per line. A glob without "/" matches the file name at any depth; a glob with "/" matches the whole path from
+# the repository root. "*" also matches "/", and matching ignores case. "!glob" exempts a path that a deny glob matched.
+#
+# Internal documents live in the private repository DyorHQ/internal (under ios-app/), never here: audit reports and
+# checklists, security reviews, runbooks and owner procedures, handoffs, incident and relaunch notes, plans and decision
+# logs. docs/ keeps only its README and the developer docs exempted at the end.
+
+# Secrets and credentials beyond the built-in list
+.envrc
+.netrc
+.pgpass
+*.secret
+secrets.json
+secrets.yml
+secrets.yaml
+credentials.json
+service-account*.json
+.foundry/*
+
+# Deployment output and logs (forge's cache/ keeps RPC URLs; logs can hold anything a script printed)
+contracts/broadcast/*
+contracts/cache/*
+*.log
+.wrangler/*
+
+# Local AI-session files
+CLAUDE.local.md
+.claude/projects/*
+.claude/shell-snapshots/*
+.claude/todos/*
+*/.claude/*.local.*
+
+# Internal documents
+HANDOFF*
+*RUNBOOK*
+*security-audit*
+*security-audit*/*
+*security-review*
+*security-review*/*
+*-audit-*/*
+*audit*/REPORT*
+*audit*/FIXES*
+*audit*/CHECKLIST*
+*audit*report*
+*pentest*
+*postmortem*
+*post-mortem*
+*incident*.md
+*relaunch*.md
+*redeploy*.md
+*decisions*.md
+*decision-log*
+*readiness-review*
+*checklist*.md
+*-plan.md
+*_plan.md
+plan.md
+docs/*
+ios/docs/*
+!docs/README.md
+!docs/app-wiring.md
+!docs/swap-spec.md
