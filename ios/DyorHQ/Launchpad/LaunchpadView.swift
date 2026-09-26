@@ -616,7 +616,10 @@ struct LaunchDetailView: View {
             Text(launch.phase == .graduated ? "Graduated" : launch.phase.title)
         } footer: {
             if launch.phase == .graduated {
-                Text("The curve's liquidity is permanently locked in a \(launch.graduationVenue.title) pool — trades now route through the Swap screen. Ongoing pool swap fees stay with the locked liquidity and aren't distributed to holders or the creator.")
+                // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes (GP-6).
+                Text(launch.graduationVenue == .monday
+                     ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's swap fees are harvested to a DyorHQ fees wallet; they aren't paid to holders or the creator."
+                     : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. Fees wait in the hook until they're swept.")
             } else if isStuck {
                 Text(offersFallback
                      ? "The last graduation attempt failed. Anyone can retry it; if Monday Trade keeps rejecting it, the launch can graduate into a locked Uniswap v4 pool right away instead."
