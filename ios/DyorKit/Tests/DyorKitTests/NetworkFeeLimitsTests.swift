@@ -70,8 +70,12 @@ final class NetworkFeeLimitsTests: XCTestCase {
         await assertRefused("unusual gas price")
     }
 
-    func testTipAboveTheBaseFeeIsRefusedOnMonad() async {
-        RPCStub.tip = hex(150 * gwei)
+    /// A tip up to twice the base fee is congestion; above that, an RPC out of bounds.
+    func testTipAboveTwiceTheBaseFeeIsRefusedOnMonad() async throws {
+        RPCStub.tip = hex(200 * gwei)
+        let busy = try await sender().prepare(request, from: CountingWallet())
+        XCTAssertEqual(busy.maxPriorityFeePerGas, 200 * gwei)
+        RPCStub.tip = hex(200 * gwei + 1)
         await assertRefused("unusual gas price")
     }
 

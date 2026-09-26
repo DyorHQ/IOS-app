@@ -9,8 +9,8 @@ import Foundation
 ///
 /// Every chain: a gas limit under `maxGasLimit`, a tip no higher than the max fee, and `gasLimit × maxFeePerGas` (the
 /// most the network can charge) under `maxNetworkFee`. Monad, where the fee market is known, also bounds the fee per
-/// gas: under `maxFeePerGas`, and when the base fee is known, a tip no higher than it and a max fee no higher than the
-/// `2 × base + tip` the app sets. Other chains (the Bridge's source side) are bounded by their total alone, since tips
+/// gas: under `maxFeePerGas`, and when the base fee is known, a tip no higher than twice it (today's suggestion is 2%
+/// of it; twice leaves room for congestion) and a max fee no higher than the `2 × base + tip` the app sets. Other chains (the Bridge's source side) are bounded by their total alone, since tips
 /// there routinely exceed the base fee.
 public enum NetworkFeeLimits {
     public struct Limits: Sendable, Equatable {
@@ -26,7 +26,7 @@ public enum NetworkFeeLimits {
         case gasLimit
         /// A max fee per gas over the chain's ceiling, or above `2 × base + tip`.
         case feePerGas
-        /// A tip above the max fee, or (Monad) above the base fee.
+        /// A tip above the max fee, or (Monad) above twice the base fee.
         case tip
         /// `gasLimit × maxFeePerGas` over the chain's ceiling.
         case total
@@ -64,7 +64,7 @@ public enum NetworkFeeLimits {
         if maxPriorityFeePerGas > maxFeePerGas { return .tip }
         if let ceiling = limits.maxFeePerGas, maxFeePerGas > ceiling { return .feePerGas }
         if chainId == Monad.chainId, let baseFee {
-            if maxPriorityFeePerGas > baseFee { return .tip }
+            if maxPriorityFeePerGas > baseFee * 2 { return .tip }
             if maxFeePerGas > baseFee * 2 + maxPriorityFeePerGas { return .feePerGas }
         }
         if gasLimit * maxFeePerGas > limits.maxNetworkFee { return .total }
