@@ -27,6 +27,14 @@ export function fmtNumber(n: number, opts: { compact?: boolean; dp?: number } = 
 }
 
 export const fmtUnits = (value: bigint, decimals: number, opts?: { compact?: boolean; dp?: number }) => fmtNumber(Number(formatUnits(value, decimals)), opts);
+/** The exact decimal of `value`, cut (never rounded up) to at most `dp` fraction digits, with no grouping or compact
+    notation — for filling an amount field: a Max or 100% preset must never exceed the balance it came from. */
+export function exactDown(value: bigint, decimals: number, dp: number): string {
+  const [whole, fraction = ""] = formatUnits(value, decimals).split(".");
+  const cut = fraction.slice(0, dp).replace(/0+$/, "");
+  return cut ? `${whole}.${cut}` : whole;
+}
+
 export const fmtAmount = (value: bigint, decimals: number, symbol: string, opts?: { compact?: boolean; dp?: number }) => `${fmtUnits(value, decimals, opts)} ${symbol}`;
 
 /** The input (ASCII digits, "." and "," only) with one "." as its decimal point and no grouping, or null when it is

@@ -555,7 +555,9 @@ struct LaunchDetailView: View {
             .pickerStyle(.segmented)
             AmountField(title: "0", text: $amountText, token: side == .buy ? pairToken : token) {
                 guard let account else { return }
-                amountText = side == .buy ? Amount.exact(account.pairBalance, decimals: launch.pair.decimals) : Amount.exact(account.tokenBalance, decimals: 18)
+                // A native-MON buy keeps the network fee back (as Swap, Send and Bridge Max do), or the buy cannot pay gas.
+                let buyable = launch.pair.isNative ? NetworkFeeReserve.spendable(balance: account.pairBalance, reserve: NetworkFeeReserve.monadFallback) : account.pairBalance
+                amountText = side == .buy ? Amount.exact(buyable, decimals: launch.pair.decimals) : Amount.exact(account.tokenBalance, decimals: 18)
             }
             if side == .buy, let q = buyQuote, rawAmount > 0 {
                 DetailRow("You receive", "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")

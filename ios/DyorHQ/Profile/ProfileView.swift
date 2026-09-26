@@ -342,7 +342,7 @@ struct SendSheet: View {
                             subtitle: "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol) → \(to.short)",
                             hash: hash, section: "wallet", usd: stable ? Amount.units(raw, decimals: token.decimals) : nil), owner: session.address)
                     }, intent: .alwaysAsks(.send)) {
-                        DetailRow("To", to.short)
+                        DetailRow("To", to.checksummed) // in full: this review is the last check before funds leave
                         DetailRow("Amount", "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol)")
                         DetailRow("Network", "Monad")
                     }

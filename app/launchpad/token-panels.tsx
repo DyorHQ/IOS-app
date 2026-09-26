@@ -9,7 +9,7 @@ import { buy, claimEscrow, claimHolderRewards, retryGraduation, sell, sweepPoolF
 import { useAsync, useNow } from "../lib/use-async";
 import { useTx } from "../lib/use-tx";
 import { useWallet } from "../lib/wallet";
-import { bpsToPct, fmtAmount, fmtUnits, parseAmount, seconds, shortAddress } from "../lib/format";
+import { bpsToPct, exactDown, fmtAmount, fmtUnits, parseAmount, seconds, shortAddress } from "../lib/format";
 import { ActionButton, TxStatus } from "./ui";
 
 /* Panels shared by the web token page and the in-app launch screen: curve trading, graduation state, position. */
@@ -65,7 +65,7 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
   };
   const setPreset = (v: string | number) => {
     if (side === "buy") setAmount(String(v));
-    else if (view) setAmount(fmtUnits((view.tokenBalance * BigInt(v)) / 100n, 18, { dp: 6 }).replace(/,/g, ""));
+    else if (view) setAmount(exactDown((view.tokenBalance * BigInt(v)) / 100n, 18, 6));
   };
   const insufficient = balance !== undefined && parsed !== null && parsed > balance + (side === "buy" ? 0n : 0n);
   return (

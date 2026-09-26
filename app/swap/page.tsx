@@ -14,7 +14,7 @@ import { useAsync, useNow } from "../lib/use-async";
 import { useDebounced } from "../lib/use-debounced";
 import { useTx } from "../lib/use-tx";
 import { useWallet } from "../lib/wallet";
-import { bpsToPct, fmtNumber, fmtUnits, parseAmount, shortAddress } from "../lib/format";
+import { bpsToPct, exactDown, fmtNumber, fmtUnits, parseAmount, shortAddress } from "../lib/format";
 import { ActionButton, TokenLogo, TxStatus } from "../launchpad/ui";
 
 const PLACEHOLDER: Address = "0x0000000000000000000000000000000000000001";
@@ -172,7 +172,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
             <div className="slip"><span style={{ marginRight: 0 }}>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
           </div>
           <div className="swap-field">
-            <div className="lbl"><span>You pay</span>{balIn !== undefined && <button type="button" onClick={() => setAmount(fmtUnits(balIn, tokenIn.decimals, { dp: 8 }).replace(/,/g, ""))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
+            <div className="lbl"><span>You pay</span>{balIn !== undefined && <button type="button" onClick={() => setAmount(exactDown(balIn, tokenIn.decimals, 8))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
             <div className="rowin">
               <input inputMode="decimal" placeholder="0" aria-label="Amount to pay" value={amount} onChange={(e) => { setAmount(e.target.value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } }} />
               <button type="button" className="tokbtn" onClick={() => setPicking("in")}><TokenLogo src={tokenIn.logo} name={tokenIn.symbol} address={tokenIn.address} size="sm" />{tokenIn.symbol}<Icon name="chev-down" /></button>

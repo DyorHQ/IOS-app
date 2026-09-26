@@ -337,10 +337,12 @@ public final class PerplTradeClient {
                 // (the caller warns that the position may be unprotected) instead of failing the whole bracket, which
                 // the order sheet would show as a failed order — inviting a second entry.
                 acks.append(PerplOrderAck(code: -1, error: (error as? LocalizedError)?.errorDescription ?? "Perpl did not confirm this trigger."))
-                break
+                continue
             }
             acks.append(ack)
-            if !ack.accepted { break }
+            // Only a rejected ENTRY ends the bracket. A rejected take-profit must not keep the stop-loss from being sent
+            // — the position would open with no stop at all.
+            if !ack.accepted, index == 0 { break }
         }
         return acks
     }
