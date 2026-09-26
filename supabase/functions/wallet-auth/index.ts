@@ -1,11 +1,12 @@
 // wallet-auth: bridges a Privy wallet login to a Supabase session, with a server-issued single-use nonce.
 //
 //   1. POST { action: "nonce", address }            -> { nonce, expiresAt }
-//      32 random bytes (64 lowercase hex), valid for 5 minutes, bound to lower(address). At most 10 unused, unexpired
-//      nonces per wallet: a new one evicts the oldest pending ones rather than being refused — wallet addresses are
-//      public, so refusing (429) would let anyone lock a wallet out of sign-in with 10 requests every 5 minutes.
-//      Expired rows are purged on every issue (an expired nonce can never be consumed), so the table only ever holds
-//      about 5 minutes of issuance.
+//      32 random bytes (64 lowercase hex), valid for 5 minutes, bound to lower(address). There is deliberately NO
+//      per-wallet cap: wallet addresses are public, so either refusing new nonces (429) or evicting the oldest pending
+//      ones would let anyone lock a chosen wallet out of sign-in by requesting nonces for it faster than its owner can
+//      sign (security audit 2026-09-26, SB-1). A cap per wallet never bounded the table anyway (any number of wallets
+//      can be named); expired rows are purged on every issue (an expired nonce can never be consumed), so the table only
+//      ever holds about 5 minutes of issuance.
 //   2. POST { address, message, signature }          -> { access_token, token_type, expires_in, wallet }
 //      The wallet personal_signs EXACTLY
 //        "DyorHQ Sign-In\n\nWallet: <address as sent>\nNonce: <nonce>\nIssued At: <unix ms>"
@@ -31,7 +32,6 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const NAMESPACE = "6f9b1c2e-1c2a-4b6e-9c3d-0a1b2c3d4e5f"; // stable namespace for wallet->uuid mapping
 const MAX_AGE_MS = 10 * 60 * 1000; // the signed message must be < 10 minutes old
 const NONCE_TTL_MS = 5 * 60 * 1000; // a nonce must be used within 5 minutes of issue
-const MAX_PENDING = 10; // unused, unexpired nonces kept per wallet (the oldest are evicted beyond this)
 const SESSION_S = 12 * 60 * 60;
 
 const cors = {
@@ -92,18 +92,6 @@ Deno.serve(async (req) => {
       db.from("auth_nonces").insert({ nonce, wallet, expires_at: new Date(expiresAt).toISOString() }),
     ]);
     if (inserted.error) return json({ error: "could not issue a sign-in nonce" }, 502);
-
-    // Keep this nonce plus the MAX_PENDING - 1 newest other pending ones; evict the rest (oldest first). Concurrent
-    // issues can only over-evict, never keep more than the cap once each request has finished.
-    const others = await db.from("auth_nonces").select("nonce")
-      .eq("wallet", wallet).is("used_at", null).gt("expires_at", now).neq("nonce", nonce)
-      .order("expires_at", { ascending: false }).order("nonce", { ascending: false });
-    const evict = (others.data ?? []).slice(MAX_PENDING - 1).map((r: { nonce: string }) => r.nonce);
-    const evicted = evict.length ? await db.from("auth_nonces").delete().in("nonce", evict) : { error: null };
-    if (others.error || evicted.error) {
-      await db.from("auth_nonces").delete().eq("nonce", nonce);
-      return json({ error: "could not issue a sign-in nonce" }, 502);
-    }
     return json({ nonce, expiresAt });
   }
   if (payload.action !== undefined) return json({ error: "unknown action" }, 400);

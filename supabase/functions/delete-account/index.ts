@@ -6,10 +6,19 @@
 //
 // Deploy:  supabase functions deploy delete-account --no-verify-jwt   (the bearer is a Privy token, not a Supabase JWT)
 // Secrets: supabase secrets set PRIVY_APP_SECRET=...   (PRIVY_APP_ID defaults to the DyorHQ app below)
+//          SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are auto-injected (the rate-limit gate; needs migration 20 applied).
 import { importSPKI, jwtVerify } from "npm:jose@5";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 const APP_ID = Deno.env.get("PRIVY_APP_ID") ?? "cmttp2squ00lk0djrso3z0yvm";
 const PRIVY = "https://auth.privy.io/api/v1";
+// The Privy-lookup budget's subject: the same hash email-pepper and email-rebind use (one budget per Privy user).
+const PRIVY_USER_LABEL = "dyorhq/email-pepper/v1/privy-user:";
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -49,6 +58,20 @@ Deno.serve(async (req) => {
 
   const secret = Deno.env.get("PRIVY_APP_SECRET");
   if (!secret) return json({ error: "PRIVY_APP_SECRET is not configured" }, 500);
+
+  // Every Privy admin call first passes email_pepper_lookup_gate (migration 20): at most 10 per Privy user per 15
+  // minutes, so one valid token cannot turn into a stream of calls under Privy's app-wide rate limit (security audit
+  // 2026-09-26, SB-3). A refusal leaves everything as it was; the app stops before erasing the device and can retry.
+  const url = Deno.env.get("SUPABASE_URL");
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !serviceKey) return json({ error: "server not configured" }, 500);
+  const db = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const gate = await db.rpc("email_pepper_lookup_gate", { p_subject: await sha256Hex(PRIVY_USER_LABEL + userId), p_ip: null });
+  if (gate.error || !gate.data || typeof gate.data !== "object") return json({ error: "account deletion is unavailable right now — try again in a minute" }, 503);
+  if (typeof (gate.data as { retryAfter?: unknown }).retryAfter === "number") {
+    return json({ error: "too many attempts — try again in a few minutes" }, 429);
+  }
+  if ((gate.data as { ok?: unknown }).ok !== true) return json({ error: "account deletion is unavailable right now — try again in a minute" }, 503);
 
   const res = await fetch(`${PRIVY}/users/${encodeURIComponent(userId)}`, {
     method: "DELETE",

@@ -78,22 +78,23 @@ Deno.serve(async (req) => {
 
   let payload: { bucket?: string; path?: string };
   try { payload = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-  // Only Moment media, and only the CALLER's own folder: `<their wallet>/<plain file name>`. No other bucket, no
-  // nested or encoded segments — so a session can never pin another wallet's objects, or point the fetch below at any
-  // other URL on this host.
+  // Only Moment media, and only the CALLER's own folder: `<their wallet>/moment-<keccak hex>.<jpg|mp4|mov>`, the only
+  // names the app pins (MomentsMath.mediaName, SocialSession.uploadAndPinMomentMedia). No other bucket, no other file
+  // names, no nested or encoded segments — so a session can never pin another wallet's objects, point the fetch below at
+  // any other URL on this host, or use the Pinata account to pin arbitrary uploads (security audit 2026-09-26, SB-2).
   if ((payload.bucket ?? "launch-media") !== "launch-media") return json({ error: "only launch-media can be pinned" }, 400);
   const bucket = "launch-media";
   const path = String(payload.path ?? "");
-  const match = /^(0x[0-9a-f]{40})\/([A-Za-z0-9_-][A-Za-z0-9._-]{0,127})$/.exec(path);
-  if (!match || match[2].includes("..")) return json({ error: "path must be <your wallet>/<file name>" }, 400);
+  const match = /^(0x[0-9a-f]{40})\/(moment-[0-9a-f]{64}\.(?:jpg|mp4|mov))$/.exec(path);
+  if (!match) return json({ error: "path must be <your wallet>/moment-<media hash>.<jpg|mp4|mov>" }, 400);
   if (match[1] !== wallet) return json({ error: "you can only pin your own uploads" }, 403);
 
   // Pull the bytes from the public bucket (the app already uploaded them there).
   const src = `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
   if (!new URL(src).pathname.startsWith(`/storage/v1/object/public/${bucket}/${wallet}/`)) return json({ error: "invalid path" }, 400);
   let obj: Response;
-  try { obj = await fetch(src, { signal: AbortSignal.timeout(20_000) }); } catch { return json({ error: "could not read the object", src }, 502); }
-  if (!obj.ok) return json({ error: `object not found (${obj.status})`, src }, 404);
+  try { obj = await fetch(src, { signal: AbortSignal.timeout(20_000) }); } catch { return json({ error: "could not read the object" }, 502); }
+  if (!obj.ok) return json({ error: `object not found (${obj.status})` }, 404);
   const bytes = new Uint8Array(await obj.arrayBuffer());
   const contentType = obj.headers.get("content-type") ?? "application/octet-stream";
   // Bare basename with NO slash, used for both the multipart filename and the pin's metadata name — a "/" in either
