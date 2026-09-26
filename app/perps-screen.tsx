@@ -28,7 +28,7 @@ const sz = (v: number, perp: PerpInfo) => v / 10 ** perp.lotDecimals;
 export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; preset?: Preset }) {
   const wallet = useWallet();
   const account = wallet.account;
-  const { perps, account: acct, accountKnown, positions, error: accountError, refresh } = usePerpsAccount(account);
+  const { perps, account: acct, accountKnown, positionsKnown, positions, error: accountError, refresh } = usePerpsAccount(account);
   const ctx = useAsync(fetchPerplContext, "perpl-context", 15_000);
   const [marketId, setMarketId] = useState<number>(preset?.token ? Number(preset.token) : 10);
   const market = PERP_MARKETS.find((m) => m.id === marketId) ?? PERP_MARKETS[1];
@@ -196,11 +196,11 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
             <div key={p.perpId} className="pos-card">
               <div className="top"><span>{p.symbol}-PERP · <span className={p.side === "long" ? "up" : "down"}>{p.side.toUpperCase()} {p.leverage.toFixed(1)}×</span></span><b className={p.unrealized >= 0 ? "up" : "down"}>{p.unrealized >= 0 ? "+" : "−"}${fmtNum(Math.abs(p.unrealized))}</b></div>
               <div className="grid"><span>Size<b>{fmtNum(p.size, p.size < 1 ? 5 : 2)} {p.symbol}</b></span><span>Entry<b>{fmtUSD(p.entry)}</b></span><span>Mark<b>{fmtUSD(p.mark)}</b></span><span>Margin<b>${fmtNum(p.margin)}</b></span><span>Liq. price<b>{p.liquidation ? fmtUSD(p.liquidation) : "—"}</b></span><span>Notional<b>${fmtNum(p.notional)}</b></span></div>
-              <button type="button" className="btn secondary sm" disabled={busy || !perps.some((x) => x.id === p.perpId)} onClick={() => { const client = wallet.client; const pi = perps.find((x) => x.id === p.perpId); if (client && pi) void run(`Close ${p.symbol} ${p.side}`, (onSent) => closePosition(client, pi, p, 100, onSent), refreshAll); }}>Close at market</button>
+              <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run(`Close ${p.symbol} ${p.side}`, (onSent) => closePosition(client, p.perp, p, 100, onSent), refreshAll); }}>Close at market</button>
             </div>
           ))}
           {positions.length === 0 && (!account ? <Empty icon="layers" title="No open positions" text="Connect a wallet to see positions." />
-            : accountKnown && !accountError ? <Empty icon="layers" title="No open positions" text="Open a position and it appears here with live PnL from the Exchange contract." />
+            : positionsKnown && !accountError ? <Empty icon="layers" title="No open positions" text="Open a position and it appears here with live PnL from the Exchange contract." />
             : !accountError && <Empty icon="layers" title="Reading positions…" text="Positions come straight from the Perpl Exchange contract." />)}
         </section>
       )}

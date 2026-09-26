@@ -60,6 +60,8 @@ export type PerpPosition = {
   leverage: number;
   liquidation: number | null;
   notional: number;
+  /** The market as read with the position, so the position can be closed even when the listed markets' read lacks it. */
+  perp: PerpInfo;
 };
 export type PerpOrder = { perpId: number; symbol: string; orderId: number; type: number; side: "buy" | "sell"; price: number; size: number; leverage: number; expiryBlock: number; reduceOnly: boolean };
 
@@ -146,7 +148,7 @@ export async function fetchPositions(account: PerpAccount, perps: PerpInfo[]): P
     const premium = fromCNS(pos.premiumPnlCNS);
     const unrealized = (side === "long" ? mark - entry : entry - mark) * size + premium;
     const notional = size * mark;
-    out.push({ perpId: perp.id, symbol: perp.symbol, side, size, entry, mark, margin, unrealized, premium, leverage: margin > 0 ? notional / margin : 0, liquidation: liquidationPrice(side, entry, size, margin, premium, perp.maintMarginFrac), notional });
+    out.push({ perpId: perp.id, symbol: perp.symbol, side, size, entry, mark, margin, unrealized, premium, leverage: margin > 0 ? notional / margin : 0, liquidation: liquidationPrice(side, entry, size, margin, premium, perp.maintMarginFrac), notional, perp });
   });
   return out;
 }
