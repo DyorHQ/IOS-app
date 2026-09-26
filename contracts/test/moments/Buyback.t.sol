@@ -37,6 +37,9 @@ contract BuybackTest is MomentsMarketBase {
             _buyExactIn(bob, key, usdcIs0, 10_000_000);
             _sellExactIn(bob, key, usdcIs0, coin.balanceOf(bob) - c0);
         }
+        // v2 (MO-2): a round runs in a later block than this burst of volume, like a keeper's would; within the
+        // same block the burst's net drift (>2% on this tiny test pool) would trip the in-block price guard.
+        vm.roll(vm.getBlockNumber() + 1);
     }
 
     /// Coin price in USDC terms, scaled 1e18, from the pool's sqrt price (direction-aware).
@@ -135,17 +138,31 @@ contract BuybackTest is MomentsMarketBase {
 
     function test_sandwiching_the_buyback_loses_money() public {
         _generateFees(12);
+        vm.roll(vm.getBlockNumber() + 1); // a fresh block: its opening price is the undisturbed one
         uint256 attackerUsdc0 = usdc.balanceOf(carol);
         // front-run: attacker buys ahead of the buyback
         _buyExactIn(carol, key, usdcIs0, 2_000_000);
         uint256 got = coin.balanceOf(carol);
-        // the buyback lands (permissionless; attacker calls it in the same block)
+        // v2 (MO-2): the buyback refuses to run on a price moved >2% within this block
         vm.prank(carol);
+        vm.expectRevert(MomentBuyback.PriceMoved.selector);
         buyback.execute(id, 0);
         // back-run: attacker sells everything
         _sellExactIn(carol, key, usdcIs0, got);
         assertLt(usdc.balanceOf(carol), attackerUsdc0, "attacker ends with less USDC than they started with");
         assertEq(coin.balanceOf(carol), 0);
+    }
+
+    function test_small_sandwich_within_the_block_tolerance_still_loses_money() public {
+        _generateFees(12);
+        vm.roll(vm.getBlockNumber() + 1);
+        uint256 attackerUsdc0 = usdc.balanceOf(carol);
+        _buyExactIn(carol, key, usdcIs0, 20_000); // $0.02: under the 2% in-block tolerance
+        uint256 got = coin.balanceOf(carol);
+        vm.prank(carol);
+        buyback.execute(id, 0); // lands
+        _sellExactIn(carol, key, usdcIs0, got);
+        assertLt(usdc.balanceOf(carol), attackerUsdc0, "attacker ends with less USDC than they started with");
     }
 
     function test_cannot_be_pointed_elsewhere() public {

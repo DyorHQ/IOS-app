@@ -27,6 +27,10 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 ///           This is safe because v4 books deltas per caller: every delta this contract creates is settled to zero
 ///           within the same call (sync → transfer → settle, or take), so the outer unlocker's accounting is
 ///           untouched and it cannot make ours non-zero.
+///         - MO-2: balances are attributed per Moment. USDC is shared by every Moment's pool, so an add for one
+///           Moment may only spend what that Moment owns here (its dust, its folded LP fees, and whatever arrived
+///           untracked just before the add — the reserve at seed, the buyback's top-up at increase), never another
+///           Moment's idle USDC.
 contract MomentLocker is IMomentLocker, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -44,6 +48,11 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
     }
 
     mapping(uint256 => Position) private _positions;
+    /// @notice v2 (MO-2): the balance of each currency this contract holds on behalf of each Moment.
+    mapping(uint256 => mapping(Currency => uint256)) public heldOf;
+    /// @notice v2 (MO-2): Σ heldOf over all Moments, per currency. Anything above it is untracked (it just arrived)
+    ///         and is credited to the next Moment whose position is added to.
+    mapping(Currency => uint256) public tracked;
 
     event Seeded(uint256 indexed momentId, PoolId indexed poolId, uint128 liquidity, uint256 amount0, uint256 amount1);
     event Increased(uint256 indexed momentId, PoolId indexed poolId, uint128 liquidityAdded, uint256 amount0, uint256 amount1);
@@ -96,28 +105,30 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
         return abi.encode(liquidity, used0, used1);
     }
 
-    /// @dev Only ever adds liquidity, and only while the PoolManager is unlocked. First folds the LP fees the
-    ///      position has earned back into this contract's balances (a zero-delta position update credits them;
-    ///      they are taken to THIS contract, never to an external address), then sizes the largest full-range add
-    ///      both balances can fund and pays for it.
+    /// @dev Only ever adds liquidity, and only while the PoolManager is unlocked. First credits the Moment with
+    ///      whatever arrived untracked, then folds the LP fees the position has earned back into its balances (a
+    ///      zero-delta position update credits them; they are taken to THIS contract, never to an external
+    ///      address), then sizes the largest full-range add the Moment's OWN balances can fund and pays for it.
     function _modify(uint256 momentId, PoolKey memory key) private returns (uint128 liquidity, uint256 used0, uint256 used1) {
         Position storage p = _positions[momentId];
+        _creditUntracked(momentId, key.currency0);
+        _creditUntracked(momentId, key.currency1);
         int24 tickLower = TickMath.minUsableTick(key.tickSpacing);
         int24 tickUpper = TickMath.maxUsableTick(key.tickSpacing);
         if (p.liquidity != 0) {
             (BalanceDelta fees,) = poolManager.modifyLiquidity(
                 key, IPoolManager.ModifyLiquidityParams({tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: 0, salt: bytes32(momentId)}), ""
             );
-            _settle(key.currency0, fees.amount0());
-            _settle(key.currency1, fees.amount1());
+            _settle(momentId, key.currency0, fees.amount0());
+            _settle(momentId, key.currency1, fees.amount1());
         }
         (uint160 sqrtP,,,) = poolManager.getSlot0(key.toId());
         liquidity = MomentPoolMath.liquidityForAmounts(
             sqrtP,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
-            key.currency0.balanceOfSelf(),
-            key.currency1.balanceOfSelf()
+            heldOf[momentId][key.currency0],
+            heldOf[momentId][key.currency1]
         );
         if (liquidity == 0) return (0, 0, 0);
         p.liquidity += liquidity; // effect before the position update
@@ -128,18 +139,35 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
             }),
             ""
         );
-        used0 = _settle(key.currency0, delta.amount0());
-        used1 = _settle(key.currency1, delta.amount1());
+        used0 = _settle(momentId, key.currency0, delta.amount0());
+        used1 = _settle(momentId, key.currency1, delta.amount1());
     }
 
-    function _settle(Currency currency, int128 amount) private returns (uint256 paid) {
+    /// @dev v2 (MO-2): attributes a currency's untracked balance (what arrived since the last add) to `momentId`.
+    function _creditUntracked(uint256 momentId, Currency currency) private {
+        uint256 bal = currency.balanceOfSelf();
+        uint256 t = tracked[currency];
+        if (bal > t) {
+            heldOf[momentId][currency] += bal - t;
+            tracked[currency] = bal;
+        }
+    }
+
+    /// @dev Pays the PoolManager out of the Moment's own balance (negative delta) or takes what it is owed to this
+    ///      contract, crediting the Moment (positive delta: folded LP fees).
+    function _settle(uint256 momentId, Currency currency, int128 amount) private returns (uint256 paid) {
         if (amount < 0) {
             paid = uint256(uint128(-amount));
+            heldOf[momentId][currency] -= paid; // checked: never spends another Moment's balance
+            tracked[currency] -= paid;
             poolManager.sync(currency);
             currency.transfer(address(poolManager), paid);
             poolManager.settle();
         } else if (amount > 0) {
-            poolManager.take(currency, address(this), uint256(uint128(amount)));
+            uint256 got = uint256(uint128(amount));
+            heldOf[momentId][currency] += got;
+            tracked[currency] += got;
+            poolManager.take(currency, address(this), got);
         }
     }
 
@@ -152,6 +180,14 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
 
     function liquidityOf(uint256 momentId) external view returns (uint128) {
         return _positions[momentId].liquidity;
+    }
+
+    /// @notice v2 (MO-2): what the next add for `momentId` could spend of `currency` — its own balance here plus
+    ///         the untracked balance that the add would credit to it first.
+    function available(uint256 momentId, Currency currency) external view returns (uint256) {
+        uint256 bal = currency.balanceOfSelf();
+        uint256 t = tracked[currency];
+        return heldOf[momentId][currency] + (bal > t ? bal - t : 0);
     }
 
     function tickRange(int24 tickSpacing) external pure returns (int24 tickLower, int24 tickUpper) {

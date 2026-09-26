@@ -7,6 +7,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
+import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
@@ -23,10 +24,15 @@ import {IMomentFeeHook} from "./interfaces/IMomentsMarket.sol";
 ///         only be pulled by the buyback module. Only the graduation executor can initialize a registered pool,
 ///         and the hook refuses to serve unregistered pools, so nobody can front-run graduation with a mispriced
 ///         pool or attach this hook to an arbitrary pair. The buyback module's own swaps are fee-exempt.
+///
+///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), MO-2: before the first swap of each block the hook
+///         records the pool's price, so the buyback can refuse to add liquidity at a price someone moved within
+///         the same block (the sandwich pattern). One storage slot per Moment; written once per block.
 contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using BalanceDeltaLibrary for BalanceDelta;
     using SafeERC20 for IERC20;
+    using StateLibrary for IPoolManager;
 
     uint256 private constant BPS = MomentTypes.BPS;
     uint256 public constant FEE_BPS = 100; // 1% of the USDC leg
@@ -43,6 +49,14 @@ contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {
     mapping(uint256 => uint256) public creatorAccrued;
     mapping(uint256 => uint256) public platformAccrued;
     mapping(uint256 => uint256) public buybackAccrued;
+
+    /// @dev v2 (MO-2): the pool price before the first swap of `blockNumber` (packed in one slot).
+    struct BlockOpen {
+        uint160 sqrtPriceX96;
+        uint64 blockNumber;
+    }
+
+    mapping(uint256 => BlockOpen) private _blockOpen;
 
     event PoolRegistered(uint256 indexed momentId, PoolId indexed poolId);
     event FeeTaken(uint256 indexed momentId, uint256 fee, uint256 creatorPart, uint256 platformPart, uint256 buybackPart);
@@ -120,8 +134,16 @@ contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {
         onlyPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        uint256 momentId = momentOf[key.toId()];
+        PoolId poolId = key.toId();
+        uint256 momentId = momentOf[poolId];
         if (momentId == 0) revert PoolNotRegistered();
+        BlockOpen storage open = _blockOpen[momentId];
+        if (open.blockNumber != block.number) {
+            // v2 (MO-2): first swap of this block — remember the price it starts from.
+            (uint160 sqrtP,,,) = poolManager.getSlot0(poolId);
+            open.sqrtPriceX96 = sqrtP;
+            open.blockNumber = uint64(block.number);
+        }
         if (sender == factory.buyback()) return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         if (!_usdcIsSpecified(key, params)) return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         bool exactIn = params.amountSpecified < 0;
@@ -205,6 +227,16 @@ contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {
         buybackAccrued[momentId] = 0;
         IERC20(Currency.unwrap(usdc)).safeTransfer(msg.sender, amount);
         emit BuybackPulled(momentId, amount);
+    }
+
+    // ------------------------------------------------------------------ views
+
+    /// @notice v2 (MO-2): the pool's sqrt price before the first swap of the CURRENT block, or its live price when
+    ///         nothing has swapped in this block yet (then the two are the same thing).
+    function blockOpenSqrtPrice(uint256 momentId) external view returns (uint160 sqrtPriceX96) {
+        BlockOpen storage open = _blockOpen[momentId];
+        if (open.blockNumber == block.number) return open.sqrtPriceX96;
+        (sqrtPriceX96,,,) = poolManager.getSlot0(poolOf[momentId]);
     }
 
     // ------------------------------------------------------------------ unused hook entry points
