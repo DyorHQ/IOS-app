@@ -722,6 +722,18 @@ final class LaunchpadTests: XCTestCase {
         } catch { XCTAssertEqual(error as? LaunchpadError, .notDeployed) }
     }
 
+    /// A launch carries the terms hash read with the terms the screen showed (IOST-2): one that changed since is refused
+    /// before anything is signed, and one that didn't is what the launch carries.
+    func testLaunchTermsAreBoundToWhatWasShown() throws {
+        let shown = Data(repeating: 0xaa, count: 32)
+        XCTAssertEqual(try LaunchpadService.boundEconomics(shown: shown, current: shown), shown)
+        XCTAssertThrowsError(try LaunchpadService.boundEconomics(shown: shown, current: Data(repeating: 0xbb, count: 32))) {
+            XCTAssertEqual($0 as? LaunchpadError, .termsChanged)
+        }
+        XCTAssertEqual(try LaunchpadService.boundEconomics(shown: nil, current: shown), shown, "no shown hash: the current one, as before")
+        XCTAssertTrue(LaunchpadError.termsChanged.localizedDescription.contains("nothing was sent"))
+    }
+
     func testServiceConstants() {
         XCTAssertEqual(LaunchpadService.maxExemptions, 32)
         XCTAssertEqual(LaunchpadService.blockSeconds, 0.4)
