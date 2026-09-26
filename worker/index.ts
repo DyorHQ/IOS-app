@@ -1,6 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { createRelayGate } from "./perpl-relay";
 
 interface Env {
   ASSETS: Fetcher;
@@ -28,36 +29,6 @@ interface ExecutionContext {
 
 const PERPL_WS = "https://app.perpl.xyz/ws/v1/market-data";
 
-/* The relay forwards only what the app's own socket sends (app/lib/perps/ws.ts): a ping (mt 1) and a subscription
-   (mt 5) to one market's order book and trades plus Monad's market state. Each allowed message is re-serialized from
-   its checked fields; anything else closes the socket, so the Worker is not a general-purpose Perpl relay. */
-const PERPL_STREAM = /^(?:order-book@\d{1,6}|trades@\d{1,6}|market-state@143)$/;
-
-function perplClientMessage(data: unknown): string | null {
-  if (typeof data !== "string" || data.length > 2048) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(data);
-  } catch {
-    return null;
-  }
-  // null, numbers, strings and arrays are not messages (reading .mt of null would throw inside the listener).
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const msg = parsed as { mt?: unknown; subs?: unknown };
-  if (msg.mt === 1) return JSON.stringify({ mt: 1 });
-  if (msg.mt !== 5 || !Array.isArray(msg.subs) || msg.subs.length === 0 || msg.subs.length > 8) return null;
-  const subs: { stream: string; subscribe: boolean }[] = [];
-  for (const sub of msg.subs as { stream?: unknown; subscribe?: unknown }[]) {
-    if (typeof sub?.stream !== "string" || !PERPL_STREAM.test(sub.stream) || typeof sub.subscribe !== "boolean") return null;
-    subs.push({ stream: sub.stream, subscribe: sub.subscribe });
-  }
-  return JSON.stringify({ mt: 5, subs });
-}
-
-/* The app's socket carries one market (three streams) and a new socket replaces it on a market switch, so a socket
-   that keeps more distinct streams open than this is not the app: it is using the Worker as a market-data firehose. */
-const MAX_STREAMS_PER_SOCKET = 8;
-
 async function proxyPerplSocket(): Promise<Response> {
   let upstream: Response;
   try {
@@ -67,22 +38,15 @@ async function proxyPerplSocket(): Promise<Response> {
   }
   const remote = (upstream as Response & { webSocket?: WebSocket | null }).webSocket;
   if (!remote) return new Response(`Perpl refused the socket (${upstream.status})`, { status: 502 });
-  const streams = new Set<string>();
+  const gate = createRelayGate();
   const pair = new WebSocketPair();
   const [client, server] = [pair[0], pair[1]];
   const accept = (socket: WebSocket) => (socket as WebSocket & { accept?: () => void }).accept?.();
   accept(server);
   accept(remote);
   server.addEventListener("message", (e) => {
-    const allowed = perplClientMessage(e.data);
-    if (allowed !== null) {
-      const { subs } = JSON.parse(allowed) as { subs?: { stream: string; subscribe: boolean }[] };
-      for (const sub of subs ?? []) {
-        if (sub.subscribe) streams.add(sub.stream);
-        else streams.delete(sub.stream);
-      }
-    }
-    if (allowed === null || streams.size > MAX_STREAMS_PER_SOCKET) {
+    const allowed = gate(e.data);
+    if (allowed === null) {
       try { server.close(1008, "Message not allowed"); } catch { /* already closing */ }
       try { remote.close(); } catch { /* already closing */ }
       return;
