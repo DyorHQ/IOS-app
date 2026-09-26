@@ -71,7 +71,8 @@ struct MomentsPortfolioView: View {
             .task { await load() }
             .sheet(isPresented: $showClaimAll) {
                 ConfirmationSheet(title: "Claim All", confirmTitle: "Claim All", build: { await env.moments.claimAllPlan(momentIds: portfolio?.claimableIds ?? []) }, onDone: { Task { await load() } },
-                                  onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed vested coins", subtitle: "across \(portfolio?.claimableIds.count ?? 0) \((portfolio?.claimableIds.count ?? 0) == 1 ? "Moment" : "Moments")", hash: hash, section: "moments"), owner: session.address) }) {
+                                  onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed vested coins", subtitle: "across \(portfolio?.claimableIds.count ?? 0) \((portfolio?.claimableIds.count ?? 0) == 1 ? "Moment" : "Moments")", hash: hash, section: "moments"), owner: session.address) },
+                                  intent: .momentsClaim) {
                     ForEach(portfolio?.rows.filter { $0.moment.graduated && $0.claimable > 0 } ?? []) { row in
                         DetailRow("$\(row.moment.symbol)", MomentsFormat.coins(row.claimable))
                     }

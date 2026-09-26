@@ -14,8 +14,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/privy-io/privy-ios",
       "state" : {
-        "revision" : "eba79d609c251bb9ace1b892500f2a26863e83d6",
-        "version" : "2.15.0"
+        "revision" : "71dd5fe9eb20a8dfaa411b219f856c108473f909",
+        "version" : "2.16.2"
       }
     },
     {

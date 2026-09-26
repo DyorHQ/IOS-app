@@ -17,12 +17,15 @@ final class TransactionRun {
     /// The settled transaction hash once the plan's final step confirms, for callers that record or route on it.
     var doneHash: Data? { if case .done(let hash) = phase { return hash } else { return nil } }
 
-    func start(_ steps: [TransactionStep], session: Session, sender: TransactionSender) {
+    /// `action`: the sheet's declared intent for a passkey (Mera) account, so its session's scope check sees the whole
+    /// plan (`Session.wallet(for:)`); nil for every other account, which signs exactly as before.
+    func start(_ steps: [TransactionStep], session: Session, sender: TransactionSender, action: MeraSession.Action? = nil) {
         guard !isRunning else { return }
-        guard let wallet = session.wallet else {
+        guard let wallet = session.wallet(for: action) else {
             phase = .failed(SessionError.readOnly.localizedDescription)
             return
         }
+        let passkey = session.isPasskeyAccount
         phase = .running
         events = []
         Task {
@@ -31,10 +34,23 @@ final class TransactionRun {
                     Task { @MainActor in self.events.append(event) }
                 }
                 phase = .done(hash)
+            } catch where passkey && isUserCancellation(error) {
+                // A passkey prompt the person dismissed: say plainly what did and didn't happen.
+                let sent = events.contains { if case .sent = $0 { return true } else { return false } }
+                phase = .failed(sent ? "Stopped at \(BiometricGate.promptName). Only the steps above were sent." : Self.notSent)
             } catch {
                 phase = .failed(describe(error))
             }
         }
+    }
+
+    /// A step-up the person cancelled before anything was signed.
+    static let notSent = "Not sent. Nothing left your account."
+
+    /// Shows a failure that happened before the plan started (a cancelled step-up).
+    func fail(_ message: String) {
+        guard !isRunning else { return }
+        phase = .failed(message)
     }
 
     func reset() {
@@ -56,6 +72,9 @@ struct ConfirmationSheet<Details: View>: View {
     /// When set, the confirmed step's "View" control calls this with the tx hash instead of opening the block
     /// explorer — the launch flow uses it to route to the in-app coin page.
     var onView: ((Data) -> Void)? = nil
+    /// What the plan does, for a passkey account's session scope (MERA-PLAN §3). A sheet that declares nothing asks
+    /// for Face ID every time; other accounts ignore it.
+    var intent: Mera.Intent = .ask
     @ViewBuilder var details: Details
 
     @Environment(Session.self) private var session
@@ -66,11 +85,22 @@ struct ConfirmationSheet<Details: View>: View {
     @State private var steps: [TransactionStep] = []
     @State private var buildError: String?
     @State private var preparing = true
+    /// A passkey account's badge: prompt-free in the live session, or Face ID and why. Re-read when the session opens
+    /// or ends, so expiry changes the badge and the button in place — no pop-up, and nothing typed is lost.
+    @State private var assessment: MeraSession.Assessment?
+    @State private var approving = false
+
+    private var confirmLabel: String {
+        session.isPasskeyAccount && assessment?.needsFaceID == true ? "Confirm with \(BiometricGate.promptName)" : confirmTitle
+    }
 
     var body: some View {
         NavigationStack {
             List {
                 Section { details }
+                if session.isPasskeyAccount, !preparing, buildError == nil, !run.isRunning, !run.isDone, let assessment {
+                    Section { SessionScopeBadge(assessment: assessment) }
+                }
                 if preparing {
                     Section {
                         HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Preparing transaction").foregroundStyle(.secondary) }
@@ -105,11 +135,8 @@ struct ConfirmationSheet<Details: View>: View {
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     } else {
-                        PrimaryButton(title: confirmTitle, isBusy: run.isRunning, isDisabled: preparing || steps.isEmpty || buildError != nil) {
-                            Task {
-                                if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm \(confirmTitle)")) { return }
-                                run.start(steps, session: session, sender: env.sender)
-                            }
+                        PrimaryButton(title: confirmLabel, isBusy: run.isRunning || approving, isDisabled: preparing || steps.isEmpty || buildError != nil || assessment?.isRefused == true) {
+                            Task { await confirm() }
                         }
                     }
                 }
@@ -128,6 +155,43 @@ struct ConfirmationSheet<Details: View>: View {
             do { steps = try await build() } catch { buildError = describe(error) }
             preparing = false
         }
+        .task(id: scopeKey) { await reassess() }
+    }
+
+    /// Changes whenever the badge could: the plan arrives, or the passkey session opens, ends or is replaced.
+    private var scopeKey: String {
+        "\(preparing)-\(session.mera.isUnlocked)-\(session.mera.expiresAt?.timeIntervalSince1970 ?? 0)"
+    }
+
+    private func reassess() async {
+        guard session.isPasskeyAccount, !preparing, buildError == nil else { assessment = nil; return }
+        assessment = await session.mera.assess(steps, intent: intent, chainId: env.sender.chainId)
+    }
+
+    /// App Lock (never for a passkey account), then — when the badge says Face ID — the passkey prompt straight from
+    /// the tap, approving this plan; then the plan. A passkey account whose badge said "No Face ID needed" signs in its
+    /// session, and the wallet still checks every transaction: one that fails asks for Face ID right there.
+    private func confirm() async {
+        if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm \(confirmTitle)")) { return }
+        guard session.isPasskeyAccount else {
+            run.start(steps, session: session, sender: env.sender)
+            return
+        }
+        let action = MeraSession.Action(intent)
+        if assessment?.needsFaceID == true {
+            approving = true
+            defer { approving = false }
+            do {
+                try await session.mera.approve(action)
+            } catch where isUserCancellation(error) {
+                run.fail(TransactionRun.notSent)
+                return
+            } catch {
+                run.fail(describe(error))
+                return
+            }
+        }
+        run.start(steps, session: session, sender: env.sender, action: action)
     }
 
     /// Dismiss and, when the plan settled, notify the caller. `onCompleted` runs BEFORE `onDone` on purpose:

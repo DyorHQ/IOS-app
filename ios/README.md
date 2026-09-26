@@ -44,6 +44,30 @@ Package tests (fast, no simulator): `cd DyorKit && swift test`. The fixtures und
 were generated with viem and real `eth_call`s against Monad mainnet, so encoders are checked against the reference
 implementation and decoders against live contract output.
 
+Passkey accounts (Mera) in the Simulator: no real passkey can associate with `accounts.dyorhq.fun` there, so a Debug
+Simulator build launched with `-MeraStubAuthenticator` uses a stub provider instead of the system sheet
+(`DyorHQ/Wallet/Mera/StubPasskeyAuthenticator.swift`, compiled out of every other build). Its PRF secrets are random per
+install, and it refuses to run unless the build points at a local fork (`MONAD_RPC_URL=http://127.0.0.1:8545`). An
+optional mode after the argument reproduces a provider case: `full` (default), `unsupported`, `deferred` or `single`.
+
+```bash
+xcrun simctl launch booted fun.dyorhq.app -MeraStubAuthenticator single
+```
+
+Mera parity: the Swift port in `DyorKit/Sources/DyorKit/Services/Mera` is derived from `@category-labs/mera` 0.2.0
+(credited in `THIRD_PARTY_NOTICES.md` at the repo root). `scripts/mera-parity` checks it against the published package,
+pinned exactly with `@scure/bip39` and `@scure/bip32` 2.3.0. A fake WebAuthn client stands in for the passkey, so the
+check needs no authenticator and no network once installed. It reads the vectors from `MeraTests.swift` and recomputes
+each one with the library: the default salt; for PRF `0x000102…1f` the 24-word phrase, seed, index-0 and index-1 keys
+and addresses, and the vault key; and the vault the Swift test seals, which Mera must decrypt. It exits non-zero on any
+difference. Run it after changing anything in the port or its vectors. It needs Node 22 or later; npm warns that Mera
+asks for 24, and the check passes on 22 and 23.
+
+```bash
+# from the repo root
+cd scripts/mera-parity && npm ci --ignore-scripts --no-audit --no-fund && npm run parity
+```
+
 ## Xcode Cloud
 
 The DyorHQ workflow archives `ios/DyorHQ.xcodeproj` on every push to `main`. That project is git-ignored, so
@@ -73,5 +97,6 @@ The DyorHQ workflow archives `ios/DyorHQ.xcodeproj` on every push to `main`. Tha
 
 - Privy keys (and a Privy mobile client for `fun.dyorhq.app`), Sign in with Apple capability on that App ID, and
   Google credentials configured in the Privy dashboard.
-- A passkey relying-party domain serving the AASA file for `fun.dyorhq.app` (`PASSKEY_RP_ID`).
+- The passkey host `accounts.dyorhq.fun` (the constant `Mera.relyingParty`) serving the AASA file for `fun.dyorhq.app`,
+  and Associated Domains enabled on that App ID.
 - Launchpad contract addresses after deployment (`LAUNCHPAD_FACTORY` and friends).

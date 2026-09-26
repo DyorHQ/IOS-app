@@ -97,7 +97,8 @@ struct TransferSheet: View {
                                   onDone: { dismiss() },
                                   onCompleted: { hash in
                                       Activity.record(ActivityRecord(kind: direction == .toPerps ? .deposit : .withdraw, title: direction == .toPerps ? "Transferred to Perps" : "Withdrawn to Spot", subtitle: "\(NumberStyle.units(raw, decimals: 6)) AUSD", hash: hash, section: "perps", usd: Amount.units(raw, decimals: 6)), owner: session.address)
-                                  }) {
+                                  },
+                                  intent: intent) {
                     DetailRow("Amount", "\(NumberStyle.units(raw, decimals: 6)) AUSD")
                     if direction == .toPerps, needsSwap, let quote {
                         DetailRow("Swap first", "≈ \(NumberStyle.units(quoteMON, decimals: 18, compact: true)) MON → \(NumberStyle.units(quote.amountOut, decimals: 6)) AUSD on \(quote.venue.displayName)")
@@ -145,6 +146,21 @@ struct TransferSheet: View {
             monNeeded = monNeeded * shortfall / max(best.minOut, 1) * 102 / 100
         }
         quoteError = "The MON → AUSD price moved; try again."
+    }
+
+    /// A withdrawal to this wallet, or a deposit into its own Perpl account — after a MON → AUSD swap for any shortfall,
+    /// valued as the AUSD taken from the wallet plus the MON spent.
+    private var intent: Mera.Intent {
+        switch direction {
+        case .toSpot:
+            return .perplWithdraw
+        case .toPerps:
+            guard needsSwap else { return .perplDeposit(amount: raw) }
+            guard let quote else { return .ask }
+            let usd = monUSD.map { Amount.units(raw - shortfall, decimals: 6) + Amount.units(quoteMON, decimals: 18) * $0 }
+            let swap = Mera.Intent.swap(venue: quote.venue, pay: .init(token: Monad.native, amount: quoteMON), receive: .init(token: Monad.ausd, amount: quote.amountOut), usd: nil)
+            return .combining([swap, .perplDeposit(amount: raw)], usd: usd)
+        }
     }
 
     private func plan() async throws -> [TransactionStep] {

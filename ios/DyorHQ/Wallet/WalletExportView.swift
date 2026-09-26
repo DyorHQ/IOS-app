@@ -12,6 +12,8 @@ import WebKit
 ///   export page in a **non-persistent** `WKWebView`; the key is reconstructed off-device and shown inside Privy's
 ///   own secure UI, and is never held by DyorHQ. Requires `WalletExportURL` to be configured and its origin added
 ///   to the Privy dashboard's allowed origins.
+/// - **Passkey (Mera) accounts** — no key is stored anywhere and nothing is held by Privy: export is the 24-word
+///   recovery phrase the passkey derives, behind a fresh passkey prompt every time (`RecoveryPhraseView`, MERA-PLAN §7).
 /// - **Watch-only** — there is no key to export.
 struct WalletExportView: View {
     @Environment(Session.self) private var session
@@ -29,6 +31,14 @@ struct WalletExportView: View {
     private var method: Session.Method? { session.account?.method }
 
     var body: some View {
+        if method == .meraPasskey {
+            RecoveryPhraseView()
+        } else {
+            keyExport
+        }
+    }
+
+    private var keyExport: some View {
         List {
             if method == .imported {
                 importedSections

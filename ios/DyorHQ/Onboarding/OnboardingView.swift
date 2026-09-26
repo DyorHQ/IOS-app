@@ -180,7 +180,6 @@ private struct FeatureCard: View {
 
 struct SignInView: View {
     @Environment(Session.self) private var session
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var path: [OnboardingStep]
     @State private var busy: String?
@@ -196,7 +195,7 @@ struct SignInView: View {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Get started").font(.largeTitle.weight(.bold))
-                    Text("Your wallet is created and kept on this device — you hold the keys.")
+                    Text("Your wallet is yours — you hold the keys.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
                 .padding(.top, 4)
@@ -211,7 +210,8 @@ struct SignInView: View {
                     VStack(spacing: 10) { alternates }
                 }
 
-                if let error { InlineError(message: error) }
+                // Also the reason a restored Privy session was ended (its wallet couldn't be set up).
+                if let message = error ?? session.lastError { InlineError(message: message) }
 
                 LabeledDivider("more ways in")
                 VStack(spacing: 10) {
@@ -242,19 +242,15 @@ struct SignInView: View {
 
     @ViewBuilder private var alternates: some View {
         if session.hasSocialLogins {
-            SignInWithAppleButton(.continue) { _ in } onCompletion: { _ in }
-                .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-                .frame(height: 50)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    // Privy drives the native Apple flow itself; the button is the affordance Apple requires.
-                    Color.clear.contentShape(Rectangle()).onTapGesture { Haptics.tap(); run("apple") { try await session.signInWithApple() } }
-                }
-            SocialButton(title: "Continue with Google", symbol: "g.circle.fill", busy: busy == "google") { run("google") { try await session.signInWithGoogle() } }
+            // Apple and Google always appear together (App Review 4.8), at the same size (Google's branding guidelines).
+            AppleSignInButton(busy: busy == "apple") { Haptics.tap(); run("apple") { try await session.signInWithApple() } }
+            GoogleSignInButton(busy: busy == "google") { run("google") { try await session.signInWithGoogle() } }
         }
         if session.hasMera {
-            SocialButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
-            SocialButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
+            // A passkey account (Mera), one sign-in method among the others: a new one, or one the user already has —
+            // on this phone, in iCloud Keychain, or on another phone by QR from the system sheet.
+            SocialButton(title: "Create account with a passkey", symbol: BiometricGate.promptSymbol, busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
+            SocialButton(title: "I already have a passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
         } else if session.hasPasskeys {
             SocialButton(title: "Sign in with a Passkey", symbol: "person.badge.key", busy: busy == "passkey") { run("passkey") { try await session.signInWithPasskey() } }
             SocialButton(title: "Create a Passkey", symbol: "faceid", busy: busy == "create") { run("create") { try await session.createPasskey(displayName: "DyorHQ") } }
@@ -264,8 +260,15 @@ struct SignInView: View {
     private func run(_ key: String, _ work: @escaping () async throws -> Void) {
         busy = key
         error = nil
+        session.lastError = nil // a new attempt replaces any earlier sign-in problem
         Task {
-            do { try await work() } catch { self.error = describe(error) }
+            do {
+                try await work()
+            } catch where isUserCancellation(error) {
+                // Closing Apple's, Google's or the passkey sheet is a choice, not a failure — nothing to show.
+            } catch {
+                self.error = describe(error)
+            }
             busy = nil
         }
     }
@@ -352,6 +355,95 @@ private struct SocialButton: View {
         }
         // Plain style so the label stays neutral Ink (not the brand tint) — the purple hero stays the only focal point.
         .buttonStyle(.plain)
+    }
+}
+
+/// Apple's own "Continue with Apple" button (ASAuthorizationAppleIDButton), as Privy recommends for its Swift SDK: a tap
+/// hands the whole Sign in with Apple ceremony to PrivySDK, which presents Apple's native sheet. Apple draws the label,
+/// artwork and accessibility; the style follows the appearance (black in light mode, white in dark).
+private struct AppleSignInButton: View {
+    var busy = false
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let dark = colorScheme == .dark
+        AppleIDButton(style: dark ? .white : .black, action: action)
+            .id(dark) // the style is fixed when the button is created — rebuild it when the appearance changes
+            .frame(height: 50)
+            .overlay {
+                if busy {
+                    RoundedRectangle(cornerRadius: 14, style: .circular)
+                        .fill(dark ? Color.white : Color.black)
+                        .overlay(ProgressView().tint(dark ? .black : .white))
+                        .accessibilityLabel("Signing in with Apple")
+                }
+            }
+    }
+}
+
+private struct AppleIDButton: UIViewRepresentable {
+    let style: ASAuthorizationAppleIDButton.Style
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+    func makeUIView(context: Context) -> ASAuthorizationAppleIDButton {
+        let button = ASAuthorizationAppleIDButton(authorizationButtonType: .continue, authorizationButtonStyle: style)
+        button.cornerRadius = 14
+        button.addTarget(context.coordinator, action: #selector(Coordinator.tapped), for: .touchUpInside)
+        return button
+    }
+
+    func updateUIView(_ button: ASAuthorizationAppleIDButton, context: Context) {
+        context.coordinator.action = action
+        button.isEnabled = context.environment.isEnabled
+    }
+
+    @MainActor final class Coordinator: NSObject {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func tapped() { action() }
+    }
+}
+
+/// "Continue with Google" to Google's sign-in branding guidelines: the official "G" (cropped from Google's pre-approved
+/// iOS assets, one per theme), Google Sans Medium, and the Light / Dark theme fill, 1pt inside stroke and text colors.
+/// Same size as the Apple button, so neither provider is more prominent.
+private struct GoogleSignInButton: View {
+    var busy = false
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let dark = colorScheme == .dark
+        let shape = RoundedRectangle(cornerRadius: 14, style: .circular)
+        Button { Haptics.tap(); action() } label: {
+            HStack(spacing: 12) {
+                if busy {
+                    ProgressView().controlSize(.small).frame(width: 20, height: 20)
+                } else {
+                    Image("GoogleG").resizable().frame(width: 20, height: 20)
+                }
+                Text("Continue with Google")
+                    .font(.custom("GoogleSans-Medium", size: 17, relativeTo: .body))
+                    // Scales with Dynamic Type up to the largest size that still fits the 50pt button in one line;
+                    // beyond it the label would truncate (and "…" isn't in the subset font).
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity).frame(height: 50)
+            .foregroundStyle(dark ? Color(red: 0xE3 / 255, green: 0xE3 / 255, blue: 0xE3 / 255)
+                                  : Color(red: 0x1F / 255, green: 0x1F / 255, blue: 0x1F / 255))
+            .background(dark ? Color(red: 0x13 / 255, green: 0x13 / 255, blue: 0x14 / 255) : .white, in: shape)
+            .overlay(shape.strokeBorder(dark ? Color(red: 0x8E / 255, green: 0x91 / 255, blue: 0x8F / 255)
+                                             : Color(red: 0x74 / 255, green: 0x77 / 255, blue: 0x75 / 255), lineWidth: 1))
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(busy ? "Signing in with Google" : "Continue with Google")
     }
 }
 

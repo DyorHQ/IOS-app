@@ -11,13 +11,12 @@ struct AppConfig: Sendable {
     let rpcURLs: [URL]
     /// The primary endpoint (Settings display, Privy's embedded-wallet chain).
     var rpcURL: URL { rpcURLs[0] }
-    let passkeyRelyingParty: String
     /// Apple / Google sign-in through Privy. Off unless `SocialLoginsEnabled=YES` in Secrets.xcconfig; the methods must
     /// also be enabled in the Privy dashboard. When off, onboarding hides them so no one taps a disallowed method.
     let enableSocialLogins: Bool
-    /// Passkey sign-in (Mera + Privy). Off unless `PasskeysEnabled=YES` in Secrets.xcconfig — passkeys need the
-    /// associated-domains entitlement, the App ID capability, and a hosted AASA (owner steps), none live yet, so the
-    /// UI hides passkey options until then rather than offering a flow that can't complete.
+    /// Mera passkey accounts next to the other sign-in methods. Off unless `PasskeysEnabled=YES` in Secrets.xcconfig —
+    /// passkeys need Associated Domains on the App ID and the AASA served at `Mera.relyingParty` (owner steps), none
+    /// live yet, so the UI hides passkey options until then rather than offering a flow that can't complete.
     let enablePasskeys: Bool
     let perplBuilderID: Int
     let launchpad: LaunchpadAddresses
@@ -36,7 +35,12 @@ struct AppConfig: Sendable {
 
     var hasPrivy: Bool { !privyAppID.isEmpty && !privyClientID.isEmpty }
     var hasBridge: Bool { hasSupabase }
-    var hasPasskeys: Bool { hasPrivy && enablePasskeys && !passkeyRelyingParty.isEmpty }
+    /// Mera passkey accounts, one sign-in method among the others. The rpId is the constant `Mera.relyingParty`, so
+    /// only the flag decides.
+    var hasMera: Bool { enablePasskeys }
+    /// Privy passkeys (`createPasskey`, `signInWithPasskey`, Settings' "Add a Passkey") would register under the same
+    /// rpId as Mera accounts, so they are off whenever Mera is on — and since both need `PasskeysEnabled`, in every build.
+    var hasPasskeys: Bool { hasPrivy && enablePasskeys && !hasMera }
     var hasSupabase: Bool { !supabaseKey.isEmpty }
 
     static let current: AppConfig = {
@@ -61,7 +65,6 @@ struct AppConfig: Sendable {
             privyAppID: string("PrivyAppID"),
             privyClientID: string("PrivyClientID"),
             rpcURLs: rpcURLs,
-            passkeyRelyingParty: string("PasskeyRelyingParty"),
             enableSocialLogins: bool("SocialLoginsEnabled"),
             enablePasskeys: bool("PasskeysEnabled"),
             perplBuilderID: Int(string("PerplBuilderID")) ?? 0,

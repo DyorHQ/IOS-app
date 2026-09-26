@@ -86,6 +86,23 @@ final class WalletAuthClientTests: XCTestCase {
         XCTAssertEqual(current, session)
     }
 
+    /// `adopt: false` (SocialSession, which may have moved on to another wallet by the time wallet-auth answers) returns
+    /// the session without making it the client's; `restore` then adopts it.
+    func testSignInWithoutAdoptingLeavesTheClientAsItWas() async throws {
+        let address = account.address.checksummed
+        WalletAuthCapture.replies = [
+            (200, #"{"nonce":"\#(serverNonce)","expiresAt":1758600300000}"#),
+            (200, #"{"access_token":"session.jwt","token_type":"bearer","expires_in":43200,"wallet":"\#(address.lowercased())"}"#),
+        ]
+        let session = try await backend.signIn(address: address, adopt: false) { try self.account.signMessage($0) }
+        XCTAssertEqual(session.accessToken, "session.jwt")
+        let before = await backend.currentSession
+        XCTAssertNil(before, "not the client's until restored")
+        await backend.restore(session)
+        let after = await backend.currentSession
+        XCTAssertEqual(after, session)
+    }
+
     func testMalformedNonceIsRefusedBeforeAnythingIsSigned() async {
         for bad in [String(repeating: "A", count: 64), "abc123", serverNonce + "00", String(serverNonce.dropLast()) + "g"] {
             WalletAuthCapture.reset()

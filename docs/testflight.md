@@ -25,8 +25,8 @@ create the Distribution certificate and App Store provisioning profile for you.
 ### 3. Register the App ID (with Associated Domains)
 <https://developer.apple.com/account> → **Certificates, Identifiers & Profiles → Identifiers → +** →
 **App IDs → App** → Bundle ID **explicit** `fun.dyorhq.app`.
-- Under Capabilities, tick **Associated Domains** (the app's entitlement needs it). Leave *Sign in with Apple* off
-  for now.
+- Under Capabilities, tick **Sign in with Apple** (Enable as a primary App ID; the app's entitlement needs it) and
+  **Associated Domains** (for passkeys later).
 - Save. (Automatic signing *can* create the App ID, but enabling Associated Domains here up front avoids a signing
   failure on the first archive.)
 
@@ -90,15 +90,19 @@ Connect. First run also auto-creates the Distribution cert + App Store profile (
 
 ## Project-specific callouts (don't get surprised)
 
-- **Passkeys (Mera) won't work in TestFlight yet — and that's expected.** The entitlement uses
-  `webcredentials:$(PASSKEY_RP_ID)?mode=developer`, which only associates on a Developer-Mode device, not in
-  TestFlight. It uploads fine and the app runs; **all other Privy sign-in methods work**. To turn passkeys on later:
-  host the AASA at `https://dyorhq.fun/.well-known/apple-app-site-association`, then remove `?mode=developer` from
-  `com.apple.developer.associated-domains` in `ios/project.yml` (the comment there spells it out) and re-upload.
+- **Passkeys (Mera) use the rpId `accounts.dyorhq.fun`.** It is the constant `Mera.relyingParty` in DyorKit, not a
+  build setting (`PASSKEY_RP_ID` is no longer read), and `ios/project.yml` carries the matching entitlement
+  `com.apple.developer.associated-domains: ["webcredentials:accounts.dyorhq.fun"]`, with no `?mode=developer`. Before
+  the first device or TestFlight install: enable Associated Domains on the `fun.dyorhq.app` App ID, host the AASA at
+  `https://accounts.dyorhq.fun/.well-known/apple-app-site-association` (GitHub Pages, repo `DyorHQ/accounts-domain`;
+  never the apex, whose site injects a third-party script), and check that Apple's CDN serves it at
+  `https://app-site-association.cdn-apple.com/a/v1/accounts.dyorhq.fun`. iOS caches a failed fetch until the build
+  number changes. Passkey accounts are one sign-in method next to the others, shown only with
+  `PASSKEYS_ENABLED = YES`; Privy passkeys stay off in every build, since they would share the rpId.
 - **Privacy manifest:** Apple may email an *informational* ITMS warning about required-reason APIs (e.g.
   `UserDefaults`). It does **not** block TestFlight, but add a `PrivacyInfo.xcprivacy` before an App Store submission.
-- **Sign in with Apple (Guideline 4.8):** off today. Not needed for TestFlight; may be required for public App Store
-  release if you offer third-party sign-in — enable it (uncomment `applesignin` in `project.yml` + on the App ID)
-  when you get there.
+- **Sign in with Apple (Guideline 4.8):** on. `com.apple.developer.applesignin` is in `project.yml`'s entitlements and
+  the capability is enabled on the `fun.dyorhq.app` App ID. Apple and Google sign-in show only when
+  `SOCIAL_LOGINS_ENABLED = YES` (Secrets.xcconfig, or the Xcode Cloud workflow environment), and always together.
 - **Secrets stay on device / in the build config** — `scripts/testflight.sh` never prints them; keep the `.p8` and
   `Secrets.xcconfig` out of git (both already are).

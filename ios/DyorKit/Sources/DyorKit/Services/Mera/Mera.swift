@@ -11,8 +11,19 @@ import Foundation
      vault     AES-256-GCM with HKDF-SHA-256(PRF(random salt), salt: empty, info: "mera.v1.encrypt.secret")
 
    and adds DyorHQ's own PRF namespace for everything that is not the wallet (a second, independent PRF salt), from
-   which per-purpose keys are derived with HKDF. Test vectors in MeraTests were produced with the JS library. */
+   which per-purpose keys are derived with HKDF. Test vectors in MeraTests were produced with the JS library, and
+   scripts/mera-parity recomputes them with the pinned package. This port is derived from `@category-labs/mera` 0.2.0
+   (Category Labs, MIT OR Apache-2.0); the credit and license text are in THIRD_PARTY_NOTICES.md at the repo root. */
 public enum Mera {
+    // MARK: Relying party
+
+    /// DyorHQ's passkey rpId. Every Mera account is bound to it, so it can never change once a real passkey exists.
+    /// It is a dedicated host that serves only the apple-app-site-association file (GitHub Pages, DyorHQ/accounts-domain),
+    /// never the apex: the site there injects a third-party script, and a script on the rpId origin could run a
+    /// ceremony and read the PRF output, which is the keys. The app's associated-domains entitlement (project.yml)
+    /// names the same host; nothing reads it from build settings.
+    public static let relyingParty = "accounts.dyorhq.fun"
+
     // MARK: PRF salts (namespaces)
 
     /// Mera's default salt: the wallet account namespace. Same bytes as the JS library's `DEFAULT_PRF_SALT`.
@@ -53,8 +64,25 @@ public enum Mera {
 
     /// Purposes DyorHQ derives under `utilitySalt`. Each string is part of the key, so they never change.
     public enum Purpose {
-        /// Perpl's trade-scoped Ed25519 API key: enrolled once, reappears on every device, never stored.
+        /// Perpl's trade-scoped Ed25519 API key, never stored. The purpose itself is the key of an enrolment made
+        /// before enrolments carried a nonce; every enrolment since has its own (`perplTrading(nonce:)`).
         public static let perplTrading = "dyorhq.perpl-trading.v1"
+
+        /// The Perpl trading key of one enrolment. Perpl registers a public key once — enrolling it again is refused
+        /// (409), even after it is revoked — and hands out its token once, so the same key can never be enrolled on a
+        /// second device, or on this one after it lost the token (Forget This Device, a reinstall). Each enrolment
+        /// draws a random nonce (`newPerplNonce`), stored with the token, and its key is derived under `perplTrading`
+        /// + "/" + the nonce in hex; nil (or empty) is the pre-nonce key. The key still comes from the passkey alone:
+        /// a stored nonce and token without the passkey sign nothing.
+        public static func perplTrading(nonce: Data?) -> String {
+            guard let nonce, !nonce.isEmpty else { return perplTrading }
+            return perplTrading + "/" + nonce.map { String(format: "%02x", $0) }.joined()
+        }
+
+        /// A fresh enrolment nonce: 16 random bytes.
+        public static func newPerplNonce() -> Data {
+            SymmetricKey(size: .bits128).withUnsafeBytes { Data($0) }
+        }
         /// Encryption key for the user's app state (alerts, notifications) kept in untrusted storage.
         public static let state = "dyorhq.state.v1"
         /// The social/backend identity, unlinkable to the trading wallet.

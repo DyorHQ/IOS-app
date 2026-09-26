@@ -19,6 +19,7 @@ struct ProfileView: View {
     @State private var showSend = false
     @State private var showAppearance = false
     @State private var confirmSignOut = false
+    @State private var confirmForget = false
     @State private var signingOut = false
     @State private var showDeleteAccount = false
 
@@ -81,11 +82,27 @@ struct ProfileView: View {
                     LabeledContent("RPC", value: env.config.rpcURL.host() ?? env.config.rpcURL.absoluteString)
                 }
 
-                Section {
-                    Button(role: .destructive) { confirmSignOut = true } label: {
-                        Label(session.canSign ? "Sign Out" : "Stop Watching", systemImage: "rectangle.portrait.and.arrow.right")
+                // A passkey account keeps nothing on the device that the passkey can't bring back, so signing out of one
+                // is forgetting this device: the whole local copy is erased (`AccountDeletion.eraseThisDevice`), and the
+                // passkey provider is never told anything — the passkey is the account (MERA-PLAN §6).
+                if session.isPasskeyAccount {
+                    Section {
+                        Button(role: .destructive) { confirmForget = true } label: {
+                            Label("Forget This Device", systemImage: "iphone.slash")
+                        }
+                        .disabled(signingOut)
+                    } footer: {
+                        Text("Removes this account from this iPhone. Your passkey keeps it — sign in again anytime.")
                     }
-                    .disabled(signingOut)
+                }
+
+                Section {
+                    if !session.isPasskeyAccount {
+                        Button(role: .destructive) { confirmSignOut = true } label: {
+                            Label(session.canSign ? "Sign Out" : "Stop Watching", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                        .disabled(signingOut)
+                    }
                     Button(role: .destructive) { showDeleteAccount = true } label: {
                         Label("Delete Account", systemImage: "person.crop.circle.badge.xmark")
                     }
@@ -116,6 +133,18 @@ struct ProfileView: View {
                 }
             } message: {
                 Text(session.canSign ? "Your wallet stays with your account. Sign in again to use it." : "Balances and positions for this address will no longer be shown.")
+            }
+            .confirmationDialog("Forget this device?", isPresented: $confirmForget, titleVisibility: .visible) {
+                Button("Forget This Device", role: .destructive) {
+                    guard let address = session.address else { return }
+                    signingOut = true
+                    Task {
+                        await AccountDeletion.eraseThisDevice(address: address, session: session, social: social, env: env)
+                        signingOut = false
+                    }
+                }
+            } message: {
+                Text("This iPhone's copy of the account is erased. Your passkey keeps the account and its funds; sign in with it again anytime.")
             }
         }
     }
@@ -258,9 +287,7 @@ struct SendSheet: View {
                     Picker("Token", selection: $token) {
                         ForEach(Token.core.filter { !$0.symbol.hasPrefix("W") || $0.symbol == "WETH" }) { Text($0.symbol).tag($0) }
                     }
-                    AmountField(title: "Amount", text: $amount, token: token) {
-                        if let balance { amount = Amount.exact(balance, decimals: token.decimals) }
-                    }
+                    AmountField(title: "Amount", text: $amount, token: token) { useMax() }
                 } header: {
                     Text("Amount")
                 } footer: {
@@ -288,13 +315,27 @@ struct SendSheet: View {
                         Activity.record(ActivityRecord(kind: .withdraw, title: "Sent \(token.symbol)",
                             subtitle: "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol) → \(to.short)",
                             hash: hash, section: "wallet", usd: stable ? Amount.units(raw, decimals: token.decimals) : nil), owner: session.address)
-                    }) {
+                    }, intent: .alwaysAsks(.send)) {
                         DetailRow("To", to.short)
                         DetailRow("Amount", "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol)")
                         DetailRow("Network", "Monad")
                     }
                 }
             }
+        }
+    }
+
+    /// The whole balance; for MON, less the send's network fee (MERA-PLAN §5), estimated for the recipient once one is
+    /// entered.
+    private func useMax() {
+        guard let balance else { return }
+        guard token.isNative else { amount = Amount.exact(balance, decimals: token.decimals); return }
+        let native = token
+        let like = recipientAddress.map { TransactionRequest(to: $0, value: 1) }
+        Task {
+            let max = await env.sender.maxValue(balance: balance, like: like, from: session.address, budget: NetworkFeeReserve.transferGasLimit)
+            guard token == native, self.balance == balance else { return }
+            amount = Amount.exact(max, decimals: native.decimals)
         }
     }
 

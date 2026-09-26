@@ -380,12 +380,19 @@ struct MomentDetailView: View {
 
     // MARK: Sheets
 
+    /// What collecting `quantity` editions pulls: the quoted gross, or the listed price when there's no quote yet.
+    private var collectGross: BigUInt { quote?.gross ?? m.price * BigUInt(quantity) }
+
     @ViewBuilder private func sheet(for which: MomentAction) -> some View {
         switch which {
         case .collect:
             ConfirmationSheet(
                 title: "Collect \(info.symbol)", confirmTitle: quote?.terminal == true ? "Collect and Graduate" : "Collect",
                 build: {
+                    // A passkey account signs no raw digest, so no Permit2 signature: an exact USDC approval, then collect.
+                    if session.isPasskeyAccount {
+                        return await env.moments.collectWithApprovalPlan(momentId: m.id, quantity: quantity, gross: collectGross, symbol: info.symbol)
+                    }
                     guard let signer = session.wallet as? MomentsPermitSigner else { throw MomentsService.MomentsError.signerRequired }
                     return try await env.moments.collectPlan(momentId: m.id, quantity: quantity, price: m.price, signer: signer, symbol: info.symbol)
                 },
@@ -394,7 +401,8 @@ struct MomentDetailView: View {
                     Activity.record(ActivityRecord(kind: .moment, title: "Collected \(info.name)", subtitle: "\(quantity) \(quantity == 1 ? "edition" : "editions") · \(MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))", hash: hash, section: "moments", usd: MomentsMath.usdc(quote?.gross ?? m.price * BigUInt(quantity)), reference: m.id.description), owner: session.address)
                 },
                 // The settled sheet's View control opens the newest edition on OpenSea, where the NFT now lives.
-                onView: { _ in openURL(OpenSea.item(contract: m.nft, tokenId: BigUInt((detail?.supply.collects ?? 0) + quantity))) }
+                onView: { _ in openURL(OpenSea.item(contract: m.nft, tokenId: BigUInt((detail?.supply.collects ?? 0) + quantity))) },
+                intent: .momentsCollect(pay: .init(token: env.config.moments.usdc, amount: collectGross), usd: MomentsMath.usdc(collectGross))
             ) {
                 DetailRow("Moment", "\(info.name) ($\(info.symbol))")
                 DetailRow("Editions", "\(quantity)")
@@ -405,32 +413,38 @@ struct MomentDetailView: View {
             }
         case .claim:
             ConfirmationSheet(title: "Claim \(info.symbol)", confirmTitle: "Claim", build: { await env.moments.claimPlan(momentId: m.id, symbol: info.symbol) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed $\(info.symbol)", subtitle: "\(MomentsFormat.coins(account?.claimable ?? 0)) vested coins", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed $\(info.symbol)", subtitle: "\(MomentsFormat.coins(account?.claimable ?? 0)) vested coins", hash: hash, section: "moments", reference: m.id.description), owner: session.address) },
+                              intent: .momentsClaim) {
                 DetailRow("Claimable", "\(MomentsFormat.coins(account?.claimable ?? 0)) $\(info.symbol)")
             }
         case .creatorProceeds:
             ConfirmationSheet(title: "Withdraw Proceeds", confirmTitle: "Withdraw", build: { await env.moments.withdrawCreatorProceedsPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) proceeds", subtitle: "\(MomentsFormat.usdc(account?.creatorProceeds ?? 0)) creator proceeds", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorProceeds ?? 0), reference: m.id.description), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) proceeds", subtitle: "\(MomentsFormat.usdc(account?.creatorProceeds ?? 0)) creator proceeds", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorProceeds ?? 0), reference: m.id.description), owner: session.address) },
+                              intent: .momentsWithdraw) {
                 DetailRow("Proceeds", MomentsFormat.usdc(account?.creatorProceeds ?? 0))
             }
         case .creatorFees:
             ConfirmationSheet(title: "Withdraw Pool Fees", confirmTitle: "Withdraw", build: { await env.moments.withdrawCreatorFeesPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) pool fees", subtitle: "\(MomentsFormat.usdc(account?.creatorFees ?? 0)) trading fees", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorFees ?? 0), reference: m.id.description), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) pool fees", subtitle: "\(MomentsFormat.usdc(account?.creatorFees ?? 0)) trading fees", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorFees ?? 0), reference: m.id.description), owner: session.address) },
+                              intent: .momentsWithdraw) {
                 DetailRow("Pool fees", MomentsFormat.usdc(account?.creatorFees ?? 0))
             }
         case .platformProceeds:
             ConfirmationSheet(title: "Withdraw Platform Proceeds", confirmTitle: "Withdraw", build: { await env.moments.withdrawPlatformProceedsPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected platform proceeds", subtitle: "\(MomentsFormat.usdc(account?.platformProceeds ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.platformProceeds ?? 0), reference: m.id.description), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected platform proceeds", subtitle: "\(MomentsFormat.usdc(account?.platformProceeds ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.platformProceeds ?? 0), reference: m.id.description), owner: session.address) },
+                              intent: .alwaysAsks(.withdrawElsewhere)) {
                 DetailRow("Proceeds", MomentsFormat.usdc(account?.platformProceeds ?? 0))
             }
         case .platformFees:
             ConfirmationSheet(title: "Withdraw Platform Fees", confirmTitle: "Withdraw", build: { await env.moments.withdrawPlatformFeesPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected platform pool fees", subtitle: "\(MomentsFormat.usdc(account?.platformFees ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.platformFees ?? 0), reference: m.id.description), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected platform pool fees", subtitle: "\(MomentsFormat.usdc(account?.platformFees ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.platformFees ?? 0), reference: m.id.description), owner: session.address) },
+                              intent: .alwaysAsks(.withdrawElsewhere)) {
                 DetailRow("Pool fees", MomentsFormat.usdc(account?.platformFees ?? 0))
             }
         case .treasuryProceeds:
             ConfirmationSheet(title: "Withdraw Treasury Share", confirmTitle: "Withdraw", build: { await env.moments.withdrawTreasuryProceedsPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected treasury share", subtitle: "\(MomentsFormat.usdc(account?.treasuryProceeds ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.treasuryProceeds ?? 0), reference: m.id.description), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected treasury share", subtitle: "\(MomentsFormat.usdc(account?.treasuryProceeds ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.treasuryProceeds ?? 0), reference: m.id.description), owner: session.address) },
+                              intent: .alwaysAsks(.withdrawElsewhere)) {
                 DetailRow("Treasury share", MomentsFormat.usdc(account?.treasuryProceeds ?? 0))
             }
         case .retry:

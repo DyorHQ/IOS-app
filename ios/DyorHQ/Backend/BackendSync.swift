@@ -3,7 +3,7 @@ import Foundation
 
 /// Mirrors what the app records on the device into the wallet's own rows on Supabase — activity with its dollar
 /// size, the notification center, price alerts and settings — and restores them on a fresh device
-/// after one sign-in. Every write goes through the wallet's backend session (row-level security by wallet);
+/// after one sign-in (for a passkey account, which keeps nothing on the device, that is its whole local history). Every write goes through the wallet's backend session (row-level security by wallet);
 /// nothing here touches a key. Uploads are debounced and best-effort: the local stores stay the source of truth,
 /// and anything that failed is retried the next time that store changes or the session connects.
 @MainActor
@@ -97,15 +97,24 @@ final class BackendSync {
     private struct AlertDown: Decodable { let payload: PriceAlert }
     private struct SettingsDown: Decodable { let data: [String: JSONValue] }
 
-    /// A fresh device: pulls what the wallet has on the backend into every local store that is still empty.
+    /// A fresh device: pulls what the wallet has on the backend into every local store that is still empty, and
+    /// merges its activity into the device's (MERA-PLAN §6). Restored rows are checked before they're applied
+    /// (`BackendRestore`): they're the wallet's own, but not the app's to trust blindly.
     func restore(owner: Address) async {
         guard social.isSignedIn else { return }
         let wallet = owner.checksummed.lowercased()
         restoring = true
         defer { restoring = false }
-        func rows<T: Decodable>(_ table: String, _ extra: [URLQueryItem]) async -> [T] {
-            (try? await social.client.read(table, query: [URLQueryItem(name: "select", value: "*"), URLQueryItem(name: "wallet", value: "eq.\(wallet)")] + extra, authed: true)) ?? []
+        func rows<T: Decodable>(_ table: String, _ extra: [URLQueryItem], select: String = "*") async -> [T] {
+            (try? await social.client.read(table, query: [URLQueryItem(name: "select", value: select), URLQueryItem(name: "wallet", value: "eq.\(wallet)")] + extra, authed: true)) ?? []
         }
+        // Activity merges even into a log that isn't empty: rows another device recorded join this one's, without
+        // doubling any (same id or transaction hash), newest first and capped like the local log.
+        let activity: [BackendRestore.ActivityRow] = await rows("activity", [URLQueryItem(name: "order", value: "occurred_at.desc"),
+                                                                            URLQueryItem(name: "limit", value: "\(ActivityLog.cap)")],
+                                                               select: BackendRestore.activityColumns)
+        let restored = activity.compactMap { BackendRestore.Activity($0) }.map(ActivityRecord.init(restored:))
+        if !restored.isEmpty { ActivityLog.merge(restored: restored, owner: owner) }
         if NotificationStore.all(owner: owner).isEmpty {
             let list: [NotificationDown] = await rows("notifications", [URLQueryItem(name: "order", value: "created_at.desc"), URLQueryItem(name: "limit", value: "200")])
             if !list.isEmpty { NotificationStore.save(list.map(\.data), owner: owner); NotificationHub.shared.bind(owner: owner) }

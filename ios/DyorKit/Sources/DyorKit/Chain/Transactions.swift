@@ -38,13 +38,38 @@ public protocol Wallet: Sendable {
 }
 
 public struct TransactionStep: Sendable, Equatable {
-    public enum Kind: Sendable, Equatable { case approve(token: Address, spender: Address, amount: BigUInt), call }
+    public enum Kind: Sendable, Equatable {
+        case approve(token: Address, spender: Address, amount: BigUInt)
+        /// A Permit2 allowance of `amount` for `spender` that expires `lifetime` seconds after the step is sent. The
+        /// expiration is set when the step runs, not when the plan is built, so a sheet left open never sends one that
+        /// is already stale; skipped when the existing allowance covers `amount` for at least another minute.
+        case permit2Approve(token: Address, spender: Address, amount: BigUInt, lifetime: Int)
+        case call
+    }
     public let kind: Kind
     public let request: TransactionRequest?
     public let label: String
 
     public static func approve(token: Address, spender: Address, amount: BigUInt, label: String) -> TransactionStep {
         TransactionStep(kind: .approve(token: token, spender: spender, amount: amount), request: nil, label: label)
+    }
+
+    public static func permit2Approve(token: Address, spender: Address, amount: BigUInt, lifetime: Int, label: String) -> TransactionStep {
+        TransactionStep(kind: .permit2Approve(token: token, spender: spender, amount: amount, lifetime: lifetime), request: nil, label: label)
+    }
+
+    /// The transaction this step sends when it runs at `now` (an approval becomes its `approve` call). Nil for a call
+    /// step without a request. For previews: at run time an approval the allowance already covers is skipped.
+    public func request(at now: Date = Date()) throws -> TransactionRequest? {
+        switch kind {
+        case .approve(let token, let spender, let amount):
+            return TransactionRequest(to: token, data: try ERC20.approveCalldata(spender: spender, amount: amount))
+        case .permit2Approve(let token, let spender, let amount, let lifetime):
+            let expiration = BigUInt(Int(now.timeIntervalSince1970) + lifetime)
+            return TransactionRequest(to: Uniswap.permit2, data: try SwapCalldata.permit2Approve(token: token, spender: spender, amount: amount, expiration: expiration))
+        case .call:
+            return request
+        }
     }
 
     public static func call(_ request: TransactionRequest, label: String) -> TransactionStep {
@@ -67,6 +92,18 @@ public struct TransactionSender: Sendable {
     /// builds a sender per source chain (Ethereum, Base, …) with that chain's id and RPC so the same wallet key
     /// signs a valid transaction there.
     public let chainId: Int
+    /// How long the Monad reserve-balance waits poll and give up (MERA-PLAN §5). Tests shorten them.
+    var timing = Timing()
+
+    struct Timing: Sendable {
+        /// Between `eth_blockNumber` reads while a MON-sending step waits out the 3-block spacing (blocks are ~0.4 s).
+        var blockPoll: Duration = .milliseconds(150)
+        /// The spacing wait gives up and sends anyway after this: a node whose head stalls (or a local fork that only
+        /// mines on demand) must never hang a plan.
+        var spacingTimeout: Duration = .seconds(5)
+        /// Before resending a transaction Monad refused because the account's funding is still settling.
+        var fundingRetry: Duration = .seconds(1)
+    }
 
     public init(rpc: RPCClient, chainId: Int = Monad.chainId) {
         self.rpc = rpc
@@ -84,21 +121,118 @@ public struct TransactionSender: Sendable {
         }
         async let nonce = rpc.transactionCount(of: wallet.address)
         async let estimate = rpc.estimateGas(call)
-        async let gasPrice = rpc.gasPrice()
-        let gasLimit = try await estimate * 120 / 100
-        let fee = try await gasPrice
-        return PreparedTransaction(from: wallet.address, to: request.to, data: request.data, value: request.value, nonce: try await nonce, gasLimit: gasLimit, maxFeePerGas: fee * 2, maxPriorityFeePerGas: fee, chainId: chainId)
+        async let fees = feeParameters()
+        let gasLimit = Self.gasLimit(estimate: try await estimate)
+        let (maxFee, tip) = try await fees
+        return PreparedTransaction(from: wallet.address, to: request.to, data: request.data, value: request.value, nonce: try await nonce, gasLimit: gasLimit, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip, chainId: chainId)
+    }
+
+    /// The node's estimate plus 20%: the limit every prepared transaction carries.
+    static func gasLimit(estimate: BigUInt) -> BigUInt { estimate * 120 / 100 }
+
+    /// The gas limit `prepare` would set for `request` sent from `from`, or nil when the node can't estimate it (a
+    /// revert, an unreachable RPC). For sizing a "Max" before the transaction exists.
+    public func gasLimit(for request: TransactionRequest, from: Address) async -> BigUInt? {
+        guard let estimate = try? await rpc.estimateGas(CallRequest(from: from, to: request.to, data: request.data, value: request.value)) else { return nil }
+        return Self.gasLimit(estimate: estimate)
+    }
+
+    /// What a transaction of `gasLimit` may be charged up front on this chain today: `gasLimit × (2 × base + tip)`,
+    /// the max fee `prepare` sets, with `NetworkFeeReserve`'s headroom. The chain's fallback when the RPC can't answer.
+    public func feeReserve(gasLimit: BigUInt) async -> BigUInt {
+        guard let fees = try? await feeParameters() else { return NetworkFeeReserve.fallback(chainId: chainId) }
+        return NetworkFeeReserve.amount(gasLimit: gasLimit, maxFeePerGas: fees.maxFee, chainId: chainId)
+    }
+
+    /// The most of a native `balance` a "Max" can send and still pay the network fee (MERA-PLAN §5). The gas limit is
+    /// estimated from `request` when there is one to estimate (a route on screen, a transfer to a known address), and
+    /// is `budget` otherwise. Zero when the fee takes the whole balance.
+    public func maxValue(balance: BigUInt, like request: TransactionRequest?, from: Address?, budget: BigUInt) async -> BigUInt {
+        var limit = budget
+        if let request, let from, let estimate = await gasLimit(for: request, from: from) { limit = estimate }
+        return NetworkFeeReserve.spendable(balance: balance, reserve: await feeReserve(gasLimit: limit))
+    }
+
+    /// EIP-1559 fees: the node's suggested tip, with a max fee of twice the base fee plus that tip so the transaction
+    /// still lands if the base fee doubles. Monad charges gas limit × min(maxFee, base + tip); tipping the whole gas
+    /// price (the old rule) roughly doubled every fee there. Falls back to the gas price when a node can't answer.
+    func feeParameters() async throws -> (maxFee: BigUInt, tip: BigUInt) {
+        async let baseFee = rpc.latestBaseFee()
+        async let suggestedTip = rpc.maxPriorityFeePerGas()
+        let base = (try? await baseFee) ?? nil
+        let tip = try? await suggestedTip
+        if let base, let tip { return (base * 2 + tip, tip) }
+        let price = try await rpc.gasPrice()
+        return (price * 2, price)
     }
 
     public func send(_ request: TransactionRequest, from wallet: Wallet) async throws -> Data {
         let prepared = try await prepare(request, from: wallet)
         let signed = try await wallet.sign(prepared)
-        return try await rpc.sendRawTransaction(signed)
+        return try await broadcast(signed, prepared)
+    }
+
+    /// Monad's consensus checks a sender's balance as of a few blocks back, so a transaction from an account funded
+    /// less than 3 blocks ago is refused with "Signer had insufficient balance" although the funds are visible. The
+    /// same signed bytes are sent once more after ~1 s (no second signature, so no second Face ID). If the node still
+    /// refuses, the message says what is true: the funds are still settling, or the balance doesn't cover the value
+    /// plus the fee.
+    func broadcast(_ signed: Data, _ transaction: PreparedTransaction) async throws -> Data {
+        guard chainId == Monad.chainId else { return try await rpc.sendRawTransaction(signed) }
+        do {
+            return try await rpc.sendRawTransaction(signed)
+        } catch let error as RPCError where Self.isFundingInFlight(error) {
+            try await Task.sleep(for: timing.fundingRetry)
+            do {
+                return try await rpc.sendRawTransaction(signed)
+            } catch let error as RPCError where Self.isFundingInFlight(error) {
+                throw TransactionError.rejected(await fundingRefusal(transaction))
+            }
+        }
+    }
+
+    /// Monad's refusal for a balance its consensus can't see yet. Other chains say "insufficient funds", which is a
+    /// real shortfall and stays one.
+    static func isFundingInFlight(_ error: RPCError) -> Bool {
+        error.message.localizedCaseInsensitiveContains("insufficient balance")
+    }
+
+    static let fundsArriving = "Your funds are still arriving. Try again in a moment."
+
+    /// "Still arriving" when the latest balance covers the value and the most the fee can be; otherwise the account is
+    /// really short, and saying the funds are on their way would be false.
+    private func fundingRefusal(_ transaction: PreparedTransaction) async -> String {
+        guard let balance = try? await rpc.balance(of: transaction.from) else { return Self.fundsArriving }
+        let cost = transaction.value + transaction.gasLimit * transaction.maxFeePerGas
+        return balance >= cost ? Self.fundsArriving : "Not enough MON to pay for gas."
+    }
+
+    /// Monad's reserve balance: while an account holds under 10 MON plus what a transaction sends, that transaction
+    /// reverts unless it is the sender's first in 3 blocks.
+    public static let monadReserveBalance = BigUInt(10).power(19)
+    static let reserveSpacingBlocks: UInt64 = 3
+
+    /// Before a step that sends MON on Monad, when the account is under the reserve (10 MON + the value): waits until
+    /// the head is 3 blocks past the block that confirmed this run's previous step (MERA-PLAN §5). The at-risk plan is
+    /// an ERC-20-pair launch with a creator buy (approve, then `launchAndBuy` with its 5 MON fee). A first step, a step
+    /// without value, a well-funded account and every other chain go straight on. A balance that can't be read counts
+    /// as under the reserve; a head that doesn't move gives up after `timing.spacingTimeout` and sends anyway.
+    func waitForReserveSpacing(value: BigUInt, after previousBlock: UInt64?, from address: Address) async throws {
+        guard chainId == Monad.chainId, value > 0, let previousBlock else { return }
+        if let balance = try? await rpc.balance(of: address), balance >= Self.monadReserveBalance + value { return }
+        let target = previousBlock + Self.reserveSpacingBlocks
+        let deadline = ContinuousClock.now + timing.spacingTimeout
+        while ContinuousClock.now < deadline {
+            if let head = try? await rpc.blockNumber(), head >= target { return }
+            try await Task.sleep(for: timing.blockPoll)
+        }
     }
 
     /// Runs a plan step by step. Approvals are skipped when the allowance already covers the amount.
     public func run(_ steps: [TransactionStep], from wallet: Wallet, onEvent: @Sendable @escaping (TransactionEvent) -> Void) async throws -> Data {
         var last: Data?
+        // The block that confirmed this run's previous step, for Monad's reserve spacing.
+        var previousBlock: UInt64?
         for step in steps {
             onEvent(.preparing(step.label))
             let request: TransactionRequest
@@ -107,16 +241,23 @@ public struct TransactionSender: Sendable {
                 let allowance = try await multicall.readAll([try ERC20.allowance(token, owner: wallet.address, spender: spender)])[0][0].uint
                 if allowance >= amount { continue }
                 request = TransactionRequest(to: token, data: try ERC20.approveCalldata(spender: spender, amount: amount))
+            case .permit2Approve(let token, let spender, let amount, _):
+                let allowance = try await multicall.readAll([try SwapCalldata.permit2Allowance(owner: wallet.address, token: token, spender: spender)])[0]
+                if allowance[0].uint >= amount, allowance[1].uint > BigUInt(Int(Date().timeIntervalSince1970) + 60) { continue }
+                guard let r = try step.request(at: Date()) else { continue }
+                request = r
             case .call:
                 guard let r = step.request else { continue }
                 request = r
             }
+            try await waitForReserveSpacing(value: request.value, after: previousBlock, from: wallet.address)
             let hash = try await send(request, from: wallet)
             onEvent(.sent(step.label, hash))
             let receipt = try await rpc.waitForReceipt(hash)
             guard receipt.success else { throw TransactionError.reverted(hash) }
             onEvent(.confirmed(step.label, hash))
             last = hash
+            previousBlock = receipt.blockNumber
         }
         guard let hash = last else { throw TransactionError.rejected("Nothing to send.") }
         return hash

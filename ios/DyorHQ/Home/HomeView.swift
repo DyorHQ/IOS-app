@@ -13,7 +13,10 @@ struct HomeView: View {
     @Environment(Router.self) private var router
     @Environment(SocialSession.self) private var social
     @Environment(PerplTrading.self) private var perplTrading
+    @Environment(\.scenePhase) private var scenePhase
     @State private var model = HomeModel()
+    /// The Add funds card for an empty passkey account (MERA-PLAN §4).
+    @State private var funding = FundingWatch()
     @State private var tokenTab: HomeTokenTab = .popular
     @State private var holdingTab: HoldingCategory = .spot
     @State private var showReceive = false
@@ -27,6 +30,17 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    if session.isPasskeyAccount {
+                        HStack { SessionPill(); Spacer() }
+                    }
+                    if session.isPasskeyAccount, funding.phase.isVisible, let address = session.address {
+                        AddFundsCard(phase: funding.phase, address: address,
+                                     onBridge: { showBridge = true },
+                                     onShowQR: { showReceive = true },
+                                     onTrade: { trade in router.openSwap(tokenIn: trade.pay, tokenOut: trade.receive) },
+                                     onClose: { funding.close() })
+                            .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
+                    }
                     heroCard
                     quickActions
                     if model.totalValue ?? 0 > 0 || !model.holdings.isEmpty { allocationCard }
@@ -35,6 +49,7 @@ struct HomeView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+                .animation(.snappy, value: funding.phase)
             }
             .background(Color(.systemGroupedBackground))
             .scrollIndicators(.hidden)
@@ -49,6 +64,16 @@ struct HomeView: View {
             .task(id: session.address) { await model.poll(env: env, address: session.address) }
             .task(id: session.address) { await model.discoverHeldTokens(env: env, address: session.address) }
             .task(id: session.address) { await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: false) }
+            // The Add funds card's balance watch: a passkey account only, while Home is on screen and the app is active.
+            .task(id: "\(session.isPasskeyAccount ? session.address?.hex ?? "" : "")-\(scenePhase == .active)") {
+                guard session.isPasskeyAccount, scenePhase == .active, let address = session.address else { return }
+                await funding.watch(env: env, address: address, home: model)
+            }
+            .onChange(of: funding.phase.isArrival) { _, arrived in
+                // Show the deposit in the balance straight away rather than at Home's next 30 s refresh.
+                if arrived { Task { await model.load(env: env, address: session.address) } }
+            }
+            .sensoryFeedback(.success, trigger: funding.phase.isArrival) { _, arrived in arrived }
             .overlay { if model.rows.isEmpty, model.loading { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showReceive) { if let address = session.address { ReceiveSheet(address: address) } }
             .sheet(isPresented: $showBridge) { BridgeView(env: env) }

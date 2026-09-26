@@ -28,11 +28,11 @@ Because ownership is re-proven by OTP every time, whoever verifies an email owns
 dead-end): a forgotten password is recovered by verifying the email again onto a new password/wallet. This moves the
 login identity, not the coins — the old wallet's funds still need the old password. Needs `PRIVY_APP_SECRET` on the
 function (set).
-| `activity` | every action with kind, section, title, tx hash, USD size, USD fee, time | `ActivityLog.record` → `BackendSync` (swaps `spot`, curve buys/sells + launches `launch`, perps orders `perps`, Moment publish/collect/claim `moments`, bridge `bridge`, Perps funding `deposit`/`withdraw`, external sends `withdraw`) | feeds Portfolio history + the journey rollup |
+| `activity` | every action with kind, section, title, tx hash, USD size, USD fee, time | `ActivityLog.record` → `BackendSync` (swaps `spot`, curve buys/sells + launches `launch`, perps orders `perps`, Moment publish/collect/claim `moments`, bridge `bridge`, Perps funding `deposit`/`withdraw`, external sends `withdraw`) | yes, merged into the device's log (no doubles, newest 300) — also feeds Portfolio history + the journey rollup |
 | `strategies` | delta-neutral, market-making and copied-trader records (JSON) | `DNStore` / `MMStore` / `CopyStore` saves | yes |
 | `notifications` | the in-app notification center | `NotificationStore.save` | yes |
 | `alerts` (`kind = price`, `payload`) | price alerts | `PriceAlertStore.save` | yes |
-| `user_settings` | appearance, notification toggles, leverage, slippage, Simple/Pro | `AppSettings` changes | yes, unless the device already changed a setting |
+| `user_settings` | appearance, notification toggles, leverage, slippage, Simple/Pro | `AppSettings` changes | yes, unless the device already changed a setting; slippage and leverage only as values Trading Preferences offers (`BackendRestore`), otherwise the defaults |
 | `device_tokens` | APNs tokens (future push) | not yet — no push server | – |
 | `follows`, `posts`, `comments`, `reactions`, `watchlist`, `leaders`, `copy_*`, `referral_*`, `leaderboard`, `launches` | social graph, feed, copy trading, referrals, launch index | web app / indexer today | – |
 

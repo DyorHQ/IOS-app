@@ -96,22 +96,45 @@ final class BridgeModel {
     // MARK: Loading
 
     /// The bridge's backend proxy serves a signed-in wallet only. RootView signs in as soon as the wallet can sign;
-    /// this covers the moment right after launch before that sign-in has landed.
+    /// this covers the moment right after launch before that sign-in has landed. Opening the screen is no tap for a
+    /// signature, so it signs in only where that shows nothing (`Session.backgroundWallet`): a passkey account whose
+    /// session is locked waits for `needsUnlock`'s button instead of a passkey prompt out of nowhere.
     private func ensureBackendSession() async {
-        if !env.social.isSignedIn, env.session.canSign { await env.social.signIn(session: env.session) }
+        guard !env.social.isSignedIn, env.session.canSignWithoutPrompt,
+              let address = env.session.address, let wallet = env.session.backgroundWallet else { return }
+        await env.social.signIn(address: address, wallet: wallet)
     }
+
+    /// A passkey account with no backend session and its passkey session locked: routes can't load until it unlocks.
+    /// Once it does, RootView signs in to the backend and the view loads again.
+    var needsUnlock: Bool { env.session.isPasskeyAccount && !env.session.canSignWithoutPrompt && !env.social.isSignedIn }
+
+    /// Counts `load` calls: the view reloads when the account unlocks or its backend sign-in lands, and an earlier load
+    /// may still be waiting on that sign-in (its task cancelled, which a joined sign-in doesn't notice). Only the newest
+    /// writes, so a superseded one can't leave its "Cancelled." over a form that loaded.
+    private var loadGeneration = 0
 
     func load() async {
         guard isConfigured else { loadError = AuroraError.notConfigured.errorDescription; return }
-        guard tokens.isEmpty else { return }
-        loadingTokens = true; defer { loadingTokens = false }
+        guard tokens.isEmpty, !needsUnlock else { return }
+        loadGeneration += 1
+        let generation = loadGeneration
+        loadingTokens = true
+        defer { if generation == loadGeneration { loadingTokens = false } }
+        loadError = nil
         await ensureBackendSession()
         do {
-            tokens = try await env.aurora.tokens().filter { EVMChain.byAuroraId($0.blockchain) != nil }
+            let loaded = try await env.aurora.tokens().filter { EVMChain.byAuroraId($0.blockchain) != nil }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            tokens = loaded
+            loadError = nil
             if fromToken == nil { fromToken = preferred(on: fromChain) }
             if toToken == nil { toToken = preferred(on: toChain) }
             await loadBalances()
-        } catch { loadError = describe(error) }
+        } catch {
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            loadError = describe(error)
+        }
     }
 
     private func preferred(on chain: EVMChain) -> AuroraToken? {
@@ -205,11 +228,37 @@ final class BridgeModel {
 
     func useMax() { usePercent(1) }
 
-    /// Fill the amount with a fraction of the from-chain balance, in EXACT units (not a display-rounded string) so
-    /// "Max" is never above balance nor silently under.
+    /// Fill the amount with a fraction of the from-chain balance. "Max" of a token is the EXACT balance, never above
+    /// it nor silently under; a Max of the chain's native coin keeps its network fee back. A share below 100% is rounded
+    /// down to six significant digits (`Amount.roundedDown`), so the field reads "0.559465" rather than 18 decimals.
     func usePercent(_ fraction: Double) {
         guard let token = fromToken, let raw = fromBalanceRaw, raw > 0 else { return }
-        let amount = fraction >= 1 ? raw : raw * BigUInt(Int((fraction * 10000).rounded())) / 10000
+        if fraction >= 1, token.isNative {
+            Task { await useNativeMax(token, balance: raw) }
+            return
+        }
+        let amount = fraction >= 1 ? raw : Amount.roundedDown(raw * BigUInt(Int((fraction * 10000).rounded())) / 10000, decimals: token.decimals)
+        setAmount(amount, of: token)
+    }
+
+    /// Max of a native coin (MERA-PLAN §5): the balance less what the deposit transfer can be charged on the source
+    /// chain — its gas estimate (to the quote's deposit address, or a stand-in until Aurora names one) × (2 × base fee
+    /// + tip) with headroom, or the chain's fallback when its RPC can't answer. Zero when the fee takes it all.
+    private func useNativeMax(_ token: AuroraToken, balance: BigUInt) async {
+        let chain = fromChain
+        let recipient = quote?.depositAddress.flatMap { Address($0) } ?? Self.feeProbeRecipient
+        let amount = await env.sender(for: chain).maxValue(balance: balance, like: TransactionRequest(to: recipient, value: 1),
+                                                           from: env.session.address, budget: NetworkFeeReserve.transferGasLimit)
+        // The source, its balance or the form changed while the fee was read: that Max no longer applies.
+        guard canEdit, fromChain == chain, fromToken?.assetId == token.assetId, fromBalanceRaw == balance else { return }
+        // Rounded down: a sliver more stays back with the fee reserve, and the field stays readable.
+        setAmount(Amount.roundedDown(amount, decimals: token.decimals), of: token)
+    }
+
+    /// An address with no code, to estimate a plain transfer before there is a deposit address.
+    private static let feeProbeRecipient = Address(literal: "0x000000000000000000000000000000000000dEaD")
+
+    private func setAmount(_ amount: BigUInt, of token: AuroraToken) {
         amountText = Amount.exact(amount, decimals: token.decimals)
         resetQuote()
         refreshQuoteSoon()
@@ -322,11 +371,12 @@ final class BridgeModel {
     var canEdit: Bool { if case .idle = phase { return true }; return false }
 
     func execute() async {
-        guard let wallet = env.session.wallet else { phase = .failed("Sign in to bridge."); return }
+        // A passkey account's bridge always asks (MERA-PLAN §3): one Face ID when the deposit is signed.
+        guard let wallet = env.session.wallet(for: MeraSession.Action(.alwaysAsks(.bridge))) else { phase = .failed("Sign in to bridge."); return }
         guard let from = fromToken, let amount = amountRaw, let quote, let deposit = quote.depositAddress, let depositAddr = Address(deposit) else {
             phase = .failed("Get a quote first."); return
         }
-        if env.settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm bridge")) { return }
+        if env.settings.appLockApplies(to: env.session.account), !(await BiometricGate.authenticate(reason: "Confirm bridge")) { return }
         phase = .signing
         completedTxURL = nil
         // The quote is EXACT_INPUT for the amount the user typed, delivered back to the user's own address. Refuse to
@@ -379,6 +429,8 @@ final class BridgeModel {
                 hash: hash, section: "bridge", usd: pendingUsd, feeUsd: bridgeFeeUsd), owner: env.session.address)
             pollGeneration += 1
             await poll(deposit: deposit, memo: quote.depositMemo, generation: pollGeneration)
+        } catch where env.session.isPasskeyAccount && isUserCancellation(error) {
+            phase = .failed(TransactionRun.notSent)
         } catch {
             phase = .failed(describe(error))
         }

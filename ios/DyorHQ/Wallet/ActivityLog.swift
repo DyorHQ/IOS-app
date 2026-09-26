@@ -17,7 +17,12 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
 
         /// Tolerates rows written by future builds (a new case) so a forward row never breaks decoding on an old app.
         init(from decoder: Decoder) throws {
-            self = Kind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .moment
+            self.init(tolerating: try decoder.singleValueContainer().decode(String.self))
+        }
+
+        /// A stored or restored kind; one this build doesn't know (a future case) reads as `.moment`, as decoding does.
+        init(tolerating raw: String) {
+            self = Kind(rawValue: raw) ?? .moment
         }
 
         var symbol: String {
@@ -80,6 +85,13 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
 
     var txHash: Data? { txHashHex.flatMap { Data(hex: $0) } }
 
+    /// A record restored from the wallet's backend `activity` row (`BackendSync.restore`), under that row's id.
+    init(restored row: BackendRestore.Activity) {
+        self.init(kind: Kind(tolerating: row.kind), title: row.title, subtitle: row.subtitle, hash: row.txHash, time: row.time,
+                  section: row.section, usd: row.usd, feeUsd: row.feeUsd)
+        id = row.id
+    }
+
     /// The notification category to file this action under, derived from its `section` so a claim/fee/graduate in
     /// Moments reads as a Moments notification and the same action in Launch reads as a plain transaction.
     var notificationKind: AppNotification.Kind {
@@ -107,7 +119,8 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
 /// freshest rows) with on-chain scans that backfill older launchpad and swap history.
 enum ActivityLog {
     private static func key(_ owner: Address) -> String { "activityLog.v1.\(owner.hex)" }
-    private static let cap = 300
+    /// The most records kept per wallet (the newest).
+    static let cap = 300
 
     static func all(owner: Address?) -> [ActivityRecord] {
         guard let owner, let data = UserDefaults.standard.data(forKey: key(owner)) else { return [] }
@@ -126,6 +139,16 @@ enum ActivityLog {
         if list.count > cap { list = Array(list.prefix(cap)) }
         UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: key(owner))
         onRecord?(record, owner)
+    }
+
+    /// Merges records restored from the backend (`BackendSync.restore`, MERA-PLAN §6) into this wallet's log: nothing
+    /// already here is replaced or doubled (same id or same transaction hash), newest first, capped like `record`.
+    /// Not mirrored back (`onRecord`): these rows came from the backend.
+    static func merge(restored: [ActivityRecord], owner: Address) {
+        let current = all(owner: owner)
+        let merged = BackendRestore.mergeActivity(local: current, restored: restored, cap: cap, id: \.id, txHash: \.txHash, time: \.time)
+        guard merged.map(\.id) != current.map(\.id) else { return }
+        UserDefaults.standard.set(try? JSONEncoder().encode(merged), forKey: key(owner))
     }
 }
 

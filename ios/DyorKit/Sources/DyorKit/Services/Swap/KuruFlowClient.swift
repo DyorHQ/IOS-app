@@ -37,7 +37,6 @@ actor KuruFlowClient {
             throw SwapError.venue(Self.text(json["message"]) ?? "Kuru Flow could not route this trade.")
         }
         if amountOut == 0 { return nil }
-        let minOut = Self.quantity(json["minOut"]) ?? SwapMath.minAfterSlippage(amountOut, bps: req.slippageBps)
         guard let to = transaction["to"].string.flatMap({ Address($0) }) else { throw SwapError.venue("Kuru Flow returned an invalid transaction.") }
         // The calldata may come without the 0x prefix.
         var calldataHex = transaction["calldata"].string ?? ""
@@ -52,6 +51,18 @@ actor KuruFlowClient {
         }
         // Kuru chooses the route, so an ordinary pair could still hop through a retired cohort's coin or pool.
         try SwapEngine.ensureNoRetired(in: calldata)
+        // Nor trust what the API says the calldata does: decode it (`KuruFlowSwap`) for every account, not only a passkey
+        // account's session. It must pay this account, trade exactly the requested amount of the requested tokens, and
+        // enforce at least the minimum the requested slippage allows on the quoted output — the one the sheet shows. A
+        // spoofed API that inflated `output` to win the best-price race then only builds a swap that reverts.
+        let slippage = min(10_000, max(1, req.slippageBps)) // as sent
+        guard let swap = KuruFlowSwap(calldata: calldata), (swap.recipient ?? user) == user,
+              swap.tokenIn == (req.tokenIn.isNative ? Address.zero : req.tokenIn.address),
+              swap.tokenOut == (req.tokenOut.isNative ? Address.zero : req.tokenOut.address),
+              swap.amountIn == req.amountIn, swap.minAmountOut >= SwapMath.minAfterSlippage(amountOut, bps: slippage) else {
+            throw SwapError.venue("Kuru Flow returned an unexpected transaction, so it was blocked for your safety.")
+        }
+        let minOut = swap.minAmountOut
         let tx = TransactionRequest(to: to, data: calldata, value: value)
         let inToken = req.tokenIn
         let amountIn = req.amountIn
@@ -128,5 +139,76 @@ actor KuruFlowClient {
         }
         if let n = json.number, n >= 0, n.rounded() == n, n < 1.8e19 { return BigUInt(UInt64(n)) }
         return nil
+    }
+}
+
+/// A swap call on the KuruFlowEntrypoint, decoded from the ready-made calldata the Flow API returns, so the wallet can
+/// check what it signs rather than trusting the API (MERA-PLAN §3). Kuru publishes no ABI and the contract is not
+/// source-verified; this layout was read from its bytecode (2026-09-25) and matches live mainnet swaps:
+///
+///     0xce1e7030  (address tokenOut, uint256 minAmountOut, address tokenIn, uint256 amountIn,
+///                  (address feeRecipient, uint256 feeBps, address referrer, uint256 referrerFeeBps, bool feeOnOutput),
+///                  bytes route)                                   → output paid to msg.sender
+///     0x31343b21  the same arguments, then (address recipient)    → output paid to `recipient`
+///
+/// Native MON is the zero address on either side. The entrypoint pulls `amountIn` of `tokenIn` from the caller (or
+/// takes it as `msg.value`), runs `route` through its router, takes any fees, and reverts unless what is left for the
+/// recipient is at least `minAmountOut` — so the minimum holds net of fees, whichever side they come from.
+public struct KuruFlowSwap: Sendable, Equatable {
+    /// The selectors, as found in the contract's dispatcher (no public signature text exists for them).
+    public static let payCaller = Data([0xce, 0x1e, 0x70, 0x30])
+    public static let payRecipient = Data([0x31, 0x34, 0x3b, 0x21])
+
+    public let tokenOut: Address
+    public let minAmountOut: BigUInt
+    public let tokenIn: Address
+    public let amountIn: BigUInt
+    /// Who receives the output: nil for the variant that pays `msg.sender`, i.e. the account that signs the call.
+    public let recipient: Address?
+
+    /// Nil for any other selector, a short or malformed payload, or an address word with dirty high bytes (which the
+    /// contract would reject anyway).
+    public init?(calldata: Data) {
+        let data = Data(calldata)
+        guard data.count >= 4 else { return nil }
+        let selector = data.prefix(4)
+        let explicitRecipient: Bool
+        if selector == Self.payCaller { explicitRecipient = false } else if selector == Self.payRecipient { explicitRecipient = true } else { return nil }
+        let args = ABIWords(data.dropFirst(4))
+        // Ten head words (four scalars, the five-word fee tuple, the route's offset), plus the recipient.
+        guard args.count >= (explicitRecipient ? 11 : 10), let tokenOut = args.address(0), let minOut = args.uint(1),
+              let tokenIn = args.address(2), let amountIn = args.uint(3) else { return nil }
+        self.tokenOut = tokenOut
+        minAmountOut = minOut
+        self.tokenIn = tokenIn
+        self.amountIn = amountIn
+        if explicitRecipient {
+            guard let recipient = args.address(10) else { return nil }
+            self.recipient = recipient
+        } else {
+            recipient = nil
+        }
+    }
+}
+
+/// Reads a calldata payload (the arguments after the selector) as 32-byte ABI words, rejecting what a strict decoder
+/// would: a word past the end, or an address word whose high 12 bytes aren't zero.
+struct ABIWords {
+    let data: Data
+
+    init(_ data: Data) { self.data = Data(data) }
+
+    var count: Int { data.count / 32 }
+
+    func word(_ index: Int) -> Data? {
+        guard index >= 0, (index + 1) * 32 <= data.count else { return nil }
+        return data.subdata(in: index * 32..<(index + 1) * 32)
+    }
+
+    func uint(_ index: Int) -> BigUInt? { word(index).map { BigUInt($0) } }
+
+    func address(_ index: Int) -> Address? {
+        guard let word = word(index), word.prefix(12).allSatisfy({ $0 == 0 }) else { return nil }
+        return Address(data: Data(word.suffix(20)))
     }
 }

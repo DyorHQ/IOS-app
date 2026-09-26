@@ -22,13 +22,18 @@ public struct SwapRequest: Sendable {
     public var slippageBps: Int
     /// Wallet that receives the output; a placeholder when nothing is connected.
     public var account: Address
+    /// Approve exactly the input, and let a Permit2 allowance live only as long as the swap needs it
+    /// (`SwapCalldata.exactPermit2Lifetime`), instead of the standing max approval and 30-day allowance. A passkey
+    /// (Mera) account's session signs only approvals like these (MERA-PLAN §3).
+    public var exactApprovals: Bool
 
-    public init(tokenIn: Token, tokenOut: Token, amountIn: BigUInt, slippageBps: Int, account: Address) {
+    public init(tokenIn: Token, tokenOut: Token, amountIn: BigUInt, slippageBps: Int, account: Address, exactApprovals: Bool = false) {
         self.tokenIn = tokenIn
         self.tokenOut = tokenOut
         self.amountIn = amountIn
         self.slippageBps = slippageBps
         self.account = account
+        self.exactApprovals = exactApprovals
     }
 }
 

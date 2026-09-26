@@ -209,6 +209,18 @@ public actor RPCClient {
         try quantity(await call("eth_gasPrice"))
     }
 
+    /// The node's suggested EIP-1559 tip.
+    public func maxPriorityFeePerGas() async throws -> BigUInt {
+        try quantity(await call("eth_maxPriorityFeePerGas"))
+    }
+
+    /// The latest block's base fee, or nil on a chain without EIP-1559.
+    public func latestBaseFee() async throws -> BigUInt? {
+        let json = try await call("eth_getBlockByNumber", [BlockTag.latest.json, .bool(false)])
+        guard let hex = json["baseFeePerGas"].string else { return nil }
+        return BigUInt(hexQuantity: hex)
+    }
+
     public func ethCall(_ tx: CallRequest, block: BlockTag = .latest) async throws -> Data {
         try bytes(await call("eth_call", [tx.json, block.json]))
     }

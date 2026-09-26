@@ -35,6 +35,19 @@ public enum Amount {
         return BigUInt(digits, radix: 10)
     }
 
+    /// A share of a balance for an amount field (25 / 50 / 75 %, a native Max after its fee): rounded DOWN to
+    /// `significantDigits` significant digits, keeping every whole digit, so it never exceeds the exact share and reads
+    /// "0.559465" rather than eighteen decimals. Only fraction digits are dropped. A full ERC-20 balance should stay exact
+    /// (so it can all be spent), so callers don't round that.
+    public static func roundedDown(_ value: BigUInt, decimals: Int, significantDigits: Int = 6) -> BigUInt {
+        let digits = String(value).count
+        let whole = max(0, digits - decimals)
+        let drop = min(decimals, max(0, digits - max(significantDigits, whole)))
+        guard drop > 0 else { return value }
+        let unit = BigUInt(10).power(drop)
+        return value / unit * unit
+    }
+
     /// Exact decimal string of raw units, trimmed of trailing zeros ("1.5", "0.000001", "1200").
     public static func exact(_ value: BigUInt, decimals: Int) -> String {
         let digits = String(value)

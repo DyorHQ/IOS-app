@@ -105,7 +105,7 @@ struct PerpTradeView: View {
             if model.lastFilledPerpId == market.id { withAnimation { bottomTab = .positions } }
         }
         .task(id: session.address) {
-            perplTrading.refresh(address: session.address)
+            perplTrading.refresh(account: session.account)
             // The user already connected Perpl trading in Profile; the single trading socket just idles to `.enrolled`
             // between visits. Bring it live up front (in the background, so it never blocks history) so `isReady` is
             // true and TP/SL is actually offered — instead of showing "Connect Perpl trading in Profile" to someone
@@ -670,7 +670,8 @@ struct PerpTradeView: View {
 
     @ViewBuilder private var historyList: some View {
         if perplTrading.key == nil {
-            emptyRow("Connect Perpl trading in Profile to see your history.")
+            // A passkey account's key exists only while its session is live; the history needs it to sign the reads.
+            emptyRow(perplTrading.isEnrolled ? "Your Perpl history loads while your passkey session is unlocked." : "Connect Perpl trading in Profile to see your history.")
         } else if let fillsError {
             InlineError(message: fillsError)
         } else if loadingFills, fills.isEmpty {
@@ -755,7 +756,7 @@ struct PerpTradeView: View {
         // and the user wants TP/SL — its submit() awaits ensureConnected(), so a socket that idled to `.enrolled` still
         // reconnects and carries the triggers instead of silently dropping to a bare on-chain entry. A plain order with
         // no triggers still falls through to the on-chain path when not live, so trading never depends on one-click.
-        if let accountId = model.account?.accountId, perplTrading.isReady || (perplTrading.key != nil && wantsTriggers) {
+        if let accountId = model.account?.accountId, perplTrading.isReady || (perplTrading.isEnrolled && wantsTriggers) {
             AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1)) {
                 ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""; sizePercent = 0
                 Task { await model.load(env: env, address: session.address) }
@@ -768,7 +769,7 @@ struct PerpTradeView: View {
     private var confirmSheet: some View {
         ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { env.perpl.orderPlan(ticket.input(market: market, refPrice: refPrice)) }, onDone: { ticket.sizeText = ""; sizePercent = 0; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
             Activity.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
-        }) {
+        }, intent: orderIntent) {
             DetailRow("Market", "\(market.asset)-PERP")
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
             DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(ticket.priceText)")
@@ -783,9 +784,16 @@ struct PerpTradeView: View {
         }
     }
 
+    /// An on-chain opening order, valued at its worst-case notional; a reduce-only close always asks (MERA-PLAN §3).
+    private var orderIntent: Mera.Intent {
+        let input = ticket.input(market: market, refPrice: refPrice)
+        return input.reduceOnly ? .alwaysAsks(.closePosition) : .perplOrder(usd: Mera.SpendingCaps.notionalUSD(of: input))
+    }
+
     private func cancelOrderSheet(_ order: PerpOrder) -> some View {
         ConfirmationSheet(title: "Cancel Order", confirmTitle: "Cancel Order", build: { env.perpl.cancelPlan(perpId: order.perpId, orderId: order.orderId) }, onDone: { Task { await model.load(env: env, address: session.address) } },
-                          onCompleted: { hash in Activity.record(ActivityRecord(kind: .perp, title: "Cancelled \(order.symbol) order", subtitle: "\(order.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(order.size)) at \(NumberStyle.number(order.price))", hash: hash, section: "perps"), owner: session.address) }) {
+                          onCompleted: { hash in Activity.record(ActivityRecord(kind: .perp, title: "Cancelled \(order.symbol) order", subtitle: "\(order.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(order.size)) at \(NumberStyle.number(order.price))", hash: hash, section: "perps"), owner: session.address) },
+                          intent: .alwaysAsks(.cancelOrder)) {
             DetailRow("Market", order.symbol)
             DetailRow("Order", "\(order.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(order.size)) at \(NumberStyle.number(order.price))")
         }
@@ -1883,10 +1891,12 @@ private struct ClosePositionSheet: View {
                     } else if !session.canSign {
                         Text(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     } else {
-                        PrimaryButton(title: isLimit ? "Place Limit Close" : "Close at Market", isBusy: run.isRunning, isDisabled: !canConfirm) {
+                        // A passkey account's close always asks (MERA-PLAN §3): one Face ID when it's signed.
+                        if session.isPasskeyAccount { SessionScopeBadge(assessment: .faceID(Mera.AlwaysAsk.closePosition.summary)) }
+                        PrimaryButton(title: session.isPasskeyAccount ? "Confirm with \(BiometricGate.promptName)" : (isLimit ? "Place Limit Close" : "Close at Market"), isBusy: run.isRunning, isDisabled: !canConfirm) {
                             Task {
-                                if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm close")) { return }
-                                run.start(steps, session: session, sender: env.sender)
+                                if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm close")) { return }
+                                run.start(steps, session: session, sender: env.sender, action: session.isPasskeyAccount ? MeraSession.Action(.alwaysAsks(.closePosition)) : nil)
                             }
                         }
                     }
@@ -1985,9 +1995,11 @@ private struct AddMarginSheet: View {
                     } else if !session.canSign {
                         Text(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     } else {
-                        PrimaryButton(title: "Add Margin", isBusy: run.isRunning, isDisabled: !canConfirm) {
+                        // Moving margin isn't in a passkey session's scope (MERA-PLAN §3): one Face ID when it's signed.
+                        if session.isPasskeyAccount { SessionScopeBadge(assessment: .faceID(Mera.AlwaysAsk.unlisted.summary)) }
+                        PrimaryButton(title: session.isPasskeyAccount ? "Confirm with \(BiometricGate.promptName)" : "Add Margin", isBusy: run.isRunning, isDisabled: !canConfirm) {
                             Task {
-                                if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm add margin")) { return }
+                                if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm add margin")) { return }
                                 run.start(env.perpl.addMarginPlan(market: market, amount: amount), session: session, sender: env.sender)
                             }
                         }
@@ -2041,6 +2053,14 @@ struct AuthedOrderSheet: View {
     /// The entry was placed (with or without every trigger) — the sheet closes on "Done" and reloads.
     private var isPlaced: Bool { if case .done = phase { return true }; if case .doneWarning = phase { return true }; return false }
 
+    /// A passkey account's badge: its live session places an opening order on its own within the caps; a reduce-only
+    /// close, or anything while locked, asks for Face ID (MERA-PLAN §3).
+    private var scopeAssessment: MeraSession.Assessment? {
+        guard session.isPasskeyAccount else { return nil }
+        if input.reduceOnly { return .faceID(Mera.AlwaysAsk.closePosition.summary) }
+        return session.mera.assessOrder(usd: Mera.SpendingCaps.notionalUSD(of: input))
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -2057,6 +2077,9 @@ struct AuthedOrderSheet: View {
                     Text("Review Order · Perpl")
                 } footer: {
                     Text("Signed and forwarded by your Perpl API key over the trading connection.")
+                }
+                if !isPlaced, let scopeAssessment {
+                    Section { SessionScopeBadge(assessment: scopeAssessment) }
                 }
                 if case .failed(let message) = phase {
                     Section { InlineError(message: message) }.listRowBackground(Color.clear)
@@ -2082,7 +2105,7 @@ struct AuthedOrderSheet: View {
             }
             .safeAreaInset(edge: .bottom) {
                 if !isPlaced {
-                    PrimaryButton(title: input.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", isBusy: phase == .placing, foreground: .onStatus) {
+                    PrimaryButton(title: scopeAssessment?.needsFaceID == true ? "Confirm with \(BiometricGate.promptName)" : (input.side == .long ? "Long \(market.asset)" : "Short \(market.asset)"), isBusy: phase == .placing, foreground: .onStatus) {
                         Task { await place() }
                     }
                     .tint(sideColor)
@@ -2098,15 +2121,16 @@ struct AuthedOrderSheet: View {
         .sensoryFeedback(.success, trigger: isPlaced)
     }
 
-    private func place() async {
+    /// `approval`: a passkey account's step-up for this one order, when its session couldn't place it prompt-free.
+    private func place(approval: MeraSession.StepUp? = nil) async {
         // App Lock covers leveraged orders too (this path signs with the Perpl API key, not a confirmation sheet).
-        if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Confirm order")) { return }
+        if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm order")) { return }
         phase = .placing
         do {
             // Bracket placement reports per-frame acceptance, so we record only the TP/SL Perpl actually admitted and
             // can warn if the entry opened without a requested protection (an unprotected position the user must know
             // about). Perpl offers no read-back for keeper triggers, so the accepted ones are remembered locally.
-            let result = try await perplTrading.submitBracket(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env, ttlBlocks: 100)
+            let result = try await perplTrading.submitBracket(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env, ttlBlocks: 100, approval: approval)
             guard result.entry else { phase = .failed(result.error ?? "Perpl rejected the order."); return }
 
             var placed: [PlacedTrigger] = []
@@ -2131,6 +2155,17 @@ struct AuthedOrderSheet: View {
             Activity.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address, notify: false)
             if settings.notificationsEnabled, settings.notifyFills {
                 Notifications.perpOrder(side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP", filled: input.kind == .market)
+            }
+        } catch is MeraSession.StepUpRequired where approval == nil {
+            // A passkey account whose session can't place this order prompt-free (locked, over a cap, a reduce-only
+            // close): one pinned passkey ceremony approves this order and opens a new session, then it is placed.
+            do {
+                let approval = try await session.mera.stepUp()
+                await place(approval: approval)
+            } catch where isUserCancellation(error) {
+                phase = .failed("Not sent. Nothing left your account.")
+            } catch {
+                phase = .failed(describe(error))
             }
         } catch {
             phase = .failed(describe(error))

@@ -22,11 +22,13 @@ When the welcome email arrives:
 
 1. Xcode → Settings → Accounts: sign in with the enrolled Apple Account. Put the team's ID in
    `DyorHQ/Config/Secrets.xcconfig` as `DEVELOPMENT_TEAM` (it replaces the Personal team).
-2. Re-enable the two entitlements the Personal team could not sign, in `project.yml` under `entitlements`:
-   `com.apple.developer.applesignin: [Default]` (Sign in with Apple is offered in onboarding and must work) and,
-   once the domain hosts the well-known file, `com.apple.developer.associated-domains`. Then `xcodegen generate`.
+2. Check the two entitlements the Personal team could not sign, in `project.yml` under `entitlements`:
+   `com.apple.developer.applesignin: [Default]` (Sign in with Apple is offered in onboarding and must work) and
+   `com.apple.developer.associated-domains: ["webcredentials:accounts.dyorhq.fun"]` (passkeys). Both are on; don't
+   install a device build until Apple's CDN serves the AASA for accounts.dyorhq.fun. Then `xcodegen generate`.
 3. developer.apple.com → Certificates, Identifiers & Profiles → Identifiers: register `fun.dyorhq.app` with the
-   Sign in with Apple capability (automatic signing creates certificates and profiles on the first archive).
+   Sign in with Apple and Associated Domains capabilities (automatic signing creates certificates and profiles on
+   the first archive).
 4. App Store Connect → Apps → "+": name DyorHQ, iOS, bundle `fun.dyorhq.app`, SKU `dyorhq-ios`, primary language
    English, category Finance. Add a privacy policy URL (required for the TestFlight test information too).
 5. Privy dashboard: confirm the mobile client is bound to `fun.dyorhq.app` and that Apple login is configured with

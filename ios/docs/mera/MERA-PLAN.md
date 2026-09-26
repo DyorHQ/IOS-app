@@ -1,156 +1,331 @@
-# Mera on DyorHQ — passkey accounts as the account layer
+# Mera on DyorHQ: lean build spec (v3.1, 2026-09-25)
 
-Status: plan, 2026-09-17. Sources read: mera.category.xyz (getting started, passkeys & PRF, signing sessions,
-passkey accounts, entropy/keys/accounts, security model, secret vaults, React Native recipe, create-passkey-accounts
-recipe), `category-labs/mera` source (`passkey.ts`, `secret.ts`, `chains/evm.ts`, `demos/mobile`), the bounty brief.
+Status: this is the build spec. It replaces the v2 plan, which the owner found too heavy.
 
-## 1. What Mera is (verified)
+**Owner direction, 2026-09-25:** Mera is one more way to sign in or create an account, alongside Email & Password, Apple/Google/Email (Privy), import and watch-only. There is **no Mera-only variant**. The `MERA_ONLY` flag and every part of the design that only applied to it are removed.
 
-- A TypeScript library (`@category-labs/mera`, preview, API may change before 1.0). No Swift SDK. The React Native
-  recipe uses `react-native-passkey`; iOS 18+ is required (PRF).
-- Identity = a **passkey with the WebAuthn PRF extension**. One ceremony returns 32 secret bytes that are the same on
-  every sign-in and every synced device: `PRF(credential, rpId, salt)` with the fixed salt
-  `sha256("mera.prf.salt.v1")`. Discoverable credential, user verification required, ES256/RS256, attestation none.
-- Accounts: the 32 bytes are BIP-39 entropy → 24-word mnemonic → BIP-39 seed (empty passphrase) → BIP-32 at the BIP-44
-  Ethereum path `m/44'/60'/0'/0/{index}` → EIP-55 address. Nothing is stored; the address is recomputed each time.
-- **Signing sessions**: an in-memory secp256k1 key that signs digests until `end()` zeroes it. "Prompt-free" means
-  no authenticator prompt while the session lives; the next signature after `end()` needs a fresh ceremony.
-- **Secret vaults**: AES-256-GCM with a key from HKDF-SHA-256(PRF(random 32-byte salt), info `mera.v1.encrypt.secret`);
-  the ciphertext can live anywhere (localStorage, a backend, iCloud) because tampering fails decryption. This is the
-  "untrusted storage" the stateless test allows.
-- Relying party: the passkey is bound to an `rpId` domain. iOS needs `https://<rpId>/.well-known/apple-app-site-association`
-  with `webcredentials` listing `TEAMID.fun.dyorhq.app`, and the `webcredentials:<rpId>` associated-domain entitlement.
-  A web app and the native app can share the same passkey and accounts when they share the rpId.
-- Threats the docs name: whoever controls the rpId domain can run a ceremony and obtain the PRF output; a live session
-  signs for any code that reaches it; losing the passkey without an export loses the accounts; migrating domains
-  invalidates accounts. Recommendations: end sessions promptly, add expiry, offer export/backup.
+Research behind it:
+- Mera docs and source (`@category-labs/mera` 0.2.0, still the latest release)
+- the Apple iOS 26.5 SDK
+- Monad docs and client source
+- the repo
 
-## 2. How it fits DyorHQ
+Earlier findings are in memory (`mera-passkey-accounts`).
 
-DyorHQ is native SwiftUI. There is no JS runtime to host `@category-labs/mera`, and a WebView bridge would put the
-account layer in the least trustworthy place. The right move is a **native implementation of the Mera scheme**:
+## 0. Principles
 
-- `AuthenticationServices` passkeys with PRF (present in the iOS 26.5 SDK: `ASAuthorizationPublicKeyCredentialPRF
-  RegistrationInput/Output` and `…PRFAssertionInput/Output`). Same rpId, same salt, same derivation, so the address a
-  user gets on iPhone equals the one Mera's JS gives them on the web app later (stack composability, and it makes the
-  bounty's "same accounts across platforms" claim true for us).
-- DyorKit already has BIP-39 validation, BIP-32 (`HDNode`), `Secp256k1Account` and the `Wallet` protocol used by
-  Privy and imported wallets. Add `Mnemonic.phrase(fromEntropy:)` (256-bit entropy → 24 words) and a `MeraWallet`
-  signer. Keys never leave the process; the runner, swaps, perps and strategies use `Wallet` unchanged.
-- Sign-in method becomes a fourth option next to Apple / Google / Email (Privy) and Import: **Continue with passkey**.
-  Privy stays for people who want email/social; Mera is the no-account, no-seed path.
+**Mera is a first-class sign-in method in the one app.**
+- A passkey account needs no seed phrase, extension, email or one-time code.
+- It lives next to the other methods, and nothing else is hidden or disabled.
+- It is shown when `PASSKEYS_ENABLED=YES`. The rpId is live, so this is now on by default in Secrets.
 
-## 3. Onboarding and time-to-first-transaction
+**We keep the native Swift port.**
+- It already matches Mera 0.2.0 byte for byte.
+- A script in the repo proves it: `scripts/mera-parity` (`npm run parity`), pinned to 0.2.0. It runs the published package with a fake WebAuthn client and compares every vector in `MeraTests.swift`.
+- The credit and Mera's MIT license text are in `THIRD_PARTY_NOTICES.md` at the repo root.
+- The organisers will be asked whether a port counts.
+- If they say no, plan B is the real library inside JavaScriptCore.
 
-Target: landing → confirmed Monad transaction in **2 taps + Face ID** and under 20 seconds.
+**The passkey is the only root secret, and it is never stored.**
+- The device keeps only public hints: the credential ID and the address.
+- Anything derived from the passkey lives in memory for the length of a session.
 
-1. Landing: "Continue with passkey" → `createPasskeyWithPrfOutput` equivalent (one Face ID). The address is on screen
-   before the sheet closes. No email, no OTP, no phrase.
-2. Returning: "Continue with passkey" → assertion with PRF → same address. Fresh device: the passkey is in iCloud
-   Keychain, so the same tap reconstructs the same address with zero local state (the stateless test).
-3. First transaction needs gas. Options, cheapest first: (a) a relayer that drips a few cents of MON to a freshly
-   created Mera address once (owner-funded, rate limited, address must be new); (b) EIP-7702 delegation of the Mera
-   EOA to a minimal smart-account implementation on Monad so a paymaster sponsors gas and session keys get on-chain
-   scope (the bounty's bonus). Ship (a) for the demo; design (b) as phase 2.
-4. The demo transaction: a small swap on the Trade tab (USDC→MON) or a Moments collect, confirmed in the activity log
-   with the explorer link.
+**Other sign-in methods are unchanged** (Social-logins commit 4ef4b26). The only thing Mera switches off is Privy's own passkey login, because it would share the rpId.
 
-## 4. Session design (prompt-free vs re-prompt)
+## 1. The rpId and the association file
 
-Keep the Mera private key in memory only, inside a `MeraSession` with an explicit scope shown in the UI:
+**The rpId is `accounts.dyorhq.fun`.**
+- It is irreversible once a real passkey exists.
+- The Swift constant is `Mera.relyingParty = "accounts.dyorhq.fun"`.
+- `project.yml` gets the entitlement `com.apple.developer.associated-domains: ["webcredentials:accounts.dyorhq.fun"]`, with no `?mode=developer`.
+- `PASSKEY_RP_ID` is no longer read from xcconfig or Info.plist for Mera.
 
-| Action | Behaviour |
+**It is not the apex `dyorhq.fun`.** The Replit site there injects `https://i.replit.com/script.js` on every HTML page, 404 pages included. A script on the rpId origin can run a passkey ceremony and read the PRF output, which is the keys.
+
+**The host is GitHub Pages, from the public repo `DyorHQ/accounts-domain`.** The repo contains exactly three files:
+- `.well-known/apple-app-site-association`, containing `{"webcredentials":{"apps":["96X7N58MVV.fun.dyorhq.app"]}}`
+- `.nojekyll`
+- `CNAME`, containing `accounts.dyorhq.fun`
+
+It never contains `index.html`, workflows or `/.well-known/webauthn`.
+- DNS: a CNAME at Hostinger, `accounts` → `dyorhq.github.io`. Also verify the org domain with a TXT record.
+- HTTPS is provisioned automatically.
+- Apple's CDN accepts the `application/octet-stream` content type that GitHub serves.
+- To check: `https://app-site-association.cdn-apple.com/a/v1/accounts.dyorhq.fun`.
+- After the CDN has cached it, the file is frozen.
+
+**Rules:**
+- Don't install a device build with this entitlement until the CDN serves the file. A failed fetch stays cached until the build number changes.
+- Whoever can push to this repo can steal keys, so the org requires 2FA.
+
+## 2. Onboarding
+
+**The Get started screen offers passkeys among the other methods.** There are two buttons in the "or continue with" group: "Create account with a passkey" and "I already have a passkey". This follows Mera's own mobile-demo pattern.
+
+**Create account:**
+- It runs one ceremony that evaluates both PRF salts (the account salt and the utility salt).
+- Each passkey gets a distinct name, `DyorHQ · <short date>`, and never an email address.
+- It captures the `userID` and the credential ID.
+
+| Registration result | What the app does |
 |---|---|
-| Swaps, perps orders, strategy slices, Perpl deposits, Moments collects | prompt-free while the session lives and the running total stays under the session cap (default $250, user-set) |
-| Send / withdraw to an external address, Perpl withdrawals, anything over the cap, exporting the phrase, changing session settings | always a fresh passkey ceremony |
-| Session lifetime | 15 minutes of activity, ends on app background > 2 minutes, app termination, or Lock. Clear "Session ends in mm:ss" pill and a Lock button in Profile. Ending zeroes the key. |
-| Read-only | address, balances and history never need a prompt |
+| `prf.isSupported == false` | Throw `prfUnavailable` with no second prompt |
+| `first` missing but supported | Run one pinned fallback assertion over both salts |
+| `second` missing | Carry on; fetch the utility output lazily with a pinned assertion when it is first needed |
 
-Perpl already has a trade-scoped Ed25519 key; register it once per session so perps stay prompt-free for the same
-window. Strategy runs (TWAP entry/exit) need the session alive; the runner requests a re-prompt when it expires
-mid-run instead of failing.
+- If no address was ever derived, signal the new credential as unknown (orphan cleanup). Never signal after `adopt()` has succeeded.
 
-## 5. The stateless test
+**I already have a passkey:** a discoverable assertion with no `allowCredentials`. The system sheet also offers sign-in by QR from another phone.
 
-Identity: fully reconstructed from the passkey (above). App state: strategies, notifications, watchlists, alerts and
-copy-trading records live in UserDefaults today. Move them behind a per-address sync to Supabase (already the backend
-for social/alerts/sync) so a fresh device shows the same positions after one ceremony. Secrets that are not the
-passkey — the Perpl trade key, an optional exported phrase — go into a **Mera secret vault** stored in Supabase; the
-vault decrypts only with the passkey, so Supabase stays untrusted storage.
+**Error mapping:**
 
-## 6. Work plan
+| Error | Meaning |
+|---|---|
+| `ASAuthorizationError.canceled` (1001) | Cancelled |
+| `.failed` (1004) | `associationUnavailable`, with a clear "setup" message. `NSLocalizedFailureReason` goes to the log in DEBUG builds only |
+| Anything else | Generic |
 
-1. Domain and relying party (blocker for everything): host `https://dyorhq.fun/.well-known/apple-app-site-association`
-   (`webcredentials` → `TEAMID.fun.dyorhq.app`) and add `webcredentials:dyorhq.fun` to the entitlements. Decide rpId
-   now; it cannot change later without losing accounts. Recommendation: `dyorhq.fun` (the future web app lives there).
-2. DyorKit: `Mnemonic.phrase(fromEntropy:)`, `MeraDerivation` (salt constant, entropy→seed→`m/44'/60'/0'/0/i`),
-   tests against vectors produced by the JS library (run `@category-labs/mera` once in Node to capture address
-   vectors for fixed PRF bytes).
-3. App: `PasskeyAccount` (create / assert with PRF, credential id stored in Keychain, no secret stored), `MeraWallet`
-   (`Wallet` conformance, session with scope, cap and expiry), "Continue with passkey" onboarding, session pill and
-   Lock, re-prompt sheet.
-4. Gas drip relayer for new Mera addresses (Supabase edge function + owner-funded hot wallet with a small float and
-   per-address/per-day limits).
-5. State sync per address (strategies, alerts, notifications) and the secret vault for the Perpl key.
-6. Demo script for judges: fresh device → passkey → drip → swap → clear storage → passkey → same address and history.
-7. Phase 2 (bonus): EIP-7702 delegation + paymaster on Monad, on-chain session-key scopes, recovery via a second
-   passkey or vault export.
+Remove the old `noCredential` string match. There is no error code for "no credential".
 
-Estimate: steps 1–3 two days, 4–5 one day, 6 half a day, once the domain is live.
+**Other rules:**
+- Only one ceremony runs at a time. A second concurrent request fails.
+- A cold launch shows no prompt: the account is restored locked, and read-only screens work.
+- The backend (wallet-auth) sign-in runs inside `signInWithMera`, while the session is live. It never runs at launch for a locked Mera wallet (`RootView.swift:50`).
+- App Lock never adds a second Face ID on top of a passkey prompt.
+- PrivacyCover shows only on `.background`, not during a ceremony.
+- When `hasMera`, Privy passkeys are disabled in every build: `createPasskey`, `signInWithPasskey` and the Settings "Add a Passkey" row. They would share the rpId.
 
-## 7. Bounty two: the passkey as a key factory (non-wallet uses)
+**Restoring a session:**
+- `loadStoredSession()` restores whichever account the device holds, as today. A Mera account's hint (credential ID and address, in UserDefaults) takes precedence.
+- There is no reinstall purge.
+- A Mera account keeps no secret on the device, so the stateless test comes down to this: after deleting the app or on a fresh device, "I already have a passkey" brings back the same address.
 
-The second bounty rewards the most creative use of PRF namespaces for anything that is *not* signing wallet
-transactions: every salt is an isolated namespace, so one passkey can mint unlimited unrelated keys for encryption,
-identities or capabilities, all reconstructible from the passkey alone, with no secret stored anywhere. Judges look
-for novelty, correct use of the primitives (derivation for identities and capabilities, encryption for state,
-genuinely namespaced salts, nothing sensitive persisted), and a live cross-device test.
+## 3. Signing session
 
-How DyorHQ uses the primitive (implemented in `DyorKit/Services/Mera`): one ceremony evaluates **two PRF salts** —
-Mera's default salt for the wallet, and `sha256("dyorhq.utility.v1")` for everything else — so the authenticator
-itself keeps the wallet secret unrelated to every utility key, and one Face ID yields both. Under the utility output,
-per-purpose keys come from HKDF-SHA-256 with the purpose string as `info`; the purpose strings are part of the key
-and never change. Secrets that must wrap existing material use Mera's secret-vault format (fresh random PRF salt per
-vault, AES-256-GCM), byte-compatible with the JS library.
+The Swift equivalent of Mera's `createSecp256k1SigningSession` and `createEd25519SigningSession`.
 
-Namespaces, in order of build:
+**Opening and closing:**
+- One ceremony opens a session. `expiresAt` is fixed when it opens.
+- The length is 5, 15 or 60 minutes; the default is 15.
+- Making the setting longer needs Face ID and never extends a session that is already live.
+- A timer ends the session at expiry. The session also ends on `.background`, on Lock and on Sign out.
 
-1. **Perpl trading capability** (`dyorhq.perpl-trading.v1`, built). Perpl needs an Ed25519 API key enrolled against the
-   wallet. DyorHQ derives it from the passkey instead of generating and storing it: enrol once, and the same key
-   reappears on any device — the trading session survives a lost phone with no backup, and there is no key to leak.
-2. **Device-independent app state** (`dyorhq.state.v1`). Strategies, alerts, notification history and copy-trading
-   settings encrypted client-side and stored in Supabase as ciphertext keyed by address. A fresh device shows the same
-   positions after one ceremony; the server never sees a watchlist or a strategy. This is also what makes the first
-   bounty's stateless test complete.
-3. **Unlinkable social identity** (`dyorhq.social-identity.v1`). The profile, follows, reports and copy-trading
-   signals are signed by an Ed25519 identity that cannot be linked to the trading wallet unless the user opts to
-   verify a wallet. Same passkey, same handle on every device; the backend authenticates the identity, not the wallet.
-4. **Vaulted imports** (Mera secret vaults). An imported private key or a recovery phrase is wrapped in a vault under
-   the passkey and kept in Supabase (untrusted); a fresh device restores it with one ceremony. This is the "wrap
-   existing credentials" starting point, kept optional and explicit.
+**`end()`:**
+- zeroes the mutable key copies (best effort, as Mera says);
+- drops the Perpl key;
+- disconnects the Perpl socket and stops its keep-alive;
+- is permanent. Any later signature throws `sessionEnded`.
 
-Further ideas that fit the product and are worth a demo if time allows: per-conversation keys for encrypted trader
-DMs and copy-trading group chats; a passkey-encrypted trade journal or assistant memory (the strategy runner's notes
-and an AI review of a position, readable by no one else); a "sealed Moment" whose media unlocks for holders via keys
-derived from their passkeys; short-lived per-strategy capabilities (a runner key that can only place hedges for one
-strategy) once EIP-7702 session keys land on Monad.
+**Key material:**
+- It never leaves the session types. No public API returns key bytes.
+- `MeraWallet` no longer conforms to a caller-facing raw-digest signer.
+- Moments collect uses the exact-approval path.
+- Perpl enrolment builds its own digest inside the session from validated typed data.
 
-The submission story: one passkey, three lives — a wallet that signs, a Perpl capability that trades, a social identity
-that speaks — plus state that follows the user to any device and is readable by no server. The live test: clear the
-app on one phone, open a second device, one Face ID, and the wallet, the trading session, the handle and the running
-strategies are all back.
+**Perpl for Mera accounts:**
+- The Ed25519 trade secret is derived from the utility output at unlock and held in memory only. It is never passed to `PerplKeychain.save`.
+- The token may be persisted, because the token alone can't sign in to the WebSocket.
+- Each enrolment has a key of its own: Perpl registers a public key once (409 for any second enrolment, even after a revoke) and hands out its token once, so one fixed key could never be enrolled on a second device. An enrolment draws a random 16-byte nonce, stored with the token, and derives its key under `dyorhq.perpl-trading.v1/<nonce hex>` (`Mera.Purpose.perplTrading(nonce:)`). A token from before nonces keeps `dyorhq.perpl-trading.v1`. The nonce without the passkey signs nothing.
+- `ensureConnected`, the keep-alive and RootView's reconnect on `.active` all require a live session.
+- `submit` and `submitBracket` require a live session and a notional cap.
+- Cancels and reduce-only closes are allowed only after a step-up.
 
-## 8. Judging criteria, mapped
+### Scope: what is prompt-free while a session is live
 
-- Time-to-first-transaction: 2 taps + Face ID, gas dripped, swap confirmed in the activity log.
-- Session design: scoped, capped, timed sessions with visible expiry and explicit re-prompt classes.
-- Stateless test: no secret on disk; address from the passkey, state from Supabase, secrets from a vault.
-- Composability (bonus): gas drip now, 7702 + paymaster + session keys next; Privy remains the alternative on-ramp.
-- Bounty two: two PRF salts per ceremony, HKDF purposes under the utility salt, vaults for wrapped secrets, nothing on disk; cross-device test = same trading key, same state, same handle on a second device.
+An action is prompt-free only when every check below passes. Otherwise it asks for Face ID, runs a pinned ceremony that must derive the same address, signs that one action, and opens a new session.
 
-## 9. Needed from the owner
+1. **The sheet declares a session-OK intent.** The default is "ask", so untagged sheets fail closed. Session-OK intents:
+   - swaps on Uniswap and Monday;
+   - Kuru Flow swaps, only if minOut is at least quote × (1 − 1%), rounded down as Kuru rounds it; otherwise Face ID. A recipient other than the account, or tokens other than the declared swap's, are refused outright (below);
+   - Launchpad buy and sell;
+   - Moments collect, claim and withdraw-to-self;
+   - Perpl deposit to own account, withdraw to own address, orders and brackets;
+   - wrap and unwrap.
+2. **The wallet's own check passes**, independently of the sheet:
+   - `chainId == 143`;
+   - `(to, selector)` is on the allowlist;
+   - ERC-20 `approve` and Permit2 `approve`: the spender is in the allowed set, the amount is no more than the declared input, the Permit2 expiration is no later than the session's `expiresAt`, and the value is 0;
+   - any MON sent is no more than the declared amount;
+   - the launchpad curve address is verified on-chain against the known factories (current and retired stacks);
+   - an unpriced input means Face ID.
+3. **The caps hold:** at most $100 per action and $250 per session. Anything above asks. A perp order is valued at its worst fill: a market order at the mark moved by the whole slippage, a limit order at the higher of its limit and the mark (a short limited below the mark fills near it).
 
-- Apple Team ID (for the AASA file) and hosting access for dyorhq.fun (it is parked at Hostinger today).
-- rpId decision (`dyorhq.fun` recommended) and testnet vs mainnet for the demo.
-- The bounty deadline and whether the submission goes through the Metropolis hackathon portal.
-- A small MON float for the gas drip and the limits you are comfortable with.
+**Refused whatever the approval** (`SigningPolicy.refusal`, checked before any prompt on every transaction a passkey account signs, prompt-free or approved by a step-up; the badge reads "Blocked for your safety: <reason>" and the button is disabled):
+- on Monad, a network fee out of bounds: more than 5 MON (gas limit × max fee), a gas limit over 15M, or a tip above the max fee. The RPC sets the fee and neither the sheet nor the caps show it. The largest transaction the app sends, a launch with its first buy, used ~5.2M gas on mainnet (~1.3 MON at the usual fees); a normal swap pays ~0.07 MON;
+- a Kuru Flow swap paying its output to another address (any intent), or trading tokens other than the declared Kuru swap's;
+- a declared launchpad buy or sell paying another address.
+
+Kuru Flow's calldata is also checked when it is quoted, for every account type (`KuruFlowClient.quote`): it must pay this account, trade exactly the requested amount of the requested tokens, and enforce at least the requested slippage's minimum on the quoted output. The sheet shows that enforced minimum.
+
+**Always asks:**
+- Send, token transfer, Bridge, launch or create, withdraw to another address;
+- export, deletion, lengthening the session;
+- any raw digest;
+- any message except the exact wallet-auth template (`"DyorHQ Sign-In\n\nWallet: …\nNonce: …\nIssued At: …"`) and the gas-drip template.
+
+**Builder fixes:**
+- Uniswap uses exact approvals. Today it uses `maxUint160` and a 30-day Permit2 allowance.
+- Moments collect for Mera uses the exact-approval path.
+
+**On screen:**
+- A Home pill reads "Active · 12m" and turns amber in the last minute. It reads "Locked" once the session ends. Tapping it opens a scope sheet.
+- Sheet badges read "No Face ID needed", "Face ID required: <reason>" or "Blocked for your safety: <reason>".
+- When locked, the button reads "Confirm with Face ID".
+- "Face ID" is the device's own prompt everywhere: Touch ID, Optic ID, or Passcode when no biometrics are enrolled (`BiometricGate.promptName`).
+- The review sheet freezes the quote it opened with, so its details, its intent and the plan it signs never drift apart while quotes refresh.
+- Bridge never prompts on open: a locked passkey account without a backend session sees "Unlock to bridge".
+- Expiry never shows a pop-up, and the form is kept.
+- A cancelled step-up shows "Not sent. Nothing left your account."
+
+## 4. Funding the first transaction (no gas sponsorship — owner confirmed 2026-09-25)
+
+**Sponsorship is not required.**
+- The bounty's deliverables are:
+  - real transactions and a live demo;
+  - one-prompt onboarding;
+  - prompt-free signing in a clearly scoped session;
+  - the stateless test.
+- None of them asks for sponsored gas.
+- Gas sponsorship appears only as one example of the optional bonus ("stack composability … gas sponsorship, intents, recovery flows, smart-account patterns, cross-chain accounts").
+- DyorHQ sponsors no gas today, and this build doesn't either.
+
+**The trade-off.** Time-to-first-transaction is judged ("taps and seconds from landing page to confirmed Monad transaction"). A new account has 0 MON, so the first transaction waits for a deposit.
+
+**Instead, the "Add funds" step is as fast as possible.**
+- After Create, Home shows an "Add funds to start trading" card with:
+  - the address;
+  - a QR code;
+  - Copy and Share;
+  - "Bridge from another chain" (the existing Aurora bridge);
+  - a live balance watch that polls every few seconds.
+- The moment funds arrive, the card turns into "Make your first trade".
+- The first trade is a single, prompt-free swap in the live session.
+
+**How it's built** (`Home/AddFundsCard.swift`; the rules are in DyorKit `FirstFunding`, tested in `FirstFundingTests`):
+- **Who sees it:** a passkey account only. One read decides. The card shows only when every known-token balance is dust and the account has no activity. Dust means under 0.001 MON, under $0.01 for a priced token, or any amount of an unpriced token that isn't curated, so an airdrop can't pass for a deposit.
+- **Activity** means any of these:
+  - a Monad nonce above 0 (pending included);
+  - an entry in the app's activity log other than a bridge in, since the bridge is how the card funds the account;
+  - launch coins, Moments or Perpl equity.
+- **The watch:** the balances over the known tokens (Home's own source) every 4 s. It runs only while Home is on screen, the app is active and the card isn't done. The nonce isn't read while the account is still empty. Prices come from Home's last load.
+- **Card phases:**
+  - **Funds arrived:** shown for 1.5 s, so the deposit is 3 blocks old before the account can spend it. The balance above it refreshes right away.
+  - **Make your first trade:** opens Swap on the pair and signs under the swap intent. The pair is MON → USDC, or USDC → MON when only USDC came (another curated token → MON, and WMON → USDC).
+  - **Too little MON for the network fee** (under 0.1 MON, which covers what Max keeps back for a swap plus a token-in trade's approvals): the button waits, and the card asks for about 0.1 MON.
+- **When it goes:** the card ends at the first activity, or when the first-trade card is closed. It never goes back to an earlier phase. A funded account with no activity doesn't see it again after a relaunch.
+- The copy says "MON" and "Monad", and never says "gas".
+
+**Bonus without a sponsor.** "Intents" and "cross-chain accounts" come from the Aurora bridge: the same address on every EVM chain, with any-chain funding. Recovery comes from phrase export.
+
+**For the demo:**
+1. Fund the new account from the owner's wallet by scanning the QR code, with a timer on screen.
+2. Or show a pre-funded rehearsal account, and say so in the write-up.
+
+**Optional later, if time allows:** a small gas drip. The design is kept in the v2 notes in memory (`mera-passkey-accounts`).
+- The easiest version is a function in the existing Supabase project with a small float.
+- A separate project would cost $10/mo.
+
+## 5. Monad fee and reserve fixes (all builds)
+
+**Done (uncommitted), all tested in DyorKit (`RPCFailoverTests`, `MonadReserveTests`):**
+- **Fees.** `TransactionSender` takes the tip from `eth_maxPriorityFeePerGas` and sets maxFee = 2 × base + tip. It falls back to the gas price.
+- **Reserve spacing.** In `TransactionSender.run` on Monad, a step with value > 0 from an account under 10 MON + value waits until the head is 3 blocks past the block that confirmed the run's previous step. A first step, a step without value, a well-funded account and every other chain go straight on. A balance that can't be read counts as under; a head that doesn't move gives up after 5 s and sends anyway (a local fork mines on demand). The at-risk case is an ERC-20-pair launch with a creator buy: approve → `launchAndBuy` with the 5 MON fee.
+- **Funds still settling.** When Monad refuses a broadcast with "…insufficient balance" (funding under 3 blocks old), `send` resends the same signed bytes once after ~1 s, so there is no second signature or Face ID. If it is refused again, the message is "Your funds are still arriving. Try again in a moment." when the latest balance covers value + gas limit × max fee, and "Not enough MON to pay for gas." when it doesn't. Other chains keep the node's error.
+- **Honest Max** (`NetworkFeeReserve`, `TransactionSender.maxValue`). The native Max keeps back gas limit × (2 × base + tip) from the RPC, × 5/4 on Monad and × 2 elsewhere (plus 0.00001 ETH for the L1 data fee on Base, Optimism and Scroll). The gas limit is estimated like `prepare` does (estimate + 20%) for the transaction when there is one, or budgeted: 300k for a swap, 25,200 for a transfer. When the fee can't be read: 0.06 MON on Monad, a per-chain amount elsewhere. The Max is zero when the fee takes the whole balance.
+  - Swap (MON in): the value step of the route on screen, or the swap budget. Replaces the old 0.02 MON.
+  - Bridge (native source, any chain): a transfer to the quote's deposit address, or to a code-less stand-in before there is one, on the source chain. Replaces keeping 0.
+  - Send (MON): a transfer to the recipient once one is entered. Replaces keeping 0.
+
+## 6. Stateless test
+
+**Reconstructed from the passkey and the chain:**
+- the address and key;
+- the Supabase session, by re-signing wallet-auth;
+- Perpl trading, by enrolling again (Profile › Perpl Trading › Connect): a new key from the passkey and a fresh nonce (§3), one Face ID at most and none inside a live session. Perpl refuses a key it has seen, and allows 16 active keys per account; a 423 says to remove old ones on app.perpl.xyz;
+- balances, positions, launches and Moments.
+
+**Restored from Supabase** (`BackendSync.restore`, rules in DyorKit `BackendRestore`):
+- notifications, alerts and settings, into stores that are still empty (as before);
+- activity: merged into the device's log on every restore, never doubling a row (same id or tx hash). Every local row is kept; restored rows only fill the room left under the 300 the local log holds, newest first, so however many there are they never push a device's own record out (a full log restores none). Rows are checked first: a UUID id, a kind and title, a real timestamp no more than 10 minutes ahead (`BackendRestore.Activity.futureSkew`), a 32-byte hash or none, non-negative dollar sizes;
+- settings are checked: slippage only as one of the Trading Preferences choices (0.1/0.5/1/2 %, never above 300 bps) and leverage as a whole step in 1–50×; anything else present restores as the default (0.5 %, 2×), and a mistyped key is ignored.
+
+**"Forget This Device"** (Profile, in place of Sign Out for a passkey account) runs `AccountDeletion.eraseThisDevice`: backend sign-out, the Perpl token dropped, notifications cleared, then `eraseLocalData()`. It never signals Apple. Footer: "Removes this account from this iPhone. Your passkey keeps it — sign in again anytime."
+
+**Deleting and reinstalling** wipes the Mera hint (UserDefaults). The account comes back through "I already have a passkey".
+
+## 7. Export (recovery phrase)
+
+`MeraSession.revealPhrase()`:
+- runs a fresh pinned ceremony every time;
+- checks that the derived address matches;
+- returns the 24 words.
+
+The view:
+- blanks the words while the screen is being captured (`sceneCaptureState` / `UIScreen.isCaptured`) and on background (PrivacyCover);
+- auto-hides after 60 s;
+- asks the user to confirm 3 of the words.
+
+`WalletExportView` routes `.meraPasskey` here, and the Manage Wallets footer is fixed.
+
+## 8. Account deletion removes the passkey
+
+**API** (iOS 26.5 SDK):
+- iOS ≥ 26.2: `ASCredentialDataManager().reportUnknownPublicKeyCredential(relyingPartyIdentifier:credentialID:)`
+- iOS 26.0–26.1: `ASCredentialUpdater()` has the same method.
+- iOS 18: no API.
+
+**What it does and doesn't guarantee:**
+- Apple doesn't confirm the result. The credential "may be removed or hidden".
+- Apple Passwords was observed moving it to Recently Deleted for 30 days.
+- Third-party managers act only if they opt in.
+- A passkey used over QR from another phone isn't reached.
+
+**Flow for `.meraPasskey`:**
+1. **The screen:**
+   - It shows the address and what could be lost: MON and tokens, Perpl collateral, NFTs and Moments, creator fees and vesting, and funds at the same address on other chains.
+   - Copy: "Deleting removes your passkey, which is this wallet's only key. Assume this is permanent unless you export the recovery phrase first."
+   - The primary buttons are **Export recovery phrase** and **Move funds out**.
+   - Deleting without an export always needs the box "I understand I may permanently lose these funds" ticked. It is never skipped based on a balance read.
+2. **Type DELETE** (as today).
+3. **Delete with Face ID:**
+   - This runs a forced pinned ceremony, even while a session is live.
+   - The derived address must equal the one on screen.
+   - It captures the credential ID in memory and opens the session used for the backend signature.
+4. **Server rows are deleted.** Deleting the profile cascades to activity, device_tokens, notifications, alerts, user_settings and sessions. `email_accounts` is deleted explicitly, as today.
+   - On failure, stop: "Nothing on this phone was changed."
+5. **Signal:** `reportUnknownPublicKeyCredential(accounts.dyorhq.fun, credentialID)`, only after the server delete succeeds.
+6. **Erase:** `eraseLocalData()`.
+7. **Done:**
+   - "Account deleted."
+   - Conditional copy: "If your passkey is in iCloud Keychain, Passwords may keep it in Recently Deleted for up to 30 days."
+   - Always the manual steps: Passwords app › Passkeys › search "dyorhq" › DyorHQ passkey › Edit › Delete. Delete it in 1Password or another app if it's stored there, or on the other phone if you used QR.
+   - On iOS 18: "One step left: delete the passkey yourself", plus the same steps.
+
+## 9. Build order
+
+Agent work happens on branch `mera/bounty`. It is verified with `swift test`, a Simulator build and a DEBUG Simulator-only stub authenticator:
+- the stub uses a random PRF per install, never a repo constant;
+- it refuses non-localhost RPC;
+- an account it derives is confined to the local fork where it signs (`MeraSession`, `Mera.Stub.permits`): transactions for chain 143 only, no messages, so no wallet-auth sign-in to the production backend (skipped quietly), no Perpl enrolment, and the Bridge screen reads "Not available in Simulator test mode";
+- it is absent from Release.
+
+1. Flags and config: the rpId constant, the entitlement, and disabling Privy passkeys when `hasMera`. (`MERA_ONLY` was built, then removed per the owner's direction.)
+2. Ceremony: `prfUnavailable`, the lazy utility salt, serialisation, names, the error mapping, `userID`, the forced pinned assertion, the signal helper and orphan cleanup, and the stub authenticator.
+3. Launch: no prompts, PrivacyCover on background only, no App Lock double prompt. Notification permission is asked at sign-in, as for every account.
+4. Session lifetime: fixed `expiresAt`, the timer, `end()`, Face ID to lengthen, and the Perpl in-memory key and socket lifecycle.
+5. Scope: intents, the wallet check, caps, Kuru decoding, exact approvals, Moments exact path, typed enrolment, and the UI (pill, badges, locked button).
+6. Export.
+7. Deletion.
+8. Stateless: activity restore, settings clamp, Forget this device.
+9. Reserve spacing and the Max buttons.
+10. Parity script (`scripts/mera-parity`), and Mera's MIT license text in `THIRD_PARTY_NOTICES.md` (Mera is MIT OR Apache-2.0).
+11. The "Add funds" card with a live balance watch that becomes "Make your first trade". There is no gas sponsorship (§4).
+
+**The owner:**
+- approves the rpId;
+- allows the repo and DNS changes;
+- turns on 2FA;
+- enables Associated Domains on the App ID;
+- asks the organisers whether a port counts;
+- picks an OSI license;
+- runs the device tests: prompt count, same address after reinstall and on a second device, QR, deletion moving the passkey to Recently Deleted.

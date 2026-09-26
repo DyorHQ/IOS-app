@@ -20,8 +20,21 @@ final class SocialSession {
     /// The open `sessions` row for this app session, persisted per wallet so a sign-out after an app relaunch can
     /// still close the same row.
     private var currentSessionRowId: String?
+    /// The wallet-auth sign-in in flight and the wallet it is for. A second request for the same wallet while it runs
+    /// (RootView's, while `signInWithMera`'s runs in the background) waits for it instead of signing a second nonce.
+    private var pending: (wallet: String, task: Task<Void, Never>)?
+    /// Profile work still running — a restored session's (`bind`), a sign-in's follow-up (`startSignIn`, which a new
+    /// passkey account doesn't await) — each of which upserts the profile row. Each removes itself when done. Account
+    /// deletion waits them out first (`settle`), so a late upsert can't recreate the row it just deleted.
+    private var profileWork: [UUID: Task<Void, Never>] = [:]
+    /// Ends the adopted backend token's `.signedIn` a minute before it expires (12 h after wallet-auth issued it), so a
+    /// dead token never reads as signed in and the next prompt-free sign-in (RootView when a passkey session opens,
+    /// Bridge on open, any screen that signs in) gets a new one.
+    @ObservationIgnored private var expiry: Task<Void, Never>?
 
     var isSignedIn: Bool { state == .signedIn }
+    /// Whether this session belongs to `address` (after `bind`, or a sign-in started for it).
+    func isBound(to address: Address) -> Bool { boundWallet == address.checksummed.lowercased() }
 
     init(config: AppConfig) {
         client = SupabaseClient(url: config.supabaseURL, anonKey: config.supabaseKey)
@@ -41,6 +54,7 @@ final class SocialSession {
         // Full wallet sign-out: record the sign-out time on the still-authed session, THEN tear down.
         if target == nil {
             state = .signedOut; profile = nil; error = nil
+            cancelExpiry()
             Task {
                 if let previous { await closeSession(wallet: previous) }
                 await client.signOut()
@@ -51,47 +65,145 @@ final class SocialSession {
 
         reset() // switching to a different wallet: drop the previous wallet's in-memory session
         guard let target, let stored = SupabaseSessionStore.load(), stored.wallet == target, stored.isValid else { return }
-        Task {
-            await client.restore(stored)
-            if await client.currentSession != nil {
-                state = .signedIn
-                try? await ensureProfile(wallet: target) // safety net: a returning wallet always has a profile
-                await openSession(wallet: target)        // a restored session on launch is this app-session's sign-in
-                await loadProfile()
+        trackProfileWork {
+            await self.client.restore(stored)
+            if await self.client.currentSession != nil, self.boundWallet == target {
+                self.adopted(stored)
+                try? await self.ensureProfile(wallet: target) // safety net: a returning wallet always has a profile
+                await self.openSession(wallet: target)        // a restored session on launch is this app-session's sign-in
+                await self.loadProfile()
             }
         }
+    }
+
+    /// Waits for the sign-in in flight and all profile work (`profileWork`). Account deletion calls it before deleting
+    /// the profile row, which any of them could otherwise recreate afterwards.
+    func settle() async {
+        if let pending { await pending.task.value }
+        while let running = profileWork.values.first { await running.value }
+    }
+
+    /// Runs `work` as profile work (`profileWork`), which removes itself when done. The task can't start before it is
+    /// recorded: both run on the main actor, and this holds it until then.
+    @discardableResult
+    private func trackProfileWork(_ work: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        let id = UUID()
+        let task = Task { @MainActor in
+            await work()
+            self.profileWork[id] = nil
+        }
+        profileWork[id] = task
+        return task
     }
 
     /// Clears the in-memory session (keeps any stored token). Used when rebinding to a different wallet.
     private func reset() {
         Task { await client.signOut() }
+        cancelExpiry()
         state = .signedOut
         profile = nil
         error = nil
     }
 
-    func signIn(session: Session) async {
-        guard let wallet = session.wallet, let address = session.address else { error = SessionError.readOnly.localizedDescription; return }
-        state = .signingIn
-        error = nil
-        do {
-            let created = try await client.signIn(address: address.checksummed) { message in try await wallet.signMessage(message) }
-            SupabaseSessionStore.save(created)
-            boundWallet = created.wallet
-            state = .signedIn
-            try? await ensureProfile(wallet: created.wallet)
-            await openSession(wallet: created.wallet)
-            await loadProfile()
-        } catch {
-            state = .signedOut
-            self.error = describe(error)
+    /// `session` is the client's now: signed in until a minute before it expires, for as long as this wallet stays bound.
+    private func adopted(_ session: SupabaseSession) {
+        state = .signedIn
+        expiry?.cancel()
+        let wallet = boundWallet
+        let ends = session.expiresAt.addingTimeInterval(-60)
+        expiry = Task { @MainActor [weak self] in
+            let delay = ends.timeIntervalSinceNow
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            guard !Task.isCancelled, let self, self.boundWallet == wallet, self.state == .signedIn else { return }
+            // The wallet stays bound and the stored token is left to expire; the client already treats it as gone
+            // (`SupabaseSession.isValid`), so only the state needs to follow.
+            self.expiry = nil
+            self.state = .signedOut
         }
     }
+
+    private func cancelExpiry() {
+        expiry?.cancel()
+        expiry = nil
+    }
+
+    func signIn(session: Session) async {
+        guard let wallet = session.wallet, let address = session.address else { error = SessionError.readOnly.localizedDescription; return }
+        await signIn(address: address, wallet: wallet)
+    }
+
+    /// Signs in as `address` with `wallet`, or waits for the sign-in already in flight for it.
+    func signIn(address: Address, wallet: any Wallet) async {
+        await startSignIn(address: address, wallet: wallet).value
+    }
+
+    /// Starts the wallet-auth sign-in for `address` (or returns the one in flight for it) without waiting. Synchronous
+    /// up to the network: the session is bound to this wallet before the call returns, so an account published in the
+    /// same main-actor turn (`Session.signInWithMera`) finds it bound when RootView rebinds, and the rebind leaves the
+    /// sign-in alone instead of resetting it. With `profileInBackground` (a new passkey account), the task ends once
+    /// wallet-auth has answered — whoever joins it (RootView's restore) goes on — and the profile row, this
+    /// app-session's `sessions` row and the profile load follow on their own. A passkey account's background signer
+    /// that finds its session ended (`MeraSession.Failure.promptNeeded`) skips the sign-in quietly: no error, and
+    /// RootView retries once the account can sign without a prompt.
+    @discardableResult
+    func startSignIn(address: Address, wallet: any Wallet, profileInBackground: Bool = false) -> Task<Void, Never> {
+        #if DEBUG && targetEnvironment(simulator)
+        // Simulator test mode: a passkey account the stub derived never signs in to the (production) backend — its key
+        // sits in plain UserDefaults (`MeraSession.isStub`). Every wallet-auth sign-in comes through here, so each one
+        // is skipped quietly, before any request: no error, the state as it was.
+        if Self.isStubSigner(wallet) { return Task {} }
+        #endif
+        let target = address.checksummed.lowercased()
+        if let pending, pending.wallet == target { return pending.task }
+        if boundWallet != target { profile = nil; boundWallet = target }
+        state = .signingIn
+        error = nil
+        let task = Task {
+            defer { if pending?.wallet == target { pending = nil } }
+            do {
+                // Not adopted by the client yet: another wallet may be bound by the time wallet-auth answers.
+                let created = try await client.signIn(address: address.checksummed, adopt: false) { message in try await wallet.signMessage(message) }
+                // The app moved on (signed out, or another wallet) while wallet-auth answered: don't adopt it.
+                guard boundWallet == target else { return }
+                await client.restore(created)
+                guard boundWallet == target else { return }
+                SupabaseSessionStore.save(created)
+                boundWallet = created.wallet
+                adopted(created)
+                let followUp = trackProfileWork {
+                    try? await self.ensureProfile(wallet: created.wallet)
+                    await self.openSession(wallet: created.wallet)
+                    await self.loadProfile()
+                }
+                if !profileInBackground { await followUp.value }
+            } catch {
+                // Superseded (signed out, or another wallet signed in meanwhile): leave that wallet's state alone.
+                guard boundWallet == target else { return }
+                state = .signedOut
+                // A background signer that needed a prompt, or a passkey prompt the person dismissed, is no error.
+                if case MeraSession.Failure.promptNeeded = error { return }
+                if isUserCancellation(error) { return }
+                self.error = describe(error)
+            }
+        }
+        pending = (target, task)
+        return task
+    }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// Whether `wallet` is a passkey account's signer whose session runs on the Simulator stub.
+    private static func isStubSigner(_ wallet: any Wallet) -> Bool {
+        if let signer = wallet as? MeraWallet { return signer.session.isStub }
+        if let signer = wallet as? MeraBackgroundSigner { return signer.session.isStub }
+        return false
+    }
+    #endif
 
     /// Full sign-out: records the sign-out time, then clears the in-memory session and the stored token.
     func signOut() {
         let wallet = boundWallet
         state = .signedOut; profile = nil; error = nil
+        cancelExpiry()
         boundWallet = nil
         Task {
             if let wallet { await closeSession(wallet: wallet) } // on the still-authed session
