@@ -5,28 +5,43 @@
 // TWO independent proofs before it writes:
 //
 //   1. Ownership of the EMAIL — the caller passes the Privy access token issued after a fresh email one-time-code
-//      login (same OTP as sign-up). The token is verified against the app's public key, and the email is read back
-//      from Privy with the app secret, so the client can never assert an email it did not just verify.
+//      login (same OTP as sign-up). The token is verified against the app's public key, must have been issued within
+//      the last 15 minutes (security audit 2026-09-26, SB-10), and the email is read back from Privy with the app
+//      secret, so the client can never assert an email it did not just verify.
 //   2. Control of the NEW WALLET — the caller signs a challenge (EIP-191 personal_sign) that names the email and the
 //      new address. The signer is recovered from the signature; only the holder of the new private key can produce it.
 //
 // The two proofs are bound together by the challenge (it carries the same email Privy attests), so this can only ever
 // bind an email you verified to a wallet you hold — it cannot hijack someone else's email or point at a wallet you
-// don't control. Then the binding is upserted with the service role, which is the only path allowed to overwrite a
-// row owned by another wallet.
+// don't control.
+//
+// An email that is already bound to ANOTHER wallet is never moved silently (GE-1, rebind.ts): the request must carry
+// "replace": "<that wallet>", which the app sends only after showing the user that wallet (and what it holds) and
+// getting their confirmation. Otherwise the answer is 409 {"error":"email_already_bound","current":"<that wallet>"}
+// and nothing is written. A first sign-up and a same-wallet re-bind are unchanged.
+//
+//   POST { message, signature, replace? }   Authorization: Bearer <Privy access token>
+//     200 { rebound: true, address }
+//     400 malformed body, expired challenge, no verified email, email mismatch
+//     401 invalid, expired or stale (> 15 min) Privy token; signature does not match
+//     409 { error: "email_already_bound", current }
+//     429 too many Privy lookups for this user (Retry-After)
+//     503 Privy or the database unavailable — retry (RO-9: every Privy call has a timeout)
 //
 // Deploy:  supabase functions deploy email-rebind --no-verify-jwt   (the bearer is a Privy token, not a Supabase JWT)
+//          Deploy this version only once the first app build that handles the 409 (and sends "replace") is the
+//          minimum build (app_config ios.min_build): older builds cannot confirm a replacement, so their Forgot
+//          Password would be refused.
 // Secrets: PRIVY_APP_SECRET (shared with delete-account). SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are auto-injected.
 // Needs migration 20 (email_pepper_lookup_gate) applied before this version is deployed.
-import { importSPKI, jwtVerify } from "npm:jose@5";
 import { recoverMessageAddress } from "npm:viem@2";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { linkedEmail, privyTokenClaims, privyUser, PrivyUnavailable, tokenIsFresh } from "../_shared/privy.ts";
+import { decideRebind, field, parseReplace, REBIND_WINDOW_MS, TOKEN_MAX_AGE_S } from "./rebind.ts";
 
-const APP_ID = Deno.env.get("PRIVY_APP_ID") ?? "cmttp2squ00lk0djrso3z0yvm";
-const PRIVY = "https://auth.privy.io/api/v1";
-const REBIND_WINDOW_MS = 15 * 60 * 1000; // the signed challenge is only good for 15 minutes
 // The Privy-lookup budget's subject: the same hash email-pepper uses, so the two functions share one budget per user.
 const PRIVY_USER_LABEL = "dyorhq/email-pepper/v1/privy-user:";
+const UNAVAILABLE = "email verification is unavailable right now — try again in a minute";
 
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -43,36 +58,6 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 }
 
-let verificationKey: CryptoKey | null = null;
-async function appVerificationKey(): Promise<CryptoKey> {
-  if (verificationKey) return verificationKey;
-  const res = await fetch(`${PRIVY}/apps/${APP_ID}`, { headers: { "privy-app-id": APP_ID } });
-  if (!res.ok) throw new Error(`privy app config ${res.status}`);
-  const app = await res.json();
-  verificationKey = await importSPKI(String(app.verification_key), "ES256");
-  return verificationKey;
-}
-
-// Reads the verified email Privy holds for this user (never trusts an email supplied by the client). Throws when Privy
-// does not answer (rate limit, outage) so that is reported as "try again", not as "no verified email".
-async function privyEmail(userId: string, secret: string): Promise<string | null> {
-  const res = await fetch(`${PRIVY}/users/${encodeURIComponent(userId)}`, {
-    headers: { Authorization: "Basic " + btoa(`${APP_ID}:${secret}`), "privy-app-id": APP_ID },
-  });
-  if (!res.ok) throw new Error(`privy responded ${res.status}`);
-  const user = await res.json();
-  const accounts: Array<Record<string, unknown>> = user?.linked_accounts ?? [];
-  const email = accounts.find((a) => a?.type === "email");
-  const address = email?.address;
-  return typeof address === "string" ? address.trim().toLowerCase() : null;
-}
-
-// Pulls `Field: value` lines out of the challenge the wallet signed.
-function field(message: string, key: string): string | null {
-  const line = message.split("\n").find((l) => l.toLowerCase().startsWith(`${key.toLowerCase()}:`));
-  return line ? line.slice(line.indexOf(":") + 1).trim() : null;
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
@@ -82,24 +67,34 @@ Deno.serve(async (req) => {
 
   let userId: string;
   try {
-    const { payload } = await jwtVerify(token, await appVerificationKey(), { issuer: "privy.io", audience: APP_ID });
-    if (!payload.sub) throw new Error("no subject");
-    userId = payload.sub;
-  } catch {
+    const claims = await privyTokenClaims(token);
+    if (!tokenIsFresh(claims.issuedAt, Date.now(), TOKEN_MAX_AGE_S)) {
+      return json({ error: "this verification expired — request a new code" }, 401);
+    }
+    userId = claims.userId;
+  } catch (err) {
+    if (err instanceof PrivyUnavailable) return json({ error: UNAVAILABLE, retryable: true }, 503);
     return json({ error: "invalid Privy access token" }, 401);
   }
 
   const secret = Deno.env.get("PRIVY_APP_SECRET");
-  if (!secret) return json({ error: "PRIVY_APP_SECRET is not configured" }, 500);
+  const url = Deno.env.get("SUPABASE_URL");
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!secret || !url || !serviceKey) {
+    console.error("email-rebind: PRIVY_APP_SECRET / SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing"); // logs only (SB-11)
+    return json({ error: "email verification is not available right now" }, 500);
+  }
 
-  let message: string, signature: string;
+  let message: string, signature: string, replace: string | undefined;
   try {
     const body = await req.json();
     message = String(body.message ?? "");
     signature = String(body.signature ?? "");
-    if (!message || !signature.startsWith("0x")) throw new Error("bad body");
+    const parsed = parseReplace(body.replace);
+    if (!message || !signature.startsWith("0x") || parsed === "invalid") throw new Error("bad body");
+    replace = parsed;
   } catch {
-    return json({ error: "expected { message, signature }" }, 400);
+    return json({ error: "expected { message, signature, replace? }" }, 400);
   }
 
   // The challenge must be recent and carry the address it claims to bind. These checks, and the signature below, cost
@@ -126,9 +121,9 @@ Deno.serve(async (req) => {
   // Each Privy admin call first passes email_pepper_lookup_gate (migration 20): at most 10 lookups per Privy user per
   // 15 minutes, a budget shared with the email-pepper function (same subject hash), so one token replaying one valid
   // challenge cannot turn into a stream of calls under Privy's app-wide rate limit.
-  const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const gate = await admin.rpc("email_pepper_lookup_gate", { p_subject: await sha256Hex(PRIVY_USER_LABEL + userId), p_ip: null });
-  if (gate.error || !gate.data || typeof gate.data !== "object") return json({ error: "email verification is unavailable right now — try again in a minute" }, 503);
+  if (gate.error || !gate.data || typeof gate.data !== "object") return json({ error: UNAVAILABLE, retryable: true }, 503);
   const retryAfter = (gate.data as { retryAfter?: unknown }).retryAfter;
   if (typeof retryAfter === "number") {
     const wait = Math.max(1, Math.ceil(retryAfter));
@@ -137,26 +132,44 @@ Deno.serve(async (req) => {
       headers: { ...cors, "Content-Type": "application/json", "Retry-After": String(wait) },
     });
   }
-  if ((gate.data as { ok?: unknown }).ok !== true) return json({ error: "email verification is unavailable right now — try again in a minute" }, 503);
+  if ((gate.data as { ok?: unknown }).ok !== true) return json({ error: UNAVAILABLE, retryable: true }, 503);
 
   // Proof #1 — the email Privy attests for this token; the challenge must name that exact email.
   let verifiedEmail: string | null;
   try {
-    verifiedEmail = await privyEmail(userId, secret);
+    verifiedEmail = linkedEmail(await privyUser(userId, secret))?.trim().toLowerCase() || null;
   } catch {
-    return json({ error: "email verification is unavailable right now — try again in a minute" }, 503);
+    return json({ error: UNAVAILABLE, retryable: true }, 503);
   }
   if (!verifiedEmail) return json({ error: "no verified email on this Privy account" }, 400);
   if (claimedEmail !== verifiedEmail) return json({ error: "the code you entered was for a different email" }, 400);
 
-  // Both proofs hold — overwrite the binding with the service role (the only path allowed past the owner RLS).
-  const { error } = await admin
-    .from("email_accounts")
-    .upsert({ email: verifiedEmail, wallet: recovered, verified_at: new Date().toISOString() }, { onConflict: "email" });
-  if (error) {
-    console.error("email-rebind upsert failed:", error.message); // function logs only; never the client
-    return json({ error: "could not save the binding — try again" }, 502);
-  }
+  // Both proofs hold. Write with the service role (the only path allowed past the owner RLS), never moving the email
+  // off another wallet without the client's confirmation (GE-1). A write that loses a race re-reads and decides again.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const existing = await admin.from("email_accounts").select("wallet").eq("email", verifiedEmail).maybeSingle();
+    if (existing.error) {
+      console.error("email-rebind read failed:", existing.error.message); // function logs only; never the client
+      return json({ error: "could not save the binding — try again", retryable: true }, 503);
+    }
+    const current = typeof existing.data?.wallet === "string" ? existing.data.wallet : null;
+    const decision = decideRebind(current, recovered, replace);
+    if (decision.action === "conflict") return json({ error: "email_already_bound", current: decision.current }, 409);
 
-  return json({ rebound: true, address: recovered });
+    const verified_at = new Date().toISOString();
+    const write = decision.action === "insert"
+      ? await admin.from("email_accounts")
+        .upsert({ email: verifiedEmail, wallet: recovered, verified_at }, { onConflict: "email", ignoreDuplicates: true })
+        .select("email")
+      : await admin.from("email_accounts")
+        .update({ wallet: recovered, verified_at })
+        .eq("email", verifiedEmail).eq("wallet", decision.from)
+        .select("email");
+    if (write.error) {
+      console.error("email-rebind write failed:", write.error.message); // function logs only; never the client
+      return json({ error: "could not save the binding — try again", retryable: true }, 503);
+    }
+    if ((write.data ?? []).length === 1) return json({ rebound: true, address: recovered });
+  }
+  return json({ error: "could not save the binding — try again", retryable: true }, 503);
 });
