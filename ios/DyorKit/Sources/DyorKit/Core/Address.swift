@@ -40,6 +40,17 @@ public struct Address: Hashable, Sendable, Codable, CustomStringConvertible {
         return out
     }
 
+    /// EIP-55 for typed or pasted input: an all-lowercase or all-uppercase address carries no checksum and passes as
+    /// typed; a mixed-case one must match its checksum exactly, so a mistyped character in a copied address is caught
+    /// before funds are sent to it. False when `string` is not an address at all.
+    public static func hasValidChecksum(_ string: String) -> Bool {
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let address = Address(trimmed) else { return false }
+        let body = String(trimmed.dropFirst(2))
+        if body == body.lowercased() || body == body.uppercased() { return true }
+        return "0x" + body == address.checksummed
+    }
+
     /// `0x1234…abcd`, for rows and titles.
     public var short: String {
         let s = checksummed

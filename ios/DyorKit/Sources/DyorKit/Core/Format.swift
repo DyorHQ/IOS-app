@@ -24,6 +24,7 @@ public enum Amount {
 
     /// Parses user input like "1,234.5" into raw units. Returns nil for anything that is not a plain decimal.
     public static func parse(_ input: String, decimals: Int) -> BigUInt? {
+        guard decimals >= 0 else { return nil } // a token's decimals can come from an API; negative ones would trap below
         let cleaned = input.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "")
         guard !cleaned.isEmpty, cleaned != ".", cleaned.allSatisfy({ $0.isNumber || $0 == "." }), cleaned.filter({ $0 == "." }).count <= 1 else { return nil }
         let parts = cleaned.split(separator: ".", omittingEmptySubsequences: false)

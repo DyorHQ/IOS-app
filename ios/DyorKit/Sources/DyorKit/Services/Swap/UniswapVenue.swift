@@ -237,7 +237,7 @@ struct UniswapVenue: Sendable {
         for (entry, result) in zip(coins, keys) {
             guard case .success(let values) = result else { continue }
             let key = values[0]
-            let poolKey = PoolKey(currency0: key[0].address, currency1: key[1].address, fee: Int(key[2].uint), tickSpacing: Int(key[3].int), hooks: key[4].address)
+            let poolKey = PoolKey(currency0: key[0].address, currency1: key[1].address, fee: Int(clamping: key[2].uint), tickSpacing: Int(clamping: key[3].int), hooks: key[4].address)
             guard !poolKey.hooks.isZero else { continue } // not graduated: no pool yet
             out.append((entry.0, poolKey))
         }
@@ -261,7 +261,7 @@ struct UniswapVenue: Sendable {
         let keys = try await multicall.readAll(try graduated.map { try SwapCalldata.launchpadPoolKey(factory: $0.factory, token: $0.token) })
         return zip(graduated, keys).map { pair, values in
             let key = values[0]
-            return (pair.token, PoolKey(currency0: key[0].address, currency1: key[1].address, fee: Int(key[2].uint), tickSpacing: Int(key[3].int), hooks: key[4].address))
+            return (pair.token, PoolKey(currency0: key[0].address, currency1: key[1].address, fee: Int(clamping: key[2].uint), tickSpacing: Int(clamping: key[3].int), hooks: key[4].address))
         }
     }
 

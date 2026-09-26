@@ -172,12 +172,13 @@ public actor RPCClient {
         guard responses.count == calls.count else { throw NetworkError.malformedResponse }
 
         var byId: [Int: JSON] = [:]
-        for r in responses { if let id = r["id"].number { byId[Int(id)] = r } }
+        // `Int(exactly:)`: a hostile or broken RPC can send any JSON number as an id; a non-integer one matches nothing.
+        for r in responses { if let id = r["id"].number, let key = Int(exactly: id) { byId[key] = r } }
         return (0..<calls.count).map { i in
             guard let r = byId[firstId + i] else { return .failure(RPCError(code: -1, message: "Missing response")) }
             let error = r["error"]
             if !error.isNull {
-                return .failure(RPCError(code: Int(error["code"].number ?? -1), message: error["message"].string ?? "RPC error", data: error["data"].string))
+                return .failure(RPCError(code: error["code"].number.flatMap { Int(exactly: $0) } ?? -1, message: error["message"].string ?? "RPC error", data: error["data"].string))
             }
             return .success(r["result"])
         }
@@ -185,12 +186,18 @@ public actor RPCClient {
 
     // MARK: Typed helpers
 
+    // Quantities from the RPC are converted with `init(exactly:)`: an out-of-range answer is a malformed response, not a
+    // crash.
     public func chainId() async throws -> Int {
-        Int(try quantity(await call("eth_chainId")))
+        let raw = try quantity(await call("eth_chainId"))
+        guard let id = Int(exactly: raw) else { throw NetworkError.malformedResponse }
+        return id
     }
 
     public func blockNumber() async throws -> UInt64 {
-        UInt64(try quantity(await call("eth_blockNumber")))
+        let raw = try quantity(await call("eth_blockNumber"))
+        guard let number = UInt64(exactly: raw) else { throw NetworkError.malformedResponse }
+        return number
     }
 
     public func balance(of address: Address, block: BlockTag = .latest) async throws -> BigUInt {
@@ -202,7 +209,9 @@ public actor RPCClient {
     }
 
     public func transactionCount(of address: Address, block: BlockTag = .pending) async throws -> UInt64 {
-        UInt64(try quantity(await call("eth_getTransactionCount", [.string(address.hex), block.json])))
+        let raw = try quantity(await call("eth_getTransactionCount", [.string(address.hex), block.json]))
+        guard let count = UInt64(exactly: raw) else { throw NetworkError.malformedResponse }
+        return count
     }
 
     public func gasPrice() async throws -> BigUInt {

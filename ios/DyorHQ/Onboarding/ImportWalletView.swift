@@ -166,10 +166,20 @@ struct ImportWalletView: View {
         importing = true
         error = nil
         Task {
-            await session.importWallet(derived)
+            guard await session.importWallet(derived) else {
+                // The key did not reach the Keychain: keep what the user entered so they can try again.
+                error = session.lastError ?? "Couldn't save the key on this iPhone. Try again."
+                importing = false
+                return
+            }
             Haptics.success()
-            // Scrub the secret from memory and the system clipboard now that the key is safely in the Keychain.
-            if UIPasteboard.general.string == importedSecret { UIPasteboard.general.string = "" }
+            // Scrub the secret from memory and the system clipboard now that the key is safely in the Keychain. The
+            // field holds a trimmed copy of what was pasted, so compare trimmed: a phrase copied with a trailing space or
+            // newline must not stay on the clipboard.
+            let trim = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if let clip = UIPasteboard.general.string, !trim(importedSecret).isEmpty, trim(clip) == trim(importedSecret) {
+                UIPasteboard.general.string = ""
+            }
             phrase = ""; privateKey = ""; self.derived = nil; reveal = false
             importing = false
             // The session flips to signed-in and the root view swaps to the app; nothing else to dismiss.

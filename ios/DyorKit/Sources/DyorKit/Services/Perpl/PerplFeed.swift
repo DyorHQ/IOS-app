@@ -258,7 +258,8 @@ public final class PerplFeed {
 
     /// Merge a delta into the current side: upsert changed prices, drop levels whose order count went to zero.
     private func apply(delta any: Any?, to current: [BookLevel], _ priceScale: Double, _ sizeScale: Double, descending: Bool) -> [BookLevel] {
-        var byPrice = Dictionary(uniqueKeysWithValues: current.map { ($0.price, $0) })
+        // Not `uniqueKeysWithValues`: a snapshot that repeats a price level would trap; the later level wins.
+        var byPrice = Dictionary(current.map { ($0.price, $0) }, uniquingKeysWith: { _, last in last })
         for level in (any as? [[String: Any]]) ?? [] {
             guard let p = num(level["p"]) else { continue }
             let price = p / priceScale

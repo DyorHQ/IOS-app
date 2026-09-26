@@ -493,7 +493,8 @@ struct PerpTradeView: View {
             Spacer()
             TextField("0.5", text: Binding(
                 get: { ticket.slippageBps == 0 ? "" : NumberStyle.number(Double(ticket.slippageBps) / 100, maximumFractionDigits: 2) },
-                set: { ticket.slippageBps = Int(($0.perpDouble ?? 0) * 100) }
+                // 0 (the default) to 50%, as the swap slippage sheet: never negative, never past 100%, never a trap.
+                set: { ticket.slippageBps = min(5_000, max(0, Int(exactly: (($0.perpDouble ?? 0) * 100).rounded(.towardZero)) ?? 0)) }
             ))
             .keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
             .font(.caption.weight(.medium)).frame(width: 60)
@@ -2226,11 +2227,13 @@ extension String {
     /// Parses a user-typed decimal. The decimal pad shows the locale separator ("," across much of Europe/LatAm) but
     /// our own writers (`plainSize`) emit POSIX "." — so try the fast POSIX path first, then normalize the locale's
     /// grouping/decimal separators. Purely additive: en_US "." input still parses via `Double(_:)` unchanged.
+    /// Finite values only: `Double(_:)` also reads "inf", "nan" and "1e400", which no amount field means and which
+    /// would trap when scaled to integers.
     var perpDouble: Double? {
-        if let d = Double(self) { return d }
+        if let d = Double(self) { return d.isFinite ? d : nil }
         var s = self
         if let g = Locale.current.groupingSeparator, !g.isEmpty { s = s.replacingOccurrences(of: g, with: "") }
         if let dec = Locale.current.decimalSeparator, dec != "." { s = s.replacingOccurrences(of: dec, with: ".") }
-        return Double(s)
+        return Double(s).flatMap { $0.isFinite ? $0 : nil }
     }
 }

@@ -59,8 +59,10 @@ public struct PerplOrderFrame: Sendable {
 
 /// Builds the order frames for a ticket: the entry order, plus optional take-profit and stop-loss triggers.
 public enum PerplOrders {
-    private static func scalePrice(_ price: Double, _ market: PerpMarket) -> Int { Int((price * pow(10, Double(market.priceDecimals))).rounded()) }
-    private static func scaleSize(_ size: Double, _ market: PerpMarket) -> Int { Int((size * pow(10, Double(market.lotDecimals))).rounded()) }
+    // `Int(exactly:)`, not `Int(_:)`: a non-finite or out-of-range value (a pasted "1e300") becomes 0 — an order Perpl
+    // refuses — instead of trapping.
+    private static func scalePrice(_ price: Double, _ market: PerpMarket) -> Int { Int(exactly: (price * pow(10, Double(market.priceDecimals))).rounded()) ?? 0 }
+    private static func scaleSize(_ size: Double, _ market: PerpMarket) -> Int { Int(exactly: (size * pow(10, Double(market.lotDecimals))).rounded()) ?? 0 }
 
     /// The entry order. A market order is a marketable-limit IOC at the slippage bound (`p:0`, `ms`, `fl:4`).
     ///

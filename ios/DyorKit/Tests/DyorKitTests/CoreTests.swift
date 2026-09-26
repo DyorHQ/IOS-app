@@ -40,6 +40,19 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Address(" 0x34B6552d57a35a1D042CcAe1951BD1C370112a6F "), address)
     }
 
+    /// EIP-55's own examples: mixed case must match the checksum; single-case input carries none and passes as typed.
+    func testAddressChecksumValidation() {
+        for valid in ["0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed", "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+                      "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB", "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+                      "0x5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED", " 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed\n"] {
+            XCTAssertTrue(Address.hasValidChecksum(valid), valid)
+        }
+        // One character's case flipped (a → A), and a non-address.
+        XCTAssertFalse(Address.hasValidChecksum("0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"))
+        XCTAssertFalse(Address.hasValidChecksum("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD"))
+        XCTAssertFalse(Address.hasValidChecksum("0x1234"))
+    }
+
     func testHexQuantities() {
         XCTAssertEqual(BigUInt(hexQuantity: "0x0"), 0)
         XCTAssertEqual(BigUInt(hexQuantity: "0x8f"), 143)

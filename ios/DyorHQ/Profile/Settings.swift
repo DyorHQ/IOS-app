@@ -50,7 +50,7 @@ struct ManageWalletsView: View {
                             Label(account.method == .meraPasskey ? "Export Recovery Phrase" : "Export Wallet", systemImage: "key.horizontal")
                         }
                     } footer: {
-                        Text(account.method == .imported
+                        Text(account.method == .imported || account.method == .emailPassword
                              ? "Reveal this wallet's private key to back it up or move it to another wallet. The key never leaves your device."
                              : account.method == .meraPasskey
                              ? "Show the 24-word recovery phrase your passkey derives, to back this wallet up or restore it in another wallet without the passkey. It asks for your passkey every time and is never stored."

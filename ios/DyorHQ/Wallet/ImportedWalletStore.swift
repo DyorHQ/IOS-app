@@ -9,7 +9,10 @@ enum ImportedWalletStore {
     private static let service = "fun.dyorhq.imported"
     private static let account = "primary"
 
-    static func save(privateKey: Data) {
+    /// Whether the key is now in the Keychain. A failed write must not be treated as saved: the key would sign for this
+    /// session only and be gone after the next launch.
+    @discardableResult
+    static func save(privateKey: Data) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -20,8 +23,9 @@ enum ImportedWalletStore {
         add[kSecValueData as String] = privateKey
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         add[kSecAttrSynchronizable as String] = false // explicit: never sync the key to iCloud Keychain
-        SecItemAdd(add as CFDictionary, nil)
+        let status = SecItemAdd(add as CFDictionary, nil)
         LocalWalletMeta.clear() // default: a plain imported key; a password sign-in re-tags it right after saving
+        return status == errSecSuccess
     }
 
     static func loadAccount() -> Secp256k1Account? {

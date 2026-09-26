@@ -287,7 +287,7 @@ struct LaunchArtwork: View {
     let logo: String
 
     var body: some View {
-        if let url = URL(string: logo), url.scheme != nil {
+        if let url = URL(string: logo), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
             AsyncImage(url: url) { phase in
                 if let image = phase.image { image.resizable().scaledToFill() }
                 else if phase.error != nil { placeholder }
@@ -646,7 +646,8 @@ struct LaunchDetailView: View {
 
     private var socialLinks: [(String, URL)] {
         [("Website", launch.socials.website), ("X", launch.socials.twitter), ("Telegram", launch.socials.telegram), ("Discord", launch.socials.discord), ("Farcaster", launch.socials.farcaster)]
-            .compactMap { label, value in URL(string: value).flatMap { $0.scheme != nil ? ($0.host() != nil ? (label, $0) : nil) : nil } }
+            // Creator-set strings: only web links, never another app's URL scheme (a wallet's dapp link, say).
+            .compactMap { label, value in URL(string: value).flatMap { ["https", "http"].contains($0.scheme?.lowercased() ?? "") && $0.host() != nil ? (label, $0) : nil } }
     }
 
     @ViewBuilder private var confirmation: some View {
