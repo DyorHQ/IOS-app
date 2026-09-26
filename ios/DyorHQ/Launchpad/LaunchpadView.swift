@@ -568,7 +568,8 @@ struct LaunchDetailView: View {
                 DetailRow("Curve fee", "\(NumberStyle.units(q.fee, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
                 if q.tax > 0 { DetailRow("Creator tax", "\(NumberStyle.units(q.tax, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
-            PrimaryButton(title: side == .buy ? "Buy \(launch.symbol)" : "Sell \(launch.symbol)", isDisabled: rawAmount == 0 || !session.canSign) { showConfirm = true }
+            PrimaryButton(title: side == .buy ? "Buy \(launch.symbol)" : "Sell \(launch.symbol)",
+                          isDisabled: rawAmount == 0 || !session.canSign || (side == .buy ? buyQuote == nil : sellQuote == nil)) { showConfirm = true }
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         } header: {
             Text("Trade on the Curve")
@@ -709,13 +710,20 @@ struct LaunchDetailView: View {
     }
 
     private func quote() async {
-        guard rawAmount > 0, launch.phase == .bonding else { buyQuote = nil; sellQuote = nil; return }
+        // Drop the previous amount's quote first: until this amount's quote lands, Buy/Sell stays disabled, so the
+        // minimum-out the sheet signs can never come from a quote for a different amount. `.task(id:)` cancels this
+        // task when the amount changes, and a cancelled task's answer is discarded.
+        buyQuote = nil
+        sellQuote = nil
+        guard rawAmount > 0, launch.phase == .bonding else { return }
         try? await Task.sleep(for: .milliseconds(300))
         if Task.isCancelled { return }
         if side == .buy {
-            buyQuote = try? await env.launchpad.quoteBuy(curve: launch.curve, quoteIn: rawAmount, recipient: session.address ?? .zero)
+            let fresh = try? await env.launchpad.quoteBuy(curve: launch.curve, quoteIn: rawAmount, recipient: session.address ?? .zero)
+            if !Task.isCancelled { buyQuote = fresh }
         } else {
-            sellQuote = try? await env.launchpad.quoteSell(curve: launch.curve, tokensIn: rawAmount)
+            let fresh = try? await env.launchpad.quoteSell(curve: launch.curve, tokensIn: rawAmount)
+            if !Task.isCancelled { sellQuote = fresh }
         }
     }
 }

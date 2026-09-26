@@ -124,6 +124,14 @@ public struct PerplOrderAck: Sendable {
 
 public enum PerplTradeError: LocalizedError {
     case notSignedIn, noAccount, forwardingDisabled, timeout, closed(String)
+    /// The order frame was already sent when this happened (no acknowledgement, or the socket closed while waiting),
+    /// so Perpl may have placed it: the caller must not offer an immediate resend.
+    public var outcomeUnknown: Bool {
+        switch self {
+        case .timeout, .closed: return true
+        case .notSignedIn, .noAccount, .forwardingDisabled: return false
+        }
+    }
     public var errorDescription: String? {
         switch self {
         case .notSignedIn: return "Not connected to Perpl trading."
@@ -320,8 +328,17 @@ public final class PerplTradeClient {
         guard signedIn, accountId != nil else { throw PerplTradeError.notSignedIn }
         guard forwardingEnabled else { throw PerplTradeError.forwardingDisabled }
         var acks: [PerplOrderAck] = []
-        for frame in frames {
-            let ack = try await send(frame)
+        for (index, frame) in frames.enumerated() {
+            let ack: PerplOrderAck
+            do {
+                ack = try await send(frame)
+            } catch where index > 0 {
+                // The entry was already acknowledged: this trigger's outcome is unknown, so report it as not accepted
+                // (the caller warns that the position may be unprotected) instead of failing the whole bracket, which
+                // the order sheet would show as a failed order — inviting a second entry.
+                acks.append(PerplOrderAck(code: -1, error: (error as? LocalizedError)?.errorDescription ?? "Perpl did not confirm this trigger."))
+                break
+            }
             acks.append(ack)
             if !ack.accepted { break }
         }

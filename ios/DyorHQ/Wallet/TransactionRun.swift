@@ -13,6 +13,10 @@ final class TransactionRun {
     private(set) var events: [TransactionEvent] = []
 
     var isRunning: Bool { phase == .running }
+    /// Whether any step of this run reached the network. `start` replays a plan from its first step, so a run that
+    /// sent something is never started again from the same sheet: a call that already landed (a swap, a send, a buy)
+    /// would be signed with the next nonce and land twice (security audit 2026-09-26).
+    var sentSomething: Bool { events.contains { if case .sent = $0 { return true } else { return false } } }
     var isDone: Bool { if case .done = phase { return true } else { return false } }
     /// The settled transaction hash once the plan's final step confirms, for callers that record or route on it.
     var doneHash: Data? { if case .done(let hash) = phase { return hash } else { return nil } }
@@ -21,6 +25,10 @@ final class TransactionRun {
     /// plan (`Session.wallet(for:)`); nil for every other account, which signs exactly as before.
     func start(_ steps: [TransactionStep], session: Session, sender: TransactionSender, action: MeraSession.Action? = nil) {
         guard !isRunning else { return }
+        if sentSomething {
+            phase = .failed(Self.alreadySent)
+            return
+        }
         guard let wallet = session.wallet(for: action) else {
             phase = .failed(SessionError.readOnly.localizedDescription)
             return
@@ -36,8 +44,7 @@ final class TransactionRun {
                 phase = .done(hash)
             } catch where passkey && isUserCancellation(error) {
                 // A passkey prompt the person dismissed: say plainly what did and didn't happen.
-                let sent = events.contains { if case .sent = $0 { return true } else { return false } }
-                phase = .failed(sent ? "Stopped at \(BiometricGate.promptName). Only the steps above were sent." : Self.notSent)
+                phase = .failed(sentSomething ? "Stopped at \(BiometricGate.promptName). Only the steps above were sent." : Self.notSent)
             } catch {
                 phase = .failed(describe(error))
             }
@@ -46,6 +53,8 @@ final class TransactionRun {
 
     /// A step-up the person cancelled before anything was signed.
     static let notSent = "Not sent. Nothing left your account."
+    /// Why a run that already broadcast something is not started again.
+    static let alreadySent = "Part of this was already sent. Check it with View above before trying again — confirming again here could send it twice."
 
     /// Shows a failure that happened before the plan started (a cancelled step-up).
     func fail(_ message: String) {
@@ -129,6 +138,14 @@ struct ConfirmationSheet<Details: View>: View {
                 VStack(spacing: 8) {
                     if run.isDone {
                         PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+                    } else if case .failed = run.phase, run.sentSomething {
+                        // Something already reached the network: no re-confirm from this sheet (it would replay the
+                        // plan from its first step). Check the sent step with View, then start again from the form.
+                        Text(TransactionRun.alreadySent)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
                     } else if !session.canSign {
                         Text(SessionError.readOnly.localizedDescription)
                             .font(.footnote)

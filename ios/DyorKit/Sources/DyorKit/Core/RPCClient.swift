@@ -268,14 +268,22 @@ public actor RPCClient {
         let json = try await call("eth_getTransactionReceipt", [.string(hash.hexString)])
         if json.isNull { return nil }
         guard let status = json["status"].string, let block = json["blockNumber"].string, let gasUsed = json["gasUsed"].string else { throw NetworkError.malformedResponse }
-        return TransactionReceipt(hash: hash, success: status == "0x1", blockNumber: UInt64(BigUInt(hexQuantity: block) ?? 0), gasUsed: BigUInt(hexQuantity: gasUsed) ?? 0)
+        return TransactionReceipt(hash: hash, success: status == "0x1", blockNumber: UInt64(exactly: BigUInt(hexQuantity: block) ?? 0) ?? 0, gasUsed: BigUInt(hexQuantity: gasUsed) ?? 0)
     }
 
     /// Polls until the transaction is mined. Monad blocks every ~0.4 s, so the interval is short.
     public func waitForReceipt(_ hash: Data, timeout: TimeInterval = 90) async throws -> TransactionReceipt {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let receipt = try await transactionReceipt(hash) { return receipt }
+            do {
+                if let receipt = try await transactionReceipt(hash) { return receipt }
+            } catch let error as CancellationError {
+                throw error
+            } catch {
+                // A failed poll (a dropped connection, every endpoint throttled, a malformed answer) says nothing about
+                // the transaction, which is already broadcast: keep polling until the deadline instead of reporting a
+                // failure the user would answer by sending it again.
+            }
             try await Task.sleep(for: .milliseconds(500))
         }
         throw TransactionError.timedOut(hash)

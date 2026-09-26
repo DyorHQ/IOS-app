@@ -325,8 +325,16 @@ struct TransactionProgress: View {
                 switch event {
                 case .preparing(let label):
                     Label(label, systemImage: "circle.dotted").foregroundStyle(.secondary)
-                case .sent(let label, _):
-                    Label("\(label) sent", systemImage: "paperplane").foregroundStyle(.secondary)
+                case .sent(let label, let hash):
+                    HStack {
+                        Label("\(label) sent", systemImage: "paperplane").foregroundStyle(.secondary)
+                        Spacer()
+                        // Until it confirms, the explorer is the only way to see whether a sent step landed — which the
+                        // user must check before trying again after an error.
+                        if !events.contains(.confirmed(label, hash)) {
+                            Link("View", destination: Monad.explorerTransaction(hash)).font(.footnote)
+                        }
+                    }
                 case .confirmed(let label, let hash):
                     HStack {
                         Label("\(label) confirmed", systemImage: "checkmark.circle.fill").foregroundStyle(Color.positive)
