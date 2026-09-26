@@ -23,6 +23,9 @@ struct TransferSheet: View {
     @State private var monUSD: Double?
     @State private var account: PerpAccount?
     @State private var loaded = false
+    /// A balance or account read that failed (RI-4). Nothing is planned on a read that failed: taken as zero AUSD or as
+    /// "no account", it built a needless MON → AUSD swap and a second `createAccount`.
+    @State private var loadError: String?
     @State private var quote: VenueQuote?
     @State private var quoteMON: BigUInt = 0
     @State private var quoting = false
@@ -54,7 +57,7 @@ struct TransferSheet: View {
         }
     }
 
-    private var ready: Bool { raw > 0 && loaded && problem == nil && (!needsSwap || quote != nil) && !quoting }
+    private var ready: Bool { raw > 0 && loaded && loadError == nil && problem == nil && (!needsSwap || quote != nil) && !quoting }
 
     var body: some View {
         NavigationStack {
@@ -65,6 +68,12 @@ struct TransferSheet: View {
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets())
                 }
+                if let loadError {
+                    Section {
+                        InlineError(message: loadError)
+                        Button("Try Again", systemImage: "arrow.clockwise") { Task { await load() } }
+                    }
+                }
                 Section {
                     AmountField(title: "0", text: $amountText, token: .ausd) {
                         Haptics.selection()
@@ -73,7 +82,8 @@ struct TransferSheet: View {
                 } header: {
                     Text(direction == .toPerps ? (isCreating ? "Open your Perpl account" : "Deposit to Perps") : "Withdraw to Spot")
                 } footer: {
-                    if let problem { Text(problem) }
+                    if loadError != nil { EmptyView() }
+                    else if let problem { Text(problem) }
                     else if direction == .toPerps, needsSwap, let quote {
                         Text("Uses \(NumberStyle.units(walletAUSD, decimals: 6)) AUSD from your wallet and swaps ≈ \(NumberStyle.units(quoteMON, decimals: 18, compact: true)) MON → AUSD on \(quote.venue.displayName) for the rest.")
                     } else if direction == .toPerps, needsSwap, quoting { Text("Pricing the MON → AUSD swap…") }
@@ -111,17 +121,28 @@ struct TransferSheet: View {
         .presentationDetents([.medium, .large])
     }
 
+    /// The wallet's AUSD and MON and the Perpl account. A read that fails is an error with a retry, never zero or "no
+    /// account" (RI-4): `account` returns nil only for an address Perpl says has none. The MON price may be missing;
+    /// `problem` already stops a swap that needs it.
     private func load() async {
         guard let address = session.address else { return }
+        loaded = false
+        loadError = nil
         async let collateral = env.perpl.collateral(of: address)
         async let perpAccount = env.perpl.account(address)
         async let balances = ERC20.balances(of: [.mon], owner: address, rpc: env.rpc, multicall: env.multicall)
         async let price = env.prices.prices(for: [.mon])
-        walletAUSD = (try? await collateral.wallet) ?? 0
-        account = try? await perpAccount
-        walletMON = (try? await balances)?[Monad.native] ?? 0
         monUSD = (try? await price)?[Monad.native]?.usd
-        loaded = true
+        do {
+            let (wallet, perp, native) = try await (collateral, perpAccount, balances)
+            guard let mon = native[Monad.native] else { throw NetworkError.malformedResponse }
+            walletAUSD = wallet.wallet
+            account = perp
+            walletMON = mon
+            loaded = true
+        } catch {
+            loadError = "Couldn't read your balances or your Perpl account, so nothing can be planned yet. \(describe(error))"
+        }
     }
 
     /// Prices the MON needed for the shortfall (plus 1% headroom) at the best venue, so the deposit is covered by
