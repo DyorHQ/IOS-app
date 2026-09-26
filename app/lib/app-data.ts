@@ -32,7 +32,7 @@ export function useMarkets(account: Address | null) {
     const balance = balances.data?.[t.address.toLowerCase()] ?? 0n;
     return { ...t, usd, change24h: p?.change24h ?? null, balance, value: usd === null ? null : (Number(balance) / 10 ** t.decimals) * usd, launch };
   });
-  return { rows, loading: prices.loading && !prices.data, error: prices.error, balancesReady: balances.data !== null, refresh: () => { prices.refresh(); balances.refresh(); launches.refresh(); }, priceMap: prices.data ?? ({} as PriceMap), launches: launches.data ?? [] };
+  return { rows, loading: prices.loading && !prices.data, error: prices.error, balancesReady: balances.data !== null, balancesError: balances.error, refresh: () => { prices.refresh(); balances.refresh(); launches.refresh(); }, priceMap: prices.data ?? ({} as PriceMap), launches: launches.data ?? [] };
 }
 
 export type Portfolio = { total: number | null; holdings: MarketRow[]; perps: { account: PerpAccount | null; positions: PerpPosition[]; perpsInfo: PerpInfo[]; equity: number } | null; loading: boolean };

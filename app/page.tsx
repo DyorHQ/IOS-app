@@ -172,7 +172,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
   const check = row ? checkRecipient(recipient, row, wallet.account, code.loading ? null : code.data ?? undefined) : null;
   const unconfirmed = !!check?.contract && confirmedContract !== recipient;
   // Why Send is disabled, in the order the user fills the form.
-  const reason = !markets.balancesReady ? "Reading your balances…"
+  const reason = !markets.balancesReady ? (markets.balancesError ? "Couldn't read your balances. Retrying…" : "Reading your balances…")
     : !row ? "This wallet holds nothing to send yet."
     : !recipient ? "Enter the recipient's address."
     : check?.block ? null // shown under the address
@@ -202,7 +202,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
   return (
     <>
       <SheetHead title="Send" onClose={onClose} />
-      <label className="field">Asset<select className="select" value={row?.address ?? token} onChange={(e) => setToken(e.target.value)}>{owned.map((r) => <option key={r.address} value={r.address}>{r.symbol} · {fmtUnits(r.balance, r.decimals, { compact: true })}</option>)}{owned.length === 0 && <option value="">{markets.balancesReady ? "No balances" : "Reading balances…"}</option>}</select></label>
+      <label className="field">Asset<select className="select" value={row?.address ?? token} onChange={(e) => setToken(e.target.value)}>{owned.map((r) => <option key={r.address} value={r.address}>{r.symbol} · {fmtUnits(r.balance, r.decimals, { compact: true })}</option>)}{owned.length === 0 && <option value="">{markets.balancesReady ? "No balances" : markets.balancesError ? "Couldn't read balances" : "Reading balances…"}</option>}</select></label>
       <label className="field">To address<input placeholder="0x…" value={to} onChange={(e) => setTo(e.target.value)} />{recipient && check?.block && <span className="hint err">{check.block}</span>}{code.error && <span className="help">Couldn&apos;t check whether this address is a contract.</span>}</label>
       {check?.warn && (
         <div className="warnbox">
@@ -210,7 +210,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
           {check.contract && row && <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}><input type="checkbox" checked={confirmedContract === recipient} onChange={(e) => setConfirmedContract(e.target.checked ? recipient : null)} />I know this contract can receive {row.symbol}.</label>}
         </div>
       )}
-      <label className="field">Amount<input inputMode="decimal" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />{row && <span className="help">{markets.balancesReady ? `Balance ${fmtUnits(row.balance, row.decimals)} ${row.symbol}` : "Reading balance…"}</span>}</label>
+      <label className="field">Amount<input inputMode="decimal" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />{row && <span className="help">{markets.balancesReady ? `Balance ${fmtUnits(row.balance, row.decimals)} ${row.symbol}` : markets.balancesError ? "Couldn't read your balance" : "Reading balance…"}</span>}</label>
       <TxStatus tx={tx} onDismiss={dismiss} />
       {wallet.onMonad && reason && <p className="hint">{reason}</p>}
       <button type="button" className="btn primary big" disabled={!valid || busy || !wallet.onMonad} onClick={send}>{wallet.onMonad ? `Send ${row?.symbol ?? ""}` : "Switch to Monad first"}</button>

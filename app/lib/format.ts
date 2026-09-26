@@ -76,8 +76,12 @@ export function parseAmount(input: string, decimals: number): bigint | null {
   return BigInt((whole || "0") + fraction.slice(0, decimals).padEnd(decimals, "0"));
 }
 
-/** "Sep 26, 04:05 PM"; "—" for a time that isn't one (a half-typed date or window), never "Invalid Date". */
-export const fmtDate = (ts: number) => (Number.isFinite(ts) ? new Date(ts * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
+/** "Sep 26, 04:05 PM"; "—" for a time that isn't one (a half-typed date, or a window too long for a date), never
+    "Invalid Date". */
+export const fmtDate = (ts: number) => {
+  const date = new Date(ts * 1000);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+};
 export function timeAgo(ts: number, now: number) {
   const d = Math.max(0, now - ts);
   if (d < 60) return `${d}s ago`;
