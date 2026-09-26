@@ -8,8 +8,12 @@ import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Recei
 import {MockUSDC} from "../moments/mocks/MockUSDC.sol";
 import {MomentTypes} from "../../src/moments/interfaces/IMoments.sol";
 import {MomentCollect} from "../../src/moments/MomentCollect.sol";
+import {V1MomentLocker} from "./V1MomentLocker.sol";
 
 /// Security audit 2026-09-26, MO-1 (proof of concept against the real v4 PoolManager; deployed bytecode unchanged).
+///
+/// This PoC runs against the DEPLOYED (v1) MomentLocker (test/audit/V1MomentLocker.sol, a verbatim copy), because
+/// the v2 source in src/ fixes the bug: see Z_MomentsUnlockGriefFixed.t.sol for the same attack against v2.
 ///
 /// The terminal collect runs graduation inside a try/catch. If that collect is made from inside a
 /// `PoolManager.unlock()` callback, graduation's `MomentLocker.seed` calls `unlock()` again, which reverts
@@ -47,6 +51,12 @@ contract UnlockGriefer is IUnlockCallback, IERC721Receiver {
 
 contract Z_MomentsUnlockGriefTest is MomentsMarketBase {
     UnlockGriefer internal griefer;
+
+    /// The deployed (v1) locker in place of the v2 one; everything else is the normal market stack.
+    function _deployMarket() internal override returns (address grad, address lockerAddr, address hookAddr, address buybackAddr) {
+        (grad, lockerAddr, hookAddr, buybackAddr) = super._deployMarket();
+        lockerAddr = address(new V1MomentLocker(manager, factory));
+    }
 
     function setUp() public override {
         super.setUp();
