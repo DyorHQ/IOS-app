@@ -23,14 +23,16 @@
 //     budget.
 // The budgets add up: whoever can pass the email's one-time code (the owner, or anyone who has taken over the mailbox)
 // gets up to 50 + 20 = 70 online guesses per email per 24 h; everyone else, 50.
-// Every request also counts toward its client network's limit (60 / 15 min; an IPv4 address or an IPv6 /64), whichever
-// budget pays — so a 429 says which limit fired, and the app offers the one-time code only for "email".
+// Anonymous requests also count toward, and are held to, their client network's limit (60 / 15 min; an IPv4 address or
+// an IPv6 /64). Verified requests are neither (migration 24, security audit 2026-09-26 SB-4), so nobody sharing a
+// network — a NAT, a carrier-grade NAT — can lock a verified owner out. A 429 says which limit fired.
 //
 // Checking a proof costs one call to Privy's API (with the app secret, under Privy's app-wide rate limit), made before
 // the database can count anything. So that call is cached per Privy user for a few minutes in this instance, and each
 // uncached one must first pass the database's lookup gate (10 per Privy user, 30 per client network per 15 min) — a
 // flood of valid tokens cannot turn into a flood of Privy API calls. The Privy app key is cached for an hour and
 // refetched early — at most every 5 minutes — when a token's signature fails against it, in case Privy rotated it.
+// Every Privy call has a timeout; an outage is a retryable 503, never a refusal (../_shared/privy.ts).
 //
 // Nothing about the request or the answer is logged: e, t and p are sensitive (p together with S is the wallet key),
 // and so is the Privy token.
@@ -46,20 +48,17 @@
 //     401 (with a token) invalid or expired Privy access token
 //     429 { error: "too many attempts", retryAfter: <seconds>, limit: "email" | "network" | "proof" }
 //           email    this request's budget for e (the anonymous one, or with a token the verified one)
-//           network  the client network's limit — it counts both budgets, so proving the email would not help
+//           network  the client network's limit — anonymous requests only, so proving the email lifts it
 //           proof    (with a token) this Privy user's lookups; the anonymous budget does not need one
 //     503 pepper or email verification temporarily unavailable
-import { importSPKI, jwtVerify } from "npm:jose@5";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { clientNet } from "../_shared/net.ts";
+import { linkedEmail, privyTokenClaims, privyUser, PrivyUnavailable } from "../_shared/privy.ts";
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const MAX_BODY = 1024;
-const APP_ID = Deno.env.get("PRIVY_APP_ID") ?? "cmttp2squ00lk0djrso3z0yvm";
-const PRIVY = "https://auth.privy.io/api/v1";
 const EMAIL_LABEL = "dyorhq/email-pepper/v1/email:";
 const PRIVY_USER_LABEL = "dyorhq/email-pepper/v1/privy-user:";
-const KEY_TTL_MS = 60 * 60_000; // the Privy app key is re-read hourly…
-const KEY_RETRY_MS = 5 * 60_000; // …or on a signature failure, but never more often than this
 const LOOKUP_TTL_MS = 5 * 60_000; // how long a Privy user's email answer is reused in this instance
 const LOOKUP_CACHE_MAX = 1000;
 const LIMITS = ["email", "network", "proof"];
@@ -75,34 +74,6 @@ function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
     status,
     headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store", ...extra },
   });
-}
-
-// The caller's network for the per-IP limit, from Cloudflare's cf-connecting-ip (set at the edge; a client cannot
-// forge it through Cloudflare). IPv4 counts per address, IPv6 per /64 — one subscriber's allocation — so rotating
-// addresses inside a /64 buys no fresh bucket. X-Forwarded-For is deliberately NOT used: its first entry is whatever
-// the client sent, so it would let a caller pick a fresh bucket per request, or fill someone else's. null when absent
-// or unparseable — the per-email limits still apply, and unknown callers don't share (and exhaust) one bucket.
-function clientNet(req: Request): string | null {
-  const raw = (req.headers.get("cf-connecting-ip") ?? "").trim();
-  const v4 = raw.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (v4) {
-    const octets = v4.slice(1).map(Number);
-    return octets.every((o) => o <= 255) ? octets.join(".") : null;
-  }
-  if (!raw.includes(":") || !/^[0-9a-fA-F:.]+$/.test(raw)) return null;
-  let host: string;
-  try { host = new URL(`http://[${raw}]/`).hostname; } catch { return null; }
-  if (!host.startsWith("[") || !host.endsWith("]")) return null;
-  // The URL parser validates and serialises IPv6 as lowercase hex groups with at most one "::" (never dotted).
-  const [head, tail = ""] = host.slice(1, -1).split("::");
-  const h = head ? head.split(":") : [], t = tail ? tail.split(":") : [];
-  const groups = host.includes("::") ? [...h, ...Array(8 - h.length - t.length).fill("0"), ...t] : h;
-  if (groups.length !== 8) return null;
-  const g = groups.map((x) => parseInt(x, 16));
-  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) { // IPv4-mapped: count as that IPv4 address
-    return [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255].join(".");
-  }
-  return `${g.slice(0, 4).map((x) => x.toString(16)).join(":")}::/64`;
 }
 
 // The email exactly as the app's EmailWallet.normalize sees it — Swift's
@@ -139,63 +110,6 @@ function privyBearer(req: Request): string | null {
   const token = auth.replace(/^Bearer\s+/i, "").trim();
   const apikey = (req.headers.get("apikey") ?? "").trim();
   return apikey !== "" && token === apikey ? null : token;
-}
-
-// As in email-rebind: the Privy app's ES256 verification key — but re-read once it is older than maxAgeMs, and never
-// tried more than once per KEY_RETRY_MS. A failed re-read keeps the key we have; with none yet, it throws (→ 503).
-let verificationKey: CryptoKey | null = null;
-let keyFetchedAt = 0, keyTriedAt = 0;
-async function appVerificationKey(maxAgeMs: number): Promise<CryptoKey> {
-  const now = Date.now();
-  if (verificationKey && (now - keyFetchedAt < maxAgeMs || now - keyTriedAt < KEY_RETRY_MS)) return verificationKey;
-  keyTriedAt = now;
-  try {
-    const res = await fetch(`${PRIVY}/apps/${APP_ID}`, { headers: { "privy-app-id": APP_ID } });
-    if (!res.ok) throw new Error(`privy app config ${res.status}`);
-    const app = await res.json();
-    verificationKey = await importSPKI(String(app.verification_key), "ES256");
-    keyFetchedAt = now;
-  } catch (err) {
-    if (!verificationKey) throw err;
-  }
-  return verificationKey;
-}
-
-class KeyUnavailable extends Error {}
-
-// The Privy user id a valid access token names. Throws KeyUnavailable when the app key can't be had at all, anything
-// else for a token that does not verify. A signature that fails against the cached key gets one more try against a
-// re-read key (Privy may have rotated it); the re-read is rate-limited, so bad tokens can't hammer Privy with it.
-async function privyUserId(token: string): Promise<string> {
-  const verify = async (maxAgeMs: number) => {
-    let key: CryptoKey;
-    try { key = await appVerificationKey(maxAgeMs); } catch { throw new KeyUnavailable(); }
-    const { payload } = await jwtVerify(token, key, { issuer: "privy.io", audience: APP_ID });
-    if (!payload.sub) throw new Error("no subject");
-    return payload.sub;
-  };
-  try {
-    return await verify(KEY_TTL_MS);
-  } catch (err) {
-    if ((err as { code?: unknown })?.code !== "ERR_JWS_SIGNATURE_VERIFICATION_FAILED") throw err;
-    return await verify(KEY_RETRY_MS);
-  }
-}
-
-// As in email-rebind: the verified email Privy holds for this user, read with the app secret — never an email the
-// client supplied. Returned as Privy stores it (normalizeEmail runs on it next); null when the user has no email
-// account. Throws when Privy can't be asked, so an outage is a retryable 503 rather than a refusal.
-async function privyEmail(userId: string, secret: string): Promise<string | null> {
-  const res = await fetch(`${PRIVY}/users/${encodeURIComponent(userId)}`, {
-    headers: { Authorization: "Basic " + btoa(`${APP_ID}:${secret}`), "privy-app-id": APP_ID },
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`privy user ${res.status}`);
-  const user = await res.json();
-  const accounts: Array<Record<string, unknown>> = user?.linked_accounts ?? [];
-  const email = accounts.find((a) => a?.type === "email");
-  const address = email?.address;
-  return typeof address === "string" ? address : null;
 }
 
 // Privy's answer (the email, or null for none) per Privy user, reused for LOOKUP_TTL_MS: repeat requests — one token,
@@ -250,9 +164,9 @@ Deno.serve(async (req) => {
   if (token !== null) {
     let userId: string;
     try {
-      userId = await privyUserId(token);
+      ({ userId } = await privyTokenClaims(token));
     } catch (err) {
-      if (err instanceof KeyUnavailable) return json({ error: "email verification unavailable" }, 503);
+      if (err instanceof PrivyUnavailable) return json({ error: "email verification unavailable" }, 503);
       return json({ error: "invalid Privy access token" }, 401);
     }
     const secret = Deno.env.get("PRIVY_APP_SECRET");
@@ -267,7 +181,7 @@ Deno.serve(async (req) => {
       const refused = tooManyAttempts(gate.data);
       if (refused) return refused;
       if ((gate.data as { ok?: unknown }).ok !== true) return json({ error: "pepper unavailable" }, 503);
-      try { verifiedEmail = await privyEmail(userId, secret); } catch { return json({ error: "email verification unavailable" }, 503); }
+      try { verifiedEmail = linkedEmail(await privyUser(userId, secret)); } catch { return json({ error: "email verification unavailable" }, 503); }
       cacheLookup(userId, verifiedEmail);
     }
     if (!verifiedEmail) return json({ error: "no verified email on this Privy account" }, 400);
