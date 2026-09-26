@@ -19,7 +19,8 @@
 #   3. pause publishing on the cohort-1 factory (its Moments stay on-chain; they leave the app once it is re-pointed)
 #   4. verify every new contract on Sourcify (no key)
 #   5. print the new addresses + deploy block and run the invariant monitor against them
-# Rehearsed end to end on an anvil fork on 2026-09-22 (see docs/moments-mainnet-runbook.md §1b).
+# Rehearsed end to end on an anvil fork on 2026-09-22
+# (see DyorHQ/internal: ios-app/docs/moments-mainnet-runbook.md §1b).
 set -euo pipefail
 
 # RETIRED (security audit 2026-09-26). Cohort 2 is itself retired (publishing paused 2026-09-23), and this script would

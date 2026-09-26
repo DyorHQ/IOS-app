@@ -11,7 +11,8 @@ import {MomentNFT} from "../../src/moments/MomentNFT.sol";
 import {MockGraduation} from "./mocks/MockGraduation.sol";
 
 /// Exact-value tests. Every literal below comes from the independent Python oracle in test/moments/EXPECTED.md
-/// (S = 1e26 coin wei, USDC in 6-dp units), which reconciles with docs/moments-analysis/economics.py.
+/// (S = 1e26 coin wei, USDC in 6-dp units), which reconciles with
+/// DyorHQ/internal: ios-app/docs/moments-analysis/economics.py.
 contract EconomicsTest is MomentsBase {
     uint256 constant RATE_NUM_10PCT = 6750000000000000000000000000000000; // S*9000*7500
     uint256 constant RATE_DEN_10USD = 1750000000000000; // 10000*1e7*17500

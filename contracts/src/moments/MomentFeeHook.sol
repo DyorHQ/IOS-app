@@ -25,7 +25,8 @@ import {IMomentFeeHook} from "./interfaces/IMomentsMarket.sol";
 ///         and the hook refuses to serve unregistered pools, so nobody can front-run graduation with a mispriced
 ///         pool or attach this hook to an arbitrary pair. The buyback module's own swaps are fee-exempt.
 ///
-///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), MO-2: before the first swap of each block the hook
+///         v2 (NOT deployed — see DyorHQ/internal: ios-app/contracts/CHANGELOG-v2.md),
+///         MO-2: before the first swap of each block the hook
 ///         records the pool's price, so the buyback can refuse to add liquidity at a price someone moved within
 ///         the same block (the sandwich pattern). One storage slot per Moment; written once per block.
 contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {

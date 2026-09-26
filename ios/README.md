@@ -30,7 +30,8 @@ ios/
 
 1. Install XcodeGen once: `brew install xcodegen`.
 2. `cp DyorHQ/Config/Secrets.example.xcconfig DyorHQ/Config/Secrets.xcconfig` and fill in the Privy app id and the
-   mobile client id created for bundle id `fun.dyorhq.app` with URL scheme `dyorhq` (see `docs/env-setup.md`).
+   mobile client id created for bundle id `fun.dyorhq.app` with URL scheme `dyorhq` (see
+   `DyorHQ/internal: ios-app/docs/env-setup.md`).
    Without them the app still runs: sign-in shows what is missing and **Watch an Address** works.
 3. `xcodegen generate`, open `DyorHQ.xcodeproj`, pick a simulator or device, run.
 

@@ -18,7 +18,8 @@ import {TransferHelper} from "./libraries/TransferHelper.sol";
 ///         received for sells. Exact-output sells are the one case charged in the launch token. Only the graduation
 ///         executor may initialize a registered pool, so nobody can front-run graduation with a mispriced pool.
 ///
-///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), LP-2: for a launch with holder fee sharing, the
+///         v2 (NOT deployed — see DyorHQ/internal: ios-app/contracts/CHANGELOG-v2.md),
+///         LP-2: for a launch with holder fee sharing, the
 ///         holders' cut of a quote-denominated fee is handed to HolderFeeSharing in the SAME swap that earned it
 ///         (exactly like the bonding curve does on every curve trade), instead of waiting in the hook for a
 ///         permissionless `sweepPoolFees`. In v1 an unswept backlog could be captured by anyone who bought, swept,

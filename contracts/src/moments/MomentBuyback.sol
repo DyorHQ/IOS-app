@@ -30,7 +30,8 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 ///         capture at most that 1% move, so it loses money — see test/moments/Buyback.t.sol. Callers may still
 ///         pass `minCoinOut`.
 ///
-///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), MO-2:
+///         v2 (NOT deployed — see DyorHQ/internal: ios-app/contracts/CHANGELOG-v2.md),
+///         MO-2:
 ///         - the round refuses to run (`PriceMoved`) when the pool price is more than `MAX_OPEN_DEVIATION_BPS` away
 ///           from where it stood before the first swap of this block (recorded by the fee hook). A same-block
 ///           sandwich would have to move the price further than that to matter, and cannot; moving it less costs

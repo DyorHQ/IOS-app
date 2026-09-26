@@ -428,7 +428,8 @@ contract LaunchpadFactory {
     ///         the 7-day rescue lock-up. Monday-only quote assets (aBIL) keep their rule unless the owner has
     ///         explicitly allowed the fallback for that launch with `allowV4Fallback`.
     ///
-    ///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), LP-1: a full `GRADUATION_GAS` budget (+1/32) is
+    ///         v2 (NOT deployed — see DyorHQ/internal: ios-app/contracts/CHANGELOG-v2.md),
+    ///         LP-1: a full `GRADUATION_GAS` budget (+1/32) is
     ///         reserved for the Uniswap v4 graduation before the Monday retry runs, and the call must carry at least
     ///         that reserve plus `GRADUATION_GAS` for the retry. Before, the retry was forwarded
     ///         63/64 of all gas, so a squatted Monday pool full of dust-liquidity ticks (every tick crossed by the

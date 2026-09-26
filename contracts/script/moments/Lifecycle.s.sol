@@ -26,7 +26,8 @@ interface IPermit2Allowance {
 
 /// @notice FORK-ONLY rehearsal of the $10 lifecycle, for app development against `anvil --fork-url monad`
 ///         (chain id 143 on the fork too). It is NOT a mainnet procedure: the live lifecycle is exercised through
-///         the DyorHQ app by ordinary, low-value wallets (see docs/moments-mainnet-runbook.md). Never run this with
+///         the DyorHQ app by ordinary, low-value wallets (see
+///         DyorHQ/internal: ios-app/docs/moments-mainnet-runbook.md). Never run this with
 ///         a real key: it publishes, collects and trades from whatever key broadcasts it. The `FORK_REHEARSAL=1`
 ///         guard exists so a mainnet RPC + real key cannot run it by accident.
 ///

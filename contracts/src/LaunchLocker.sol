@@ -15,7 +15,8 @@ import {Types, ILaunchpadFactory} from "./interfaces/ILaunchpad.sol";
 /// @notice Holds every graduated pool position and the supply left over at graduation, forever. There is no
 ///         unlock, no owner and no withdrawal: the contract can only add liquidity, never remove it.
 ///
-///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), LP-3: `locked[]` is keyed by the LAUNCH token for
+///         v2 (NOT deployed — see DyorHQ/internal: ios-app/contracts/CHANGELOG-v2.md),
+///         LP-3: `locked[]` is keyed by the LAUNCH token for
 ///         every pair. v1 keyed it by currency0 unless currency0 was native, so a launch whose ERC-20 quote asset
 ///         sorts below the token (e.g. AUSD, some USDC launches) was recorded under the QUOTE token's address —
 ///         `locked(token)` read empty and each such graduation overwrote the previous one's entry.

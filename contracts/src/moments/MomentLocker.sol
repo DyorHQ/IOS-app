@@ -20,7 +20,7 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 ///         it on every increase. There is no function that removes liquidity, no `take` to any address but
 ///         itself, no token transfer except paying the PoolManager what a position add costs, and no owner.
 ///
-///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md):
+///         v2 (NOT deployed — see DyorHQ/internal: ios-app/contracts/CHANGELOG-v2.md):
 ///         - MO-1: an add requested while the PoolManager is ALREADY unlocked (graduation reached from inside
 ///           someone else's `unlock` callback, e.g. a terminal collect made by a contract holding the lock) runs
 ///           in-line instead of calling `unlock` again, which would revert `AlreadyUnlocked` and fail graduation.
