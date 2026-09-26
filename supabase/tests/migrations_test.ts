@@ -164,7 +164,17 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
       ["avatars", 5242880, ["image/jpeg"]],
       ["launch-media", 52428800, ["image/jpeg", "video/mp4", "video/quicktime"]],
     ]);
-    await assertRejects(() => as(db, "anon", null, "select public.launch_media_upload_allowed()"), Error, "permission denied");
+    await assertRejects(() => as(db, "anon", null, "select public.storage_upload_allowed('launch-media')"), Error, "permission denied");
+    // Takedown: a blocklisted wallet can upload to neither bucket, nor overwrite its avatar; nobody but the owner sees the list.
+    const C = "0x" + "c".repeat(40);
+    await db.exec(`insert into public.profiles (wallet) values ('${C}')`);
+    await put(C, "avatars", `${C}/avatar.jpg`, true);
+    await db.exec(`insert into public.upload_blocklist (wallet, reason) values ('${C}', 'test')`);
+    await assertRejects(() => put(C, "launch-media", `${C}/${uuid(300)}.jpg`), Error, "row-level security");
+    await assertRejects(() => put(C, "avatars", `${C}/avatar.jpg`, true), Error, "row-level security");
+    for (const role of ["anon", "authenticated"] as const) {
+      await assertRejects(() => as(db, role, C, "select count(*) from public.upload_blocklist"), Error, "permission denied");
+    }
   });
 
   await t.step("SB-2 / OH-6 / LR-4: edge_rate_gate budgets per subject and per network, never storing an IP", async () => {
