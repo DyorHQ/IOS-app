@@ -390,8 +390,9 @@ final class Session {
 
     /// Store the derived key (Keychain, like an import) and make it the signer, superseding any other session.
     private func commitPasswordWallet(_ account: Secp256k1Account, email: String) async {
-        ImportedWalletStore.save(privateKey: account.privateKey) // clears the local-wallet tag…
-        LocalWalletMeta.setEmailPassword(email: email)           // …then tags it as an email+password wallet
+        // save clears the local-wallet tag, then it's tagged as an email+password wallet. A refused save keeps the
+        // previous key and its tag, so that tag must not be rewritten (this session still signs in memory).
+        if ImportedWalletStore.save(privateKey: account.privateKey) { LocalWalletMeta.setEmailPassword(email: email) }
         WatchOnlyStore.clear()
         mera.forget()
         if let privy, case .authenticated(let user) = await privy.getAuthState() { await user.logout() }

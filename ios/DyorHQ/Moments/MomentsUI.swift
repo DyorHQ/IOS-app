@@ -30,7 +30,9 @@ struct MomentArtwork: View {
     private func load() async {
         let sources = self.sources
         guard !sources.isEmpty else { return }
-        let key = provenance.mediaURI
+        // The cache is keyed by everything the sources depend on, not the pointer alone: `mediaURI` is not unique, so
+        // another Moment reusing this CID with its own hash and mirror must never fill this Moment's entry.
+        let key = [provenance.mediaURI, creator?.hex ?? "", provenance.mediaHash.map { String(format: "%02x", $0) }.joined()].joined(separator: "|")
         if let cached = MomentMediaLoader.shared.cached(key) { image = cached; failed = false; return }
         image = nil; failed = false
         let loaded = await MomentMediaLoader.shared.load(key: key, sources: sources)
@@ -48,10 +50,6 @@ struct MomentArtwork: View {
     }
 }
 
-/// Fetches Moment images from an ordered list of sources and remembers the outcome per media URI for the session —
-/// hits for good, misses for a minute — so a feed neither re-downloads an image on every scroll nor re-probes a dead
-/// link (an unrecoverable directory CID, say) on every appearance. One in-flight fetch is shared by every view
-/// showing the same Moment.
 /// One place to look for a Moment's image. `keccak`, when set, is what the downloaded bytes must hash to (the Moment's
 /// on-chain provenance hash); a source whose bytes don't match is skipped like a failed one.
 struct MomentImageSource: Sendable {
@@ -59,6 +57,10 @@ struct MomentImageSource: Sendable {
     var keccak: Data? = nil
 }
 
+/// Fetches Moment images from an ordered list of sources and remembers the outcome per media URI for the session —
+/// hits for good, misses for a minute — so a feed neither re-downloads an image on every scroll nor re-probes a dead
+/// link (an unrecoverable directory CID, say) on every appearance. One in-flight fetch is shared by every view
+/// showing the same Moment.
 @MainActor
 final class MomentMediaLoader {
     static let shared = MomentMediaLoader()
@@ -81,8 +83,15 @@ final class MomentMediaLoader {
     ///   content-addressed IPFS copy goes first and the mirror is only the last fallback.
     static func imageSources(provenance: MomentProvenance, creator: Address?) -> [MomentImageSource] {
         let gateways = MomentsMath.gatewayURLs(provenance.mediaURI).map { MomentImageSource(url: $0) }
-        guard let creator, provenance.mediaURI.lowercased().hasPrefix("ipfs://"),
+        guard let creator,
               let mirror = MomentsMath.mirrorURL(creator: creator, mediaHash: provenance.mediaHash, supabaseURL: AppConfig.current.supabaseURL) else {
+            return gateways
+        }
+        guard provenance.mediaURI.lowercased().hasPrefix("ipfs://") else {
+            // An https pointer that is this photo's own mirror (published when pinning failed) is checked the same way.
+            if provenance.animationURI.isEmpty, gateways.count == 1, gateways[0].url == mirror {
+                return [MomentImageSource(url: mirror, keccak: provenance.mediaHash)]
+            }
             return gateways
         }
         if provenance.animationURI.isEmpty {

@@ -199,7 +199,7 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Amount.parse(",5", decimals: 6), 500_000)
         XCTAssertEqual(Amount.parse("5,", decimals: 6), 5_000_000)
         XCTAssertEqual(Amount.parse("0.9999999", decimals: 6), 999_999)
-        for bad in [".", ",", "1,,5", "12,3456,789.1", "1,234.567.8", "1.234,567,8", "-1", "1 000", "1٫5", "１"] {
+        for bad in [".", ",", "1,,5", "12,3456,789.1", "1,234.567.8", "1.234,567,8", "-1", "1 000", "1٫5", "１", "0.001,5", "0,500.25", "0,500,000"] {
             XCTAssertNil(Amount.parse(bad, decimals: 6), bad)
         }
         XCTAssertNil(Amount.parse("1", decimals: -1))

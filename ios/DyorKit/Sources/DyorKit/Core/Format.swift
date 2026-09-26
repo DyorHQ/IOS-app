@@ -45,12 +45,14 @@ public enum Amount {
     /// - one separator of either kind is the decimal point ("0,5" and "0.5");
     /// - both kinds ("1,234.5", "1.234,5"): the last is the decimal point and the other must group thousands exactly;
     /// - one kind more than once ("1,234,567"): thousands grouping only, else nil.
-    static func decimalPoint(_ s: String) -> String? {
+    public static func decimalPoint(_ s: String) -> String? {
         let dots = s.filter { $0 == "." }.count
         let commas = s.filter { $0 == "," }.count
         func grouped(_ part: Substring, by separator: Character) -> String? {
             let groups = part.split(separator: separator, omittingEmptySubsequences: false)
-            guard let first = groups.first, (1...3).contains(first.count), groups.dropFirst().allSatisfy({ $0.count == 3 }) else { return nil }
+            // More than one group: the first can't start with 0 ("0.001,5" is not 1.5, "0,500" alone is one half).
+            guard let first = groups.first, (1...3).contains(first.count), groups.count == 1 || first.first != "0",
+                  groups.dropFirst().allSatisfy({ $0.count == 3 }) else { return nil }
             return groups.joined()
         }
         if dots + commas == 0 { return s }

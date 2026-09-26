@@ -124,12 +124,14 @@ public struct PerplOrderAck: Sendable {
 
 public enum PerplTradeError: LocalizedError {
     case notSignedIn, noAccount, forwardingDisabled, timeout, closed(String)
+    /// The trading socket is not connected, so nothing was sent (the message says why).
+    case unavailable(String)
     /// The order frame was already sent when this happened (no acknowledgement, or the socket closed while waiting),
     /// so Perpl may have placed it: the caller must not offer an immediate resend.
     public var outcomeUnknown: Bool {
         switch self {
         case .timeout, .closed: return true
-        case .notSignedIn, .noAccount, .forwardingDisabled: return false
+        case .notSignedIn, .noAccount, .forwardingDisabled, .unavailable: return false
         }
     }
     public var errorDescription: String? {
@@ -139,6 +141,7 @@ public enum PerplTradeError: LocalizedError {
         case .forwardingDisabled: return "Enable one-click trading (order forwarding) on your Perpl account first."
         case .timeout: return "Perpl did not acknowledge the order in time."
         case .closed(let why): return why // already a full sentence from PerplClose.message
+        case .unavailable(let why): return why
         }
     }
 }

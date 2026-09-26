@@ -595,7 +595,7 @@ struct PerpTradeView: View {
         Haptics.commit()
         // Use the authenticated path when the socket is live, OR when the wallet has an enrolled key and the user wants
         // TP/SL (its submit awaits ensureConnected()); otherwise the on-chain path. Decided here, once per confirmation.
-        authedOrderAccount = model.account?.accountId.flatMap { perplTrading.isReady || (perplTrading.isEnrolled && wantsTriggers) ? $0 : nil }
+        authedOrderAccount = (perplTrading.isReady || (perplTrading.isEnrolled && wantsTriggers)) ? model.account?.accountId : nil
         showConfirm = true
     }
 
@@ -1897,6 +1897,10 @@ private struct ClosePositionSheet: View {
                 VStack(spacing: 8) {
                     if run.isDone {
                         PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+                    } else if case .failed = run.phase, run.sentSomething {
+                        // Already on the network: no re-confirm (it would replay the plan), as in ConfirmationSheet.
+                        Text(TransactionRun.alreadySent).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
                     } else if !session.canSign {
                         Text(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     } else {
@@ -2001,6 +2005,10 @@ private struct AddMarginSheet: View {
                 VStack(spacing: 8) {
                     if run.isDone {
                         PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+                    } else if case .failed = run.phase, run.sentSomething {
+                        // Already on the network: no re-confirm (it would replay the plan), as in ConfirmationSheet.
+                        Text(TransactionRun.alreadySent).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
                     } else if !session.canSign {
                         Text(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     } else {
@@ -2244,16 +2252,15 @@ struct OrderTicket {
 }
 
 extension String {
-    /// Parses a user-typed decimal. The decimal pad shows the locale separator ("," across much of Europe/LatAm) but
-    /// our own writers (`plainSize`) emit POSIX "." — so try the fast POSIX path first, then normalize the locale's
-    /// grouping/decimal separators. Purely additive: en_US "." input still parses via `Double(_:)` unchanged.
-    /// Finite values only: `Double(_:)` also reads "inf", "nan" and "1e400", which no amount field means and which
-    /// would trap when scaled to integers.
+    /// Parses a user-typed decimal. The decimal pad shows the locale separator ("," across much of Europe/LatAm) while
+    /// our own writers (`plainSize`) emit POSIX "." — both are read by the token-amount rules, whatever the device's
+    /// locale (the old locale-grouping strip turned a pasted "0,5" into 5 in en_US). ASCII digits and separators only,
+    /// finite values only: no "inf", "nan", "1e400" or signs, which no field here means.
     var perpDouble: Double? {
-        if let d = Double(self) { return d.isFinite ? d : nil }
-        var s = self
-        if let g = Locale.current.groupingSeparator, !g.isEmpty { s = s.replacingOccurrences(of: g, with: "") }
-        if let dec = Locale.current.decimalSeparator, dec != "." { s = s.replacingOccurrences(of: dec, with: ".") }
-        return Double(s).flatMap { $0.isFinite ? $0 : nil }
+        // Same rules as token amounts (Amount.decimalPoint): "0,5" is one half in every locale, never 5.
+        let s = trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty, s.allSatisfy({ $0 == "." || $0 == "," || ($0.isASCII && $0.isNumber) }),
+              let normalized = Amount.decimalPoint(s), normalized != "." else { return nil }
+        return Double(normalized).flatMap { $0.isFinite ? $0 : nil }
     }
 }
