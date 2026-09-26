@@ -90,7 +90,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const [choice, setChoice] = useState<Venue | null>(null);
   const [picking, setPicking] = useState<"in" | "out" | null>(null);
   const [step, setStep] = useState<{ label: string; hash?: Hex } | null>(null);
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, reset, dismiss, busy } = useTx();
   const debouncedAmount = useDebounced(amount, 400);
   const amountIn = parseAmount(debouncedAmount, tokenIn.decimals) ?? 0n;
 
@@ -200,7 +200,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
           )}
           {highImpact && <div className="warnbox"><b>High price impact.</b> This trade moves the market by {bpsToPct(impact)}. Consider a smaller amount or a different venue.</div>}
           {step && busy && <p className="hint">{step.label}{step.hash ? " · sent" : "…"}</p>}
-          <TxStatus tx={tx} onDismiss={() => { reset(); setStep(null); }} />
+          <TxStatus tx={tx} onDismiss={() => { dismiss(); setStep(null); }} />
           {/* Not ready until the typed amount has settled: the quote and the swap use the debounced amount. */}
           <ActionButton ready={!!selected && amountIn > 0n && !insufficient && amount === debouncedAmount} busy={busy} label={buttonLabel} onClick={submit} requireLaunchpad={false} />
           <p className="hint">Quotes are compared live across Kuru Flow, Uniswap (v3 and v4) and Monday Trade. You trade from your own wallet; DyorHQ never holds funds.</p>

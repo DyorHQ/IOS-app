@@ -16,7 +16,7 @@ export default function Portfolio() {
   const wallet = useWallet();
   const now = useNow();
   const account = wallet.account;
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy } = useTx();
   const portfolio = useAsync(() => (account ? fetchPortfolio(account) : Promise.resolve(null)), `portfolio:${account ?? ""}`, 10_000);
   const p = portfolio.data;
   const claimableIds = p ? p.rows.filter((r) => r.claimableCollector + r.claimableCreator > 0n).map((r) => r.moment.id) : [];
@@ -46,7 +46,7 @@ export default function Portfolio() {
           <button type="button" className="btn primary sm" disabled={busy || claimableIds.length === 0 || !wallet.client} onClick={() => { const client = wallet.client; if (client) void run(`Claim ${claimableIds.length} Moment${claimableIds.length === 1 ? "" : "s"}`, (onSent) => claimAll(client, claimableIds, onSent), () => portfolio.refresh()); }}>Claim all ({claimableIds.length}) <Icon name="arrow-ur" /></button>
         </div>
       )}
-      <TxStatus tx={tx} onDismiss={reset} />
+      <TxStatus tx={tx} onDismiss={dismiss} />
       {portfolio.error && <p className="tx bad" role="alert">{portfolio.error}</p>}
       <section className="stack-cards" style={{ marginTop: 16 }}>
         {p?.rows.map((r) => {

@@ -161,7 +161,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
   const [token, setToken] = useState<string>("0x0000000000000000000000000000000000000000");
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("");
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy } = useTx();
   const row = markets.rows.find((r) => r.address.toLowerCase() === token.toLowerCase()) ?? owned[0];
   const parsed = row ? parseAmount(amount, row.decimals) : null;
   const valid = !!row && !!parsed && parsed > 0n && parsed <= row.balance && isAddress(to);
@@ -186,7 +186,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
       <label className="field">Asset<select className="select" value={row?.address ?? token} onChange={(e) => setToken(e.target.value)}>{owned.map((r) => <option key={r.address} value={r.address}>{r.symbol} · {fmtUnits(r.balance, r.decimals, { compact: true })}</option>)}{owned.length === 0 && <option value="">No balances</option>}</select></label>
       <label className="field">To address<input placeholder="0x…" value={to} onChange={(e) => setTo(e.target.value)} /></label>
       <label className="field">Amount<input inputMode="decimal" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />{row && <span className="help">Balance {fmtUnits(row.balance, row.decimals)} {row.symbol}</span>}</label>
-      <TxStatus tx={tx} onDismiss={reset} />
+      <TxStatus tx={tx} onDismiss={dismiss} />
       <button type="button" className="btn primary big" disabled={!valid || busy || !wallet.onMonad} onClick={send}>{wallet.onMonad ? `Send ${row?.symbol ?? ""}` : "Switch to Monad first"}</button>
     </>
   );

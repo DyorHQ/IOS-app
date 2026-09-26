@@ -30,7 +30,7 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
   const [side, setSide] = useState<Side>("buy");
   const [amount, setAmount] = useState("");
   const [slippageBps, setSlippage] = useState(100);
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, reset, dismiss, busy } = useTx();
   const now = useNow();
   const deferredAmount = useDeferredValue(amount);
   const decimals = side === "buy" ? pair.decimals : 18;
@@ -91,7 +91,7 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
         <div><span>Minimum after slippage</span><b>{q ? fmtUnits(minOut, side === "buy" ? 18 : pair.decimals) : "—"}</b></div>
       </div>
       <div className="slip"><span>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
-      <TxStatus tx={tx} onDismiss={reset} />
+      <TxStatus tx={tx} onDismiss={dismiss} />
       {quote.error && <p className="hint err">{quote.error}</p>}
       {insufficient && <p className="hint err">Insufficient balance.</p>}
       <ActionButton ready={!!q && out > 0n && !insufficient} busy={busy || (quote.loading && !!parsed)} label={side === "buy" ? `Buy $${launch.symbol}` : `Sell $${launch.symbol}`} onClick={submit} className={`btn big ${side === "buy" ? "tone-up" : "tone-down"}`} />
@@ -101,7 +101,7 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
 
 export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: () => void }) {
   const wallet = useWallet();
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy } = useTx();
   const pending = launch.hookPendingFees + launch.hookPendingTax;
   const venue = launch.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4";
   if (launch.phase === 2) {
@@ -114,7 +114,7 @@ export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: (
           <Row label="Swept into the pool" value={fmtAmount(launch.sweptQuote, launch.pair.decimals, launch.pair.symbol, { compact: true })} />
           <Row label="Undistributed pool fees" value={fmtAmount(pending, launch.pair.decimals, launch.pair.symbol)} />
         </div>
-        <TxStatus tx={tx} onDismiss={reset} />
+        <TxStatus tx={tx} onDismiss={dismiss} />
         <div className="flow-actions" style={{ marginTop: 4 }}>
           <Link className="btn primary" href={`/swap?in=${launch.pair.native ? "MON" : launch.pairToken}&out=${launch.token}`}>Trade ${launch.symbol} <Icon name="arrow-ur" /></Link>
           {pending > 0n && wallet.client && (
@@ -136,7 +136,7 @@ export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: (
     <div className="card state-card">
       <h3>Graduation pending</h3>
       <p>The curve is complete but the {venue} pool has not opened yet. Anyone can retry the migration; if it keeps failing, the owner can enable refunds after seven days.</p>
-      <TxStatus tx={tx} onDismiss={reset} />
+      <TxStatus tx={tx} onDismiss={dismiss} />
       <ActionButton ready={!busy} busy={busy} label="Retry graduation" className="btn secondary" onClick={() => { const client = wallet.client; if (client) void run("Graduate", (onSent) => retryGraduation(client, launch.factory, launch.token, onSent), onDone); }} />
     </div>
   );
@@ -144,7 +144,7 @@ export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: (
 
 export function Position({ launch, view, onDone }: { launch: LaunchDetail; view: AccountView; onDone: () => void }) {
   const wallet = useWallet();
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy } = useTx();
   const { pair } = launch;
   const value = (view.tokenBalance * launch.price) / 10n ** 18n;
   return (
@@ -166,7 +166,7 @@ export function Position({ launch, view, onDone }: { launch: LaunchDetail; view:
           <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run("Claim creator fees", (onSent) => claimEscrow(client, launch.stack.escrow, launch.pairToken, pair.native, onSent), onDone); }}>Claim</button>
         </div>
       )}
-      <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={reset} /></div>
+      <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={dismiss} /></div>
     </div>
   );
 }

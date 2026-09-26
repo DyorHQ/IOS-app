@@ -45,7 +45,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
   const [tab, setTab] = useState<(typeof PTABS)[number]>("Positions");
   const [period, setPeriod] = useState("60");
   const [collatAmount, setCollatAmount] = useState("");
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, reset, dismiss, busy } = useTx();
   const orders = useAsync(async () => (acct && perps.length ? fetchOpenOrders(acct, perps) : []), `orders:${acct?.accountId ?? 0}:${perps.length}`, 10_000);
   const collat = useAsync(async () => (account ? collateralBalances(account) : null), `collat:${account ?? ""}`, 10_000);
 
@@ -145,7 +145,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
         <div className="between"><span>Notional</span><b>${fmtNum(notional)}</b></div>
         <div className="between"><span>Margin required</span><b>${fmtNum(marginNeeded)}</b></div>
         <div className="between"><span>Est. liquidation</span><b>{perp && sizeNum > 0 && marginNeeded > 0 ? fmtUSD(Math.max(0, side === "Long" ? refPrice * (1 - (1 / lev - perp.maintMarginFrac)) : refPrice * (1 + (1 / lev - perp.maintMarginFrac)))) : "—"}</b></div>
-        <TxStatus tx={tx} onDismiss={reset} />
+        <TxStatus tx={tx} onDismiss={dismiss} />
         {acct ? <ActionButton ready={valid} busy={busy} label={`${side} ${market.symbol} · ${lev}×`} onClick={submit} className={`btn big ${side === "Long" ? "tone-up" : "tone-down"}`} requireLaunchpad={false} />
           : <ActionButton ready={true} busy={false} label="Deposit AUSD to start" onClick={() => setTab("Collateral")} className="btn big primary" requireLaunchpad={false} />}
         <p className="hint">Orders are placed on Perpl&apos;s on-chain order book by your wallet. Market orders are immediate-or-cancel at 1% slippage.</p>
@@ -183,7 +183,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
             <>
               <div className="inline-form"><input inputMode="decimal" placeholder="AUSD amount" value={collatAmount} onChange={(e) => setCollatAmount(e.target.value)} /><button type="button" className="btn primary sm" disabled={busy || !parseAmount(collatAmount, 6)} onClick={doDeposit}>{acct ? "Deposit" : "Open account"}</button><button type="button" className="btn secondary sm" disabled={busy || !acct || !parseAmount(collatAmount, 6)} onClick={doWithdraw}>Withdraw</button></div>
               <p className="hint" style={{ marginTop: 8 }}>Collateral is AUSD. First deposit opens your account (minimum 10 AUSD). Need AUSD? <button type="button" className="link" style={{ color: "var(--accent-ink)", fontWeight: 600 }} onClick={() => toast("Swap MON to AUSD on the Swap tab")}>Swap for it</button>.</p>
-              <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={reset} /></div>
+              <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={dismiss} /></div>
             </>
           )}
         </section>

@@ -50,7 +50,7 @@ export function CollectPanel({ moment, view, onDone }: { moment: MomentDetail; v
   const [qty, setQty] = useState(1);
   const [mode, setMode] = useState<CollectMode>("permit2");
   const [agreed, setAgreed] = useDisclosure();
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy } = useTx();
   const quote = useAsync(() => quoteCollect(moment.id, qty), `quote:${moment.id}:${qty}`, 6_000);
   const q = quote.data?.quote ?? null;
   const closed = now > 0 && now >= moment.deadline;
@@ -92,7 +92,7 @@ export function CollectPanel({ moment, view, onDone }: { moment: MomentDetail; v
         <button type="button" aria-pressed={mode === "permit2"} onClick={() => setMode("permit2")} title="Approve Permit2 once, then sign each collect">Permit2 signature</button>
         <button type="button" aria-pressed={mode === "approve"} onClick={() => setMode("approve")} title="An exact USDC approval of the collect contract, then the collect">Plain approval</button>
       </div>
-      <TxStatus tx={tx} onDismiss={reset} />
+      <TxStatus tx={tx} onDismiss={dismiss} />
       {insufficient && <p className="hint err">Not enough USDC.</p>}
       <ActionButton requireLaunchpad={false} ready={MOMENTS_DEPLOYED && !!q && agreed && !insufficient && !closed} busy={busy || (quote.loading && !q)} label={<>Collect {q ? `${q.editions} for ${usd(q.gross)}` : ""} <Icon name="arrow-ur" /></>} onClick={submit} className="btn big tone-up" />
       <p className="hint">Window closes {fmtDate(moment.deadline)} (<Countdown until={moment.deadline} now={now} />). Nothing is refunded and nothing is over-pulled: the last collect is clamped so the reserve lands exactly on {usd(moment.threshold)}.</p>
@@ -103,7 +103,7 @@ export function CollectPanel({ moment, view, onDone }: { moment: MomentDetail; v
 export function StatePanel({ moment, onDone }: { moment: MomentDetail; onDone: () => void }) {
   const wallet = useWallet();
   const now = useNow();
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy } = useTx();
   const l = moment.ledger;
   const expirable = now > 0 && now >= moment.deadline && (l.state === 0 || (l.state === 1 && now >= l.stuckSince + STUCK_GRACE_SECONDS));
   const call = (label: string, action: (onSent: (h: `0x${string}`) => void) => Promise<unknown>) => { const client = wallet.client; if (client) void run(label, action, onDone); };
@@ -128,7 +128,7 @@ export function StatePanel({ moment, onDone }: { moment: MomentDetail; onDone: (
           <KV label="Last buyback" value={p.lastBuyback ? fmtDate(p.lastBuyback) : "never"} />
           <KV label="Pool id" value={<span className="mono">{shortAddress(p.poolId, 6)}</span>} />
         </div>
-        <TxStatus tx={tx} onDismiss={reset} />
+        <TxStatus tx={tx} onDismiss={dismiss} />
         <div className="flow-actions" style={{ marginTop: 4 }}>
           <Link className="btn primary" href={`/swap?in=${USDC.address}&out=${moment.coin}`}>Trade ${moment.symbol} <Icon name="arrow-ur" /></Link>
           <button type="button" className="btn secondary" disabled={busy || !canBuyback || !wallet.client} title={canBuyback ? "Buys coin with the accrued 0.5% and adds it to the locked position" : `Needs ${usd(p.buybackMin)} accrued and one hour between rounds`} onClick={() => call("Run buyback", (onSent) => runBuyback(wallet.client!, moment.id, 0n, onSent))}>Run buyback ({usd(accrued)})</button>
@@ -155,7 +155,7 @@ export function StatePanel({ moment, onDone }: { moment: MomentDetail; onDone: (
       <div className="card state-card">
         <h3>Graduation pending</h3>
         <p>The reserve reached {usd(moment.threshold)} but the pool did not open in that transaction. Anyone can retry; every cent is still in the collect contract. {l.stuckSince ? `First failure ${fmtDate(l.stuckSince)}.` : ""} If it keeps failing, the Moment can be wound down {STUCK_GRACE_SECONDS / 86400} days after the first failure and after the window closes.</p>
-        <TxStatus tx={tx} onDismiss={reset} />
+        <TxStatus tx={tx} onDismiss={dismiss} />
         <div className="flow-actions">
           <ActionButton requireLaunchpad={false} ready={!busy && !!wallet.client} busy={busy} label="Retry graduation" className="btn secondary" onClick={() => call("Graduate", (onSent) => retryGraduation(wallet.client!, moment.id, onSent))} />
           {expirable && <button type="button" className="btn secondary" disabled={busy} onClick={() => call("Wind down", (onSent) => expire(wallet.client!, moment.id, onSent))}>Wind down</button>}
@@ -172,7 +172,7 @@ export function StatePanel({ moment, onDone }: { moment: MomentDetail; onDone: (
         <KV label="Collected in total" value={usd(l.totalGross)} />
         <KV label="Window" value={<Countdown until={moment.deadline} now={now} />} />
       </div>
-      <TxStatus tx={tx} onDismiss={reset} />
+      <TxStatus tx={tx} onDismiss={dismiss} />
       {expirable && <ActionButton requireLaunchpad={false} ready={!busy && !!wallet.client} busy={busy} label="Wind down" className="btn secondary" onClick={() => call("Wind down", (onSent) => expire(wallet.client!, moment.id, onSent))} />}
     </div>
   );
@@ -180,7 +180,7 @@ export function StatePanel({ moment, onDone }: { moment: MomentDetail; onDone: (
 
 export function PositionPanel({ moment, view, onDone }: { moment: MomentDetail; view: AccountView; onDone: () => void }) {
   const wallet = useWallet();
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy } = useTx();
   const now = useNow();
   const isCreator = wallet.account?.toLowerCase() === moment.creator.toLowerCase();
   const alloc = isCreator ? (SUPPLY * BigInt(moment.creatorAllocBps)) / BPS : 0n;
@@ -217,7 +217,7 @@ export function PositionPanel({ moment, view, onDone }: { moment: MomentDetail; 
           </div>
         </>
       )}
-      <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={reset} /></div>
+      <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={dismiss} /></div>
       {moment.graduated && (
         <div className="claim" style={{ marginTop: 10 }}>
           <div><span>Claimable now</span><b>{coinsOf(claimable, moment.symbol)}</b></div>
@@ -231,7 +231,7 @@ export function PositionPanel({ moment, view, onDone }: { moment: MomentDetail; 
 
 export function CreatorPanel({ moment, view, onDone }: { moment: MomentDetail; view: AccountView; onDone: () => void }) {
   const wallet = useWallet();
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy } = useTx();
   const rows: { label: string; amount: bigint; action: (onSent: (h: `0x${string}`) => void) => Promise<unknown> }[] = [];
   const client = wallet.client;
   if (client) {
@@ -251,7 +251,7 @@ export function CreatorPanel({ moment, view, onDone }: { moment: MomentDetail; v
           <button type="button" className="btn secondary sm" disabled={busy} onClick={() => void run(`Withdraw ${usd(r.amount)}`, r.action, onDone)}>Withdraw</button>
         </div>
       ))}
-      <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={reset} /></div>
+      <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={dismiss} /></div>
     </div>
   );
 }

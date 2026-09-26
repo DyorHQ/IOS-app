@@ -111,7 +111,7 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
   const [form, setForm] = useState<Form>(EMPTY);
   const [advanced, setAdvanced] = useState(false);
   const [touched, setTouched] = useState(false);
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy } = useTx();
   const protocol = useAsync(fetchProtocol, "protocol", 60_000);
   const pairs = protocol.data?.pairs.filter((p) => p.approved) ?? [];
   const pair = pairs.find((p) => p.address === form.pair) ?? pairs[0];
@@ -214,7 +214,7 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
           )}
 
           {allowed.data === false && <div className="warnbox"><b>Whitelist only.</b> Launching is currently limited to whitelisted wallets and yours is not on the list.</div>}
-          <TxStatus tx={tx} onDismiss={reset} />
+          <TxStatus tx={tx} onDismiss={dismiss} />
           {firstError && <p className="hint err" role="alert">{firstError}</p>}
           <ActionButton type="submit" ready={!!input && allowed.data !== false && !!protocol.data?.configEnabled} busy={busy} label={<>Launch for {fee}{estimate ? ` + ${fmtAmount(estimate.used, pair?.decimals ?? 18, pair?.symbol ?? "MON")}` : ""} <Icon name="arrow-ur" /></>} onClick={submit} />
           <p className="hint">You pay the launch fee plus your developer buy. Supply mints to the curve only: no team allocation, and nobody can withdraw the liquidity after graduation.</p>

@@ -58,11 +58,12 @@ export function TxStatus({ tx, onDismiss }: { tx: TxState; onDismiss?: () => voi
   if (tx.status === "idle") return null;
   const busy = tx.status === "signing" || tx.status === "pending";
   const text = tx.status === "signing" ? "Confirm in your wallet…" : tx.status === "pending" ? "Waiting for confirmation on Monad…" : tx.status === "success" ? "Confirmed." : tx.message;
+  // "unconfirmed" is neither success nor failure: the transaction is out and may still land.
   return (
     <div className={`tx ${tx.status === "success" ? "ok" : tx.status === "error" ? "bad" : ""}`} role="status">
-      {busy ? <span className="spinner" /> : <Icon name={tx.status === "success" ? "check" : "x"} />}
+      {busy ? <span className="spinner" /> : <Icon name={tx.status === "success" ? "check" : tx.status === "unconfirmed" ? "clock" : "x"} />}
       <div><b>{tx.label}</b>{text}{tx.hash && <><br /><a href={explorerTx(tx.hash)} target="_blank" rel="noreferrer">View transaction <Icon name="arrow-ur" /></a></>}</div>
-      {onDismiss && !busy && <button type="button" className="tx-x" aria-label="Dismiss" onClick={onDismiss}><Icon name="x" /></button>}
+      {onDismiss && !busy && <button type="button" className="tx-x" aria-label={tx.status === "unconfirmed" ? "I have checked the transaction" : "Dismiss"} onClick={() => onDismiss()}><Icon name="x" /></button>}
     </div>
   );
 }

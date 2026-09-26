@@ -56,7 +56,7 @@ export default function Create() {
   const [file, setFile] = useState<File | null>(null);
   const [fileHash, setFileHash] = useState<Hex | null>(null);
   const [touched, setTouched] = useState(false);
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy } = useTx();
   const policy = useAsync(fetchPolicy, "moments-policy", 60_000);
   const preview = useMemo(() => (file ? URL.createObjectURL(file) : ""), [file]);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
@@ -120,7 +120,7 @@ export default function Create() {
           <label className="field">Collect window (days)<input inputMode="decimal" value={form.windowDays} onChange={(e) => set({ windowDays: e.target.value })} /><span className="help">1 hour to 30 days. Collecting ends at graduation or when the window closes, whichever comes first. {now > 0 ? `Closes ${fmtDate(closesAt)}.` : ""}</span>{touched && errors.windowDays && <span className="hint err">{errors.windowDays}</span>}</label>
 
           <div className="note"><b>What you are publishing</b><p>A numbered, transferable edition (ERC-721, marketplace-ready with a {p ? bpsToPct(p.royaltyBps) : "5%"} creator royalty) and a promise of coins that only exist if the reserve reaches {p ? usd(p.threshold) : "$10"}. You receive {p ? bpsToPct(p.creatorBps) : "20%"} of every collect in USDC, 0.2% of every trade after graduation, and the {p ? bpsToPct(p.royaltyBps) : "5%"} royalty on secondary sales of the editions. Nothing about a published Moment can be changed afterwards.</p></div>
-          <TxStatus tx={tx} onDismiss={reset} />
+          <TxStatus tx={tx} onDismiss={dismiss} />
           {firstError && <p className="hint err" role="alert">{firstError}</p>}
           {p?.publishingPaused && <div className="warnbox"><b>Publishing is paused.</b> Governance has paused new Moments for now.</div>}
           <ActionButton requireLaunchpad={false} type="submit" ready={MOMENTS_DEPLOYED && !!input && !p?.publishingPaused} busy={busy} label={<>Publish <Icon name="arrow-ur" /></>} onClick={submit} />
