@@ -90,13 +90,17 @@ function withSecurityHeaders(response: Response, policy: string): Response {
   return secured;
 }
 
-/** vinext stamps its inline scripts with the nonce it finds in the request's CSP header (the Next.js convention).
-    The Worker sets that header itself, replacing any the client sent, so a client never chooses the nonce. */
-function withPolicy(request: Request, policy: string): Request {
+/** Page requests reach vinext with headers only the Worker sets, replacing any the client sent: the CSP carrying this
+    response's nonce (vinext stamps its inline scripts with the nonce it finds there, the Next.js convention), and the
+    host and scheme the request really came in on (app/layout.tsx builds share links from them). */
+function forRender(request: Request, policy: string): Request {
   if (request.method !== "GET" && request.method !== "HEAD") return request;
+  const url = new URL(request.url);
   const headers = new Headers(request.headers);
   headers.delete("content-security-policy");
   headers.set("content-security-policy-report-only", policy);
+  headers.set("x-forwarded-host", url.host);
+  headers.set("x-forwarded-proto", url.protocol.slice(0, -1));
   return new Request(request, { headers });
 }
 
@@ -123,7 +127,7 @@ const app = {
       }, allowedWidths);
     }
 
-    return handler.fetch(withPolicy(request, policy), env, ctx);
+    return handler.fetch(forRender(request, policy), env, ctx);
   },
 };
 
