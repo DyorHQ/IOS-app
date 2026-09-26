@@ -10,7 +10,9 @@ struct SwapView: View {
     @Environment(AppSettings.self) private var settings
     @State private var model = SwapModel()
     @State private var picking: SwapModel.Side?
-    @State private var showConfirm = false
+    /// The quote under review, frozen when the sheet opens. Quotes refresh every 15 s, and the sheet builds its plan
+    /// once, so reading the live quote would let the details (and a passkey session's intent) drift from what's signed.
+    @State private var reviewing: SwapReview?
     @State private var showSlippage = false
     @State private var historyWindow: SwapHistoryService.Window = .day
     @State private var swapHistory: [SwapHistoryItem] = []
@@ -22,6 +24,7 @@ struct SwapView: View {
                 paySection
                 flipRow
                 receiveSection
+                actionSection
                 quotesSection
                 activitySection
             }
@@ -39,11 +42,6 @@ struct SwapView: View {
                 }
             }
             .keyboardDoneButton()
-            .safeAreaInset(edge: .bottom) {
-                PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil) { showConfirm = true }
-                    .padding()
-                    .background(.bar)
-            }
             .sheet(item: $picking) { side in
                 TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: KnownTokenStore.universe(owner: session.address)) { token in
                     // Remember any token the user picks (a pasted ERC-20 included) so it shows a balance and price in
@@ -52,10 +50,10 @@ struct SwapView: View {
                     model.select(token, for: side)
                 }
             }
-            .sheet(isPresented: $showConfirm) { confirmation }
+            .sheet(item: $reviewing) { review in confirmation(review) }
             .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
             .task(id: session.address) { await model.refreshBalances(env: env, address: session.address) }
-            .task(id: model.quoteKey) { await model.quote(env: env, account: session.address) }
+            .task(id: model.quoteKey) { await model.quote(env: env, account: session.address, exactApprovals: session.isPasskeyAccount) }
             .onChange(of: router.pendingSwap?.tokenOut) { _, _ in applyPending() }
             .onAppear { applyPending() }
         }
@@ -109,7 +107,7 @@ struct SwapView: View {
         Section {
             tokenRow(side: .pay, token: model.tokenIn)
             AmountField(title: "0", text: $model.amountText, token: nil) {
-                Haptics.selection(); model.applyPercent(100)
+                Haptics.selection(); useMax()
             }
             percentRow
         } header: {
@@ -122,20 +120,27 @@ struct SwapView: View {
                 Spacer()
                 if let usd = model.payUSD { Text(usd, format: .currency(code: "USD")) }
             }
+            // With the header below trimmed to match (`receiveSection`), the flip button sits 10 pt from the balance
+            // line and 10 pt from "You Receive".
+            .padding(.bottom, -8)
         }
+        .listSectionSpacing(0)
     }
 
     /// Quick-size the pay amount to a share of the wallet balance — 25 / 50 / 75 / 100%. On a full send of native
-    /// MON a little is kept back for gas.
+    /// MON the swap's network fee is kept back.
     private var percentRow: some View {
         HStack(spacing: 8) {
             ForEach([25, 50, 75, 100], id: \.self) { pct in
-                Button("\(pct)%") { Haptics.selection(); model.applyPercent(Double(pct)) }
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                Button("\(pct)%") {
+                    Haptics.selection()
+                    if pct == 100 { useMax() } else { model.applyPercent(Double(pct)) }
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
         }
         .buttonStyle(.plain)
@@ -143,6 +148,12 @@ struct SwapView: View {
         .listRowSeparator(.hidden)
     }
 
+    private func useMax() {
+        Task { await model.applyMax(env: env, account: session.address) }
+    }
+
+    /// The flip button between the two cards, as tight as the list allows and the same gap above and below: no section
+    /// spacing on either side of it, and a row exactly the button's height.
     private var flipRow: some View {
         Section {
             HStack {
@@ -156,8 +167,21 @@ struct SwapView: View {
                 .accessibilityLabel("Swap direction")
                 Spacer()
             }
+            .frame(height: 40)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets())
+        }
+        .listSectionSpacing(0)
+        .environment(\.defaultMinListRowHeight, 0)
+    }
+
+    /// The swap's action, in the page right under what it trades. Pinned to the bottom it sat on a bar over the quotes
+    /// and the history.
+    private var actionSection: some View {
+        Section {
+            PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil) { reviewing = model.review }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
         }
     }
 
@@ -167,7 +191,7 @@ struct SwapView: View {
             HStack {
                 if let quote = model.selectedQuote {
                     AmountText(amount: quote.amountOut, token: model.tokenOut, font: .title2.weight(.medium))
-                } else if model.quoting {
+                } else if model.awaitingQuote {
                     ProgressView().controlSize(.small)
                     Text("Finding the best price").foregroundStyle(.secondary)
                 } else {
@@ -177,6 +201,7 @@ struct SwapView: View {
             }
         } header: {
             Text("You Receive")
+                .padding(.top, -10) // the same 10 pt from the flip button as the balance line above it (`paySection`)
         } footer: {
             HStack {
                 if let balance = model.balances[model.tokenOut.address] {
@@ -189,7 +214,7 @@ struct SwapView: View {
     }
 
     @ViewBuilder private var quotesSection: some View {
-        if let result = model.result, model.amountIn > 0 {
+        if let result = model.currentResult, model.amountIn > 0 {
             Section {
                 ForEach(result.quotes) { quote in
                     Button { Haptics.selection(); model.selectedVenue = quote.venue; model.userPickedVenue = true } label: {
@@ -234,7 +259,7 @@ struct SwapView: View {
                     Text("Minimum received \(NumberStyle.units(quote.minOut, decimals: model.tokenOut.decimals)) \(model.tokenOut.symbol) at \(NumberStyle.basisPoints(model.slippageBps)) slippage. Quotes refresh every 15 seconds.")
                 }
             }
-        } else if let error = model.error {
+        } else if let error = model.currentError {
             Section { InlineError(message: error) }.listRowBackground(Color.clear)
         }
     }
@@ -256,28 +281,24 @@ struct SwapView: View {
         .accessibilityHint("Choose a different token")
     }
 
-    @ViewBuilder private var confirmation: some View {
-        if let quote = model.selectedQuote {
-            SwapConfirmation(model: model, quote: quote, onDone: {
-                let paidIn = model.amountIn // capture before clearing, so the notification reports the real amount
-                model.amountText = ""
-                // Remember both sides so they show in holdings and the picker even if they aren't curated: the token
-                // just acquired, and the one paid with (a partial swap leaves a balance still worth showing).
-                KnownTokenStore.add(model.tokenOut, owner: session.address)
-                KnownTokenStore.add(model.tokenIn, owner: session.address)
-                if settings.notificationsEnabled, settings.notifyFills {
-                    Notifications.swapped(paidIn, model.tokenIn, quote.amountOut, model.tokenOut)
-                }
-                Task { await model.refreshBalances(env: env, address: session.address) }
-            }, onCompleted: { hash in
-                // Record the swap so it shows in Swap History and Recent Activity with its exact legs (including a
-                // native MON leg, which an on-chain Transfer scan can't recover).
-                let text = "\(NumberStyle.units(model.amountIn, decimals: model.tokenIn.decimals, compact: true)) \(model.tokenIn.symbol) → \(NumberStyle.units(quote.amountOut, decimals: model.tokenOut.decimals, compact: true)) \(model.tokenOut.symbol)"
-                let paidUSD = Amount.units(model.amountIn, decimals: model.tokenIn.decimals) * (model.prices[model.tokenIn.address]?.usd ?? 0)
-                let receivedUSD = Amount.units(quote.amountOut, decimals: model.tokenOut.decimals) * (model.prices[model.tokenOut.address]?.usd ?? 0)
-                ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash, usd: paidUSD > 0 ? paidUSD : (receivedUSD > 0 ? receivedUSD : nil)), owner: session.address)
-            })
-        }
+    private func confirmation(_ review: SwapReview) -> some View {
+        SwapConfirmation(review: review, onDone: {
+            model.amountText = ""
+            // Remember both sides so they show in holdings and the picker even if they aren't curated: the token
+            // just acquired, and the one paid with (a partial swap leaves a balance still worth showing).
+            KnownTokenStore.add(review.tokenOut, owner: session.address)
+            KnownTokenStore.add(review.tokenIn, owner: session.address)
+            if settings.notificationsEnabled, settings.notifyFills {
+                Notifications.swapped(review.amountIn, review.tokenIn, review.quote.amountOut, review.tokenOut)
+            }
+            Task { await model.refreshBalances(env: env, address: session.address) }
+        }, onCompleted: { hash in
+            // Record the swap so it shows in Swap History and Recent Activity with its exact legs (including a
+            // native MON leg, which an on-chain Transfer scan can't recover): the ones reviewed and signed.
+            let text = "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals, compact: true)) \(review.tokenIn.symbol) → \(NumberStyle.units(review.quote.amountOut, decimals: review.tokenOut.decimals, compact: true)) \(review.tokenOut.symbol)"
+            let usd = [review.payUSD, review.receiveUSD].compactMap { $0 }.first { $0 > 0 }
+            ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash, usd: usd), owner: session.address)
+        })
     }
 
     private func applyPending() {
@@ -290,26 +311,47 @@ struct SwapView: View {
     }
 }
 
-/// Builds the plan for the chosen quote, then hands it to the shared confirmation sheet.
-private struct SwapConfirmation: View {
-    let model: SwapModel
+/// What the review sheet shows and signs, frozen when Review is tapped: the quote with the request it answers (the
+/// pair, amount and slippage it was quoted for, and their dollar values then). Quotes refresh every 15 s and a Max can
+/// land late, but the sheet builds its plan once, so everything it shows, declares to a passkey session and records
+/// comes from here — never from the live form.
+struct SwapReview: Identifiable {
+    let id = UUID()
     let quote: VenueQuote
+    let tokenIn: Token
+    let tokenOut: Token
+    let amountIn: BigUInt
+    let slippageBps: Int
+    let payUSD: Double?
+    let receiveUSD: Double?
+}
+
+/// Builds the plan for the reviewed quote, then hands it to the shared confirmation sheet.
+private struct SwapConfirmation: View {
+    let review: SwapReview
     let onDone: () -> Void
     var onCompleted: ((Data) -> Void)? = nil
     @Environment(Session.self) private var session
 
     var body: some View {
+        let quote = review.quote
         ConfirmationSheet(title: "Review Swap", confirmTitle: "Swap", build: {
             guard let address = session.address else { throw SessionError.readOnly }
             return try await quote.build(address)
-        }, onDone: onDone, onCompleted: onCompleted) {
-            DetailRow("You pay", "\(NumberStyle.units(model.amountIn, decimals: model.tokenIn.decimals)) \(model.tokenIn.symbol)")
-            DetailRow("You receive", "\(NumberStyle.units(quote.amountOut, decimals: model.tokenOut.decimals)) \(model.tokenOut.symbol)")
-            DetailRow("Minimum received", "\(NumberStyle.units(quote.minOut, decimals: model.tokenOut.decimals)) \(model.tokenOut.symbol)")
+        }, onDone: onDone, onCompleted: onCompleted, intent: intent) {
+            DetailRow("You pay", "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals)) \(review.tokenIn.symbol)")
+            DetailRow("You receive", "\(NumberStyle.units(quote.amountOut, decimals: review.tokenOut.decimals)) \(review.tokenOut.symbol)")
+            DetailRow("Minimum received", "\(NumberStyle.units(quote.minOut, decimals: review.tokenOut.decimals)) \(review.tokenOut.symbol)")
             DetailRow("Venue", quote.venue.displayName)
             DetailRow("Route", quote.route)
-            DetailRow("Slippage", NumberStyle.basisPoints(model.slippageBps))
+            DetailRow("Slippage", NumberStyle.basisPoints(review.slippageBps))
         }
+    }
+
+    /// A swap (or wrap) of exactly what's shown, for the quoted output, valued at the input's price.
+    private var intent: Mera.Intent {
+        .swap(venue: review.quote.venue, pay: .init(token: review.tokenIn.address, amount: review.amountIn),
+              receive: .init(token: review.tokenOut.address, amount: review.quote.amountOut), usd: review.payUSD)
     }
 }
 
@@ -328,14 +370,31 @@ final class SwapModel {
     private(set) var balances: [Address: BigUInt] = [:]
     private(set) var prices: [Address: PriceInfo] = [:]
     private(set) var result: QuoteResult?
+    /// The `quoteKey` that `result` and `error` answer. The amount, pair or slippage can change while a re-quote is on
+    /// its way (400 ms debounce, then every venue): until it lands, the old answer is kept out of sight and can't be
+    /// reviewed (`currentResult`, `selectedQuote`).
+    private(set) var resultKey: String?
     private(set) var quoting = false
     private(set) var error: String?
 
     var amountIn: BigUInt { Amount.parse(amountText, decimals: tokenIn.decimals) ?? 0 }
     var quoteKey: String { "\(tokenIn.address.hex)-\(tokenOut.address.hex)-\(amountIn)-\(slippageBps)" }
+    /// A quote for what is on screen is on its way: the fetch, or the debounce before it after an edit (the old answer
+    /// is already out of sight).
+    var awaitingQuote: Bool { amountIn > 0 && tokenIn != tokenOut && (quoting || resultKey != quoteKey) }
+    /// `result`, when it answers what is on screen now.
+    var currentResult: QuoteResult? { resultKey == quoteKey ? result : nil }
+    /// `error`, when it answers what is on screen now.
+    var currentError: String? { resultKey == quoteKey ? error : nil }
     var selectedQuote: VenueQuote? {
-        guard let result, amountIn > 0 else { return nil }
+        guard let result = currentResult, amountIn > 0 else { return nil }
         return result.quotes.first { $0.venue == selectedVenue } ?? result.quotes.first
+    }
+    /// What the review sheet shows and signs, frozen when Review is tapped (nil without a current quote).
+    var review: SwapReview? {
+        guard let quote = selectedQuote else { return nil }
+        return SwapReview(quote: quote, tokenIn: tokenIn, tokenOut: tokenOut, amountIn: amountIn, slippageBps: slippageBps,
+                          payUSD: payUSD, receiveUSD: receiveUSD)
     }
     var payUSD: Double? { prices[tokenIn.address].map { Amount.units(amountIn, decimals: tokenIn.decimals) * $0.usd } }
     var receiveUSD: Double? {
@@ -352,6 +411,7 @@ final class SwapModel {
     func select(_ token: Token, for side: Side) {
         // Trading a retired cohort's Moment coin is closed: the picker never offers one, and it is refused here too.
         guard SwapEngine.isTradable(token) else { return }
+        let before = (tokenIn, tokenOut)
         switch side {
         case .pay:
             if token == tokenOut { tokenOut = tokenIn }
@@ -360,28 +420,50 @@ final class SwapModel {
             if token == tokenIn { tokenIn = tokenOut }
             tokenOut = token
         }
+        // Re-picking the same token changes nothing: its quotes stay (the running refresh keeps its key).
+        guard (tokenIn, tokenOut) != before else { return }
         result = nil
         userPickedVenue = false
     }
 
     func flip() {
+        // The quote's output becomes the new input: read it before the swap makes it answer another pair.
+        let carried = selectedQuote
         swap(&tokenIn, &tokenOut)
-        if let quote = selectedQuote { amountText = Amount.exact(quote.amountOut, decimals: tokenIn.decimals) }
+        if let carried { amountText = Amount.exact(Amount.roundedDown(carried.amountOut, decimals: tokenIn.decimals), decimals: tokenIn.decimals) }
         result = nil
         userPickedVenue = false
     }
 
-    /// Set the pay amount to `pct`% of the wallet balance. A full send of native MON keeps ~0.02 MON back for gas.
+    /// Set the pay amount to `pct`% of the wallet balance. A full send of native MON keeps Monad's fallback fee back;
+    /// the Max buttons use `applyMax`, which reads the real one. A share (or MON after its fee) is rounded down to six
+    /// significant digits (`Amount.roundedDown`); 100% of a token stays exact, so all of it can be swapped.
     func applyPercent(_ pct: Double) {
         guard let balance = balances[tokenIn.address], balance > 0 else { return }
         var amount = balance
         if pct < 100 {
-            amount = balance * BigUInt(UInt(pct)) / 100
+            amount = Amount.roundedDown(balance * BigUInt(UInt(pct)) / 100, decimals: tokenIn.decimals)
         } else if tokenIn.isNative {
-            let gasBuffer = BigUInt(2) * BigUInt(10).power(16) // ~0.02 MON
-            amount = balance > gasBuffer ? balance - gasBuffer : balance
+            amount = Amount.roundedDown(NetworkFeeReserve.spendable(balance: balance, reserve: NetworkFeeReserve.monadFallback), decimals: tokenIn.decimals)
         }
         amountText = Amount.exact(amount, decimals: tokenIn.decimals)
+    }
+
+    /// Max (MERA-PLAN §5). For native MON: the balance less what the swap can be charged up front — the gas limit of
+    /// the route on screen (estimated for this account) or a routed swap's budget, × (2 × base fee + tip) with headroom,
+    /// 0.06 MON when the fee can't be read. Zero when the fee takes it all. Any other token: the whole balance.
+    func applyMax(env: AppEnvironment, account: Address?) async {
+        guard tokenIn.isNative, let balance = balances[tokenIn.address], balance > 0 else { applyPercent(100); return }
+        let token = tokenIn
+        var route: TransactionRequest?
+        if let account, let quote = selectedQuote, let steps = try? await quote.build(account) {
+            route = steps.lazy.compactMap { try? $0.request(at: Date()) }.first { $0.value > 0 }
+        }
+        let amount = await env.sender.maxValue(balance: balance, like: route, from: account, budget: NetworkFeeReserve.swapGasLimit)
+        // The pair or the balance changed while the fee was read: that Max no longer applies.
+        guard tokenIn == token, balances[token.address] == balance else { return }
+        // Rounded down: a sliver more stays back with the fee reserve, and the field reads "2.16254", not 18 decimals.
+        amountText = Amount.exact(Amount.roundedDown(amount, decimals: token.decimals), decimals: token.decimals)
     }
 
     func refreshBalances(env: AppEnvironment, address: Address?) async {
@@ -392,19 +474,27 @@ final class SwapModel {
     }
 
     /// Debounced by the caller's `.task(id:)`: the task is cancelled and restarted on every keystroke.
-    func quote(env: AppEnvironment, account: Address?) async {
+    /// `exactApprovals`: a passkey account's plans approve exactly the input (`SwapRequest.exactApprovals`).
+    func quote(env: AppEnvironment, account: Address?, exactApprovals: Bool = false) async {
         guard amountIn > 0, tokenIn != tokenOut else {
             result = nil
+            resultKey = nil
+            error = nil
+            // A fetch cancelled mid-flight (the amount cleared, or Done after a swap) returns without resetting it.
+            quoting = false
             return
         }
         try? await Task.sleep(for: .milliseconds(400))
         if Task.isCancelled { return }
         while !Task.isCancelled {
             quoting = true
-            let request = SwapRequest(tokenIn: tokenIn, tokenOut: tokenOut, amountIn: amountIn, slippageBps: slippageBps, account: account ?? Address(literal: "0x000000000000000000000000000000000000dEaD"))
+            let key = quoteKey
+            let request = SwapRequest(tokenIn: tokenIn, tokenOut: tokenOut, amountIn: amountIn, slippageBps: slippageBps, account: account ?? Address(literal: "0x000000000000000000000000000000000000dEaD"),
+                                      exactApprovals: exactApprovals)
             let outcome = await env.swap.quotes(for: request)
             if Task.isCancelled { return }
             result = outcome
+            resultKey = key
             error = outcome.quotes.isEmpty ? (outcome.errors.values.first ?? "No venue can route this pair right now.") : nil
             if !userPickedVenue || selectedVenue == nil || !outcome.quotes.contains(where: { $0.venue == selectedVenue }) { selectedVenue = outcome.quotes.first?.venue }
             quoting = false

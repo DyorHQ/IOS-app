@@ -208,6 +208,38 @@ final class SwapRetiredCoinTests: XCTestCase {
         XCTAssertTrue(SwapNetStub.recorded().contains("\(Kuru.api.host ?? "")/api/quote"))
     }
 
+    /// Kuru Flow's calldata is decoded, not trusted, for every account: a route that pays someone else, trades another
+    /// token or amount, or enforces less than the requested slippage allows on the quoted output is blocked at the quote.
+    func testKuruCalldataThatDoesntMatchTheRequestIsBlocked() async throws {
+        let kuru = KuruFlowClient(session: SwapNetStub.session())
+        let req = request(.mon, .usdc)
+        let stranger = Address(literal: "0x2222222222222222222222222222222222222222")
+        let blocked: [(String, String)] = [
+            ("pays another address", SwapNetStub.kuruSwap(recipient: stranger)),
+            ("another token out", SwapNetStub.kuruSwap(tokenOut: Monad.wmon)),
+            ("another token in", SwapNetStub.kuruSwap(tokenIn: Monad.usdc)),
+            ("another amount in", SwapNetStub.kuruSwap(amountIn: 2 * amount)),
+            ("a minimum below the requested slippage", SwapNetStub.kuruSwap(minOut: 2_586_999)),
+            ("not a Kuru Flow swap", "0xdeadbeef"),
+        ]
+        for (name, calldata) in blocked {
+            SwapNetStub.setKuruCalldata(calldata)
+            do {
+                _ = try await kuru.quote(req)
+                XCTFail("Kuru Flow quoted calldata that \(name)")
+            } catch {
+                XCTAssertEqual(error as? SwapError, .venue("Kuru Flow returned an unexpected transaction, so it was blocked for your safety."), name)
+            }
+        }
+        // Paying this account by name is fine, and the minimum shown is the one the calldata enforces.
+        SwapNetStub.setKuruCalldata(SwapNetStub.kuruSwap(recipient: account))
+        let named = try await kuru.quote(req)
+        XCTAssertEqual(named?.minOut, 2_587_000)
+        SwapNetStub.setKuruCalldata(SwapNetStub.kuruSwap(minOut: 2_590_000))
+        let stricter = try await kuru.quote(req)
+        XCTAssertEqual(stricter?.minOut, 2_590_000, "a stricter minimum than the API's own field")
+    }
+
     // MARK: A normal pair still routes
 
     func testNormalPairCalldataStillBuilds() throws {
@@ -251,14 +283,31 @@ final class SwapRetiredCoinTests: XCTestCase {
 final class SwapNetStub: URLProtocol {
     static let rpcURL = URL(string: "https://rpc.swap-stub.invalid")!
     static let kuruOutput = BigUInt(2_600_000)
+    /// A real-shaped `0xce1e7030` swap of 1 MON for USDC paying the caller, with the minimum a 0.5% slippage allows on
+    /// `kuruOutput` (2,587,000) — what the client's calldata check accepts.
+    static let kuruSwapCalldata = kuruSwap()
+
+    /// KuruFlowEntrypoint calldata: `0xce1e7030` (pays the caller), or `0x31343b21` with an explicit `recipient`.
+    static func kuruSwap(tokenOut: Address = Monad.usdc, minOut: BigUInt = 2_587_000, tokenIn: Address = .zero,
+                             amountIn: BigUInt = BigUInt(10).power(18), recipient: Address? = nil) -> String {
+        func pad(_ hex: String) -> String { String(repeating: "0", count: 64 - hex.count) + hex }
+        func word(_ value: BigUInt) -> String { pad(String(value, radix: 16)) }
+        func word(_ address: Address) -> String { pad(address.data.hexString.replacingOccurrences(of: "0x", with: "")) }
+        var words = [word(tokenOut), word(minOut), word(tokenIn), word(amountIn),
+                     word(Address.zero), word(BigUInt(0)), word(Address.zero), word(BigUInt(0)), word(BigUInt(0)), // fee tuple zeroed
+                     word(BigUInt(recipient == nil ? 320 : 352))] // the route's offset
+        if let recipient { words.append(word(recipient)) }
+        words.append(word(BigUInt(0))) // an empty route
+        return (recipient == nil ? "0xce1e7030" : "0x31343b21") + words.joined()
+    }
     private static let lock = NSLock()
     nonisolated(unsafe) private static var requests: [String] = []
-    nonisolated(unsafe) private static var kuruCalldata = "deadbeef"
+    nonisolated(unsafe) private static var kuruCalldata = kuruSwapCalldata
 
     static func reset() {
         lock.lock(); defer { lock.unlock() }
         requests = []
-        kuruCalldata = "deadbeef"
+        kuruCalldata = kuruSwapCalldata
     }
 
     /// The calldata Kuru Flow's quote returns (hex, with or without 0x) until the next `reset()`.

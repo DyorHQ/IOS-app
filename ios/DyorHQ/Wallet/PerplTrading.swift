@@ -12,9 +12,15 @@ import Security
 /// with the Perpl web app) and closes any beyond that with 1008 "too many connections" — so every connect goes
 /// through a single in-flight task, tears the previous socket down first, and failed attempts back off before an
 /// automatic retry.
+///
+/// A passkey (Mera) account's trading key is different (MERA-PLAN §3): its Ed25519 secret is derived from the passkey's
+/// utility output when a session opens and held in memory only — the Keychain keeps just the token, which can't sign
+/// in to the socket alone. The key, the socket and the keep-alive live exactly as long as the session: `end()` drops
+/// all three (`MeraSessionLifecycle`), nothing reconnects while it is locked, and orders need the live session and fit
+/// its caps, or a step-up.
 @Observable
 @MainActor
-final class PerplTrading {
+final class PerplTrading: MeraSessionLifecycle {
     enum Status: Equatable {
         case notEnrolled          // no key on this device
         case enrolled             // key stored, not connected
@@ -47,10 +53,24 @@ final class PerplTrading {
     /// Keeps the single trading socket alive for as long as a key is enrolled, reconnecting automatically after any
     /// drop (network change, server restart, app resume) so the user never has to reconnect by hand to place TP/SL.
     /// It runs from the moment a key is present until the key is removed or the wallet changes; only Perpl rejecting
-    /// the key (close 3401) makes it stand down (that key can never sign in again — the user must re-enroll).
+    /// the key (close 3401) makes it stand down (that key can never sign in again — the user must re-enroll). For a
+    /// passkey account it runs only while the session is live.
     private var keepAlive: Task<Void, Never>?
+    /// The passkey session a Mera account's trading key lives in.
+    private let mera: MeraSession?
+    /// The bound wallet is a passkey (Mera) account: its key exists only while that account's session is live.
+    private var boundToPasskey = false
+    /// A passkey account's stored token (never its secret).
+    private var storedToken: PerplToken?
+
+    init(mera: MeraSession? = nil) {
+        self.mera = mera
+        mera?.lifecycle = self
+    }
 
     var isReady: Bool { status == .connected }
+    /// A key is enrolled for this wallet: loaded, or — for a passkey account whose session is locked — its token only.
+    var isEnrolled: Bool { key != nil || storedToken != nil }
     /// The signed-in account id from the trading WS (same value the on-chain account reports).
     var accountId: Int? { client?.accountId }
     /// The most recent failure, for callers that need to say why an authenticated action couldn't run.
@@ -59,24 +79,101 @@ final class PerplTrading {
     var isSignedIn: Bool { client?.signedIn == true }
     var isForwarding: Bool { client?.forwardingEnabled == true || forwardingGrantedOnChain }
 
-    /// Load any stored key for this address so the UI shows "enrolled" without a network call. Rebinds to the given
+    /// Load any stored key for this account so the UI shows "enrolled" without a network call. Rebinds to the given
     /// wallet: when the wallet changes (or signs out) it tears down the previous wallet's authenticated session first,
-    /// so a `connected` / one-click-ready state can never carry over to a different account.
-    func refresh(address: Address?) {
+    /// so a `connected` / one-click-ready state can never carry over to a different account. A passkey account loads
+    /// its token only; its key exists while its session is live.
+    func refresh(account: Session.Account?) {
+        let address = account?.address
+        let passkey = account?.method == .meraPasskey
         let target = address?.checksummed
-        if target != boundAddress {
+        if target != boundAddress || passkey != boundToPasskey {
             disconnect()
             key = nil
+            storedToken = nil
             status = .notEnrolled
             boundAddress = target
+            boundToPasskey = passkey
             keyRejected = false
             forwardingGrantedOnChain = false
             resetRetry()
         }
         guard let address else { stopKeepAlive(); return }
-        key = PerplKeychain.load(address: address.checksummed)
-        if status == .notEnrolled || status == .enrolled { status = key == nil ? .notEnrolled : .enrolled }
+        if passkey {
+            storedToken = PerplKeychain.loadToken(address: address.checksummed)
+            syncSessionKey()
+        } else {
+            key = PerplKeychain.load(address: address.checksummed)
+        }
+        if status == .notEnrolled || status == .enrolled { status = isEnrolled ? .enrolled : .notEnrolled }
         if key != nil { startKeepAlive() } else { stopKeepAlive() }
+    }
+
+    // MARK: Passkey (Mera) accounts
+
+    /// Whether automatic reconnects may run: always, except for a passkey account whose session is locked.
+    private var sessionAllowsTrading: Bool { !boundToPasskey || mera?.isUnlocked == true }
+
+    /// A passkey account's key: its stored token with the live session's trading secret. Nil while locked.
+    private func sessionKey() -> PerplApiKey? {
+        guard boundToPasskey, let storedToken, let mera, let boundAddress, mera.address?.checksummed == boundAddress else { return nil }
+        return mera.perplKey(token: storedToken.token, scopeMask: storedToken.scopeMask, keyNonce: storedToken.keyNonceData)
+    }
+
+    /// Brings a passkey account's `key` in line with its session: the live session's key (the socket and keep-alive
+    /// follow it), or none.
+    private func syncSessionKey() {
+        let fresh = sessionKey()
+        if fresh != key {
+            // A socket signed in with another key must not outlive it.
+            if key != nil { disconnect() }
+            key = fresh
+        }
+        if key != nil {
+            if status == .notEnrolled { status = .enrolled }
+            startKeepAlive()
+        } else {
+            stopKeepAlive()
+        }
+    }
+
+    func meraSessionDidOpen(_ session: MeraSession) {
+        guard boundToPasskey else { return }
+        syncSessionKey()
+    }
+
+    /// MERA-PLAN §3 `end()`: the socket closes, the keep-alive stops and the key is dropped. The token stays.
+    func meraSessionDidEnd(_ session: MeraSession) {
+        guard boundToPasskey else { return }
+        stopKeepAlive()
+        key = nil
+        disconnect()
+        // A key Perpl rejected keeps saying so; anything else reads as enrolled (token kept) or not.
+        if !keyRejected { status = storedToken != nil ? .enrolled : .notEnrolled }
+    }
+
+    /// For a tap on a passkey account: opens the session when it is locked (one pinned ceremony), and fetches the
+    /// utility output if the provider evaluated one salt only. Automatic reconnects never come here.
+    private func unlockPasskeyKey() async throws {
+        guard let mera, storedToken != nil else { throw PerplTradeError.notSignedIn }
+        try await mera.unlock()
+        if sessionKey() == nil { try await mera.loadUtility() }
+        syncSessionKey()
+        guard key != nil else { throw PerplTradeError.notSignedIn }
+    }
+
+    /// MERA-PLAN §3 for a passkey account's order: it goes out only inside a live session and within its caps (the
+    /// order's worst-case notional, at most $100 per order and $250 per session), and a reduce-only close always needs
+    /// a step-up. Otherwise `MeraSession.StepUpRequired`: the sheet answers it with one pinned ceremony and retries with
+    /// the approval, which covers that one order. Other accounts are unaffected.
+    private func authorize(_ input: OrderInput, approval: MeraSession.StepUp?) throws -> MeraSession.Charge? {
+        guard boundToPasskey else { return nil }
+        guard let mera else { throw PerplTradeError.notSignedIn }
+        if input.reduceOnly {
+            try mera.requireStepUp(approval, for: .reduceOnlyClose)
+            return nil
+        }
+        return try mera.authorize(usd: Mera.SpendingCaps.notionalUSD(of: input), approval: approval)
     }
 
     /// Starts the always-on reconnect loop (idempotent). While a key is enrolled and Perpl hasn't rejected it, this
@@ -88,7 +185,7 @@ final class PerplTrading {
             while !Task.isCancelled {
                 // Only act when the socket is actually down. A live socket (signed in — whether `.connected` or
                 // `.needsForwarding`) is left alone; the client's own ping keeps it from idling out.
-                if let self, self.key != nil, !self.keyRejected, self.client?.signedIn != true {
+                if let self, self.key != nil, !self.keyRejected, self.sessionAllowsTrading, self.client?.signedIn != true {
                     await self.ensureConnected()
                 }
                 try? await Task.sleep(for: .seconds(5))
@@ -105,26 +202,39 @@ final class PerplTrading {
     /// Any wallet that can sign a digest (Privy embedded or an imported local wallet) can enroll. The typed data is
     /// validated before the wallet sees anything (`PerplEnrollment`): it must register exactly this key for exactly
     /// this wallet on the terms the app asked for, and the digest signed is recomputed on device.
-    func enroll(wallet: any DigestSigner, address: Address) async throws {
+    ///
+    /// A passkey (Mera) account enrols inside its session instead: the trading key is derived from the passkey
+    /// (utility namespace, purpose-scoped, with a fresh nonce per enrolment because Perpl never registers a key twice —
+    /// never stored, never backed up), and the session validates the typed data and signs its digest itself. Only the
+    /// token and its nonce are stored, so a new device, or this one after it forgot the token, simply enrols again.
+    func enroll(wallet: any Wallet, address: Address) async throws {
         status = .connecting
         do {
             // The payload is bound to `address`; only that wallet may sign it.
             guard wallet.address == address else { throw PerplEnrollmentError.foreignSigner }
-            // A Mera account derives its trading key from the passkey (utility namespace, purpose-scoped): the same
-            // key reappears on every device and is never generated at random or backed up anywhere.
-            let secret: Data
-            if let mera = wallet as? MeraWallet {
-                secret = try await mera.session.derivedKey(Mera.Purpose.perplTrading)
+            if let passkey = wallet as? MeraWallet {
+                guard boundToPasskey, boundAddress == address.checksummed else { throw PerplTradeError.notSignedIn }
+                // A fresh key for every enrolment (Perpl never registers one twice), so a new device — or this one after
+                // it forgot its token — enrols again with one passkey prompt at most, none inside a live session.
+                let enrolled = try await passkey.session.enrollPerpl(label: "DyorHQ")
+                let token = PerplToken(enrolled.key, keyNonce: enrolled.keyNonce)
+                PerplKeychain.saveToken(token, address: address.checksummed)
+                storedToken = token
+                // From the live session, not the enrolment's copy: nothing outlives a session that ended meanwhile.
+                key = sessionKey()
+                guard key != nil else { throw Mera.SessionError.sessionEnded }
+            } else if let signer = wallet as? DigestSigner {
+                let secret = PerplAuth.newSecret()
+                let publicKeyHex = try PerplAuth.publicKeyHex(secret: secret)
+                let auth = PerplAuthClient(chainId: Monad.chainId)
+                let payload = try await auth.requestPayload(address: address.checksummed, publicKeyHex: publicKeyHex, scopeMask: PerplScope.trade, label: "DyorHQ")
+                let walletSignature = try await signer.signDigest(payload.digest)
+                let enrolled = try await auth.enroll(address: address.checksummed, secret: secret, payload: payload, walletSignature: walletSignature, scopeMask: PerplScope.trade)
+                PerplKeychain.save(enrolled, address: address.checksummed)
+                key = enrolled
             } else {
-                secret = PerplAuth.newSecret()
+                throw PerplTradeError.notSignedIn
             }
-            let publicKeyHex = try PerplAuth.publicKeyHex(secret: secret)
-            let auth = PerplAuthClient(chainId: Monad.chainId)
-            let payload = try await auth.requestPayload(address: address.checksummed, publicKeyHex: publicKeyHex, scopeMask: PerplScope.trade, label: "DyorHQ")
-            let walletSignature = try await wallet.signDigest(payload.digest)
-            let enrolled = try await auth.enroll(address: address.checksummed, secret: secret, payload: payload, walletSignature: walletSignature, scopeMask: PerplScope.trade)
-            PerplKeychain.save(enrolled, address: address.checksummed)
-            key = enrolled
             keyRejected = false
             resetRetry()
             startKeepAlive()
@@ -135,9 +245,17 @@ final class PerplTrading {
         }
     }
 
-    /// Sign in to the trading WebSocket with the stored key. Single-flight: a call made while a connect is already in
-    /// progress awaits that one instead of opening a second socket.
+    /// Sign in to the trading WebSocket with the stored key, for a tap (Reconnect, Try Again, after enrolling or
+    /// enabling forwarding). A passkey account whose session is locked asks for the passkey first; automatic
+    /// reconnects go through `ensureConnected`, which never asks.
     func connect() async throws {
+        if boundToPasskey { try await unlockPasskeyKey() }
+        try await openSocket()
+    }
+
+    /// Opens the one trading socket. Single-flight: a call made while a connect is already in progress awaits that one
+    /// instead of opening a second socket.
+    private func openSocket() async throws {
         if let connectTask { try await connectTask.value; return }
         let task = Task<Void, Error> { [self] in
             defer { self.connectTask = nil }
@@ -170,6 +288,9 @@ final class PerplTrading {
         self.client = client
         do {
             try await client.connect()
+            // Disconnected while signing in (a wallet change, or a passkey session that ended): the catch below closes
+            // this socket too, rather than leaving it signed in with nobody holding it.
+            guard self.client === client else { throw PerplTradeError.notSignedIn }
             keyRejected = false
             resetRetry()
             syncStatus()
@@ -197,7 +318,7 @@ final class PerplTrading {
             // Forwarding is on if the WS says so OR we confirmed the on-chain grant this session (the WS can lag it).
             status = (client.forwardingEnabled || forwardingGrantedOnChain) ? .connected : .needsForwarding
         } else if status != .connecting {
-            status = key != nil ? .enrolled : .notEnrolled
+            status = isEnrolled ? .enrolled : .notEnrolled
         }
     }
 
@@ -210,7 +331,7 @@ final class PerplTrading {
         if let close, close.isAuthFailure || close.isConnectionCap {
             status = .failed(close.message)
         } else {
-            status = key != nil ? .enrolled : .notEnrolled
+            status = isEnrolled ? .enrolled : .notEnrolled
         }
     }
 
@@ -268,9 +389,13 @@ final class PerplTrading {
 
     /// Places the entry order (market/limit) with optional take-profit / stop-loss triggers linked to it. Returns
     /// the entry's gateway acknowledgement.
-    func submit(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int = 100) async throws -> PerplOrderAck {
+    /// A passkey account's order must fit its live session (`authorize`) or carry a step-up `approval`.
+    func submit(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int = 100,
+                approval: MeraSession.StepUp? = nil) async throws -> PerplOrderAck {
+        let charge = try authorize(input, approval: approval)
         await ensureConnected()
-        let client = try liveClient()
+        let client: PerplTradeClient
+        do { client = try liveClient() } catch { mera?.refund(charge); throw error }
         let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
         var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
         let entryRq = client.nextRequestId()
@@ -289,12 +414,19 @@ final class PerplTrading {
             frame.requestId = client.nextRequestId()
             frames.append(frame)
         }
-        return try await client.place(frames)
+        let ack = try await client.place(frames)
+        if !ack.accepted { mera?.refund(charge) }
+        return ack
     }
 
     /// Cancels a resting order over the authenticated path (no wallet signature) — for recycling / cancelling an order.
+    /// A passkey account's cancel always needs a step-up `approval` (MERA-PLAN §3).
     @discardableResult
-    func cancel(perpId: Int, orderId: Int, env: AppEnvironment) async throws -> PerplOrderAck {
+    func cancel(perpId: Int, orderId: Int, env: AppEnvironment, approval: MeraSession.StepUp? = nil) async throws -> PerplOrderAck {
+        if boundToPasskey {
+            guard let mera else { throw PerplTradeError.notSignedIn }
+            try mera.requireStepUp(approval, for: .cancelOrder)
+        }
         await ensureConnected()
         let client = try liveClient()
         guard let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
@@ -303,13 +435,17 @@ final class PerplTrading {
     }
 
     /// Reduce-only market close of a position over the authenticated path. `side` is the POSITION's side; the close
-    /// order is submitted on the opposite side (matches PerplService.closePositionPlan) so it actually reduces.
+    /// order is submitted on the opposite side (matches PerplService.closePositionPlan) so it actually reduces. A
+    /// passkey account's close always needs a step-up `approval` (MERA-PLAN §3; `submit` checks it).
     @discardableResult
-    func closePosition(market: PerpMarket, side: PositionSide, size: Double, slippageBps: Int, env: AppEnvironment) async throws -> PerplOrderAck {
+    func closePosition(market: PerpMarket, side: PositionSide, size: Double, slippageBps: Int, env: AppEnvironment,
+                       approval: MeraSession.StepUp? = nil) async throws -> PerplOrderAck {
+        // Asked for before connecting; `submit` spends the approval.
+        if boundToPasskey, approval == nil { throw MeraSession.StepUpRequired(reason: .reduceOnlyClose) }
         await ensureConnected()
         guard let accountId = client?.accountId else { throw PerplTradeError.notSignedIn }
         let input = OrderInput(market: market, side: side.opposite, kind: .market, size: size, leverage: 1, reduceOnly: true, slippageBps: slippageBps)
-        return try await submit(input: input, accountId: accountId, takeProfit: nil, stopLoss: nil, env: env)
+        return try await submit(input: input, accountId: accountId, takeProfit: nil, stopLoss: nil, env: env, approval: approval)
     }
 
     /// The per-frame acceptance of a bracket placement, so an automated caller can refuse to record a level whose
@@ -317,10 +453,14 @@ final class PerplTrading {
     struct BracketResult: Sendable { var entry: Bool; var takeProfit: Bool?; var stopLoss: Bool?; var error: String? }
 
     /// Places a bracket (entry + linked TP/SL) and reports whether the entry AND each requested trigger were
-    /// individually accepted — unlike `submit`, which returns only the entry ack.
-    func submitBracket(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int) async throws -> BracketResult {
+    /// individually accepted — unlike `submit`, which returns only the entry ack. A passkey account's bracket must fit
+    /// its live session (`authorize`) or carry a step-up `approval`.
+    func submitBracket(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int,
+                       approval: MeraSession.StepUp? = nil) async throws -> BracketResult {
+        let charge = try authorize(input, approval: approval)
         await ensureConnected()
-        let client = try liveClient()
+        let client: PerplTradeClient
+        do { client = try liveClient() } catch { mera?.refund(charge); throw error }
         let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
         var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
         let entryRq = client.nextRequestId()
@@ -342,6 +482,7 @@ final class PerplTrading {
             guard let i = labels.firstIndex(of: label), i < acks.count else { return false }
             return acks[i].accepted
         }
+        if !accepted("entry") { mera?.refund(charge) }
         return BracketResult(entry: accepted("entry"),
                              takeProfit: takeProfit != nil ? accepted("tp") : nil,
                              stopLoss: stopLoss != nil ? accepted("sl") : nil,
@@ -350,13 +491,14 @@ final class PerplTrading {
 
     /// Ensures a LIVE trading socket before an authed operation. Reconnects when the socket isn't truly alive — even
     /// if `status` is a stale `.connected` — but never hammers Perpl: it joins an in-flight connect, waits out the
-    /// backoff after a failure, and gives up on a key Perpl has rejected (the user must re-enroll).
+    /// backoff after a failure, and gives up on a key Perpl has rejected (the user must re-enroll). It never prompts:
+    /// a passkey account reconnects only while its session is live (the keep-alive and RootView's resume come here).
     func ensureConnected() async {
-        guard key != nil, !keyRejected else { return }
+        guard key != nil, !keyRejected, sessionAllowsTrading else { return }
         if status == .connected, client?.signedIn == true { return }
         if let connectTask { _ = try? await connectTask.value; return }
         guard Date() >= retryAfter else { return }
-        try? await connect()
+        try? await openSocket()
     }
 
     func forget(address: Address) {
@@ -364,6 +506,7 @@ final class PerplTrading {
         PerplKeychain.delete(address: address.checksummed)
         disconnect()
         key = nil
+        storedToken = nil
         keyRejected = false
         forwardingGrantedOnChain = false
         resetRetry()
@@ -371,12 +514,55 @@ final class PerplTrading {
     }
 }
 
-/// Keychain storage for the Perpl API key (opaque token + 32-byte Ed25519 secret), one per wallet address.
+/// What a passkey (Mera) account stores of its Perpl API key: the token, and the nonce of the enrolment that issued it
+/// (`Mera.Purpose.perplTrading(nonce:)`). Neither can sign in to the trading socket without the Ed25519 secret, which
+/// the passkey re-derives at every unlock and is never stored.
+struct PerplToken: Codable, Equatable {
+    let token: String
+    let address: String
+    let scopeMask: Int
+    /// Hex; nil for a token enrolled before enrolments carried a nonce (its key is the purpose's own).
+    let keyNonce: String?
+
+    init(_ key: PerplApiKey, keyNonce: Data?) {
+        token = key.token
+        address = key.address
+        scopeMask = key.scopeMask
+        self.keyNonce = keyNonce?.hexString
+    }
+
+    var keyNonceData: Data? { keyNonce.flatMap { Data(hex: $0) } }
+}
+
+/// Keychain storage for the Perpl API key (opaque token + 32-byte Ed25519 secret), one per wallet address — or, for a
+/// passkey account, its token only (`saveToken`).
 enum PerplKeychain {
     private static let service = "fun.dyorhq.perpl"
 
     static func save(_ key: PerplApiKey, address: String) {
         guard let data = try? JSONEncoder().encode(key) else { return }
+        write(data, address: address)
+    }
+
+    static func load(address: String) -> PerplApiKey? {
+        read(address: address).flatMap { try? JSONDecoder().decode(PerplApiKey.self, from: $0) }
+    }
+
+    /// A passkey account's token. Replaces whatever was stored for the address.
+    static func saveToken(_ token: PerplToken, address: String) {
+        guard let data = try? JSONEncoder().encode(token) else { return }
+        write(data, address: address)
+    }
+
+    /// A passkey account's token. An earlier build stored such an account's whole key; the secret in it is dropped here
+    /// (the token is kept with no nonce, and the passkey re-derives the pre-nonce secret).
+    static func loadToken(address: String) -> PerplToken? {
+        guard let data = read(address: address), let token = try? JSONDecoder().decode(PerplToken.self, from: data) else { return nil }
+        if (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["secret"] != nil { saveToken(token, address: address) }
+        return token
+    }
+
+    private static func write(_ data: Data, address: String) {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: address]
         SecItemDelete(query as CFDictionary)
         var add = query
@@ -386,11 +572,11 @@ enum PerplKeychain {
         SecItemAdd(add as CFDictionary, nil)
     }
 
-    static func load(address: String) -> PerplApiKey? {
+    private static func read(address: String) -> Data? {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: address, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
-        return try? JSONDecoder().decode(PerplApiKey.self, from: data)
+        return data
     }
 
     static func delete(address: String) {

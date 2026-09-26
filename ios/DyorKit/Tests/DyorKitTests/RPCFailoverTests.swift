@@ -18,6 +18,22 @@ final class RPCFailoverTests: XCTestCase {
         RPCClient(urls: [primary, secondary], session: RPCStub.session(), maxBatch: maxBatch)
     }
 
+    /// EIP-1559 fees: tip = the node's suggestion, max fee = 2 × base + tip (Monad: base 100 gwei, tip 2 gwei → an
+    /// effective 102 gwei instead of the 202 gwei the old "tip = gas price" rule paid). Without the tip method, the old
+    /// rule is the fallback.
+    func testFeeParametersUseSuggestedTip() async throws {
+        RPCStub.baseFee = "0x174876e800" // 100 gwei
+        RPCStub.tip = "0x77359400"       // 2 gwei
+        let fees = try await TransactionSender(rpc: client()).feeParameters()
+        XCTAssertEqual(fees.tip, BigUInt(2_000_000_000))
+        XCTAssertEqual(fees.maxFee, BigUInt(202_000_000_000))
+
+        RPCStub.reset() // no eth_maxPriorityFeePerGas, no baseFeePerGas
+        let fallback = try await TransactionSender(rpc: client()).feeParameters()
+        XCTAssertEqual(fallback.tip, BigUInt(102_000_000_000))
+        XCTAssertEqual(fallback.maxFee, BigUInt(204_000_000_000))
+    }
+
     func testFailsOverOn429() async throws {
         RPCStub.status["primary.test"] = 429
         let block = try await client().blockNumber()
@@ -183,9 +199,16 @@ final class RPCStub: URLProtocol {
     nonisolated(unsafe) static var itemBudget: [String: Int] = [:]
     /// The first N requests to a host answer HTTP 429, then it serves normally.
     nonisolated(unsafe) static var failFirst: [String: Int] = [:]
+    /// Fee answers (hex quantities); nil makes the method fail the way a node without it would.
+    nonisolated(unsafe) static var baseFee: String?
+    nonisolated(unsafe) static var tip: String?
+    nonisolated(unsafe) static var gasPrice: String? = "0x17bfac7c00" // 102 gwei
+    /// A small simulated chain for running whole plans; nil keeps the fixed answers the transport tests rely on.
+    nonisolated(unsafe) static var chain: SimulatedChain?
 
     static func reset() {
         status = [:]; transportFailure = []; hosts = []; requestSizes = []; sendError = nil; knownTransactions = []; itemBudget = [:]; failFirst = [:]
+        baseFee = nil; tip = nil; gasPrice = "0x17bfac7c00"; chain = nil
     }
 
     static func session() -> URLSession {
@@ -235,9 +258,13 @@ final class RPCStub: URLProtocol {
         func failure(_ message: String) -> JSON {
             .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(-32000), "message": .string(message)])])
         }
+        if let chain, let answer = chain.reply(call, result: result, failure: failure) { return answer }
         switch call["method"].string {
         case "eth_blockNumber": return result(.string("0x10"))
         case "echo": return result(call["params"].array?.first ?? .null)
+        case "eth_getBlockByNumber": return result(.object(baseFee.map { ["number": .string("0x10"), "baseFeePerGas": .string($0)] } ?? ["number": .string("0x10")]))
+        case "eth_maxPriorityFeePerGas": return tip.map { result(.string($0)) } ?? failure("method not found")
+        case "eth_gasPrice": return gasPrice.map { result(.string($0)) } ?? failure("method not found")
         case "eth_sendRawTransaction": return sendError.map(failure) ?? result(.string("0x" + String(repeating: "ab", count: 32)))
         case "eth_getTransactionByHash":
             let asked = call["params"].array?.first?.string ?? ""
@@ -259,4 +286,54 @@ final class RPCStub: URLProtocol {
         }
         return data
     }
+}
+
+/// The chain behind `RPCStub.chain`: the head moves one block each time `eth_blockNumber` is read (time passing while a
+/// caller polls) unless `frozen`, receipts confirm at the current head, and every broadcast is recorded with the head it
+/// arrived at. Fees come from the stub's `baseFee` / `tip` / `gasPrice`.
+final class SimulatedChain: @unchecked Sendable {
+    var head: UInt64 = 100
+    var frozen = false
+    var balance: BigUInt = 0
+    /// `eth_estimateGas`'s answer; nil fails it like a revert.
+    var estimate: String? = "0x5208" // 21,000
+    /// The next N broadcasts fail with `sendFailure`.
+    var sendFailures = 0
+    var sendFailure = "Signer had insufficient balance"
+    private(set) var blockNumberReads = 0
+    private(set) var balanceReads = 0
+    private(set) var sent: [(raw: String, head: UInt64)] = []
+    private(set) var receiptBlocks: [UInt64] = []
+
+    func reply(_ call: JSON, result: (JSON) -> JSON, failure: (String) -> JSON) -> JSON? {
+        func quantity(_ n: BigUInt) -> JSON { .string(n.hexQuantity) }
+        switch call["method"].string {
+        case "eth_blockNumber":
+            blockNumberReads += 1
+            defer { if !frozen { head += 1 } }
+            return result(quantity(BigUInt(head)))
+        case "eth_getBalance":
+            balanceReads += 1
+            return result(quantity(balance))
+        case "eth_call": return result(.string("0x"))
+        case "eth_getTransactionCount": return result(.string("0x0"))
+        case "eth_estimateGas": return estimate.map { result(.string($0)) } ?? failure("execution reverted")
+        case "eth_sendRawTransaction":
+            let raw = call["params"].array?.first?.string ?? ""
+            sent.append((raw, head))
+            if sendFailures > 0 { sendFailures -= 1; return failure(sendFailure) }
+            return result(.string(Keccak.hash256(Data(hex: raw) ?? Data()).hexString))
+        case "eth_getTransactionReceipt":
+            receiptBlocks.append(head)
+            return result(.object(["status": .string("0x1"), "blockNumber": quantity(BigUInt(head)), "gasUsed": .string("0x5208")]))
+        default: return nil
+        }
+    }
+}
+
+/// Signs nothing real: the unsigned payload stands in for the raw transaction, so each step broadcasts distinct bytes.
+struct StubWallet: Wallet {
+    let address = Address(literal: "0x1111111111111111111111111111111111111111")
+    func sign(_ transaction: PreparedTransaction) async throws -> Data { RLP.unsignedPayload(transaction) }
+    func signMessage(_ message: Data) async throws -> Data { Data() }
 }

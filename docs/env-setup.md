@@ -32,7 +32,7 @@ Copy `Secrets.example.xcconfig` to `Secrets.xcconfig` and fill in:
 | `PERPL_BUILDER_ID` | Optional | Same as above |
 | `LAUNCHPAD_FACTORY`, `LAUNCH_ROUTER`, `FEE_ESCROW`, `HOLDER_FEE_SHARING`, `MEME_HOOK` | After you deploy | `contracts/deployments/143.json` |
 | `DEVELOPMENT_TEAM` | For device builds | Xcode → Settings → Accounts → your team's **Team ID**. Must be a paid Apple Developer Program team: the app carries the Sign in with Apple entitlement, which a Personal Team can't sign (Simulator builds need no team). Read at build time, survives `xcodegen generate`. |
-| `PASSKEY_RP_ID` | Paid team only | `accounts.dyorhq.fun`, once the AASA is hosted at `https://accounts.dyorhq.fun/.well-known/apple-app-site-association`. Leave empty on a Personal Team (Associated Domains can't be signed) and keep the entitlement block in `ios/project.yml` commented out. |
+| `PASSKEYS_ENABLED` | Paid team only | `YES` offers Mera passkey accounts next to the other sign-in methods. The rpId is not configurable: it is the constant `Mera.relyingParty` = `accounts.dyorhq.fun` (DyorKit), and `ios/project.yml` carries the matching entitlement `webcredentials:accounts.dyorhq.fun`. Device builds need Associated Domains on the `fun.dyorhq.app` App ID and the AASA at `https://accounts.dyorhq.fun/.well-known/apple-app-site-association`, served by Apple's CDN (`https://app-site-association.cdn-apple.com/a/v1/accounts.dyorhq.fun`) before the first install. Empty hides passkeys. `PASSKEY_RP_ID` is no longer read. |
 
 ## 3. Web app — `.env.local`
 

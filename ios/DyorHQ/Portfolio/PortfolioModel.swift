@@ -302,7 +302,7 @@ final class PortfolioModel {
         guard let address else { reset(); return }
         // A cached load that skipped perps for lack of a Perpl key (or hit a transient perps error) must not be
         // served once a key is available — otherwise perps volume stays 0 in the whole-app total. On a cold start the
-        // Portfolio load reads perplTrading.key before RootView's refresh(address:) has loaded it from the Keychain,
+        // Portfolio load reads perplTrading.key before RootView's refresh(account:) has loaded it from the Keychain,
         // so re-fetch when we now have a key and the last load noted a perps gap. A clean keyed load clears perpsNote.
         if !force, loadedFor == address, !(perpsNote != nil && perplKey != nil), let updatedAt, Date().timeIntervalSince(updatedAt) < 300 { return }
         if loadedFor != address { reset() }

@@ -11,7 +11,8 @@
 #   PRIVY_APP_ID, PRIVY_CLIENT_ID   sign-in and the embedded wallet — an archive fails without them, since sign-up
 #                                   needs Privy and a build without it can't onboard anyone
 #   AURORA_API_KEY                  the Bridge (without it the button explains why)
-#   optional: MONAD_RPC_URL PASSKEY_RP_ID PERPL_BUILDER_ID AURORA_FEE_RECIPIENT SOCIAL_LOGINS_ENABLED PASSKEYS_ENABLED
+#   optional: MONAD_RPC_URL PERPL_BUILDER_ID AURORA_FEE_RECIPIENT SOCIAL_LOGINS_ENABLED PASSKEYS_ENABLED
+# The passkey rpId is the constant Mera.relyingParty (accounts.dyorhq.fun), not a variable.
 # Any other missing value degrades its feature exactly as in a local build (see AppConfig).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -46,7 +47,7 @@ else
     echo "// Written by ci_scripts/ci_post_clone.sh from the Xcode Cloud workflow's environment variables."
     echo "// xcconfig reads // as the start of a comment, so URLs spell it /\$(DYOR_SLASH)."
     echo "DYOR_SLASH = /"
-    for key in PRIVY_APP_ID PRIVY_CLIENT_ID MONAD_RPC_URL PASSKEY_RP_ID PERPL_BUILDER_ID DEVELOPMENT_TEAM \
+    for key in PRIVY_APP_ID PRIVY_CLIENT_ID MONAD_RPC_URL PERPL_BUILDER_ID DEVELOPMENT_TEAM \
                AURORA_API_KEY AURORA_FEE_RECIPIENT SOCIAL_LOGINS_ENABLED PASSKEYS_ENABLED; do
       value=${(P)key:-}
       value=${value//[$'\r\n']/}   # a stray newline in a pasted value would start a new xcconfig line

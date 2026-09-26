@@ -303,10 +303,16 @@ final class PerplEnrollmentTests: XCTestCase {
 /// Serves canned Perpl enrollment replies by path suffix and records every request (path + JSON body).
 final class PerplEnrollTransport: URLProtocol {
     static var replies: [String: Data] = [:]
+    /// A status other than 200 for a path (default: 200 with a reply, 404 without).
+    static var statuses: [String: Int] = [:]
+    /// A server with state, when set: answers every request from its path and JSON body instead of `replies`.
+    static var respond: ((String, [String: Any]) -> (status: Int, body: Data))?
     static var requests: [(path: String, body: [String: Any])] = []
 
     static func reset() {
         replies = [:]
+        statuses = [:]
+        respond = nil
         requests = []
     }
 
@@ -326,9 +332,12 @@ final class PerplEnrollTransport: URLProtocol {
             }
             stream.close()
         }
-        Self.requests.append((path, (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]))
-        let data = Self.replies.first { path.hasSuffix($0.key) }?.value
-        let response = HTTPURLResponse(url: request.url!, statusCode: data == nil ? 404 : 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        Self.requests.append((path, json))
+        var data = Self.replies.first { path.hasSuffix($0.key) }?.value
+        var status = Self.statuses.first { path.hasSuffix($0.key) }?.value ?? (data == nil ? 404 : 200)
+        if let respond = Self.respond { (status, data) = respond(path, json) }
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data ?? Data("{}".utf8))
         client?.urlProtocolDidFinishLoading(self)

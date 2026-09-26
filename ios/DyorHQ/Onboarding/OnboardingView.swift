@@ -247,8 +247,10 @@ struct SignInView: View {
             GoogleSignInButton(busy: busy == "google") { run("google") { try await session.signInWithGoogle() } }
         }
         if session.hasMera {
-            SocialButton(title: "Continue with a Passkey", symbol: "faceid", busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
-            SocialButton(title: "I already have a Passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
+            // A passkey account (Mera), one sign-in method among the others: a new one, or one the user already has —
+            // on this phone, in iCloud Keychain, or on another phone by QR from the system sheet.
+            SocialButton(title: "Create account with a passkey", symbol: BiometricGate.promptSymbol, busy: busy == "mera") { run("mera") { try await session.signInWithMera(create: true) } }
+            SocialButton(title: "I already have a passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
         } else if session.hasPasskeys {
             SocialButton(title: "Sign in with a Passkey", symbol: "person.badge.key", busy: busy == "passkey") { run("passkey") { try await session.signInWithPasskey() } }
             SocialButton(title: "Create a Passkey", symbol: "faceid", busy: busy == "create") { run("create") { try await session.createPasskey(displayName: "DyorHQ") } }
@@ -263,7 +265,7 @@ struct SignInView: View {
             do {
                 try await work()
             } catch where isUserCancellation(error) {
-                // Closing Apple's or Google's sheet is a choice, not a failure — nothing to show.
+                // Closing Apple's, Google's or the passkey sheet is a choice, not a failure — nothing to show.
             } catch {
                 self.error = describe(error)
             }

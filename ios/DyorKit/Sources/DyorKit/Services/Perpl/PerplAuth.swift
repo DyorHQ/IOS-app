@@ -131,7 +131,10 @@ public actor PerplAuthClient {
             "chain_id": chainId, "address": address, "typed_data": payload.typedData, "mac": payload.mac,
             "signature": walletSignature, "pop_signature": pop,
         ]
-        let json = try await post("v1/api-key/enroll", body: body)
+        let json: [String: Any]
+        do { json = try await post("v1/api-key/enroll", body: body) }
+        catch PerplError.contextUnavailable(status: 409) { throw PerplEnrollRefusal.keyAlreadyRegistered }
+        catch PerplError.contextUnavailable(status: 423) { throw PerplEnrollRefusal.keyLimitReached }
         guard let info = json["api_key"] as? [String: Any], let token = info["api_key"] as? String else {
             throw PerplError.malformedResponse("api-key enroll")
         }
@@ -173,5 +176,20 @@ public actor PerplAuthClient {
         }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw PerplError.malformedResponse("json object") }
         return json
+    }
+}
+
+/// Perpl refused to register a trading key (`POST v1/api-key/enroll`), in words a person can act on.
+public enum PerplEnrollRefusal: Error, LocalizedError, Equatable {
+    /// 409: this public key is registered already, or was revoked (a revoked key never comes back). A new key is needed.
+    case keyAlreadyRegistered
+    /// 423: the Perpl account has the most active API keys it allows (16).
+    case keyLimitReached
+
+    public var errorDescription: String? {
+        switch self {
+        case .keyAlreadyRegistered: return "Perpl already has this trading key. Nothing was changed; try connecting again."
+        case .keyLimitReached: return "Your Perpl account has the most API keys it allows (16). Remove keys you no longer use under API Keys on app.perpl.xyz, then try again."
+        }
     }
 }

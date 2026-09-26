@@ -6,6 +6,10 @@ import SwiftUI
 /// side is always Monad, so the chain picker only ever chooses the other chain.
 struct BridgeView: View {
     @State private var model: BridgeModel
+    @Environment(Session.self) private var session
+    @Environment(SocialSession.self) private var social
+    @State private var unlocking = false
+    @State private var unlockError: String?
     @Environment(\.dismiss) private var dismiss
     @FocusState private var amountFocused: Bool
     @State private var showChainPicker = false
@@ -19,12 +23,30 @@ struct BridgeView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if !model.isConfigured {
+                #if DEBUG && targetEnvironment(simulator)
+                // Simulator test mode: the stub's key signs on the local Monad fork only, and a bridge signs on another
+                // chain (`Mera.Stub.permits`), so the screen is closed rather than failing at the signature.
+                if session.isStubAccount {
+                    ContentUnavailableView(Mera.Stub.unavailableTitle, systemImage: "point.3.connected.trianglepath.dotted",
+                                           description: Text("This test passkey signs on the local Monad fork only. Bridging needs a real passkey on a device."))
+                } else if !model.isConfigured {
                     ContentUnavailableView("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted",
                                            description: Text("Cross-chain bridging isn't configured in this build yet."))
+                } else if model.needsUnlock {
+                    unlockPrompt
                 } else {
                     form
                 }
+                #else
+                if !model.isConfigured {
+                    ContentUnavailableView("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted",
+                                           description: Text("Cross-chain bridging isn't configured in this build yet."))
+                } else if model.needsUnlock {
+                    unlockPrompt
+                } else {
+                    form
+                }
+                #endif
             }
             .navigationTitle("Bridge")
             .navigationBarTitleDisplayMode(.inline)
@@ -33,12 +55,42 @@ struct BridgeView: View {
                 ToolbarItem(placement: .keyboard) { HStack { Spacer(); Button("Done") { amountFocused = false } } }
             }
         }
-        .task { await model.load() }
+        // Again once a locked passkey account unlocks (its load then joins RootView's backend sign-in) or signs in.
+        .task(id: "\(session.mera.isUnlocked)-\(social.isSignedIn)") {
+            #if DEBUG && targetEnvironment(simulator)
+            if session.isStubAccount { return } // nothing to load for a closed screen (and no backend sign-in)
+            #endif
+            await model.load()
+        }
         .sheet(isPresented: $showChainPicker) { chainPicker }
         .sheet(isPresented: $showSourcePicker) { sourceAssetPicker }
         .sheet(isPresented: $pickingFromToken) { tokenPicker(for: model.fromChain, isFrom: true) }
         .sheet(isPresented: $pickingToToken) { tokenPicker(for: model.toChain, isFrom: false) }
         .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
+    }
+
+    /// A locked passkey account: one tap opens its session (the passkey prompt the person asked for), then the routes load.
+    private var unlockPrompt: some View {
+        ContentUnavailableView {
+            Label("Unlock to bridge", systemImage: "lock.fill")
+        } description: {
+            Text(unlockError ?? "Bridge routes load once your passkey session is open.")
+        } actions: {
+            Button {
+                Haptics.tap()
+                unlocking = true
+                Task {
+                    defer { unlocking = false }
+                    do { try await session.mera.unlock(); unlockError = nil }
+                    catch where isUserCancellation(error) { unlockError = nil }
+                    catch { unlockError = describe(error) }
+                }
+            } label: {
+                Label("Unlock with \(BiometricGate.promptName)", systemImage: BiometricGate.promptSymbol)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(unlocking)
+        }
     }
 
     /// The source-token tap opens the cross-chain, balance-sorted asset picker (which also switches chains); only when
@@ -70,6 +122,12 @@ struct BridgeView: View {
                 slippageControl
                 summaryCard
                 statusCard
+
+                if session.isPasskeyAccount, model.canEdit {
+                    SessionScopeBadge(assessment: .faceID(Mera.AlwaysAsk.bridge.summary))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                }
 
                 PrimaryButton(title: primaryTitle, isBusy: model.isBusy, isDisabled: !primaryEnabled) {
                     amountFocused = false

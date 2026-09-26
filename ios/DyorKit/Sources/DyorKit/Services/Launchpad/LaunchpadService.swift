@@ -377,6 +377,27 @@ public actor LaunchpadService {
 
     // MARK: - Transaction plans
 
+    /// The bonding curve a known factory — the live one, then each retired stack — recorded for `token`, read on-chain.
+    /// Nil when no known factory launched it or the read fails. A passkey session signs a curve buy or sell (and the
+    /// approval for it) only against this address, never one a caller supplied (MERA-PLAN §3).
+    public func knownCurve(token: Address) async -> Address? {
+        let stacks = stacks.filter(\.isDeployed)
+        guard !token.isZero, !stacks.isEmpty else { return nil }
+        let calls = stacks.map { LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.legacyRecord)) }
+        guard let results = try? await multicall.read(calls) else { return nil }
+        return Self.knownCurve(stacks: stacks, records: results)
+    }
+
+    /// Pure half of `knownCurve`: the first stack whose `getLaunchedToken` record exists and names a curve.
+    static func knownCurve(stacks: [LaunchpadAddresses], records: [Result<[ABIValue], Error>]) -> Address? {
+        for (stack, result) in zip(stacks, records) {
+            guard case .success(let values) = result, let tuple = values.first else { continue }
+            let record = LaunchpadABI.LaunchRecord(tuple, legacy: stack.legacyRecord)
+            if record.exists, !record.curve.isZero { return record.curve }
+        }
+        return nil
+    }
+
     /// Approve the pair asset for the curve when it is an ERC-20, then `buy`. Native MON rides on `value`.
     public func buyPlan(launch: Launch, quoteIn: BigUInt, minTokensOut: BigUInt, recipient: Address) -> [TransactionStep] {
         var steps: [TransactionStep] = []

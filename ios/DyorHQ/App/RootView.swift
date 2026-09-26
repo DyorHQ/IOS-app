@@ -14,7 +14,12 @@ struct RootView: View {
                 ProgressView()
                     .controlSize(.large)
             case .signedOut:
-                OnboardingView()
+                // A passkey account just deleted: what's left to do about the passkey, then onboarding.
+                if let done = session.passkeyDeletion {
+                    AccountDeletedView(done: done) { session.passkeyDeletion = nil }
+                } else {
+                    OnboardingView()
+                }
             case .signedIn:
                 MainTabView()
             }
@@ -26,17 +31,21 @@ struct RootView: View {
         // Privacy cover for the app-switcher snapshot: iOS screenshots the UI whenever the app leaves the foreground,
         // and that image is written to the app container. If a recovery phrase / private key were on screen (Import
         // Wallet), it would land in that snapshot. Covering the whole hierarchy the instant we're not active means the
-        // snapshot only ever captures the cover, never a secret.
-        .overlay { PrivacyCover(active: scenePhase == .active) }
+        // snapshot only ever captures the cover, never a secret. The one exception is a passkey ceremony: its system
+        // sheet makes the scene .inactive, and the cover must not blank the app behind it. Only a passkey (Mera)
+        // ceremony counts, so a build without passkey accounts covers exactly as before.
+        .overlay { PrivacyCover(active: scenePhase == .active || (scenePhase == .inactive && session.mera.isPrompting)) }
         .task { session.start(); settings.appearance.apply(); Notifications.configure() }
         .onChange(of: scenePhase) { _, phase in
-            // An unlocked passkey (Mera) signing session must not outlive the user leaving the app: whoever picks the
-            // phone up next has to present the passkey again.
-            if phase == .background { session.mera.lock() }
+            // A passkey (Mera) signing session must not outlive the user leaving the app: whoever picks the phone up
+            // next has to present the passkey again. Ending it also closes a passkey account's Perpl socket and drops
+            // its trading key.
+            if phase == .background { session.mera.end() }
             if phase == .active {
                 settings.appearance.apply()
                 // Reconnect the trading socket the instant the app returns (iOS drops it while suspended), so TP/SL is
-                // ready without waiting for the keep-alive loop's next tick.
+                // ready without waiting for the keep-alive loop's next tick. Never a prompt: a passkey account's
+                // socket reconnects only inside a live session, and there is none right after a return.
                 Task { await env.perplTrading.ensureConnected() }
             }
         }
@@ -46,15 +55,35 @@ struct RootView: View {
         .task(id: session.address) {
             env.social.bind(address: session.address)
             // A wallet that can sign connects to the backend by itself (one signature), so activity and settings are
-            // recorded — and restored on a fresh device — without a separate step.
-            if session.canSign, !env.social.isSignedIn { await env.social.signIn(session: session) }
-            if env.social.isSignedIn, let address = session.address { await env.sync.restore(owner: address) }
-            env.perplTrading.refresh(address: session.address)
+            // recorded — and restored on a fresh device — without a separate step. Not a passkey account restored
+            // locked at launch: that signature would be a passkey prompt nobody asked for. `signInWithMera` starts its
+            // sign-in while its session is live (this joins it), and the background signer never prompts.
+            if session.canSignWithoutPrompt, !env.social.isSignedIn, let address = session.address, let wallet = session.backgroundWallet {
+                await env.social.signIn(address: address, wallet: wallet)
+            }
+            env.perplTrading.refresh(account: session.account)
             NotificationHub.shared.bind(owner: session.address)
             // Ask for notification permission once the user is signed in and can act (so swaps, fills and price
             // alerts actually reach the lock screen). notificationsEnabled defaults on, but the Settings toggle only
             // requests when flipped — so a user who never opened Settings was never prompted.
             if session.canSign, settings.notificationsEnabled { await Notifications.requestAuthorizationIfUndetermined() }
+        }
+        // Whenever the account's backend session opens — whoever signed in (the rebind above, the reconnect below,
+        // Bridge, a screen that uploads) or a stored token was restored — pull what other devices recorded. Idempotent:
+        // activity merges without doubling, the other stores fill only while empty.
+        .task(id: "\(env.social.isSignedIn)-\(session.address?.hex ?? "")") {
+            guard env.social.isSignedIn, let address = session.address, env.social.isBound(to: address) else { return }
+            await env.sync.restore(owner: address)
+        }
+        // An account that isn't connected to the backend (a passkey account restored locked, a sign-in skipped because
+        // the app left the foreground, or a token that just expired after 12 h) reconnects as soon as it can sign
+        // without a prompt: at once for a key or Privy wallet, when its session opens for a passkey account. Only once
+        // the rebind above has bound this account, and never while a sign-in runs. It can't loop: a failed sign-in
+        // leaves isSignedIn false throughout, so the id doesn't change; a success changes it once, then the guard stops.
+        .task(id: "\(session.mera.isUnlocked)-\(env.social.isSignedIn)") {
+            guard !env.social.isSignedIn, env.social.state == .signedOut, session.canSignWithoutPrompt,
+                  let address = session.address, env.social.isBound(to: address), let wallet = session.backgroundWallet else { return }
+            await env.social.signIn(address: address, wallet: wallet)
         }
         .task { env.alertWatcher.start(env: env, settings: settings) }
         .task { await env.refreshVenueTokens() }

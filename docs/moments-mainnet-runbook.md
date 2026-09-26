@@ -192,6 +192,8 @@ cd /Users/jerry/Hackathon-moments && node scripts/dev/seed-moments-fork.mjs
 
 Then start the `web-fork` dev server from `.claude/launch.json` (RPC and log RPC on the fork, the seed's wallet 1 as
 an in-page EIP-6963 wallet via `NEXT_PUBLIC_DEV_WALLET_KEY`, dev builds only) and open http://localhost:3100/moments.
+The config holds no key: export `DYORHQ_FORK_WALLET_KEY` (wallet 1's fork-only key from the seed script) in the
+environment that starts it; without it the server runs with no in-page wallet.
 
 ## 4. What to expect (reconciled against economics.py and the fork runs)
 

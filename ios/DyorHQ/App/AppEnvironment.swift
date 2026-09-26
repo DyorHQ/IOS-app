@@ -32,7 +32,8 @@ final class AppEnvironment {
     let aurora: AuroraIntents
     let chainBalances = MultiChainBalances()
     let settings = AppSettings()
-    let perplTrading = PerplTrading()
+    /// Authenticated Perpl trading. A passkey account's trading key lives and dies with its session (`session.mera`).
+    let perplTrading: PerplTrading
     /// The wallet's cross-section volume / fees / P&L model, shared by Home's Total Volume and the Portfolio page.
     let portfolio = PortfolioModel()
     let alertWatcher = AlertWatcher()
@@ -76,7 +77,12 @@ final class AppEnvironment {
         // The venue-wide pool scan (from genesis, no wallet filter) runs on rpc3 so it never crowds out the wallet's
         // own history scans on rpc1, which answer a whole history in one call.
         venueTokens = VenueTokensService(logsRPC: RPCClient(url: URL(string: "https://rpc3.monad.xyz")!), multicall: multicall)
-        session = Session(config: config)
+        session = Session(config: config, backend: social)
+        // A passkey session's scope check trusts only the configured Moments cohorts, and signs a launchpad trade only
+        // against the curve a known factory recorded on-chain (MERA-PLAN §3).
+        session.mera.contracts = Mera.SigningPolicy.Contracts(moments: config.moments)
+        session.mera.curveVerifier = { [launchpad] token in await launchpad.knownCurve(token: token) }
+        perplTrading = PerplTrading(mera: session.mera)
         sync = BackendSync(social: social)
         sync.install(settings: settings, address: { [weak session] in session?.address })
     }

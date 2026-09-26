@@ -174,6 +174,30 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Amount.units(BigInt(-1_500_000), decimals: 6), -1.5)
     }
 
+    func testAmountRoundedDownForAnAmountField() {
+        let e18 = BigUInt(10).power(18)
+        func text(_ raw: BigUInt, _ decimals: Int) -> String { Amount.exact(Amount.roundedDown(raw, decimals: decimals), decimals: decimals) }
+        // 25% of 2.237860145197887006 MON: six significant digits, rounded down.
+        XCTAssertEqual(text(BigUInt("559465036299471751"), 18), "0.559465")
+        XCTAssertEqual(text(BigUInt("1118930072598943503"), 18), "1.11893")
+        XCTAssertEqual(text(BigUInt("559465999999999999"), 18), "0.559465", "down, never up")
+        // Whole digits are all kept; only fraction digits go.
+        XCTAssertEqual(text(1_234_567_891, 6), "1234.56")
+        XCTAssertEqual(text(1_234_567_123_456, 6), "1234567")
+        XCTAssertEqual(text(BigUInt(123_456_789) * e18 + 987, 18), "123456789")
+        // Dust keeps its six significant digits.
+        XCTAssertEqual(text(12_345_678_900_000, 18), "0.0000123456")
+        // Already short, or no decimals: unchanged.
+        XCTAssertEqual(Amount.roundedDown(19_390, decimals: 6), 19_390)
+        XCTAssertEqual(Amount.roundedDown(750_000_000_000_000_000, decimals: 18), 750_000_000_000_000_000)
+        XCTAssertEqual(Amount.roundedDown(123_456_789, decimals: 0), 123_456_789)
+        XCTAssertEqual(Amount.roundedDown(0, decimals: 18), 0)
+        // Never above the value it rounds.
+        for raw in [BigUInt(1), 999_999, BigUInt("987654321987654321987"), e18 - 1] {
+            XCTAssertLessThanOrEqual(Amount.roundedDown(raw, decimals: 18), raw)
+        }
+    }
+
     func testNumberStyle() {
         XCTAssertEqual(NumberStyle.number(0), "0")
         XCTAssertEqual(NumberStyle.number(1234.5678), "1,234.57")

@@ -156,17 +156,20 @@ struct RetiredMomentDetailView: View {
         switch which {
         case .claim:
             ConfirmationSheet(title: "Claim \(info.symbol)", confirmTitle: "Claim", build: { plan }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed $\(info.symbol)", subtitle: "\(MomentsFormat.coins(account?.claimable ?? 0)) vested coins · past cohort", hash: hash, section: "moments", reference: info.key.description), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed $\(info.symbol)", subtitle: "\(MomentsFormat.coins(account?.claimable ?? 0)) vested coins · past cohort", hash: hash, section: "moments", reference: info.key.description), owner: session.address) },
+                              intent: .momentsClaim) {
                 DetailRow("Claimable", "\(MomentsFormat.coins(account?.claimable ?? 0)) $\(info.symbol)")
             }
         case .withdrawCreatorProceeds:
             ConfirmationSheet(title: "Withdraw Proceeds", confirmTitle: "Withdraw", build: { plan }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) proceeds", subtitle: "\(MomentsFormat.usdc(account?.creatorProceeds ?? 0)) creator proceeds · past cohort", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorProceeds ?? 0), reference: info.key.description), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) proceeds", subtitle: "\(MomentsFormat.usdc(account?.creatorProceeds ?? 0)) creator proceeds · past cohort", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorProceeds ?? 0), reference: info.key.description), owner: session.address) },
+                              intent: .momentsWithdraw) {
                 DetailRow("Proceeds", MomentsFormat.usdc(account?.creatorProceeds ?? 0))
             }
         case .withdrawCreatorFees:
             ConfirmationSheet(title: "Withdraw Pool Fees", confirmTitle: "Withdraw", build: { plan }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) pool fees", subtitle: "\(MomentsFormat.usdc(account?.creatorFees ?? 0)) trading fees · past cohort", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorFees ?? 0), reference: info.key.description), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) pool fees", subtitle: "\(MomentsFormat.usdc(account?.creatorFees ?? 0)) trading fees · past cohort", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorFees ?? 0), reference: info.key.description), owner: session.address) },
+                              intent: .momentsWithdraw) {
                 DetailRow("Pool fees", MomentsFormat.usdc(account?.creatorFees ?? 0))
             }
         }

@@ -127,7 +127,8 @@ struct CreateMomentView: View {
                                       let info = (try? await env.moments.info(id: result.momentId)) ?? nil else { return }
                                 onPublished(info)
                             }
-                        }
+                        },
+                        intent: .alwaysAsks(.launch)
                     ) {
                         DetailRow("Moment", "\(input.name) ($\(input.symbol))")
                         DetailRow("Collect price", MomentsFormat.usdc(input.price))

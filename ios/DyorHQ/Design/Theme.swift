@@ -1,3 +1,4 @@
+import DyorKit
 import LocalAuthentication
 import SwiftUI
 import UIKit
@@ -29,8 +30,15 @@ final class AppSettings {
         notifyFills = defaults.object(forKey: "settings.notifyFills") as? Bool ?? true
         notifyPriceAlerts = defaults.object(forKey: "settings.notifyPrice") as? Bool ?? false
         requireBiometrics = defaults.object(forKey: "settings.biometrics") as? Bool ?? false
-        defaultLeverage = defaults.object(forKey: "settings.leverage") as? Double ?? 2
-        slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? 50
+        defaultLeverage = defaults.object(forKey: "settings.leverage") as? Double ?? TradingDefaults.leverage
+        slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? TradingDefaults.slippageBps
+    }
+
+    /// Whether App Lock asks for Face ID before `account` signs. Never for a passkey (Mera) account: its passkey is the
+    /// lock, and a locked session already asks for it where the signature is needed, so App Lock never stacks a second
+    /// Face ID on top of a passkey prompt.
+    func appLockApplies(to account: Session.Account?) -> Bool {
+        requireBiometrics && account?.method != .meraPasskey
     }
 
     private func store(_ value: Any, _ key: String) { defaults.set(value, forKey: key); AppSettings.onChange?() }
@@ -44,14 +52,17 @@ final class AppSettings {
          "notifyPriceAlerts": notifyPriceAlerts, "defaultLeverage": defaultLeverage, "slippageBps": slippageBps]
     }
 
-    /// Applies a backend copy of the settings (a fresh device after sign-in). Unknown keys are ignored.
+    /// Applies a backend copy of the settings (a fresh device after sign-in). The copy is checked first
+    /// (`BackendRestore.settings`): unknown or mistyped keys are ignored, and a slippage or leverage the Trading
+    /// Preferences screen couldn't have set restores as the default, so a tampered row can't loosen a ticket.
     func apply(snapshot: [String: Any]) {
-        if let raw = snapshot["appearance"] as? String, let mode = AppearanceMode(rawValue: raw) { appearance = mode }
-        if let v = snapshot["notificationsEnabled"] as? Bool { notificationsEnabled = v }
-        if let v = snapshot["notifyFills"] as? Bool { notifyFills = v }
-        if let v = snapshot["notifyPriceAlerts"] as? Bool { notifyPriceAlerts = v }
-        if let v = snapshot["defaultLeverage"] as? Double { defaultLeverage = v }
-        if let v = snapshot["slippageBps"] as? Int { slippageBps = v }
+        let restored = BackendRestore.settings(from: snapshot, appearances: Set(AppearanceMode.allCases.map(\.rawValue)))
+        if let raw = restored.appearance, let mode = AppearanceMode(rawValue: raw) { appearance = mode }
+        if let v = restored.notificationsEnabled { notificationsEnabled = v }
+        if let v = restored.notifyFills { notifyFills = v }
+        if let v = restored.notifyPriceAlerts { notifyPriceAlerts = v }
+        if let v = restored.defaultLeverage { defaultLeverage = v }
+        if let v = restored.slippageBps { slippageBps = v }
     }
 }
 
@@ -71,6 +82,30 @@ enum BiometricGate {
         default: return "Biometrics"
         }
     }
+
+    /// What this device's passkey prompt asks for, in copy like "Confirm with Face ID" and "Face ID required: …":
+    /// "Face ID", "Touch ID" or "Optic ID", and "Passcode" when no biometrics are enrolled (a passkey then takes the
+    /// device passcode). Read once per launch.
+    static let promptName: String = {
+        let context = LAContext()
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else { return "Passcode" }
+        switch context.biometryType {
+        case .faceID: return "Face ID"
+        case .touchID: return "Touch ID"
+        case .opticID: return "Optic ID"
+        default: return "Passcode"
+        }
+    }()
+
+    /// The SF Symbol for `promptName`.
+    static let promptSymbol: String = {
+        switch promptName {
+        case "Face ID": return "faceid"
+        case "Touch ID": return "touchid"
+        case "Optic ID": return "opticid"
+        default: return "lock"
+        }
+    }()
 
     /// Whether the device can verify its owner at all — biometrics or the device passcode.
     static var canAuthenticateOwner: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) }

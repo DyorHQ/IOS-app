@@ -3,7 +3,10 @@ import XCTest
 @testable import DyorKit
 
 /// The native Mera implementation against vectors produced with `@category-labs/mera` 0.2.0, `@scure/bip39` and
-/// `@scure/bip32` in Node (see the derivation script in the session notes): same salt, same phrase, same address.
+/// `@scure/bip32` in Node: same salt, same phrase, same address. `scripts/mera-parity/parity.mjs` reads the literals in
+/// this file (the PRFs, phrase, seed, keys, addresses and the sealed vault) and recomputes each one with the pinned
+/// library, so a vector changed here without the library agreeing fails there. It finds them by shape: keep each
+/// literal in its current form, or update the script's patterns with it.
 final class MeraTests: XCTestCase {
     let prf = Data(hex: "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")!
 
@@ -35,6 +38,7 @@ final class MeraTests: XCTestCase {
     func testVaultKeyAndCiphertextMatchWebCrypto() throws {
         let vaultPRF = Data(hex: "0x202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f")!
         XCTAssertEqual(Mera.Vault.key(prf: vaultPRF).withUnsafeBytes { Data($0) }.hexString, "0xd574b00b8aa99c62632a6311f25f8013b23397c8903bbaf65079aec3e710bc71")
+        XCTAssertEqual(Mera.Vault.key(prf: prf).withUnsafeBytes { Data($0) }.hexString, "0x08c0ce37bd9a24a5d348d42921f2e897612214c5e7f736e4a61701dc33b30d02")
         let nonce = Data(hex: "0x404142434445464748494a4b")!
         let salt = Data(repeating: 7, count: 32)
         let vault = try Mera.Vault.seal(secret: Data("hello mera".utf8), prf: vaultPRF, prfSalt: salt, credentialID: Data([1, 2, 3]), nonce: nonce)
@@ -66,6 +70,25 @@ final class MeraTests: XCTestCase {
         let key = try Mera.ed25519Key(prf: prf, purpose: Mera.Purpose.perplTrading)
         XCTAssertEqual(key.rawRepresentation, trading)
         XCTAssertEqual(key.publicKey.rawRepresentation.count, 32)
+    }
+
+    /// The rpId is a constant, and the app's associated-domains entitlement names exactly that host — with no
+    /// `?mode=developer`, which never associates in a distribution build.
+    func testRelyingPartyMatchesTheEntitlement() throws {
+        XCTAssertEqual(Mera.relyingParty, "accounts.dyorhq.fun")
+        var ios = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
+        guard let spec = try? String(contentsOf: ios.appendingPathComponent("project.yml"), encoding: .utf8) else {
+            throw XCTSkip("ios/project.yml is not in this checkout")
+        }
+        let settings = spec.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
+        XCTAssertEqual(settings.filter { $0.contains("com.apple.developer.associated-domains") }.map { $0.trimmingCharacters(in: .whitespaces) },
+                       ["com.apple.developer.associated-domains: [\"webcredentials:\(Mera.relyingParty)\"]"])
+        XCTAssertFalse(settings.contains { $0.contains("mode=developer") })
+        // XcodeGen writes the entitlements file from project.yml; the checked-in copy must be regenerated to match.
+        let entitlements = try String(contentsOf: ios.appendingPathComponent("DyorHQ/DyorHQ.entitlements"), encoding: .utf8)
+        XCTAssertTrue(entitlements.contains("<string>webcredentials:\(Mera.relyingParty)</string>"))
+        XCTAssertFalse(entitlements.contains("mode=developer"))
     }
 
     func testBase64URL() {

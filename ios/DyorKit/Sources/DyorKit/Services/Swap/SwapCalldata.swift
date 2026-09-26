@@ -90,6 +90,10 @@ public struct V4Hop: Hashable, Sendable {
 public enum SwapCalldata {
     public static let deadlineSeconds = 10 * 60
     public static let maxUint160 = (BigUInt(1) << 160) - 1
+    /// How long an exact Permit2 allowance lives (`SwapRequest.exactApprovals`): set when its step is sent, and the
+    /// swap is the very next transaction, so two minutes is ample — and a passkey session signs one only while the
+    /// allowance ends before the session does.
+    public static let exactPermit2Lifetime = 2 * 60
     /// SwapRouter02's `ADDRESS_THIS` recipient sentinel, used before `unwrapWETH9`.
     static let routerThis = Address(literal: "0x0000000000000000000000000000000000000002")
 

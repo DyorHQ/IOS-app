@@ -240,7 +240,8 @@ struct PrimaryButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button {
+        let unavailable = isDisabled && !isBusy
+        let button = Button {
             Haptics.commit()
             action()
         } label: {
@@ -252,12 +253,33 @@ struct PrimaryButton: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
-            // Disabled prominent buttons get a pale fill, on which the white label vanishes.
-            .foregroundStyle(isDisabled && !isBusy ? AnyShapeStyle(.secondary) : AnyShapeStyle(foreground))
+            .foregroundStyle(unavailable ? Color(.secondaryLabel) : foreground)
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .disabled(isDisabled || isBusy)
+        if unavailable {
+            // iOS draws a disabled prominent button as a near-clear fill with faded text, which all but vanishes on a
+            // light background. This keeps the button's size and shape with a solid neutral fill and readable text,
+            // and it stays disabled for touch and VoiceOver.
+            button.buttonStyle(UnavailablePrimaryButtonStyle()).disabled(true)
+        } else {
+            button
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isBusy)
+        }
+    }
+}
+
+/// `PrimaryButton` while it can't be used: the height and shape of a `.large` `.borderedProminent` button (a capsule
+/// from iOS 26, a rounded rectangle before), on a solid gray that reads in light and dark.
+private struct UnavailablePrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.vertical, 15) // measured against the enabled button: both 62 pt at the default text size
+            .background(Color(.systemGray5), in: shape)
+    }
+
+    private var shape: AnyShape {
+        if #available(iOS 26, *) { AnyShape(Capsule()) } else { AnyShape(RoundedRectangle(cornerRadius: 12, style: .continuous)) }
     }
 }
 

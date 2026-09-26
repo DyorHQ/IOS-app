@@ -90,11 +90,15 @@ Connect. First run also auto-creates the Distribution cert + App Store profile (
 
 ## Project-specific callouts (don't get surprised)
 
-- **Passkeys (Mera) won't work in TestFlight yet — and that's expected.** The entitlement uses
-  `webcredentials:$(PASSKEY_RP_ID)?mode=developer`, which only associates on a Developer-Mode device, not in
-  TestFlight. It uploads fine and the app runs; **all other Privy sign-in methods work**. To turn passkeys on later:
-  host the AASA at `https://dyorhq.fun/.well-known/apple-app-site-association`, then remove `?mode=developer` from
-  `com.apple.developer.associated-domains` in `ios/project.yml` (the comment there spells it out) and re-upload.
+- **Passkeys (Mera) use the rpId `accounts.dyorhq.fun`.** It is the constant `Mera.relyingParty` in DyorKit, not a
+  build setting (`PASSKEY_RP_ID` is no longer read), and `ios/project.yml` carries the matching entitlement
+  `com.apple.developer.associated-domains: ["webcredentials:accounts.dyorhq.fun"]`, with no `?mode=developer`. Before
+  the first device or TestFlight install: enable Associated Domains on the `fun.dyorhq.app` App ID, host the AASA at
+  `https://accounts.dyorhq.fun/.well-known/apple-app-site-association` (GitHub Pages, repo `DyorHQ/accounts-domain`;
+  never the apex, whose site injects a third-party script), and check that Apple's CDN serves it at
+  `https://app-site-association.cdn-apple.com/a/v1/accounts.dyorhq.fun`. iOS caches a failed fetch until the build
+  number changes. Passkey accounts are one sign-in method next to the others, shown only with
+  `PASSKEYS_ENABLED = YES`; Privy passkeys stay off in every build, since they would share the rpId.
 - **Privacy manifest:** Apple may email an *informational* ITMS warning about required-reason APIs (e.g.
   `UserDefaults`). It does **not** block TestFlight, but add a `PrivacyInfo.xcprivacy` before an App Store submission.
 - **Sign in with Apple (Guideline 4.8):** on. `com.apple.developer.applesignin` is in `project.yml`'s entitlements and

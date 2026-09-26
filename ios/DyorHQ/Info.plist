@@ -57,8 +57,6 @@
 	<string>DyorHQ uses Face ID to unlock your wallet on this device.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>DyorHQ uses your photos to add a token image when you launch a coin.</string>
-	<key>PasskeyRelyingParty</key>
-	<string>$(PASSKEY_RP_ID)</string>
 	<key>PasskeysEnabled</key>
 	<string>$(PASSKEYS_ENABLED)</string>
 	<key>PerplBuilderID</key>

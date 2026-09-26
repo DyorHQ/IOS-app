@@ -99,7 +99,9 @@ public actor SupabaseClient {
     /// Signs in: asks wallet-auth for a single-use nonce bound to this address, has the wallet sign the exact sign-in
     /// message around it, and exchanges the signature for a session. The server consumes the nonce on success, so a
     /// captured signature can never be replayed. `sign` is the wallet's `signMessage` (EIP-191 personal_sign).
-    public func signIn(address: String, sign: (Data) async throws -> Data) async throws -> SupabaseSession {
+    /// `adopt: false` returns the session without making it the client's: a caller that may have moved on to another
+    /// wallet while this ran checks first, then `restore`s it.
+    public func signIn(address: String, adopt: Bool = true, sign: (Data) async throws -> Data) async throws -> SupabaseSession {
         let nonce = try await signInNonce(address: address)
         let message = Self.signInMessage(address: address, nonce: nonce, issuedAt: Int(Date().timeIntervalSince1970 * 1000))
         let signature = try await sign(Data(message.utf8)).hexString
@@ -108,7 +110,7 @@ public actor SupabaseClient {
         struct AuthResponse: Decodable { let access_token: String; let expires_in: Int; let wallet: String }
         guard let response = try? JSONDecoder().decode(AuthResponse.self, from: data) else { throw SupabaseError.decoding("the sign-in response") }
         let created = SupabaseSession(accessToken: response.access_token, wallet: response.wallet, expiresAt: Date().addingTimeInterval(Double(response.expires_in)))
-        current = created
+        if adopt { current = created }
         return created
     }
 

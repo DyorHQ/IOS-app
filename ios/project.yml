@@ -77,14 +77,15 @@ targets:
         # Debug-only RPC override (a local anvil fork). Empty in Release by DYOR_DEBUG_RPC_OVERRIDE below, and ignored
         # by Release code anyway: shipped builds use the keyless public Monad RPCs (Monad.publicRPCs).
         MonadRPCURL: "$(DYOR_DEBUG_RPC_OVERRIDE)"
-        PasskeyRelyingParty: "$(PASSKEY_RP_ID)"
         # SOCIAL_LOGINS_ENABLED=YES in Secrets.xcconfig shows Apple/Google sign-in (both live in the Privy dashboard
         # since 2026-09-24). Unset resolves to false and onboarding hides them — they must stay together (App Review 4.8).
         SocialLoginsEnabled: "$(SOCIAL_LOGINS_ENABLED)"
         # Google Sans Medium, subset to the "Continue with Google" label (Google's sign-in branding guidelines).
         UIAppFonts: [GoogleSans-Medium.ttf]
-        # Set PASSKEYS_ENABLED=YES once passkeys are live (associated-domains entitlement restored, the App ID
-        # capabilities enabled, and the AASA hosted). Until then the UI hides passkey options. Unset resolves to false.
+        # Set PASSKEYS_ENABLED=YES to offer Mera passkey accounts next to the other sign-in methods, once passkeys are live
+        # (Associated Domains enabled on the App ID and the AASA served by Apple's CDN — see the entitlements below).
+        # Until then the UI hides passkey options. Unset resolves to false. The rpId is the constant Mera.relyingParty
+        # (accounts.dyorhq.fun), not a build setting. Privy passkeys are off whenever Mera is on: they'd share the rpId.
         PasskeysEnabled: "$(PASSKEYS_ENABLED)"
         PerplBuilderID: "$(PERPL_BUILDER_ID)"
         LaunchpadFactory: "$(LAUNCHPAD_FACTORY)"
@@ -100,12 +101,16 @@ targets:
       # XcodeGen REWRITES DyorHQ.entitlements from these properties on every `xcodegen generate` — edit here, never the
       # file. Sign in with Apple is on: PrivySDK runs Apple's native ASAuthorizationController, which needs this
       # entitlement, and the Sign in with Apple capability is enabled on the fun.dyorhq.app App ID (primary App ID).
-      # Associated Domains (passkeys) stay OFF until the AASA is hosted at
-      # https://$(PASSKEY_RP_ID)/.well-known/apple-app-site-association and the capability is enabled on the App ID;
-      # then add (NO ?mode=developer suffix — never allowed in a distribution build):
-      #   com.apple.developer.associated-domains: ["webcredentials:$(PASSKEY_RP_ID)"]
+      # Associated Domains: passkeys (Mera) bind to the rpId accounts.dyorhq.fun (Mera.relyingParty in DyorKit, which a
+      # DyorKit test keeps equal to this line). That host serves only
+      # https://accounts.dyorhq.fun/.well-known/apple-app-site-association (GitHub Pages, repo DyorHQ/accounts-domain).
+      # Never add ?mode=developer — it never associates in a distribution build. Device builds also need Associated
+      # Domains on the App ID. Don't install a device build until
+      # https://app-site-association.cdn-apple.com/a/v1/accounts.dyorhq.fun serves the file: iOS caches a failed fetch
+      # until the build number changes.
       properties:
         com.apple.developer.applesignin: [Default]
+        com.apple.developer.associated-domains: ["webcredentials:accounts.dyorhq.fun"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fun.dyorhq.app

@@ -83,13 +83,19 @@ struct UniswapVenue: Sendable {
         let inToken = req.tokenIn
         let outAddress = req.tokenOut.address
         let amountIn = req.amountIn
+        let exactApprovals = req.exactApprovals
 
         return VenueQuote(venue: .uniswap, amountOut: amountOut, minOut: minOut, route: route, gasEstimate: gas, priceImpactBps: priceImpactBps) { account in
             let deadline = BigUInt(SwapMath.nowSeconds + SwapCalldata.deadlineSeconds)
             var steps: [TransactionStep] = []
             switch chosen {
             case .v4(let v4):
-                if !nativeIn {
+                if !nativeIn, exactApprovals {
+                    // Exactly the input, to Permit2 and on to the Universal Router, the allowance ending minutes after it's set.
+                    steps.append(.approve(token: inToken.address, spender: Uniswap.permit2, amount: amountIn, label: "Approve \(inToken.symbol) for Permit2"))
+                    steps.append(.permit2Approve(token: inToken.address, spender: Uniswap.universalRouter, amount: amountIn, lifetime: SwapCalldata.exactPermit2Lifetime,
+                                                 label: "Allow the Universal Router to spend \(inToken.symbol)"))
+                } else if !nativeIn {
                     steps.append(.approve(token: inToken.address, spender: Uniswap.permit2, amount: SwapCalldata.maxUint160, label: "Approve \(inToken.symbol) for Permit2"))
                     if let permit = try await Self.permit2Step(multicall: multicall, owner: account, token: inToken, amount: amountIn) { steps.append(permit) }
                 }

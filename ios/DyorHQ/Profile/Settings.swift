@@ -29,7 +29,7 @@ struct ManageWalletsView: View {
                     Text(account.method == .watchOnly
                          ? "You are watching this address. Sign in to create a wallet you can sign with."
                          : account.method == .meraPasskey
-                         ? "This wallet is derived from your passkey every time you sign in; nothing is stored on this device or on a server. The same passkey gives the same wallet on any device."
+                         ? "This wallet is derived from your passkey every time you unlock it; its key is never stored, on this device or on a server. The same passkey gives the same wallet on any device."
                          : [.apple, .google, .email, .passkey].contains(account.method)
                          ? "This is a Privy embedded wallet, secured by your \(account.method.title) sign-in. The same sign-in opens it on any device. DyorHQ never holds your keys."
                          : "This wallet was created on this device and is secured by your \(account.method.title) account. DyorHQ never holds your keys.")
@@ -46,10 +46,14 @@ struct ManageWalletsView: View {
 
                 if account.canSign {
                     Section {
-                        NavigationLink { WalletExportView() } label: { Label("Export Wallet", systemImage: "key.horizontal") }
+                        NavigationLink { WalletExportView() } label: {
+                            Label(account.method == .meraPasskey ? "Export Recovery Phrase" : "Export Wallet", systemImage: "key.horizontal")
+                        }
                     } footer: {
                         Text(account.method == .imported
                              ? "Reveal this wallet's private key to back it up or move it to another wallet. The key never leaves your device."
+                             : account.method == .meraPasskey
+                             ? "Show the 24-word recovery phrase your passkey derives, to back this wallet up or restore it in another wallet without the passkey. It asks for your passkey every time and is never stored."
                              : "Export this wallet's private key through Privy's secure export page.")
                     }
                 }
@@ -101,6 +105,10 @@ struct SecurityView: View {
                         }
                     }
                     .disabled(busy || !session.canSign)
+                } else if session.hasMera {
+                    // Privy passkeys are off whenever Mera is on (they'd share the rpId): a passkey is an account of its own.
+                    Label("Passkey accounts are created from the sign-in screen, not added here.", systemImage: "person.badge.key")
+                        .foregroundStyle(.secondary).font(.subheadline)
                 } else {
                     Label("Passkeys are not enabled in this build.", systemImage: "key.slash").foregroundStyle(.secondary).font(.subheadline)
                 }
@@ -108,6 +116,7 @@ struct SecurityView: View {
                 Text("Passkeys")
             } footer: {
                 if let message { Text(message).foregroundStyle(isError ? Color.attention : Color.positive) }
+                else if session.hasMera { Text("A passkey account unlocks with Face ID or Touch ID, and iCloud Keychain keeps its passkey on your other Apple devices.") }
                 else { Text("Sign in with Face ID or Touch ID. Add one per device.") }
             }
 
@@ -128,7 +137,10 @@ struct SecurityView: View {
             } header: {
                 Text("App Lock")
             } footer: {
-                if settings.requireBiometrics, !BiometricGate.canAuthenticateOwner {
+                if session.account?.method == .meraPasskey {
+                    // `AppSettings.appLockApplies`: a passkey account's lock is its passkey, never a second prompt.
+                    Text("Your passkey is this account's lock: signing asks for it whenever the session is locked, so App Lock doesn't add a second \(BiometricGate.promptName) prompt.")
+                } else if settings.requireBiometrics, !BiometricGate.canAuthenticateOwner {
                     Text("Set a device passcode in iOS Settings — App Lock can't confirm transactions without one.").foregroundStyle(Color.attention)
                 } else {
                     Text("Asks for \(BiometricGate.typeName) (or your passcode) before every transaction is signed, and before App Lock can be turned off.")
@@ -190,13 +202,11 @@ struct NotificationsView: View {
 struct TradingPreferencesView: View {
     @Environment(AppSettings.self) private var settings
 
-    private let slippageChoices: [(Int, String)] = [(10, "0.1%"), (50, "0.5%"), (100, "1%"), (200, "2%")]
-
     var body: some View {
         @Bindable var settings = settings
         List {
             Section {
-                Stepper(value: $settings.defaultLeverage, in: 1...50, step: 1) {
+                Stepper(value: $settings.defaultLeverage, in: TradingDefaults.leverageRange, step: 1) {
                     LabeledContent("Default Leverage", value: "\(Int(settings.defaultLeverage))×")
                 }
             } footer: {
@@ -204,7 +214,8 @@ struct TradingPreferencesView: View {
             }
             Section {
                 Picker("Max Slippage", selection: $settings.slippageBps) {
-                    ForEach(slippageChoices, id: \.0) { Text($0.1).tag($0.0) }
+                    // The same choices a restored backend copy is checked against (`BackendRestore.slippageBps`).
+                    ForEach(TradingDefaults.slippageChoicesBps, id: \.self) { Text(NumberStyle.basisPoints($0)).tag($0) }
                 }
             } footer: {
                 Text("The furthest a market order or swap may move from its quote before it is cancelled.")
@@ -216,7 +227,7 @@ struct TradingPreferencesView: View {
 }
 
 /// Connect to Perpl's authenticated trading API (the route to real TP/SL). One-time enrollment signs a payload
-/// with the wallet; the Ed25519 key lives in the Keychain.
+/// with the wallet; the Ed25519 key lives in the Keychain (a passkey account's: its token only, once per device).
 struct PerplTradingView: View {
     @Environment(PerplTrading.self) private var trading
     @Environment(Session.self) private var session
@@ -234,7 +245,11 @@ struct PerplTradingView: View {
                     LabeledContent("One-click trading") { checkmark(trading.isForwarding) }
                 }
             } footer: {
-                Text("Your trading key is generated on this device and authorized once by your wallet.")
+                if session.account?.method == .meraPasskey {
+                    Text("Your trading key comes from your passkey and exists only while your session is unlocked; this device stores just its token. On another iPhone, connect once more.")
+                } else {
+                    Text("Your trading key is generated on this device and authorized once by your wallet.")
+                }
             }
 
             Section {
@@ -266,7 +281,11 @@ struct PerplTradingView: View {
                     Label("Ready to trade", systemImage: "checkmark.seal.fill").foregroundStyle(Color.positive)
                     Button("Disconnect") { trading.disconnect() }.disabled(busy)
                 case .failed:
-                    Button("Try Again") { run { try await trading.connect() } }.disabled(busy)
+                    // A failed enrolment left no key to reconnect with: trying again enrols again (a new key each time).
+                    Button("Try Again") {
+                        run { if trading.isEnrolled { try await trading.connect() } else { try await enroll() } }
+                    }
+                    .disabled(busy)
                 }
             } header: {
                 Text("Connection")
@@ -277,7 +296,7 @@ struct PerplTradingView: View {
                 else if trading.status == .needsForwarding { Text("Lets Perpl's keeper forward your signed orders. One on-chain transaction.") }
             }
 
-            if trading.key != nil {
+            if trading.isEnrolled {
                 Section {
                     Button("Remove API Key", role: .destructive) { if let address = session.address { trading.forget(address: address) } }.disabled(busy)
                 } footer: {
@@ -287,7 +306,7 @@ struct PerplTradingView: View {
         }
         .navigationTitle("Perpl Trading")
         .navigationBarTitleDisplayMode(.inline)
-        .task { trading.refresh(address: session.address) }
+        .task { trading.refresh(account: session.account) }
     }
 
     private func checkmark(_ on: Bool) -> some View {
@@ -307,16 +326,16 @@ struct PerplTradingView: View {
     }
 
     private func enroll() async throws {
-        guard let wallet = session.wallet as? DigestSigner, let address = session.address else { throw SessionError.readOnly }
+        guard let wallet = session.wallet, let address = session.address else { throw SessionError.readOnly }
         // Enrollment signs with the wallet and creates a trading key — App Lock applies.
-        if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Connect Perpl trading")) { throw SessionError.authenticationRequired }
+        if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Connect Perpl trading")) { throw SessionError.authenticationRequired }
         try await trading.enroll(wallet: wallet, address: address)
     }
 
     private func enableForwarding() async throws {
         guard let wallet = session.wallet else { throw SessionError.readOnly }
         // An on-chain transaction sent without a confirmation sheet — App Lock applies.
-        if settings.requireBiometrics, !(await BiometricGate.authenticate(reason: "Enable one-click trading")) { throw SessionError.authenticationRequired }
+        if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Enable one-click trading")) { throw SessionError.authenticationRequired }
         try await trading.enableForwarding(env: env, wallet: wallet)
     }
 
@@ -402,6 +421,8 @@ struct AppearanceSheet: View {
 /// The passkey signing session: how long signatures stay prompt-free after a Face ID, and a way to end it now.
 private struct MeraSessionSection: View {
     @Environment(Session.self) private var session
+    @State private var changing = false
+    @State private var error: String?
 
     var body: some View {
         let mera = session.mera
@@ -416,16 +437,30 @@ private struct MeraSessionSection: View {
                     }
                 }
             }
-            Picker("Prompt-free for", selection: Binding(get: { Int(mera.sessionLength) }, set: { mera.sessionLength = TimeInterval($0) })) {
-                Text("5 minutes").tag(5 * 60)
-                Text("15 minutes").tag(15 * 60)
-                Text("1 hour").tag(60 * 60)
+            Picker("Prompt-free for", selection: Binding(get: { Int(mera.sessionLength) }, set: { change(to: TimeInterval($0)) })) {
+                ForEach(Mera.SessionLength.choices, id: \.self) { length in
+                    Text(length >= 3600 ? "1 hour" : "\(Int(length / 60)) minutes").tag(Int(length))
+                }
             }
-            Button("Lock now", systemImage: "lock") { Haptics.tap(); mera.lock() }.disabled(!mera.isUnlocked)
+            .disabled(changing)
+            Button("Lock now", systemImage: "lock") { Haptics.tap(); mera.end() }.disabled(!mera.isUnlocked)
         } header: {
             Text("Passkey")
         } footer: {
-            Text("Signs without another prompt until the session ends; then Face ID again.")
+            if let error { InlineError(message: error) }
+            else { Text("Signs without another prompt until the session ends; then \(BiometricGate.promptName) again. A new length applies from the next session, and a longer one needs \(BiometricGate.promptName).") }
+        }
+    }
+
+    /// Shorter is immediate; longer asks for the passkey (Face ID) and leaves the live session's end time as it is.
+    private func change(to length: TimeInterval) {
+        guard length != session.mera.sessionLength else { return }
+        changing = true; error = nil
+        Task {
+            do { try await session.mera.setSessionLength(length) }
+            catch where isUserCancellation(error) {}
+            catch { self.error = describe(error) }
+            changing = false
         }
     }
 }
