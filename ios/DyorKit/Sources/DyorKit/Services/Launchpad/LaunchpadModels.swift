@@ -583,10 +583,13 @@ public struct ActivityItem: Identifiable, Hashable, Sendable {
 public enum LaunchpadError: Error, LocalizedError, Equatable {
     case notDeployed
     case unexpectedResponse(String)
+    /// The factory's launch fee is no longer the one the screen showed (the new fee, in wei).
+    case launchFeeChanged(BigUInt)
 
     public var errorDescription: String? {
         switch self {
         case .notDeployed: return "The launchpad contracts are not deployed yet."
+        case .launchFeeChanged(let fee): return "The launch fee changed to \(NumberStyle.units(fee, decimals: 18)) MON since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new fee."
         case .unexpectedResponse(let what): return "The launchpad returned something the app could not read (\(what))."
         }
     }

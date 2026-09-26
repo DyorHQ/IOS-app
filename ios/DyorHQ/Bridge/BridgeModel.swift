@@ -380,8 +380,10 @@ final class BridgeModel {
         phase = .signing
         completedTxURL = nil
         // The quote is EXACT_INPUT for the amount the user typed, delivered back to the user's own address. Refuse to
-        // sign anything else — a quote whose input amount, recipient or refund address differs from the request (a
-        // compromised proxy or API) must never move the user's funds.
+        // sign anything else — a quote whose input amount, recipient or refund address differs from the request. This
+        // catches a buggy or mismatched quote; it cannot prove the deposit address is Aurora's, because the request
+        // echo arrives in the same response as that address: the address is trusted to Aurora and the aurora-proxy
+        // Edge Function, and the review card shows it before the user confirms (security audit 2026-09-26, IOST-3).
         guard let quotedIn = BigUInt(quote.amountIn), quotedIn == amount else {
             phase = .failed("The bridge quote didn't match the amount you entered, so nothing was sent. Get a new quote.")
             return

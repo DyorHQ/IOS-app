@@ -857,7 +857,7 @@ struct CreateLaunchView: View {
                     // requires (`expectedEconomics`). The sync overload leaves that hash zero → LaunchEconomicsMismatch.
                     ConfirmationSheet(
                         title: "Launch \(symbol)", confirmTitle: "Launch \(symbol)",
-                        build: { try await env.launchpad.launchPlan(input, from: address) },
+                        build: { try await env.launchpad.launchPlan(input, from: address, expectedLaunchFee: info.launchFee) },
                         onDone: { dismiss(); onLaunched() },
                         onCompleted: { hash in
                             Activity.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
