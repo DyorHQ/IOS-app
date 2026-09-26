@@ -50,7 +50,6 @@ export function usePerplFeed(marketId: number | null): Feed {
       const socket = new WebSocket(url);
       ws = socket;
       socket.onopen = () => {
-        attempt = 0;
         socket.send(JSON.stringify({ mt: 5, subs: [{ stream: `order-book@${marketId}`, subscribe: true }, { stream: `trades@${marketId}`, subscribe: true }, { stream: "market-state@143", subscribe: true }] }));
         ping = setInterval(() => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ mt: 1 })); }, 30_000);
         setFeed((f) => ({ ...f, connected: true, error: null }));
@@ -62,6 +61,9 @@ export function usePerplFeed(marketId: number | null): Feed {
         } catch {
           return;
         }
+        // The backoff restarts once data flows, not on open: a relay that accepts and then drops the socket (Perpl
+        // refusing it upstream) must keep backing off rather than be redialled every second.
+        attempt = 0;
         if (m.mt === 15) setFeed((f) => ({ ...f, book: { bids: applyLevels([], m.bid ?? [], true), asks: applyLevels([], m.ask ?? [], false) } }));
         else if (m.mt === 16) setFeed((f) => ({ ...f, book: { bids: applyLevels(f.book.bids, m.bid ?? [], true), asks: applyLevels(f.book.asks, m.ask ?? [], false) } }));
         else if (m.mt === 17 || m.mt === 18) {
