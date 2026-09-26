@@ -103,6 +103,13 @@ public struct TransactionSender: Sendable {
         var spacingTimeout: Duration = .seconds(5)
         /// Before resending a transaction Monad refused because the account's funding is still settling.
         var fundingRetry: Duration = .seconds(1)
+        /// A broadcast that got no answer is resent (the same bytes) and looked up by hash this many times, waiting
+        /// `resendBackoff`, then twice that, and so on, before it is reported as possibly sent.
+        var resendAttempts = 3
+        var resendBackoff: Duration = .seconds(1)
+        /// The receipt wait for each sent step (`RPCClient.waitForReceipt`): a number of polls, not a deadline.
+        var receiptPolls = 180
+        var receiptInterval: Duration = .milliseconds(500)
     }
 
     public init(rpc: RPCClient, chainId: Int = Monad.chainId) {
@@ -172,23 +179,52 @@ public struct TransactionSender: Sendable {
         return try await broadcast(signed, prepared)
     }
 
+    /// Hands the signed bytes to the network and returns their hash: keccak-256 of those bytes, known before anything is
+    /// sent. A node's answer settles it — taken, or refused (looked up by hash once first, in case an endpoint before a
+    /// failover took it). No answer at all (the connection dropped with the phone locked, every endpoint failed, the
+    /// reply was unreadable) leaves the transaction possibly live, so `confirmUnanswered` follows it by hash and never
+    /// reports it as not sent.
+    ///
     /// Monad's consensus checks a sender's balance as of a few blocks back, so a transaction from an account funded
     /// less than 3 blocks ago is refused with "Signer had insufficient balance" although the funds are visible. The
     /// same signed bytes are sent once more after ~1 s (no second signature, so no second Face ID). If the node still
     /// refuses, the message says what is true: the funds are still settling, or the balance doesn't cover the value
     /// plus the fee.
     func broadcast(_ signed: Data, _ transaction: PreparedTransaction) async throws -> Data {
-        guard chainId == Monad.chainId else { return try await rpc.sendRawTransaction(signed) }
+        let hash = Keccak.hash256(signed)
         do {
-            return try await rpc.sendRawTransaction(signed)
-        } catch let error as RPCError where Self.isFundingInFlight(error) {
-            try await Task.sleep(for: timing.fundingRetry)
             do {
                 return try await rpc.sendRawTransaction(signed)
-            } catch let error as RPCError where Self.isFundingInFlight(error) {
-                throw TransactionError.rejected(await fundingRefusal(transaction))
+            } catch let error as RPCError where chainId == Monad.chainId && Self.isFundingInFlight(error) {
+                try await Task.sleep(for: timing.fundingRetry)
+                do {
+                    return try await rpc.sendRawTransaction(signed)
+                } catch let error as RPCError where Self.isFundingInFlight(error) {
+                    throw TransactionError.rejected(await fundingRefusal(transaction))
+                }
             }
+        } catch let error as RPCError {
+            if await rpc.knowsTransaction(hash) == true { return hash }
+            throw error
+        } catch let error as TransactionError {
+            throw error
+        } catch {
+            return try await confirmUnanswered(signed, hash: hash)
         }
+    }
+
+    /// A broadcast with no answer (PR-4). The same bytes go out again — the same transaction, never a replacement, so
+    /// it can only land once — and the hash is looked up between tries. Anything short of the network taking it or
+    /// having it is `possiblySent`: the caller follows the hash and never signs this step again, since a new signature
+    /// would carry the next nonce and could land the step twice.
+    private func confirmUnanswered(_ signed: Data, hash: Data) async throws -> Data {
+        for attempt in 1...max(1, timing.resendAttempts) {
+            try? await Task.sleep(for: timing.resendBackoff * attempt)
+            if await rpc.knowsTransaction(hash) == true { return hash }
+            if let taken = try? await rpc.sendRawTransaction(signed) { return taken }
+        }
+        if await rpc.knowsTransaction(hash) == true { return hash }
+        throw TransactionError.possiblySent(hash)
     }
 
     /// Monad's refusal for a balance its consensus can't see yet. Other chains say "insufficient funds", which is a
@@ -251,9 +287,15 @@ public struct TransactionSender: Sendable {
                 request = r
             }
             try await waitForReserveSpacing(value: request.value, after: previousBlock, from: wallet.address)
-            let hash = try await send(request, from: wallet)
+            let hash: Data
+            do {
+                hash = try await send(request, from: wallet)
+            } catch TransactionError.possiblySent(let possible) {
+                // No endpoint said it took the broadcast, but it may be live: follow it like any sent step.
+                hash = possible
+            }
             onEvent(.sent(step.label, hash))
-            let receipt = try await rpc.waitForReceipt(hash)
+            let receipt = try await rpc.waitForReceipt(hash, polls: timing.receiptPolls, interval: timing.receiptInterval)
             guard receipt.success else { throw TransactionError.reverted(hash) }
             onEvent(.confirmed(step.label, hash))
             last = hash
