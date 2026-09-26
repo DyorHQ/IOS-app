@@ -43,8 +43,10 @@ struct RootView: View {
             if phase == .background { session.mera.end() }
             if phase == .active {
                 settings.appearance.apply()
-                // Transactions sent before the app left the foreground: settle their pending rows (GL-2).
+                // Transactions sent before the app left the foreground: settle their pending rows (GL-2), and pick up
+                // the bridges iOS suspended (GL-5).
                 Task { await PendingActivity.recheck(owner: session.address, rpc: env.rpc) }
+                env.bridgeTracker.resume()
                 // Reconnect the trading socket the instant the app returns (iOS drops it while suspended), so TP/SL is
                 // ready without waiting for the keep-alive loop's next tick. Never a prompt: a passkey account's
                 // socket reconnects only inside a live session, and there is none right after a return.
@@ -56,6 +58,8 @@ struct RootView: View {
         // authenticated Perpl trading session.
         .task(id: session.address) {
             env.social.bind(address: session.address)
+            // Bridges are tracked for the account that sent them only: a sign-out or switch stops the rest (RS-2).
+            env.bridgeTracker.bind(owner: session.address)
             // A wallet that can sign connects to the backend by itself (one signature), so activity and settings are
             // recorded — and restored on a fresh device — without a separate step. Not a passkey account restored
             // locked at launch: that signature would be a passkey prompt nobody asked for. `signInWithMera` starts its

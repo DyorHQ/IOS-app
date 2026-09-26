@@ -140,8 +140,9 @@ private struct AuroraErrorBody: Decodable { let message: String?; let error: Str
 // MARK: - Models
 
 /// A token Aurora can bridge. `assetId` is Aurora's canonical id (`nep245:v2_1.omni.hot.tg:<evmChainId>_<suffix>`);
-/// `contractAddress` is the ERC-20 address on `blockchain`, absent for the chain's native asset.
-public struct AuroraToken: Decodable, Sendable, Hashable, Identifiable {
+/// `contractAddress` is the ERC-20 address on `blockchain`, absent for the chain's native asset. Encodable too, so an
+/// in-flight bridge can persist its destination token.
+public struct AuroraToken: Codable, Sendable, Hashable, Identifiable {
     public let assetId: String
     public let decimals: Int
     public let blockchain: String
