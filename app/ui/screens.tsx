@@ -90,7 +90,7 @@ export function HomeScreen({ go, openSheet }: ScreenProps) {
         <>
           <section className="balance">
             <div><span className="label">Portfolio</span><div className="hero-num">${fmtNum(total)}</div><div className={`delta ${dayDelta >= 0 ? "up" : "down"}`}><span>{dayDelta >= 0 ? "+" : "−"}${fmtNum(Math.abs(dayDelta))} today</span></div></div>
-            <div className="balance-side"><div><span className="label">Perps equity</span><div className="val">${fmtNum(perpEquity)}</div></div><a className="net" href={explorerAddress(account)} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>Monad · {shortAddress(account)}</a></div>
+            <div className="balance-side"><div><span className="label">Perps equity</span><div className="val">{perps.account || perps.accountKnown ? `$${fmtNum(perpEquity)}` : "—"}</div></div><a className="net" href={explorerAddress(account)} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>Monad · {shortAddress(account)}</a></div>
           </section>
           <section className="kv"><div><span className="label">Tokens</span><b>${fmtNum(tokenValue)}</b></div><div><span className="label">MON</span><b>{fmtUnits(markets.rows.find((r) => r.native)?.balance ?? 0n, 18, { compact: true })}</b></div></section>
         </>
@@ -319,7 +319,7 @@ export function ProfileScreen({ go, toast, openSheet }: ScreenProps) {
         <div style={{ flex: 1, minWidth: 0 }}><b>{wallet.active?.info.name ?? "Wallet"}</b><small>{shortAddress(account, 6)}</small></div>
         <button type="button" className="iconbtn" onClick={() => { navigator.clipboard?.writeText(account); toast("Address copied"); }}><Icon name="copy" />Copy</button>
       </section>
-      <section className="balance"><div><span className="label">Total value</span><div className="hero-num">${fmtNum(tokenValue + perpEquity)}</div></div><div className="balance-side"><div><span className="label">Perps equity</span><div className="val">${fmtNum(perpEquity)}</div></div></div></section>
+      <section className="balance"><div><span className="label">Total value</span><div className="hero-num">${fmtNum(tokenValue + perpEquity)}</div></div><div className="balance-side"><div><span className="label">Perps equity</span><div className="val">{perps.account || perps.accountKnown ? `$${fmtNum(perpEquity)}` : "—"}</div></div></div></section>
       <section className="actions">
         <button type="button" className="action" onClick={() => openSheet("receive")}><Icon name="deposit" />Receive</button>
         <button type="button" className="action" onClick={() => openSheet("send")}><Icon name="send" />Send</button>
@@ -334,9 +334,10 @@ export function ProfileScreen({ go, toast, openSheet }: ScreenProps) {
       )}
       {tab === "Perps" && (
         <section style={{ marginTop: 12 }}>
-          <div className="collat"><div><span>Perpl balance</span><b>{perps.account ? `$${fmtNum(Number(perps.account.balance) / 1e6)}` : "No account"}</b></div><button type="button" className="btn secondary sm" onClick={() => go("trade", "perps")}>Open perps</button></div>
+          <div className="collat"><div><span>Perpl balance</span><b>{perps.account ? `$${fmtNum(Number(perps.account.balance) / 1e6)}` : perps.accountKnown ? "No account" : perps.error ? "Couldn't read" : "Reading…"}</b></div><button type="button" className="btn secondary sm" onClick={() => go("trade", "perps")}>Open perps</button></div>
+          {perps.error && <p className="hint err" role="alert">Couldn&apos;t read your Perpl account or positions ({perps.error}). Retrying.</p>}
           <div className="stack-cards">{perps.positions.map((p) => <div key={p.perpId} className="pos-card"><div className="top"><span>{p.symbol} · <span className={p.side === "long" ? "up" : "down"}>{p.side.toUpperCase()} {p.leverage.toFixed(1)}×</span></span><b className={p.unrealized >= 0 ? "up" : "down"}>{p.unrealized >= 0 ? "+" : "−"}${fmtNum(Math.abs(p.unrealized))}</b></div><div className="grid"><span>Size<b>{fmtNum(p.size, p.size < 1 ? 5 : 2)} {p.symbol}</b></span><span>Entry<b>{fmtUSD(p.entry)}</b></span><span>Mark<b>{fmtUSD(p.mark)}</b></span></div></div>)}</div>
-          {perps.positions.length === 0 && <Empty icon="layers" title="No open positions" text="Positions on Perpl show here with live PnL." />}
+          {perps.positions.length === 0 && !perps.error && <Empty icon="layers" title={perps.accountKnown ? "No open positions" : "Reading positions…"} text="Positions on Perpl show here with live PnL." />}
         </section>
       )}
       {tab === "Activity" && (

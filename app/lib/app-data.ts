@@ -41,5 +41,9 @@ export function usePerpsAccount(account: Address | null) {
   const perps = useAsync(() => fetchPerps(), "perps", 10_000);
   const acct = useAsync(async () => (account ? fetchAccount(account) : null), `perp-account:${account ?? ""}`, 8_000);
   const positions = useAsync(async () => (acct.data && perps.data ? fetchPositions(acct.data, perps.data) : []), `perp-positions:${account ?? ""}:${acct.data?.accountId ?? 0}:${acct.data?.positionPerps.join("/") ?? ""}:${perps.data ? "p" : ""}`, 8_000);
-  return { perps: perps.data ?? [], account: acct.data ?? null, positions: positions.data ?? [], loading: perps.loading || acct.loading, refresh: () => { perps.refresh(); acct.refresh(); positions.refresh(); } };
+  // Known once a read has answered for this wallet (an account, or certainly none). Until then nothing may say "no
+  // account" or "no positions", or offer to open an account.
+  const accountKnown = !!account && !acct.loading && (acct.data !== null || acct.error === null);
+  const error = acct.error ?? positions.error ?? perps.error;
+  return { perps: perps.data ?? [], account: acct.data ?? null, accountKnown, positions: positions.data ?? [], error, loading: perps.loading || acct.loading, refresh: () => { perps.refresh(); acct.refresh(); positions.refresh(); } };
 }

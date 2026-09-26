@@ -7,7 +7,7 @@ import { compact, fmtNum, fmtPct, fmtUSD } from "./ui/data";
 import type { Go, Preset, Toast } from "./ui/nav";
 import { PerplChart } from "./ui/tradingview";
 import { usePerpsAccount } from "./lib/app-data";
-import { cancelOrder, closePosition, collateralBalances, deposit, fetchOpenOrders, fetchPerplContext, fromCNS, PERP_MARKETS, placeOrder, withdraw, type PerpInfo } from "./lib/perps/perpl";
+import { cancelOrder, closePosition, collateralBalances, deposit, fetchOpenOrders, fetchPerplContext, fromCNS, PERP_MARKETS, PERPL, placeOrder, withdraw, type PerpInfo } from "./lib/perps/perpl";
 import { usePerplFeed } from "./lib/perps/ws";
 import { useAsync, useNow } from "./lib/use-async";
 import { useTx } from "./lib/use-tx";
@@ -28,7 +28,7 @@ const sz = (v: number, perp: PerpInfo) => v / 10 ** perp.lotDecimals;
 export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; preset?: Preset }) {
   const wallet = useWallet();
   const account = wallet.account;
-  const { perps, account: acct, positions, refresh } = usePerpsAccount(account);
+  const { perps, account: acct, accountKnown, positions, error: accountError, refresh } = usePerpsAccount(account);
   const ctx = useAsync(fetchPerplContext, "perpl-context", 15_000);
   const [marketId, setMarketId] = useState<number>(preset?.token ? Number(preset.token) : 10);
   const market = PERP_MARKETS.find((m) => m.id === marketId) ?? PERP_MARKETS[1];
@@ -56,26 +56,45 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
   const maxLev = perp ? Math.max(1, Math.floor(1 / perp.initMarginFrac)) : 10;
   const levOptions = [1, 2, 3, 5, 10, 15, 20, 25, 50].filter((x) => x <= maxLev);
   const available = acct ? fromCNS(acct.balance - acct.locked) : 0;
-  const sizeNum = Number(size) || 0;
-  const limitPrice = Number(price) || 0;
+  // What the order carries, not what was typed: the size cut down to the market's lot and the limit price to its
+  // price decimals (parseAmount truncates, never rounds up, and reads a decimal comma). Every figure below uses them.
+  const lots = perp ? parseAmount(size, perp.lotDecimals) : null;
+  const limitPNS = perp && type === "Limit" ? parseAmount(price, perp.priceDecimals) : null;
+  const sizeNum = perp && lots !== null ? Number(lots) / 10 ** perp.lotDecimals : 0;
+  const limitPrice = perp && limitPNS !== null ? Number(limitPNS) / 10 ** perp.priceDecimals : 0;
+  const sizeText = perp && lots !== null ? formatUnits(lots, perp.lotDecimals) : "";
+  const limitText = perp && limitPNS !== null ? formatUnits(limitPNS, perp.priceDecimals) : "";
+  const cut = (typed: string, kept: bigint | null, decimals: number) => kept !== null && parseAmount(typed, 18) !== kept * 10n ** BigInt(Math.max(0, 18 - decimals));
+  const sizeCut = !!perp && cut(size, lots, perp.lotDecimals);
+  const priceCut = !!perp && type === "Limit" && cut(price, limitPNS, perp.priceDecimals);
   const refPrice = type === "Limit" && limitPrice > 0 ? limitPrice : mark;
   const notional = sizeNum * refPrice;
   const marginNeeded = lev > 0 ? notional / lev : 0;
   const minSize = perp ? 1 / 10 ** perp.lotDecimals : 0;
-  const valid = !!perp && sizeNum >= minSize && marginNeeded > 0 && marginNeeded <= available * 1.0001 && (type === "Market" || limitPrice > 0);
-  const setPct = (pct: number) => { if (!perp || mark <= 0) return; const s = ((available * pct) / 100) * lev / refPrice; setSize((Math.floor(s * 10 ** perp.lotDecimals) / 10 ** perp.lotDecimals).toString()); };
+  const valid = !!perp && lots !== null && lots > 0n && marginNeeded > 0 && marginNeeded <= available * 1.0001 && (type === "Market" || (limitPNS !== null && limitPNS > 0n));
+  // Why the order button is disabled, once there is something to explain.
+  const orderIssue = !acct || !size.trim() ? null
+    : !perp ? (accountError ? "Couldn't read this market from Perpl." : "Reading this market from Perpl…")
+    : lots === null ? "Enter the size as a plain number, like 0.5."
+    : lots === 0n ? `The smallest size is ${formatUnits(1n, perp.lotDecimals)} ${perp.symbol}.`
+    : type === "Limit" && (limitPNS === null || limitPNS === 0n) ? "Enter a limit price."
+    : refPrice <= 0 ? "Waiting for Perpl's mark price…"
+    : marginNeeded > available * 1.0001 ? `This needs $${fmtNum(marginNeeded)} of margin; $${fmtNum(available)} is available.`
+    : null;
+  const setPct = (pct: number) => { if (!perp || refPrice <= 0) return; const s = ((available * pct) / 100) * lev / refPrice; setSize(formatUnits(BigInt(Math.floor(s * 10 ** perp.lotDecimals)), perp.lotDecimals)); };
   const refreshAll = () => { refresh(); orders.refresh(); collat.refresh(); };
 
   const submit = async () => {
     const client = wallet.client;
-    if (!client || !perp) return;
-    const done = await run(`${side} ${sizeNum} ${perp.symbol} · ${lev}×`, (onSent) => placeOrder(client, { perp, side: side === "Long" ? "long" : "short", kind: type === "Market" ? "market" : "limit", size: sizeNum, price: limitPrice || undefined, leverage: lev, slippageBps: 100 }, onSent));
+    if (!client || !perp || lots === null || lots === 0n) return;
+    const limit = type === "Limit" && limitPNS !== null ? { price: limitPrice, pricePNS: limitPNS } : {};
+    const done = await run(`${side} ${sizeText} ${perp.symbol}${type === "Limit" ? ` at $${limitText}` : ""} · ${lev}×`, (onSent) => placeOrder(client, { perp, side: side === "Long" ? "long" : "short", kind: type === "Market" ? "market" : "limit", size: sizeNum, lotLNS: lots, ...limit, leverage: lev, slippageBps: 100 }, onSent));
     if (done) { setSize(""); toast(`${type} order sent to Perpl`); refreshAll(); }
   };
   const doDeposit = async () => {
     const client = wallet.client; const amt = parseAmount(collatAmount, 6);
     if (!client || !amt) return;
-    const done = await run(`Deposit ${formatUnits(amt, 6)} AUSD`, (onSent) => deposit(client, amt, !!acct, onSent));
+    const done = await run(`${acct ? "Deposit" : "Open account with"} ${formatUnits(amt, 6)} AUSD`, (onSent) => deposit(client, amt, onSent));
     if (done) { setCollatAmount(""); refreshAll(); }
   };
   const doWithdraw = async () => {
@@ -84,6 +103,20 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
     const done = await run(`Withdraw ${formatUnits(amt, 6)} AUSD`, (onSent) => withdraw(client, amt, onSent));
     if (done) { setCollatAmount(""); refreshAll(); }
   };
+
+  // Deposit and withdraw checks, shown before anything is signed. Opening an account waits until the account read has
+  // answered: during an RPC failure an existing account must not be offered "Open account".
+  const collatAmt = parseAmount(collatAmount, PERPL.collateralDecimals);
+  const walletAusd = collat.data?.wallet ?? null;
+  const freeCNS = acct ? acct.balance - acct.locked : 0n;
+  const depositIssue = !collatAmount.trim() ? null
+    : collatAmt === null || collatAmt === 0n ? "Enter an AUSD amount, like 25."
+    : !accountKnown ? (accountError ? "Couldn't read your Perpl account; deposits wait until it loads." : "Reading your Perpl account…")
+    : !acct && collatAmt < PERPL.minDeposit ? `The first deposit opens your account and must be at least ${formatUnits(PERPL.minDeposit, 6)} AUSD.`
+    : walletAusd !== null && collatAmt > walletAusd ? `Your wallet holds ${fmtUnits(walletAusd, 6)} AUSD.`
+    : null;
+  const withdrawIssue = !!acct && collatAmt !== null && collatAmt > freeCNS;
+  const accountText = acct ? null : !account ? "—" : accountKnown ? null : accountError ? "Couldn't read" : "Reading…";
 
   const bids = feed.book.bids.slice(0, 8);
   const asks = feed.book.asks.slice(0, 8);
@@ -137,31 +170,38 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
       <div style={{ marginTop: 18 }}><Seg options={opts(SIDES)} value={side} onChange={setSide} tone="dir" /></div>
       <section className="card order" style={{ marginTop: 12 }}>
         <div className="settings2"><span className="pill-static">Isolated</span><select className="select" aria-label="Leverage" value={lev} onChange={(e) => setLev(Number(e.target.value))}>{levOptions.map((x) => <option key={x} value={x}>{x}×</option>)}</select></div>
-        <div className="between"><span>Available margin</span><b>{acct ? `$${fmtNum(available)}` : account ? "No Perpl account yet" : "—"}</b></div>
+        <div className="between"><span>Available margin</span><b>{acct ? `$${fmtNum(available)}` : accountText ?? "No Perpl account yet"}</b></div>
         <select className="select" aria-label="Order type" value={type} onChange={(e) => setType(e.target.value as "Market" | "Limit")}><option>Market</option><option>Limit</option></select>
         {type === "Limit" && <label className="field">Limit price (USD)<input inputMode="decimal" value={price} placeholder={mark ? fmtNum(mark, pf.priceDecimals) : "0"} onChange={(e) => setPrice(e.target.value)} /></label>}
         <label className="field">Size ({market.symbol})<input inputMode="decimal" value={size} placeholder={minSize ? String(minSize) : "0"} onChange={(e) => setSize(e.target.value)} /></label>
         <div className="presets">{[25, 50, 75, 100].map((x) => <button key={x} type="button" onClick={() => setPct(x)} disabled={!acct}>{x}%</button>)}</div>
+        {perp && lots !== null && lots > 0n && <div className="between"><span>Order size</span><b>{sizeText} {perp.symbol}{type === "Limit" && limitPNS !== null && limitPNS > 0n ? ` at $${limitText}` : ""}</b></div>}
+        {(sizeCut || priceCut) && <p className="hint">Cut to what the market accepts: {sizeCut ? `sizes in steps of ${formatUnits(1n, perp!.lotDecimals)}` : ""}{sizeCut && priceCut ? ", " : ""}{priceCut ? `prices to ${perp!.priceDecimals} decimals` : ""}.</p>}
         <div className="between"><span>Notional</span><b>${fmtNum(notional)}</b></div>
         <div className="between"><span>Margin required</span><b>${fmtNum(marginNeeded)}</b></div>
         <div className="between"><span>Est. liquidation</span><b>{perp && sizeNum > 0 && marginNeeded > 0 ? fmtUSD(Math.max(0, side === "Long" ? refPrice * (1 - (1 / lev - perp.maintMarginFrac)) : refPrice * (1 + (1 / lev - perp.maintMarginFrac)))) : "—"}</b></div>
         <TxStatus tx={tx} onDismiss={dismiss} />
+        {orderIssue && <p className="hint err">{orderIssue}</p>}
         {acct ? <ActionButton ready={valid} busy={busy} label={`${side} ${market.symbol} · ${lev}×`} onClick={submit} className={`btn big ${side === "Long" ? "tone-up" : "tone-down"}`} requireLaunchpad={false} />
-          : <ActionButton ready={true} busy={false} label="Deposit AUSD to start" onClick={() => setTab("Collateral")} className="btn big primary" requireLaunchpad={false} />}
+          : accountKnown || !account ? <ActionButton ready={true} busy={false} label="Deposit AUSD to start" onClick={() => setTab("Collateral")} className="btn big primary" requireLaunchpad={false} />
+          : <ActionButton ready={false} busy={!accountError} label={accountError ? "Couldn't read your Perpl account" : "Reading your Perpl account…"} onClick={() => undefined} className="btn big primary" requireLaunchpad={false} />}
         <p className="hint">Orders are placed on Perpl&apos;s on-chain order book by your wallet. Market orders are immediate-or-cancel at 1% slippage.</p>
       </section>
 
       <Subtabs options={PTABS} value={tab} onChange={setTab} />
       {tab === "Positions" && (
         <section className="stack-cards" style={{ marginTop: 12 }}>
+          {account && accountError && <p className="hint err" role="alert">Couldn&apos;t read your Perpl account or positions ({accountError}). Retrying{positions.length ? "; the positions below may be out of date" : ""}.</p>}
           {positions.map((p) => (
             <div key={p.perpId} className="pos-card">
               <div className="top"><span>{p.symbol}-PERP · <span className={p.side === "long" ? "up" : "down"}>{p.side.toUpperCase()} {p.leverage.toFixed(1)}×</span></span><b className={p.unrealized >= 0 ? "up" : "down"}>{p.unrealized >= 0 ? "+" : "−"}${fmtNum(Math.abs(p.unrealized))}</b></div>
               <div className="grid"><span>Size<b>{fmtNum(p.size, p.size < 1 ? 5 : 2)} {p.symbol}</b></span><span>Entry<b>{fmtUSD(p.entry)}</b></span><span>Mark<b>{fmtUSD(p.mark)}</b></span><span>Margin<b>${fmtNum(p.margin)}</b></span><span>Liq. price<b>{p.liquidation ? fmtUSD(p.liquidation) : "—"}</b></span><span>Notional<b>${fmtNum(p.notional)}</b></span></div>
-              <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; const pi = perps.find((x) => x.id === p.perpId); if (client && pi) void run(`Close ${p.symbol} ${p.side}`, (onSent) => closePosition(client, pi, p, 100, onSent), refreshAll); }}>Close at market</button>
+              <button type="button" className="btn secondary sm" disabled={busy || !perps.some((x) => x.id === p.perpId)} onClick={() => { const client = wallet.client; const pi = perps.find((x) => x.id === p.perpId); if (client && pi) void run(`Close ${p.symbol} ${p.side}`, (onSent) => closePosition(client, pi, p, 100, onSent), refreshAll); }}>Close at market</button>
             </div>
           ))}
-          {positions.length === 0 && <Empty icon="layers" title="No open positions" text={account ? "Open a position and it appears here with live PnL from the Exchange contract." : "Connect a wallet to see positions."} />}
+          {positions.length === 0 && (!account ? <Empty icon="layers" title="No open positions" text="Connect a wallet to see positions." />
+            : accountKnown && !accountError ? <Empty icon="layers" title="No open positions" text="Open a position and it appears here with live PnL from the Exchange contract." />
+            : !accountError && <Empty icon="layers" title="Reading positions…" text="Positions come straight from the Perpl Exchange contract." />)}
         </section>
       )}
       {tab === "Orders" && (
@@ -173,15 +213,18 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
               <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run(`Cancel order #${o.orderId}`, (onSent) => cancelOrder(client, o.perpId, o.orderId, onSent), refreshAll); }}>Cancel</button>
             </div>
           ))}
-          {(orders.data ?? []).length === 0 && <Empty icon="file" title={orders.loading ? "Reading the book…" : "No open orders"} text="Resting limit orders on Perpl appear here." />}
+          {orders.error && <p className="hint err" role="alert">Couldn&apos;t read your open orders ({orders.error}). Retrying.</p>}
+          {(orders.data ?? []).length === 0 && !orders.error && <Empty icon="file" title={orders.loading || (account && !accountKnown) ? "Reading the book…" : "No open orders"} text="Resting limit orders on Perpl appear here." />}
         </section>
       )}
       {tab === "Collateral" && (
         <section style={{ marginTop: 12 }}>
-          <div className="collat"><div><span>Perpl account</span><b>{acct ? `$${fmtNum(fromCNS(acct.balance))}` : "Not opened"}</b>{acct && <span>locked ${fmtNum(fromCNS(acct.locked))}</span>}</div><div style={{ textAlign: "right" }}><span>AUSD in wallet</span><b>{collat.data ? fmtUnits(collat.data.wallet, 6) : "—"}</b></div></div>
+          <div className="collat"><div><span>Perpl account</span><b>{acct ? `$${fmtNum(fromCNS(acct.balance))}` : accountText ?? "Not opened"}</b>{acct && <span>locked ${fmtNum(fromCNS(acct.locked))}</span>}</div><div style={{ textAlign: "right" }}><span>AUSD in wallet</span><b>{collat.data ? fmtUnits(collat.data.wallet, 6) : collat.error ? "Couldn't read" : "—"}</b></div></div>
           {!account ? <Empty icon="wallet" title="Connect a wallet" text="Deposits go to the Perpl Exchange contract from your wallet." /> : (
             <>
-              <div className="inline-form"><input inputMode="decimal" placeholder="AUSD amount" value={collatAmount} onChange={(e) => setCollatAmount(e.target.value)} /><button type="button" className="btn primary sm" disabled={busy || !parseAmount(collatAmount, 6)} onClick={doDeposit}>{acct ? "Deposit" : "Open account"}</button><button type="button" className="btn secondary sm" disabled={busy || !acct || !parseAmount(collatAmount, 6)} onClick={doWithdraw}>Withdraw</button></div>
+              <div className="inline-form"><input inputMode="decimal" placeholder="AUSD amount" value={collatAmount} onChange={(e) => setCollatAmount(e.target.value)} /><button type="button" className="btn primary sm" disabled={busy || !accountKnown || !collatAmt || !!depositIssue} onClick={doDeposit}>{acct ? "Deposit" : "Open account"}</button><button type="button" className="btn secondary sm" disabled={busy || !acct || !collatAmt || withdrawIssue} onClick={doWithdraw}>Withdraw</button></div>
+              {depositIssue && <p className="hint err" style={{ marginTop: 8 }}>{depositIssue}</p>}
+              {acct && <p className={`hint ${withdrawIssue ? "err" : ""}`} style={{ marginTop: 8 }}>${fmtNum(fromCNS(freeCNS))} is free to withdraw (the rest backs open positions and orders).</p>}
               <p className="hint" style={{ marginTop: 8 }}>Collateral is AUSD. First deposit opens your account (minimum 10 AUSD). Need AUSD? <button type="button" className="link" style={{ color: "var(--accent-ink)", fontWeight: 600 }} onClick={() => toast("Swap MON to AUSD on the Swap tab")}>Swap for it</button>.</p>
               <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={dismiss} /></div>
             </>

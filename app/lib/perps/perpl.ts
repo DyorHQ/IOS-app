@@ -1,4 +1,4 @@
-import { erc20Abi, type Address, type Hex } from "viem";
+import { erc20Abi, formatUnits, type Address, type Hex } from "viem";
 import { publicClient } from "../chain";
 import { describeError } from "../errors";
 import { waitFor } from "../use-tx";
@@ -123,15 +123,21 @@ export function liquidationPrice(side: "long" | "short", entry: number, size: nu
   return Math.max(0, entry + (sign * (mmr - margin - premium)) / size);
 }
 
+/** Every open position of the account. A position that can't be read fails the whole read (never a shorter list: a
+    missing position hides its Close button exactly when it may be needed); a market the app doesn't list is read. */
 export async function fetchPositions(account: PerpAccount, perps: PerpInfo[]): Promise<PerpPosition[]> {
   if (account.positionPerps.length === 0) return [];
+  const unlisted = account.positionPerps.filter((id) => !perps.some((p) => p.id === id));
+  const markets = unlisted.length ? [...perps, ...(await fetchPerps(unlisted))] : perps;
   const results = await publicClient.multicall({ contracts: account.positionPerps.map((id) => ({ ...exchange, functionName: "getPosition", args: [BigInt(id), BigInt(account.accountId)] }) as const), allowFailure: true });
   const out: PerpPosition[] = [];
   results.forEach((r, i) => {
-    if (r.status !== "success") return;
+    const perpId = account.positionPerps[i];
+    if (r.status !== "success") throw new Error(`Couldn't read your position in Perpl market ${perpId}.`);
     const [pos, markPNS] = r.result;
-    const perp = perps.find((p) => p.id === account.positionPerps[i]);
-    if (!perp || pos.lotLNS === 0n) return;
+    const perp = markets.find((p) => p.id === perpId);
+    if (!perp) throw new Error(`Couldn't read Perpl market ${perpId}, where you have a position.`);
+    if (pos.lotLNS === 0n) return;
     const size = scale(pos.lotLNS, perp.lotDecimals);
     const entry = scale(pos.pricePNS, perp.priceDecimals);
     const mark = markPNS > 0n ? scale(markPNS, perp.priceDecimals) : perp.mark;
@@ -206,17 +212,25 @@ async function send<TArgs extends readonly unknown[]>(wallet: Wallet, functionNa
   return hash;
 }
 
-/** Approves AUSD when needed, then opens the account (first deposit) or tops it up. */
-export async function deposit(wallet: Wallet, amountCNS: bigint, hasAccount: boolean, onSent: OnSent): Promise<Hex> {
+/** Opens the account (first deposit) or tops it up, approving AUSD first when needed. Whether the account exists is
+    read from the chain here, not taken from the screen, and the balance and the opening minimum are checked before
+    anything is signed: an approval for a deposit that can't happen is a wasted transaction. */
+export async function deposit(wallet: Wallet, amountCNS: bigint, onSent: OnSent): Promise<Hex> {
   const owner = wallet.account.address;
-  const allowance = await publicClient.readContract({ address: PERPL.collateral, abi: erc20Abi, functionName: "allowance", args: [owner, PERPL.exchange] });
+  const [existing, balance, allowance] = await Promise.all([
+    fetchAccount(owner),
+    publicClient.readContract({ address: PERPL.collateral, abi: erc20Abi, functionName: "balanceOf", args: [owner] }),
+    publicClient.readContract({ address: PERPL.collateral, abi: erc20Abi, functionName: "allowance", args: [owner, PERPL.exchange] }),
+  ]);
+  if (!existing && amountCNS < PERPL.minDeposit) throw new Error(`The first deposit opens your Perpl account and must be at least ${formatUnits(PERPL.minDeposit, PERPL.collateralDecimals)} AUSD.`);
+  if (balance < amountCNS) throw new Error(`Your wallet holds ${formatUnits(balance, PERPL.collateralDecimals)} AUSD, less than the deposit.`);
   if (allowance < amountCNS) {
     const { request } = await publicClient.simulateContract({ address: PERPL.collateral, abi: erc20Abi, functionName: "approve", args: [PERPL.exchange, amountCNS], account: wallet.account });
     const hash = await wallet.writeContract(request);
     onSent(hash);
     await waitFor(hash);
   }
-  return send(wallet, hasAccount ? "depositCollateral" : "createAccount", [amountCNS] as const, onSent);
+  return send(wallet, existing ? "depositCollateral" : "createAccount", [amountCNS] as const, onSent);
 }
 
 export const withdraw = (wallet: Wallet, amountCNS: bigint, onSent: OnSent) => send(wallet, "withdrawCollateral", [amountCNS] as const, onSent);
@@ -226,7 +240,11 @@ export type OrderInput = {
   side: "long" | "short";
   kind: "market" | "limit";
   size: number; // base units
+  /** The exact size in lots, when the caller parsed it (the order form); otherwise `size` is rounded to the lot. */
+  lotLNS?: bigint;
   price?: number; // limit price; market orders derive it from the mark and slippage
+  /** The exact limit price in the market's price units, when the caller parsed it. */
+  pricePNS?: bigint;
   leverage: number;
   reduceOnly?: boolean;
   slippageBps?: number;
@@ -251,8 +269,8 @@ export function buildOrderDesc(input: OrderInput) {
     perpId: BigInt(perp.id),
     orderType,
     orderId: 0n,
-    pricePNS: BigInt(Math.round(price * 10 ** perp.priceDecimals)),
-    lotLNS: BigInt(Math.round(input.size * 10 ** perp.lotDecimals)),
+    pricePNS: input.kind === "limit" && input.pricePNS !== undefined ? input.pricePNS : BigInt(Math.round(price * 10 ** perp.priceDecimals)),
+    lotLNS: input.lotLNS ?? BigInt(Math.round(input.size * 10 ** perp.lotDecimals)),
     expiryBlock: 0n,
     postOnly: !!input.postOnly && input.kind === "limit",
     fillOrKill: false,
