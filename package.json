@@ -15,7 +15,8 @@
     "abis": "node scripts/export-abis.mjs",
     "sync:deployment": "node scripts/sync-deployment.mjs",
     "typecheck": "tsc --noEmit",
-    "sync:moments": "node scripts/sync-moments-deployment.mjs"
+    "sync:moments": "node scripts/sync-moments-deployment.mjs",
+    "keepers:test": "node --test contracts/keepers/test/abis.test.mjs contracts/keepers/test/decide.test.mjs contracts/keepers/test/jobs.test.mjs contracts/keepers/test/send.test.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
