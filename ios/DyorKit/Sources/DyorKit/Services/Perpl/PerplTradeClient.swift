@@ -113,25 +113,57 @@ public enum PerplOrders {
         // rejected with `last exec block too high`.
         PerplOrderFrame(type: .cancel, marketId: perpId, accountId: accountId, pricePNS: 0, lotLNS: 0, leverageHdths: 0, ioc: false, lastExecutionBlock: 0, orderId: orderId)
     }
+
+    /// Why `frame` must not be sent, or nil. The scaling above turns a price below one tick into 0, and on Perpl a
+    /// 0 means something else: a trigger with `tp: 0` is a plain reduce-only market close that executes the moment it
+    /// is admitted (a take-profit or stop-loss typed as "0" would close the position at once), and a resting order
+    /// with `p: 0` is a market order. Checked for every frame before any is sent, so a bracket is refused whole.
+    public static func problem(_ frame: PerplOrderFrame) -> String? {
+        switch frame.type {
+        case .cancel, .change, .increasePositionCollateral:
+            return nil
+        case .openLong, .openShort, .closeLong, .closeShort:
+            if frame.lotLNS <= 0 { return "The order size rounds to zero on this market." }
+            if frame.triggerCondition != nil || frame.triggerPricePNS != nil {
+                guard frame.type == .closeLong || frame.type == .closeShort else { return "A take-profit or stop-loss can only close a position." }
+                guard (frame.triggerPricePNS ?? 0) > 0, frame.triggerCondition != nil else { return "The take-profit or stop-loss price rounds to zero on this market." }
+                return nil
+            }
+            if !frame.ioc, frame.pricePNS <= 0 { return "The limit price rounds to zero on this market." }
+            return nil
+        }
+    }
 }
 
 /// The result of an order request: the gateway ack (`mt:3`). `code == 0` means accepted for forwarding.
 public struct PerplOrderAck: Sendable {
     public let code: Int
     public let error: String?
-    public var accepted: Bool { code == 0 }
+    /// The frame went out but no status came back (the ack timed out, or the socket closed while waiting): Perpl may
+    /// have placed it, so it is neither accepted nor rejected — the caller says so and never resends it blindly.
+    public let outcomeUnknown: Bool
+    public var accepted: Bool { code == 0 && !outcomeUnknown }
+
+    public init(code: Int, error: String?, outcomeUnknown: Bool = false) {
+        self.code = code
+        self.error = error
+        self.outcomeUnknown = outcomeUnknown
+    }
 }
 
 public enum PerplTradeError: LocalizedError {
     case notSignedIn, noAccount, forwardingDisabled, timeout, closed(String)
     /// The trading socket is not connected, so nothing was sent (the message says why).
     case unavailable(String)
+    /// Refused on the device before anything was sent: the frame would not do what the ticket says (a zero trigger
+    /// price is a market close that fires at once, a zero-price limit is a market order).
+    case invalidOrder(String)
     /// The order frame was already sent when this happened (no acknowledgement, or the socket closed while waiting),
     /// so Perpl may have placed it: the caller must not offer an immediate resend.
     public var outcomeUnknown: Bool {
         switch self {
         case .timeout, .closed: return true
-        case .notSignedIn, .noAccount, .forwardingDisabled, .unavailable: return false
+        case .notSignedIn, .noAccount, .forwardingDisabled, .unavailable, .invalidOrder: return false
         }
     }
     public var errorDescription: String? {
@@ -142,6 +174,7 @@ public enum PerplTradeError: LocalizedError {
         case .timeout: return "Perpl did not acknowledge the order in time."
         case .closed(let why): return why // already a full sentence from PerplClose.message
         case .unavailable(let why): return why
+        case .invalidOrder(let why): return why
         }
     }
 }
@@ -221,6 +254,48 @@ public struct PerplOpenOrder: Identifiable, Sendable, Hashable {
     /// and takes profit when it rises (the reverse for a short) — NOT by whether last or mark is watched. This
     /// classifies triggers placed anywhere (including the Perpl web app), not only this app's own last/mark convention.
     public var isStopLoss: Bool { protectsLong ? !firesOnRise : firesOnRise }
+    /// A resting order that can still open or grow a position (OpenLong / OpenShort, not a trigger). A trigger attached
+    /// to such an entry (`tr`) waits for it to fill, so the triggers on its market are never treated as orphaned.
+    public var isRestingEntry: Bool { !isTrigger && (typeRaw == 1 || typeRaw == 2) }
+}
+
+/// One position from the authenticated stream (mt:26 snapshot, mt:27 updates). `pid` is the id a trigger links to
+/// (`lp`): Perpl cancels a position-linked trigger itself when that position closes or inverts. Size is the market's
+/// scaled integer, like `PerplOpenOrder`.
+public struct PerplLivePosition: Sendable, Hashable {
+    public let pid: Int
+    public let marketId: Int
+    public let isLong: Bool
+    public let sizeRaw: Int
+    /// 1 Open, 2 Closed, 3 Liquidated, 4 Deleveraged, 5 Unwound, 6 Failed.
+    public let statusRaw: Int
+
+    public init(pid: Int, marketId: Int, isLong: Bool, sizeRaw: Int, statusRaw: Int) {
+        self.pid = pid; self.marketId = marketId; self.isLong = isLong; self.sizeRaw = sizeRaw; self.statusRaw = statusRaw
+    }
+
+    public var isOpen: Bool { statusRaw == 1 && sizeRaw > 0 }
+    public var wasLiquidated: Bool { statusRaw == 3 }
+    /// Closed by the protocol rather than by an order: liquidated, deleveraged or unwound.
+    public var endedByProtocol: Bool { statusRaw == 3 || statusRaw == 4 || statusRaw == 5 }
+}
+
+/// A keeper trigger (take-profit / stop-loss) changing state on the authenticated stream: it fired (Perpl is closing
+/// the position), or it failed — refused after the gateway admitted it, or it fired and could not execute, which
+/// leaves the position open without that protection.
+public struct PerplTriggerEvent: Sendable, Equatable {
+    public enum Outcome: Sendable, Equatable {
+        case triggered
+        /// `reason` is Perpl's `sr` (OrderStatusReason), e.g. 64 TriggeredExecutionAttemptsExhausted.
+        case failed(reason: Int)
+    }
+    public let order: PerplOpenOrder
+    public let outcome: Outcome
+
+    public init(order: PerplOpenOrder, outcome: Outcome) {
+        self.order = order
+        self.outcome = outcome
+    }
 }
 
 /// Live authenticated connection: signs in, tracks the account (id, forwarding, request-id seed) and places orders.
@@ -236,8 +311,26 @@ public final class PerplTradeClient {
     /// pending triggers, since they never touch the on-chain order book. Empty until the first snapshot arrives.
     public private(set) var openOrders: [PerplOpenOrder] = []
     private var ordersByOid: [Int: PerplOpenOrder] = [:]
+    /// The mt:23 snapshot has arrived on this socket, so `openOrders` is the whole set rather than whatever updates
+    /// came in first. Until then (and on a socket that dropped) the list proves nothing about what is live.
+    public private(set) var hasOrdersSnapshot = false
+    /// The account's open positions as the authenticated stream reports them (mt:26 snapshot, mt:27 updates) — the
+    /// source of the position id a trigger links to (`lp`).
+    public private(set) var positions: [PerplLivePosition] = []
+    private var positionsByPid: [Int: PerplLivePosition] = [:]
+    public private(set) var hasPositionsSnapshot = false
     /// Fired on the main actor whenever `openOrders` changes, so the owner can republish it.
     public var onOrdersUpdate: (@MainActor () -> Void)?
+    /// Fired on the main actor when a trigger fires or fails (from mt:24 updates only — a snapshot is state, not a
+    /// transition). Each trigger reports each outcome once.
+    public var onTriggerEvent: (@MainActor (PerplTriggerEvent) -> Void)?
+    /// Fired on the main actor when an update (mt:27) reports a position that is no longer open — closed by an order,
+    /// or liquidated, deleveraged or unwound — after `positions` already reflects it.
+    public var onPositionEnded: (@MainActor (PerplLivePosition) -> Void)?
+    private var announcedTriggers: Set<String> = []
+    private var endedPositions: Set<Int> = []
+    /// Order requests between their first frame and their last ack (`place`, `placeAll`, `sendEach`).
+    private var requestsInFlight = 0
     /// Fired on the main actor whenever account state (id / forwardingEnabled / lfr) changes — from the initial
     /// snapshot or a later AccountUpdate — so the owner can re-derive its status the moment forwarding turns on.
     public var onAccountUpdate: (@MainActor () -> Void)?
@@ -266,10 +359,16 @@ public final class PerplTradeClient {
         self.session = session
     }
 
+    /// Something sent on this socket is still waiting for Perpl: an order request mid-way through its frames, or a
+    /// frame whose ack hasn't come back. Closing the socket now would leave its outcome unknown.
+    public var hasRequestsInFlight: Bool { requestsInFlight > 0 || !pending.isEmpty }
+
     /// Connects and signs in, resolving once the WalletSnapshot has seeded the account and request-id counter.
     public func connect(timeout: TimeInterval = 10) async throws {
         if self.task != nil { disconnect() } // one socket per client, ever
         lastClose = nil
+        hasOrdersSnapshot = false
+        hasPositionsSnapshot = false
         let socket = session.webSocketTask(with: wsURL)
         self.task = socket
         socket.resume()
@@ -302,6 +401,8 @@ public final class PerplTradeClient {
         let open = task
         task = nil
         signedIn = false
+        hasOrdersSnapshot = false
+        hasPositionsSnapshot = false
         open?.cancel(with: .goingAway, reason: nil)
         let closed = PerplTradeError.closed("Trading connection was closed.")
         failConnect(closed)
@@ -312,9 +413,9 @@ public final class PerplTradeClient {
     /// Places the frames in order (entry first, then triggers), returning the entry's ack. Triggers are sent
     /// best-effort after the entry is accepted.
     public func place(_ frames: [PerplOrderFrame]) async throws -> PerplOrderAck {
-        guard signedIn, let accountId else { throw PerplTradeError.notSignedIn }
-        guard forwardingEnabled else { throw PerplTradeError.forwardingDisabled }
-        _ = accountId
+        try admit(frames)
+        requestsInFlight += 1
+        defer { requestsInFlight -= 1 }
         var firstAck: PerplOrderAck?
         for frame in frames {
             let ack = try await send(frame)
@@ -328,18 +429,19 @@ public final class PerplTradeClient {
     /// verify that a linked take-profit / stop-loss actually landed, not just the entry — critical for a bracket that
     /// must never leave a position unprotected.
     public func placeAll(_ frames: [PerplOrderFrame]) async throws -> [PerplOrderAck] {
-        guard signedIn, accountId != nil else { throw PerplTradeError.notSignedIn }
-        guard forwardingEnabled else { throw PerplTradeError.forwardingDisabled }
+        try admit(frames)
+        requestsInFlight += 1
+        defer { requestsInFlight -= 1 }
         var acks: [PerplOrderAck] = []
         for (index, frame) in frames.enumerated() {
             let ack: PerplOrderAck
             do {
                 ack = try await send(frame)
             } catch where index > 0 {
-                // The entry was already acknowledged: this trigger's outcome is unknown, so report it as not accepted
-                // (the caller warns that the position may be unprotected) instead of failing the whole bracket, which
-                // the order sheet would show as a failed order — inviting a second entry.
-                acks.append(PerplOrderAck(code: -1, error: (error as? LocalizedError)?.errorDescription ?? "Perpl did not confirm this trigger."))
+                // The entry was already acknowledged: this trigger isn't accepted, so the caller warns that the position
+                // may be unprotected, instead of failing the whole bracket, which the order sheet would show as a failed
+                // order — inviting a second entry. Sent and unanswered is "unknown" (it may be live); never sent is not.
+                acks.append(Self.unanswered(error, fallback: "Perpl did not confirm this trigger."))
                 continue
             }
             acks.append(ack)
@@ -348,6 +450,32 @@ public final class PerplTradeClient {
             if !ack.accepted, index == 0 { break }
         }
         return acks
+    }
+
+    /// Sends each frame in turn and returns every frame's ack, whatever the others did — for independent requests such
+    /// as cancelling several triggers. Throws only when nothing could be sent.
+    public func sendEach(_ frames: [PerplOrderFrame]) async throws -> [PerplOrderAck] {
+        try admit(frames)
+        requestsInFlight += 1
+        defer { requestsInFlight -= 1 }
+        var acks: [PerplOrderAck] = []
+        for frame in frames {
+            do { acks.append(try await send(frame)) } catch { acks.append(Self.unanswered(error, fallback: "Perpl did not confirm this request.")) }
+        }
+        return acks
+    }
+
+    /// Checks a request before its first frame goes out: signed in, forwarding on, and every frame sendable.
+    private func admit(_ frames: [PerplOrderFrame]) throws {
+        guard signedIn, task != nil, accountId != nil else { throw PerplTradeError.notSignedIn }
+        guard forwardingEnabled else { throw PerplTradeError.forwardingDisabled }
+        if let problem = frames.lazy.compactMap(PerplOrders.problem).first { throw PerplTradeError.invalidOrder(problem) }
+    }
+
+    /// The ack to report for a frame whose send threw: unknown if it went out (Perpl may have it), rejected if not.
+    private static func unanswered(_ error: Error, fallback: String) -> PerplOrderAck {
+        let unknown = (error as? PerplTradeError)?.outcomeUnknown ?? true
+        return PerplOrderAck(code: -1, error: (error as? LocalizedError)?.errorDescription ?? fallback, outcomeUnknown: unknown)
     }
 
     /// The next strictly-increasing request id, seeded from the account's last-forwarded id.
@@ -364,6 +492,9 @@ public final class PerplTradeClient {
     }
 
     private func send(_ frame: PerplOrderFrame) async throws -> PerplOrderAck {
+        // The socket closed between frames: this one never leaves the device (rather than waiting 8 s on a socket that
+        // no longer exists and reporting an outcome that isn't in doubt).
+        guard signedIn, task != nil else { throw PerplTradeError.notSignedIn }
         let rq = frame.requestId ?? max(nextRequestId(), lastForwardedRq)
         snCounter += 1
         let sn = snCounter
@@ -418,7 +549,8 @@ public final class PerplTradeClient {
         return PerplClose(code: code.rawValue, reason: reason)
     }
 
-    private func handle(_ data: Data) {
+    /// Internal (not private) so tests can replay recorded frames.
+    func handle(_ data: Data) {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let mt = obj["mt"] as? Int else { return }
         switch mt {
         case 19: // WalletSnapshot — the accounts array is under `as` (Perpl `Wallet.as: Account[]`); the previous
@@ -430,11 +562,21 @@ public final class PerplTradeClient {
             applyAccount(obj)
         case 23: // OrdersSnapshot — the full open-order set replaces what we hold
             ordersByOid.removeAll()
-            for raw in (obj["d"] as? [[String: Any]]) ?? [] { applyOrder(raw) }
+            for raw in (obj["d"] as? [[String: Any]]) ?? [] { applyOrder(raw, announce: false) }
+            hasOrdersSnapshot = true
             publishOrders()
         case 24: // OrdersUpdate — upsert live orders, drop removed / terminal ones
-            for raw in (obj["d"] as? [[String: Any]]) ?? [] { applyOrder(raw) }
+            for raw in (obj["d"] as? [[String: Any]]) ?? [] { applyOrder(raw, announce: true) }
             publishOrders()
+        case 26: // PositionsSnapshot — the full open-position set
+            positionsByPid.removeAll()
+            for raw in (obj["d"] as? [[String: Any]]) ?? [] { _ = applyPosition(raw) }
+            hasPositionsSnapshot = true
+            publishPositions()
+        case 27: // PositionsUpdate — upsert open positions, drop ended ones, and report each ending once
+            let ended = ((obj["d"] as? [[String: Any]]) ?? []).compactMap(applyPosition)
+            publishPositions()
+            for position in ended where endedPositions.insert(position.pid).inserted { onPositionEnded?(position) }
         case 3: // command status ack
             if let cid = obj["cid"] as? Int, let continuation = pending.removeValue(forKey: cid) {
                 let status = obj["status"] as? [String: Any]
@@ -472,29 +614,75 @@ public final class PerplTradeClient {
 
     /// Upserts one `Order` from mt:23/24, or drops it when Perpl flags it removed (`r`) or it reaches a terminal
     /// status. Live statuses kept: Pending(1), Open(2), PartiallyFilled(3), Untriggered(8), Triggered(9).
-    private func applyOrder(_ raw: [String: Any]) {
+    /// `announce` (updates only): report a trigger that fired or failed (`onTriggerEvent`).
+    private func applyOrder(_ raw: [String: Any], announce: Bool) {
         guard let oid = Self.intValue(raw["oid"]) else { return }
-        let status = Self.intValue(raw["st"]) ?? 0
+        let previous = ordersByOid[oid]
+        // An update without a status keeps the one it had, rather than reading as terminal and dropping a live order.
+        let status = Self.intValue(raw["st"]) ?? previous?.statusRaw ?? 0
+        let reason = Self.intValue(raw["sr"]) ?? 0
         let removed = Self.boolValue(raw["r"]) ?? false
-        guard !removed, [1, 2, 3, 8, 9].contains(status) else { ordersByOid[oid] = nil; return }
-        ordersByOid[oid] = PerplOpenOrder(
+        // An update may carry only what changed; the order's own terms (type, size, trigger) never do.
+        let order = PerplOpenOrder(
             oid: oid,
-            marketId: Self.intValue(raw["mkt"]) ?? 0,
-            typeRaw: Self.intValue(raw["t"]) ?? 0,
+            marketId: Self.intValue(raw["mkt"]) ?? previous?.marketId ?? 0,
+            typeRaw: Self.intValue(raw["t"]) ?? previous?.typeRaw ?? 0,
             statusRaw: status,
-            priceRaw: Self.intValue(raw["p"]) ?? 0,
-            sizeRaw: Self.intValue(raw["os"]) ?? 0,
-            filledRaw: Self.intValue(raw["fs"]) ?? 0,
-            triggerPriceRaw: Self.intValue(raw["tp"]),
-            triggerConditionRaw: Self.intValue(raw["tpc"]),
-            linkedPositionId: Self.intValue(raw["lp"]),
-            leverageHundredths: Self.intValue(raw["lv"]) ?? 0
+            priceRaw: Self.intValue(raw["p"]) ?? previous?.priceRaw ?? 0,
+            sizeRaw: Self.intValue(raw["os"]) ?? previous?.sizeRaw ?? 0,
+            filledRaw: Self.intValue(raw["fs"]) ?? previous?.filledRaw ?? 0,
+            triggerPriceRaw: Self.intValue(raw["tp"]) ?? previous?.triggerPriceRaw,
+            triggerConditionRaw: Self.intValue(raw["tpc"]) ?? previous?.triggerConditionRaw,
+            linkedPositionId: Self.intValue(raw["lp"]) ?? previous?.linkedPositionId,
+            leverageHundredths: Self.intValue(raw["lv"]) ?? previous?.leverageHundredths ?? 0
         )
+        if announce, order.isTrigger, let outcome = Self.triggerOutcome(status: status, reason: reason),
+           announcedTriggers.insert("\(oid)-\(outcome == .triggered ? "fired" : "failed")").inserted {
+            onTriggerEvent?(PerplTriggerEvent(order: order, outcome: outcome))
+        }
+        guard !removed, [1, 2, 3, 8, 9].contains(status) else { ordersByOid[oid] = nil; return }
+        ordersByOid[oid] = order
+    }
+
+    /// What a trigger's status says happened to it, if anything worth reporting: Triggered (9) / Executed (10) /
+    /// Filled (4) or a triggered-execution reason (54, 65, 66) means it fired; Failed (7) means it was refused or
+    /// could not execute. Untriggered, open and cancelled triggers report nothing.
+    static func triggerOutcome(status: Int, reason: Int) -> PerplTriggerEvent.Outcome? {
+        if status == 7 { return .failed(reason: reason) }
+        if [4, 9, 10].contains(status) || [54, 65, 66].contains(reason) { return .triggered }
+        return nil
     }
 
     private func publishOrders() {
         openOrders = ordersByOid.values.sorted { $0.oid < $1.oid } // stable order so rows don't reshuffle between updates
         onOrdersUpdate?()
+    }
+
+    /// Upserts one `Position` from mt:26/27, dropping it once it is no longer open. Returns the position when this
+    /// frame ended it (closed, liquidated, deleveraged, unwound), for `onPositionEnded`.
+    private func applyPosition(_ raw: [String: Any]) -> PerplLivePosition? {
+        guard let pid = Self.intValue(raw["pid"]) else { return nil }
+        let previous = positionsByPid[pid]
+        // The side is never guessed: a position whose side isn't known can't be matched to the triggers that close it.
+        guard let isLong = Self.intValue(raw["sd"]).map({ $0 == 1 }) ?? previous?.isLong else { return nil }
+        let position = PerplLivePosition(
+            pid: pid,
+            marketId: Self.intValue(raw["mkt"]) ?? previous?.marketId ?? 0,
+            isLong: isLong,
+            sizeRaw: Self.intValue(raw["s"]) ?? previous?.sizeRaw ?? 0,
+            statusRaw: Self.intValue(raw["st"]) ?? previous?.statusRaw ?? 0
+        )
+        if position.isOpen {
+            positionsByPid[pid] = position
+            return nil
+        }
+        positionsByPid[pid] = nil
+        // Closed (2) or ended by the protocol (3–5): an ending worth reporting. Failed (6) never opened.
+        return (2...5).contains(position.statusRaw) ? position : nil
+    }
+
+    private func publishPositions() {
+        positions = positionsByPid.values.sorted { $0.pid < $1.pid }
     }
 
     private func resolveConnect() {
