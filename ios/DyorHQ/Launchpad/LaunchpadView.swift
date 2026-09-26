@@ -571,14 +571,28 @@ struct LaunchDetailView: View {
                 if q.tax > 0 { DetailRow("Creator tax", "\(NumberStyle.units(q.tax, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
             PrimaryButton(title: side == .buy ? "Buy \(launch.symbol)" : "Sell \(launch.symbol)",
-                          isDisabled: rawAmount == 0 || !session.canSign || (side == .buy ? buyQuote == nil : sellQuote == nil)) { showConfirm = true }
+                          isDisabled: rawAmount == 0 || !session.canSign || (side == .buy ? buyQuote == nil : sellQuote == nil) || shortfall != nil) { showConfirm = true }
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         } header: {
             Text("Trade on the Curve")
         } footer: {
             if !session.canSign { Text("Sign in to trade.") }
+            else if let shortfall { Text(shortfall).foregroundStyle(Color.attention) }
             else if let account { Text("Balance: \(NumberStyle.units(account.tokenBalance, decimals: 18, compact: true)) \(launch.symbol) · \(NumberStyle.units(account.pairBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
         }
+    }
+
+    /// Why the trade can't go ahead on this balance (UI-4): the amount is more than the wallet holds. Nil while the
+    /// balance is unknown; the network still refuses what the wallet can't pay.
+    private var shortfall: String? {
+        guard let account, rawAmount > 0 else { return nil }
+        if side == .buy, rawAmount > account.pairBalance {
+            return "Not enough \(launch.pair.symbol): you have \(NumberStyle.units(account.pairBalance, decimals: launch.pair.decimals))."
+        }
+        if side == .sell, rawAmount > account.tokenBalance {
+            return "Not enough \(launch.symbol): you have \(NumberStyle.units(account.tokenBalance, decimals: 18, compact: true))."
+        }
+        return nil
     }
 
     private var graduatedSection: some View {

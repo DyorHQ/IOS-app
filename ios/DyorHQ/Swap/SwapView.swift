@@ -179,7 +179,8 @@ struct SwapView: View {
     /// and the history.
     private var actionSection: some View {
         Section {
-            PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil) { reviewing = model.review }
+            // Disabled while the balance can't cover the input: the title says why (UI-4).
+            PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil || model.insufficient) { reviewing = model.review }
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
         }
@@ -402,9 +403,11 @@ final class SwapModel {
         guard let quote = selectedQuote, let price = prices[tokenOut.address] else { return nil }
         return Amount.units(quote.amountOut, decimals: tokenOut.decimals) * price.usd
     }
+    /// The input is more than the wallet holds (a balance that couldn't be read doesn't count).
+    var insufficient: Bool { balances[tokenIn.address].map { amountIn > $0 } ?? false }
     var actionTitle: String {
         if amountIn == 0 { return "Enter an Amount" }
-        if let balance = balances[tokenIn.address], amountIn > balance { return "Insufficient \(tokenIn.symbol)" }
+        if insufficient { return "Insufficient \(tokenIn.symbol)" }
         if SwapEngine.isWrap(tokenIn, tokenOut) { return tokenIn.isNative ? "Wrap MON" : "Unwrap WMON" }
         return "Review Swap"
     }
