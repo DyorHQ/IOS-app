@@ -11,7 +11,7 @@ import { launch as launchAction, type LaunchInput } from "../../lib/actions";
 import { useAsync } from "../../lib/use-async";
 import { useTx } from "../../lib/use-tx";
 import { useWallet } from "../../lib/wallet";
-import { bpsToPct, fmtAmount, fmtUnits, parseAmount, seconds } from "../../lib/format";
+import { bpsToPct, fmtAmount, fmtUnits, parseAmount, seconds, shortAddress } from "../../lib/format";
 import { ActionButton, DeployNotice, TokenLogo, TxStatus, toneFor } from "../ui";
 
 type Form = { name: string; symbol: string; description: string; logo: string; twitter: string; telegram: string; website: string; pair: Address; devBuy: string; holderFeeSharing: boolean; graduationVenue: number; creatorWallet: string; creatorTax: string; exemptions: string };
@@ -139,6 +139,12 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
   // otherwise. The picker is then forced to Monday and disabled.
   const pairMondayOnly = pair?.mondayOnly ?? false;
   const effectiveVenue = pairMondayOnly ? 1 : form.graduationVenue;
+  // The creator wallet is set under Advanced but matters to everyone: it is paid the creator share and tax, and it
+  // controls that role (it can hand it on, and veto an owner takeover). It is always shown, and a wallet other than
+  // the connected one is called out; an Advanced field with an error opens the section.
+  const creatorWallet = form.creatorWallet.trim() || account || "";
+  const creatorIsOther = !!account && isAddress(creatorWallet) && getAddress(creatorWallet) !== getAddress(account);
+  const showAdvanced = advanced || (touched && !!(errors.creatorWallet || errors.creatorTax || errors.exemptions));
 
   const submit = async () => {
     setTouched(true);
@@ -203,8 +209,8 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
             {touched && errors.devBuy && <span className="hint err">{errors.devBuy}</span>}
           </label>
 
-          <button type="button" className="disclosure" aria-expanded={advanced} onClick={() => setAdvanced((a) => !a)}>Advanced options <Icon name="chev-down" /></button>
-          {advanced && (
+          <button type="button" className="disclosure" aria-expanded={showAdvanced} onClick={() => setAdvanced(!showAdvanced)}>Advanced options <Icon name="chev-down" /></button>
+          {showAdvanced && (
             <div className="advanced">
               <div className="toggle-row"><div><b>Holder fee sharing</b><small>Route the creator share of every trade fee to token holders, pro rata, instead of one wallet. Cannot be changed later.</small></div><Switch checked={form.holderFeeSharing} onChange={(v) => set({ holderFeeSharing: v })} label="Holder fee sharing" /></div>
               <label className="field">Creator wallet<input placeholder={account ?? "0x…"} value={form.creatorWallet} onChange={(e) => set({ creatorWallet: e.target.value })} /><span className="help">Receives creator fees and any creator tax, and is exempt from the snipe tax. Defaults to your connected wallet.</span>{touched && errors.creatorWallet && <span className="hint err">{errors.creatorWallet}</span>}</label>
@@ -213,6 +219,7 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
             </div>
           )}
 
+          {creatorIsOther && <div className="warnbox"><b>Creator fees go to another wallet.</b> {shortAddress(creatorWallet)} (not your connected wallet) receives the creator share of fees and any creator tax, and controls that role: it can hand it to another wallet. Set under Advanced options.</div>}
           {allowed.data === false && <div className="warnbox"><b>Whitelist only.</b> Launching is currently limited to whitelisted wallets and yours is not on the list.</div>}
           <TxStatus tx={tx} onDismiss={dismiss} />
           {firstError && <p className="hint err" role="alert">{firstError}</p>}
@@ -233,6 +240,7 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
               <Row label="Trade fee" value={protocol.data ? bpsToPct(protocol.data.curveFeeBps) : "—"} />
               <Row label="Creator tax" value={bpsToPct(creatorTaxBps)} />
               <Row label="Fees go to" value={form.holderFeeSharing ? "Holders" : "Creator wallet"} />
+              <Row label="Creator wallet" value={isAddress(creatorWallet) ? <span className={creatorIsOther ? "down" : ""}>{shortAddress(creatorWallet)}{creatorIsOther ? " · not you" : " · you"}</span> : "—"} />
               <Row label="Launch window" value={protocol.data ? `${seconds(protocol.data.snipeSchedule.length)} snipe tax` : "—"} />
               <Row label="Graduation" value={pair ? fmtAmount(pair.graduationThreshold, pair.decimals, pair.symbol, { compact: true }) : "—"} />
               <Row label="Graduation venue" value={venueLabel(effectiveVenue)} />
