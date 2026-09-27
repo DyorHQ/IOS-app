@@ -894,7 +894,7 @@ struct PerpTradeView: View {
         // no triggers still falls through to the on-chain path when not live, so trading never depends on one-click.
         if let accountId = authedOrderAccount {
             AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1),
-                             triggerSize: invertedSize(side: ticket.side), triggerNote: turnaroundNote) {
+                             triggerSize: invertedSize(side: ticket.side), triggerNote: turnaroundNote, onChainPositions: model.positions, onChainOrders: model.orders) {
                 if ticket.effectiveReduceOnly { model.noteUserClose(market.id) }
                 ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""; sizePercent = 0
                 Task { await model.load(env: env, address: session.address) }
@@ -905,7 +905,7 @@ struct PerpTradeView: View {
     }
 
     private var confirmSheet: some View {
-        ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { env.perpl.orderPlan(ticket.input(market: market, refPrice: refPrice)) }, onDone: { ticket.sizeText = ""; sizePercent = 0; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
+        ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { try await checkedOrderPlan() }, onDone: { ticket.sizeText = ""; sizePercent = 0; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
             if ticket.effectiveReduceOnly { model.noteUserClose(market.id) }
             Activity.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }, intent: orderIntent) {
@@ -919,6 +919,10 @@ struct PerpTradeView: View {
             // triggers the order won't carry; tell the user they need one-click trading for them.
             if ticket.effectiveTPSL, !ticket.takeProfitText.isEmpty || !ticket.stopLossText.isEmpty {
                 DetailRow("TP/SL", "Needs one-click trading — not placed", tint: .attention)
+            }
+            if leftoversUnchecked {
+                Text("Take-profit and stop-loss left from an earlier \(market.asset) \(ticket.side == .long ? "long" : "short") can't be checked while Perpl trading is offline. If you had any, check Orders first: they would act on this position.")
+                    .font(.footnote).foregroundStyle(Color.attention)
             }
         }
     }
@@ -982,12 +986,31 @@ struct PerpTradeView: View {
     }
 
     /// Leftover TP/SL on this side of the market (security audit GT-2) would act on the position this order opens: a
-    /// stop-loss left from an earlier position can fire the moment it exists. They are cancelled first.
+    /// stop-loss left from an earlier position can fire the moment it exists. They are cancelled first. Checked again
+    /// where the order is sent: `PerplTrading.submitBracket` for a one-click order, `checkedOrderPlan` on-chain.
     private func leftoverTriggerProblem(side: PositionSide) -> String? {
         let leftovers = orphanedTriggers.filter { $0.protectsLong == (side == .long) }
         guard !leftovers.isEmpty else { return nil }
-        let one = leftovers.count == 1
-        return "\(leftovers.count) take-profit/stop-loss order\(one ? "" : "s") from an earlier \(market.asset) \(side == .long ? "long" : "short") \(one ? "is" : "are") still armed on Perpl and would act on this new position. Cancel \(one ? "it" : "them") from Orders first."
+        return PerplTrading.leftoverMessage(count: leftovers.count, asset: market.asset, side: side)
+    }
+
+    /// The on-chain order's plan, once the leftover TP/SL check has run on Perpl's live lists (GT-2). The stream is
+    /// brought up first when it can be without a prompt; a passkey account's stays down until its session opens, and
+    /// the review says the check couldn't run (`leftoversUnchecked`).
+    private func checkedOrderPlan() async throws -> [TransactionStep] {
+        let input = ticket.input(market: market, refPrice: refPrice)
+        if !input.reduceOnly {
+            if perplTrading.isEnrolled, !(perplTrading.ordersAreLive && perplTrading.positionsAreLive) {
+                await perplTrading.awaitLiveStream(timeout: 4)
+            }
+            if let problem = leftoverTriggerProblem(side: input.side) { throw PerplTradeError.invalidOrder(problem) }
+        }
+        return env.perpl.orderPlan(input)
+    }
+
+    /// An opening order whose leftover TP/SL check can't run: Perpl trading is enrolled but its stream isn't live.
+    private var leftoversUnchecked: Bool {
+        !ticket.effectiveReduceOnly && perplTrading.isEnrolled && !(perplTrading.ordersAreLive && perplTrading.positionsAreLive)
     }
     private var sideColor: Color { ticket.side == .long ? .positive : .negative }
 
@@ -2391,6 +2414,9 @@ struct AuthedOrderSheet: View {
     /// turns around (GT-6), with a note saying so.
     var triggerSize: Double? = nil
     var triggerNote: String? = nil
+    /// The account's positions and orders as the Exchange last reported them, for the checks made where it is sent.
+    var onChainPositions: [PerpPosition] = []
+    var onChainOrders: [PerpOrder] = []
     let onDone: () -> Void
 
     @Environment(PerplTrading.self) private var perplTrading
@@ -2495,7 +2521,8 @@ struct AuthedOrderSheet: View {
             // Bracket placement reports per-frame acceptance, so we record only the TP/SL Perpl actually admitted and
             // can warn if the entry opened without a requested protection (an unprotected position the user must know
             // about). Perpl offers no read-back for keeper triggers, so the accepted ones are remembered locally.
-            let result = try await perplTrading.submitBracket(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env, ttlBlocks: 100, approval: approval)
+            let result = try await perplTrading.submitBracket(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env, ttlBlocks: 100, approval: approval,
+                                                              onChainPositions: onChainPositions, onChainOrders: onChainOrders)
             guard result.entry else { phase = .failed(result.error ?? "Perpl rejected the order."); return }
 
             var placed: [PlacedTrigger] = []

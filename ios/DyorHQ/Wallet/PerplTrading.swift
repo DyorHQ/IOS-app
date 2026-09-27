@@ -75,6 +75,9 @@ final class PerplTrading: MeraSessionLifecycle {
     private var boundToPasskey = false
     /// A passkey account's stored token (never its secret).
     private var storedToken: PerplToken?
+    /// Reads a wallet's open positions on-chain over the given markets (set by AppEnvironment), throwing when the read
+    /// is incomplete. The automatic clean-up of leftover TP/SL cancels only what the chain agrees has closed.
+    @ObservationIgnored var readPositions: ((Address, [PerpMarket]) async throws -> [PerpPosition])?
 
     init(mera: MeraSession? = nil) {
         self.mera = mera
@@ -679,14 +682,22 @@ final class PerplTrading: MeraSessionLifecycle {
 
     /// Places a bracket (entry + linked TP/SL) and reports whether the entry AND each requested trigger were
     /// individually accepted — unlike `submit`, which returns only the entry ack. A passkey account's bracket must fit
-    /// its live session (`authorize`) or carry a step-up `approval`.
+    /// its live session (`authorize`) or carry a step-up `approval`. `onChainPositions` / `onChainOrders`: the account's
+    /// positions and orders as the Exchange last reported them, for `checkOpening`.
     func submitBracket(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int,
-                       approval: MeraSession.StepUp? = nil) async throws -> BracketResult {
+                       approval: MeraSession.StepUp? = nil, onChainPositions: [PerpPosition], onChainOrders: [PerpOrder]) async throws -> BracketResult {
         try Self.checkTriggers(input: input, takeProfit: takeProfit, stopLoss: stopLoss)
         let charge = try authorize(input, approval: approval)
         await ensureConnected()
         let client: PerplTradeClient
-        do { client = try liveClient() } catch { mera?.refund(charge); throw error }
+        do {
+            client = try liveClient()
+            try await checkOpening(input, withTriggers: takeProfit != nil || stopLoss != nil, on: client,
+                                   onChainPositions: onChainPositions, onChainOrders: onChainOrders)
+        } catch {
+            mera?.refund(charge)
+            throw error
+        }
         let head = (try? await env.rpc.blockNumber()).map { Int($0) } ?? 0
         var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
         let entryRq = client.nextRequestId()
@@ -732,6 +743,54 @@ final class PerplTrading: MeraSessionLifecycle {
                 throw PerplTradeError.invalidOrder(problem.message(market: input.market))
             }
         }
+    }
+
+    /// Checks an opening order against Perpl's live lists where it is sent, not only when the ticket was tapped (a
+    /// passkey account's stream is down until its session opens, which is after the tap). Refused, before anything is
+    /// sent (security audit GT-2, GT-6):
+    /// - while TP/SL left from an earlier position on that side of the market are still armed: they would act on the
+    ///   position this opens (a leftover stop-loss can close it at once);
+    /// - TP/SL on an order that only shrinks the open position on the other side.
+    /// It waits briefly for the stream's order and position lists; without them nothing can be checked, so nothing is
+    /// sent.
+    private func checkOpening(_ input: OrderInput, withTriggers: Bool, on client: PerplTradeClient,
+                              onChainPositions: [PerpPosition], onChainOrders: [PerpOrder]) async throws {
+        guard !input.reduceOnly else { return }
+        let deadline = Date().addingTimeInterval(3)
+        while client.signedIn, !(client.hasOrdersSnapshot && client.hasPositionsSnapshot), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard self.client === client, ordersAreLive, positionsAreLive else {
+            throw PerplTradeError.unavailable("Perpl hasn't sent your open orders yet, so take-profit and stop-loss left from an earlier position can't be checked. Nothing was sent. Try again in a moment.")
+        }
+        let side = PerplMarketSide(marketId: input.market.id, isLong: input.side == .long)
+        let leftovers = orphanedTriggers(onChainPositions: onChainPositions, onChainOrders: onChainOrders).filter { $0.side == side }
+        if !leftovers.isEmpty {
+            throw PerplTradeError.invalidOrder(Self.leftoverMessage(count: leftovers.count, asset: input.market.asset, side: input.side))
+        }
+        guard withTriggers else { return }
+        let scale = pow(10, Double(input.market.lotDecimals))
+        let held = onChainPositions.filter { $0.perpId == input.market.id }.map { ($0.side, $0.size) }
+            + client.positions.filter { $0.marketId == input.market.id && $0.isOpen }.map { ($0.isLong ? PositionSide.long : .short, Double($0.sizeRaw) / scale) }
+        if let position = held.first(where: { PerplTriggerRules.onlyReduces(side: input.side, size: input.size, positionSide: $0.0, positionSize: $0.1) }) {
+            throw PerplTradeError.invalidOrder(PerplTriggerRules.Problem.reducesPosition(position.0).message(market: input.market))
+        }
+    }
+
+    /// Why an order can't open on a side of a market where TP/SL from an earlier position are still armed.
+    static func leftoverMessage(count: Int, asset: String, side: PositionSide) -> String {
+        let one = count == 1
+        return "\(count) take-profit/stop-loss order\(one ? "" : "s") from an earlier \(asset) \(side == .long ? "long" : "short") \(one ? "is" : "are") still armed on Perpl and would act on this new position. Cancel \(one ? "it" : "them") from Orders first."
+    }
+
+    /// Brings the trading stream up without a prompt (a key account, or a passkey account whose session is open) and
+    /// waits up to `timeout` for its order and position lists — for a check an on-chain order needs before it is signed.
+    /// Returns at once when the stream can't come up without the user.
+    func awaitLiveStream(timeout: TimeInterval) async {
+        guard key != nil, !keyRejected, sessionAllowsTrading else { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        Task { await self.ensureConnected() } // single-flight; keeps going if it outlasts the wait
+        while !(ordersAreLive && positionsAreLive), Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
     }
 
     /// Ensures a LIVE trading socket before an authed operation. Reconnects when the socket isn't truly alive — even
@@ -860,29 +919,49 @@ final class PerplTrading: MeraSessionLifecycle {
     /// Cancels the TP/SL that were closing `ended`'s side of its market, once it has closed (security audit GT-2).
     /// Perpl drops a position-linked trigger itself, but the ticket's triggers are linked to their entry, and nothing
     /// documents that those go with the position: left armed, a stop-loss would fire against the NEXT position on that
-    /// side. Only what is provably orphaned goes: no open position on that side, no resting entry on the market (a
-    /// trigger may be waiting on it) and no entry sent from here in the last minute. It waits two seconds for Perpl's
-    /// own clean-up to arrive first. A passkey account's cancel needs Face ID, so it is left to the trade screen's
-    /// "Cancel leftover TP/SL" instead.
+    /// side. Only what is provably orphaned goes: no open position on that side, no resting entry on that side of the
+    /// market (a trigger may be waiting on it) and no entry sent from here in the last minute. It waits two seconds for
+    /// Perpl's own clean-up to arrive first. The stream alone never decides it: nothing is cancelled unless a fresh
+    /// on-chain read agrees that side holds no position (a partial liquidation, or a stream that got it wrong, must
+    /// not take the stop-loss off a position that is still open); while the chain still shows it, it tries again a
+    /// few times and then leaves them to the trade screen's warning. A passkey account's cancel needs Face ID, so it
+    /// is left to the trade screen's "Cancel leftover TP/SL" instead.
     private func cancelLeftovers(of ended: PerplLivePosition) {
-        guard !boundToPasskey else { return }
-        let owner = boundOwner
+        guard !boundToPasskey, let owner = boundOwner else { return }
+        let side = PerplMarketSide(marketId: ended.marketId, isLong: ended.isLong)
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            guard let self, let client = self.client, client.signedIn, client.hasOrdersSnapshot, client.hasPositionsSnapshot,
-                  let accountId = client.accountId, self.boundOwner == owner else { return }
-            let leftovers = PerplTriggerCleanup.siblings(of: ended, orders: client.openOrders, positions: client.positions, extraRestingEntries: self.recentEntrySides)
-                .filter { !self.cancelsSent.contains($0.id) }
-            guard !leftovers.isEmpty else { return }
-            self.cancelsSent.formUnion(leftovers.map(\.id))
-            guard let acks = try? await client.sendEach(leftovers.map { PerplOrders.cancel(perpId: $0.marketId, orderId: $0.oid, accountId: accountId, head: 0) }) else { return }
-            let cancelled = acks.filter(\.accepted).count
-            guard cancelled > 0, let owner else { return }
-            // Recorded quietly: the ending itself was the news.
-            Activity.record(ActivityRecord(kind: .perp, title: "Cancelled leftover TP/SL",
-                                           subtitle: "\(self.marketName(ended.marketId)) · \(cancelled) order\(cancelled == 1 ? "" : "s") from the closed \(ended.isLong ? "long" : "short")",
-                                           hash: nil, section: "perps"), owner: owner, notify: false)
+            for delay in [2, 4, 8] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard let self, self.boundOwner == owner, self.leftovers(of: ended) != nil else { return }
+                // The chain's word, read now: its position on that side is gone.
+                guard let read = self.readPositions, let chain = try? await read(owner, Array(self.markets.values)),
+                      !chain.contains(where: { $0.perpId == side.marketId && ($0.side == .long) == side.isLong }) else { continue }
+                // Re-read after the await: the stream may have moved on (a new position, a cancel of its own).
+                guard self.boundOwner == owner, let client = self.client, let accountId = client.accountId,
+                      let leftovers = self.leftovers(of: ended) else { return }
+                self.cancelsSent.formUnion(leftovers.map(\.id))
+                guard let acks = try? await client.sendEach(leftovers.map { PerplOrders.cancel(perpId: $0.marketId, orderId: $0.oid, accountId: accountId, head: 0) }) else { return }
+                self.recordLeftoversCancelled(acks.filter(\.accepted).count, of: ended, owner: owner)
+                return
+            }
         }
+    }
+
+    /// The live stream's triggers left over from `ended`'s side, not already being cancelled — nil when there are none,
+    /// or the stream can't say (not signed in, or before its snapshots).
+    private func leftovers(of ended: PerplLivePosition) -> [PerplOpenOrder]? {
+        guard let client, client.signedIn, client.hasOrdersSnapshot, client.hasPositionsSnapshot else { return nil }
+        let leftovers = PerplTriggerCleanup.siblings(of: ended, orders: client.openOrders, positions: client.positions, extraRestingEntries: recentEntrySides)
+            .filter { !cancelsSent.contains($0.id) }
+        return leftovers.isEmpty ? nil : leftovers
+    }
+
+    private func recordLeftoversCancelled(_ cancelled: Int, of ended: PerplLivePosition, owner: Address) {
+        guard cancelled > 0 else { return }
+        // Recorded quietly: the ending itself was the news.
+        Activity.record(ActivityRecord(kind: .perp, title: "Cancelled leftover TP/SL",
+                                       subtitle: "\(marketName(ended.marketId)) · \(cancelled) order\(cancelled == 1 ? "" : "s") from the closed \(ended.isLong ? "long" : "short")",
+                                       hash: nil, section: "perps"), owner: owner, notify: false)
     }
 
     func forget(address: Address) {

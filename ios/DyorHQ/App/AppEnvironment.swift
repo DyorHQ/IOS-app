@@ -83,6 +83,17 @@ final class AppEnvironment {
         session.mera.contracts = Mera.SigningPolicy.Contracts(moments: config.moments)
         session.mera.curveVerifier = { [launchpad] token in await launchpad.knownCurve(token: token) }
         perplTrading = PerplTrading(mera: session.mera)
+        // The chain's word on which positions are open, which the automatic TP/SL clean-up needs besides the stream's.
+        // A position the account's bitmap holds but the read left out (a failed sub-read, a market not listed) throws:
+        // it is never read as closed.
+        perplTrading.readPositions = { [perpl] address, markets in
+            guard let account = try await perpl.account(address) else { return [] }
+            let positions = try await perpl.positions(account, markets: markets)
+            guard Set(positions.map(\.perpId)).isSuperset(of: account.positionPerpIds) else {
+                throw PerplTradeError.unavailable("Perpl positions couldn't be read in full.")
+            }
+            return positions
+        }
         sync = BackendSync(social: social)
         sync.install(settings: settings, address: { [weak session] in session?.address })
     }
