@@ -81,9 +81,11 @@ enum NotificationStore {
     /// Mirrors the center to the backend (installed by the app environment).
     nonisolated(unsafe) static var onChange: (([AppNotification], Address?) -> Void)?
 
-    static func save(_ items: [AppNotification], owner: Address?) {
+    /// `mirror: false` for an account other than the one signed in, whose backend session isn't the app's: its copy
+    /// catches up the next time its center changes while it is signed in.
+    static func save(_ items: [AppNotification], owner: Address?, mirror: Bool = true) {
         UserDefaults.standard.set(try? JSONEncoder().encode(Array(items.prefix(cap))), forKey: key(owner))
-        onChange?(items, owner)
+        if mirror { onChange?(items, owner) }
     }
 }
 
@@ -110,8 +112,19 @@ final class NotificationHub {
     }
 
     /// Records the notification and delivers it as a system notification when `deliver` is true, the in-app master
-    /// toggle is on, and OS permission is granted. The in-app center always keeps the record either way.
-    func post(_ notification: AppNotification, deliver: Bool = true) {
+    /// toggle is on, and OS permission is granted. The in-app center always keeps the record either way. `owner` is the
+    /// account the action belongs to, when the caller knows it (`Activity.record`): an action that settles after the app
+    /// moved to another account is filed in its own account's center, not the one on screen (RS-9).
+    func post(_ notification: AppNotification, deliver: Bool = true, owner account: Address? = nil) {
+        if let account, account != owner {
+            var list = NotificationStore.all(owner: account)
+            if let recent = list.first, recent.title == notification.title, recent.body == notification.body,
+               notification.time.timeIntervalSince(recent.time) < 8 { return }
+            list.insert(notification, at: 0)
+            NotificationStore.save(list, owner: account, mirror: false)
+            if deliver, Self.bannersEnabled { Self.deliverLocally(title: notification.title, body: notification.body, id: notification.id.uuidString) }
+            return
+        }
         // Dedupe: a settled action recorded through two paths, or a retried transaction, can post twice. The activity
         // log already dedupes by tx hash, so the center must not double either — drop a repeat of the same
         // title+body that arrived within the last few seconds.
@@ -128,8 +141,9 @@ final class NotificationHub {
     /// The in-app notifications master toggle, persisted by AppSettings under this key (default on).
     private static var bannersEnabled: Bool { UserDefaults.standard.object(forKey: "settings.notifications") as? Bool ?? true }
 
-    func post(kind: AppNotification.Kind, title: String, body: String, route: AppNotification.Route = .none, reference: String? = nil, deliver: Bool = true) {
-        post(AppNotification(kind: kind, title: title, body: body, route: route, reference: reference), deliver: deliver)
+    func post(kind: AppNotification.Kind, title: String, body: String, route: AppNotification.Route = .none, reference: String? = nil,
+              deliver: Bool = true, owner account: Address? = nil) {
+        post(AppNotification(kind: kind, title: title, body: body, route: route, reference: reference), deliver: deliver, owner: account)
     }
 
     func markRead(_ id: UUID) {

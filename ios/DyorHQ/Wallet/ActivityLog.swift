@@ -176,7 +176,7 @@ enum Activity {
         ActivityLog.record(record, owner: owner)
         guard notify, owner != nil else { return }
         NotificationHub.shared.post(kind: record.notificationKind, title: record.title, body: record.subtitle,
-                                    route: record.notificationRoute, reference: record.reference)
+                                    route: record.notificationRoute, reference: record.reference, owner: owner)
     }
 }
 

@@ -96,6 +96,12 @@ public actor SupabaseClient {
 
     public func signOut() { current = nil }
 
+    /// Signs out only while the session is the one holding `accessToken`: a sign-out that finishes after a newer
+    /// sign-in has been adopted leaves that one alone (security audit 2026-09-26, RS-6).
+    public func signOut(ifAccessToken accessToken: String) {
+        if current?.accessToken == accessToken { current = nil }
+    }
+
     /// Signs in: asks wallet-auth for a single-use nonce bound to this address, has the wallet sign the exact sign-in
     /// message around it, and exchanges the signature for a session. The server consumes the nonce on success, so a
     /// captured signature can never be replayed. `sign` is the wallet's `signMessage` (EIP-191 personal_sign).

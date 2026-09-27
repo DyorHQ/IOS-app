@@ -152,6 +152,20 @@ final class WalletAuthClientTests: XCTestCase {
         XCTAssertEqual(after, session)
     }
 
+    /// A sign-out that finishes late (after its network call) ends only the session it was for: a sign-in adopted
+    /// meanwhile keeps its session (RS-6).
+    func testSignOutOnlyEndsTheSessionItWasFor() async {
+        let old = SupabaseSession(accessToken: "old.jwt", wallet: "0xaa", expiresAt: Date().addingTimeInterval(3600))
+        let new = SupabaseSession(accessToken: "new.jwt", wallet: "0xbb", expiresAt: Date().addingTimeInterval(3600))
+        await backend.restore(new)
+        await backend.signOut(ifAccessToken: old.accessToken)
+        let kept = await backend.currentSession
+        XCTAssertEqual(kept, new, "a newer sign-in survives the late sign-out of an older one")
+        await backend.signOut(ifAccessToken: new.accessToken)
+        let gone = await backend.currentSession
+        XCTAssertNil(gone)
+    }
+
     func testMalformedNonceIsRefusedBeforeAnythingIsSigned() async {
         for bad in [String(repeating: "A", count: 64), "abc123", serverNonce + "00", String(serverNonce.dropLast()) + "g"] {
             WalletAuthCapture.reset()

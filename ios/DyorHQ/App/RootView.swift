@@ -70,15 +70,19 @@ struct RootView: View {
             env.social.bind(address: session.address)
             // Bridges are tracked for the account that sent them only: a sign-out or switch stops the rest (RS-2).
             env.bridgeTracker.bind(owner: session.address)
+            // Perpl trading and the notification center follow the account at once, not after the backend sign-in's
+            // round-trip below, so nothing meanwhile trades for or is filed under the previous account (RS-9).
+            env.perplTrading.refresh(account: session.account)
+            NotificationHub.shared.bind(owner: session.address)
             // A wallet that can sign connects to the backend by itself (one signature), so activity and settings are
             // recorded — and restored on a fresh device — without a separate step. Not a passkey account restored
             // locked at launch: that signature would be a passkey prompt nobody asked for. `signInWithMera` starts its
-            // sign-in while its session is live (this joins it), and the background signer never prompts.
+            // sign-in while its session is live (this joins it), and the background signer never prompts. A stored
+            // token `bind` is restoring is this launch's sign-in: this joins it too, and signs only if it didn't restore
+            // (RS-3).
             if session.canSignWithoutPrompt, !env.social.isSignedIn, let address = session.address, let wallet = session.backgroundWallet {
                 await env.social.signIn(address: address, wallet: wallet)
             }
-            env.perplTrading.refresh(account: session.account)
-            NotificationHub.shared.bind(owner: session.address)
             // Ask for notification permission once the user is signed in and can act (so swaps, fills and price
             // alerts actually reach the lock screen). notificationsEnabled defaults on, but the Settings toggle only
             // requests when flipped — so a user who never opened Settings was never prompted.
