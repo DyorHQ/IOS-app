@@ -8,6 +8,7 @@ import SwiftUI
 struct RecentActivityView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
+    @Environment(Router.self) private var router
     @State private var model = RecentActivityModel()
 
     var body: some View {
@@ -16,7 +17,13 @@ struct RecentActivityView: View {
                 if model.loading {
                     HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading activity…").foregroundStyle(.secondary) }
                 } else {
-                    ContentUnavailableView("No Activity Yet", systemImage: "clock.arrow.circlepath", description: Text("Your launches, swaps, buys, sells and perp orders show up here."))
+                    ContentUnavailableView {
+                        Label("No Activity Yet", systemImage: "clock.arrow.circlepath")
+                    } description: {
+                        Text("Your launches, swaps, buys, sells and perp orders show up here.")
+                    } actions: {
+                        Button("Start Trading") { Haptics.tap(); router.presented = nil; router.tradeMode = .swap; router.tab = .trade }
+                    }
                 }
             } else {
                 Section {

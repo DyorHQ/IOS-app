@@ -31,7 +31,13 @@ struct PerpsView: View {
                 } else if model.loading {
                     ProgressView().controlSize(.large).frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    ContentUnavailableView("No Markets", systemImage: "chart.bar.xaxis", description: Text("Perpl markets are unavailable right now."))
+                    ContentUnavailableView {
+                        Label("No Markets", systemImage: "chart.bar.xaxis")
+                    } description: {
+                        Text("Perpl's markets couldn't be loaded. DyorHQ keeps retrying every few seconds.")
+                    } actions: {
+                        Button("Try Again") { Haptics.tap(); Task { await model.load(env: env, address: session.address) } }
+                    }
                 }
             }
             .navigationBarTitleDisplayMode(.inline)

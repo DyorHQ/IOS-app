@@ -128,6 +128,8 @@ struct MomentsView: View {
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if filter == .all, session.canSign {
                 Button("Publish a Moment") { Haptics.tap(); showCreate = true }.buttonStyle(.borderedProminent).foregroundStyle(.white).padding(.top, 4)
+            } else if filter != .all {
+                Button("Show All Moments") { Haptics.selection(); filter = .all }.padding(.top, 4)
             }
         }
         .frame(maxWidth: .infinity)

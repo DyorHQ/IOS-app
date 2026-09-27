@@ -19,26 +19,34 @@ struct NewsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if model.articles.isEmpty {
-                    if model.loading {
-                        ProgressView("Loading headlines…").controlSize(.large)
-                    } else {
-                        ContentUnavailableView("No Headlines", systemImage: "newspaper", description: Text(model.error ?? "The news feeds could not be reached. Pull to try again."))
-                    }
+                if model.articles.isEmpty, model.loading {
+                    ProgressView("Loading headlines…").controlSize(.large)
                 } else {
+                    // A list even when empty, so the empty state can be pulled to refresh as it says (UI-6).
                     List {
-                        Section {
-                            ForEach(shown) { item in
-                                Button { Haptics.tap(); article = item } label: { NewsRow(article: item) }
-                                    .buttonStyle(.plain)
-                                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                        if model.articles.isEmpty {
+                            ContentUnavailableView {
+                                Label("No Headlines", systemImage: "newspaper")
+                            } description: {
+                                Text(model.error ?? "The news feeds could not be reached.")
+                            } actions: {
+                                Button("Try Again") { Haptics.tap(); Task { await model.load(env: env, force: true) } }
                             }
-                        } header: {
-                            sourceChips
-                                .textCase(nil)
-                                .listRowInsets(EdgeInsets())
-                        } footer: {
-                            Text("Headlines come straight from each publisher's feed.").font(.caption)
+                            .listRowBackground(Color.clear)
+                        } else {
+                            Section {
+                                ForEach(shown) { item in
+                                    Button { Haptics.tap(); article = item } label: { NewsRow(article: item) }
+                                        .buttonStyle(.plain)
+                                        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                                }
+                            } header: {
+                                sourceChips
+                                    .textCase(nil)
+                                    .listRowInsets(EdgeInsets())
+                            } footer: {
+                                Text("Headlines come straight from each publisher's feed.").font(.caption)
+                            }
                         }
                     }
                     .listStyle(.insetGrouped)
@@ -145,8 +153,10 @@ final class NewsModel {
         loading = articles.isEmpty
         defer { loading = false }
         let latest = await env.news.latest(limit: 150, force: force)
+        // Cut short (the page closed): an empty or partial answer, not what the feeds said.
+        guard !Task.isCancelled else { return }
         if latest.isEmpty {
-            if articles.isEmpty { error = "The news feeds could not be reached. Check your connection and pull to refresh." }
+            if articles.isEmpty { error = "The news feeds could not be reached. Check your connection, then pull down or tap Try Again." }
         } else {
             articles = latest
             error = nil

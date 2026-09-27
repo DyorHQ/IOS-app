@@ -37,7 +37,15 @@ struct MomentsPortfolioView: View {
                         Text("Coins across every Moment. Vesting unlocks at the monthly cliffs.")
                     }
                     if portfolio.rows.isEmpty {
-                        if past.positions.isEmpty { ContentUnavailableView("No Moments Yet", systemImage: "camera.aperture", description: Text("Collect a Moment and it shows up here with its editions and coins.")) }
+                        if past.positions.isEmpty {
+                            ContentUnavailableView {
+                                Label("No Moments Yet", systemImage: "camera.aperture")
+                            } description: {
+                                Text("Collect a Moment and it shows up here with its editions and coins.")
+                            } actions: {
+                                Button("Browse Moments") { Haptics.tap(); dismiss() }
+                            }
+                        }
                     } else {
                         Section("Your Moments") {
                             ForEach(portfolio.rows) { row in
