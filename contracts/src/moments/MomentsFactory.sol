@@ -293,6 +293,8 @@ contract MomentsFactory is IMomentsFactory {
         if (pol.platform == address(0) || pol.treasury == address(0)) revert ZeroAddress();
         if (pol.threshold < MIN_THRESHOLD || pol.minPrice < MIN_MIN_PRICE || pol.reserveBps == 0) revert InvalidPolicy();
         if (uint256(pol.creatorBps) + pol.platformBps + pol.reserveBps != MomentTypes.BPS) revert InvalidPolicy();
+        // v2 (sec2): `publish` refuses prices above the completion gross, so a minimum above it would refuse them all.
+        if (pol.minPrice > Math.ceilDiv(pol.threshold * MomentTypes.BPS, pol.reserveBps)) revert InvalidPolicy();
         if (pol.maxCreatorAllocBps > MomentTypes.MAX_CREATOR_ALLOC_BPS) revert InvalidPolicy();
         if (pol.expiryCreatorBps > MomentTypes.BPS) revert InvalidPolicy();
         if (pol.royaltyBps > MomentTypes.MAX_ROYALTY_BPS) revert InvalidPolicy();

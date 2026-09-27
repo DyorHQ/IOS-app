@@ -341,4 +341,25 @@ contract Sec2MomentsTest is MomentsMarketBase {
         assertTrue(collect.quote(id, 1).terminal);
         assertEq(collect.quote(id, 1).gross, completion, "the only edition is charged its listed price");
     }
+
+    /// A minimum price above the completion gross would make every publish revert (PriceTooLow below it, PriceTooHigh
+    /// above the ceiling) until another 48h proposal, so no such policy is accepted; the ceiling itself is.
+    function test_policyWithMinPriceAboveTheCompletionGross_isRefused() public {
+        MomentTypes.Policy memory bad = _policy(1_000_000); // $1 threshold at 75%: completion gross $1.333334
+        bad.minPrice = 2_000_000;
+        vm.expectRevert(MomentsFactory.InvalidPolicy.selector);
+        new MomentsFactory(gov, bad);
+        vm.prank(gov);
+        vm.expectRevert(MomentsFactory.InvalidPolicy.selector);
+        factory.proposePolicy(bad);
+        MomentTypes.Policy memory edge = _policy(1_000_000);
+        edge.minPrice = (1_000_000 * BPS + RESERVE_BPS - 1) / RESERVE_BPS;
+        vm.prank(gov);
+        factory.proposePolicy(edge);
+        vm.warp(vm.getBlockTimestamp() + factory.POLICY_DELAY());
+        factory.applyPolicy();
+        bytes32 terms = factory.termsHash();
+        vm.prank(creator);
+        factory.publish(_params(edge.minPrice, 0, 3), terms); // the one price both bounds allow
+    }
 }
