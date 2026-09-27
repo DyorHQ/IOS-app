@@ -18,7 +18,9 @@ final class BackendSync {
     private var debounced: [Store: Task<Void, Never>] = [:]
     /// Bumped by each upload scheduled for a store, so only the latest one can mark it as synced.
     private var generation: [Store: Int] = [:]
-    private var restoring = false
+    /// The wallet a `restore` is running for. Its stores' changes meanwhile are marked, not sent: restore's closing
+    /// flush sends their contents then.
+    private var restoring: Address?
     /// Wallets waiting for a `flush`, and the one running them.
     private var flushQueue: [Address] = []
     private var flushTask: Task<Void, Never>?
@@ -53,11 +55,15 @@ final class BackendSync {
 
     /// A new record joins the wallet's queue on the device first, then the queue is sent.
     private func activity(_ record: ActivityRecord, owner: Address) {
-        let row = ActivityRow(id: Self.stableID(record).uuidString.lowercased(), wallet: owner.checksummed.lowercased(), kind: record.kind.rawValue,
-                              section: record.section ?? "wallet", title: String(record.title.prefix(120)), subtitle: String(record.subtitle.prefix(300)),
-                              tx_hash: record.txHashHex?.lowercased(), usd: record.usd, fee_usd: record.feeUsd, occurred_at: Self.iso(record.time))
+        let row = Self.row(record, owner: owner)
         Self.updateActivityQueue(owner) { $0.enqueue(id: row.id, row: row) }
         flush(owner: owner)
+    }
+
+    private static func row(_ record: ActivityRecord, owner: Address) -> ActivityRow {
+        ActivityRow(id: stableID(record).uuidString.lowercased(), wallet: owner.checksummed.lowercased(), kind: record.kind.rawValue,
+                    section: record.section ?? "wallet", title: String(record.title.prefix(120)), subtitle: String(record.subtitle.prefix(300)),
+                    tx_hash: record.txHashHex?.lowercased(), usd: record.usd, fee_usd: record.feeUsd, occurred_at: iso(record.time))
     }
 
     /// The same settled transaction always maps to the same row, so re-recording it can never double a row. The row
@@ -106,7 +112,9 @@ final class BackendSync {
     }
 
     private func notifications(_ items: [AppNotification], owner: Address?) {
-        guard !restoring, let owner else { return }
+        guard let owner else { return }
+        // Marked, never dropped, while this wallet's restore runs (RS-4): its closing flush sends the store as it is then.
+        guard restoring != owner else { Self.setDirty(.notifications, true, owner: owner); return }
         uploadNotifications(items, owner: owner, delay: 2)
     }
 
@@ -129,7 +137,7 @@ final class BackendSync {
     }
 
     private func alerts(_ alerts: [PriceAlert], owner: Address) {
-        guard !restoring else { return }
+        guard restoring != owner else { Self.setDirty(.alerts, true, owner: owner); return }
         uploadAlerts(alerts, owner: owner, delay: 2)
     }
 
@@ -154,7 +162,8 @@ final class BackendSync {
 
     private func settingsChanged() {
         UserDefaults.standard.set(true, forKey: "settings.touched")
-        guard !restoring, let owner = address() else { return }
+        guard let owner = address() else { return }
+        guard restoring != owner else { Self.setDirty(.settings, true, owner: owner); return }
         uploadSettings(owner: owner, delay: 2)
     }
 
@@ -176,35 +185,60 @@ final class BackendSync {
     /// A fresh device: pulls what the wallet has on the backend into every local store that is still empty, and
     /// merges its activity into the device's (MERA-PLAN §6). Restored rows are checked before they're applied
     /// (`BackendRestore`): they're the wallet's own, but not the app's to trust blindly. A store with changes the
-    /// backend hasn't got yet keeps them. Then whatever is waiting for this wallet is sent (`flush`).
+    /// backend hasn't got yet keeps them, and so does one that changes while its rows are read: what arrived meanwhile
+    /// is kept and the restored rows are added to it. Then whatever is waiting for this wallet is sent (`flush`).
     func restore(owner: Address) async {
         guard social.isSignedIn else { return }
         let wallet = owner.checksummed.lowercased()
         let dirty = Self.dirty(owner)
-        restoring = true
-        defer { restoring = false; flush(owner: owner) }
-        func rows<T: Decodable>(_ table: String, _ extra: [URLQueryItem], select: String = "*") async -> [T] {
-            (try? await social.client.read(table, query: [URLQueryItem(name: "select", value: select), URLQueryItem(name: "wallet", value: "eq.\(wallet)")] + extra, authed: true)) ?? []
+        restoring = owner
+        defer { if restoring == owner { restoring = nil }; flush(owner: owner) }
+        func read<T: Decodable>(_ table: String, _ extra: [URLQueryItem], select: String = "*") async -> [T]? {
+            try? await social.client.read(table, query: [URLQueryItem(name: "select", value: select), URLQueryItem(name: "wallet", value: "eq.\(wallet)")] + extra, authed: true)
         }
         // Activity merges even into a log that isn't empty: rows another device recorded join this one's, without
         // doubling any (same id or transaction hash), newest first and capped like the local log.
-        let activity: [BackendRestore.ActivityRow] = await rows("activity", [URLQueryItem(name: "order", value: "occurred_at.desc"),
-                                                                            URLQueryItem(name: "limit", value: "\(ActivityLog.cap)")],
-                                                               select: BackendRestore.activityColumns)
-        let restored = activity.compactMap { BackendRestore.Activity($0) }.map(ActivityRecord.init(restored:))
-        if !restored.isEmpty { ActivityLog.merge(restored: restored, owner: owner) }
-        if NotificationStore.all(owner: owner).isEmpty, !dirty.contains(.notifications) {
-            let list: [NotificationDown] = await rows("notifications", [URLQueryItem(name: "order", value: "created_at.desc"), URLQueryItem(name: "limit", value: "200")])
-            if !list.isEmpty { NotificationStore.save(list.map(\.data), owner: owner); NotificationHub.shared.bind(owner: owner) }
+        let activity: [BackendRestore.ActivityRow]? = await read("activity", [URLQueryItem(name: "order", value: "occurred_at.desc"),
+                                                                             URLQueryItem(name: "limit", value: "\(ActivityLog.cap)")],
+                                                                select: BackendRestore.activityColumns)
+        if let activity {
+            let restored = activity.compactMap { BackendRestore.Activity($0) }.map(ActivityRecord.init(restored:))
+            if !restored.isEmpty { ActivityLog.merge(restored: restored, owner: owner) }
+            backfillActivity(owner: owner, onServer: Set(activity.compactMap { $0.id?.lowercased() }))
         }
-        if PriceAlertStore.all(owner: owner).isEmpty, !dirty.contains(.alerts) {
-            let list: [AlertDown] = await rows("alerts", [URLQueryItem(name: "kind", value: "eq.price")])
-            if !list.isEmpty { PriceAlertStore.save(list.map(\.payload), owner: owner) }
+        if NotificationStore.all(owner: owner).isEmpty, !dirty.contains(.notifications),
+           let list: [NotificationDown] = await read("notifications", [URLQueryItem(name: "order", value: "created_at.desc"), URLQueryItem(name: "limit", value: "200")]),
+           !list.isEmpty {
+            let local = NotificationStore.all(owner: owner) // posted while the rows were read: newer, and kept
+            let ids = Set(local.map(\.id))
+            NotificationStore.save(local + list.map(\.data).filter { !ids.contains($0.id) }, owner: owner)
+            NotificationHub.shared.bind(owner: owner)
         }
-        if !UserDefaults.standard.bool(forKey: "settings.touched"), let settings {
-            let list: [SettingsDown] = await rows("user_settings", [])
-            if let data = list.first?.data { settings.apply(snapshot: data.mapValues(\.any)) }
+        if PriceAlertStore.all(owner: owner).isEmpty, !dirty.contains(.alerts),
+           let list: [AlertDown] = await read("alerts", [URLQueryItem(name: "kind", value: "eq.price")]), !list.isEmpty {
+            let local = PriceAlertStore.all(owner: owner) // added while the rows were read: kept
+            let ids = Set(local.map(\.id))
+            PriceAlertStore.save(local + list.map(\.payload).filter { !ids.contains($0.id) }, owner: owner)
         }
+        if !UserDefaults.standard.bool(forKey: "settings.touched"), let settings,
+           let list: [SettingsDown] = await read("user_settings", []), let data = list.first?.data,
+           !UserDefaults.standard.bool(forKey: "settings.touched") { // a setting changed while it was read wins
+            settings.apply(snapshot: data.mapValues(\.any))
+        }
+    }
+
+    private static func backfilledKey(_ owner: Address) -> String { "backendSync.activityBackfilled.v1.\(owner.hex)" }
+
+    /// Once per wallet: the records this device holds that the server doesn't (`onServer`: the ids of its newest rows)
+    /// join the queue. Builds before the queue sent a record only while the session was up, so anything recorded while
+    /// it was down was never uploaded (RS-4); from here on the queue keeps every new record until it is sent.
+    private func backfillActivity(owner: Address, onServer: Set<String>) {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.backfilledKey(owner)) else { return }
+        let missing = ActivityLog.all(owner: owner).map { Self.row($0, owner: owner) }.filter { !onServer.contains($0.id) }
+        // Oldest first, so the newest are the last to go past the queue's cap.
+        if !missing.isEmpty { Self.updateActivityQueue(owner) { queue in for row in missing.reversed() { queue.enqueue(id: row.id, row: row) } } }
+        defaults.set(true, forKey: Self.backfilledKey(owner))
     }
 
     // MARK: Retry
