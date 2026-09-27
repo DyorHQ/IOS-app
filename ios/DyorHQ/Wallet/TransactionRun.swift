@@ -299,7 +299,11 @@ struct ConfirmationSheet<Details: View>: View {
     /// the tap, approving this plan; then the plan. A passkey account whose badge said "No Face ID needed" signs in its
     /// session, and the wallet still checks every transaction: one that fails asks for Face ID right there.
     private func confirm() async {
-        if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm \(confirmTitle)")) { return }
+        if settings.appLockApplies(to: session.account) {
+            // App Lock fails closed. Without a device passcode nothing can confirm the owner: say so, not a dead button.
+            guard BiometricGate.canAuthenticateOwner else { run.fail("App Lock needs a device passcode. Set one in iOS Settings, then try again."); return }
+            guard await BiometricGate.authenticate(reason: "Confirm \(confirmTitle)") else { return }
+        }
         guard session.isPasskeyAccount else {
             run.start(steps, session: session, sender: env.sender)
             return
