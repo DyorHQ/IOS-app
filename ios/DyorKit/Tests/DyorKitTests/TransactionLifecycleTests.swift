@@ -75,19 +75,94 @@ final class TransactionLifecycleTests: XCTestCase {
         XCTAssertEqual(wallet.signatures, 1)
     }
 
-    /// A node's refusal is an answer: it stands, after one look-up by hash.
+    /// A node's refusal of this very transaction is an answer: it stands, after one look-up by hash.
     func testAnsweredRefusalStands() async {
         chain.sendFailures = 1
-        chain.sendFailure = "execution reverted"
+        chain.sendFailure = "insufficient funds for gas * price + value"
         do {
             _ = try await sender(chainId: 8453).send(request, from: CountingWallet())
             XCTFail("expected the node's error")
         } catch let error as RPCError {
-            XCTAssertEqual(error.message, "execution reverted")
+            XCTAssertEqual(error.message, "insufficient funds for gas * price + value")
         } catch {
             XCTFail("unexpected \(error)")
         }
         XCTAssertEqual(chain.sent.count, 1, "a refusal is never resent")
+    }
+
+    /// A gateway's error from an upstream that took the transaction, while the first look-up misses it: followed by
+    /// hash, never read as "not sent" (which would let the sheet sign it again with the next nonce).
+    func testGatewayErrorIsFollowedNotTakenAsARefusal() async throws {
+        let wallet = CountingWallet()
+        chain.takenSendFailures = 1
+        chain.sendFailure = "internal error"
+        chain.hiddenLookups = 2 // the receipt and by-hash reads of the first look-up
+        let hash = try await sender().send(request, from: wallet)
+        XCTAssertEqual(hash, Keccak.hash256(Data(hex: chain.sent[0].raw)!))
+        XCTAssertEqual(chain.sent.count, 1, "found by hash: nothing sent again")
+        XCTAssertEqual(wallet.signatures, 1)
+    }
+
+    /// A reply the client can't match to its request ("Missing response") is no answer about the transaction.
+    func testUnmatchedReplyIsFollowedByHash() async throws {
+        let wallet = CountingWallet()
+        chain.unmatchedSendAnswers = 1
+        chain.hiddenLookups = 2
+        let hash = try await sender().send(request, from: wallet)
+        XCTAssertEqual(hash, Keccak.hash256(Data(hex: chain.sent[0].raw)!))
+        XCTAssertEqual(wallet.signatures, 1)
+    }
+
+    /// A gateway that keeps erroring: the same bytes are resent, and the step ends possibly sent — never not sent.
+    func testPersistentGatewayErrorIsPossiblySent() async {
+        let wallet = CountingWallet()
+        chain.sendFailures = 100
+        chain.sendFailure = "upstream request timeout"
+        do {
+            _ = try await sender().send(request, from: wallet)
+            XCTFail("expected possiblySent")
+        } catch let error as TransactionError {
+            guard case .possiblySent(let hash) = error else { return XCTFail("unexpected \(error)") }
+            XCTAssertEqual(hash, Keccak.hash256(Data(hex: chain.sent[0].raw)!))
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+        XCTAssertEqual(wallet.signatures, 1)
+        XCTAssertEqual(Set(chain.sent.map(\.raw)).count, 1, "only ever the same signed bytes")
+    }
+
+    /// "Nonce too low" is this transaction's own nonce only when the network turns up the transaction; a node behind
+    /// the one that mined it answers it too, so it is looked up again before the refusal stands.
+    func testNonceTooLowFromALaggingNodeIsFollowed() async throws {
+        let wallet = CountingWallet()
+        chain.takenSendFailures = 1
+        chain.sendFailure = "nonce too low"
+        chain.hiddenLookups = 3 // sendRawTransaction's own look-up, then the first receipt and by-hash reads
+        let hash = try await sender().send(request, from: wallet)
+        XCTAssertEqual(hash, Keccak.hash256(Data(hex: chain.sent[0].raw)!))
+        XCTAssertEqual(chain.sent.count, 1)
+
+        RPCStub.chain = SimulatedChain()
+        chain.sendFailures = 1
+        chain.sendFailure = "nonce too low"
+        do {
+            _ = try await sender().send(request, from: CountingWallet())
+            XCTFail("another transaction used the nonce — must stay an error")
+        } catch let error as RPCError {
+            XCTAssertTrue(error.message.contains("nonce too low"))
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    func testRefusalsAreNarrow() {
+        for message in ["insufficient funds for gas * price + value", "Signer had insufficient balance", "intrinsic gas too low",
+                        "replacement transaction underpriced", "max fee per gas less than block base fee", "nonce too low", "invalid chain id for signer"] {
+            XCTAssertTrue(TransactionSender.isRefusal(RPCError(code: -32000, message: message)), message)
+        }
+        for message in ["internal error", "upstream request timeout", "Missing response", "execution reverted", "rate limit exceeded", "nonce too high", ""] {
+            XCTAssertFalse(TransactionSender.isRefusal(RPCError(code: -32603, message: message)), message)
+        }
     }
 
     /// A plan whose broadcast got no answer still follows that step by hash, confirms it, and runs on — one signature

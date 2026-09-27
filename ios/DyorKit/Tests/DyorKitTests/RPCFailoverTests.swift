@@ -309,6 +309,12 @@ final class SimulatedChain: @unchecked Sendable {
     var lostSendAnswers = 0
     /// The next N broadcasts never reach the node (a transport failure; nothing is taken).
     var unreachableSends = 0
+    /// The next N broadcasts are taken, but answered with `sendFailure` (a gateway whose upstream took them).
+    var takenSendFailures = 0
+    /// The next N broadcasts are taken, but answered under another id (a reply the client can't match to its request).
+    var unmatchedSendAnswers = 0
+    /// The next N receipt or by-hash reads answer "unknown" whatever was taken (a node behind the one that took it).
+    var hiddenLookups = 0
     /// Receipt reads that answer "pending" before a taken transaction's receipt appears.
     var pendingReceiptReads = 0
     /// The next N receipt reads fail at the transport (a socket that died while the app was suspended).
@@ -349,15 +355,19 @@ final class SimulatedChain: @unchecked Sendable {
             if sendFailures > 0 { sendFailures -= 1; return failure(sendFailure) }
             let hash = Keccak.hash256(Data(hex: raw) ?? Data()).hexString
             accepted.insert(hash)
+            if takenSendFailures > 0 { takenSendFailures -= 1; return failure(sendFailure) }
+            if unmatchedSendAnswers > 0 { unmatchedSendAnswers -= 1; return .object(["jsonrpc": .string("2.0"), "id": .number(-7), "result": .string(hash)]) }
             if lostSendAnswers > 0 { lostSendAnswers -= 1; transportFailure = true }
             return result(.string(hash))
         case "eth_getTransactionReceipt":
             if receiptReadFailures > 0 { receiptReadFailures -= 1; transportFailure = true; return result(.null) }
+            if hiddenLookups > 0 { hiddenLookups -= 1; return result(.null) }
             guard let asked = call["params"].array?.first?.string, accepted.contains(asked) else { return result(.null) }
             if pendingReceiptReads > 0 { pendingReceiptReads -= 1; return result(.null) }
             receiptBlocks.append(head)
             return result(.object(["status": .string(receiptsSucceed ? "0x1" : "0x0"), "blockNumber": quantity(BigUInt(head)), "gasUsed": .string("0x5208")]))
         case "eth_getTransactionByHash":
+            if hiddenLookups > 0 { hiddenLookups -= 1; return result(.null) }
             let asked = call["params"].array?.first?.string ?? ""
             return result(accepted.contains(asked) ? .object(["hash": .string(asked)]) : .null)
         default: return nil

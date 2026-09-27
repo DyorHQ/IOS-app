@@ -234,10 +234,11 @@ public struct TransactionSender: Sendable {
     }
 
     /// Hands the signed bytes to the network and returns their hash: keccak-256 of those bytes, known before anything is
-    /// sent. A node's answer settles it — taken, or refused (looked up by hash once first, in case an endpoint before a
-    /// failover took it). No answer at all (the connection dropped with the phone locked, every endpoint failed, the
-    /// reply was unreadable) leaves the transaction possibly live, so `confirmUnanswered` follows it by hash and never
-    /// reports it as not sent.
+    /// sent. A node's refusal of this very transaction (`isRefusal`) settles it, after a look-up by hash in case an
+    /// endpoint before a failover took it. Anything else — no answer at all (the connection dropped with the phone
+    /// locked, every endpoint failed), a reply the client couldn't match, a gateway's "internal error" or "upstream
+    /// timeout", throttling that outlasted the retries — leaves the transaction possibly live, so `confirmUnanswered`
+    /// follows it by hash and never reports it as not sent.
     ///
     /// Monad's consensus checks a sender's balance as of a few blocks back, so a transaction from an account funded
     /// less than 3 blocks ago is refused with "Signer had insufficient balance" although the funds are visible. The
@@ -259,6 +260,10 @@ public struct TransactionSender: Sendable {
             }
         } catch let error as RPCError {
             if await rpc.knowsTransaction(hash) == true { return hash }
+            guard Self.isRefusal(error) else { return try await confirmUnanswered(signed, hash: hash) }
+            // "Nonce too low": a node behind the one that mined this transaction answers it too, so it is looked up a
+            // few more times before another transaction is taken to have used the nonce.
+            if Self.isNonceUsed(error), await becomesKnown(hash) { return hash }
             throw error
         } catch let error as TransactionError {
             throw error
@@ -280,6 +285,32 @@ public struct TransactionSender: Sendable {
         if await rpc.knowsTransaction(hash) == true { return hash }
         throw TransactionError.possiblySent(hash)
     }
+
+    /// Whether the network turns out to know `hash`, looked up with the same growing waits as `confirmUnanswered`.
+    private func becomesKnown(_ hash: Data) async -> Bool {
+        for attempt in 1...max(1, timing.resendAttempts) {
+            try? await Task.sleep(for: timing.resendBackoff * attempt)
+            if await rpc.knowsTransaction(hash) == true { return true }
+        }
+        return false
+    }
+
+    /// A node's answer that this very transaction is invalid — so no node holds it, and it can't land as signed (PR-4):
+    /// the balance can't pay for it, its gas or fee fields are out of bounds, its nonce is used, it is signed for another
+    /// chain. Deliberately narrow: an error that isn't about the transaction (a gateway's "internal error" or "upstream
+    /// request timeout", the client's own "Missing response", throttling) may come from a path where a node took it.
+    static func isRefusal(_ error: RPCError) -> Bool {
+        let message = error.message.lowercased()
+        return refusals.contains { message.contains($0) }
+    }
+
+    static func isNonceUsed(_ error: RPCError) -> Bool { error.message.lowercased().contains("nonce too low") }
+
+    private static let refusals = [
+        "insufficient funds", "insufficient balance", "intrinsic gas too low", "exceeds block gas limit", "underpriced",
+        "less than block base fee", "tip higher than fee cap", "max priority fee per gas higher than max fee per gas",
+        "nonce too low", "invalid sender", "invalid chain id", "transaction type not supported", "oversized data",
+    ]
 
     /// Monad's refusal for a balance its consensus can't see yet. Other chains say "insufficient funds", which is a
     /// real shortfall and stays one.
