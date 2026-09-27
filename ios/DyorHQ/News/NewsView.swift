@@ -19,7 +19,9 @@ struct NewsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if model.articles.isEmpty, model.loading {
+                // The full-screen spinner is for the first load only. Once the list is on screen it stays there while a
+                // refresh runs: swapping out the list a pull started would cancel that pull's reload (UI-6).
+                if model.articles.isEmpty, model.loading, model.error == nil {
                     ProgressView("Loading headlines…").controlSize(.large)
                 } else {
                     // A list even when empty, so the empty state can be pulled to refresh as it says (UI-6).
@@ -30,7 +32,11 @@ struct NewsView: View {
                             } description: {
                                 Text(model.error ?? "The news feeds could not be reached.")
                             } actions: {
-                                Button("Try Again") { Haptics.tap(); Task { await model.load(env: env, force: true) } }
+                                if model.loading {
+                                    ProgressView()
+                                } else {
+                                    Button("Try Again") { Haptics.tap(); Task { await model.load(env: env, force: true) } }
+                                }
                             }
                             .listRowBackground(Color.clear)
                         } else {
