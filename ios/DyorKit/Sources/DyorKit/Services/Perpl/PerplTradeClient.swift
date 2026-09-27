@@ -222,6 +222,14 @@ public struct PerplClose: Sendable, Equatable {
 /// happens where a `PerpMarket` is in hand). `OrderType` here is Perpl's 1-indexed API enum, NOT the 0-indexed on-chain
 /// `PerpOrderType`.
 public struct PerplOpenOrder: Identifiable, Sendable, Hashable {
+    /// An order is known by its market AND its id: Perpl's order ids are per market (on-chain `getOrder(perpId,
+    /// orderId)`), so the same id on two markets is two orders.
+    public struct Key: Hashable, Sendable {
+        public let marketId: Int
+        public let oid: Int
+        public init(marketId: Int, oid: Int) { self.marketId = marketId; self.oid = oid }
+    }
+
     public let oid: Int
     public let marketId: Int
     public let typeRaw: Int              // 1 OpenLong, 2 OpenShort, 3 CloseLong, 4 CloseShort
@@ -233,7 +241,8 @@ public struct PerplOpenOrder: Identifiable, Sendable, Hashable {
     public let triggerConditionRaw: Int? // `tpc`: 1/2 last-based (take-profit), 3/4 mark-based (stop-loss)
     public let linkedPositionId: Int?
     public let leverageHundredths: Int
-    public var id: Int { oid }
+    public var key: Key { Key(marketId: marketId, oid: oid) }
+    public var id: Key { key }
 
     public init(oid: Int, marketId: Int, typeRaw: Int, statusRaw: Int, priceRaw: Int, sizeRaw: Int, filledRaw: Int,
                 triggerPriceRaw: Int?, triggerConditionRaw: Int?, linkedPositionId: Int?, leverageHundredths: Int) {
@@ -255,8 +264,18 @@ public struct PerplOpenOrder: Identifiable, Sendable, Hashable {
     /// classifies triggers placed anywhere (including the Perpl web app), not only this app's own last/mark convention.
     public var isStopLoss: Bool { protectsLong ? !firesOnRise : firesOnRise }
     /// A resting order that can still open or grow a position (OpenLong / OpenShort, not a trigger). A trigger attached
-    /// to such an entry (`tr`) waits for it to fill, so the triggers on its market are never treated as orphaned.
+    /// to such an entry (`tr`) waits for it to fill, so the triggers closing that side of its market are never treated
+    /// as orphaned.
     public var isRestingEntry: Bool { !isTrigger && (typeRaw == 1 || typeRaw == 2) }
+    /// The side of the market this order acts on: the position a trigger closes, or the one an entry opens.
+    public var side: PerplMarketSide { PerplMarketSide(marketId: marketId, isLong: isReduceOnly ? protectsLong : typeRaw == 1) }
+}
+
+/// One side of one market: a position there, or the entries and triggers that act on it.
+public struct PerplMarketSide: Hashable, Sendable {
+    public let marketId: Int
+    public let isLong: Bool
+    public init(marketId: Int, isLong: Bool) { self.marketId = marketId; self.isLong = isLong }
 }
 
 /// One position from the authenticated stream (mt:26 snapshot, mt:27 updates). `pid` is the id a trigger links to
@@ -282,12 +301,15 @@ public struct PerplLivePosition: Sendable, Hashable {
 
 /// A keeper trigger (take-profit / stop-loss) changing state on the authenticated stream: it fired (Perpl is closing
 /// the position), or it failed — refused after the gateway admitted it, or it fired and could not execute, which
-/// leaves the position open without that protection.
+/// leaves the position open without that protection — or it expired without firing.
 public struct PerplTriggerEvent: Sendable, Equatable {
     public enum Outcome: Sendable, Equatable {
         case triggered
-        /// `reason` is Perpl's `sr` (OrderStatusReason), e.g. 64 TriggeredExecutionAttemptsExhausted.
+        /// `reason` is Perpl's `sr` (OrderStatusReason), e.g. 64 TriggeredExecutionAttemptsExhausted, 67
+        /// TriggeredOrderExpired.
         case failed(reason: Int)
+        /// It reached its time-in-force without firing (Expired, 6): it no longer protects anything.
+        case expired
     }
     public let order: PerplOpenOrder
     public let outcome: Outcome
@@ -310,7 +332,11 @@ public final class PerplTradeClient {
     /// stream reports them (mt:23 snapshot on connect, mt:24 updates after). This is the ONLY authoritative source for
     /// pending triggers, since they never touch the on-chain order book. Empty until the first snapshot arrives.
     public private(set) var openOrders: [PerplOpenOrder] = []
-    private var ordersByOid: [Int: PerplOpenOrder] = [:]
+    private var ordersByKey: [PerplOpenOrder.Key: PerplOpenOrder] = [:]
+    /// Orders Perpl has reported with a status other than Failed on this socket. Per Perpl's client-side deduplication
+    /// rule (api-docs websocket.md) that first non-failure status is definitive, so a later failure only a resent
+    /// request can get (`duplicateRequestFailures`) is a stale echo, not the order's end.
+    private var admitted: Set<PerplOpenOrder.Key> = []
     /// The mt:23 snapshot has arrived on this socket, so `openOrders` is the whole set rather than whatever updates
     /// came in first. Until then (and on a socket that dropped) the list proves nothing about what is live.
     public private(set) var hasOrdersSnapshot = false
@@ -561,7 +587,7 @@ public final class PerplTradeClient {
         case 21: // AccountUpdate — fw / lfr change
             applyAccount(obj)
         case 23: // OrdersSnapshot — the full open-order set replaces what we hold
-            ordersByOid.removeAll()
+            ordersByKey.removeAll()
             for raw in (obj["d"] as? [[String: Any]]) ?? [] { applyOrder(raw, announce: false) }
             hasOrdersSnapshot = true
             publishOrders()
@@ -614,18 +640,33 @@ public final class PerplTradeClient {
 
     /// Upserts one `Order` from mt:23/24, or drops it when Perpl flags it removed (`r`) or it reaches a terminal
     /// status. Live statuses kept: Pending(1), Open(2), PartiallyFilled(3), Untriggered(8), Triggered(9).
-    /// `announce` (updates only): report a trigger that fired or failed (`onTriggerEvent`).
+    /// `announce` (updates only): report a trigger that fired, failed or expired (`onTriggerEvent`).
     private func applyOrder(_ raw: [String: Any], announce: Bool) {
         guard let oid = Self.intValue(raw["oid"]) else { return }
-        let previous = ordersByOid[oid]
+        // Order ids are per market: an update is merged into the order with its market AND id. One that leaves out
+        // its market belongs to the only order with that id, if there is exactly one; otherwise it can't be placed.
+        let marketId: Int
+        if let mkt = Self.intValue(raw["mkt"]) {
+            marketId = mkt
+        } else {
+            let known = ordersByKey.keys.filter { $0.oid == oid }
+            guard known.count <= 1 else { return }
+            marketId = known.first?.marketId ?? 0
+        }
+        let key = PerplOpenOrder.Key(marketId: marketId, oid: oid)
+        let previous = ordersByKey[key]
         // An update without a status keeps the one it had, rather than reading as terminal and dropping a live order.
         let status = Self.intValue(raw["st"]) ?? previous?.statusRaw ?? 0
         let reason = Self.intValue(raw["sr"]) ?? 0
         let removed = Self.boolValue(raw["r"]) ?? false
+        // A failure only a resent request can get, for an order already admitted: the late echo of a duplicate. The
+        // order stays as it is (dropping it would hide a live stop-loss the app could then no longer cancel).
+        if status == 7, admitted.contains(key), Self.duplicateRequestFailures.contains(reason) { return }
+        if Self.admittedStatuses.contains(status) { admitted.insert(key) }
         // An update may carry only what changed; the order's own terms (type, size, trigger) never do.
         let order = PerplOpenOrder(
             oid: oid,
-            marketId: Self.intValue(raw["mkt"]) ?? previous?.marketId ?? 0,
+            marketId: marketId,
             typeRaw: Self.intValue(raw["t"]) ?? previous?.typeRaw ?? 0,
             statusRaw: status,
             priceRaw: Self.intValue(raw["p"]) ?? previous?.priceRaw ?? 0,
@@ -637,24 +678,46 @@ public final class PerplTradeClient {
             leverageHundredths: Self.intValue(raw["lv"]) ?? previous?.leverageHundredths ?? 0
         )
         if announce, order.isTrigger, let outcome = Self.triggerOutcome(status: status, reason: reason),
-           announcedTriggers.insert("\(oid)-\(outcome == .triggered ? "fired" : "failed")").inserted {
+           announcedTriggers.insert("\(marketId)-\(oid)-\(Self.eventName(outcome))").inserted {
             onTriggerEvent?(PerplTriggerEvent(order: order, outcome: outcome))
         }
-        guard !removed, [1, 2, 3, 8, 9].contains(status) else { ordersByOid[oid] = nil; return }
-        ordersByOid[oid] = order
+        guard !removed, [1, 2, 3, 8, 9].contains(status) else { ordersByKey[key] = nil; return }
+        ordersByKey[key] = order
     }
 
-    /// What a trigger's status says happened to it, if anything worth reporting: Triggered (9) / Executed (10) /
-    /// Filled (4) or a triggered-execution reason (54, 65, 66) means it fired; Failed (7) means it was refused or
-    /// could not execute. Untriggered, open and cancelled triggers report nothing.
+    /// The statuses that admit an order (api-docs websocket.md, "Client-side deduplication"): Open, PartiallyFilled,
+    /// Filled, Canceled, Untriggered, Triggered, Executed.
+    static let admittedStatuses: Set<Int> = [2, 3, 4, 5, 8, 9, 10]
+    /// Failures that answer a request, never an order already on Perpl: its request id was already used
+    /// (OrderDescIdTooLow 32, TriggerDescIdTooLow 59), or forwarding was off when it was sent
+    /// (OrderForwardingNotAllowed 34 — revoking forwarding leaves admitted orders alone).
+    static let duplicateRequestFailures: Set<Int> = [32, 34, 59]
+
+    /// What a trigger's status says happened to it, if anything worth reporting. The reason is read first: a trigger
+    /// that fired and then couldn't be carried out — attempts exhausted (64) or the triggered order expired (67) — has
+    /// failed whatever status comes with it (an expiry arrives as Expired, 6). Then Failed (7): refused, or could not
+    /// execute. Expired (6) after firing is a failure too; before firing, the trigger simply expired. Triggered (9) /
+    /// Executed (10) / Filled (4) or a firing reason (54, 65, 66) means it fired — including a recoverable failure (68)
+    /// the keeper is still retrying under Triggered. Untriggered, open and cancelled triggers report nothing.
     static func triggerOutcome(status: Int, reason: Int) -> PerplTriggerEvent.Outcome? {
+        if [64, 67].contains(reason) { return .failed(reason: reason) }
         if status == 7 { return .failed(reason: reason) }
+        if status == 6 { return [54, 65, 66, 68].contains(reason) ? .failed(reason: 67) : .expired }
         if [4, 9, 10].contains(status) || [54, 65, 66].contains(reason) { return .triggered }
         return nil
     }
 
+    private static func eventName(_ outcome: PerplTriggerEvent.Outcome) -> String {
+        switch outcome {
+        case .triggered: return "fired"
+        case .failed: return "failed"
+        case .expired: return "expired"
+        }
+    }
+
     private func publishOrders() {
-        openOrders = ordersByOid.values.sorted { $0.oid < $1.oid } // stable order so rows don't reshuffle between updates
+        // A stable order, so rows don't reshuffle between updates.
+        openOrders = ordersByKey.values.sorted { ($0.oid, $0.marketId) < ($1.oid, $1.marketId) }
         onOrdersUpdate?()
     }
 

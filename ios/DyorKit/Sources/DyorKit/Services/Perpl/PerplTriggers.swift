@@ -95,28 +95,26 @@ extension PerplTriggerRules.Problem {
 /// (`lp`) when that position closes, but a trigger linked to its entry request (`tr`, how the order ticket attaches
 /// TP/SL) is not documented to go with it — left armed, it would fire against the next position on that side.
 public enum PerplTriggerCleanup {
-    /// Markets where a resting entry (a limit OpenLong / OpenShort) could still open a position. The triggers on such
-    /// a market may be waiting on that entry, so none of them is treated as orphaned.
-    public static func restingEntryMarkets(_ orders: [PerplOpenOrder]) -> Set<Int> {
-        Set(orders.filter(\.isRestingEntry).map(\.marketId))
+    /// The sides where a resting entry (a limit OpenLong / OpenShort) could still open a position. The triggers closing
+    /// that side of that market may be waiting on the entry, so none of them is treated as orphaned. Only that side: a
+    /// resting short says nothing about the stop-loss of a long that is gone.
+    public static func restingEntrySides(_ orders: [PerplOpenOrder]) -> Set<PerplMarketSide> {
+        Set(orders.filter(\.isRestingEntry).map(\.side))
     }
 
-    /// The reduce-only triggers whose market has no open position on the side they close and no resting entry. One
+    /// The reduce-only triggers with no open position on the side they close and no resting entry on that side. One
     /// that has already fired (Triggered, 9) is the keeper's to finish, never touched.
-    public static func orphans(orders: [PerplOpenOrder], positions: [PerplLivePosition], extraRestingEntryMarkets: Set<Int> = []) -> [PerplOpenOrder] {
-        let resting = restingEntryMarkets(orders).union(extraRestingEntryMarkets)
-        let open = Set(positions.filter(\.isOpen).map { OpenSide(marketId: $0.marketId, isLong: $0.isLong) })
+    public static func orphans(orders: [PerplOpenOrder], positions: [PerplLivePosition], extraRestingEntries: Set<PerplMarketSide> = []) -> [PerplOpenOrder] {
+        let resting = restingEntrySides(orders).union(extraRestingEntries)
+        let open = Set(positions.filter(\.isOpen).map { PerplMarketSide(marketId: $0.marketId, isLong: $0.isLong) })
         return orders.filter { order in
-            order.isTrigger && order.isReduceOnly && order.statusRaw != 9 && !resting.contains(order.marketId)
-                && !open.contains(OpenSide(marketId: order.marketId, isLong: order.protectsLong))
+            order.isTrigger && order.isReduceOnly && order.statusRaw != 9 && !resting.contains(order.side) && !open.contains(order.side)
         }
     }
 
     /// The triggers to cancel because `ended` closed: the orphans on its market that closed its side.
-    public static func siblings(of ended: PerplLivePosition, orders: [PerplOpenOrder], positions: [PerplLivePosition], extraRestingEntryMarkets: Set<Int> = []) -> [PerplOpenOrder] {
-        orphans(orders: orders, positions: positions, extraRestingEntryMarkets: extraRestingEntryMarkets)
+    public static func siblings(of ended: PerplLivePosition, orders: [PerplOpenOrder], positions: [PerplLivePosition], extraRestingEntries: Set<PerplMarketSide> = []) -> [PerplOpenOrder] {
+        orphans(orders: orders, positions: positions, extraRestingEntries: extraRestingEntries)
             .filter { $0.marketId == ended.marketId && $0.protectsLong == ended.isLong }
     }
-
-    private struct OpenSide: Hashable { let marketId: Int; let isLong: Bool }
 }

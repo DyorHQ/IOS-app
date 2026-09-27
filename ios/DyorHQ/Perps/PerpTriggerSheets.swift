@@ -333,7 +333,7 @@ struct CancelTriggersSheet: View {
             var cancelled = 0
             for order in orders {
                 let what = "\(order.isStopLoss ? "stop-loss" : "take-profit") at \(triggerText(order))"
-                guard let ack = acks[order.oid] else { continue }
+                guard let ack = acks[order.id] else { continue }
                 if ack.accepted {
                     cancelled += 1
                     lines.append(TriggerSheetLine(text: "Cancel sent for the \(what). It leaves the list when Perpl confirms.", warning: false))

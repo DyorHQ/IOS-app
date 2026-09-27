@@ -42,10 +42,10 @@ final class PerplTrading: MeraSessionLifecycle {
     private(set) var protectionNotice: ProtectionNotice?
     /// Markets the app has seen, for naming and scaling what the trading stream reports (`noteMarkets`).
     private var markets: [Int: PerpMarket] = [:]
-    /// Order ids a cancel was already sent for, so the automatic sibling cleanup never sends one twice.
-    private var cancelsSent: Set<Int> = []
-    /// Markets an entry was sent to recently: its triggers may be on the stream before the entry is.
-    private var recentEntries: [Int: Date] = [:]
+    /// Orders (by market and id) a cancel was already sent for, so the automatic sibling cleanup never sends one twice.
+    private var cancelsSent: Set<PerplOpenOrder.Key> = []
+    /// Sides of markets an entry was sent to recently: its triggers may be on the stream before the entry is.
+    private var recentEntries: [PerplMarketSide: Date] = [:]
     /// Markets whose position the trading stream saw end (any way), so the positions poll doesn't report it again.
     private var endingsSeen: [Int: Date] = [:]
     private var client: PerplTradeClient?
@@ -484,7 +484,7 @@ final class PerplTrading: MeraSessionLifecycle {
         var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
         let entryRq = client.nextRequestId()
         entry.requestId = entryRq
-        if !input.reduceOnly { recentEntries[input.market.id] = Date() }
+        if !input.reduceOnly { recentEntries[PerplMarketSide(marketId: input.market.id, isLong: input.side == .long)] = Date() }
 
         var frames = [entry]
         if let takeProfit {
@@ -522,9 +522,9 @@ final class PerplTrading: MeraSessionLifecycle {
 
     /// Cancels open orders or keeper triggers (TP/SL) from the live list, as ONE action: a passkey account's single
     /// step-up `approval` covers all of them (MERA-PLAN §3 — a cancel always asks). Each cancel is sent whatever the
-    /// others did, and each order's ack is returned by order id. An accepted ack means Perpl admitted the cancel; the
-    /// order leaves `openOrders` when the stream confirms it (mt:24).
-    func cancel(orders: [PerplOpenOrder], approval: MeraSession.StepUp? = nil) async throws -> [Int: PerplOrderAck] {
+    /// others did, and each order's ack is returned by its market and id. An accepted ack means Perpl admitted the
+    /// cancel; the order leaves `openOrders` when the stream confirms it (mt:24).
+    func cancel(orders: [PerplOpenOrder], approval: MeraSession.StepUp? = nil) async throws -> [PerplOpenOrder.Key: PerplOrderAck] {
         guard !orders.isEmpty else { return [:] }
         if boundToPasskey {
             guard let mera else { throw PerplTradeError.notSignedIn }
@@ -533,9 +533,9 @@ final class PerplTrading: MeraSessionLifecycle {
         await ensureConnected()
         let client = try liveClient()
         guard let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
-        cancelsSent.formUnion(orders.map(\.oid))
+        cancelsSent.formUnion(orders.map(\.id))
         let acks = try await client.sendEach(orders.map { PerplOrders.cancel(perpId: $0.marketId, orderId: $0.oid, accountId: accountId, head: 0) })
-        return Dictionary(zip(orders.map(\.oid), acks), uniquingKeysWith: { first, _ in first })
+        return Dictionary(zip(orders.map(\.id), acks), uniquingKeysWith: { first, _ in first })
     }
 
     /// One kind of trigger to set on an open position: the price for a new one (nil to only remove), and the live
@@ -608,14 +608,14 @@ final class PerplTrading: MeraSessionLifecycle {
                     outcomes[change.kind] = .unchanged(describe(error))
                     continue
                 }
-                cancelsSent.formUnion(change.replacing.map(\.oid))
+                cancelsSent.formUnion(change.replacing.map(\.id))
                 if let refused = acks.first(where: { !$0.accepted && !$0.outcomeUnknown }) {
                     let why = refused.error ?? "Perpl refused the cancel."
                     outcomes[change.kind] = acks.contains(where: \.accepted) ? .partlyRemoved(why) : .unchanged(why)
                     continue
                 }
                 if acks.contains(where: \.outcomeUnknown) { outcomes[change.kind] = .cancelUnknown; continue }
-                guard await awaitRemoval(of: Set(change.replacing.map(\.oid)), from: client) else {
+                guard await awaitRemoval(of: Set(change.replacing.map(\.id)), from: client) else {
                     outcomes[change.kind] = .cancelNotConfirmed
                     continue
                 }
@@ -641,13 +641,13 @@ final class PerplTrading: MeraSessionLifecycle {
         return outcomes
     }
 
-    /// Waits for the stream to confirm (mt:24) that none of `oids` is live any more. A gateway ack only admits a cancel;
-    /// the chain can still refuse it (a trigger that fired meanwhile, a reverted forward). False when the list stops
-    /// being live, or after `timeout`.
-    private func awaitRemoval(of oids: Set<Int>, from client: PerplTradeClient, timeout: TimeInterval = 10) async -> Bool {
+    /// Waits for the stream to confirm (mt:24) that none of `orders` (by market and id) is live any more. A gateway ack
+    /// only admits a cancel; the chain can still refuse it (a trigger that fired meanwhile, a reverted forward). False
+    /// when the list stops being live, or after `timeout`.
+    private func awaitRemoval(of orders: Set<PerplOpenOrder.Key>, from client: PerplTradeClient, timeout: TimeInterval = 10) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while client.signedIn, client.hasOrdersSnapshot {
-            if !client.openOrders.contains(where: { oids.contains($0.oid) }) { return true }
+            if !client.openOrders.contains(where: { orders.contains($0.id) }) { return true }
             guard Date() < deadline else { return false }
             try? await Task.sleep(for: .milliseconds(250))
         }
@@ -691,7 +691,7 @@ final class PerplTrading: MeraSessionLifecycle {
         var entry = PerplOrders.entry(input, accountId: accountId, head: head, ttlBlocks: ttlBlocks)
         let entryRq = client.nextRequestId()
         entry.requestId = entryRq
-        if !input.reduceOnly { recentEntries[input.market.id] = Date() }
+        if !input.reduceOnly { recentEntries[PerplMarketSide(marketId: input.market.id, isLong: input.side == .long)] = Date() }
         var frames = [entry]
         var labels = ["entry"]
         if let takeProfit {
@@ -773,13 +773,14 @@ final class PerplTrading: MeraSessionLifecycle {
     func dismissProtectionNotice() { protectionNotice = nil }
 
     /// The live TP/SL with nothing left to protect (security audit GT-2): no open position on the side they close —
-    /// neither on the stream nor in `onChainPositions` — and no entry resting on, or sent in the last minute to, their
-    /// market. Empty unless both of the stream's lists are live, so a gap in the data never reads as an orphan.
+    /// neither on the stream nor in `onChainPositions` — and no entry resting on, or sent in the last minute to, that
+    /// side of their market. Empty unless both of the stream's lists are live, so a gap in the data never reads as an
+    /// orphan.
     func orphanedTriggers(onChainPositions: [PerpPosition], onChainOrders: [PerpOrder]) -> [PerplOpenOrder] {
         guard ordersAreLive, positionsAreLive else { return [] }
         let onChain = onChainPositions.map { PerplLivePosition(pid: -1, marketId: $0.perpId, isLong: $0.side == .long, sizeRaw: 1, statusRaw: 1) }
-        let resting = Set(onChainOrders.filter { !$0.reduceOnly }.map(\.perpId)).union(recentEntryMarkets)
-        return PerplTriggerCleanup.orphans(orders: openOrders, positions: livePositions + onChain, extraRestingEntryMarkets: resting)
+        let resting = Set(onChainOrders.filter { !$0.reduceOnly }.map { PerplMarketSide(marketId: $0.perpId, isLong: $0.side == .buy) }).union(recentEntrySides)
+        return PerplTriggerCleanup.orphans(orders: openOrders, positions: livePositions + onChain, extraRestingEntries: resting)
     }
 
     /// The positions poll saw this side of a market close. The stream normally reports it first (mt:27); this covers a
@@ -788,7 +789,7 @@ final class PerplTrading: MeraSessionLifecycle {
         cancelLeftovers(of: PerplLivePosition(pid: -1, marketId: marketId, isLong: isLong, sizeRaw: 0, statusRaw: 2))
     }
 
-    private var recentEntryMarkets: Set<Int> { Set(recentEntries.filter { Date().timeIntervalSince($0.value) < 60 }.keys) }
+    private var recentEntrySides: Set<PerplMarketSide> { Set(recentEntries.filter { Date().timeIntervalSince($0.value) < 60 }.keys) }
 
     private func resetProtection() {
         protectionNotice = nil
@@ -830,6 +831,10 @@ final class PerplTrading: MeraSessionLifecycle {
             title = fired ? "\(kind) couldn't execute" : "\(kind) not placed"
             body = "\(detail). " + (fired ? "It triggered but Perpl couldn't close the position, so it is still open." : "Perpl refused it after accepting the order, so it isn't protecting your position.") + " Check the position on Perps."
             warning = true
+        case .expired:
+            title = "\(kind) expired"
+            body = "\(detail). It expired without triggering, so it no longer protects your position. Check the position on Perps."
+            warning = true
         }
         publish(ProtectionNotice(marketId: order.marketId, title: title, body: body, warning: warning))
     }
@@ -866,10 +871,10 @@ final class PerplTrading: MeraSessionLifecycle {
             try? await Task.sleep(for: .seconds(2))
             guard let self, let client = self.client, client.signedIn, client.hasOrdersSnapshot, client.hasPositionsSnapshot,
                   let accountId = client.accountId, self.boundOwner == owner else { return }
-            let leftovers = PerplTriggerCleanup.siblings(of: ended, orders: client.openOrders, positions: client.positions, extraRestingEntryMarkets: self.recentEntryMarkets)
-                .filter { !self.cancelsSent.contains($0.oid) }
+            let leftovers = PerplTriggerCleanup.siblings(of: ended, orders: client.openOrders, positions: client.positions, extraRestingEntries: self.recentEntrySides)
+                .filter { !self.cancelsSent.contains($0.id) }
             guard !leftovers.isEmpty else { return }
-            self.cancelsSent.formUnion(leftovers.map(\.oid))
+            self.cancelsSent.formUnion(leftovers.map(\.id))
             guard let acks = try? await client.sendEach(leftovers.map { PerplOrders.cancel(perpId: $0.marketId, orderId: $0.oid, accountId: accountId, head: 0) }) else { return }
             let cancelled = acks.filter(\.accepted).count
             guard cancelled > 0, let owner else { return }

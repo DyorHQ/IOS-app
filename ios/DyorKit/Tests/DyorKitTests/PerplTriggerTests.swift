@@ -112,8 +112,8 @@ final class PerplTriggerTests: XCTestCase {
 
     private func frame(_ object: [String: Any]) -> Data { try! JSONSerialization.data(withJSONObject: object) }
 
-    private func trigger(oid: Int, st: Int, sr: Int = 0, removed: Bool = false, tpc: Int = 4) -> [String: Any] {
-        var order: [String: Any] = ["oid": oid, "mkt": 1, "t": 3, "st": st, "sr": sr, "p": 0, "os": 10000, "fs": 0, "tp": 900000, "tpc": tpc, "lv": 0]
+    private func trigger(oid: Int, st: Int, sr: Int = 0, removed: Bool = false, tpc: Int = 4, market: Int = 1) -> [String: Any] {
+        var order: [String: Any] = ["oid": oid, "mkt": market, "t": 3, "st": st, "sr": sr, "p": 0, "os": 10000, "fs": 0, "tp": 900000, "tpc": tpc, "lv": 0]
         if removed { order["r"] = true }
         return order
     }
@@ -225,7 +225,9 @@ final class PerplTriggerTests: XCTestCase {
         let ethEntry = order(oid: 5, market: 20, type: 1, tp: nil, tpc: nil)
         XCTAssertTrue(ethEntry.isRestingEntry)
         XCTAssertEqual(PerplTriggerCleanup.orphans(orders: orders + [ethEntry], positions: [btcLong]).map(\.oid), [3])
-        XCTAssertEqual(PerplTriggerCleanup.orphans(orders: orders, positions: [btcLong], extraRestingEntryMarkets: [20]).map(\.oid), [3])
+        XCTAssertEqual(PerplTriggerCleanup.orphans(orders: orders, positions: [btcLong], extraRestingEntries: [PerplMarketSide(marketId: 20, isLong: true)]).map(\.oid), [3])
+        XCTAssertEqual(PerplTriggerCleanup.orphans(orders: orders, positions: [btcLong], extraRestingEntries: [PerplMarketSide(marketId: 20, isLong: false)]).map(\.oid), [3, 4],
+                       "an entry sent on the other side says nothing about the long's triggers")
 
         // The BTC long closed: its take-profit and stop-loss are the siblings to cancel — not the short-side one.
         let closed = PerplLivePosition(pid: 10, marketId: 1, isLong: true, sizeRaw: 0, statusRaw: 2)
@@ -238,5 +240,92 @@ final class PerplTriggerTests: XCTestCase {
         let firing = PerplOpenOrder(oid: 7, marketId: 1, typeRaw: 3, statusRaw: 9, priceRaw: 0, sizeRaw: 10000, filledRaw: 0,
                                     triggerPriceRaw: 900000, triggerConditionRaw: 4, linkedPositionId: nil, leverageHundredths: 0)
         XCTAssertEqual(PerplTriggerCleanup.siblings(of: closed, orders: [firing, longSL], positions: []).map(\.oid), [1])
+    }
+
+    // MARK: Security audit review (GT-1, GT-2, GT-3, GT-6, GT-9)
+
+    func testRestingEntryExemptsOnlyItsOwnSide() {
+        let longSL = order(oid: 1, type: 3)                              // CloseLong stop on BTC, no BTC long open
+        let restingShort = order(oid: 2, type: 2, tp: nil, tpc: nil)     // a far-away limit short on BTC
+        let restingLong = order(oid: 3, type: 1, tp: nil, tpc: nil)      // a limit long on BTC
+        XCTAssertEqual(restingShort.side, PerplMarketSide(marketId: 1, isLong: false))
+        XCTAssertEqual(longSL.side, PerplMarketSide(marketId: 1, isLong: true))
+        XCTAssertEqual(PerplTriggerCleanup.orphans(orders: [longSL, restingShort], positions: []).map(\.oid), [1],
+                       "a resting short never hides the orphaned stop-loss of a long")
+        XCTAssertTrue(PerplTriggerCleanup.orphans(orders: [longSL, restingLong], positions: []).isEmpty, "it may be waiting on the resting long")
+    }
+
+    func testTheSameOrderIdOnTwoMarketsIsTwoOrders() {
+        let c = client()
+        var events: [PerplTriggerEvent] = []
+        c.onTriggerEvent = { events.append($0) }
+        // BTC's trigger 12 and ETH's resting entry 12: both kept.
+        let ethEntry: [String: Any] = ["oid": 12, "mkt": 20, "t": 1, "st": 2, "p": 30000000, "os": 100, "fs": 0, "lv": 500]
+        c.handle(frame(["mt": 23, "d": [trigger(oid: 12, st: 8), ethEntry]]))
+        XCTAssertEqual(Set(c.openOrders.map(\.id)), [PerplOpenOrder.Key(marketId: 1, oid: 12), PerplOpenOrder.Key(marketId: 20, oid: 12)])
+        // ETH's order fills: BTC's trigger is untouched, and nothing is announced for it.
+        c.handle(frame(["mt": 24, "d": [["oid": 12, "mkt": 20, "st": 4, "fs": 100, "r": true]]]))
+        XCTAssertEqual(c.openOrders.map(\.id), [PerplOpenOrder.Key(marketId: 1, oid: 12)])
+        XCTAssertEqual(c.openOrders.first?.triggerPriceRaw, 900000)
+        XCTAssertTrue(events.isEmpty)
+        // An ETH trigger with the same id: its own order, and its firing is its own event.
+        c.handle(frame(["mt": 24, "d": [trigger(oid: 12, st: 8, market: 20)]]))
+        XCTAssertEqual(c.openOrders.count, 2)
+        // An update with no market can't be told apart while two orders share the id: ignored, not merged into either.
+        c.handle(frame(["mt": 24, "d": [["oid": 12, "st": 9, "sr": 54]]]))
+        XCTAssertTrue(events.isEmpty)
+        XCTAssertEqual(c.openOrders.map(\.statusRaw), [8, 8])
+        c.handle(frame(["mt": 24, "d": [trigger(oid: 12, st: 9, sr: 54)]]))
+        c.handle(frame(["mt": 24, "d": [trigger(oid: 12, st: 9, sr: 54, market: 20)]]))
+        XCTAssertEqual(events.map(\.order.marketId), [1, 20], "one trigger firing never hides the other market's")
+        // With one order left for the id, an update without a market is that order's.
+        c.handle(frame(["mt": 24, "d": [trigger(oid: 12, st: 10, sr: 65, removed: true, market: 20)]]))
+        c.handle(frame(["mt": 24, "d": [["oid": 12, "st": 10, "sr": 65, "r": true]]]))
+        XCTAssertTrue(c.openOrders.isEmpty)
+    }
+
+    func testALateDuplicateFailureKeepsTheLiveTrigger() {
+        let c = client()
+        var events: [PerplTriggerEvent] = []
+        c.onTriggerEvent = { events.append($0) }
+        c.handle(frame(["mt": 23, "d": [trigger(oid: 5, st: 8)]]))
+        // The late failure of a resent request (request id too low): Perpl's first non-failure status stands.
+        c.handle(frame(["mt": 24, "d": [trigger(oid: 5, st: 7, sr: 32)]]))
+        XCTAssertEqual(c.openOrders.map(\.oid), [5])
+        XCTAssertEqual(c.openOrders.first?.statusRaw, 8)
+        XCTAssertTrue(events.isEmpty)
+        // A real outcome after it still counts: it fired and couldn't be carried out.
+        c.handle(frame(["mt": 24, "d": [trigger(oid: 5, st: 7, sr: 64, removed: true)]]))
+        XCTAssertEqual(events.map(\.outcome), [.failed(reason: 64)])
+        XCTAssertTrue(c.openOrders.isEmpty)
+        // A failure for an order never admitted is its answer, whatever the reason.
+        c.handle(frame(["mt": 24, "d": [trigger(oid: 6, st: 7, sr: 32)]]))
+        XCTAssertEqual(events.last?.outcome, .failed(reason: 32))
+    }
+
+    func testATriggeredOrderThatExpiresIsReportedAsFailed() {
+        let c = client()
+        var events: [PerplTriggerEvent] = []
+        c.onTriggerEvent = { events.append($0) }
+        c.handle(frame(["mt": 23, "d": [trigger(oid: 5, st: 8), trigger(oid: 6, st: 8)]]))
+        c.handle(frame(["mt": 24, "d": [trigger(oid: 5, st: 9, sr: 54)]]))
+        c.handle(frame(["mt": 24, "d": [trigger(oid: 5, st: 6, sr: 67, removed: true)]]))
+        XCTAssertEqual(events.map(\.outcome), [.triggered, .failed(reason: 67)], "told it was closing, then that it couldn't")
+        // One that expires without firing no longer protects anything either.
+        c.handle(frame(["mt": 24, "d": [trigger(oid: 6, st: 6, sr: 6, removed: true)]]))
+        XCTAssertEqual(events.last?.outcome, .expired)
+        XCTAssertTrue(c.openOrders.isEmpty)
+    }
+
+    func testTriggerOutcomes() {
+        XCTAssertEqual(PerplTradeClient.triggerOutcome(status: 9, reason: 68), .triggered, "a recoverable failure is still being retried")
+        XCTAssertEqual(PerplTradeClient.triggerOutcome(status: 7, reason: 68), .failed(reason: 68))
+        XCTAssertEqual(PerplTradeClient.triggerOutcome(status: 6, reason: 68), .failed(reason: 67))
+        XCTAssertEqual(PerplTradeClient.triggerOutcome(status: 6, reason: 67), .failed(reason: 67))
+        XCTAssertEqual(PerplTradeClient.triggerOutcome(status: 5, reason: 67), .failed(reason: 67))
+        XCTAssertEqual(PerplTradeClient.triggerOutcome(status: 6, reason: 0), .expired)
+        XCTAssertEqual(PerplTradeClient.triggerOutcome(status: 10, reason: 65), .triggered)
+        XCTAssertNil(PerplTradeClient.triggerOutcome(status: 5, reason: 28), "cancelled")
+        XCTAssertNil(PerplTradeClient.triggerOutcome(status: 8, reason: 0))
     }
 }

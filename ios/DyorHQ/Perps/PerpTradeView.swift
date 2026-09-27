@@ -952,7 +952,7 @@ struct PerpTradeView: View {
         let authoritative = perplTrading.openOrders
             .filter { $0.marketId == market.id && $0.isTrigger && $0.isReduceOnly }
             .map { o in
-                TriggerRow(id: "auth-\(o.oid)", symbol: market.asset, kind: o.isStopLoss ? .stopLoss : .takeProfit,
+                TriggerRow(id: "auth-\(o.marketId)-\(o.oid)", symbol: market.asset, kind: o.isStopLoss ? .stopLoss : .takeProfit,
                            price: Double(o.triggerPriceRaw ?? 0) / priceScale, size: Double(o.sizeRaw) / sizeScale,
                            positionLong: o.protectsLong, source: live ? .live : .lastKnown, order: o, positionSize: positionSize(o.protectsLong))
             }
