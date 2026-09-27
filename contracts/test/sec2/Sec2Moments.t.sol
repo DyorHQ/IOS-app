@@ -59,6 +59,50 @@ contract Sec2MomentsTest is MomentsMarketBase {
         assertLt(_crossBlockSandwich(id, coin, key, 15_000_000), 0, "profit scales with what the round adds");
     }
 
+    /// The same sandwich run by `who`, counting the creator's 20% of the hook fee on the push as income.
+    function _crossBlockSandwichBy(address who, uint256 id, MomentCoin coin, PoolKey memory key, uint256 push) internal returns (int256 pnl) {
+        _approveCoin(coin, who);
+        uint256 u0 = usdc.balanceOf(who);
+        uint256 fees0 = hook.creatorAccrued(id);
+        uint256 c0 = coin.balanceOf(who);
+        _buyExactIn(who, key, true, push); // block N
+        uint256 pushed = coin.balanceOf(who) - c0;
+        vm.roll(vm.getBlockNumber() + 1); // block N+1: the round runs first
+        buyback.execute(id, 0);
+        _sellExactIn(who, key, true, pushed);
+        int256 feesBack = who == creator ? int256(hook.creatorAccrued(id) - fees0) : int256(0);
+        pnl = int256(usdc.balanceOf(who)) - int256(u0) + feesBack;
+        emit log_named_int("PnL (USDC units)", pnl);
+    }
+
+    /// The add cap is in liquidity, so what one round hands a price pusher grows with the push. With 2% the creator
+    /// (who gets 20% of the hook fee back) profited from pushes many times the pool's USDC side on a Moment with a
+    /// large carried budget (the re-audit: +0.51, +1.56 and +3.31 USDC on 200, 500 and 1,000 USDC). At 0.5% every
+    /// push loses more than 0.5% of its size, the creator's included.
+    function test_MO2_creatorSandwich_ofPushesManyTimesThePool_losesMoney() public {
+        (uint256 id, MomentCoin coin, PoolKey memory key) = _feeMoment(300);
+        assertGt(hook.buybackAccrued(id), 25_000_000, "a large carried budget");
+        uint256 poolUsdc = usdc.balanceOf(address(manager));
+        uint256[3] memory pushes = [uint256(200_000_000), 500_000_000, 1_000_000_000];
+        uint256 snap = vm.snapshotState();
+        for (uint256 i = 0; i < pushes.length; i++) {
+            assertGe(pushes[i], 5 * poolUsdc, "the push dwarfs the pool");
+            int256 pnl = _crossBlockSandwichBy(creator, id, coin, key, pushes[i]);
+            assertLt(pnl, -int256(pushes[i] / 200), "the creator's sandwich must lose more than 0.5% of the push");
+            vm.revertToState(snap);
+        }
+    }
+
+    function test_MO2_outsiderSandwich_ofALargePush_losesMore() public {
+        (uint256 id, MomentCoin coin, PoolKey memory key) = _feeMoment(300);
+        uint256 snap = vm.snapshotState();
+        int256 byCreator = _crossBlockSandwichBy(creator, id, coin, key, 1_000_000_000);
+        vm.revertToState(snap);
+        int256 byOutsider = _crossBlockSandwichBy(carol, id, coin, key, 1_000_000_000);
+        assertLt(byOutsider, byCreator, "an outsider gets no fee back");
+        assertLt(byOutsider, -int256(uint256(1_000_000_000) / 100), "and loses more than 1% of the push");
+    }
+
     /// The cap: one round grows the position by at most MAX_INCREASE_BPS; what it could not add stays held for the
     /// Moment (nothing is lost) and later rounds add it.
     function test_MO2_roundAdd_isCapped_andTheRestIsAddedLater() public {

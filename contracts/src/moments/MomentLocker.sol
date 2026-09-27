@@ -31,11 +31,14 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 ///           Moment may only spend what that Moment owns here (its dust, its folded LP fees, and whatever arrived
 ///           untracked just before the add — the reserve at seed, the buyback's top-up at increase), never another
 ///           Moment's idle USDC.
-///         - MO-2 (sec2): one `increase` grows the position by at most `MAX_INCREASE_BPS` of its liquidity; the rest
-///           stays held for the Moment and is added by later rounds. An add is priced at the live pool price, and
-///           someone who pushed that price in the previous block (the block-open guard cannot see it) takes the
-///           impermanent loss of whatever is added; capped at 2%, the add is too small for that to repay the 3%
-///           round-trip fees of the push, whatever the push size.
+///         - MO-2 (sec2): one `increase` grows the position by at most `MAX_INCREASE_BPS` (0.5%) of its liquidity; the
+///           rest stays held for the Moment and is added by later rounds. An add is priced at the live pool price, and
+///           someone who pushed that price in an earlier block (the block-open guard cannot see it) takes the
+///           impermanent loss of whatever is added. The cap is in liquidity, so that loss grows with the push: about
+///           0.5% of it from the add, plus up to about 0.5% from the buyback's own swap. A one-round sandwich pays more
+///           in fees than that (about 2.1% even for the Moment's creator, who gets 20% of the hook fee back). A push
+///           held across several hourly rounds can still spend the Moment's held balance at that price, one capped
+///           add per round.
 contract MomentLocker is IMomentLocker, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -44,7 +47,7 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
     using TransientStateLibrary for IPoolManager;
 
     /// @notice v2 (sec2, MO-2): the most one `increase` may add, in basis points of the position's liquidity.
-    uint256 public constant MAX_INCREASE_BPS = 200;
+    uint256 public constant MAX_INCREASE_BPS = 50;
 
     IPoolManager public immutable poolManager;
     IMomentsFactory public immutable factory;
