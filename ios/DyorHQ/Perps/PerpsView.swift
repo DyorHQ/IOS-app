@@ -108,7 +108,11 @@ final class PerpsModel {
     }
 
     /// The user closed this market's position, or sent a close for it, from this app: its disappearance is expected.
+    /// Noted when the close is sent, before the next poll can see the position gone (GT-9).
     func noteUserClose(_ perpId: Int) { userCloses[perpId] = Date() }
+
+    /// A close noted as sent never left the device: the position's disappearance is news again.
+    func forgetUserClose(_ perpId: Int) { userCloses[perpId] = nil }
 
     func load(env: AppEnvironment, address: Address?) async {
         perpl = env.perpl

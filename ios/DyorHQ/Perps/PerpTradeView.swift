@@ -176,8 +176,8 @@ struct PerpTradeView: View {
         .sheet(isPresented: $showWithdraw) { CollateralSheet(kind: .withdraw, model: model) }
         .sheet(isPresented: $showPortfolio) { PerpsPortfolioView(model: model) }
         .sheet(item: $closingPosition) { position in
-            ClosePositionSheet(market: market, position: position, mark: mark, leftoverTriggers: triggersProtecting(position)) {
-                model.noteUserClose(market.id)
+            ClosePositionSheet(market: market, position: position, mark: mark, leftoverTriggers: triggersProtecting(position),
+                               onSending: { model.noteUserClose(market.id) }, onNotSent: { model.forgetUserClose(market.id) }) {
                 Task { await model.load(env: env, address: session.address) }
             }
         }
@@ -894,8 +894,8 @@ struct PerpTradeView: View {
         // no triggers still falls through to the on-chain path when not live, so trading never depends on one-click.
         if let accountId = authedOrderAccount {
             AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1),
-                             triggerSize: invertedSize(side: ticket.side), triggerNote: turnaroundNote, onChainPositions: model.positions, onChainOrders: model.orders) {
-                if ticket.effectiveReduceOnly { model.noteUserClose(market.id) }
+                             triggerSize: invertedSize(side: ticket.side), triggerNote: turnaroundNote, onChainPositions: model.positions, onChainOrders: model.orders,
+                             onSent: { if ticket.effectiveReduceOnly { model.noteUserClose(market.id) } }) {
                 ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""; sizePercent = 0
                 Task { await model.load(env: env, address: session.address) }
             }
@@ -2178,6 +2178,12 @@ private struct ClosePositionSheet: View {
     let mark: Double
     /// The live TP/SL closing this position's side, to say what happens to them (security audit GT-2).
     var leftoverTriggers: [PerplOpenOrder] = []
+    /// The close is about to be sent, and — if it then fails before anything left the device — it wasn't: so the
+    /// positions poll knows the position's disappearance is expected from the moment it could happen (GT-9), not only
+    /// once Done is tapped.
+    var onSending: () -> Void = {}
+    var onNotSent: () -> Void = {}
+    /// The caller's reload, on Done.
     let onDone: () -> Void
 
     @Environment(Session.self) private var session
@@ -2263,6 +2269,7 @@ private struct ClosePositionSheet: View {
                         PrimaryButton(title: session.isPasskeyAccount ? "Confirm with \(BiometricGate.promptName)" : (isLimit ? "Place Limit Close" : "Close at Market"), isBusy: run.isRunning, isDisabled: !canConfirm) {
                             Task {
                                 if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm close")) { return }
+                                onSending()
                                 run.start(steps, session: session, sender: env.sender, action: session.isPasskeyAccount ? MeraSession.Action(.alwaysAsks(.closePosition)) : nil)
                             }
                         }
@@ -2275,16 +2282,24 @@ private struct ClosePositionSheet: View {
         .presentationDetents([.medium, .large])
         .presentationBackground(Color(.systemGroupedBackground))
         .sensoryFeedback(.success, trigger: run.isDone)
+        // Recorded when the close settles, not when the sheet is dismissed: a settled sheet can be swiped away.
+        .onChange(of: run.phase) { _, phase in
+            switch phase {
+            case .done(let hash):
+                onSending() // settled: expected from now on, whenever the poll next reads
+                Activity.record(ActivityRecord(kind: .perp, title: isLimit ? "Close order placed" : "Closed \(position.symbol)", subtitle: "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)\(isLimit ? " · Limit" : "")", hash: hash, section: "perps", usd: position.notional > 0 ? position.notional : nil), owner: session.address)
+            case .failed where !run.sentSomething:
+                onNotSent()
+            case .idle, .running, .failed:
+                break
+            }
+        }
     }
 
     private func finish() {
         let done = run.isDone
-        let hash = run.doneHash
         dismiss()
-        if done {
-            Activity.record(ActivityRecord(kind: .perp, title: isLimit ? "Close order placed" : "Closed \(position.symbol)", subtitle: "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)\(isLimit ? " · Limit" : "")", hash: hash, section: "perps", usd: position.notional > 0 ? position.notional : nil), owner: session.address)
-            onDone()
-        }
+        if done { onDone() }
     }
 }
 
@@ -2417,6 +2432,8 @@ struct AuthedOrderSheet: View {
     /// The account's positions and orders as the Exchange last reported them, for the checks made where it is sent.
     var onChainPositions: [PerpPosition] = []
     var onChainOrders: [PerpOrder] = []
+    /// The entry went out (Perpl admitted it, or never answered, so it may be live) — before Done is tapped.
+    var onSent: () -> Void = {}
     let onDone: () -> Void
 
     @Environment(PerplTrading.self) private var perplTrading
@@ -2524,6 +2541,7 @@ struct AuthedOrderSheet: View {
             let result = try await perplTrading.submitBracket(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env, ttlBlocks: 100, approval: approval,
                                                               onChainPositions: onChainPositions, onChainOrders: onChainOrders)
             guard result.entry else { phase = .failed(result.error ?? "Perpl rejected the order."); return }
+            onSent()
 
             var placed: [PlacedTrigger] = []
             // An unanswered trigger may be live too, so it is remembered as well (shown as unverified until Perpl's
@@ -2560,6 +2578,7 @@ struct AuthedOrderSheet: View {
             // The entry frame went out but was never acknowledged: it may be live. Resending would place a second
             // order, so this sheet only closes (and reloads orders and positions) from here. Its triggers are sent only
             // after the entry is answered, so none of them went out (GL-1): if the entry is live, it has no TP/SL.
+            onSent()
             let triggers = [takeProfit != nil ? "take-profit" : nil, stopLoss != nil ? "stop-loss" : nil].compactMap { $0 }
             var message = "Order status unknown — Perpl didn't confirm this order, so it may have been placed. Check Open Orders and Positions before placing it again."
             if !triggers.isEmpty {
