@@ -10,7 +10,7 @@ import { useMarkets, usePerpsAccount, type MarketRow } from "../lib/app-data";
 import { DEPLOYED, EXPLORER, explorerAddress, explorerTx } from "../lib/chain";
 import { fetchAccountView, fetchLaunch, fetchLaunches, priceNumber, type LaunchInfo } from "../lib/launchpad";
 import { candlesFromTrades, fetchCurveTrades, fetchLaunchpadActivity, type ActivityItem } from "../lib/launchpad/events";
-import { fetchPerplContext } from "../lib/perps/perpl";
+import { fetchPerplContext, unreadablePositionsText } from "../lib/perps/perpl";
 import { usePerplFeed } from "../lib/perps/ws";
 import { useAsync, useNow } from "../lib/use-async";
 import { useWallet } from "../lib/wallet";
@@ -341,8 +341,9 @@ export function ProfileScreen({ go, toast, openSheet }: ScreenProps) {
         <section style={{ marginTop: 12 }}>
           <div className="collat"><div><span>Perpl balance</span><b>{perps.account ? `$${fmtFixed(Number(perps.account.balance) / 1e6)}` : perps.accountKnown ? "No account" : perps.error ? "Couldn't read" : "Reading…"}</b></div><button type="button" className="btn secondary sm" onClick={() => go("trade", "perps")}>Open perps</button></div>
           {perps.error && <p className="hint err" role="alert">Couldn&apos;t read your Perpl account or positions ({perps.error}). Retrying.</p>}
+          {!perps.error && perps.unreadable.length > 0 && <p className="hint err" role="alert">{unreadablePositionsText(perps.unreadable)} Retrying.</p>}
           <div className="stack-cards">{perps.positions.map((p) => <div key={p.perpId} className="pos-card"><div className="top"><span>{p.symbol} · <span className={p.side === "long" ? "up" : "down"}>{p.side.toUpperCase()} {p.leverage.toFixed(1)}×</span></span><b className={p.unrealized >= 0 ? "up" : "down"}>{p.unrealized >= 0 ? "+" : "−"}${fmtFixed(Math.abs(p.unrealized))}</b></div><div className="grid"><span>Size<b>{fmtFixed(p.size, p.size < 1 ? 5 : 2)} {p.symbol}</b></span><span>Entry<b>{fmtUsd(p.entry)}</b></span><span>Mark<b>{fmtUsd(p.mark)}</b></span></div></div>)}</div>
-          {perps.positions.length === 0 && !perps.error && <Empty icon="layers" title={perps.positionsKnown ? "No open positions" : "Reading positions…"} text="Positions on Perpl show here with live PnL." />}
+          {perps.positions.length === 0 && !perps.error && perps.unreadable.length === 0 && <Empty icon="layers" title={perps.positionsKnown ? "No open positions" : "Reading positions…"} text="Positions on Perpl show here with live PnL." />}
         </section>
       )}
       {tab === "Activity" && (

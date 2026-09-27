@@ -6,7 +6,7 @@ import { Empty, Seg, SideMark, Subtabs, opts, tabPanel } from "./ui/components";
 import type { Go, Preset, Toast } from "./ui/nav";
 import { PerplChart } from "./ui/tradingview";
 import { usePerpsAccount } from "./lib/app-data";
-import { cancelOrder, closePosition, collateralBalances, deposit, fetchOpenOrders, fetchPerplContext, fromCNS, PERP_MARKETS, PERPL, placeOrder, withdraw, type PerpInfo } from "./lib/perps/perpl";
+import { cancelOrder, closePosition, collateralBalances, deposit, fetchOpenOrders, fetchPerplContext, fromCNS, PERP_MARKETS, PERPL, placeOrder, unreadablePositionsText, withdraw, type PerpInfo } from "./lib/perps/perpl";
 import { usePerplFeed } from "./lib/perps/ws";
 import { useAsync, useNow } from "./lib/use-async";
 import { useTx, type TxState } from "./lib/use-tx";
@@ -29,7 +29,7 @@ const sz = (v: number, perp: PerpInfo) => v / 10 ** perp.lotDecimals;
 export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; preset?: Preset }) {
   const wallet = useWallet();
   const account = wallet.account;
-  const { perps, account: acct, accountKnown, positionsKnown, positions, error: accountError, refresh } = usePerpsAccount(account);
+  const { perps, account: acct, accountKnown, positionsKnown, positions, unreadable, error: accountError, refresh } = usePerpsAccount(account);
   const ctx = useAsync(fetchPerplContext, "perpl-context", 15_000);
   const [marketId, setMarketId] = useState<number>(preset?.token ? Number(preset.token) : 10);
   const market = PERP_MARKETS.find((m) => m.id === marketId) ?? PERP_MARKETS[1];
@@ -206,6 +206,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
         <section className="stack-cards" style={{ marginTop: 12 }}>
           <TxStatus tx={txFor("positions")} onDismiss={dismiss} />
           {account && accountError && <p className="hint err" role="alert">Couldn&apos;t read your Perpl account or positions ({accountError}). Retrying{positions.length ? "; the positions below may be out of date" : ""}.</p>}
+          {account && !accountError && unreadable.length > 0 && <p className="hint err" role="alert">{unreadablePositionsText(unreadable)} Retrying{positions.length ? "; your other positions below are current" : ""}.</p>}
           {positions.map((p) => (
             <div key={p.perpId} className="pos-card">
               <div className="top"><span>{p.symbol}-PERP · <span className={p.side === "long" ? "up" : "down"}>{p.side.toUpperCase()} {p.leverage.toFixed(1)}×</span></span><b className={p.unrealized >= 0 ? "up" : "down"}>{p.unrealized >= 0 ? "+" : "−"}${fmtFixed(Math.abs(p.unrealized))}</b></div>
@@ -215,7 +216,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
           ))}
           {positions.length === 0 && (!account ? <Empty icon="layers" title="No open positions" text="Connect a wallet to see positions." />
             : positionsKnown && !accountError ? <Empty icon="layers" title="No open positions" text="Open a position and it appears here with live PnL from the Exchange contract." />
-            : !accountError && <Empty icon="layers" title="Reading positions…" text="Positions come straight from the Perpl Exchange contract." />)}
+            : !accountError && unreadable.length === 0 && <Empty icon="layers" title="Reading positions…" text="Positions come straight from the Perpl Exchange contract." />)}
         </section>
       )}
       {tab === "Orders" && (

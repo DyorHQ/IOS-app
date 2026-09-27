@@ -69,10 +69,12 @@ const scale = (v: bigint, decimals: number) => Number(v) / 10 ** decimals;
 export const fromCNS = (v: bigint) => Number(v) / 10 ** PERPL.collateralDecimals;
 export const toCNS = (v: number) => BigInt(Math.round(v * 10 ** PERPL.collateralDecimals));
 
-export async function fetchPerps(ids: readonly number[] = PERP_MARKETS.map((m) => m.id)): Promise<PerpInfo[]> {
+type Reader = Pick<typeof publicClient, "multicall">;
+
+export async function fetchPerps(ids: readonly number[] = PERP_MARKETS.map((m) => m.id), client: Reader = publicClient): Promise<PerpInfo[]> {
   const [infos, margins] = await Promise.all([
-    publicClient.multicall({ contracts: ids.map((id) => ({ ...exchange, functionName: "getPerpetualInfo", args: [BigInt(id)] }) as const), allowFailure: true }),
-    publicClient.multicall({ contracts: ids.map((id) => ({ ...exchange, functionName: "getMarginFractions", args: [BigInt(id), 0n] }) as const), allowFailure: true }),
+    client.multicall({ contracts: ids.map((id) => ({ ...exchange, functionName: "getPerpetualInfo", args: [BigInt(id)] }) as const), allowFailure: true }),
+    client.multicall({ contracts: ids.map((id) => ({ ...exchange, functionName: "getMarginFractions", args: [BigInt(id), 0n] }) as const), allowFailure: true }),
   ]);
   const out: PerpInfo[] = [];
   ids.forEach((id, i) => {
@@ -125,20 +127,27 @@ export function liquidationPrice(side: "long" | "short", entry: number, size: nu
   return Math.max(0, entry + (sign * (mmr - margin - premium)) / size);
 }
 
-/** Every open position of the account. A position that can't be read fails the whole read (never a shorter list: a
-    missing position hides its Close button exactly when it may be needed); a market the app doesn't list is read. */
-export async function fetchPositions(account: PerpAccount, perps: PerpInfo[]): Promise<PerpPosition[]> {
-  if (account.positionPerps.length === 0) return [];
+export type PositionsRead = { positions: PerpPosition[]; unreadable: number[] };
+
+/** Every open position of the account, and the markets (perp ids) where the account has a position that could not be
+    read. One market that can't be read (its position or its market info reverts) never hides the others, which keep
+    their Close buttons; it is named instead, so nothing says "no positions" while one is missing. A market the app
+    doesn't list is read too. Only a failure of the whole read throws. */
+export async function fetchPositions(account: PerpAccount, perps: PerpInfo[], client: Reader = publicClient): Promise<PositionsRead> {
+  if (account.positionPerps.length === 0) return { positions: [], unreadable: [] };
   const unlisted = account.positionPerps.filter((id) => !perps.some((p) => p.id === id));
-  const markets = unlisted.length ? [...perps, ...(await fetchPerps(unlisted))] : perps;
-  const results = await publicClient.multicall({ contracts: account.positionPerps.map((id) => ({ ...exchange, functionName: "getPosition", args: [BigInt(id), BigInt(account.accountId)] }) as const), allowFailure: true });
+  const markets = unlisted.length ? [...perps, ...(await fetchPerps(unlisted, client))] : perps;
+  const results = await client.multicall({ contracts: account.positionPerps.map((id) => ({ ...exchange, functionName: "getPosition", args: [BigInt(id), BigInt(account.accountId)] }) as const), allowFailure: true });
   const out: PerpPosition[] = [];
+  const unreadable: number[] = [];
   results.forEach((r, i) => {
     const perpId = account.positionPerps[i];
-    if (r.status !== "success") throw new Error(`Couldn't read your position in Perpl market ${perpId}.`);
-    const [pos, markPNS] = r.result;
     const perp = markets.find((p) => p.id === perpId);
-    if (!perp) throw new Error(`Couldn't read Perpl market ${perpId}, where you have a position.`);
+    if (r.status !== "success" || !perp) {
+      unreadable.push(perpId);
+      return;
+    }
+    const [pos, markPNS] = r.result;
     if (pos.lotLNS === 0n) return;
     const size = scale(pos.lotLNS, perp.lotDecimals);
     const entry = scale(pos.pricePNS, perp.priceDecimals);
@@ -150,7 +159,14 @@ export async function fetchPositions(account: PerpAccount, perps: PerpInfo[]): P
     const notional = size * mark;
     out.push({ perpId: perp.id, symbol: perp.symbol, side, size, entry, mark, margin, unrealized, premium, leverage: margin > 0 ? notional / margin : 0, liquidation: liquidationPrice(side, entry, size, margin, premium, perp.maintMarginFrac), notional, perp });
   });
-  return out;
+  return { positions: out, unreadable };
+}
+
+/** "Couldn't read your position in BTC-PERP." for the perp ids fetchPositions could not read. */
+export function unreadablePositionsText(ids: readonly number[]): string {
+  const names = ids.map((id) => { const m = PERP_MARKETS.find((p) => p.id === id); return m ? `${m.symbol}-PERP` : `Perpl market ${id}`; });
+  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0] ?? "";
+  return `Couldn't read your position${ids.length === 1 ? "" : "s"} in ${list}.`;
 }
 
 /** Open orders of an account: walk the perp's order-id bitmap index, read each order, keep the account's own. */

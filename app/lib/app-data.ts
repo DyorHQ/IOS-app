@@ -40,12 +40,14 @@ export type Portfolio = { total: number | null; holdings: MarketRow[]; perps: { 
 export function usePerpsAccount(account: Address | null) {
   const perps = useAsync(() => fetchPerps(), "perps", 10_000);
   const acct = useAsync(async () => (account ? fetchAccount(account) : null), `perp-account:${account ?? ""}`, 8_000);
-  const positions = useAsync(async () => (acct.data && perps.data ? fetchPositions(acct.data, perps.data) : []), `perp-positions:${account ?? ""}:${acct.data?.accountId ?? 0}:${acct.data?.positionPerps.join("/") ?? ""}:${perps.data ? "p" : ""}`, 8_000);
+  const positions = useAsync(async () => (acct.data && perps.data ? fetchPositions(acct.data, perps.data) : { positions: [], unreadable: [] }), `perp-positions:${account ?? ""}:${acct.data?.accountId ?? 0}:${acct.data?.positionPerps.join("/") ?? ""}:${perps.data ? "p" : ""}`, 8_000);
   // Known once a read has answered for this wallet (an account, or certainly none). Until then nothing may say "no
   // account" or "no positions", or offer to open an account.
   const accountKnown = !!account && !acct.loading && (acct.data !== null || acct.error === null);
-  // The same for positions: an account with open positions has none on screen until they have been read.
-  const positionsKnown = accountKnown && (!acct.data || acct.data.positionPerps.length === 0 || (perps.data !== null && positions.data !== null && !positions.loading));
+  // Markets where the account has a position that could not be read: the others are shown, these are named.
+  const unreadable = positions.data?.unreadable ?? [];
+  // The same for positions: an account with open positions has none on screen until all of them have been read.
+  const positionsKnown = accountKnown && (!acct.data || acct.data.positionPerps.length === 0 || (perps.data !== null && positions.data !== null && !positions.loading && unreadable.length === 0));
   const error = acct.error ?? positions.error ?? perps.error;
-  return { perps: perps.data ?? [], account: acct.data ?? null, accountKnown, positionsKnown, positions: positions.data ?? [], error, loading: perps.loading || acct.loading, refresh: () => { perps.refresh(); acct.refresh(); positions.refresh(); } };
+  return { perps: perps.data ?? [], account: acct.data ?? null, accountKnown, positionsKnown, positions: positions.data?.positions ?? [], unreadable, error, loading: perps.loading || acct.loading, refresh: () => { perps.refresh(); acct.refresh(); positions.refresh(); } };
 }
