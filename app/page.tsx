@@ -19,6 +19,7 @@ import { useTx } from "./lib/use-tx";
 import { waitFor } from "./lib/use-tx";
 import { fmtUnits, parseAmount, shortAddress, timeAgo } from "./lib/format";
 import { checkRecipient } from "./lib/send-checks";
+import { COPY_FEEDBACK, useCopy } from "./lib/clipboard";
 import { TxStatus } from "./launchpad/ui";
 import "./launchpad/launchpad.css";
 
@@ -121,7 +122,7 @@ export default function Home() {
             <div className={`sheet ${sheet ? "open" : ""}`} inert={!sheet}>
               <div className="backdrop" onClick={() => setSheet(null)} />
               <div className="panel" role="dialog" aria-modal="true" aria-label={sheet ?? "Sheet"}>
-                {sheet === "receive" && <ReceiveSheet onClose={() => setSheet(null)} />}
+                {sheet === "receive" && <ReceiveSheet onClose={() => setSheet(null)} toast={toast} />}
                 {sheet === "send" && <SendSheet onClose={() => setSheet(null)} toast={toast} />}
                 {sheet === "activity" && <ActivitySheet onClose={() => setSheet(null)} />}
                 {sheet === "wallets" && <WalletsSheet onClose={() => setSheet(null)} />}
@@ -140,9 +141,9 @@ function SheetHead({ title, onClose }: { title: string; onClose: () => void }) {
   return <div className="hd"><h2 style={{ margin: 0 }}>{title}</h2><button type="button" className="circ" onClick={onClose} aria-label="Close"><Icon name="x" /></button></div>;
 }
 
-function ReceiveSheet({ onClose }: { onClose: () => void }) {
+function ReceiveSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNode) => void }) {
   const wallet = useWallet();
-  const [copied, setCopied] = useState(false);
+  const [copied, copy] = useCopy();
   if (!wallet.account) return <><SheetHead title="Receive" onClose={onClose} /><p className="hint">Connect a wallet first.</p></>;
   const address = wallet.account;
   return (
@@ -150,7 +151,7 @@ function ReceiveSheet({ onClose }: { onClose: () => void }) {
       <SheetHead title="Receive on Monad" onClose={onClose} />
       <p className="hint" style={{ marginBottom: 10 }}>Send MON or any Monad token to this address. Only use the Monad network (chain id 143).</p>
       <div className="addr-box">{address}</div>
-      <div className="flow-actions"><button type="button" className="btn primary" onClick={() => { navigator.clipboard?.writeText(address).then(() => setCopied(true)); }}>{copied ? "Copied" : "Copy address"}</button><a className="btn secondary" href={explorerAddress(address)} target="_blank" rel="noreferrer">Monadscan <Icon name="arrow-ur" /></a></div>
+      <div className="flow-actions"><button type="button" className="btn primary" onClick={() => { void copy(address).then((ok) => toast(ok ? COPY_FEEDBACK.copied : `${COPY_FEEDBACK.failed}. Select it above and copy it.`)); }}>{copied === "copied" ? "Copied" : "Copy address"}</button><a className="btn secondary" href={explorerAddress(address)} target="_blank" rel="noreferrer">Monadscan <Icon name="arrow-ur" /></a></div>
     </>
   );
 }

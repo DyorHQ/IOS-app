@@ -14,6 +14,7 @@ import { fetchPerplContext } from "../lib/perps/perpl";
 import { usePerplFeed } from "../lib/perps/ws";
 import { useAsync, useNow } from "../lib/use-async";
 import { useWallet } from "../lib/wallet";
+import { COPY_FEEDBACK, copyText } from "../lib/clipboard";
 import { fmtAmount, fmtFixed, fmtNumber, fmtPct, fmtUnits, fmtUsd, shortAddress, timeAgo } from "../lib/format";
 import { LaunchCard as WebLaunchCard, PhaseBadge, Progress, RetiredBadge, Skeleton, TokenLogo } from "../launchpad/ui";
 import { Position, StatePanel, TradePanel } from "../launchpad/token-panels";
@@ -320,7 +321,7 @@ export function ProfileScreen({ go, toast, openSheet }: ScreenProps) {
       <section className="usercard" style={{ marginBottom: 14 }}>
         <span className="avatar">{account.slice(2, 4).toUpperCase()}</span>
         <div style={{ flex: 1, minWidth: 0 }}><b>{wallet.active?.info.name ?? "Wallet"}</b><small>{shortAddress(account, 6)}</small></div>
-        <button type="button" className="iconbtn" onClick={() => { navigator.clipboard?.writeText(account); toast("Address copied"); }}><Icon name="copy" />Copy</button>
+        <button type="button" className="iconbtn" onClick={() => { void copyText(account).then((ok) => toast(ok ? COPY_FEEDBACK.copied : `${COPY_FEEDBACK.failed}. Receive shows it in full.`)); }}><Icon name="copy" />Copy</button>
       </section>
       <section className="balance"><div><span className="label">Total value</span><div className="hero-num">${fmtFixed(tokenValue + perpEquity)}</div></div><div className="balance-side"><div><span className="label">Perps equity</span><div className="val">{perps.account || perps.accountKnown ? `$${fmtFixed(perpEquity)}` : "—"}</div></div></div></section>
       <section className="actions">

@@ -9,6 +9,7 @@ import { priceNumber, type LaunchInfo } from "../lib/launchpad";
 import { bpsToPct, fmtAmount, fmtNumber, shortAddress, timeAgo } from "../lib/format";
 import type { TxState } from "../lib/use-tx";
 import { useWallet } from "../lib/wallet";
+import { COPY_FEEDBACK, useCopy } from "../lib/clipboard";
 
 const TONE_LIST = Object.values(TONES);
 export const toneFor = (address: string) => TONE_LIST[parseInt(address.slice(2, 8), 16) % TONE_LIST.length];
@@ -70,14 +71,13 @@ export function TxStatus({ tx, onDismiss }: { tx: TxState; onDismiss?: () => voi
 }
 
 export function AddressChip({ address, label, token = false }: { address: string; label?: string; token?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard?.writeText(address).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); });
-  };
+  // The tick shows, and the status is announced, only once the clipboard has taken the address.
+  const [copied, copy] = useCopy(1200);
   return (
     <span className="addr">
       <a href={`${explorerAddress(address)}${token ? "" : ""}`} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>{label ? `${label} ` : ""}{shortAddress(address)}</a>
-      <button type="button" onClick={copy} aria-label="Copy address" title="Copy" style={{ display: "inline-flex" }}><Icon name={copied ? "check" : "copy"} /></button>
+      <button type="button" onClick={() => void copy(address)} aria-label={`Copy ${label ? `${label.toLowerCase()} ` : ""}address`} title="Copy" style={{ display: "inline-flex" }}><Icon name={copied === "copied" ? "check" : copied === "failed" ? "x" : "copy"} /></button>
+      <span className="sr-only" role="status">{copied === "idle" ? "" : COPY_FEEDBACK[copied]}</span>
     </span>
   );
 }
@@ -122,6 +122,7 @@ export function NetworkPill() {
 export function WalletButton({ className = "btn primary sm" }: { className?: string }) {
   const wallet = useWallet();
   const [open, setOpen] = useState(false);
+  const [copied, copy] = useCopy();
   const trigger = useRef<HTMLButtonElement>(null);
   const popover = useId();
   const account = wallet.account;
@@ -142,8 +143,9 @@ export function WalletButton({ className = "btn primary sm" }: { className?: str
           <div className="popover card" id={popover}>
             <small>{wallet.active?.info.name ?? "Wallet"}</small>
             <a href={explorerAddress(account)} target="_blank" rel="noreferrer"><Icon name="arrow-ur" />View on Monadscan</a>
-            <button type="button" onClick={() => { navigator.clipboard?.writeText(account); setOpen(false); }}><Icon name="copy" />Copy address</button>
+            <button type="button" onClick={() => void copy(account)}><Icon name={copied === "copied" ? "check" : "copy"} />{copied === "idle" ? "Copy address" : COPY_FEEDBACK[copied]}</button>
             <button type="button" onClick={() => { wallet.disconnect(); setOpen(false); }}><Icon name="logout" />Disconnect</button>
+            <span className="sr-only" role="status">{copied === "idle" ? "" : COPY_FEEDBACK[copied]}</span>
           </div>
         )}
       </div>
