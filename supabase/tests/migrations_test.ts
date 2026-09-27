@@ -160,6 +160,25 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
     }
   });
 
+  await t.step("SB-4: the lookup gate holds a Privy user to the network limit only from their third lookup", async () => {
+    const lookup = (subject: string, ip: string | null) =>
+      as<{ r: { ok?: boolean; limit?: string } }>(db, "service_role", null,
+        "select public.email_pepper_lookup_gate($1, $2) as r", [subject, ip]).then((rows) => rows[0].r);
+    // Three Privy users behind one NAT spend its 30 lookups (10 each, their own limit too)…
+    for (let u = 0; u < 3; u++) for (let i = 0; i < 10; i++) assertEquals((await lookup(hex64(9000 + u), "192.0.2.50")).ok, true);
+    assertEquals((await lookup(hex64(9000), "192.0.2.50")).limit, "network");
+    // …yet another user there still gets their first two lookups; the third meets the spent network limit,
+    assertEquals((await lookup(hex64(9100), "192.0.2.50")).ok, true);
+    assertEquals((await lookup(hex64(9100), "192.0.2.50")).ok, true);
+    assertEquals((await lookup(hex64(9100), "192.0.2.50")).limit, "network");
+    // and with no network (email-rebind, delete-account) only the per-user limit applies.
+    for (let i = 0; i < 10; i++) assertEquals((await lookup(hex64(9200), null)).ok, true);
+    assertEquals((await lookup(hex64(9200), null)).limit, "proof");
+    for (const role of ["anon", "authenticated"] as const) {
+      await assertRejects(() => as(db, role, A, "select public.email_pepper_lookup_gate($1, null)", [hex64(1)]), Error, "permission denied");
+    }
+  });
+
   await t.step("SB-5 A: the app can upsert with on_conflict=wallet,id; a squatted id still blocks until B", async () => {
     const upsert = (wallet: string, id: string, title: string) => as(db, "authenticated", wallet,
       `insert into public.activity (id, wallet, kind, title) values ($1, $2, 'swap', $3)

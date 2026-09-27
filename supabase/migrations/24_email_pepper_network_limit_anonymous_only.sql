@@ -10,19 +10,33 @@
 --     email by that budget, and the edge function reaches them only after email_pepper_lookup_gate() (10 per Privy
 --     user and 30 per client network per 15 minutes, for uncached lookups), which keeps its own network limit on
 --     purpose: it protects Privy's app-wide rate limit from floods of valid tokens.
--- A 'network' refusal can now only answer an anonymous request, and proving the email then lifts it.
+-- A 'network' refusal from email_pepper_hmac() can now only answer an anonymous request, and proving the email then
+-- lifts it.
 --
--- Only the network subquery changed. The rest of the body is migration 20's, which was checked against the live
--- function on 2026-09-26 (read-only: the live prosrc equals migration 20's body without its comment lines, md5
--- 1d8629a6115b4f9cff8a5e6e0bdb920a). Grants are re-asserted. Idempotent.
+-- The lookup gate a verified request passes first had the same weakness (review of the fixes, 2026-09-27): its network
+-- limit protects Privy's app-wide rate limit from floods of valid tokens, but anyone behind the same NAT holding three
+-- OTP-verified Privy accounts (10 lookups each) could spend it and lock verified owners out of uncached lookups. Now a
+-- Privy user's first two lookups in any 15 minutes are not held to the network limit (they still count toward it);
+-- from the third on it applies as before. Each exempt lookup needs its own OTP-verified Privy account, and the per-user
+-- limit (10 per 15 minutes) is unchanged. email-rebind and delete-account pass no network, so they are unaffected.
 --
--- Reverse: re-run section 4 of 20_email_pepper.sql (create or replace with the old network subquery).
+-- Only those two conditions changed. The rest of each body is migration 20's, which was checked against the live
+-- functions (read-only: the live prosrc equals migration 20's body without its comment lines — email_pepper_hmac md5
+-- 1d8629a6115b4f9cff8a5e6e0bdb920a on 2026-09-26, email_pepper_lookup_gate md5 4313ab1fd15aa800bd638319f9893746 on
+-- 2026-09-27). Grants are re-asserted. Idempotent.
+--
+-- Reverse: re-run sections 4 and 5 of 20_email_pepper.sql (create or replace with the old conditions).
 -- Verify after apply:
 --   select pg_get_functiondef('public.email_pepper_hmac(text,text,text,boolean)'::regprocedure)
---          like '%not p_verified and v_ip is not null and a.ip = v_ip and not a.verified%';           -- true
+--          like '%not p_verified and v_ip is not null and a.ip = v_ip and not a.verified%',           -- true
+--          pg_get_functiondef('public.email_pepper_lookup_gate(text,text)'::regprocedure)
+--          like '%a.subject = p_subject and a.created_at > now() - interval ''15 minutes''%offset 1 limit 1%'; -- true
 --   select has_function_privilege('anon', 'public.email_pepper_hmac(text,text,text,boolean)', 'execute'),          -- false
 --          has_function_privilege('authenticated', 'public.email_pepper_hmac(text,text,text,boolean)', 'execute'), -- false
---          has_function_privilege('service_role', 'public.email_pepper_hmac(text,text,text,boolean)', 'execute');  -- true
+--          has_function_privilege('service_role', 'public.email_pepper_hmac(text,text,text,boolean)', 'execute'),  -- true
+--          has_function_privilege('anon', 'public.email_pepper_lookup_gate(text,text)', 'execute'),                -- false
+--          has_function_privilege('authenticated', 'public.email_pepper_lookup_gate(text,text)', 'execute'),       -- false
+--          has_function_privilege('service_role', 'public.email_pepper_lookup_gate(text,text)', 'execute');        -- true
 
 create or replace function public.email_pepper_hmac(p_e text, p_t text, p_ip text, p_verified boolean)
 returns jsonb
@@ -110,6 +124,59 @@ grant execute on function public.email_pepper_hmac(text, text, text, boolean) to
 comment on function public.email_pepper_hmac(text, text, text, boolean) is
   'email-pepper: rate-limits (per email hash: anonymous 10/15 min + 50/24 h, or with p_verified — set by the edge function only after a valid Privy access token for the user whose linked email hashes to this e — a separate 20/24 h; per client network 60/15 min, anonymous requests only), records the attempt, and returns {"p": HMAC-SHA256(vault email_pepper_key, "dyorhq/email-pepper/v1" || 0x00 || e || t)} or {"retryAfter": seconds, "limit": "email"|"network"}. Refuses if the key does not match email_pepper_key_check. Never returns the key. service_role only.';
 
+create or replace function public.email_pepper_lookup_gate(p_subject text, p_ip text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $function$
+declare
+  v_ip            text := nullif(left(btrim(coalesce(p_ip, '')), 64), '');
+  v_subject_until timestamptz;
+  v_net_until     timestamptz;
+begin
+  if p_subject is null or p_subject !~ '^[0-9a-f]{64}$' then
+    raise exception 'subject must be 64 lowercase hex characters' using errcode = '22023';
+  end if;
+
+  -- Same discipline as email_pepper_hmac(): subject lock, then network lock, so the counts are exact.
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('dyorhq/email-pepper/lookup-subject'), pg_catalog.hashtext(p_subject));
+  if v_ip is not null then
+    perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('dyorhq/email-pepper/lookup-ip'), pg_catalog.hashtext(v_ip));
+  end if;
+
+  delete from public.email_pepper_lookups where created_at < now() - interval '1 hour';
+
+  select a.created_at + interval '15 minutes' into v_subject_until from public.email_pepper_lookups a
+    where a.subject = p_subject and a.created_at > now() - interval '15 minutes'
+    order by a.created_at desc offset 9 limit 1;
+  -- The network limit holds a Privy user only from their third lookup in 15 minutes on (migration 24, SB-4), so
+  -- nobody sharing the network can lock a verified owner out of their first two.
+  if v_ip is not null and exists (select 1 from public.email_pepper_lookups a
+                                   where a.subject = p_subject and a.created_at > now() - interval '15 minutes'
+                                   offset 1 limit 1) then
+    select a.created_at + interval '15 minutes' into v_net_until from public.email_pepper_lookups a
+      where a.ip = v_ip and a.created_at > now() - interval '15 minutes'
+      order by a.created_at desc offset 29 limit 1;
+  end if;
+  if v_subject_until is not null or v_net_until is not null then
+    return jsonb_build_object(
+      'retryAfter', greatest(1, ceil(extract(epoch from greatest(v_subject_until, v_net_until) - now()))::int),
+      'limit', case when v_net_until is not null then 'network' else 'proof' end);
+  end if;
+
+  insert into public.email_pepper_lookups (subject, ip) values (p_subject, v_ip);
+  return jsonb_build_object('ok', true);
+end;
+$function$;
+
+revoke all on function public.email_pepper_lookup_gate(text, text) from public, anon, authenticated;
+grant execute on function public.email_pepper_lookup_gate(text, text) to service_role;
+
+comment on function public.email_pepper_lookup_gate(text, text) is
+  'email-pepper: before the edge function asks Privy which email a token''s user holds — at most 10 lookups per Privy user (p_subject, a hash of its id) per 15 min, and 30 per client network per 15 min for a user''s third lookup on (the first two are not held to it). Records the allowed lookup and returns {"ok": true}, or {"retryAfter": seconds, "limit": "proof"|"network"}. service_role only.';
+
 -- Fail the migration if the new rule or the grants did not take.
 do $$
 begin
@@ -121,6 +188,15 @@ begin
      or has_function_privilege('authenticated', 'public.email_pepper_hmac(text, text, text, boolean)', 'execute')
      or not has_function_privilege('service_role', 'public.email_pepper_hmac(text, text, text, boolean)', 'execute') then
     raise exception 'email_pepper_hmac must be executable by service_role only';
+  end if;
+  if pg_catalog.pg_get_functiondef('public.email_pepper_lookup_gate(text, text)'::regprocedure)
+     not like '%a.subject = p_subject and a.created_at > now() - interval ''15 minutes''%offset 1 limit 1%' then
+    raise exception 'email_pepper_lookup_gate still holds a user''s first lookups to the network limit';
+  end if;
+  if has_function_privilege('anon', 'public.email_pepper_lookup_gate(text, text)', 'execute')
+     or has_function_privilege('authenticated', 'public.email_pepper_lookup_gate(text, text)', 'execute')
+     or not has_function_privilege('service_role', 'public.email_pepper_lookup_gate(text, text)', 'execute') then
+    raise exception 'email_pepper_lookup_gate must be executable by service_role only';
   end if;
 end
 $$;
