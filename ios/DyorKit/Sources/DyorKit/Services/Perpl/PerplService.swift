@@ -36,7 +36,7 @@ public actor PerplService {
     // MARK: Reads
 
     /// Markets in the order of `ids`; markets the contract fails to report are left out, and a market whose
-    /// margin read fails gets Perpl's usual 10% / 5% requirements.
+    /// margin read fails has unknown (nil) margin fractions, never a guessed 10% / 5%.
     public func markets(ids: [Int]? = nil) async throws -> [PerpMarket] {
         let ids = ids ?? Self.markets.map(\.id)
         async let infoReads = multicall.read(ids.map { PerplExchange.read(PerplExchange.Signature.getPerpetualInfo, [.uint($0)], returns: PerplExchange.Returns.perpetualInfo) })
@@ -278,8 +278,8 @@ public actor PerplService {
     // MARK: Pure helpers
 
     /// Price at which the position's equity would fall to the maintenance requirement; nil for an empty
-    /// position, never below zero.
-    public nonisolated static func liquidationPrice(side: PositionSide, entry: Double, size: Double, margin: Double, premium: Double, maintenanceFraction: Double) -> Double? {
+    /// position or an unknown maintenance fraction (the margin read failed), never below zero.
+    public nonisolated static func liquidationPrice(side: PositionSide, entry: Double, size: Double, margin: Double, premium: Double, maintenanceFraction: Double?) -> Double? {
         PerplExchange.liquidationPrice(side: side, entry: entry, size: size, margin: margin, premium: premium, maintenanceFraction: maintenanceFraction)
     }
 

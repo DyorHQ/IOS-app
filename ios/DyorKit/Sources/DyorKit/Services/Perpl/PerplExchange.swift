@@ -157,8 +157,10 @@ enum PerplExchange {
             shortOI: scale(p[18].uint, decimals: lotDecimals),
             fundingRatePct100k: Int(clamping: p[20].int),
             status: int(p[22].uint),
-            initMarginFraction: initial.flatMap { $0 > 0 ? 100 / Double($0) : nil } ?? 0.1,
-            maintMarginFraction: maintenance.flatMap { $0 > 0 ? 100 / Double($0) : nil } ?? 0.05,
+            // Nil when the read failed or reported no divisor: never a guess. A guessed 5% maintenance would understate
+            // the risk on the 10% markets (LIT, VVV, TAO, PUMP), so the liquidation price shows as unknown instead.
+            initMarginFraction: initial.flatMap { $0 > 0 ? 100 / Double($0) : nil },
+            maintMarginFraction: maintenance.flatMap { $0 > 0 ? 100 / Double($0) : nil },
             numOrders: int(p[28].uint),
             fundingStartBlock: UInt64(clamping: p[19].uint),
             fundingClampPct100k: int(p[21].uint)
@@ -247,8 +249,8 @@ enum PerplExchange {
         return (accountId, order)
     }
 
-    static func liquidationPrice(side: PositionSide, entry: Double, size: Double, margin: Double, premium: Double, maintenanceFraction: Double) -> Double? {
-        if size <= 0 { return nil }
+    static func liquidationPrice(side: PositionSide, entry: Double, size: Double, margin: Double, premium: Double, maintenanceFraction: Double?) -> Double? {
+        guard size > 0, let maintenanceFraction, maintenanceFraction > 0 else { return nil }
         let mmr = entry * size * maintenanceFraction
         let sign: Double = side == .long ? 1 : -1
         return max(0, entry + (sign * (mmr - margin - premium)) / size)

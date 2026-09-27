@@ -250,10 +250,17 @@ final class PerplTests: XCTestCase {
             XCTAssertEqual(m.status, Int(expected["status"].number!))
             XCTAssertEqual(m.basePricePNS, BigUInt(expected["basePricePNS"].string!)!)
             XCTAssertEqual(m.numOrders, Int(expected["numOrders"].string!)!)
-            XCTAssertGreaterThan(m.initMarginFraction, 0)
-            XCTAssertLessThan(m.initMarginFraction, 1)
-            XCTAssertGreaterThan(m.maintMarginFraction, 0)
-            XCTAssertLessThan(m.maintMarginFraction, 1)
+            // Only market 10 has a margin read in the fixture; the others are unknown, never guessed.
+            if let initial = m.initMarginFraction, let maintenance = m.maintMarginFraction {
+                XCTAssertGreaterThan(initial, 0)
+                XCTAssertLessThan(initial, 1)
+                XCTAssertGreaterThan(maintenance, 0)
+                XCTAssertLessThan(maintenance, 1)
+            } else {
+                XCTAssertNotEqual(id, 10)
+                XCTAssertNil(m.initMarginFraction)
+                XCTAssertNil(m.maintMarginFraction)
+            }
         }
         XCTAssertEqual(market(1).symbol, "BTC")
         XCTAssertEqual(market(10).symbol, "MON")
@@ -265,17 +272,21 @@ final class PerplTests: XCTestCase {
         let mon = market(10)
         XCTAssertEqual(mon.initMarginFraction, 100 / values[0])
         XCTAssertEqual(mon.maintMarginFraction, 100 / values[1])
-        XCTAssertEqual(mon.initMarginFraction, 0.1, accuracy: 1e-12)
-        XCTAssertEqual(mon.maintMarginFraction, 0.05, accuracy: 1e-12)
-        // Without a margin read the web app's defaults apply.
+        XCTAssertEqual(mon.initMarginFraction!, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(mon.maintMarginFraction!, 0.05, accuracy: 1e-12)
+        // Without a margin read the fractions are unknown, never a guessed 10% / 5% (which would understate the risk
+        // on the 10% maintenance markets), so no liquidation price is computed.
         let btc = market(1)
-        XCTAssertEqual(btc.initMarginFraction, 0.1)
-        XCTAssertEqual(btc.maintMarginFraction, 0.05)
-        // A zero divisor also falls back rather than dividing by zero.
+        XCTAssertNil(btc.initMarginFraction)
+        XCTAssertNil(btc.maintMarginFraction)
+        XCTAssertEqual(btc.maxLeverage, 1)
+        XCTAssertNil(PerplService.liquidationPrice(side: .long, entry: 100, size: 2, margin: 20, premium: 0, maintenanceFraction: btc.maintMarginFraction))
+        XCTAssertNil(PerplService.liquidationPrice(side: .long, entry: 100, size: 2, margin: 20, premium: 0, maintenanceFraction: 0))
+        // A zero divisor is unknown too, rather than dividing by zero.
         let info = try! ABI.decode(hex(f["chain"]["perpetualInfo"]["10"]["data"].string!), PerplExchange.Returns.perpetualInfo)[0]
         let zero = PerplExchange.market(id: 10, info: info, margins: [.uint(0), .uint(0), .uint(0), .uint(0), .uint(0), .uint(0)])
-        XCTAssertEqual(zero.initMarginFraction, 0.1)
-        XCTAssertEqual(zero.maintMarginFraction, 0.05)
+        XCTAssertNil(zero.initMarginFraction)
+        XCTAssertNil(zero.maintMarginFraction)
     }
 
     func testMarketsThroughMulticall() async throws {
@@ -283,9 +294,9 @@ final class PerplTests: XCTestCase {
         let markets = try await makeService().markets()
         XCTAssertEqual(markets.map(\.id), marketIds)
         XCTAssertEqual(markets.map(\.symbol).prefix(3), ["BTC", "MON", "ETH"])
-        XCTAssertEqual(markets[1].initMarginFraction, 0.1, accuracy: 1e-12)
-        XCTAssertEqual(markets[1].maintMarginFraction, 0.05, accuracy: 1e-12)
-        XCTAssertEqual(markets[0].initMarginFraction, 0.1, "margin read failed inside aggregate3, default applies")
+        XCTAssertEqual(markets[1].initMarginFraction!, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(markets[1].maintMarginFraction!, 0.05, accuracy: 1e-12)
+        XCTAssertNil(markets[0].maintMarginFraction, "margin read failed inside aggregate3: unknown, not a guess")
         XCTAssertEqual(PerplMockTransport.aggregateSizes.sorted(), [6, 6], "one multicall for infos, one for margins")
         XCTAssertEqual(PerplMockTransport.unknownCalls.count, 5, "only the five missing margin reads were unknown")
 

@@ -479,8 +479,8 @@ struct PerpTradeView: View {
             VStack(spacing: 8) {
                 // Named in words, not told apart by green and red alone (security audit AI-3): the side isn't chosen
                 // until Long or Short is tapped, so both are shown.
-                summaryRow("Liq. if long", liquidationLong.map { NumberStyle.number($0) } ?? "—", tint: liquidationLong == nil ? nil : .positive)
-                summaryRow("Liq. if short", liquidationShort.map { NumberStyle.number($0) } ?? "—", tint: liquidationShort == nil ? nil : .negative)
+                summaryRow("Liq. if long", liquidationLong.map { NumberStyle.number($0) } ?? liquidationFallback, tint: liquidationLong == nil ? nil : .positive)
+                summaryRow("Liq. if short", liquidationShort.map { NumberStyle.number($0) } ?? liquidationFallback, tint: liquidationShort == nil ? nil : .negative)
                 summaryRow("Max", "\(NumberStyle.number(maxNotional, maximumFractionDigits: 2)) AUSD")
                 summaryRow("Fee", "\(NumberStyle.number(estFee, maximumFractionDigits: 2)) AUSD")
             }
@@ -1098,7 +1098,11 @@ struct PerpTradeView: View {
 
     // MARK: Derived values
 
-    private var maxLeverage: Double { max(1, (1 / max(market.initMarginFraction, 0.01)).rounded(.down)) }
+    /// 1x while the margin read has failed: the venue's limit is unknown, and it is never guessed.
+    private var maxLeverage: Double { max(1, (1 / max(market.initMarginFraction ?? 1, 0.01)).rounded(.down)) }
+    /// What a liquidation price that can't be computed reads as: unknown when the maintenance margin couldn't be read
+    /// (never a guessed 5%, which would understate the risk), a dash when there is nothing to compute yet.
+    private var liquidationFallback: String { market.maintMarginFraction == nil ? "Unknown" : "—" }
     private var minSize: Double { pow(10, -Double(market.lotDecimals)) }
     private func referencePrice(_ type: PriceType) -> Double {
         switch type {
@@ -2002,7 +2006,8 @@ private struct PositionCard: View {
                 stat("Entry", NumberStyle.number(position.entry))
                 stat("Mark", NumberStyle.number(liveMark > 0 ? liveMark : position.mark))
                 stat("Margin", position.margin.formatted(.currency(code: "USD")))
-                stat("Liq.", position.liquidation.map { NumberStyle.number($0) } ?? "—")
+                // An open position's liquidation price is nil only when its maintenance margin couldn't be read.
+                stat("Liq.", position.liquidation.map { NumberStyle.number($0) } ?? "Unknown")
                 stat("Notional", position.notional.formatted(.currency(code: "USD")))
             }
             if !triggers.isEmpty {
@@ -2362,7 +2367,7 @@ private struct AddMarginSheet: View {
                     Section("After") {
                         DetailRow("Margin", projMargin.formatted(.currency(code: "USD")))
                         DetailRow("Leverage", "\(NumberStyle.number(projLeverage, maximumFractionDigits: 1))×")
-                        DetailRow("Liq. price", projLiquidation.map { NumberStyle.number($0) } ?? "—")
+                        DetailRow("Liq. price", projLiquidation.map { NumberStyle.number($0) } ?? (market.maintMarginFraction == nil ? "Unknown" : "—"))
                     }
                 }
                 if !run.events.isEmpty { Section("Progress") { TransactionProgress(events: run.events) } }

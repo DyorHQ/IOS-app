@@ -47,8 +47,10 @@ public struct PerpMarket: Identifiable, Hashable, Sendable {
     public let shortOI: Double
     public let fundingRatePct100k: Int
     public let status: Int
-    public let initMarginFraction: Double
-    public let maintMarginFraction: Double
+    /// Initial and maintenance margin as fractions of notional (0.1 = 10%); nil when the Exchange's margin read failed.
+    /// Never guessed: a liquidation price computed from a guess could understate the risk.
+    public let initMarginFraction: Double?
+    public let maintMarginFraction: Double?
     public let numOrders: Int
     /// Block the market's funding schedule started at; funding settles every `PerplFunding.blocksPerInterval` blocks from here.
     public let fundingStartBlock: UInt64
@@ -65,11 +67,11 @@ public struct PerpMarket: Identifiable, Hashable, Sendable {
     /// positive means long positions pay short positions.
     public var fundingRateHourly: Double { PerplFunding.hourlyRate(pct100k: fundingRatePct100k) }
     /// The venue's maximum leverage for this market (`floor(1 / initial margin fraction)`).
-    public var maxLeverage: Double { initMarginFraction > 0 ? max(1, (1 / initMarginFraction).rounded(.down)) : 1 }
+    public var maxLeverage: Double { (initMarginFraction ?? 0) > 0 ? max(1, (1 / initMarginFraction!).rounded(.down)) : 1 }
     /// The smallest tradable size (one lot).
     public var minSize: Double { pow(10, -Double(lotDecimals)) }
 
-    public init(id: Int, symbol: String, name: String, priceDecimals: Int, lotDecimals: Int, basePricePNS: BigUInt, mark: Double, last: Double, oracle: Double, markTimestamp: Int, longOI: Double, shortOI: Double, fundingRatePct100k: Int, status: Int, initMarginFraction: Double, maintMarginFraction: Double, numOrders: Int, fundingStartBlock: UInt64 = 0, fundingClampPct100k: Int = 0) {
+    public init(id: Int, symbol: String, name: String, priceDecimals: Int, lotDecimals: Int, basePricePNS: BigUInt, mark: Double, last: Double, oracle: Double, markTimestamp: Int, longOI: Double, shortOI: Double, fundingRatePct100k: Int, status: Int, initMarginFraction: Double?, maintMarginFraction: Double?, numOrders: Int, fundingStartBlock: UInt64 = 0, fundingClampPct100k: Int = 0) {
         self.id = id
         self.symbol = symbol
         self.name = name
