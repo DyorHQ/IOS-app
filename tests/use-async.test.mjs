@@ -6,7 +6,7 @@ import { tsImport } from "tsx/esm/api";
    response can't land after a newer one), a stopped loop aborts its load, and failures back off. setTimeout is mocked;
    `settle` lets pending promise callbacks run. */
 
-const { refreshDelay, startRefreshLoop } = await tsImport("../app/lib/use-async.ts", import.meta.url);
+const { loadTimeout, refreshDelay, startRefreshLoop, withTimeout } = await tsImport("../app/lib/use-async.ts", import.meta.url);
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 function deferred() {
@@ -100,4 +100,34 @@ test("failures back off, a thrown load counts as one, and a success resets the i
   await advance(1_000);
   assert.equal(runs, 4, "after a success the plain interval again");
   stop();
+});
+
+/* withTimeout: a load that never settles fails after its timeout and is aborted, so the refresh loop moves on. */
+
+test("a load that answers in time is returned as is", async () => {
+  assert.equal(await withTimeout(async () => "data", new AbortController().signal, 50), "data");
+  await assert.rejects(withTimeout(async () => { throw new Error("rpc down"); }, new AbortController().signal, 50), /rpc down/);
+});
+
+test("a hung load fails as a timeout, even when it ignores its signal, and its signal is aborted", async () => {
+  let seen;
+  const hung = (signal) => { seen = signal; return new Promise(() => {}); };
+  await assert.rejects(withTimeout(hung, new AbortController().signal, 20), (e) => e.name === "TimeoutError" && /No answer after/.test(e.message));
+  assert.equal(seen.aborted, true, "the fetch behind it is cancelled");
+  assert.equal(loadTimeout(10_000), 60_000, "never under a minute");
+  assert.equal(loadTimeout(60_000), 120_000, "twice a long interval");
+});
+
+test("stopping the loop aborts the load's signal too", async () => {
+  const outer = new AbortController();
+  let seen;
+  const pending = withTimeout((signal) => { seen = signal; return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))); }, outer.signal, 10_000);
+  outer.abort(new Error("superseded"));
+  await assert.rejects(pending, /superseded/);
+  assert.equal(seen.aborted, true);
+  const already = new AbortController();
+  already.abort();
+  let aborted;
+  await withTimeout(async (signal) => { aborted = signal.aborted; }, already.signal, 10_000);
+  assert.equal(aborted, true, "a signal already aborted passes through");
 });
