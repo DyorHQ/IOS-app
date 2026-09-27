@@ -43,8 +43,8 @@
 #     inside one level deep too); UTF-16 text is decoded. A file that cannot be unpacked is itself a finding.
 # Repository policy (.leakguard "@" lines; the committed and the pending version, as scripts/dev/forbidden-paths.sh
 # reads it, so no commit can relax its own check):
-#   @public    — a public repository: internal audit finding IDs (SEC-5, LR-7, …) are findings in content and commit
-#                messages too.
+#   @public    — a public repository: internal audit finding IDs (a prefix from the list below, a hyphen and a
+#                number) are findings in content and commit messages too.
 #   @internal  — the DyorHQ/internal repository: the internal-document marker is allowed. Everywhere else it is a
 #                finding (every DyorHQ/internal document carries it, so a copied document is caught).
 #   @allow GLOB NAME — a reviewed false positive: findings called NAME (a pattern or heuristic name exactly as printed)
