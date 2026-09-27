@@ -281,7 +281,7 @@ export function LaunchScreen({ preset }: { go: Go; toast: Toast; preset?: Preset
           {!DEPLOYED && <Empty icon="rocket" title="Contracts not deployed" text="The launchpad reads from Monad mainnet once the owner deploys and syncs the addresses." />}
           <section className="feed">
             {launches.loading && !launches.data && DEPLOYED && <Skeleton h={160} />}
-            {(launches.data ?? []).map((l) => <div key={l.token} onClick={() => setSelected(l.token)} style={{ cursor: "pointer" }}><WebLaunchCard launch={l} now={now} /></div>)}
+            {(launches.data ?? []).map((l) => <WebLaunchCard key={l.token} launch={l} now={now} onSelect={() => setSelected(l.token)} />)}
             {launches.error && <p className="hint err">{launches.error}</p>}
           </section>
         </>

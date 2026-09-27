@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useId, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { Icon } from "../ui/icons";
 import { TONES } from "../ui/data";
 import { DEPLOYED, explorerAddress, explorerTx } from "../lib/chain";
@@ -90,10 +90,17 @@ export function AddressChip({ address, label, token = false }: { address: string
   );
 }
 
-export function LaunchCard({ launch, now }: { launch: LaunchInfo; now: number }) {
+/** A launch's card, a link to its token page. With `onSelect` (the in-app launchpad) a plain click opens the launch in
+    place instead of leaving the app; a modified click (new tab or window) still follows the link. */
+export function LaunchCard({ launch, now, onSelect }: { launch: LaunchInfo; now: number; onSelect?: () => void }) {
   const { pair } = launch;
+  const select = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!onSelect || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    onSelect();
+  };
   return (
-    <Link href={`/launchpad/${launch.token}`} className="card launch-card link">
+    <Link href={`/launchpad/${launch.token}`} className="card launch-card link" onClick={select}>
       <div className="launch-top">
         <TokenLogo src={launch.logo} name={launch.name} />
         <div style={{ flex: 1, minWidth: 0 }}>

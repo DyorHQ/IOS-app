@@ -27,7 +27,9 @@ export function ipfsToHttp(uri: string): string {
 }
 const isVideo = (uri: string) => /\.(mp4|webm|mov|m4v)(\?|$)/i.test(uri);
 
-export function MomentMedia({ provenance, name, hero = false }: { provenance: Pick<Provenance, "mediaURI" | "animationURI">; name: string; hero?: boolean }) {
+/** The Moment's image or video. `still`: inside a link (a card), where interactive content is not allowed, the video has
+    no controls and the media has no name of its own; the card's heading names it. */
+export function MomentMedia({ provenance, name, hero = false, still = false }: { provenance: Pick<Provenance, "mediaURI" | "animationURI">; name: string; hero?: boolean; still?: boolean }) {
   const [broken, setBroken] = useState(false);
   const image = ipfsToHttp(provenance.mediaURI);
   const animation = provenance.animationURI ? ipfsToHttp(provenance.animationURI) : "";
@@ -35,9 +37,9 @@ export function MomentMedia({ provenance, name, hero = false }: { provenance: Pi
   return (
     <div className={`moment-media ${hero ? "hero" : ""}`}>
       {animation && isVideo(animation) ? (
-        <video src={animation} poster={usable ? image : undefined} controls muted playsInline preload="metadata" aria-label={name} />
+        <video src={animation} poster={usable ? image : undefined} controls={!still} muted playsInline preload="metadata" aria-label={still ? undefined : name} aria-hidden={still || undefined} />
       ) : usable ? (
-        <img src={image} alt={name} loading="lazy" onError={() => setBroken(true)} />
+        <img src={image} alt={still ? "" : name} loading="lazy" onError={() => setBroken(true)} />
       ) : (
         <span className="placeholder" aria-hidden="true"><Icon name="rocket" /></span>
       )}
@@ -70,7 +72,7 @@ export function MomentCard({ moment, now }: { moment: MomentInfo; now: number })
   const price = moment.pool ? moment.pool.usdcPerCoin : null;
   return (
     <Link href={`/moments/${moment.id}`} className="card moment-card link">
-      <div className="media"><MomentMedia provenance={moment.provenance} name={moment.name} /></div>
+      <div className="media"><MomentMedia provenance={moment.provenance} name={moment.name} still /></div>
       <div className="body">
         <div className="launch-top" style={{ marginBottom: 6 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
