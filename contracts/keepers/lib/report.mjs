@@ -6,20 +6,23 @@ import { dirname } from "node:path";
 
 export const EXIT = Object.freeze({ OK: 0, ERROR: 1, ALERT: 2 });
 
-export function makeReporter({ log = console.log } = {}) {
+/** `scrub` is applied to every alert reason before it is stored, printed or posted (see redact.mjs): an RPC error can
+    quote the endpoint URL, and with it an API key. */
+export function makeReporter({ log = console.log, scrub = (s) => s } = {}) {
   const alerts = [];
   const actions = [];
   return {
     alerts,
     actions,
-    info: (msg) => log(`  ${msg}`),
+    info: (msg) => log(scrub(`  ${msg}`)),
     action: (a) => {
       actions.push(a);
-      log(`ACTION ${a.job} ${a.target}: ${a.what}`);
+      log(scrub(`ACTION ${a.job} ${a.target}: ${a.what}`));
     },
     alert: (a) => {
-      alerts.push(a);
-      log(`ALERT [${a.severity}] ${a.job} ${a.target}: ${a.reason}`);
+      const clean = { ...a, reason: scrub(a.reason) };
+      alerts.push(clean);
+      log(`ALERT [${clean.severity}] ${clean.job} ${clean.target}: ${clean.reason}`);
     },
   };
 }
@@ -29,7 +32,7 @@ export async function postWebhook(url, alerts, { fetchImpl = globalThis.fetch } 
   const text = alerts.map((a) => `[${a.severity}] ${a.job} ${a.target}: ${a.reason}`).join("\n");
   const body = JSON.stringify({ text: `DyorHQ keeper: ${alerts.length} alert(s)\n${text}`, alerts }, (_, v) => (typeof v === "bigint" ? v.toString() : v));
   const res = await fetchImpl(url, { method: "POST", headers: { "content-type": "application/json" }, body });
-  if (!res.ok) throw new Error(`webhook POST failed: ${res.status}`);
+  if (!res.ok) throw new Error(`webhook POST failed: ${res.status}`); // never echoes the webhook URL
 }
 
 /** Tiny JSON state (per-target failure counters) so repeated failures escalate across runs. */

@@ -2,29 +2,52 @@
 // dry-run sender; we assert exactly which calls it would send and which alerts it raises.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { momentsGraduationJob, buybacksJob, sweepsJob, launchpadGraduationJob } from "../lib/jobs.mjs";
+import { mkdtempSync, cpSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { momentsGraduationJob, buybacksJob, sweepsJob, launchpadGraduationJob, governanceJob, getLogsChunked } from "../lib/jobs.mjs";
 import { makeSender } from "../lib/send.mjs";
 import { makeReporter } from "../lib/report.mjs";
 import { mondayTargetSqrtPriceX96, tickAtSqrtPrice } from "../lib/decide.mjs";
+import { launchpads, momentsCohorts, pinMismatches, LIVE_FACTORIES } from "../lib/deployments.mjs";
 
 const NOW = 1_790_000_000n;
 const DAY = 86_400n;
 const a = (n) => `0x${n.toString(16).padStart(40, "0")}`;
 const ZERO = a(0);
 
-function mockClient({ reads, sims = {} }) {
+function mockClient({ reads, sims = {}, head = 1000n, getLogs, estimates, gasPrice }) {
   const k = (addr, fn, args = []) => `${addr}:${fn}:${args.map(String).join(",")}`.toLowerCase();
   return {
     reads: new Map(Object.entries(reads).map(([key, v]) => [key.toLowerCase(), v])),
+    logCalls: [],
     async getBlock() {
       return { timestamp: NOW };
     },
     async getBlockNumber() {
-      return 1000n;
+      return head;
     },
-    async getLogs() {
-      return [];
+    async getLogs(req) {
+      this.logCalls.push(req);
+      return getLogs ? getLogs(req) : [];
     },
+    ...(estimates
+      ? {
+          async estimateContractGas({ address, functionName, args }) {
+            const e = estimates[k(address, functionName, args)];
+            if (e === undefined) throw new Error("cannot estimate");
+            return e;
+          },
+        }
+      : {}),
+    ...(gasPrice !== undefined
+      ? {
+          async getGasPrice() {
+            return gasPrice;
+          },
+        }
+      : {}),
     async readContract({ address, functionName, args }) {
       const key = k(address, functionName, args);
       if (!this.reads.has(key)) throw new Error(`unmocked read ${key}`);
@@ -226,23 +249,42 @@ function lp1Reads({ tok, l, completed, stuckSince, pool, slot0, bitmap = {} }) {
   return reads;
 }
 
-test("LP-1: a dense squat on a not-yet-complete Monday launch raises a critical pre-completion alert", async () => {
-  const tok = a(0x7001);
-  const l = launch({ graduationVenue: 1, phase: 0 });
-  const pool = a(0x9001);
+function denseSquatReads(tok, l, pool) {
   const target = mondayTargetSqrtPriceX96({ token: tok, quote: WMON, quoteAmount: 16_000n * 10n ** 18n, tokenAmount: 200_000_000n * 10n ** 18n, phantomQuote: 4_000n * 10n ** 18n });
   const tickTo = tickAtSqrtPrice(target);
   const squatTick = 600_000;
   const full = (1n << 256n) - 1n; // every tick in every word initialized
   const bitmap = {};
   for (let w = Math.floor(Math.min(tickTo, squatTick) / 200) >> 8; w <= Math.ceil(Math.max(tickTo, squatTick) / 200) >> 8; w++) bitmap[w] = full;
-  const reads = lp1Reads({ tok, l, completed: false, stuckSince: 0n, pool, slot0: [1n << 150n, squatTick, 0, 1, 1, 0, true], bitmap });
+  return lp1Reads({ tok, l, completed: false, stuckSince: 0n, pool, slot0: [1n << 150n, squatTick, 0, 1, 1, 0, true], bitmap });
+}
+
+// sec2: the live graduateFallback recovers a blocking squat on an ordinary pair with >= ~12M gas (test/sec2/
+// Sec2LiveV1.t.sol), so before completion that is a warning; only a Monday-only pair (aBIL) freezes holders.
+test("LP-1: a dense squat on an ordinary pair is a warning that names the v4 fallback", async () => {
+  const tok = a(0x7001);
+  const l = launch({ graduationVenue: 1, phase: 0 });
+  const reads = denseSquatReads(tok, l, a(0x9001));
   const h = harness();
   await launchpadGraduationJob({ client: mockClient({ reads }), launchpads: [lp], ...h });
   assert.equal(h.sender.sent.length, 0, "nothing to send before completion");
   assert.equal(h.reporter.alerts.length, 1);
-  assert.equal(h.reporter.alerts[0].severity, "critical");
+  assert.equal(h.reporter.alerts[0].severity, "warning");
   assert.match(h.reporter.alerts[0].reason, /blocking/);
+  assert.match(h.reporter.alerts[0].reason, /graduateFallback/);
+});
+
+test("LP-1: a dense squat on a Monday-only pair (aBIL) raises a critical pre-completion alert naming the owner", async () => {
+  const tok = a(0x7001);
+  const l = launch({ graduationVenue: 1, phase: 0 });
+  const reads = denseSquatReads(tok, l, a(0x9001));
+  reads[`${lp.factory}:pairMondayOnly:${l.pairToken}`] = true;
+  reads[`${lp.factory}:v4FallbackAllowed:${tok}`] = false;
+  const h = harness();
+  await launchpadGraduationJob({ client: mockClient({ reads }), launchpads: [lp], ...h });
+  assert.equal(h.reporter.alerts.length, 1);
+  assert.equal(h.reporter.alerts[0].severity, "critical");
+  assert.match(h.reporter.alerts[0].reason, /allowV4Fallback/);
 });
 
 test("LP-1: no Monday pool yet -> silent", async () => {
@@ -285,4 +327,303 @@ test("LP-1: stuck Monday launch where only the v4 fallback works -> graduateFall
   const h = harness();
   await launchpadGraduationJob({ client, launchpads: [lp], ...h });
   assert.deepEqual(h.sender.sent[0].argv.slice(0, 4), ["send", lp.factory, "graduateFallback(address)", tok]);
+});
+
+// ---------------------------------------------------------------- sec2: robustness (2026-09-26 ops audit)
+
+const retiredCohort = { label: "cohort2 (retired)", factory: a(0xf2), collect: a(0xc2), graduation: a(0x92) };
+
+// rpc.monad.xyz answers eth_getLogs over more than 100 blocks with -32614 "eth_getLogs is limited to a 100 range".
+// Before: the MO-1 job scanned 500-block chunks per cohort before the next cohort's retries, so the first scan threw
+// and a later cohort's pending Moment (1 day from expiry) never got its retry.
+test("sec2 MO-1: a getLogs range cap neither aborts the job nor starves a later cohort's retry", async () => {
+  const client = mockClient({
+    reads: {
+      [`${cohort.factory}:momentCount:`]: 0n,
+      [`${retiredCohort.factory}:momentCount:`]: 1n,
+      [`${retiredCohort.collect}:state:1`]: 1,
+      [`${retiredCohort.collect}:ledger:1`]: ledger(NOW - 6n * DAY),
+      [`${retiredCohort.factory}:getMoment:1`]: moment(NOW - DAY),
+    },
+    sims: { [`${retiredCohort.graduation}:graduate:1`.toLowerCase()]: null },
+    head: 1_000_000n,
+    getLogs: ({ fromBlock, toBlock }) => {
+      if (toBlock - fromBlock + 1n > 100n) throw Object.assign(new Error("RPC Request failed."), { details: "eth_getLogs is limited to a 100 range" });
+      return [];
+    },
+  });
+  const h = harness();
+  await momentsGraduationJob({ client, cohorts: [cohort, retiredCohort], logsLookback: 1000n, logsChunk: 500n, ...h });
+  assert.equal(h.sender.sent.length, 1, "the retired cohort's retry is sent");
+  assert.deepEqual(h.sender.sent[0].argv.slice(0, 4), ["send", retiredCohort.graduation, "graduate(uint256)", "1"]);
+  assert.ok(!h.reporter.alerts.some((x) => /could not be checked/.test(x.reason)), "the scans adapted to the cap");
+  assert.equal(client.logCalls.at(-1).toBlock, 1_000_000n, "each cohort's scan reached the head");
+});
+
+test("sec2: one failing read is an alert, and the items after it are still handled", async () => {
+  const client = mockClient({
+    reads: {
+      [`${cohort.factory}:momentCount:`]: new Error("429 Too Many Requests"),
+      [`${retiredCohort.factory}:momentCount:`]: 1n,
+      [`${retiredCohort.collect}:state:1`]: 1,
+      [`${retiredCohort.collect}:ledger:1`]: ledger(NOW - DAY),
+      [`${retiredCohort.factory}:getMoment:1`]: moment(NOW + DAY),
+    },
+    sims: { [`${retiredCohort.graduation}:graduate:1`.toLowerCase()]: null },
+  });
+  const h = harness();
+  await momentsGraduationJob({ client, cohorts: [cohort, retiredCohort], ...h });
+  assert.equal(h.sender.sent.length, 1);
+  const failed = h.reporter.alerts.find((x) => x.target === cohort.label);
+  assert.equal(failed.severity, "critical");
+  assert.match(failed.reason, /429/);
+});
+
+test("sec2: getLogsChunked halves its range on a cap and returns every log", async () => {
+  const client = mockClient({
+    reads: {},
+    getLogs: ({ fromBlock, toBlock }) => {
+      if (toBlock - fromBlock + 1n > 100n) throw new Error("eth_getLogs is limited to a 100 range");
+      return fromBlock <= 250n && 250n <= toBlock ? [{ blockNumber: 250n }] : [];
+    },
+  });
+  const logs = await getLogsChunked(client, { address: a(1), from: 0n, to: 999n, chunk: 500n });
+  assert.deepEqual(logs, [{ blockNumber: 250n }]);
+});
+
+// Monad bills the gas LIMIT. Before: 1 wei of pending holder fee made the keeper send a 1.5M-gas sweep, from the same
+// wallet that pays the MO-1 retries; an attacker could leave dust in every pool every 15 minutes.
+test("sec2 LP-2: a dust holder backlog is not swept; a real one is, with an estimated gas limit", async () => {
+  const tok = a(0x7001);
+  const l = launch({});
+  const base = {
+    [`${lp.factory}:launchCount:`]: 1n,
+    [`${lp.factory}:getLaunches:0,100`]: [tok],
+    [`${lp.factory}:getLaunchedToken:${tok}`]: l,
+    [`${lp.hook}:pendingCreatorTax:${l.poolId},${ZERO}`]: 0n,
+    [`${lp.hook}:pendingFees:${l.poolId},${tok}`]: 0n,
+    [`${lp.hook}:pendingCreatorTax:${l.poolId},${tok}`]: 0n,
+  };
+  const sims = { [`${lp.hook}:sweepPoolFees:${l.poolId},${ZERO}`.toLowerCase()]: null };
+  const estimates = { [`${lp.hook}:sweepPoolFees:${l.poolId},${ZERO}`.toLowerCase()]: 150_000n };
+  const gasPrice = 202_000_000_000n; // 202 gwei, as seen on Monad
+  const dust = harness();
+  await sweepsJob({ client: mockClient({ reads: { ...base, [`${lp.hook}:pendingFees:${l.poolId},${ZERO}`]: 1n }, sims, estimates, gasPrice }), launchpads: [lp], ...dust });
+  assert.equal(dust.sender.sent.length, 0, "1 wei is not worth a sweep");
+  const real = harness();
+  await sweepsJob({ client: mockClient({ reads: { ...base, [`${lp.hook}:pendingFees:${l.poolId},${ZERO}`]: 10n ** 18n }, sims, estimates, gasPrice }), launchpads: [lp], ...real });
+  assert.equal(real.sender.sent.length, 1);
+  assert.ok(real.sender.sent[0].argv.includes("180000"), "estimateGas x 1.2, not the fixed 1.5M");
+});
+
+// v2 (LP-2) keeps the protocol's cut of holder-sharing pools in pendingProtocolFees; reading only pendingFees and
+// pendingCreatorTax would show 0 forever and never sweep it.
+test("sec2 LP-2: a v2 hook's pendingProtocolFees counts toward a sweep", async () => {
+  const tok = a(0x7001);
+  const l = launch({});
+  const client = mockClient({
+    reads: {
+      [`${lp.factory}:launchCount:`]: 1n,
+      [`${lp.factory}:getLaunches:0,100`]: [tok],
+      [`${lp.factory}:getLaunchedToken:${tok}`]: l,
+      [`${lp.hook}:pendingFees:${l.poolId},${ZERO}`]: 0n,
+      [`${lp.hook}:pendingCreatorTax:${l.poolId},${ZERO}`]: 0n,
+      [`${lp.hook}:pendingProtocolFees:${l.poolId},${ZERO}`]: 5n * 10n ** 17n,
+      [`${lp.hook}:pendingFees:${l.poolId},${tok}`]: 0n,
+      [`${lp.hook}:pendingCreatorTax:${l.poolId},${tok}`]: 0n,
+      [`${lp.hook}:pendingProtocolFees:${l.poolId},${tok}`]: 0n,
+    },
+    sims: { [`${lp.hook}:sweepPoolFees:${l.poolId},${ZERO}`.toLowerCase()]: null },
+  });
+  const h = harness();
+  await sweepsJob({ client, launchpads: [lp], ...h });
+  assert.equal(h.sender.sent.length, 1);
+});
+
+test("sec2: the legacy 0xad3d factory is read with its 16-field record and its Monday executor from the record", async () => {
+  const legacy = { label: "launchpad 0xad3d (retired)", factory: a(0xad), hook: a(0x4d), graduationExecutor: mondayExec, legacyRecord: true };
+  const tok = a(0x7001);
+  const l = launch({ phase: 0 });
+  delete l.graduationVenue;
+  const reads = lp1Reads({ tok, l, completed: true, stuckSince: NOW - 3600n, pool: ZERO });
+  delete reads[`${lp.factory}:mondayExecutor:`];
+  const remapped = Object.fromEntries(Object.entries(reads).map(([k2, v]) => [k2.replace(lp.factory, legacy.factory), v]));
+  const client = mockClient({ reads: remapped, sims: { [`${legacy.factory}:graduate:${tok}`.toLowerCase()]: null } });
+  const legacyShapes = [];
+  const read = client.readContract.bind(client);
+  client.readContract = async (req) => {
+    if (req.functionName === "mondayExecutor") throw new Error("execution reverted"); // like the real 0xad3d
+    if (req.functionName === "getLaunchedToken") legacyShapes.push(req.abi[0].outputs[0].components.length);
+    return read(req);
+  };
+  const h = harness();
+  await launchpadGraduationJob({ client, launchpads: [legacy], ...h });
+  assert.deepEqual(legacyShapes, [16]);
+  assert.equal(h.sender.sent.length, 1, "a stuck legacy launch is retried on Monday");
+  assert.ok(h.sender.sent[0].argv.includes("25000000"), "with the Monday gas limit");
+  const sw = harness();
+  await sweepsJob({ client, launchpads: [legacy], ...sw });
+  assert.equal(sw.reporter.alerts.length, 0, "nothing to sweep on an all-Monday factory");
+});
+
+test("sec2 LP-1: a stuck Monday-only launch tells the on-call that the OWNER must act", async () => {
+  const tok = a(0x7001);
+  const l = launch({ graduationVenue: 1, phase: 0 });
+  const reads = lp1Reads({ tok, l, completed: true, stuckSince: NOW - 3600n, pool: ZERO });
+  reads[`${lp.factory}:pairMondayOnly:${l.pairToken}`] = true;
+  reads[`${lp.factory}:v4FallbackAllowed:${tok}`] = false;
+  const h = harness();
+  await launchpadGraduationJob({ client: mockClient({ reads }), launchpads: [lp], ...h });
+  assert.equal(h.reporter.alerts[0].severity, "critical");
+  assert.match(h.reporter.alerts[0].reason, /OWNER calls allowV4Fallback/);
+});
+
+// ---------------------------------------------------------------- sec2: governance watch
+
+const expected = { owner: a(0x0a), treasury: a(0x0b), feesRecipient: a(0x0c), momentsGovernance: a(0x0a), externalBaseURI: "https://dyorhq.fun/moments/" };
+const govPad = {
+  label: "launchpad (live)",
+  factory: a(0xfa),
+  hook: a(0x4a),
+  graduationExecutor: a(0x61),
+  locker: a(0x62),
+  escrow: a(0x63),
+  holderFeeSharing: a(0x64),
+  launchAndBuyRouter: a(0x65),
+  launchDeployer: a(0x66),
+  mondayExecutor: a(0x67),
+  feeVault: a(0x68),
+};
+const govCohort = { label: "cohort3 (live)", factory: a(0xf1), live: true };
+const oldCohort = { label: "cohort2 (retired)", factory: a(0xf2), live: false };
+
+function govReads(over = {}) {
+  return {
+    [`${govPad.factory}:hook:`]: govPad.hook,
+    [`${govPad.factory}:graduationExecutor:`]: govPad.graduationExecutor,
+    [`${govPad.factory}:locker:`]: govPad.locker,
+    [`${govPad.factory}:escrow:`]: govPad.escrow,
+    [`${govPad.factory}:holderFeeSharing:`]: govPad.holderFeeSharing,
+    [`${govPad.factory}:router:`]: govPad.launchAndBuyRouter,
+    [`${govPad.factory}:launchDeployer:`]: govPad.launchDeployer,
+    [`${govPad.factory}:mondayExecutor:`]: govPad.mondayExecutor,
+    [`${govPad.factory}:owner:`]: expected.owner,
+    [`${govPad.factory}:pendingOwner:`]: ZERO,
+    [`${govPad.factory}:protocolFeeRecipient:`]: expected.treasury,
+    [`${govPad.factory}:launchCount:`]: 3n,
+    [`${govPad.feeVault}:owner:`]: expected.owner,
+    [`${govPad.feeVault}:pendingOwner:`]: ZERO,
+    [`${govPad.feeVault}:lpFeeRecipient:`]: expected.feesRecipient,
+    [`${govCohort.factory}:governance:`]: expected.momentsGovernance,
+    [`${govCohort.factory}:pendingGovernance:`]: ZERO,
+    [`${govCohort.factory}:pendingPolicyAt:`]: 0n,
+    [`${govCohort.factory}:publishingPaused:`]: false,
+    [`${govCohort.factory}:externalBaseURI:`]: expected.externalBaseURI,
+    [`${oldCohort.factory}:governance:`]: expected.momentsGovernance,
+    [`${oldCohort.factory}:pendingGovernance:`]: ZERO,
+    [`${oldCohort.factory}:pendingPolicyAt:`]: 0n,
+    [`${oldCohort.factory}:publishingPaused:`]: true,
+    ...over,
+  };
+}
+
+test("sec2 governance: everything as recorded -> silent", async () => {
+  const h = harness();
+  await governanceJob({ client: mockClient({ reads: govReads() }), launchpads: [govPad], cohorts: [govCohort, oldCohort], expected, ...h });
+  assert.deepEqual(h.reporter.alerts, []);
+});
+
+test("sec2 governance: a swapped executor, a repointed fee, an unpaused retired cohort and a pending policy all alert", async () => {
+  const reads = govReads({
+    [`${govPad.factory}:graduationExecutor:`]: a(0xbeef),
+    [`${govPad.feeVault}:lpFeeRecipient:`]: a(0xbad),
+    [`${oldCohort.factory}:publishingPaused:`]: false,
+    [`${govCohort.factory}:pendingPolicyAt:`]: NOW + DAY,
+  });
+  const h = harness();
+  await governanceJob({ client: mockClient({ reads }), launchpads: [govPad], cohorts: [govCohort, oldCohort], expected, ...h });
+  const reasons = h.reporter.alerts.map((x) => `${x.severity} ${x.reason}`).join("\n");
+  assert.match(reasons, /critical module graduationExecutor\(\) is 0x0+beef/);
+  assert.match(reasons, /critical lpFeeRecipient\(\) is 0x0+bad/);
+  assert.match(reasons, /critical a retired cohort is publishing again/);
+  assert.match(reasons, /warning a policy proposal is pending/);
+});
+
+// The live factory 0x6B1C has no launch, so the owner key can still swap every module (2026-09-26 ops audit, medium).
+test("sec2 governance: an unfrozen factory warns once a day, not on every run", async () => {
+  const client = mockClient({ reads: govReads({ [`${govPad.factory}:launchCount:`]: 0n }) });
+  const h = harness();
+  await governanceJob({ client, launchpads: [govPad], cohorts: [], expected, ...h });
+  assert.equal(h.reporter.alerts.length, 1);
+  assert.equal(h.reporter.alerts[0].severity, "warning");
+  assert.match(h.reporter.alerts[0].reason, /modules not sealed/);
+  const again = { ...harness(), state: h.state };
+  await governanceJob({ client, launchpads: [govPad], cohorts: [], expected, ...again });
+  assert.equal(again.reporter.alerts.length, 0, "throttled by the state file");
+  const sealed = harness();
+  await governanceJob({ client: mockClient({ reads: govReads({ [`${govPad.factory}:launchCount:`]: 0n, [`${govPad.factory}:modulesSealed:`]: true }) }), launchpads: [govPad], cohorts: [], expected, ...sealed });
+  assert.equal(sealed.reporter.alerts.length, 0, "a v2 factory sealed at deploy is fine");
+});
+
+test("sec2 governance: every governance event in the lookback is critical", async () => {
+  const client = mockClient({
+    reads: govReads(),
+    head: 10_000n,
+    getLogs: ({ address, events, fromBlock }) =>
+      fromBlock === 9_901n && address.some((x) => x === govPad.factory) && events.some((e) => e.name === "ModulesSet")
+        ? [{ address: govPad.factory, eventName: "ModulesSet", blockNumber: 9_950n, transactionHash: "0xabc" }]
+        : [],
+  });
+  const h = harness();
+  await governanceJob({ client, launchpads: [govPad], cohorts: [govCohort], expected, logsLookback: 99n, ...h });
+  assert.equal(h.reporter.alerts.length, 1);
+  assert.match(h.reporter.alerts[0].reason, /governance event ModulesSet in block 9950/);
+});
+
+// ---------------------------------------------------------------- sec2: deployment records
+
+const DEPLOYMENTS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "deployments");
+
+function withRecords(edit, fn) {
+  const dir = mkdtempSync(join(tmpdir(), "keeper-deployments-"));
+  try {
+    cpSync(DEPLOYMENTS, dir, { recursive: true });
+    edit(dir);
+    return fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Before: a missing live record was skipped silently, so the keeper dropped the live stacks and exited 0.
+test("sec2: a missing or wrong-chain LIVE record stops the keeper instead of dropping the live stack", () => {
+  withRecords((d) => rmSync(join(d, "143.json")), (d) => assert.throws(() => launchpads(d), /required deployment record 143\.json/));
+  withRecords((d) => rmSync(join(d, "moments-143.json")), (d) => assert.throws(() => momentsCohorts(d), /required deployment record moments-143\.json/));
+  withRecords(
+    (d) => {
+      const f = join(d, "143.json");
+      writeFileSync(f, JSON.stringify({ ...JSON.parse(readFileSync(f, "utf8")), chainId: 31337 }));
+    },
+    (d) => assert.throws(() => launchpads(d), /chain 31337/),
+  );
+});
+
+test("sec2: the records cover every launchpad with launches, and the live factories match the pin", () => {
+  const pads = launchpads();
+  assert.deepEqual(
+    pads.map((p) => p.factory.slice(0, 6)),
+    ["0x6B1C", "0x10F3", "0x2F02", "0xad3d"],
+  );
+  assert.equal(pads.find((p) => p.factory.startsWith("0xad3d")).legacyRecord, true);
+  assert.deepEqual(pinMismatches({ cohorts: momentsCohorts(), pads }), []);
+  assert.equal(pads[0].factory, LIVE_FACTORIES.launchpad);
+  const moved = withRecords(
+    (d) => {
+      const f = join(d, "143.json");
+      writeFileSync(f, JSON.stringify({ ...JSON.parse(readFileSync(f, "utf8")), factory: a(0xdead) }));
+    },
+    (d) => pinMismatches({ cohorts: momentsCohorts(d), pads: launchpads(d) }),
+  );
+  assert.equal(moved.length, 1);
+  assert.equal(moved[0].file, "143.json");
 });

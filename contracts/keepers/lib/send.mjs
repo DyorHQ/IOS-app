@@ -1,6 +1,7 @@
 // Transactions go out ONLY through Foundry's `cast send`, with a keystore, a named Foundry account, or a Ledger.
 // This module never sees key material: it refuses raw private keys (flags and environment variables alike) and
-// by default (dry run) only prints the exact `cast` command it would run.
+// by default (dry run) only prints the exact `cast` command it would run. The RPC URL reaches cast through its
+// ETH_RPC_URL environment variable, never argv: a keyed URL would otherwise show in `ps` and in every printed command.
 import { spawnSync } from "node:child_process";
 
 const FORBIDDEN_ENV = ["PRIVATE_KEY", "KEEPER_PRIVATE_KEY", "ETH_PRIVATE_KEY", "DEPLOYER_PRIVATE_KEY"];
@@ -31,12 +32,18 @@ export function assertNoKeyEnv(env = process.env) {
   if (hit.length) throw new Error(`refusing to run with ${hit.join(", ")} set: unset it; the keepers sign only via keystore/Ledger`);
 }
 
-/** The exact `cast send` argv for one call. `args` are already-stringified Solidity arguments. */
-export function castSendArgv({ to, signature, args = [], rpcUrl, gasLimit, signer, allowUnlocked }) {
-  const argv = ["send", to, signature, ...args.map(String), "--rpc-url", rpcUrl];
+/** The exact `cast send` argv for one call. `args` are already-stringified Solidity arguments. The RPC URL is not in
+    it: `castEnv` hands it to cast as ETH_RPC_URL. */
+export function castSendArgv({ to, signature, args = [], gasLimit, signer, allowUnlocked }) {
+  const argv = ["send", to, signature, ...args.map(String)];
   if (gasLimit) argv.push("--gas-limit", String(gasLimit));
   argv.push(...signerArgs(signer, { allowUnlocked }));
   return argv;
+}
+
+/** The environment cast runs with: the caller's, plus the RPC URL as ETH_RPC_URL. */
+export function castEnv(rpcUrl, env = process.env) {
+  return { ...env, ETH_RPC_URL: rpcUrl };
 }
 
 function quote(a) {
@@ -58,16 +65,16 @@ export function makeSender({ send = false, rpcUrl, signer, allowUnlocked = false
     sent,
     async call({ to, signature, args = [], gasLimit, label }) {
       const argv = send
-        ? castSendArgv({ to, signature, args, rpcUrl, gasLimit, signer, allowUnlocked })
-        : ["send", to, signature, ...args.map(String), "--rpc-url", rpcUrl, ...(gasLimit ? ["--gas-limit", String(gasLimit)] : []), "<signer>"];
-      const printable = [castBin, ...argv].map(quote).join(" ");
+        ? castSendArgv({ to, signature, args, gasLimit, signer, allowUnlocked })
+        : ["send", to, signature, ...args.map(String), ...(gasLimit ? ["--gas-limit", String(gasLimit)] : []), "<signer>"];
+      const printable = `ETH_RPC_URL=<rpc> ${[castBin, ...argv].map(quote).join(" ")}`;
       if (!send) {
         log(`[dry-run] ${label ?? signature}: ${printable}`);
         sent.push({ dryRun: true, argv });
         return { dryRun: true };
       }
       log(`[send] ${label ?? signature}: ${printable}`);
-      const r = spawn(castBin, argv, { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" });
+      const r = spawn(castBin, argv, { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8", env: castEnv(rpcUrl) });
       const ok = r.status === 0;
       sent.push({ dryRun: false, argv, ok, stdout: r.stdout, stderr: r.stderr });
       if (!ok) throw new Error(`cast send failed (${r.status}): ${(r.stderr || "").trim()}`);

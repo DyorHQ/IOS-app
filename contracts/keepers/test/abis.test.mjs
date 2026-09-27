@@ -20,6 +20,9 @@ const MAP = {
   bondingCurveAbi: "BondingCurve",
   mondayExecutorAbi: "MondayGraduationExecutor",
   memeHookAbi: "MemeHook",
+  memeHookV2Abi: "MemeHook",
+  launchpadFactoryV2Abi: "LaunchpadFactory",
+  mondayFeeVaultAbi: "MondayFeeVault",
 };
 
 // Flatten a param list to canonical types (tuples expanded) so struct/field names don't matter.
