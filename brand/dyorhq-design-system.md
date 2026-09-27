@@ -10,11 +10,11 @@ The sole approved identity is the editorial wordmark and interlocking D/Q monogr
 
 ## Sources of truth
 
-- `public/design-tokens.css`: interface colors, typefaces, spacing, radii, layers, and motion.
-- `app/globals.css`: shared component styling.
-- `app/ui/components.tsx`: buttons, segmented choices, percentage chips, switches, ranges, and empty states.
-- `app/ui/wordmark.tsx`: one reusable wordmark treatment.
-- `/brand`: live component reference, including light/dark controls and input validation.
+- This document and the assets beside it.
+- The iOS implementation: `ios/DyorHQ/Design/Theme.swift` (colour tokens) and `ios/DyorHQ/Design/Components.swift`
+  (shared components), with the asset catalog in `ios/DyorHQ/Resources/Assets.xcassets`.
+
+The web app (and its CSS tokens and components) was removed on 2026-09-27; DyorHQ is an iPhone app.
 
 Do not declare new brand colors or font stacks in feature stylesheets. Extend the token source when a genuinely new semantic role is needed.
 
@@ -34,7 +34,7 @@ Keep at least one lowercase letter-height of surrounding clear space. Use the wo
 
 The wordmark is original artwork, not Bodoni Moda text. Bodoni Moda complements its thick-thin serif character. Manrope provides open, readable interface lettering. IBM Plex Mono keeps changing figures aligned.
 
-Fonts are bundled in `public/fonts`, with SIL Open Font License files. No Google Fonts request is needed at runtime. Manrope is preloaded. All faces use `font-display: swap`.
+These families describe the brand; the iPhone app follows Apple's system type unless a screen calls for the editorial face.
 
 Scale: 12px metadata, 14px labels, 16px body, 18px lead, 24px section titles, 40-72px editorial display. Dense financial rows may use 13-14px figures. Text should not be less than 12px. Use sentence case and normal tracking in controls. Financial data uses tabular figures. Never apply a serif to a numeric amount or switch fonts on a single emphasized word.
 
