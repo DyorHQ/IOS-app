@@ -98,11 +98,16 @@ private struct Feature {
     init(_ symbol: String, _ title: String, _ detail: String) { self.symbol = symbol; self.title = title; self.detail = detail }
 }
 
-/// A gentle, swipeable carousel of the four things DyorHQ does. Auto-advances (unless the user prefers reduced motion)
-/// and loops forward seamlessly — it never visibly rewinds to the first card.
+/// A gentle, swipeable carousel of the four things DyorHQ does. Auto-advances — unless the user prefers reduced motion,
+/// VoiceOver or Switch Control is running (a card moving under the cursor, AI-12), or the user has swiped it themselves
+/// — and loops forward seamlessly: it never visibly rewinds to the first card.
 private struct FeatureTour: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
     @State private var index = 0
+    /// The user took over by swiping: the tour stops advancing on its own.
+    @State private var userPaused = false
 
     private let features = [
         Feature("camera.aperture", "Make Moments last forever", "Mint a photo or video as an NFT on Monad. Share it, and earn when it’s collected."),
@@ -124,6 +129,7 @@ private struct FeatureTour: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .simultaneousGesture(DragGesture(minimumDistance: 10).onChanged { _ in userPaused = true })
 
             HStack(spacing: 7) {
                 ForEach(features.indices, id: \.self) { i in
@@ -136,7 +142,7 @@ private struct FeatureTour: View {
             .accessibilityHidden(true)
         }
         .onReceive(advance) { _ in
-            guard !reduceMotion else { return }
+            guard !reduceMotion, !voiceOver, !switchControl, !userPaused else { return }
             withAnimation(.easeInOut(duration: 0.5)) { index += 1 }
         }
         .onChange(of: index) { _, new in
