@@ -9,10 +9,10 @@ import { usePerpsAccount } from "./lib/app-data";
 import { cancelOrder, closePosition, collateralBalances, deposit, fetchOpenOrders, fetchPerplContext, fromCNS, PERP_MARKETS, PERPL, placeOrder, withdraw, type PerpInfo } from "./lib/perps/perpl";
 import { usePerplFeed } from "./lib/perps/ws";
 import { useAsync, useNow } from "./lib/use-async";
-import { useTx } from "./lib/use-tx";
+import { useTx, type TxState } from "./lib/use-tx";
 import { useWallet } from "./lib/wallet";
 import { fmtFixed, fmtNumber, fmtPct, fmtUnits, fmtUsd, parseAmount, timeAgo } from "./lib/format";
-import { ActionButton, TxStatus } from "./launchpad/ui";
+import { ActionButton, LiveHint, TxStatus } from "./launchpad/ui";
 
 /* Perps on Perpl: Perpl's own candles, live order book and tape from Perpl's feed, and orders, positions and
    collateral straight from the Exchange contract. */
@@ -21,6 +21,7 @@ const PERIODS: [string, string][] = [["60", "1m"], ["300", "5m"], ["900", "15m"]
 const BOOKS = ["Order book", "Trades"] as const;
 const SIDES = ["Long", "Short"] as const;
 const PTABS = ["Positions", "Orders", "Collateral"] as const;
+const NO_TX: TxState = { status: "idle", label: "" };
 const px = (v: number, perp: PerpInfo) => v / 10 ** perp.priceDecimals;
 const sz = (v: number, perp: PerpInfo) => v / 10 ** perp.lotDecimals;
 
@@ -46,6 +47,11 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
   const [collatAmount, setCollatAmount] = useState("");
   const collatId = useId();
   const { tx, run, reset, dismiss, busy } = useTx();
+  // One transaction at a time, reported once, where it was started: the order ticket, a position, an order or collateral.
+  const [txAt, setTxAt] = useState<"order" | "positions" | "orders" | "collateral">("order");
+  const txFor = (at: typeof txAt) => (txAt === at ? tx : NO_TX);
+  // Never moves the status of a transaction that is still running (run refuses a second one anyway).
+  const startAt = (at: typeof txAt) => { if (!busy) setTxAt(at); };
   const orders = useAsync(async () => (acct && perps.length ? fetchOpenOrders(acct, perps) : []), `orders:${acct?.accountId ?? 0}:${perps.length}`, 10_000);
   const collat = useAsync(async () => (account ? collateralBalances(account) : null), `collat:${account ?? ""}`, 10_000);
 
@@ -88,18 +94,21 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
     const client = wallet.client;
     if (!client || !perp || lots === null || lots === 0n) return;
     const limit = type === "Limit" && limitPNS !== null ? { price: limitPrice, pricePNS: limitPNS } : {};
+    startAt("order");
     const done = await run(`${side} ${sizeText} ${perp.symbol}${type === "Limit" ? ` at $${limitText}` : ""} · ${lev}×`, (onSent) => placeOrder(client, { perp, side: side === "Long" ? "long" : "short", kind: type === "Market" ? "market" : "limit", size: sizeNum, lotLNS: lots, ...limit, leverage: lev, slippageBps: 100 }, onSent));
     if (done) { setSize(""); toast(`${type} order sent to Perpl`); refreshAll(); }
   };
   const doDeposit = async () => {
     const client = wallet.client; const amt = parseAmount(collatAmount, 6);
     if (!client || !amt) return;
+    startAt("collateral");
     const done = await run(`${acct ? "Deposit" : "Open account with"} ${formatUnits(amt, 6)} AUSD`, (onSent) => deposit(client, amt, onSent));
     if (done) { setCollatAmount(""); refreshAll(); }
   };
   const doWithdraw = async () => {
     const client = wallet.client; const amt = parseAmount(collatAmount, 6);
     if (!client || !amt) return;
+    startAt("collateral");
     const done = await run(`Withdraw ${formatUnits(amt, 6)} AUSD`, (onSent) => withdraw(client, amt, onSent));
     if (done) { setCollatAmount(""); refreshAll(); }
   };
@@ -180,8 +189,8 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
         <div className="between"><span>Notional</span><b>${fmtFixed(notional)}</b></div>
         <div className="between"><span>Margin required</span><b>${fmtFixed(marginNeeded)}</b></div>
         <div className="between"><span>Est. liquidation</span><b>{perp && sizeNum > 0 && marginNeeded > 0 ? fmtUsd(Math.max(0, side === "Long" ? refPrice * (1 - (1 / lev - perp.maintMarginFrac)) : refPrice * (1 + (1 / lev - perp.maintMarginFrac)))) : "—"}</b></div>
-        <TxStatus tx={tx} onDismiss={dismiss} />
-        {orderIssue && <p className="hint err">{orderIssue}</p>}
+        <TxStatus tx={txFor("order")} onDismiss={dismiss} />
+        <LiveHint text={orderIssue} />
         {acct ? <ActionButton ready={valid} busy={busy} label={`${side} ${market.symbol} · ${lev}×`} onClick={submit} className={`btn big ${side === "Long" ? "tone-up" : "tone-down"}`} requireLaunchpad={false} />
           : accountKnown || !account ? <ActionButton ready={true} busy={false} label="Deposit AUSD to start" onClick={() => setTab("Collateral")} className="btn big primary" requireLaunchpad={false} />
           : <ActionButton ready={false} busy={!accountError} label={accountError ? "Couldn't read your Perpl account" : "Reading your Perpl account…"} onClick={() => undefined} className="btn big primary" requireLaunchpad={false} />}
@@ -192,12 +201,13 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
       <div {...tabPanel("perps-account", tab)}>
       {tab === "Positions" && (
         <section className="stack-cards" style={{ marginTop: 12 }}>
+          <TxStatus tx={txFor("positions")} onDismiss={dismiss} />
           {account && accountError && <p className="hint err" role="alert">Couldn&apos;t read your Perpl account or positions ({accountError}). Retrying{positions.length ? "; the positions below may be out of date" : ""}.</p>}
           {positions.map((p) => (
             <div key={p.perpId} className="pos-card">
               <div className="top"><span>{p.symbol}-PERP · <span className={p.side === "long" ? "up" : "down"}>{p.side.toUpperCase()} {p.leverage.toFixed(1)}×</span></span><b className={p.unrealized >= 0 ? "up" : "down"}>{p.unrealized >= 0 ? "+" : "−"}${fmtFixed(Math.abs(p.unrealized))}</b></div>
               <div className="grid"><span>Size<b>{fmtFixed(p.size, p.size < 1 ? 5 : 2)} {p.symbol}</b></span><span>Entry<b>{fmtUsd(p.entry)}</b></span><span>Mark<b>{fmtUsd(p.mark)}</b></span><span>Margin<b>${fmtFixed(p.margin)}</b></span><span>Liq. price<b>{p.liquidation ? fmtUsd(p.liquidation) : "—"}</b></span><span>Notional<b>${fmtFixed(p.notional)}</b></span></div>
-              <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run(`Close ${p.symbol} ${p.side}`, (onSent) => closePosition(client, p.perp, p, 100, onSent), refreshAll); }}>Close at market</button>
+              <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; if (!client) return; startAt("positions"); void run(`Close ${p.symbol} ${p.side}`, (onSent) => closePosition(client, p.perp, p, 100, onSent), refreshAll); }}>Close at market</button>
             </div>
           ))}
           {positions.length === 0 && (!account ? <Empty icon="layers" title="No open positions" text="Connect a wallet to see positions." />
@@ -207,11 +217,12 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
       )}
       {tab === "Orders" && (
         <section className="stack-cards" style={{ marginTop: 12 }}>
+          <TxStatus tx={txFor("orders")} onDismiss={dismiss} />
           {(orders.data ?? []).map((o) => (
             <div key={`${o.perpId}-${o.orderId}`} className="pos-card">
               <div className="top"><span>{o.symbol}-PERP · <span className={o.side === "buy" ? "up" : "down"}>{o.side === "buy" ? "BUY" : "SELL"}</span>{o.reduceOnly && <em className="badge" style={{ marginLeft: 6 }}>reduce-only</em>}</span><b>#{o.orderId}</b></div>
               <div className="grid"><span>Price<b>{fmtUsd(o.price)}</b></span><span>Size<b>{fmtFixed(o.size, o.size < 1 ? 5 : 2)}</b></span><span>Leverage<b>{o.leverage}×</b></span></div>
-              <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run(`Cancel order #${o.orderId}`, (onSent) => cancelOrder(client, o.perpId, o.orderId, onSent), refreshAll); }}>Cancel</button>
+              <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; if (!client) return; startAt("orders"); void run(`Cancel order #${o.orderId}`, (onSent) => cancelOrder(client, o.perpId, o.orderId, onSent), refreshAll); }}>Cancel</button>
             </div>
           ))}
           {orders.error && <p className="hint err" role="alert">Couldn&apos;t read your open orders ({orders.error}). Retrying.</p>}
@@ -225,10 +236,10 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
             <>
               <label className="label" htmlFor={collatId} style={{ display: "block", marginBottom: 6 }}>Amount (AUSD)</label>
               <div className="inline-form"><input id={collatId} inputMode="decimal" placeholder="0" value={collatAmount} onChange={(e) => setCollatAmount(e.target.value)} /><button type="button" className="btn primary sm" disabled={busy || !accountKnown || !collatAmt || !!depositIssue} onClick={doDeposit}>{acct ? "Deposit" : "Open account"}</button><button type="button" className="btn secondary sm" disabled={busy || !acct || !collatAmt || withdrawIssue} onClick={doWithdraw}>Withdraw</button></div>
-              {depositIssue && <p className="hint err" style={{ marginTop: 8 }}>{depositIssue}</p>}
+              <LiveHint text={depositIssue} style={{ marginTop: 8 }} />
               {acct && <p className={`hint ${withdrawIssue ? "err" : ""}`} style={{ marginTop: 8 }}>${fmtFixed(fromCNS(freeCNS))} is available to withdraw.</p>}
               <p className="hint" style={{ marginTop: 8 }}>Collateral is AUSD. First deposit opens your account (minimum 10 AUSD). Need AUSD? <button type="button" className="link" style={{ color: "var(--accent-ink)", fontWeight: 600 }} onClick={() => toast("Swap MON to AUSD on the Swap tab")}>Swap for it</button>.</p>
-              <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={dismiss} /></div>
+              <div style={{ marginTop: 10 }}><TxStatus tx={txFor("collateral")} onDismiss={dismiss} /></div>
             </>
           )}
         </section>

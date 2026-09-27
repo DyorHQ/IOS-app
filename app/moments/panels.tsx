@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useId, useState, useSyncExternalStore } from "react";
 import { Icon } from "../ui/icons";
-import { ActionButton, TxStatus } from "../launchpad/ui";
+import { ActionButton, LiveHint, TxStatus } from "../launchpad/ui";
 import { BPS, MAX_BATCH, MOMENTS_DEPLOYED, MONTH_SECONDS, ONRAMP_URL, STUCK_GRACE_SECONDS, SUPPLY, USDC } from "../lib/moments/config";
 import { claim, collect, expire, retryGraduation, runBuyback, withdrawCreatorFees, withdrawCreatorProceeds, withdrawPlatformFees, withdrawPlatformProceeds, withdrawTreasuryProceeds, type CollectMode } from "../lib/moments/actions";
 import { fdvUsd, quoteCollect, type AccountView, type MomentDetail } from "../lib/moments/reads";
@@ -85,8 +85,8 @@ export function CollectPanel({ moment, view, onDone }: { moment: MomentDetail; v
         <div><span>To the pool reserve · creator · DyorHQ</span><b>{q ? `${usd(q.reserveIn)} · ${usd(q.creatorIn)} · ${usd(q.platformIn)}` : "—"}</b></div>
         {q?.terminal && <div><span>Completes the Moment</span><b className="warn">Only {usd(q.gross)} is taken{q.excess > 0n ? `; ${usd(q.excess)} of your request is never pulled` : ""}. Graduation runs in the same transaction.</b></div>}
       </div>
-      {quote.data?.reason && <p className="hint err">{quote.data.reason}</p>}
-      {closed && <p className="hint err">The collect window closed {fmtDate(moment.deadline)}.</p>}
+      <LiveHint text={quote.data?.reason} />
+      <LiveHint text={closed && `The collect window closed ${fmtDate(moment.deadline)}.`} />
       <DisclosureBox checked={agreed} onChange={setAgreed} moment={moment} />
       <div className="slip" style={{ marginTop: 10 }} role="group" aria-labelledby={payWithId}>
         <span id={payWithId}>Pay with</span>
@@ -94,7 +94,7 @@ export function CollectPanel({ moment, view, onDone }: { moment: MomentDetail; v
         <button type="button" aria-pressed={mode === "approve"} onClick={() => setMode("approve")} title="An exact USDC approval of the collect contract, then the collect">Plain approval</button>
       </div>
       <TxStatus tx={tx} onDismiss={dismiss} />
-      {insufficient && <p className="hint err">Not enough USDC.</p>}
+      <LiveHint text={insufficient && "Not enough USDC."} />
       <ActionButton requireLaunchpad={false} ready={MOMENTS_DEPLOYED && !!q && agreed && !insufficient && !closed} busy={busy || (quote.loading && !q)} label={<>Collect {q ? `${q.editions} for ${usd(q.gross)}` : ""} <Icon name="arrow-ur" /></>} onClick={submit} className="btn big tone-up" />
       <p className="hint">Window closes {fmtDate(moment.deadline)} (<Countdown until={moment.deadline} now={now} />). Nothing is refunded and nothing is over-pulled: the last collect is clamped so the reserve lands exactly on {usd(moment.threshold)}.</p>
     </div>

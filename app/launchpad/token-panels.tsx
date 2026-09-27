@@ -10,7 +10,7 @@ import { useAsync, useNow } from "../lib/use-async";
 import { useTx } from "../lib/use-tx";
 import { useWallet } from "../lib/wallet";
 import { bpsToPct, exactDown, fmtAmount, fmtUnits, parseAmount, seconds, shortAddress } from "../lib/format";
-import { ActionButton, TxStatus } from "./ui";
+import { ActionButton, LiveHint, TxStatus } from "./ui";
 
 /* Panels shared by the web token page and the in-app launch screen: curve trading, graduation state, position. */
 
@@ -93,8 +93,8 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
       </div>
       <div className="slip" role="group" aria-labelledby={slipId}><span id={slipId}>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
       <TxStatus tx={tx} onDismiss={dismiss} />
-      {quote.error && <p className="hint err">{quote.error}</p>}
-      {insufficient && <p className="hint err">Insufficient balance.</p>}
+      <LiveHint text={quote.error} />
+      <LiveHint text={insufficient && "Insufficient balance."} />
       <ActionButton ready={!!q && out > 0n && !insufficient} busy={busy || (quote.loading && !!parsed)} label={side === "buy" ? `Buy $${launch.symbol}` : `Sell $${launch.symbol}`} onClick={submit} className={`btn big ${side === "buy" ? "tone-up" : "tone-down"}`} />
     </div>
   );

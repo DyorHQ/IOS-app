@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { Icon } from "../ui/icons";
 import { TONES } from "../ui/data";
 import { DEPLOYED, explorerAddress, explorerTx } from "../lib/chain";
@@ -57,7 +57,9 @@ export function DeployNotice() {
 }
 
 export function TxStatus({ tx, onDismiss }: { tx: TxState; onDismiss?: () => void }) {
-  if (tx.status === "idle") return null;
+  // The live region stays mounted while idle (empty, out of the layout): a region that appears together with its first
+  // message is often not announced. Both branches render the same <div>, so React keeps the one node.
+  if (tx.status === "idle") return <div className="sr-only" role="status" />;
   const busy = tx.status === "signing" || tx.status === "pending";
   const text = tx.status === "signing" ? "Confirm in your wallet…" : tx.status === "pending" ? "Waiting for confirmation on Monad…" : tx.status === "success" ? "Confirmed." : tx.message;
   // "unconfirmed" is neither success nor failure: the transaction is out and may still land.
@@ -68,6 +70,12 @@ export function TxStatus({ tx, onDismiss }: { tx: TxState; onDismiss?: () => voi
       {onDismiss && !busy && <button type="button" className="tx-x" aria-label={tx.status === "unconfirmed" ? "I have checked the transaction" : "Dismiss"} onClick={() => onDismiss()}><Icon name="x" /></button>}
     </div>
   );
+}
+
+/** A message that appears while the user fills a form (why an action is unavailable), in a polite live region that is
+    mounted before it has anything to say, so it is announced when it appears. Empty, it takes no space. */
+export function LiveHint({ text, error = true, style }: { text: string | null | false | undefined; error?: boolean; style?: CSSProperties }) {
+  return text ? <p className={`hint ${error ? "err" : ""}`} role="status" style={style}>{text}</p> : <p className="sr-only" role="status" />;
 }
 
 export function AddressChip({ address, label, token = false }: { address: string; label?: string; token?: boolean }) {

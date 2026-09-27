@@ -198,7 +198,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
               <input id={`${ids}-pay`} inputMode="decimal" placeholder="0" value={amount} onChange={(e) => { edited.current = true; setAmount(e.target.value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } }} />
               <button type="button" className="tokbtn" onClick={() => setPicking("in")}><TokenLogo src={tokenIn.logo} name={tokenIn.symbol} size="sm" />{tokenIn.symbol}<Icon name="chev-down" /></button>
             </div>
-            <div className="sub">{insufficient ? <span className="impact-bad">Insufficient balance</span> : ""}</div>
+            <div className="sub" role="status">{insufficient ? <span className="impact-bad">Insufficient balance</span> : ""}</div>
           </div>
           <button type="button" className="flip" aria-label="Switch tokens" onClick={flip}><Icon name="swap" /></button>
           <div className="swap-field">
