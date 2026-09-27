@@ -20,12 +20,16 @@ struct PendingBridge: Codable, Equatable, Identifiable {
     let inSymbol: String
     let amountText: String
     let destToken: AuroraToken
-    /// The destination balance read just before signing; nil when that read failed, which rules out confirming the
-    /// arrival by the balance (RI-3).
-    let baseline: BigUInt?
+    /// The destination balance, asked for just before signing; set once that read answers (`setBaseline`), after the
+    /// deposit is already persisted. Nil while it hasn't, or when it failed, which rules out confirming the arrival by
+    /// the balance (RI-3).
+    var baseline: BigUInt?
     let minOut: BigUInt?
     let usd: Double?
     let sentAt: Date
+    /// Another bridge to the same asset was unsettled at some point while this one was: either one's credit could be
+    /// read as the other's arrival, so neither is ever confirmed by the balance, only by the bridge's status (RI-3).
+    var overlapped = false
     /// The arrival was seen in the destination balance and recorded; the bridge's status is still watched for a refund.
     var arrivedByBalance = false
 }
@@ -34,10 +38,11 @@ struct PendingBridge: Codable, Equatable, Identifiable {
 /// is persisted the moment it is sent, so a relaunch or a return to the foreground resumes its tracking; completion
 /// (Portfolio volume, the "Bridge complete" notification) and refunds are recorded whenever they are seen.
 ///
-/// "Arrived" means the destination balance rose by the promised minimum over a baseline read just before signing, with
-/// no other bridge to the same asset unsettled; the bridge's status is still watched afterwards, and a later refund
-/// corrects the record. When the bridge reports success but no such delta can be shown (no fresh baseline, or the
-/// balance hasn't caught up), the screen says to check the balance instead. Only the account that sent a deposit
+/// "Arrived" means the destination balance rose by the promised minimum over a baseline asked for just before signing,
+/// with no other bridge to the same asset unsettled at any point in this one's life; the bridge's status is still
+/// watched afterwards, and a later refund corrects the record. When the bridge reports success but no such delta can be
+/// shown (no baseline, an overlapping bridge, or a balance that still hasn't caught up after a few reads), the screen
+/// says to check the balance instead. Only the account that sent a deposit
 /// tracks or credits it: signing out or switching accounts stops every poll at once, and nothing is recorded for
 /// another account.
 @Observable
@@ -97,15 +102,32 @@ final class BridgeTracker {
         }
     }
 
-    /// A deposit just sent: persisted before anything else can go wrong, then polled.
+    /// A deposit just sent: persisted before anything else can go wrong, then polled. Any other unsettled bridge to the
+    /// same asset and this one are marked `overlapped` (RI-3).
     func track(_ bridge: PendingBridge) {
+        var bridge = bridge
         var list = Self.pending(owner: bridge.owner)
         list.removeAll { $0.hash == bridge.hash }
+        for i in list.indices where list[i].destToken.assetId == bridge.destToken.assetId {
+            list[i].overlapped = true
+            bridge.overlapped = true
+        }
         list.append(bridge)
         Self.save(list, owner: bridge.owner)
         status[bridge.hash] = .bridging(.pendingDeposit)
         guard bridge.owner == owner, polls[bridge.hash] == nil else { return }
         start(bridge)
+    }
+
+    /// The destination balance asked for before `hash` was signed, once it answers (RI-3): recorded on the persisted
+    /// deposit unless it already has one. A read that failed (nil) leaves none. One that answers late can only be too
+    /// high (it may include this bridge's own credit), which never confirms an arrival that didn't happen.
+    func setBaseline(_ baseline: BigUInt?, for hash: String, owner: Address) {
+        guard let baseline else { return }
+        var list = Self.pending(owner: owner)
+        guard let i = list.firstIndex(where: { $0.hash == hash }), list[i].baseline == nil else { return }
+        list[i].baseline = baseline
+        Self.save(list, owner: owner)
     }
 
     private func start(_ bridge: PendingBridge) {
@@ -139,7 +161,14 @@ final class BridgeTracker {
                 switch state.status {
                 case .success:
                     if bridge.arrivedByBalance { finish(bridge); return }
-                    let arrived = await arrival(bridge)
+                    // The bridge reports success once the destination transaction is mined, and a destination RPC a block
+                    // or two behind still reads the old balance: read it a few times before saying to check it.
+                    var arrived = await arrival(bridge)
+                    for _ in 0..<3 where arrived == nil && provable(bridge) != nil {
+                        guard isCurrent(bridge) else { return }
+                        try? await Task.sleep(for: .seconds(2))
+                        arrived = await arrival(bridge)
+                    }
                     guard isCurrent(bridge) else { return }
                     recordCompletion(bridge, usd: state.swapDetails?.amountOutUsd.flatMap(Double.init))
                     let out = state.swapDetails?.amountOutFormatted.map { "\($0) \(bridge.destToken.symbol)" }
@@ -185,24 +214,33 @@ final class BridgeTracker {
         var updated = bridge
         updated.arrivedByBalance = true
         var list = Self.pending(owner: bridge.owner)
-        if let i = list.firstIndex(where: { $0.hash == bridge.hash }) { list[i] = updated; Self.save(list, owner: bridge.owner) }
+        // Only the flag: the stored baseline and overlap may be newer than this poll's copy.
+        if let i = list.firstIndex(where: { $0.hash == bridge.hash }) { list[i].arrivedByBalance = true; Self.save(list, owner: bridge.owner) }
         recordCompletion(updated, usd: nil)
         status[bridge.hash] = .arrived(arrived)
         return updated
     }
 
     /// What arrived, when the destination balance has risen by at least 95% of the promised minimum over the baseline
-    /// read before signing. Nil without a baseline, while another bridge to the same asset is unsettled (its credit
-    /// would count), or when the balance can't be read.
+    /// asked for before signing. Nil when the arrival can't be shown by the balance (`provable`), or the balance can't
+    /// be read.
     private func arrival(_ bridge: PendingBridge) async -> String? {
-        guard let baseline = bridge.baseline, let minOut = bridge.minOut, minOut > 0, let chain = chain(bridge.toChainId) else { return nil }
-        let others = Self.pending(owner: bridge.owner).filter { $0.hash != bridge.hash && $0.destToken.assetId == bridge.destToken.assetId }
-        guard others.isEmpty else { return nil }
+        guard let stored = provable(bridge), let baseline = stored.baseline, let minOut = stored.minOut, let chain = chain(bridge.toChainId) else { return nil }
         let read = await balances.balances(owner: bridge.owner, chain: chain, tokens: [bridge.destToken])
         guard let now = read[bridge.destToken.assetId], now > baseline else { return nil }
         let credited = now - baseline
         guard credited * 100 >= minOut * 95 else { return nil }
         return "\(NumberStyle.units(credited, decimals: bridge.destToken.decimals)) \(bridge.destToken.symbol)"
+    }
+
+    /// The persisted deposit, when its arrival can be shown by the balance: it has a baseline and a minimum, and no other
+    /// bridge to the same asset was unsettled at any point in its life (`overlapped`, and checked again now). Read from
+    /// storage, not a poll's copy, since the baseline and the overlap are recorded after the poll starts.
+    private func provable(_ bridge: PendingBridge) -> PendingBridge? {
+        let list = Self.pending(owner: bridge.owner)
+        guard let stored = list.first(where: { $0.hash == bridge.hash }), stored.baseline != nil, (stored.minOut ?? 0) > 0, !stored.overlapped,
+              !list.contains(where: { $0.hash != bridge.hash && $0.destToken.assetId == bridge.destToken.assetId }) else { return nil }
+        return stored
     }
 
     private func chain(_ auroraId: String) -> EVMChain? { auroraId == monad.auroraId ? monad : EVMChain.byAuroraId(auroraId) }

@@ -395,30 +395,38 @@ final class BridgeModel {
         let sendAmount = quotedIn
         let sourceChain = fromChain
         let destChain = toChain
+        // A lock or an app switch while the deposit is signed and sent suspends this: ask for the time iOS grants, so the
+        // deposit is broadcast, recorded and persisted, and Aurora told (GL-5).
+        let background = BackgroundTime("Bridge")
+        defer { background.end() }
         do {
-            let request: TransactionRequest
-            if from.isNative {
-                request = TransactionRequest(to: depositAddr, value: sendAmount)
-            } else if let contract = from.contractAddress.flatMap(Address.init) {
-                request = TransactionRequest(to: contract, data: try ERC20.transferCalldata(to: depositAddr, amount: sendAmount))
-            } else { localPhase = .failed("This source token can't be bridged."); return }
+            guard let request = try Self.depositRequest(from, to: depositAddr, amount: sendAmount) else {
+                localPhase = .failed("This source token can't be bridged."); return
+            }
 
-            // The destination balance, asked for before signing (RI-3): the baseline an arrival is measured from. It can't
-            // include this bridge's credit, which takes the deposit confirming and the bridge settling. Never the
-            // picker's cached balance, which can be missing or from before an earlier bridge landed; a read that fails
-            // leaves no baseline, and the arrival is then never inferred from the balance.
-            async let baselineRead = env.chainBalances.balances(owner: owner, chain: destChain, tokens: [to])
+            // The destination balance, asked for before signing (RI-3): the baseline an arrival is measured from. Asked
+            // before the deposit exists, it can't include this bridge's credit, which takes the deposit confirming and the
+            // bridge settling. Never the picker's cached balance, which can be missing or from before an earlier bridge
+            // landed; a read that fails leaves no baseline, and the arrival is then never inferred from the balance. It
+            // is recorded when it answers, after the deposit is persisted: a slow destination RPC never holds that up.
+            // Another bridge to the same asset unsettled now rules the balance out for both (`PendingBridge.overlapped`).
+            let balancer = env.chainBalances
+            let baselineRead = Task { await balancer.balances(owner: owner, chain: destChain, tokens: [to])[to.assetId] }
+            let overlapping = BridgeTracker.pending(owner: owner).contains { $0.destToken.assetId == to.assetId }
             let hash: Data
             do {
                 hash = try await env.sender(for: sourceChain).send(request, from: wallet)
             } catch TransactionError.possiblySent(let possible) {
                 // No endpoint said it took the deposit, but it may be live: track it rather than invite a second one.
                 hash = possible
+            } catch {
+                baselineRead.cancel()
+                throw error
             }
-            let baseline = await baselineRead[to.assetId]
             trackedHash = hash.hexString
             sourceTxURL = sourceChain.explorerTx(hash.hexString) // source deposit tx — a verifiable link straight away
-            // Recorded and persisted before anything else can go wrong (GL-5): the funds have left the source chain.
+            // Recorded and persisted the moment it is sent, before anything else can go wrong (GL-5): the funds have left
+            // the source chain.
             let bridgeFeeUsd: Double? = {
                 guard let inUsd = quote.amountInUsd.flatMap(Double.init), let outUsd = quote.amountOutUsd.flatMap(Double.init) else { return nil }
                 return max(0, inUsd - outUsd)
@@ -428,11 +436,16 @@ final class BridgeModel {
                 kind: .bridge, title: "Bridge \(from.symbol) → \(to.symbol)",
                 subtitle: "\(amountText) \(from.symbol) · \(sourceChain.name) → \(destChain.name)",
                 hash: hash, section: "bridge", usd: usd, feeUsd: bridgeFeeUsd), owner: owner)
-            env.bridgeTracker.track(PendingBridge(
+            let tracker = env.bridgeTracker
+            tracker.track(PendingBridge(
                 hash: hash.hexString, owner: owner, depositAddress: deposit, memo: quote.depositMemo,
                 fromChainId: sourceChain.auroraId, toChainId: destChain.auroraId, fromName: sourceChain.name, toName: destChain.name,
-                inSymbol: from.symbol, amountText: amountText, destToken: to, baseline: baseline,
-                minOut: quote.minAmountOut.flatMap { BigUInt($0) }, usd: usd, sentAt: Date()))
+                inSymbol: from.symbol, amountText: amountText, destToken: to, baseline: nil,
+                minOut: quote.minAmountOut.flatMap { BigUInt($0) }, usd: usd, sentAt: Date(), overlapped: overlapping))
+            Task {
+                let baseline = await baselineRead.value
+                tracker.setBaseline(baseline, for: hash.hexString, owner: owner)
+            }
             localPhase = .submitting
             _ = try? await env.aurora.submitDeposit(txHash: hash.hexString, depositAddress: deposit, memo: quote.depositMemo)
             // The deposit address is consumed: `reset` re-quotes before another bridge can be sent (`canBridge`).
@@ -442,6 +455,14 @@ final class BridgeModel {
         } catch {
             localPhase = .failed(describe(error))
         }
+    }
+
+    /// The source-chain deposit: `amount` of `token` to Aurora's deposit address — a plain transfer of the native coin,
+    /// or the token's `transfer`. Nil for a token with neither.
+    private static func depositRequest(_ token: AuroraToken, to deposit: Address, amount: BigUInt) throws -> TransactionRequest? {
+        if token.isNative { return TransactionRequest(to: deposit, value: amount) }
+        guard let contract = token.contractAddress.flatMap(Address.init) else { return nil }
+        return TransactionRequest(to: contract, data: try ERC20.transferCalldata(to: deposit, amount: amount))
     }
 
     /// Return to a clean state to start another bridge, keeping the entered amount and re-quoting it (so a
