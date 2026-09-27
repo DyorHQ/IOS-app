@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {Script} from "forge-std/Script.sol";
+import {MainnetGuard} from "./lib/MainnetGuard.sol";
 import {LaunchpadFactory} from "../src/LaunchpadFactory.sol";
 import {IERC20} from "../src/interfaces/IERC20.sol";
 
 /// @notice Approves an ERC-20 as a pairing asset (e.g. a tokenized stock or a stablecoin) with its own economics.
 ///         FACTORY=0x... PAIR_TOKEN=0x... PHANTOM_QUOTE=<in token units> GRADUATION_THRESHOLD=<in token units>
-///           forge script script/AddPairToken.s.sol:AddPairToken --rpc-url monad --broadcast --ledger
-///         (or --account <keystore name>; never a plaintext --private-key)
-contract AddPairToken is Script {
+///           script/mainnet.sh forge script script/AddPairToken.s.sol:AddPairToken --rpc-url monad --broadcast --ledger
+///         (or --account <keystore>; a raw private key is refused on Monad mainnet: security audit 2026-09-26, SEC-1)
+contract AddPairToken is MainnetGuard {
     function run() external {
+        _refuseRawKeyOnMainnet();
         LaunchpadFactory factory = LaunchpadFactory(vm.envAddress("FACTORY"));
         address pairToken = vm.envAddress("PAIR_TOKEN");
         uint256 phantomQuote = vm.envUint("PHANTOM_QUOTE");

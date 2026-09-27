@@ -16,6 +16,15 @@ final class MomentsEconomicsTests: XCTestCase {
         XCTAssertEqual(MomentsMath.graduationFDV(threshold: 771_428_571, reserveBps: 7_500, creatorAllocBps: 0), 1_800, accuracy: 0.001)
     }
 
+    /// The collect price is capped at the gross that completes the reserve: the live cohort 3 policy ($771.428571 at
+    /// 75%) charges at most $1,028.571428 however high the listed price, so the create screen refuses anything above it.
+    func testMaxCollectPriceIsTheCompletionGrossRoundedUp() {
+        XCTAssertEqual(MomentsMath.maxCollectPrice(threshold: 771_428_571, reserveBps: 7_500), 1_028_571_428)
+        XCTAssertEqual(MomentsMath.maxCollectPrice(threshold: 10_000_000, reserveBps: 7_500), 13_333_334, "rounds up, as Math.ceilDiv")
+        XCTAssertEqual(MomentsMath.maxCollectPrice(threshold: 10_000_000, reserveBps: 10_000), 10_000_000)
+        XCTAssertNil(MomentsMath.maxCollectPrice(threshold: 10_000_000, reserveBps: 0))
+    }
+
     func testDegenerateInputsAreZeroNotACrash() {
         XCTAssertEqual(MomentsMath.graduationFDV(threshold: 771_428_571, reserveBps: 0, creatorAllocBps: 1_000), 0)
         XCTAssertEqual(MomentsMath.graduationFDV(threshold: 771_428_571, reserveBps: 7_500, creatorAllocBps: 10_000), 0)

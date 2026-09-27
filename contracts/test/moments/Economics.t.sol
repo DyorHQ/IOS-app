@@ -108,8 +108,9 @@ contract EconomicsTest is MomentsBase {
         f.setModules(address(c), address(v), address(g), makeAddr("locker-x"), makeAddr("hook-x"), makeAddr("buyback-x"));
         vm.prank(alice);
         usdc.approve(address(c), type(uint256).max);
+        bytes32 terms = f.termsHash();
         vm.prank(creator);
-        (uint256 id, address coin,) = f.publish(_params(price, MAX_ALLOC_BPS, 9));
+        (uint256 id, address coin,) = f.publish(_params(price, MAX_ALLOC_BPS, 9), terms);
         uint256 n;
         while (c.ledger(id).state == MomentTypes.State.Collecting) {
             vm.prank(alice);

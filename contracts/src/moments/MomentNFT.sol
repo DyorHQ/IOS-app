@@ -7,7 +7,7 @@ import {IERC2981} from "@openzeppelin/contracts/interfaces/IERC2981.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
-import {MomentTypes, IMomentsFactory} from "./interfaces/IMoments.sol";
+import {MomentTypes} from "./interfaces/IMoments.sol";
 
 /// @notice The per-Moment collectible: a freely transferable ERC-721 whose token id IS the collector's edition rank
 ///         (#1, #2, ...). Minted only by the collect contract while the Moment is Collecting; the collection is
@@ -18,7 +18,8 @@ import {MomentTypes, IMomentsFactory} from "./interfaces/IMoments.sol";
 ///         to the immutable creator; ERC-4906 metadata-refresh events (emitted when the edition size is fixed);
 ///         ERC-7572 `contractURI()` collection metadata; `owner()` returns the creator purely as the collection-admin
 ///         convention marketplaces read — it confers no on-chain power; `animation_url` for video Moments and
-///         `external_url` back to the Moment page (base URI held by the factory, metadata only).
+///         `external_url` back to the Moment page (metadata only). v2 (sec2, MO-8): the link base is the factory's
+///         at publish, stored here once; a later change of the factory's base never rewrites this collection.
 contract MomentNFT is ERC721Enumerable, IERC2981 {
     using Strings for uint256;
 
@@ -27,13 +28,15 @@ contract MomentNFT is ERC721Enumerable, IERC2981 {
     bytes4 private constant ERC4906_INTERFACE_ID = 0x49064906;
 
     uint256 public immutable momentId;
-    address public immutable factory; // the deployer; only consulted for the metadata-only external base URI
+    address public immutable factory; // the deployer
     address public immutable creator;
     address public immutable collect; // the only minter; also closes on expiry
     address public immutable graduation; // closes at graduation
     uint16 public immutable royaltyBps; // ERC-2981 creator royalty suggested to marketplaces
 
     MomentTypes.Provenance private _provenance;
+    /// @notice v2 (sec2, MO-8): prefix of this collection's external links (`<base><momentId>`), fixed at publish.
+    string public externalBaseURI;
     uint256 public totalMinted;
     bool public closed;
 
@@ -59,7 +62,8 @@ contract MomentNFT is ERC721Enumerable, IERC2981 {
         address _collect,
         address _graduation,
         uint16 _royaltyBps,
-        MomentTypes.Provenance memory prov
+        MomentTypes.Provenance memory prov,
+        string memory externalBase
     ) ERC721(name_, symbol_) {
         if (_creator == address(0) || _collect == address(0) || _graduation == address(0)) revert ZeroAddress();
         if (_royaltyBps > MAX_ROYALTY_BPS) revert BadRoyalty();
@@ -70,6 +74,7 @@ contract MomentNFT is ERC721Enumerable, IERC2981 {
         graduation = _graduation;
         royaltyBps = _royaltyBps;
         _provenance = prov;
+        externalBaseURI = externalBase;
         emit ContractURIUpdated();
     }
 
@@ -182,15 +187,10 @@ contract MomentNFT is ERC721Enumerable, IERC2981 {
 
     // ------------------------------------------------------------------ internals
 
-    /// @dev `<factory.externalBaseURI()><momentId>` when the factory has a base set; empty otherwise. Tolerates a
-    ///      deployer that is not the factory (direct deployments in tests).
+    /// @dev `<externalBaseURI><momentId>` when a base was set at publish; empty otherwise.
     function _externalURL() private view returns (string memory) {
-        try IMomentsFactory(factory).externalBaseURI() returns (string memory base) {
-            if (bytes(base).length == 0) return "";
-            return string.concat(base, momentId.toString());
-        } catch {
-            return "";
-        }
+        if (bytes(externalBaseURI).length == 0) return "";
+        return string.concat(externalBaseURI, momentId.toString());
     }
 
     /// @dev Escapes a creator-supplied string for embedding in the metadata JSON: `"` and `\` are backslash-escaped

@@ -100,9 +100,10 @@ abstract contract MomentsBase is Test {
         });
     }
 
-    function _publish(address who, uint256 price, uint16 allocBps, uint256 seed) internal returns (uint256 id, MomentCoin coin, MomentNFT nft) {
+    function _publish(address who, uint256 price, uint16 allocBps, uint256 seed) internal virtual returns (uint256 id, MomentCoin coin, MomentNFT nft) {
+        bytes32 terms = factory.termsHash(); // v2 (sec2, MO-4): publish is bound to the terms shown
         vm.prank(who);
-        (uint256 i, address c, address n) = factory.publish(_params(price, allocBps, seed));
+        (uint256 i, address c, address n) = factory.publish(_params(price, allocBps, seed), terms);
         return (i, MomentCoin(c), MomentNFT(n));
     }
 

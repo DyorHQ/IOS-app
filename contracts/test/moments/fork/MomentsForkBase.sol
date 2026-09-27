@@ -53,7 +53,9 @@ abstract contract MomentsForkBase is MomentsMarketBase {
     }
 
     function setUp() public virtual override {
-        vm.createSelectFork("monad", FORK_BLOCK);
+        // Public Monad RPCs prune old state, so the pinned block eventually stops being served: MOMENTS_FORK_BLOCK
+        // re-pins the fork (any recent block works; the stack under test is deployed fresh on the fork).
+        vm.createSelectFork("monad", vm.envOr("MOMENTS_FORK_BLOCK", FORK_BLOCK));
         usdc = MockUSDC(USDC_ADDR); // only the ERC-20 surface of the real USDC is used through this handle
         permit2 = MockPermit2(PERMIT2_ADDR);
         factory = new MomentsFactory(gov, _policy(THRESHOLD));

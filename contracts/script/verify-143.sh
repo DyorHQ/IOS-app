@@ -4,7 +4,7 @@
 # must be passed or Sourcify reports a misleading bytecode mismatch. Run from contracts/ after `forge script … --broadcast`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-J=deployments/143.json
+J=${RECORD:-deployments/143.json} # RECORD=deployments/pending-143.json right after a broadcast (script/README.md)
 addr() { python3 -c "import json,sys; print(json.load(open('$J'))['$1'])"; }
 V="--chain 143 --verifier sourcify --verifier-url https://sourcify-api-monad.blockvision.org/ --compilation-profile v4core --watch"
 verify() { echo "== $2 @ $1"; ~/.foundry/bin/forge verify-contract "$1" "$2" $V || echo "!! $2 failed — retry with --compilation-profile default"; }

@@ -5,6 +5,12 @@
 # runs write (deployment records, broadcast/ and cache/ dirs) is snapshotted first and restored on exit.
 #   cd /Users/jerry/Hackathon/contracts && ./script/relaunch/rehearse.sh
 set -euo pipefail
+
+# RETIRED with relaunch-new-wallets.sh (security audit 2026-09-26): it rehearses a relaunch that is done, with a script
+# that now refuses to run. script/deploy-v2.sh has its own FORK=1 rehearsal mode. Kept for the record only.
+echo "rehearse.sh is retired together with relaunch-new-wallets.sh; rehearse v2 with FORK=1 script/deploy-v2.sh." >&2
+exit 1
+
 LP_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 MOM_DIR=${MOMENTS_DIR:-/Users/jerry/Hackathon-moments/contracts}
 FORGE=~/.foundry/bin/forge; CAST=~/.foundry/bin/cast; ANVIL=~/.foundry/bin/anvil

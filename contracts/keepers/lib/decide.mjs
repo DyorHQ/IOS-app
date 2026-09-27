@@ -68,24 +68,51 @@ export function minOutWithSlippage(simulated, slippageBps) {
   return (simulated * (10_000n - slippageBps)) / 10_000n;
 }
 
-/** MO-2 monitor: USDC idle in a cohort's shared locker is what a spot-price sandwich could extract. */
-export function decideLockerIdle({ lockerUsdc, alertAbove }) {
-  return lockerUsdc > alertAbove
-    ? { action: "alert", severity: "warning", reason: `locker holds ${lockerUsdc} idle USDC units (> ${alertAbove})` }
-    : { action: "none" };
+/**
+ * MO-2 monitor: USDC idle in a cohort's shared locker is what a spot-price sandwich could extract. On a v2 locker the
+ * balance is per Moment (`perMoment`): each round adds at most 0.5% of the position, so a remainder there is normal,
+ * and only one Moment's own large remainder is worth a look (a price held away from the market across rounds can
+ * spend it).
+ */
+export function decideLockerIdle({ lockerUsdc, alertAbove, perMoment = false }) {
+  if (lockerUsdc <= alertAbove) return { action: "none" };
+  const where = perMoment ? "locker holds this Moment" : "locker holds";
+  return { action: "alert", severity: "warning", reason: `${where} ${lockerUsdc} idle USDC units (> ${alertAbove})` };
 }
 
 // ------------------------------------------------------------------------------------------------ LP-2
 
 /**
- * LP-2: sweep a v4 pool's hook fees. Holder-sharing launches are swept whenever anything is pending in the quote
- * asset (any backlog is capturable by a one-block holder); everything else only above `minOther`.
+ * LP-2: sweep a v4 pool's hook fees. Holder-sharing launches are swept as soon as the quote-asset backlog is worth the
+ * sweep (`minHolders`, see `minHolderSweep`): a backlog is capturable by a one-block holder, but a dust backlog is not
+ * worth capturing, and sweeping it on every run would let anyone drain the keeper's gas. Everything else is swept only
+ * above `minOther`.
  */
 export function decideSweep({ holderFeeSharing, isQuote, pending, minHolders = 1n, minOther }) {
   if (pending === 0n) return { action: "none" };
-  if (holderFeeSharing && isQuote) return pending >= minHolders ? { action: "sweep", reason: "holder rewards backlog" } : { action: "none" };
+  if (holderFeeSharing && isQuote) {
+    return pending >= minHolders ? { action: "sweep", reason: "holder rewards backlog" } : { action: "none", reason: `holder backlog ${pending} below the sweep floor ${minHolders}` };
+  }
   if (minOther !== undefined && pending >= minOther) return { action: "sweep", reason: "fee backlog" };
   return { action: "none" };
+}
+
+/**
+ * The smallest holder backlog worth a sweep. Native MON: twice the sweep's gas cost (Monad bills the gas limit). An
+ * ERC-20 quote has no on-chain MON price here, so the floor is 0.01 whole tokens (1 cent of a dollar stablecoin).
+ */
+export function minHolderSweep({ isNative, gasLimit, gasPrice = 0n, decimals = 18 }) {
+  if (isNative) {
+    const floor = 2n * gasLimit * gasPrice;
+    return floor > 0n ? floor : 1n;
+  }
+  return 10n ** BigInt(Math.max(0, Number(decimals) - 2));
+}
+
+/** estimateGas x 1.2, never above `cap` (the fixed limit a job used before; also the fallback when estimation fails). */
+export function gasWithMargin(estimate, cap) {
+  const g = (estimate * 12n) / 10n;
+  return g < cap ? g : cap;
 }
 
 // ------------------------------------------------------------------------------------------------ LP-1
@@ -164,42 +191,68 @@ export function bitmapWordsBetween({ tickSpacing, tickFrom, tickTo }) {
  *  - "light":    squatted, but the realign crosses few enough ticks to fit the automatic 2M-gas graduation.
  *  - "heavy":    the automatic graduation will fail (> 2M); a plain `graduate(token)` with a big gas limit, or the
  *                v1 `graduateFallback` whose Monday retry gets 63/64 of the gas, still completes ON MONDAY.
- *  - "blocking": the realign needs more than the fallback's Monday retry can get in one transaction, so the retry
- *                runs out of gas and the v1 v4 fallback starves on the last 1/64: holders are locked until the
- *                owner's 7-day rescue unless someone pre-aligns the pool in several transactions (see README).
- * `crossGas` is a conservative per-crossed-tick cost; `baseGas` the rest of a Monday graduation.
+ *  - "blocking": the realign needs more than one transaction can give the Monday retry. For an ordinary pair this is
+ *                recoverable: the live `graduateFallback` with >= ~12M gas (the keeper sends 29.9M) graduates on
+ *                Uniswap v4, because the out-of-gas happens frames below it and each reverted frame hands back the
+ *                1/64 it kept (test/sec2/Sec2LiveV1.t.sol). For a Monday-only pair (aBIL) the fallback needs the owner's
+ *                `allowV4Fallback`, so holders are frozen until the owner acts: only then is it critical. On a v2
+ *                factory (`valveDelay` set) the fallback opens to anyone after that delay stuck, so the freeze is bounded.
+ * `crossGas` is the per-crossed-tick cost: ~28.7k was measured on Monday Trade's real bytecode under Monad's gas
+ * schedule (debug_traceCall, 2026-09-26 audit); 30k keeps a margin. `baseGas` is the rest of a Monday graduation.
  */
-export function assessMondaySquat({ poolExists, sqrtPriceX96, targetSqrtPriceX96, ticksToCross, crossGas = 25_000n, baseGas = 700_000n, txGasCap = 30_000_000n, v4Need = 1_500_000n }) {
+export function assessMondaySquat({ poolExists, sqrtPriceX96, targetSqrtPriceX96, ticksToCross, mondayOnly = false, valveDelay, crossGas = 30_000n, baseGas = 700_000n, txGasCap = 30_000_000n }) {
   if (!poolExists) return { level: "none", reason: "no Monday pool yet" };
   if (sqrtPriceX96 === 0n) return { level: "none", reason: "pool created but not initialized (the executor initializes it)" };
   if (sqrtPriceX96 === targetSqrtPriceX96) return { level: "none", reason: "pool already at the graduation price" };
+  const blockedTail = !mondayOnly
+    ? "graduateFallback with >= ~12M gas (the keeper sends 29.9M) still graduates it on Uniswap v4"
+    : valveDelay !== undefined
+      ? `Monday-only launch: once it completes, holders are frozen until the v4 fallback opens to anyone after ${valveDelay}s stuck, or until the owner's allowV4Fallback(token) opens it at once`
+      : "Monday-only pair: the v4 fallback needs the owner's allowV4Fallback(token), so holders are frozen until the owner acts";
+  const bounded = mondayOnly && valveDelay !== undefined;
   if (ticksToCross === undefined || ticksToCross === null) {
-    return { level: "blocking", reason: "pool is mispriced and its tick density could not be read — treat as blocking", estimatedGas: undefined };
+    return { level: "blocking", mondayOnly, bounded, reason: `pool is mispriced and its tick density could not be read — treat as blocking; ${blockedTail}`, estimatedGas: undefined };
   }
   const estimatedGas = baseGas + BigInt(ticksToCross) * crossGas;
-  // v1 graduateFallback: the Monday retry gets 63/64 of what is left; the v4 path then needs `v4Need` of the 1/64.
+  // v1 graduateFallback: the Monday retry gets 63/64 of what is left.
   const fallbackMondayBudget = (txGasCap * 63n) / 64n;
-  if (estimatedGas <= GRADUATION_GAS) return { level: "light", estimatedGas, reason: `${ticksToCross} initialized ticks to cross; fits the automatic graduation` };
-  if (estimatedGas < fallbackMondayBudget) return { level: "heavy", estimatedGas, reason: `${ticksToCross} initialized ticks; automatic graduation will fail, a high-gas retry graduates on Monday` };
-  return { level: "blocking", estimatedGas, reason: `${ticksToCross} initialized ticks (~${estimatedGas} gas) exceed one transaction: graduation AND the v4 fallback are blocked` };
+  if (estimatedGas <= GRADUATION_GAS) return { level: "light", mondayOnly, estimatedGas, reason: `${ticksToCross} initialized ticks to cross; fits the automatic graduation` };
+  if (estimatedGas < fallbackMondayBudget) return { level: "heavy", mondayOnly, estimatedGas, reason: `${ticksToCross} initialized ticks; automatic graduation will fail, a high-gas retry graduates on Monday` };
+  return { level: "blocking", mondayOnly, bounded, estimatedGas, reason: `${ticksToCross} initialized ticks (~${estimatedGas} gas) exceed one transaction, so the Monday graduation cannot finish; ${blockedTail}` };
+}
+
+/** Alert severity of a squat seen BEFORE completion: only a blocking squat on a Monday-only pair freezes holders, and
+    on a v2 factory (`bounded`) only until its public fallback delay has passed. */
+export function squatSeverity({ level, mondayOnly, bounded = false }) {
+  if (level === "blocking") return mondayOnly && !bounded ? "critical" : "warning";
+  if (level === "heavy") return "warning";
+  return "info";
 }
 
 /**
  * LP-1 (+ stuck v4 launches): what to do with a launch whose curve completed but which did not graduate.
  * `simGraduate` / `simFallback` are simulation outcomes (true = would succeed).
  */
-export function decideStuckLaunch({ phase, venue, completed, rescued, stuckSince, now, simGraduate, simFallback }) {
+export function decideStuckLaunch({ phase, venue, completed, rescued, stuckSince, now, simGraduate, simFallback, mondayOnly = false, v4FallbackAllowed = false, valveDelay }) {
   if (phase !== LAUNCH_PHASE.NotGraduated || !completed || rescued) return { action: "none" };
   const rescueAt = stuckSince === 0n ? 0n : stuckSince + RESCUE_DELAY;
   if (simGraduate) return { action: "graduate", severity: "warning", rescueAt, reason: "completed but not graduated; graduate() simulates OK" };
   if (venue === VENUE.Monday && simFallback) return { action: "graduateFallback", severity: "warning", rescueAt, reason: "Monday graduation fails; the v4 fallback simulates OK" };
-  return {
-    action: "alert",
-    severity: "critical",
-    rescueAt,
-    reason:
-      venue === VENUE.Monday
-        ? "Monday graduation AND the v4 fallback fail: pre-align the Monday pool (README, LP-1 manual procedure) or rescue after the delay"
-        : "v4 graduation fails: investigate",
-  };
+  let reason = "v4 graduation fails: investigate";
+  const failing = "Monday graduation AND the v4 fallback fail: investigate; pre-align the Monday pool (README, LP-1 manual procedure) or rescue after the delay";
+  if (venue === VENUE.Monday) {
+    if (!mondayOnly || v4FallbackAllowed) {
+      reason = failing;
+    } else if (valveDelay === undefined) {
+      // live (v1) factory: no public valve
+      reason = "Monday-only pair: holders are frozen (curve closed, no pool) until the OWNER calls allowV4Fallback(token), or pre-aligns the Monday pool (README, LP-1 manual procedure); rescue needs the owner too";
+    } else {
+      const valveAt = stuckSince + valveDelay;
+      reason =
+        now < valveAt
+          ? `Monday-only launch: holders are frozen (curve closed, no pool) until the v4 fallback opens to anyone at ${valveAt}, unless the OWNER calls allowV4Fallback(token) now or pre-aligns the Monday pool (README, LP-1 manual procedure); the keeper sends the fallback once it simulates`
+          : `Monday-only launch past its public fallback time (${valveAt}), and ${failing}`;
+    }
+  }
+  return { action: "alert", severity: "critical", rescueAt, reason };
 }

@@ -7,12 +7,28 @@ import { parseAbi } from "viem";
 export const momentsFactoryAbi = parseAbi([
   "function momentCount() view returns (uint256)",
   "function publishingPaused() view returns (bool)",
+  "function governance() view returns (address)",
+  "function pendingGovernance() view returns (address)",
+  "function pendingPolicyAt() view returns (uint64)",
+  "function externalBaseURI() view returns (string)",
+  "event GovernanceTransferStarted(address indexed from, address indexed to)",
+  "event PolicyProposed((uint256 threshold, uint256 minPrice, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 maxCreatorAllocBps, uint16 expiryCreatorBps, uint16 royaltyBps, address platform, address treasury) policy, uint64 applicableAt)",
+  "event PolicyApplied((uint256 threshold, uint256 minPrice, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 maxCreatorAllocBps, uint16 expiryCreatorBps, uint16 royaltyBps, address platform, address treasury) policy)",
+  "event PolicyCancelled()",
+  "event PublishingPaused(bool paused)",
+  "event ExternalBaseURISet(string base)",
   "function getMoment(uint256 momentId) view returns ((address creator, address platform, address treasury, address coin, address nft, uint256 price, uint256 threshold, uint256 rateNum, uint256 rateDen, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 creatorAllocBps, uint16 expiryCreatorBps, uint16 royaltyBps, uint64 publishedAt, uint64 deadline))",
 ]);
+
+// v2 only (NOT deployed): the guardian's events. Absent on every live cohort.
+export const momentsFactoryV2Abi = parseAbi(["event GuardianSet(address indexed guardian)", "event GuardianPaused(bool paused)"]);
 
 // Cohort 0 ("v1") predates `royaltyBps`; its Moment struct has one field fewer. Used as a fallback decoder.
 export const momentsFactoryV1Abi = parseAbi([
   "function getMoment(uint256 momentId) view returns ((address creator, address platform, address treasury, address coin, address nft, uint256 price, uint256 threshold, uint256 rateNum, uint256 rateDen, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 creatorAllocBps, uint16 expiryCreatorBps, uint64 publishedAt, uint64 deadline))",
+  // Its Policy has no royaltyBps either, so its policy events have their own topics.
+  "event PolicyProposed((uint256 threshold, uint256 minPrice, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 maxCreatorAllocBps, uint16 expiryCreatorBps, address platform, address treasury) policy, uint64 applicableAt)",
+  "event PolicyApplied((uint256 threshold, uint256 minPrice, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 maxCreatorAllocBps, uint16 expiryCreatorBps, address platform, address treasury) policy)",
 ]);
 
 export const momentCollectAbi = parseAbi([
@@ -30,6 +46,10 @@ export const momentGraduationAbi = parseAbi([
 
 export const momentFeeHookAbi = parseAbi(["function buybackAccrued(uint256 momentId) view returns (uint256)"]);
 
+// v2 only (NOT deployed): the locker attributes its balances per Moment and adds at most MAX_INCREASE_BPS per round,
+// so a Moment's remainder waits here between rounds. Reverts on every live (v1) locker.
+export const momentLockerV2Abi = parseAbi(["function heldOf(uint256 momentId, address currency) view returns (uint256)"]);
+
 // Permissionless: MomentBuyback.execute(id, minCoinOut). At most once per MIN_INTERVAL per Moment.
 export const momentBuybackAbi = parseAbi([
   "function execute(uint256 momentId, uint256 minCoinOut) returns ((uint256 budget, uint256 usdcSpent, uint256 coinBought, uint256 usdcToPool, uint128 liquidityAdded, uint256 carried))",
@@ -46,9 +66,58 @@ export const launchpadFactoryAbi = parseAbi([
   "function stuckSince(address token) view returns (uint256)",
   "function mondayExecutor() view returns (address)",
   "function hook() view returns (address)",
+  "function graduationExecutor() view returns (address)",
+  "function locker() view returns (address)",
+  "function escrow() view returns (address)",
+  "function holderFeeSharing() view returns (address)",
+  "function router() view returns (address)",
+  "function launchDeployer() view returns (address)",
+  "function owner() view returns (address)",
+  "function pendingOwner() view returns (address)",
+  "function protocolFeeRecipient() view returns (address)",
+  "function pairMondayOnly(address pairToken) view returns (bool)",
+  "function v4FallbackAllowed(address token) view returns (bool)",
   "function graduate(address token)",
   "function graduateFallback(address token)",
   "event AutoGraduationFailed(address indexed token)",
+  "event ModulesSet(address hook, address executor, address locker, address escrow, address sharing, address router, address deployer)",
+  "event MondayExecutorSet(address executor)",
+  "event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner)",
+  "event FeePolicySet(address recipient, uint16 protocolShareBps)",
+  "event LaunchFeeSet(uint256 fee)",
+  "event PairEconomicsSet(address indexed pairToken, uint256 phantomQuote, uint256 graduationThreshold, uint8 decimals, bool approved)",
+  "event PairMondayOnlySet(address indexed pairToken, bool mondayOnly)",
+  "event WhitelistSet(bool enabled)",
+  "event LaunchConfigEnabled(uint256 indexed id, bool enabled)",
+  "event CreatorFeeRecipientChangeProposed(address indexed token, address newRecipient, uint256 effectiveAt, uint256 expiresAt)",
+  "event V4FallbackAllowed(address indexed token)",
+  "event LaunchRescued(address indexed token)",
+  "event LaunchConfigAdded(uint256 indexed id)",
+  "event MaxCreatorTaxSet(uint16 bps)",
+  "event WhitelistedSet(address indexed account, bool allowed)",
+]);
+
+// The retired 0xad3d factory predates the graduation-venue choice: its launch record has no `graduationVenue`
+// (16 fields), every launch graduates on Monday Trade, and it has no mondayExecutor()/graduateFallback().
+export const launchpadFactoryLegacyAbi = parseAbi([
+  "function getLaunchedToken(address token) view returns ((address token, address curve, address deployer, address creatorFeeRecipient, address pairToken, uint256 graduationThreshold, uint16 creatorTaxBps, uint16 poolFeeBps, int24 tickSpacing, bool holderFeeSharing, uint8 phase, uint256 sweptQuote, uint256 sweptTokens, uint256 sweptAt, bytes32 poolId, bool exists))",
+]);
+
+// v2 only (NOT deployed): sealing the modules before the first launch. Absent on every live factory.
+// Also v2 only: the Monday-only rule snapshotted per launch, and the delay after which its v4 fallback is public.
+export const launchpadFactoryV2Abi = parseAbi([
+  "function modulesSealed() view returns (bool)",
+  "function launchMondayOnly(address token) view returns (bool)",
+  "function MONDAY_ONLY_FALLBACK_DELAY() view returns (uint256)",
+  "event ModulesSealed()",
+]);
+
+export const mondayFeeVaultAbi = parseAbi([
+  "function owner() view returns (address)",
+  "function pendingOwner() view returns (address)",
+  "function lpFeeRecipient() view returns (address)",
+  "event LpFeeRecipientSet(address indexed recipient)",
+  "event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner)",
 ]);
 
 export const bondingCurveAbi = parseAbi([
@@ -84,4 +153,8 @@ export const memeHookAbi = parseAbi([
   "function sweepPoolFees(bytes32 poolId, address currency)",
 ]);
 
-export const erc20Abi = parseAbi(["function balanceOf(address) view returns (uint256)"]);
+// v2 only (NOT deployed, LP-2): the protocol's cut of holder-sharing pools waits here, not in pendingFees. Reverts
+// on every live hook, where the keeper treats it as 0.
+export const memeHookV2Abi = parseAbi(["function pendingProtocolFees(bytes32 poolId, address currency) view returns (uint256)"]);
+
+export const erc20Abi = parseAbi(["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"]);

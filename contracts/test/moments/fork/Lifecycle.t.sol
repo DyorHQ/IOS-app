@@ -136,6 +136,9 @@ contract LifecycleForkTest is MomentsForkBase {
             _buyExactIn(bob, r.key, usdcIs0, 10_000_000);
             _sellExactIn(bob, r.key, usdcIs0, coin.balanceOf(bob) - c0);
         }
+        // v2 (MO-2): the round runs in a later block than the burst, like a keeper's; within the burst's block its
+        // drift (>2% on this small pool) trips the block-open price guard.
+        vm.roll(vm.getBlockNumber() + 1);
         uint128 liq0 = _lockerPositionLiquidity(id, r.key);
         MomentBuyback.Round memory round = buyback.execute(id, 0);
         assertGt(round.liquidityAdded, 0);
