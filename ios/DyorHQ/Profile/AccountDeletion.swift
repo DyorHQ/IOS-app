@@ -193,6 +193,7 @@ struct DeleteAccountView: View {
     @Environment(Session.self) private var session
     @Environment(SocialSession.self) private var social
     @Environment(AppEnvironment.self) private var env
+    @Environment(AppSettings.self) private var settings
     @Environment(\.dismiss) private var dismiss
     @State private var acknowledged = false
     @State private var confirmation = ""
@@ -340,6 +341,10 @@ struct DeleteAccountView: View {
     }
 
     private func deleteAccount() async {
+        // Deleting destroys a Privy embedded wallet or the only copy of an imported key, so with App Lock on it asks
+        // for the device owner first, like key export (audit F5). A passkey account's own ceremony already asks.
+        if !isPasskey, session.canSign, settings.appLockApplies(to: session.account),
+           !(await BiometricGate.authenticate(reason: "Delete your DyorHQ account")) { return }
         deleting = true
         error = nil
         do {

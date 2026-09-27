@@ -144,9 +144,13 @@ struct ProfileView: View {
             .sheet(isPresented: $showDeleteAccount) { DeleteAccountView() }
             .confirmationDialog(session.canSign ? "Sign out of DyorHQ?" : "Stop watching this address?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button(session.canSign ? "Sign Out" : "Stop Watching", role: .destructive) {
-                    signingOut = true
                     let address = session.address
                     Task { @MainActor in
+                        // Signing out can delete the only copy of an imported key, so with App Lock on it asks for the
+                        // device owner first, like key export (audit F5).
+                        if session.canSign, settings.appLockApplies(to: session.account),
+                           !(await BiometricGate.authenticate(reason: "Sign out of DyorHQ")) { return }
+                        signingOut = true
                         // The Perpl trading key on this device is a delegate for this wallet: it goes with the session.
                         if let address { perplTrading.forget(address: address) }
                         await session.signOut()
