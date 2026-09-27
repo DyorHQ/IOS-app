@@ -15,10 +15,12 @@
 // bind an email you verified to a wallet you hold — it cannot hijack someone else's email or point at a wallet you
 // don't control.
 //
-// An email that is already bound to ANOTHER wallet is never moved silently (GE-1, rebind.ts): the request must carry
-// "replace": "<that wallet>", which the app sends only after showing the user that wallet (and what it holds) and
-// getting their confirmation. Otherwise the answer is 409 {"error":"email_already_bound","current":"<that wallet>"}
-// and nothing is written. A first sign-up and a same-wallet re-bind are unchanged.
+// An email that is already bound to ANOTHER wallet is never moved silently once REBIND_REQUIRE_REPLACE=on (GE-1,
+// rebind.ts): the request must then carry "replace": "<that wallet>", which the app sends only after showing the user
+// that wallet (and what it holds) and getting their confirmation. Otherwise the answer is 409
+// {"error":"email_already_bound","current":"<that wallet>"} and nothing is written. Until the switch is on, a request
+// without "replace" moves the binding as every earlier version did (still as a compare-and-set); a request with it is
+// honoured either way. A first sign-up and a same-wallet re-bind are unchanged.
 //
 //   POST { message, signature, replace? }   Authorization: Bearer <Privy access token>
 //     200 { rebound: true, address }
@@ -29,19 +31,23 @@
 //     503 Privy or the database unavailable — retry (RO-9: every Privy call has a timeout)
 //
 // Deploy:  supabase functions deploy email-rebind --no-verify-jwt   (the bearer is a Privy token, not a Supabase JWT)
-//          Deploy this version only once the first app build that handles the 409 (and sends "replace") is the
-//          minimum build (app_config ios.min_build): older builds cannot confirm a replacement, so their Forgot
-//          Password would be refused.
+//          Safe to deploy now with REBIND_REQUIRE_REPLACE unset. Set REBIND_REQUIRE_REPLACE=on only once the first app
+//          build that handles the 409 (balance warning, same-password and legacy rules, then "replace") has shipped
+//          AND every older build is expired in App Store Connect / TestFlight (app_config ios.min_build alone does not
+//          stop builds that never read it). Builds without that handling send no "replace", so with the switch on they
+//          get the 409 in three flows: Forgot Password; the pre-v2 upgrade (Log In finds the legacy binding, then binds
+//          the v2 wallet — legacy users could no longer log in); and Sign Up again with an email already in use.
 // Secrets: PRIVY_APP_SECRET (shared with delete-account). SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are auto-injected.
 // Needs migration 20 (email_pepper_lookup_gate) applied before this version is deployed.
 import { recoverMessageAddress } from "npm:viem@2";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { linkedEmail, privyTokenClaims, privyUser, PrivyUnavailable, tokenIsFresh } from "../_shared/privy.ts";
-import { decideRebind, field, parseReplace, REBIND_WINDOW_MS, TOKEN_MAX_AGE_S } from "./rebind.ts";
+import { decideRebind, field, parseReplace, REBIND_WINDOW_MS, replaceRequired, TOKEN_MAX_AGE_S } from "./rebind.ts";
 
 // The Privy-lookup budget's subject: the same hash email-pepper uses, so the two functions share one budget per user.
 const PRIVY_USER_LABEL = "dyorhq/email-pepper/v1/privy-user:";
 const UNAVAILABLE = "email verification is unavailable right now — try again in a minute";
+const REQUIRE_REPLACE = replaceRequired(Deno.env.get("REBIND_REQUIRE_REPLACE"));
 
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -153,7 +159,7 @@ Deno.serve(async (req) => {
       return json({ error: "could not save the binding — try again", retryable: true }, 503);
     }
     const current = typeof existing.data?.wallet === "string" ? existing.data.wallet : null;
-    const decision = decideRebind(current, recovered, replace);
+    const decision = decideRebind(current, recovered, replace, REQUIRE_REPLACE);
     if (decision.action === "conflict") return json({ error: "email_already_bound", current: decision.current }, 409);
 
     const verified_at = new Date().toISOString();

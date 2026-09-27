@@ -6,7 +6,11 @@
 //   bound to the recovered wallet            -> refresh (a same-wallet re-bind; unchanged)
 //   bound to another wallet, and the request
 //     carries replace == that wallet          -> replace (the client showed that wallet and the user confirmed)
-//   bound to another wallet otherwise        -> conflict: 409 {"error":"email_already_bound","current":"<wallet>"}
+//   bound to another wallet, replace names
+//     a different wallet                      -> conflict (the binding changed after the client looked)
+//   bound to another wallet, no replace      -> conflict: 409 {"error":"email_already_bound","current":"<wallet>"},
+//                                               when replace is required (REBIND_REQUIRE_REPLACE=on); otherwise
+//                                               replace, as every build before GE-1 expects (see index.ts, Deploy)
 //
 // Returning the current address is safe: the caller has just proven ownership of the email. Addresses compare
 // case-insensitively. refresh and replace are written as a compare-and-set on the wallet read here, so a binding that
@@ -21,11 +25,19 @@ export const REBIND_WINDOW_MS = 15 * 60 * 1000; // the signed challenge is only 
 // The Privy token must be as fresh as the challenge (SB-10): the app captures it from the one-time code moments before.
 export const TOKEN_MAX_AGE_S = 15 * 60;
 
-export function decideRebind(current: string | null, recovered: string, replace: string | undefined): RebindDecision {
+export function decideRebind(current: string | null, recovered: string, replace: string | undefined,
+                             requireReplace = true): RebindDecision {
   if (current === null) return { action: "insert" };
   if (current.toLowerCase() === recovered.toLowerCase()) return { action: "refresh", from: current };
-  if (replace !== undefined && replace.toLowerCase() === current.toLowerCase()) return { action: "replace", from: current };
-  return { action: "conflict", current };
+  if (replace !== undefined) {
+    return replace.toLowerCase() === current.toLowerCase() ? { action: "replace", from: current } : { action: "conflict", current };
+  }
+  return requireReplace ? { action: "conflict", current } : { action: "replace", from: current };
+}
+
+// Whether moving a binding off another wallet needs "replace": only once REBIND_REQUIRE_REPLACE is "on" (any case).
+export function replaceRequired(configured: string | undefined): boolean {
+  return (configured ?? "").trim().toLowerCase() === "on";
 }
 
 // The optional "replace" body field: undefined when absent (or null), the address when it is one, else "invalid".

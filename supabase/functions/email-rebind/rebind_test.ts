@@ -1,6 +1,6 @@
 // deno test --no-config --node-modules-dir=none -A supabase/functions/email-rebind/
 import { assertEquals } from "jsr:@std/assert@1";
-import { decideRebind, field, parseReplace } from "./rebind.ts";
+import { decideRebind, field, parseReplace, replaceRequired } from "./rebind.ts";
 
 const NEW = "0x" + "a".repeat(40);
 const OLD = "0x" + "b".repeat(40);
@@ -20,6 +20,24 @@ Deno.test("GE-1: another wallet's binding moves only with replace naming exactly
   assertEquals(decideRebind(OLD, NEW, OLD), { action: "replace", from: OLD });
   assertEquals(decideRebind(OLD, NEW, OLD_MIXED), { action: "replace", from: OLD });
   assertEquals(decideRebind(OLD_MIXED, NEW, OLD), { action: "replace", from: OLD_MIXED });
+});
+
+Deno.test("GE-1 transition: until REBIND_REQUIRE_REPLACE=on, no replace moves the binding as before; a replace is still checked", () => {
+  assertEquals(decideRebind(OLD, NEW, undefined, false), { action: "replace", from: OLD });
+  assertEquals(decideRebind(OLD, NEW, OLD, false), { action: "replace", from: OLD });
+  assertEquals(decideRebind(OLD, NEW, "0x" + "c".repeat(40), false), { action: "conflict", current: OLD });
+  assertEquals(decideRebind(null, NEW, undefined, false), { action: "insert" });
+  assertEquals(decideRebind(NEW, NEW, undefined, false), { action: "refresh", from: NEW });
+  assertEquals(decideRebind(OLD, NEW, undefined, true), { action: "conflict", current: OLD });
+});
+
+Deno.test("REBIND_REQUIRE_REPLACE: only \"on\" requires replace", () => {
+  assertEquals(replaceRequired(undefined), false);
+  assertEquals(replaceRequired(""), false);
+  assertEquals(replaceRequired("off"), false);
+  assertEquals(replaceRequired("true"), false);
+  assertEquals(replaceRequired("on"), true);
+  assertEquals(replaceRequired(" ON "), true);
 });
 
 Deno.test("replace: absent or null is no replace; anything but an address is invalid", () => {
