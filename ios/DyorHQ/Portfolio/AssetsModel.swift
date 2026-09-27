@@ -154,10 +154,8 @@ struct AssetsCard: View {
                 .aspectRatio(1, contentMode: .fit)
                 .overlay {
                     if let url = nft.imageURL {
-                        AsyncImage(url: url) { phase in
-                            if let image = phase.image { image.resizable().scaledToFill() }
-                            else if phase.error != nil { Image(systemName: "photo").foregroundStyle(.secondary) }
-                            else { ProgressView().controlSize(.small) }
+                        RemoteImage(url: url, pointSize: 120) { loading in
+                            if loading { ProgressView().controlSize(.small) } else { Image(systemName: "photo").foregroundStyle(.secondary) }
                         }
                     } else {
                         Image(systemName: "seal").foregroundStyle(.secondary)

@@ -79,10 +79,7 @@ struct ChainBadge: View {
 
     var body: some View {
         Group {
-            AsyncImage(url: chain.logoURL) { phase in
-                if let image = phase.image { image.resizable().scaledToFit() }
-                else { monogram }
-            }
+            RemoteImage(url: chain.logoURL, pointSize: size, contentMode: .fit) { _ in monogram }
         }
         .frame(width: size, height: size)
         .background(chain.brandColor.opacity(0.18))

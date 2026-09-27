@@ -464,7 +464,7 @@ private struct LaunchHoldingRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            LaunchArtwork(symbol: holding.launch.symbol, logo: holding.launch.logo)
+            LaunchArtwork(symbol: holding.launch.symbol, logo: holding.launch.logo, pointSize: 34)
                 .frame(width: 34, height: 34)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {

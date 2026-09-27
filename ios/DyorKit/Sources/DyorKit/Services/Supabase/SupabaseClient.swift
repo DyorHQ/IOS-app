@@ -189,20 +189,35 @@ public actor SupabaseClient {
     /// in a row — never the bytes.
     @discardableResult
     public func uploadPublic(bucket: String, path: String, data: Data, contentType: String) async throws -> URL {
+        let request = try storageUpload(bucket: bucket, path: path, contentType: contentType)
+        let (respData, response) = try await session.upload(for: request, from: data)
+        return try uploaded(bucket: bucket, path: path, respData, response)
+    }
+
+    /// `uploadPublic`, streaming the body from a file (a picked video) so it is never read into memory whole.
+    @discardableResult
+    public func uploadPublic(bucket: String, path: String, file: URL, contentType: String) async throws -> URL {
+        let request = try storageUpload(bucket: bucket, path: path, contentType: contentType)
+        let (respData, response) = try await session.upload(for: request, fromFile: file)
+        return try uploaded(bucket: bucket, path: path, respData, response)
+    }
+
+    private func storageUpload(bucket: String, path: String, contentType: String) throws -> URLRequest {
         guard let token = currentSession?.accessToken else { throw SupabaseError.notSignedIn }
         var request = URLRequest(url: baseURL.appending(path: "storage/v1/object/\(bucket)/\(path)"))
         request.httpMethod = "POST"
-        request.httpBody = data
         request.setValue(anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("true", forHTTPHeaderField: "x-upsert")
         request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
+        return request
+    }
 
-        let (respData, response) = try await session.data(for: request)
+    private func uploaded(bucket: String, path: String, _ data: Data, _ response: URLResponse) throws -> URL {
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw SupabaseError.http(http.statusCode, String(data: respData, encoding: .utf8) ?? "")
+            throw SupabaseError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
         return baseURL.appending(path: "storage/v1/object/public/\(bucket)/\(path)")
     }

@@ -267,8 +267,10 @@ struct CreateMomentView: View {
                 // A video: the file itself is the NFT's animation and is fingerprinted; a frame from it is the image.
                 guard let movie = try await item.loadTransferable(type: MovieFile.self) else { imageError = "That video could not be read."; return }
                 defer { try? FileManager.default.removeItem(at: movie.url) }
-                let data = try Data(contentsOf: movie.url)
-                guard data.count <= 50 * 1024 * 1024 else { imageError = "Videos up to 50 MB."; return }
+                // The size comes from the file system, before anything is read: a long 4K clip is gigabytes, and
+                // reading it just to refuse it would exhaust memory (security audit 2026-09-26, RI-5). The file is then
+                // hashed a chunk at a time and uploaded straight from disk.
+                guard let size = try movie.url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 50 * 1024 * 1024 else { imageError = "Videos up to 50 MB."; return }
                 guard let posterImage = try await MovieFile.coverFrame(url: movie.url) else { imageError = "Could not read a frame from that video."; return }
                 previewImage = posterImage; isVideo = true // show the video's poster frame immediately, before the pin
                 guard let poster = posterImage.avatarJPEG(maxDimension: 2048, quality: 0.9) else { imageError = "Could not read a frame from that video."; return }
@@ -276,9 +278,10 @@ struct CreateMomentView: View {
                 let isMP4 = type.conforms(to: .mpeg4Movie)
                 // The video's hash is the provenance hash; its poster is filed under that same hash so the app can
                 // find the poster mirror again from on-chain data (MomentsMath.mirrorURL).
-                let videoHash = Keccak.hash256(data)
+                let movieURL = movie.url
+                let videoHash = try await Task.detached(priority: .userInitiated) { try Keccak.hash256(file: movieURL) }.value
                 let posterPin = try await social.uploadAndPinMomentMedia(poster, contentType: "image/jpeg", fileExtension: "jpg", name: MomentsMath.mediaName(hash: videoHash))
-                let videoPin = try await social.uploadAndPinMomentMedia(data, contentType: isMP4 ? "video/mp4" : "video/quicktime", fileExtension: isMP4 ? "mp4" : "mov")
+                let videoPin = try await social.uploadAndPinMomentMedia(file: movie.url, hash: videoHash, contentType: isMP4 ? "video/mp4" : "video/quicktime", fileExtension: isMP4 ? "mp4" : "mov")
                 mediaURI = posterPin.onchain
                 lastUploadedURI = posterPin.onchain
                 animationURI = videoPin.onchain

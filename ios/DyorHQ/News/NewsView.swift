@@ -107,9 +107,7 @@ private struct NewsRow: View {
             }
             Spacer(minLength: 0)
             if let image = article.imageURL {
-                AsyncImage(url: image) { phase in
-                    if let img = phase.image { img.resizable().scaledToFill() } else { Color(.tertiarySystemFill) }
-                }
+                RemoteImage(url: image, pointSize: 72) { _ in Color(.tertiarySystemFill) }
                 .frame(width: 72, height: 72)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }

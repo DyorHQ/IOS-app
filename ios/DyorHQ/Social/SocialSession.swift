@@ -313,6 +313,16 @@ final class SocialSession {
         return (onchain, url)
     }
 
+    /// `uploadAndPinMomentMedia` for a file on disk (a picked video), streamed from the file so it is never read into
+    /// memory whole. `hash` is the keccak-256 of its bytes (`Keccak.hash256(file:)`), which names the object.
+    func uploadAndPinMomentMedia(file: URL, hash: Data, contentType: String, fileExtension: String) async throws -> (onchain: String, mirror: URL) {
+        guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
+        let path = "\(wallet)/\(MomentsMath.mediaName(hash: hash)).\(fileExtension)"
+        let url = try await client.uploadPublic(bucket: "launch-media", path: path, file: file, contentType: contentType)
+        let onchain = (try? await client.pinToIPFS(bucket: "launch-media", path: path)) ?? url.absoluteString
+        return (onchain, url)
+    }
+
     /// Uploads a new profile picture (JPEG bytes) to the wallet's own folder in the public `avatars` bucket, then
     /// records its URL on the profile. A cache-busting query is appended so the new image shows immediately.
     func uploadAvatar(jpeg: Data) async throws {
