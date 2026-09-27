@@ -51,7 +51,7 @@ enum AccountDeletion {
             // A Privy login's token, fetched fresh before anything is deleted: delete-account takes only one issued in
             // the last 15 minutes, and a failure here leaves everything as it was.
             let privyToken = try await session.privyAccessToken(fresh: true)
-            if account.method == .emailPassword { try await deleteEmailSignIn(social: social) }
+            if account.method == .emailPassword { notice = try await deleteEmailSignIn(social: social) }
             try await deleteServerRows(wallet: wallet, social: social)
             if let privyToken {
                 do {
@@ -75,20 +75,33 @@ enum AccountDeletion {
     /// An Email & Password account's email sign-in at Privy (SB-7): its sign-up verified the email with a Privy one-time
     /// code, which created a Privy user, and the app keeps no Privy session to delete it with. delete-account deletes it
     /// by the email this wallet is bound to, authorised by the wallet's own backend session, so this runs before the
-    /// binding is deleted. The server keeps the Privy user when it is also another way into DyorHQ. Any failure stops
-    /// the deletion with nothing deleted. A delete-account from before this path (it reads every bearer as a Privy token
-    /// and refuses it) can't do it at all, so it is skipped there, as before.
+    /// binding is deleted. The server keeps the Privy user when it is also another way into DyorHQ. A failure of the
+    /// request (the session, a limit, an outage) stops the deletion with nothing deleted. Two answers go on with it:
+    /// no binding for this wallet (409) — the email was moved to another wallet (a reset, a sign-up elsewhere, Replace
+    /// Wallet), whose Privy user this wallet must not delete, or a retry after the binding went — and a server without
+    /// Privy deletion set up, which is reported afterwards like the Privy-login path (the returned notice). A
+    /// delete-account from before this path (it reads every bearer as a Privy token and refuses it) can't do it at all,
+    /// so it is skipped there, as before.
     @MainActor
-    private static func deleteEmailSignIn(social: SocialSession) async throws {
+    private static func deleteEmailSignIn(social: SocialSession) async throws -> String? {
         guard let token = await social.client.currentSession?.accessToken else { throw SupabaseError.notSignedIn }
         do {
             _ = try await social.client.invoke(function: "delete-account", bearer: token, body: Data(#"{"method":"email-password"}"#.utf8))
         } catch SupabaseError.http(401, let body) where body.contains("invalid Privy access token") {
-            return // the delete-account from before this path
+            return nil // the delete-account from before this path
+        } catch SupabaseError.http(409, let body) where serverError(body) == "no email binding" {
+            return nil
+        } catch SupabaseError.http(500, let body) where body.contains("PRIVY_APP_SECRET") {
+            return Failure.privyNotConfigured.localizedDescription
         } catch SupabaseError.http(let code, let body) {
-            let reason = (try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])?["error"] as? String
-            throw Failure.emailSignInNotDeleted(reason ?? "error \(code)")
+            throw Failure.emailSignInNotDeleted(serverError(body) ?? "error \(code)")
         }
+        return nil
+    }
+
+    /// The `error` field of an Edge Function's JSON answer.
+    private static func serverError(_ body: String) -> String? {
+        (try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])?["error"] as? String
     }
 
     /// A passkey (Mera) account's deletion, which removes the passkey too (MERA-PLAN §8), in the order
@@ -153,17 +166,19 @@ enum AccountDeletion {
         try await deleteServerRows(wallet: wallet, social: social)
     }
 
-    /// The wallet's server data, in this order, for every account type.
+    /// The wallet's server data, in this order, for every account type. The profile row goes last, so once it is gone
+    /// every row is (RI-8): a failure before it leaves the profile, and a retry deletes the rest again (each delete of a
+    /// row already gone is a no-op, and the email sign-in step reads the missing binding as nothing to delete).
     @MainActor
     private static func deleteServerRows(wallet: String, social: SocialSession) async throws {
         try await social.client.deleteObjects(bucket: "avatars", prefix: wallet)
-        // The profile row is the root: every other table references it with ON DELETE CASCADE.
-        try await social.client.delete("profiles", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
         // The email → wallet binding has NO FK to profiles, so it doesn't cascade. Delete it explicitly: an
         // email+password wallet is deterministic, so leaving the binding would let the same credentials log back
         // in through the gate (email_account_matches) after "deletion". Owner-scoped DELETE (migration 17) only
         // touches this wallet's own row; other account types simply have no row here.
         try await social.client.delete("email_accounts", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
+        // The profile row is the root: every other table references it with ON DELETE CASCADE.
+        try await social.client.delete("profiles", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
     }
 }
 
