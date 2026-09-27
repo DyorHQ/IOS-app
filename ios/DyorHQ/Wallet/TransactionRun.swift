@@ -12,6 +12,8 @@ final class TransactionRun {
 
     private(set) var phase: Phase = .idle
     private(set) var events: [TransactionEvent] = []
+    /// The step this run last saw confirmed: superseded once the next one is sent (`record`).
+    @ObservationIgnored private var lastConfirmed: Data?
 
     var isRunning: Bool { phase == .running }
     /// Whether any step of this run reached the network. `start` replays a plan from its first step, so a run that
@@ -39,6 +41,7 @@ final class TransactionRun {
         let mera = session.mera
         phase = .running
         events = []
+        lastConfirmed = nil
         // An approved plan keeps a passkey account's session until its last step, even if the app leaves the
         // foreground meanwhile (GL-1): its later steps never ask for the passkey again.
         mera.beginAction()
@@ -64,13 +67,20 @@ final class TransactionRun {
         }
     }
 
-    /// Each sent step is a pending Activity row until it is seen confirmed (`PendingActivity`), so a plan that fails or
-    /// is killed after a broadcast never loses the transaction.
+    /// Each sent step is a pending Activity row (`PendingActivity`), so a plan that fails or is killed after a broadcast
+    /// never loses the transaction. Seen confirmed, the row says so and stays: an earlier step's goes when the next step is
+    /// sent, and the last one's is replaced by the caller's own record of the action (same hash) — or stays, when the
+    /// sheet is gone before it records (GL-2).
     private func record(_ event: TransactionEvent, owner: Address?) {
         events.append(event)
         switch event {
-        case .sent(let label, let hash): PendingActivity.sent(hash, label: label, owner: owner)
-        case .confirmed(_, let hash): PendingActivity.confirmed(hash, owner: owner)
+        case .sent(let label, let hash):
+            if let previous = lastConfirmed { PendingActivity.superseded(previous, owner: owner) }
+            lastConfirmed = nil
+            PendingActivity.sent(hash, label: label, owner: owner)
+        case .confirmed(_, let hash):
+            PendingActivity.confirmed(hash, owner: owner)
+            lastConfirmed = hash
         case .preparing: break
         }
     }
@@ -89,6 +99,7 @@ final class TransactionRun {
     func reset() {
         phase = .idle
         events = []
+        lastConfirmed = nil
     }
 }
 
