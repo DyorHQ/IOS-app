@@ -297,8 +297,9 @@ final class PerplTests: XCTestCase {
         XCTAssertEqual(markets[1].initMarginFraction!, 0.1, accuracy: 1e-12)
         XCTAssertEqual(markets[1].maintMarginFraction!, 0.05, accuracy: 1e-12)
         XCTAssertNil(markets[0].maintMarginFraction, "margin read failed inside aggregate3: unknown, not a guess")
-        XCTAssertEqual(PerplMockTransport.aggregateSizes.sorted(), [6, 6], "one multicall for infos, one for margins")
-        XCTAssertEqual(PerplMockTransport.unknownCalls.count, 5, "only the five missing margin reads were unknown")
+        XCTAssertEqual(PerplService.markets.map(\.id), [1, 10, 20, 31, 40, 50, 60, 70, 80, 90], "every live Perpl market")
+        XCTAssertEqual(PerplMockTransport.aggregateSizes.sorted(), [10, 10], "one multicall for infos, one for margins")
+        XCTAssertEqual(PerplMockTransport.unknownCalls.count, 13, "the fixture has no reads for 60-90 and margins only for 10")
 
         // A subset keeps the requested order, and an unknown market is simply left out.
         let subset = try await makeService().markets(ids: [50, 999, 1])
@@ -413,12 +414,22 @@ final class PerplTests: XCTestCase {
         let empty = PerplExchange.position(perp: mon, values: position(type: 0, lot: 0, price: 26000, deposit: 100_000_000, premium: 0, markPNS: 26191))
         XCTAssertNil(empty)
 
-        // Through the service: one real (empty) slot, one synthetic position, one unknown market.
+        // Through the service: one real (empty) slot, one synthetic position, one market the list doesn't hold.
         install(PerplExchange.Signature.getPosition, [.uint(10), .uint(4638)], returning: position(type: 0, lot: 42036, price: 26000, deposit: 100_000_000, premium: -1_000_000, markPNS: 26191), types: PerplExchange.Returns.position)
         install(PerplExchange.Signature.getPosition, [.uint(999), .uint(4638)], returning: position(type: 0, lot: 5, price: 1, deposit: 1, premium: 0, markPNS: 1), types: PerplExchange.Returns.position)
         let account = PerpAccount(accountId: 4638, balance: 0, locked: 0, frozen: false, positionPerpIds: [1, 10, 999])
+        // 999's market can't be read: an error, never a list that silently leaves the position out.
+        do {
+            _ = try await service.positions(account, markets: markets)
+            XCTFail("a position in an unreadable market was dropped")
+        } catch {}
+        // Once its market reads (MON's info stands in), the position is decoded with it and shown.
+        let monInfo = try! ABI.decode(hex(f["chain"]["perpetualInfo"]["10"]["data"].string!), PerplExchange.Returns.perpetualInfo)
+        install(PerplExchange.Signature.getPerpetualInfo, [.uint(999)], returning: monInfo, types: PerplExchange.Returns.perpetualInfo)
         let positions = try await service.positions(account, markets: markets)
-        XCTAssertEqual(positions, [long!])
+        XCTAssertEqual(positions.map(\.perpId), [10, 999])
+        XCTAssertEqual(positions.first, long!)
+        XCTAssertNil(positions.last?.liquidation, "no margin read for 999: unknown, not guessed")
     }
 
     func testLiquidationPriceMatchesTypeScript() {
