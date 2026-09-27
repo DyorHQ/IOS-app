@@ -4,7 +4,6 @@ import { useState } from "react";
 import type { Address } from "viem";
 import { Icon, type IconName } from "./icons";
 import { Empty, Seg, Subtabs, opts, type SegOpt } from "./components";
-import { compact, fmtNum, fmtPct, fmtUSD } from "./data";
 import type { Go, OpenSheet, Preset, Toast } from "./nav";
 import { LightweightChart, PERPL_CHARTS, PerplChart, TV_SYMBOLS, tradingViewUrl } from "./tradingview";
 import { useMarkets, usePerpsAccount, type MarketRow } from "../lib/app-data";
@@ -15,7 +14,7 @@ import { fetchPerplContext } from "../lib/perps/perpl";
 import { usePerplFeed } from "../lib/perps/ws";
 import { useAsync, useNow } from "../lib/use-async";
 import { useWallet } from "../lib/wallet";
-import { fmtAmount, fmtNumber, fmtUnits, shortAddress, timeAgo } from "../lib/format";
+import { fmtAmount, fmtFixed, fmtNumber, fmtPct, fmtUnits, fmtUsd, shortAddress, timeAgo } from "../lib/format";
 import { LaunchCard as WebLaunchCard, PhaseBadge, Progress, RetiredBadge, Skeleton, TokenLogo } from "../launchpad/ui";
 import { Position, StatePanel, TradePanel } from "../launchpad/token-panels";
 import Create from "../launchpad/create/page";
@@ -45,7 +44,7 @@ function TokenRowLive({ row, i, onClick }: { row: MarketRow; i: number; onClick:
       <TokenLogo src={row.logo} name={row.symbol} address={row.address} />
       <span className="row-main"><b>{row.symbol}{row.launchpad && <em className="badge accent">Launch</em>}</b><small>{row.name}</small></span>
       <span className="row-end">
-        <span className="price">{row.usd === null ? "—" : fmtUSD(row.usd)}</span>
+        <span className="price">{row.usd === null ? "—" : fmtUsd(row.usd)}</span>
         {row.change24h !== null ? <span className={`chip ${row.change24h >= 0 ? "up" : "down"}`}>{fmtPct(row.change24h)}</span> : <span className="chip neutral">{row.launch ? "on curve" : row.usd === null ? "no pool" : "new"}</span>}
       </span>
     </button>
@@ -91,10 +90,10 @@ export function HomeScreen({ go, openSheet }: ScreenProps) {
       {account ? (
         <>
           <section className="balance">
-            <div><span className="label">Portfolio</span><div className="hero-num">${fmtNum(total)}</div><div className={`delta ${dayDelta >= 0 ? "up" : "down"}`}><span>{dayDelta >= 0 ? "+" : "−"}${fmtNum(Math.abs(dayDelta))} today</span></div></div>
-            <div className="balance-side"><div><span className="label">Perps equity</span><div className="val">{perps.account || perps.accountKnown ? `$${fmtNum(perpEquity)}` : "—"}</div></div><a className="net" href={explorerAddress(account)} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>Monad · {shortAddress(account)}</a></div>
+            <div><span className="label">Portfolio</span><div className="hero-num">${fmtFixed(total)}</div><div className={`delta ${dayDelta >= 0 ? "up" : "down"}`}><span>{dayDelta >= 0 ? "+" : "−"}${fmtFixed(Math.abs(dayDelta))} today</span></div></div>
+            <div className="balance-side"><div><span className="label">Perps equity</span><div className="val">{perps.account || perps.accountKnown ? `$${fmtFixed(perpEquity)}` : "—"}</div></div><a className="net" href={explorerAddress(account)} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>Monad · {shortAddress(account)}</a></div>
           </section>
-          <section className="kv"><div><span className="label">Tokens</span><b>${fmtNum(tokenValue)}</b></div><div><span className="label">MON</span><b>{fmtUnits(markets.rows.find((r) => r.native)?.balance ?? 0n, 18, { compact: true })}</b></div></section>
+          <section className="kv"><div><span className="label">Tokens</span><b>${fmtFixed(tokenValue)}</b></div><div><span className="label">MON</span><b>{fmtUnits(markets.rows.find((r) => r.native)?.balance ?? 0n, 18, { compact: true })}</b></div></section>
         </>
       ) : <ConnectCard />}
       <section className="actions">
@@ -119,7 +118,7 @@ export function HomeScreen({ go, openSheet }: ScreenProps) {
       ) : (
         <section className="card" style={{ padding: "12px 16px" }}>
           <div className="hd" style={{ marginBottom: 6 }}><b>Perps tape · MON</b><span className={`pill-live ${feed.connected ? "" : "off"}`}><i />{feed.connected ? "Perpl live" : "connecting"}</span></div>
-          <div className="tape">{feed.trades.slice(0, 6).map((t, i) => <div className="t" key={i}><span className={t.side === "buy" ? "up" : "down"}>{fmtUSD(t.p / 1e6)}</span><span>{fmtNum(t.s, 0)} MON</span><span>{now ? timeAgo(Math.floor(t.t / 1000), now) : ""}</span></div>)}{feed.trades.length === 0 && <p className="hint">Waiting for trades…</p>}</div>
+          <div className="tape">{feed.trades.slice(0, 6).map((t, i) => <div className="t" key={i}><span className={t.side === "buy" ? "up" : "down"}>{fmtUsd(t.p / 1e6)}</span><span>{fmtFixed(t.s, 0)} MON</span><span>{now ? timeAgo(Math.floor(t.t / 1000), now) : ""}</span></div>)}{feed.trades.length === 0 && <p className="hint">Waiting for trades…</p>}</div>
         </section>
       )}
     </main>
@@ -144,11 +143,11 @@ function TokenDetail({ row, go, onBack }: { row: MarketRow; go: Go; onBack: () =
   return (
     <>
       <button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Markets</button>
-      <div className="detail-head"><TokenLogo src={row.logo} name={row.symbol} address={row.address} size="lg" /><div><h1>{row.symbol}<small>{row.name}</small></h1><div className="detail-price">{row.usd === null ? "—" : fmtUSD(row.usd)}</div>{row.change24h !== null && <span className={`chip ${row.change24h >= 0 ? "up" : "down"}`} style={{ marginTop: 6 }}>{fmtPct(row.change24h)} · 24h</span>}</div></div>
+      <div className="detail-head"><TokenLogo src={row.logo} name={row.symbol} address={row.address} size="lg" /><div><h1>{row.symbol}<small>{row.name}</small></h1><div className="detail-price">{row.usd === null ? "—" : fmtUsd(row.usd)}</div>{row.change24h !== null && <span className={`chip ${row.change24h >= 0 ? "up" : "down"}`} style={{ marginTop: 6 }}>{fmtPct(row.change24h)} · 24h</span>}</div></div>
       {perp ? <PerplChart marketId={perp.id} height={300} /> : launch ? (candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={240} precision={8} /><p className="hint" style={{ padding: "6px 8px 4px" }}>Price in {launch.pair.symbol} per token from curve trades in the last two hours.</p></div> : <div className="card"><p className={`hint ${trades.error ? "err" : ""}`}>{trades.error ? `Couldn't read curve trades (${trades.error}). Retrying.` : trades.loading ? "Reading curve trades…" : "No curve trades in the last two hours."}</p></div>) : <div className="card"><p className="hint">No chart for {row.symbol} in the app. Prices come from its Monad pool.{tv && <> <a href={tradingViewUrl(tv)} target="_blank" rel="noopener noreferrer">{tv} on TradingView ↗</a></>}</p></div>}
       <div className="mini-stats">
         <div className="stat"><span>Your balance</span><b>{fmtUnits(row.balance, row.decimals, { compact: true })} {row.symbol}</b></div>
-        <div className="stat"><span>Value</span><b>{row.value === null ? "—" : fmtUSD(row.value)}</b></div>
+        <div className="stat"><span>Value</span><b>{row.value === null ? "—" : `$${fmtFixed(row.value)}`}</b></div>
         {launch && <div className="stat"><span>Launch phase</span><b><PhaseBadge launch={launch} /></b></div>}
         {launch && <div className="stat"><span>Curve price</span><b>{fmtNumber(priceNumber(launch))} {launch.pair.symbol}</b></div>}
       </div>
@@ -200,8 +199,8 @@ export function MarketsScreen({ go, preset, autoFocus = false }: { go: Go; prese
             {(perpsCtx.data ?? []).map((m, i) => { const chg = m.prev24h ? ((m.last - m.prev24h) / m.prev24h) * 100 : null; return (
               <button key={m.id} type="button" className="tok-row" onClick={() => go("trade", "perps", { token: String(m.id) })}>
                 <span className="rank">{i + 1}</span><span className="coin" style={{ background: "var(--asset-violet, #7C5CFF)" }}>{m.name[0]}</span>
-                <span className="row-main"><b>{m.name}-PERP<em className="badge">{m.isOpen ? "OPEN" : "PAUSED"}</em></b><small>OI {compact(Math.round(m.openInterest))} · 24h vol {compact(Math.round(m.volume24h))}</small></span>
-                <span className="row-end"><span className="price">{fmtUSD(m.mark)}</span>{chg !== null && <span className={`chip ${chg >= 0 ? "up" : "down"}`}>{fmtPct(chg)}</span>}</span>
+                <span className="row-main"><b>{m.name}-PERP<em className="badge">{m.isOpen ? "OPEN" : "PAUSED"}</em></b><small>OI {fmtNumber(Math.round(m.openInterest), { compact: true })} · 24h vol {fmtNumber(Math.round(m.volume24h), { compact: true })}</small></span>
+                <span className="row-end"><span className="price">{fmtUsd(m.mark)}</span>{chg !== null && <span className={`chip ${chg >= 0 ? "up" : "down"}`}>{fmtPct(chg)}</span>}</span>
               </button>
             ); })}
             {perpsCtx.error && <p className="hint err">{perpsCtx.error}</p>}
@@ -323,7 +322,7 @@ export function ProfileScreen({ go, toast, openSheet }: ScreenProps) {
         <div style={{ flex: 1, minWidth: 0 }}><b>{wallet.active?.info.name ?? "Wallet"}</b><small>{shortAddress(account, 6)}</small></div>
         <button type="button" className="iconbtn" onClick={() => { navigator.clipboard?.writeText(account); toast("Address copied"); }}><Icon name="copy" />Copy</button>
       </section>
-      <section className="balance"><div><span className="label">Total value</span><div className="hero-num">${fmtNum(tokenValue + perpEquity)}</div></div><div className="balance-side"><div><span className="label">Perps equity</span><div className="val">{perps.account || perps.accountKnown ? `$${fmtNum(perpEquity)}` : "—"}</div></div></div></section>
+      <section className="balance"><div><span className="label">Total value</span><div className="hero-num">${fmtFixed(tokenValue + perpEquity)}</div></div><div className="balance-side"><div><span className="label">Perps equity</span><div className="val">{perps.account || perps.accountKnown ? `$${fmtFixed(perpEquity)}` : "—"}</div></div></div></section>
       <section className="actions">
         <button type="button" className="action" onClick={() => openSheet("receive")}><Icon name="deposit" />Receive</button>
         <button type="button" className="action" onClick={() => openSheet("send")}><Icon name="send" />Send</button>
@@ -338,9 +337,9 @@ export function ProfileScreen({ go, toast, openSheet }: ScreenProps) {
       )}
       {tab === "Perps" && (
         <section style={{ marginTop: 12 }}>
-          <div className="collat"><div><span>Perpl balance</span><b>{perps.account ? `$${fmtNum(Number(perps.account.balance) / 1e6)}` : perps.accountKnown ? "No account" : perps.error ? "Couldn't read" : "Reading…"}</b></div><button type="button" className="btn secondary sm" onClick={() => go("trade", "perps")}>Open perps</button></div>
+          <div className="collat"><div><span>Perpl balance</span><b>{perps.account ? `$${fmtFixed(Number(perps.account.balance) / 1e6)}` : perps.accountKnown ? "No account" : perps.error ? "Couldn't read" : "Reading…"}</b></div><button type="button" className="btn secondary sm" onClick={() => go("trade", "perps")}>Open perps</button></div>
           {perps.error && <p className="hint err" role="alert">Couldn&apos;t read your Perpl account or positions ({perps.error}). Retrying.</p>}
-          <div className="stack-cards">{perps.positions.map((p) => <div key={p.perpId} className="pos-card"><div className="top"><span>{p.symbol} · <span className={p.side === "long" ? "up" : "down"}>{p.side.toUpperCase()} {p.leverage.toFixed(1)}×</span></span><b className={p.unrealized >= 0 ? "up" : "down"}>{p.unrealized >= 0 ? "+" : "−"}${fmtNum(Math.abs(p.unrealized))}</b></div><div className="grid"><span>Size<b>{fmtNum(p.size, p.size < 1 ? 5 : 2)} {p.symbol}</b></span><span>Entry<b>{fmtUSD(p.entry)}</b></span><span>Mark<b>{fmtUSD(p.mark)}</b></span></div></div>)}</div>
+          <div className="stack-cards">{perps.positions.map((p) => <div key={p.perpId} className="pos-card"><div className="top"><span>{p.symbol} · <span className={p.side === "long" ? "up" : "down"}>{p.side.toUpperCase()} {p.leverage.toFixed(1)}×</span></span><b className={p.unrealized >= 0 ? "up" : "down"}>{p.unrealized >= 0 ? "+" : "−"}${fmtFixed(Math.abs(p.unrealized))}</b></div><div className="grid"><span>Size<b>{fmtFixed(p.size, p.size < 1 ? 5 : 2)} {p.symbol}</b></span><span>Entry<b>{fmtUsd(p.entry)}</b></span><span>Mark<b>{fmtUsd(p.mark)}</b></span></div></div>)}</div>
           {perps.positions.length === 0 && !perps.error && <Empty icon="layers" title={perps.positionsKnown ? "No open positions" : "Reading positions…"} text="Positions on Perpl show here with live PnL." />}
         </section>
       )}

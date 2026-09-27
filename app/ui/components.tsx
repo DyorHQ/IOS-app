@@ -2,7 +2,8 @@
 // Shared building blocks: segmented control, chips, coins, rows, empty states, switches, ranges.
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
 import { Icon, type IconName } from "./icons";
-import { TONES, fmtPct, fmtUSD, type Token, type Tone } from "./data";
+import { TONES, type Token, type Tone } from "./data";
+import { fmtPct, fmtUsd } from "../lib/format";
 
 export const cssVars = (o: Record<string, string | number>) => o as CSSProperties;
 
@@ -34,7 +35,7 @@ export function TokenRow({ t, i, badge = false, onClick }: { t: Token; i: number
     <button type="button" className="row" onClick={onClick}>
       <span className="rank">{i + 1}</span><Coin sym={t.sym} tone={t.tone} />
       <span className="row-main"><b>{t.sym}{badge && t.perp && <em className="badge">PERP</em>}{t.rwa && <em className="badge accent">RWA</em>}</b><small>{t.name}</small></span>
-      <span className="row-end"><span className="price">{fmtUSD(t.price)}</span><Chip chg={t.chg} /></span>
+      <span className="row-end"><span className="price">{fmtUsd(t.price)}</span><Chip chg={t.chg} /></span>
     </button>
   );
 }

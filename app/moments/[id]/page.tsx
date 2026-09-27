@@ -9,7 +9,7 @@ import { MOMENTS_DEPLOYED } from "../../lib/moments/config";
 import { fdvUsd, fetchAccountView, fetchMoment } from "../../lib/moments/reads";
 import { useAsync, useNow } from "../../lib/use-async";
 import { useWallet } from "../../lib/wallet";
-import { bpsToPct, fmtDate, fmtNumber, fmtUnits, shortAddress, timeAgo } from "../../lib/format";
+import { bpsToPct, fmtDate, fmtNumber, fmtUnits, fmtUsd, shortAddress, timeAgo } from "../../lib/format";
 import { EarlyLabel, HoldersPanel, KV, MomentMedia, MomentsDeployNotice, StateBadge, ipfsToHttp, usd } from "../ui";
 import { CollectPanel, CreatorPanel, PositionPanel, StatePanel } from "../panels";
 
@@ -72,7 +72,7 @@ export default function MomentPage() {
 
       {moment.error && <p className="hint err" role="alert">Couldn&apos;t refresh this Moment ({moment.error}). Showing the last values read; retrying.</p>}
       <div className="stats-4">
-        <Tile label={data.graduated && price !== null ? "Coin price" : "Collect price"} value={data.graduated && price !== null ? `$${fmtNumber(price)}` : usd(data.price)} sub={data.graduated && price !== null ? `FDV $${fmtNumber(fdvUsd(price), { compact: true })}` : "per edition, USDC"} />
+        <Tile label={data.graduated && price !== null ? "Coin price" : "Collect price"} value={data.graduated && price !== null ? fmtUsd(price) : usd(data.price)} sub={data.graduated && price !== null ? `FDV $${fmtNumber(fdvUsd(price), { compact: true })}` : "per edition, USDC"} />
         <Tile label={data.graduated ? "Seeded" : "Reserve"} value={data.graduated ? usd(data.pool?.reserveSeed ?? data.threshold) : usd(data.ledger.reserve)} sub={data.graduated ? `${usd(data.ledger.totalGross)} collected in total` : `of ${usd(data.threshold)} to graduate`} />
         <Tile label="Editions" value={String(data.editions)} sub={`${data.ledger.collects} collect${data.ledger.collects === 1 ? "" : "s"}`} />
         <Tile label="Progress" value={`${(data.progressBps / 100).toFixed(1)}%`} sub={<Progress bps={data.progressBps} />} />

@@ -2,19 +2,20 @@
 
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import type { Address } from "viem";
+import { formatUnits, type Address } from "viem";
 import { Icon } from "../ui/icons";
 import { Progress, Skeleton, toneFor } from "../launchpad/ui";
 import { MOMENTS_DEPLOYED, USDC } from "../lib/moments/config";
 import { fetchHolderStats } from "../lib/moments/holders";
 import { STATES, fdvUsd, fetchNftHolders, type MomentInfo, type Provenance } from "../lib/moments/reads";
 import { useAsync } from "../lib/use-async";
-import { bpsToPct, fmtNumber, fmtUnits, shortAddress, timeAgo } from "../lib/format";
+import { bpsToPct, fmtNumber, fmtUnits, fmtUsd, shortAddress, timeAgo } from "../lib/format";
 
 /* Shared Moments pieces. Containment (spec §12): every coin shows holder count + top-holder share, every Moment is
    labelled early / low-cap / validation, and there is no "proven demand" badge anywhere. */
 
-export const usd = (units: bigint, opts?: { compact?: boolean; dp?: number }) => `$${fmtUnits(units, USDC.decimals, opts)}`;
+/** USDC amounts as dollars, formatted like every other dollar value in the app (fmtUsd). */
+export const usd = (units: bigint) => fmtUsd(Number(formatUnits(units, USDC.decimals)));
 export const coinsOf = (wei: bigint, symbol: string, compact = true) => `${fmtUnits(wei, 18, { compact })} $${symbol}`;
 
 /** A gateway URL for an ipfs:// URI, the URI itself when it is http(s), and "" for anything else: media URIs are
@@ -82,7 +83,7 @@ export function MomentCard({ moment, now }: { moment: MomentInfo; now: number })
         <div className="progress-label"><span>{moment.graduated ? "Pool locked on Uniswap v4" : moment.ledger.state === 3 ? "Wound down" : "Reserve to graduation"}</span><b>{(moment.progressBps / 100).toFixed(1)}%</b></div>
         <Progress bps={moment.progressBps} />
         <div className="launch-stats">
-          <span>{moment.graduated ? "Coin price" : "Collect price"}<b>{moment.graduated && price !== null ? `$${fmtNumber(price)}` : usd(moment.price)}</b></span>
+          <span>{moment.graduated ? "Coin price" : "Collect price"}<b>{moment.graduated && price !== null ? fmtUsd(price) : usd(moment.price)}</b></span>
           <span>{moment.graduated && price !== null ? "FDV" : "Raised"}<b>{moment.graduated && price !== null ? `$${fmtNumber(fdvUsd(price), { compact: true })}` : usd(moment.ledger.totalGross)}</b></span>
           <span>{moment.ledger.state === 0 ? "Window" : "Collectors' coins"}<b>{moment.ledger.state === 0 ? <Countdown until={moment.deadline} now={now} /> : fmtUnits(moment.entitlements, 18, { compact: true })}</b></span>
         </div>
