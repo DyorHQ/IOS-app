@@ -1,12 +1,13 @@
 // The caller's network for per-IP limits, from Cloudflare's cf-connecting-ip (set at the edge; a client cannot forge
 // it through Cloudflare, and the functions' request logs show it on every call). IPv4 counts per address, IPv6 per
-// /64 — one subscriber's allocation — so rotating addresses inside a /64 buys no fresh bucket. X-Forwarded-For is
-// deliberately NOT used: its first entry is whatever the client sent, so it would let a caller pick a fresh bucket per
-// request, or fill someone else's. null when absent or unparseable — per-subject limits still apply, and unknown
-// callers don't share (and exhaust) one bucket.
+// /64 by default — one subscriber's allocation — so rotating addresses inside a /64 buys no fresh bucket. A caller whose
+// limit exists to stop one party from rotating addresses (wallet-auth's new wallets, the waitlist) asks for /48: that
+// is what a tunnel broker hands out for free, 65,536 /64s. X-Forwarded-For is deliberately NOT used: its first entry is
+// whatever the client sent, so it would let a caller pick a fresh bucket per request, or fill someone else's. null when
+// absent or unparseable — per-subject limits still apply, and unknown callers don't share (and exhaust) one bucket.
 //
 // Shared by email-pepper (its network limits, migration 20) and the edge_rate_gate callers (migration 27).
-export function clientNet(req: Request): string | null {
+export function clientNet(req: Request, v6Prefix: 48 | 56 | 64 = 64): string | null {
   const raw = (req.headers.get("cf-connecting-ip") ?? "").trim();
   const v4 = raw.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (v4) {
@@ -26,5 +27,7 @@ export function clientNet(req: Request): string | null {
   if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) { // IPv4-mapped: count as that IPv4 address
     return [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255].join(".");
   }
-  return `${g.slice(0, 4).map((x) => x.toString(16)).join(":")}::/64`;
+  // The prefix's whole groups, then (for /56) the high byte of the next one.
+  const kept = g.slice(0, Math.ceil(v6Prefix / 16)).map((x, i) => (i + 1) * 16 > v6Prefix ? x & 0xff00 : x);
+  return `${kept.map((x) => x.toString(16)).join(":")}::/${v6Prefix}`;
 }

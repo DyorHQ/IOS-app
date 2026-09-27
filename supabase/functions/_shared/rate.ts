@@ -1,10 +1,12 @@
-// The Edge Functions' side of edge_rate_gate (migration 27): per-subject and per-network budgets for pin-media,
-// aurora-proxy and waitlist. The gate records an allowed call and answers {"ok": true}, or refuses with
-// {"retryAfter": seconds, "limit": "subject" | "network"}. Anything else — the RPC failing, an unexpected answer —
-// fails closed as a retryable 503, so an outage can never turn into unlimited use.
+// The Edge Functions' side of edge_rate_gate (migration 27): per-subject, per-network and overall budgets for pin-media,
+// aurora-proxy, waitlist and wallet-auth's first sign-ins. The gate records an allowed call and answers {"ok": true},
+// or refuses with {"retryAfter": seconds, "limit": "subject" | "network" | "global"}. Anything else — the RPC failing
+// (including before migration 27 is applied), an unexpected answer — fails closed as a retryable 503, so an outage can
+// never turn into unlimited use.
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
-export type RateScope = "pin-media" | "aurora" | "aurora-status" | "waitlist";
+export type RateScope = "pin-media" | "aurora" | "aurora-status" | "waitlist" | "wallet-auth";
+const LIMITS = new Set(["subject", "network", "global"]);
 
 // null when the call may proceed, else the Response to send (with `headers`, e.g. the function's CORS headers).
 export function gateRefusal(data: unknown, failed: boolean, headers: Record<string, string>): Response | null {
@@ -19,7 +21,7 @@ export function gateRefusal(data: unknown, failed: boolean, headers: Record<stri
   const result = data as { ok?: unknown; retryAfter?: unknown; limit?: unknown };
   if (typeof result.retryAfter === "number" && Number.isFinite(result.retryAfter)) {
     const retryAfter = Math.min(86_400, Math.max(1, Math.ceil(result.retryAfter)));
-    const limit = result.limit === "subject" || result.limit === "network" ? { limit: result.limit } : {};
+    const limit = typeof result.limit === "string" && LIMITS.has(result.limit) ? { limit: result.limit } : {};
     return reply({ error: "too many requests — try again later", retryAfter, ...limit }, 429, { "Retry-After": String(retryAfter) });
   }
   if (result.ok !== true) return reply({ error: "temporarily unavailable — try again in a minute", retryable: true }, 503);

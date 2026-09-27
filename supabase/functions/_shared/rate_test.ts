@@ -16,6 +16,8 @@ Deno.test("gateRefusal: a refusal is a 429 with Retry-After and the limit that f
   assertEquals(await res.json(), { error: "too many requests — try again later", retryAfter: 13, limit: "network" });
   const odd = gateRefusal({ retryAfter: 0, limit: "something" }, false, cors)!;
   assertEquals(await odd.json(), { error: "too many requests — try again later", retryAfter: 1 });
+  const overall = gateRefusal({ retryAfter: 600, limit: "global" }, false, cors)!;
+  assertEquals((await overall.json()).limit, "global");
 });
 
 Deno.test("gateRefusal: an RPC error or an unexpected answer fails closed as a retryable 503", async () => {
