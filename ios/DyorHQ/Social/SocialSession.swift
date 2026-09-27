@@ -80,7 +80,10 @@ final class SocialSession {
         let task = Task { @MainActor in
             defer { if self.restoring?.wallet == target { self.restoring = nil } }
             await self.client.restore(stored)
-            guard await self.client.currentSession?.accessToken == stored.accessToken, self.boundWallet == target else { return }
+            guard await self.client.currentSession?.accessToken == stored.accessToken else { return }
+            // Signed out or switched while it restored: drop exactly what this restored (RS-6). No later sign-out would,
+            // since this object never adopted it.
+            guard self.boundWallet == target else { await self.client.signOut(ifAccessToken: stored.accessToken); return }
             self.adopted(stored)
             self.trackProfileWork {
                 try? await self.ensureProfile(wallet: target) // safety net: a returning wallet always has a profile
@@ -191,7 +194,8 @@ final class SocialSession {
                 // The app moved on (signed out, or another wallet) while wallet-auth answered: don't adopt it.
                 guard boundWallet == target else { return }
                 await client.restore(created)
-                guard boundWallet == target else { return }
+                // It moved on during that hop: drop exactly what was just restored (RS-6), which no later sign-out would.
+                guard boundWallet == target else { await client.signOut(ifAccessToken: created.accessToken); return }
                 SupabaseSessionStore.save(created)
                 boundWallet = created.wallet
                 adopted(created)
