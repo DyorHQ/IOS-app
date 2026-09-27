@@ -51,8 +51,6 @@
 	<string>$(MEME_HOOK)</string>
 	<key>MonadRPCURL</key>
 	<string>$(DYOR_DEBUG_RPC_OVERRIDE)</string>
-	<key>NSCameraUsageDescription</key>
-	<string>DyorHQ uses the camera to scan wallet addresses and QR codes.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>DyorHQ uses Face ID to unlock your wallet on this device.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
