@@ -1,5 +1,8 @@
 // The Supabase session wallet-auth mints: role authenticated, the wallet_address claim every RLS policy keys off, and
-// a stable per-wallet sub, valid for SESSION_S.
+// a stable per-wallet sub, valid for SESSION_S (12 hours) unless WALLET_AUTH_SESSION_S sets a shorter lifetime.
+// A session cannot be revoked before it expires (security audit 2026-09-26, SB-10): a shorter lifetime narrows that
+// window, but the app does not sign in again on its own when a session ends (it shows the backend features as signed
+// out until the next sign-in), so shortening it is an owner decision to take together with an app change.
 //
 // Two signing keys (security audit 2026-09-26, OH-7):
 //   * APP_JWT_SIGNING_JWK — a dedicated asymmetric key: a private P-256 JWK with a kid (`supabase gen signing-key
@@ -13,6 +16,16 @@ import { v5 as uuidv5 } from "npm:uuid@9";
 
 const NAMESPACE = "6f9b1c2e-1c2a-4b6e-9c3d-0a1b2c3d4e5f"; // stable namespace for wallet->uuid mapping
 export const SESSION_S = 12 * 60 * 60;
+export const MIN_SESSION_S = 15 * 60;
+
+// The session lifetime WALLET_AUTH_SESSION_S configures: whole seconds from 15 minutes to 12 hours (clamped); SESSION_S
+// when unset or not a whole number.
+export function sessionLifetime(configured: string | undefined): number {
+  const raw = (configured ?? "").trim();
+  const n = Number(raw);
+  if (raw === "" || !Number.isInteger(n)) return SESSION_S;
+  return Math.min(SESSION_S, Math.max(MIN_SESSION_S, n));
+}
 
 export type SessionSigner =
   | { alg: "ES256"; kid: string; key: KeyLike | Uint8Array }
@@ -37,8 +50,8 @@ export async function sessionSigner(config: { jwk?: string; secret?: string }): 
   return null;
 }
 
-// A session for `wallet` (lowercase 0x address) issued at `nowS` (unix seconds).
-export async function mintSession(wallet: string, signer: SessionSigner, nowS: number): Promise<string> {
+// A session for `wallet` (lowercase 0x address) issued at `nowS` (unix seconds), valid for `lifetimeS`.
+export async function mintSession(wallet: string, signer: SessionSigner, nowS: number, lifetimeS = SESSION_S): Promise<string> {
   const header = signer.alg === "ES256"
     ? { alg: "ES256", kid: signer.kid, typ: "JWT" }
     : { alg: "HS256", typ: "JWT" };
@@ -47,6 +60,6 @@ export async function mintSession(wallet: string, signer: SessionSigner, nowS: n
     .setSubject(uuidv5(wallet, NAMESPACE))
     .setAudience("authenticated")
     .setIssuedAt(nowS)
-    .setExpirationTime(nowS + SESSION_S)
+    .setExpirationTime(nowS + lifetimeS)
     .sign(signer.key);
 }

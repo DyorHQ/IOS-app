@@ -1,7 +1,7 @@
 // deno test --no-config --node-modules-dir=none supabase/functions/wallet-auth/
 import { assertEquals } from "jsr:@std/assert@1";
 import { getAddress } from "npm:viem@2";
-import { parseSignIn, siweMessage } from "./sign_in.ts";
+import { legacySignIn, parseSignIn, siweMessage } from "./sign_in.ts";
 
 const LOWER = "0x52908400098527886e0f7030069857d2e4169ee7"; // an EIP-55 test vector (mixed case when checksummed)
 const CHECKSUMMED = getAddress(LOWER);
@@ -93,4 +93,17 @@ Deno.test("legacy template: still accepted, with the address exactly as sent, an
   assertEquals((parseSignIn(legacy(CHECKSUMMED), LOWER, NOW) as { status: number }).status, 400);
   assertEquals((parseSignIn(legacy(LOWER) + "\n", LOWER, NOW) as { status: number }).status, 400);
   assertEquals((parseSignIn(legacy(LOWER, NOW - 11 * 60_000), LOWER, NOW) as { status: number }).status, 401);
+});
+
+Deno.test("IOSK-7: WALLET_AUTH_LEGACY_SIGNIN=off refuses the legacy template and nothing else", () => {
+  const legacy = `DyorHQ Sign-In\n\nWallet: ${LOWER}\nNonce: ${NONCE}\nIssued At: ${NOW}`;
+  const refused = parseSignIn(legacy, LOWER, NOW, { legacy: false });
+  assertEquals("status" in refused ? refused.status : 200, 400);
+  assertEquals(parseSignIn(message(), LOWER, NOW, { legacy: false }), { nonce: NONCE, format: "eip4361" });
+  assertEquals(parseSignIn(legacy, LOWER, NOW, { legacy: true }), { nonce: NONCE, format: "legacy" });
+  assertEquals(legacySignIn(undefined), true);
+  assertEquals(legacySignIn(""), true);
+  assertEquals(legacySignIn("on"), true);
+  assertEquals(legacySignIn("off"), false);
+  assertEquals(legacySignIn(" OFF "), false);
 });

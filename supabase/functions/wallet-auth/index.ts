@@ -16,13 +16,23 @@
 //      (EIP-191), and only THEN consumes the nonce atomically — a single UPDATE … WHERE used_at IS NULL AND
 //      expires_at > now(), so a signature can be exchanged for a session at most once, and nobody without the wallet's
 //      signature can burn a nonce. Legacy client-generated nonces are rejected (no grace period).
+//      A wallet signing in for the FIRST time (no profile row yet; the app creates one on every sign-in) then passes
+//      edge_rate_gate 'wallet-auth' for its client network — an IPv4 address or IPv6 /48 — at most 30 per 15 minutes
+//      and 200 per day (migration 27; security audit 2026-09-26, SB-2 / OH-6: wallets cost nothing, so every per-wallet
+//      budget in pin-media, aurora-proxy and storage multiplied freely). A returning wallet is never counted or
+//      refused, so nobody sharing its network can lock it out. Refused: 429 with Retry-After (the nonce is spent; the
+//      app signs a new one).
 //
 // On success it mints a Supabase-compatible JWT carrying the `wallet_address` claim every RLS policy keys off (signed
 // as session.ts describes). No private key ever touches this service; only a signature over a server nonce.
 //
 // Deploy:  supabase functions deploy wallet-auth --no-verify-jwt   (called before the app has a session)
 //          Apply migration 19 first, and ship together with the app build that requests nonces: this version rejects
-//          the old client-built message, and the old version rejects { action: "nonce" }.
+//          the old client-built message, and the old version rejects { action: "nonce" }. Apply migration 27 before
+//          deploying this version: without edge_rate_gate a first sign-in fails closed (503; returning wallets are
+//          unaffected).
+// Options: WALLET_AUTH_LEGACY_SIGNIN=off refuses the legacy template (sign_in.ts: only once the first EIP-4361 build
+//          has shipped and every older build is expired); WALLET_AUTH_SESSION_S shortens the session (session.ts).
 // Secret:  APP_JWT_SECRET must equal the project's JWT Secret (Dashboard -> Settings -> API -> JWT Secret) so the
 //          minted tokens are accepted by PostgREST — or, once the owner moves sessions to a dedicated asymmetric key
 //          (OH-7, supabase/README.md), APP_JWT_SIGNING_JWK, which then takes precedence. SUPABASE_URL /
@@ -30,10 +40,14 @@
 //          no policies, service role only).
 import { recoverMessageAddress, isAddress } from "npm:viem@2";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { parseSignIn } from "./sign_in.ts";
-import { mintSession, SESSION_S, type SessionSigner, sessionSigner } from "./session.ts";
+import { clientNet } from "../_shared/net.ts";
+import { rateGate } from "../_shared/rate.ts";
+import { legacySignIn, parseSignIn } from "./sign_in.ts";
+import { mintSession, type SessionSigner, sessionLifetime, sessionSigner } from "./session.ts";
 
 const NONCE_TTL_MS = 5 * 60 * 1000; // a nonce must be used within 5 minutes of issue
+const LEGACY_SIGNIN = legacySignIn(Deno.env.get("WALLET_AUTH_LEGACY_SIGNIN"));
+const LIFETIME_S = sessionLifetime(Deno.env.get("WALLET_AUTH_SESSION_S"));
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -111,7 +125,7 @@ Deno.serve(async (req) => {
     return json({ error: "address, message and signature are required" }, 400);
   }
 
-  const signIn = parseSignIn(message, address, Date.now());
+  const signIn = parseSignIn(message, address, Date.now(), { legacy: LEGACY_SIGNIN });
   if ("error" in signIn) return json({ error: signIn.error }, signIn.status);
   const nonce = signIn.nonce;
 
@@ -130,7 +144,15 @@ Deno.serve(async (req) => {
     return json({ error: "sign-in nonce invalid, expired or already used" }, 401);
   }
 
-  const token = await mintSession(wallet, sessionKey, Math.floor(Date.now() / 1000));
+  // A first sign-in for this wallet counts against its client network's budget (see the header).
+  const known = await db.from("profiles").select("wallet").eq("wallet", wallet).limit(1);
+  if (known.error || !Array.isArray(known.data)) return json({ error: "could not complete the sign-in — try again" }, 502);
+  if (known.data.length === 0) {
+    const refused = await rateGate(db, "wallet-auth", null, clientNet(req, 48), cors);
+    if (refused) return refused;
+  }
 
-  return json({ access_token: token, token_type: "bearer", expires_in: SESSION_S, wallet });
+  const token = await mintSession(wallet, sessionKey, Math.floor(Date.now() / 1000), LIFETIME_S);
+
+  return json({ access_token: token, token_type: "bearer", expires_in: LIFETIME_S, wallet });
 });

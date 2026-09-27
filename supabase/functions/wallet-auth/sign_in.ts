@@ -18,9 +18,11 @@
 // its EIP-55 checksum. Domain, URI, Version and Chain ID are fixed. Issued At must be within 10 minutes of server time;
 // Expiration Time must be in the future, after Issued At, and at most 10 minutes after it.
 //
-// The legacy template ("DyorHQ Sign-In\n\nWallet: <address as sent>\nNonce: <nonce>\nIssued At: <unix ms>") is still
-// accepted for the builds that send it.
-// TODO(IOSK-7 SIWE contract): remove the legacy template once the owner retires the builds that send it.
+// The legacy template ("DyorHQ Sign-In\n\nWallet: <address as sent>\nNonce: <nonce>\nIssued At: <unix ms>") is not
+// bound to a domain or chain, so any page that gets a wallet to sign it can sign in as that wallet. It is still
+// accepted for the builds that send it, until the owner sets WALLET_AUTH_LEGACY_SIGNIN=off (legacySignIn below) — once
+// the first build that signs EIP-4361 has shipped and every older build is expired. No code change or redeploy is
+// needed to retire it; then remove it from the code as well.
 import { getAddress } from "npm:viem@2";
 
 export const MAX_AGE_MS = 10 * 60 * 1000; // a signed message must be < 10 minutes old
@@ -51,6 +53,11 @@ export function siweMessage(address: string, nonce: string, issuedAt: string, ex
     `Expiration Time: ${expirationTime}`;
 }
 
+// Whether the legacy template is still accepted: yes unless WALLET_AUTH_LEGACY_SIGNIN is "off" (any case, trimmed).
+export function legacySignIn(configured: string | undefined): boolean {
+  return (configured ?? "").trim().toLowerCase() !== "off";
+}
+
 // Milliseconds for a strict ISO-8601 UTC timestamp with milliseconds (a real date: it must round-trip), else null.
 function isoMillis(text: string): number | null {
   const ms = Date.parse(text);
@@ -58,8 +65,8 @@ function isoMillis(text: string): number | null {
 }
 
 // The nonce a sign-in message carries, once its template, address and times check out; or why it was refused.
-// `address` is the request's address (0x + 40 hex; any case).
-export function parseSignIn(message: string, address: string, nowMs: number): SignIn | SignInRefusal {
+// `address` is the request's address (0x + 40 hex; any case). `legacy: false` refuses the legacy template.
+export function parseSignIn(message: string, address: string, nowMs: number, options: { legacy?: boolean } = {}): SignIn | SignInRefusal {
   if (!ADDRESS.test(address)) return unrecognised;
 
   const siwe = SIWE.exec(message);
@@ -77,6 +84,7 @@ export function parseSignIn(message: string, address: string, nowMs: number): Si
     return { nonce: siwe[2], format: "eip4361" };
   }
 
+  if (options.legacy === false) return unrecognised;
   // `address` passed ADDRESS above (0x + 40 hex, no regex metacharacters), and JS `$` without the m flag matches only
   // at the very end, so nothing can be appended.
   const legacy = new RegExp(`^DyorHQ Sign-In\\n\\nWallet: ${address}\\nNonce: ([0-9a-f]{64})\\nIssued At: (\\d{13})$`).exec(message);
