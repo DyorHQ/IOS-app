@@ -1,5 +1,5 @@
 #!/bin/bash
-# Turns on the tracked leak-guard hooks (.githooks/: pre-commit, pre-merge-commit, pre-push) for this clone and every
+# Turns on the tracked leak-guard hooks (.githooks/: pre-commit, pre-merge-commit, commit-msg, pre-push) for this clone and every
 # worktree of it. Run it once per clone; the SessionStart hook in .claude/settings.json runs it for every Claude Code
 # session. Safe to re-run.
 #
@@ -10,7 +10,8 @@
 #
 # Two set-ups, picked automatically:
 #   core.hooksPath=.githooks — when every worktree of the clone has .githooks/ (a fresh clone, CI, a cloud session).
-#     git then runs the checked-out branch's own .githooks/ directly.
+#     git then runs the checked-out branch's own .githooks/ directly, and stops running the hooks in <git common
+#     dir>/hooks: when another tool has hooks there (Git LFS, a hook manager), this refuses to switch unless --force.
 #   dispatchers — when some worktree checks out a branch from before .githooks/ existed (the main ~/Hackathon checkout
 #     and its many worktrees): core.hooksPath would leave those worktrees with no hooks at all, because it applies to
 #     the whole clone. Small dispatchers go into the shared hooks directory (<git common dir>/hooks) instead. Each runs
@@ -34,7 +35,12 @@ say() { [ -n "$QUIET" ] || echo "install-hooks: $*"; }
 warn() { echo "install-hooks: $*" >&2; }
 die() { warn "$*"; exit 2; }
 
-HOOK_NAMES="pre-commit pre-merge-commit pre-push"
+HOOK_NAMES="pre-commit pre-merge-commit commit-msg pre-push"
+# Every hook name git runs: a hook of another tool under one of these names stops running under core.hooksPath.
+GIT_HOOKS="applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg commit-msg
+  post-commit pre-rebase post-checkout post-merge pre-push pre-receive update proc-receive post-receive post-update
+  reference-transaction push-to-checkout pre-auto-gc post-rewrite sendemail-validate fsmonitor-watchman post-index-change
+  p4-changelist p4-prepare-changelist p4-post-changelist p4-pre-submit"
 OURS='dyorhq-(leak-guard|secret-scan)' # markers of this guard's hooks, new and old
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 TOP=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository"
@@ -69,6 +75,13 @@ done < <(git -C "$TOP" worktree list --porcelain)
 for h in $HOOK_NAMES; do [ -x "$TOP/.githooks/$h" ] || chmod 755 "$TOP/.githooks/$h" 2>/dev/null; done
 
 if [ -z "$LACKING" ]; then
+  if [ "$CURRENT" != .githooks ] && [ -z "$FORCE" ]; then
+    FOREIGN=
+    for h in $GIT_HOOKS; do
+      [ -f "$HOOKS_DIR/$h" ] && [ -x "$HOOKS_DIR/$h" ] && ! grep -qE "$OURS" "$HOOKS_DIR/$h" && FOREIGN="$FOREIGN $h"
+    done
+    [ -z "$FOREIGN" ] || die "core.hooksPath=.githooks would switch off another tool's hooks in $HOOKS_DIR:$FOREIGN — left untouched. Call them from .githooks/ or re-run with --force."
+  fi
   git -C "$TOP" config core.hooksPath .githooks || die "cannot set core.hooksPath"
   say "core.hooksPath=.githooks — every worktree of this clone runs its branch's .githooks/."
   exit 0
@@ -85,7 +98,12 @@ done
 chmod 755 "$HOOKS_DIR/secret-scan.sh"
 STATUS=0
 for h in $HOOK_NAMES; do
-  case "$h" in pre-push) fallback=--pre-push ;; *) fallback=--staged ;; esac
+  nofallback=
+  case "$h" in
+    pre-push) fallback=--pre-push ;;
+    commit-msg) fallback=; nofallback='exit 0 # those branches never checked commit messages' ;;
+    *) fallback=--staged ;;
+  esac
   hook="$HOOKS_DIR/$h"
   if [ -e "$hook" ] && ! grep -qE "$OURS" "$hook"; then
     if [ -z "$FORCE" ]; then
@@ -101,6 +119,7 @@ for h in $HOOK_NAMES; do
 # always had: its own scripts/dev/secret-scan.sh, else the copy stored next to this dispatcher.
 top=\$(git rev-parse --show-toplevel) || exit 1
 [ -f "\$top/.githooks/$h" ] && exec /bin/bash "\$top/.githooks/$h" "\$@"
+$nofallback
 scanner="\$top/scripts/dev/secret-scan.sh"
 [ -f "\$scanner" ] || scanner="$HOOKS_DIR/secret-scan.sh"
 if [ ! -f "\$scanner" ]; then
