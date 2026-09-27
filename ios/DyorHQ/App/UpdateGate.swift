@@ -3,11 +3,13 @@ import Foundation
 import Observation
 import SwiftUI
 
-/// The minimum supported build (security audit 2026-09-26, GP-2). Builds that hard-code retired contract stacks are
-/// retired by the owner raising `app_config` 'ios'.min_build (supabase migration 28): a build below it shows
-/// `UpdateRequiredView` in place of the app, where balances and key export stay reachable and nothing signs. Read at
-/// launch and on every return to the foreground, at most once every ten minutes. Fails open: a failed or unreadable
-/// check blocks nothing, and a block already seen this run stays until a check says otherwise.
+/// The minimum supported build (security audit 2026-09-26, GP-2). A build that contains this check (the first after
+/// build 13) and is below `app_config` 'ios'.min_build (supabase migration 28) shows `UpdateRequiredView` in place of the
+/// app, where balances and key export stay reachable and nothing signs. Builds 13 and earlier never read it, so raising
+/// min_build does nothing for them: the ones that hard-code retired contract stacks (12 and earlier) must still be
+/// expired in App Store Connect and TestFlight. Read at launch and on every return to the foreground, at most once
+/// every ten minutes. Fails open: a failed or unreadable check blocks nothing, and a block already seen this run stays
+/// until a check says otherwise.
 @Observable
 @MainActor
 final class UpdateGate {
