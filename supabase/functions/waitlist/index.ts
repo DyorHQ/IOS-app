@@ -6,13 +6,16 @@
 //                        honeypot alike — so the endpoint cannot be used to test which emails signed up
 //     400                malformed input (not JSON, not an object, a bad email or source, body over 2 KB)
 //     403                a browser page on any origin but https://dyorhq.fun and https://www.dyorhq.fun
-//     429 { retryAfter } this client network's budget is spent (5 per 15 minutes, 20 per day; 500 per hour overall)
+//     429 { retryAfter } this client network's budget is spent (5 per 15 minutes, 20 per day, per IPv4 address or IPv6
+//                        /48; 500 per hour overall)
 //     503                storage or the rate gate unavailable — try again
 //
 // `website` is a honeypot the form hides from people: a non-empty value is answered 200 and not stored. The email is
 // trimmed, lowercased and checked (normalizeEmail in signup.ts); `source` is an optional short tag. Rate limits run
 // through edge_rate_gate (migration 27), which never stores the client's address (only an HMAC of it under a salt no
-// API role can read). The row is inserted with ON CONFLICT DO NOTHING into public.waitlist (migration 29: RLS on, no
+// API role can read). IPv6 counts per /48, not /64: a tunnel broker hands out a /48 for free, and 65,536 /64 budgets
+// would let one party spend the overall cap. A proxy pool with many IPv4 addresses still can; a challenge (e.g.
+// Cloudflare Turnstile on the form) would be the next step if that happens. The row is inserted with ON CONFLICT DO NOTHING into public.waitlist (migration 29: RLS on, no
 // policies, service role only). Nothing about the request is logged.
 //
 // Deploy:  supabase functions deploy waitlist --no-verify-jwt   (after migrations 27 and 29)
@@ -60,7 +63,7 @@ Deno.serve(async (req) => {
   if (!url || !serviceKey) return json({ error: "temporarily unavailable — try again later" }, 503, cors);
   const db = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
-  const refused = await rateGate(db, "waitlist", "all", clientNet(req), cors);
+  const refused = await rateGate(db, "waitlist", "all", clientNet(req, 48), cors);
   if (refused) return refused;
 
   const { error } = await db.from("waitlist")

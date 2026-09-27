@@ -24,13 +24,16 @@
 // The budgets add up: whoever can pass the email's one-time code (the owner, or anyone who has taken over the mailbox)
 // gets up to 50 + 20 = 70 online guesses per email per 24 h; everyone else, 50.
 // Anonymous requests also count toward, and are held to, their client network's limit (60 / 15 min; an IPv4 address or
-// an IPv6 /64). Verified requests are neither (migration 24, security audit 2026-09-26 SB-4), so nobody sharing a
-// network — a NAT, a carrier-grade NAT — can lock a verified owner out. A 429 says which limit fired.
+// an IPv6 /64). Verified requests are neither (migration 24, security audit 2026-09-26 SB-4). A 429 says which limit
+// fired.
 //
 // Checking a proof costs one call to Privy's API (with the app secret, under Privy's app-wide rate limit), made before
 // the database can count anything. So that call is cached per Privy user for a few minutes in this instance, and each
-// uncached one must first pass the database's lookup gate (10 per Privy user, 30 per client network per 15 min) — a
-// flood of valid tokens cannot turn into a flood of Privy API calls. The Privy app key is cached for an hour and
+// uncached one must first pass the database's lookup gate (10 per Privy user per 15 min; 30 per client network per
+// 15 min, which holds a Privy user only from their third uncached lookup in 15 minutes on, migration 24) — a flood of
+// valid tokens cannot turn into a flood of Privy API calls. So nobody sharing a network (a NAT, a carrier-grade NAT)
+// can refuse a verified owner their first two uncached lookups in any 15 minutes; a third can still meet a network
+// spent by others (429 "network"). Repeat requests from one Privy user are usually answered from the cache. The Privy app key is cached for an hour and
 // refetched early — at most every 5 minutes — when a token's signature fails against it, in case Privy rotated it.
 // Every Privy call has a timeout; an outage is a retryable 503, never a refusal (../_shared/privy.ts).
 //
@@ -48,7 +51,8 @@
 //     401 (with a token) invalid or expired Privy access token
 //     429 { error: "too many attempts", retryAfter: <seconds>, limit: "email" | "network" | "proof" }
 //           email    this request's budget for e (the anonymous one, or with a token the verified one)
-//           network  the client network's limit — anonymous requests only, so proving the email lifts it
+//           network  the client network's limit: for an anonymous request the pepper's (proving the email lifts it);
+//                    with a token, the lookup gate's, from the Privy user's third uncached lookup in 15 minutes on
 //           proof    (with a token) this Privy user's lookups; the anonymous budget does not need one
 //     503 pepper or email verification temporarily unavailable
 import { createClient } from "npm:@supabase/supabase-js@2";
