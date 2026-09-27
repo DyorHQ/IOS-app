@@ -6,6 +6,7 @@ import { LOGS_RPC } from "../app/lib/moments/config";
 import { KURU } from "../app/lib/swap/config";
 import { contentSecurityPolicy, newNonce, sourceOrigin } from "./csp";
 import { createRelayGate } from "./perpl-relay";
+import { PERPL_REQUESTS_PER_MINUTE, PERPL_SOCKETS_PER_CLIENT, PERPL_SOCKET_OPENS_PER_MINUTE, clientKey, createSlotLimiter, createWindowLimiter } from "./rate-limit";
 
 interface Env {
   ASSETS: Fetcher;
@@ -33,15 +34,27 @@ interface ExecutionContext {
 
 const PERPL_WS = "https://app.perpl.xyz/ws/v1/market-data";
 
-async function proxyPerplSocket(): Promise<Response> {
+// Per-client caps on the Perpl relays, in this isolate's memory (worker/rate-limit.ts).
+const perplRequests = createWindowLimiter(PERPL_REQUESTS_PER_MINUTE, 60_000);
+const perplSocketOpens = createWindowLimiter(PERPL_SOCKET_OPENS_PER_MINUTE, 60_000);
+const perplSockets = createSlotLimiter(PERPL_SOCKETS_PER_CLIENT);
+const tooMany = (what: string) =>
+  Response.json({ error: `Too many ${what} from this address. Try again in a minute.` }, { status: 429, headers: { "retry-after": "60" } });
+
+/** Bridges one socket to Perpl; `release` frees the client's socket slot once either side closes. */
+async function proxyPerplSocket(release: () => void): Promise<Response> {
   let upstream: Response;
   try {
     upstream = await fetch(PERPL_WS, { headers: { Upgrade: "websocket" } });
   } catch {
+    release();
     return new Response("Perpl did not answer", { status: 502 });
   }
   const remote = (upstream as Response & { webSocket?: WebSocket | null }).webSocket;
-  if (!remote) return new Response(`Perpl refused the socket (${upstream.status})`, { status: 502 });
+  if (!remote) {
+    release();
+    return new Response(`Perpl refused the socket (${upstream.status})`, { status: 502 });
+  }
   const gate = createRelayGate();
   const pair = new WebSocketPair();
   const [client, server] = [pair[0], pair[1]];
@@ -58,10 +71,10 @@ async function proxyPerplSocket(): Promise<Response> {
     try { remote.send(allowed); } catch { /* remote closed */ }
   });
   remote.addEventListener("message", (e) => { try { server.send(e.data); } catch { /* client closed */ } });
-  server.addEventListener("close", () => remote.close());
-  remote.addEventListener("close", () => server.close());
-  server.addEventListener("error", () => remote.close());
-  remote.addEventListener("error", () => server.close());
+  server.addEventListener("close", () => { release(); remote.close(); });
+  remote.addEventListener("close", () => { release(); server.close(); });
+  server.addEventListener("error", () => { release(); remote.close(); });
+  remote.addEventListener("error", () => { release(); server.close(); });
   return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
 }
 
@@ -110,11 +123,21 @@ const app = {
 
     // Perpl's market-data WebSocket only accepts its own origin, so browsers connect here and the Worker
     // bridges the socket to Perpl without an Origin header (Cloudflare Workers can dial WebSockets with fetch).
-    // Only this app's pages may open it: browsers always send Origin on a WebSocket handshake.
+    // Only this app's pages may open it: browsers always send Origin on a WebSocket handshake. A script can forge
+    // Origin, so each client also has a cap on sockets held and opened, and on REST reads through /api/perpl/*.
     if (url.pathname === "/api/perpl/ws" && request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
       if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers: { allow: "GET" } });
       if (request.headers.get("Origin") !== url.origin) return new Response("Forbidden", { status: 403 });
-      return proxyPerplSocket();
+      const client = clientKey(request);
+      if (client === null) return proxyPerplSocket(() => undefined);
+      if (!perplSocketOpens(client)) return tooMany("Perpl sockets opened");
+      const release = perplSockets.acquire(client);
+      if (!release) return tooMany("open Perpl sockets");
+      return proxyPerplSocket(release);
+    }
+    if (url.pathname.startsWith("/api/perpl/")) {
+      const client = clientKey(request);
+      if (client !== null && !perplRequests(client)) return tooMany("Perpl requests");
     }
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];

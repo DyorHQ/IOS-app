@@ -6,7 +6,8 @@ import { isCandlesRoute } from "../../../lib/perps/candles";
    relayed: no other upstream path (candle paths must name a listed market and resolution over the current window), no
    query string, and no request from another site (Origin / Sec-Fetch-Site), so the route cannot be used as a general
    Perpl proxy. Scripted clients can fake those headers, so every valid URL is the same for all viewers and is answered
-   from the edge cache while it is fresh: many clients, one upstream read. */
+   from the edge cache while it is fresh (many clients, one upstream read), and the Worker caps each client's reads
+   (worker/rate-limit.ts). */
 const UPSTREAM = "https://app.perpl.xyz/api";
 const CONTEXT_ROUTE = "v1/pub/context";
 

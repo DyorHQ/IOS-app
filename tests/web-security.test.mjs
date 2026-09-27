@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
+import { tsImport } from "tsx/esm/api";
 
 /* Security headers and the Perpl relay's limits, exercised on the production Worker in dist/. */
 const ORIGIN = "https://mainstreet-ui.bushy-petal-0744.chatgpt.site";
@@ -145,6 +146,29 @@ test("the relay answers repeat reads from the edge cache: many viewers, one upst
   } finally {
     delete globalThis.caches;
   }
+});
+
+test("one client's Perpl reads and socket opens are capped; other clients are not affected", async () => {
+  const { PERPL_REQUESTS_PER_MINUTE, PERPL_SOCKET_OPENS_PER_MINUTE } = await tsImport("../worker/rate-limit.ts", import.meta.url);
+  const from = (n, extra = {}) => ({ headers: { "cf-connecting-ip": `203.0.113.${n}`, "sec-fetch-site": "same-origin", ...extra } });
+  let limitedAt = null;
+  for (let i = 0; i <= PERPL_REQUESTS_PER_MINUTE && limitedAt === null; i++) if ((await call("/api/perpl/v1/pub/context", from(7))).status === 429) limitedAt = i;
+  assert.equal(limitedAt, PERPL_REQUESTS_PER_MINUTE);
+  upstreamCalls = [];
+  const refused = await call("/api/perpl/v1/pub/context", from(7));
+  assert.equal(refused.status, 429);
+  assert.equal(refused.headers.get("retry-after"), "60");
+  assertSecured(refused);
+  assert.deepEqual(upstreamCalls, [], "a refused read does not reach Perpl");
+  assert.equal((await call("/api/perpl/v1/pub/context", from(8))).status, 200, "another client");
+  assert.equal((await call("/api/perpl/v1/pub/context", { headers: { "sec-fetch-site": "same-origin" } })).status, 200, "no client IP: not counted");
+
+  // Each dial here fails upstream (there is no Perpl in the test) and frees its slot, so the opens cap is what trips.
+  const socket = (n) => call("/api/perpl/ws", from(n, { Upgrade: "websocket", Origin: ORIGIN }));
+  let opensLimitedAt = null;
+  for (let i = 0; i <= PERPL_SOCKET_OPENS_PER_MINUTE && opensLimitedAt === null; i++) if ((await socket(9)).status === 429) opensLimitedAt = i;
+  assert.equal(opensLimitedAt, PERPL_SOCKET_OPENS_PER_MINUTE);
+  assert.equal((await socket(10)).status, 502, "another client still reaches the dial");
 });
 
 test("no third-party script is loaded into the wallet origin", () => {
