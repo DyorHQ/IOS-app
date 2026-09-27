@@ -120,10 +120,18 @@ final class Session {
             if case .signedIn = state { return }
             state = .loading
         case .unauthenticated, .authenticatedUnverified:
+            if !suppressPrivyAdoption { EmailCheckMarker.clear() } // no Privy session left behind by an email check
             wallet = nil
             if !loadStoredSession() { state = .signedOut }
         case .authenticated(let user):
             if suppressPrivyAdoption { return } // email verification only — don't adopt the Privy wallet
+            if EmailCheckMarker.isSet {
+                // Left by an email check the app never finished (killed between the code and its logout): ended, never
+                // adopted as the user's wallet (GL-6).
+                await user.logout()
+                EmailCheckMarker.clear()
+                return
+            }
             try? await adoptOnce(user) // a failure is already recorded in lastError and the Privy session ended
         }
     }
@@ -442,15 +450,32 @@ final class Session {
     /// OTP requirement is enforced on the backend, not just in this app, and `email-pepper` accepts it to pay for this
     /// email's pepper from its verified budget. Used by sign-up, forgot-password and a rate-limited log-in. The token
     /// goes to those two functions only.
+    ///
+    /// The Privy session the check opens is ended on every path, a failure included, and a marker kept across launches
+    /// covers a check the app never finished (killed in between): that session is ended at the next launch, never
+    /// adopted as the user's wallet (GL-6).
     func verifyEmailCapturingToken(email: String, code: String) async throws -> String {
         let privy = try requirePrivy()
         suppressPrivyAdoption = true
+        EmailCheckMarker.set()
         defer { suppressPrivyAdoption = false }
-        _ = try await privy.email.loginWithCode(code, sentTo: email.trimmingCharacters(in: .whitespacesAndNewlines))
-        let token = try await privyAccessToken()
-        if case .authenticated(let user) = await privy.getAuthState() { await user.logout() }
+        let token: String?
+        do {
+            _ = try await privy.email.loginWithCode(code, sentTo: email.trimmingCharacters(in: .whitespacesAndNewlines))
+            token = try await privyAccessToken()
+        } catch {
+            await endEmailCheck(privy)
+            throw error
+        }
+        await endEmailCheck(privy)
         guard let token else { throw SessionError.emailNotVerified }
         return token
+    }
+
+    /// Ends the Privy session an email check opened, then clears the check's marker.
+    private func endEmailCheck(_ privy: any Privy) async {
+        if case .authenticated(let user) = await privy.getAuthState() { await user.logout() }
+        EmailCheckMarker.clear()
     }
 
     /// The canonical challenge the wallet signs to prove control of itself during a bind. The `email-rebind` function
@@ -591,6 +616,16 @@ func authenticationServicesError(in error: Error) -> NSError? {
     if ns.domain == ASAuthorizationError.errorDomain || ns.domain == ASWebAuthenticationSessionError.errorDomain { return ns }
     if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error { return authenticationServicesError(in: underlying) }
     return nil
+}
+
+/// An email one-time-code check in progress (`Session.verifyEmailCapturingToken`), remembered across launches: a Privy
+/// session found at launch while it is set was left by a check the app never finished, and is ended rather than adopted
+/// as the user's wallet (GL-6). Public flag only.
+private enum EmailCheckMarker {
+    private static let key = "session.emailCheckInFlight"
+    static var isSet: Bool { UserDefaults.standard.bool(forKey: key) }
+    static func set() { UserDefaults.standard.set(true, forKey: key) }
+    static func clear() { UserDefaults.standard.removeObject(forKey: key) }
 }
 
 /// Remembers a watch-only address between launches.
