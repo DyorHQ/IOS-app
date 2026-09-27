@@ -81,20 +81,37 @@ public enum RemoteMedia {
 }
 
 /// One capped download: checks the response, appends the body's chunks up to the cap, and answers once. Its callbacks
-/// run on the session's serial delegate queue; `start` runs before the task is resumed.
+/// run on the session's serial delegate queue; `start` runs on the caller's. The continuation is handed between the
+/// two under a lock, so it is resumed exactly once, whichever comes first — the task's completion, or a cancellation
+/// that got in before the task was resumed.
 private final class CappedLoad: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let maxBytes: Int
     private var data = Data()
     private var failure: RemoteMedia.Failure?
+    private let lock = NSLock()
     private var continuation: CheckedContinuation<Data, Error>?
 
     init(maxBytes: Int) { self.maxBytes = maxBytes }
 
     func start(_ task: URLSessionDataTask, _ continuation: CheckedContinuation<Data, Error>) {
-        // Cancelled before it started: a never-resumed task may never report back.
-        guard task.state != .canceling else { continuation.resume(throwing: CancellationError()); return }
-        self.continuation = continuation
+        // Only a task never resumed can be started. One already cancelled (canceling, or completed if its completion
+        // came first) may never report back, so it is answered here; one cancelled from now on reports its
+        // completion, which finds the continuation stored.
+        lock.lock()
+        let startable = task.state == .suspended
+        if startable { self.continuation = continuation }
+        lock.unlock()
+        guard startable else { continuation.resume(throwing: CancellationError()); return }
         task.resume()
+    }
+
+    /// The continuation, taken once.
+    private func take() -> CheckedContinuation<Data, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        let taken = continuation
+        continuation = nil
+        return taken
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
@@ -122,8 +139,7 @@ private final class CappedLoad: NSObject, URLSessionDataDelegate, @unchecked Sen
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let continuation else { return }
-        self.continuation = nil
+        guard let continuation = take() else { return }
         if let failure { continuation.resume(throwing: failure) }
         else if let error { continuation.resume(throwing: error) }
         else { continuation.resume(returning: data) }

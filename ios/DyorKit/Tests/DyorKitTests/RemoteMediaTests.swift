@@ -79,6 +79,26 @@ final class RemoteMediaTests: XCTestCase {
         }
     }
 
+    func testFetchesCancelledAtAnyMomentAllEnd() async {
+        // A cancellation can land before the task is resumed, between the check and the resume, or mid-download:
+        // every one of these fetches must still answer, exactly once.
+        MediaStub.reply = (200, [:], Data(repeating: 1, count: 4096))
+        let session = MediaStub.session()
+        let tasks = (0..<200).map { i in
+            Task { () -> Data? in
+                for _ in 0..<(i % 4) { await Task.yield() }
+                return try? await RemoteMedia.fetch(URL(string: "https://cdn.example/\(i).png")!, session: session)
+            }
+        }
+        for (i, task) in tasks.enumerated() where i % 2 == 0 { task.cancel() }
+        let done = expectation(description: "every fetch answered")
+        Task {
+            for task in tasks { _ = await task.value }
+            done.fulfill()
+        }
+        await fulfillment(of: [done], timeout: 30)
+    }
+
     func testOnlyHTTPSIsFetched() async {
         await XCTAssertThrowsFailure(.insecureURL) { try await RemoteMedia.fetch(URL(string: "http://cdn.example/logo.png")!, session: MediaStub.session()) }
         XCTAssertTrue(MediaStub.requests.isEmpty)
@@ -128,8 +148,12 @@ final class MediaStub: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func stopLoading() {}
 
+    private static let lock = NSLock()
+
     override func startLoading() {
+        Self.lock.lock()
         Self.requests.append(request)
+        Self.lock.unlock()
         let (status, headers, body) = Self.reply
         var fields = headers
         if !Self.omitLength, fields["Content-Length"] == nil { fields["Content-Length"] = "\(body.count)" }
