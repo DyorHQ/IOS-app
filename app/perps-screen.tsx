@@ -23,6 +23,7 @@ const SIDES = ["Long", "Short"] as const;
 const PTABS = ["Positions", "Orders", "Collateral"] as const;
 const NO_TX: TxState = { status: "idle", label: "" };
 const TX_TAB = { positions: "Positions", orders: "Orders", collateral: "Collateral" } as const;
+const NOT_ENOUGH_MARGIN = "Not enough available margin for this order.";
 const px = (v: number, perp: PerpInfo) => v / 10 ** perp.priceDecimals;
 const sz = (v: number, perp: PerpInfo) => v / 10 ** perp.lotDecimals;
 
@@ -84,14 +85,15 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
   const marginNeeded = lev > 0 ? notional / lev : 0;
   const minSize = perp ? 1 / 10 ** perp.lotDecimals : 0;
   const valid = !!perp && lots !== null && lots > 0n && marginNeeded > 0 && marginNeeded <= available * 1.0001 && (type === "Market" || (limitPNS !== null && limitPNS > 0n));
-  // Why the order button is disabled, once there is something to explain.
+  // Why the order button is disabled, once there is something to explain. It is announced (LiveHint), so it must not
+  // change with every tick of the mark price: the margin figures that do are shown outside the live region.
   const orderIssue = !acct || !size.trim() ? null
     : !perp ? (accountError ? "Couldn't read this market from Perpl." : "Reading this market from Perpl…")
     : lots === null ? "Enter the size as a plain number, like 0.5."
     : lots === 0n ? `The smallest size is ${formatUnits(1n, perp.lotDecimals)} ${perp.symbol}.`
     : type === "Limit" && (limitPNS === null || limitPNS === 0n) ? "Enter a limit price."
     : refPrice <= 0 ? "Waiting for Perpl's mark price…"
-    : marginNeeded > available * 1.0001 ? `This needs $${fmtFixed(marginNeeded)} of margin; $${fmtFixed(available)} is available.`
+    : marginNeeded > available * 1.0001 ? NOT_ENOUGH_MARGIN
     : null;
   const setPct = (pct: number) => { if (!perp || refPrice <= 0) return; const s = ((available * pct) / 100) * lev / refPrice; setSize(formatUnits(BigInt(Math.floor(s * 10 ** perp.lotDecimals)), perp.lotDecimals)); };
   const refreshAll = () => { refresh(); orders.refresh(); collat.refresh(); };
@@ -197,6 +199,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
         <div className="between"><span>Est. liquidation</span><b>{perp && sizeNum > 0 && marginNeeded > 0 ? fmtUsd(Math.max(0, side === "Long" ? refPrice * (1 - (1 / lev - perp.maintMarginFrac)) : refPrice * (1 + (1 / lev - perp.maintMarginFrac)))) : "—"}</b></div>
         <TxStatus tx={txFor("order")} onDismiss={dismiss} />
         <LiveHint text={orderIssue} />
+        {orderIssue === NOT_ENOUGH_MARGIN && <p className="hint">This needs ${fmtFixed(marginNeeded)} of margin; ${fmtFixed(available)} is available.</p>}
         {acct ? <ActionButton ready={valid && !locked} busy={busy} label={`${side} ${market.symbol} · ${lev}×`} onClick={submit} className={`btn big ${side === "Long" ? "tone-up" : "tone-down"}`} requireLaunchpad={false} />
           : accountKnown || !account ? <ActionButton ready={true} busy={false} label="Deposit AUSD to start" onClick={() => setTab("Collateral")} className="btn big primary" requireLaunchpad={false} />
           : <ActionButton ready={false} busy={!accountError} label={accountError ? "Couldn't read your Perpl account" : "Reading your Perpl account…"} onClick={() => undefined} className="btn big primary" requireLaunchpad={false} />}
