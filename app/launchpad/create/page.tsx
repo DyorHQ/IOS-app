@@ -19,6 +19,9 @@ const EMPTY: Form = { name: "", symbol: "", description: "", logo: "", twitter: 
 const VENUES = [{ v: 0, label: "Uniswap v4" }, { v: 1, label: "Monday Trade" }] as const;
 const venueLabel = (v: number) => VENUES.find((x) => x.v === v)?.label ?? "Uniswap v4";
 const MAX_EXEMPTIONS = 32;
+/** The fields in the order they appear on the form; the last three are under Advanced options. */
+const FIELD_ORDER: (keyof Form)[] = ["logo", "name", "symbol", "description", "website", "pair", "devBuy", "creatorWallet", "creatorTax", "exemptions"];
+const ADVANCED_FIELDS: (keyof Form)[] = ["creatorWallet", "creatorTax", "exemptions"];
 
 const socialUrl = (value: string, base: string) => {
   const v = value.trim();
@@ -140,12 +143,6 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
     "aria-describedby": [help && `${ids}-${k}-help`, errorOf(k) && `${ids}-${k}-err`].filter(Boolean).join(" ") || undefined,
   });
   const errorText = (k: keyof Form) => { const e = errorOf(k); return e ? <span className="hint err" id={`${ids}-${k}-err`}>{e}</span> : null; };
-  // Why Launch is unavailable: the launchpad settings first, then (once the form has been touched) its first problem,
-  // in the order the form is filled.
-  const reason = !DEPLOYED ? null
-    : !protocol.data ? (protocol.error ? "Couldn't read the launchpad settings. Retrying…" : "Reading the launchpad settings…")
-    : !protocol.data.configEnabled ? "New launches are paused on the launchpad right now."
-    : touched || form !== EMPTY || Object.keys(left).length > 0 ? (Object.values(errors)[0] ?? null) : null;
   const creatorTaxBps = input?.creatorTaxBps ?? (Math.round(Number(form.creatorTax || "0") * 100) || 0);
   // The amount as read (a "," can be the decimal point), shown under the field so "1,000" can't silently mean 1.
   const devBuyRead = pair && form.devBuy.trim() ? parseAmount(form.devBuy, pair.decimals) : null;
@@ -163,6 +160,15 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
   const creatorWallet = form.creatorWallet.trim() || account || "";
   const creatorIsOther = !!account && isAddress(creatorWallet) && getAddress(creatorWallet) !== getAddress(account);
   const showAdvanced = advanced || !!(errorOf("creatorWallet") || errorOf("creatorTax") || errorOf("exemptions"));
+  // Why Launch is unavailable: the launchpad settings first, then (once the form has been touched) its first problem
+  // in the order the fields appear, saying so when that field is in the collapsed Advanced options. With no wallet
+  // connected there is no summary: the button asks for a wallet first (the creator wallet defaults to it).
+  const firstProblem = FIELD_ORDER.find((k) => errors[k]);
+  const reason = !DEPLOYED ? null
+    : !protocol.data ? (protocol.error ? "Couldn't read the launchpad settings. Retrying…" : "Reading the launchpad settings…")
+    : !protocol.data.configEnabled ? "New launches are paused on the launchpad right now."
+    : !account || !firstProblem || !(touched || form !== EMPTY || Object.keys(left).length > 0) ? null
+    : ADVANCED_FIELDS.includes(firstProblem) && !showAdvanced ? `In Advanced options: ${errors[firstProblem]}` : errors[firstProblem] ?? null;
 
   const submit = async () => {
     setTouched(true);
