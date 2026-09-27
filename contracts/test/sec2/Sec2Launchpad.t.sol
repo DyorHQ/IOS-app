@@ -197,6 +197,23 @@ contract Sec2LaunchpadTest is LaunchpadBase {
         assertEq(uint8(_venue(t)), uint8(Types.GraduationVenue.UniswapV4), "a blocking squat still falls back on the floor alone");
     }
 
+    /// The retry floor is a floor, not the whole budget: a squat that needs more than MONDAY_RETRY_GAS to realign
+    /// (1,100 dust ticks here, between the floor and one transaction) keeps its Monday venue only when the caller
+    /// sends more. At the minimum the fallback accepts it moves to Uniswap v4 (holders still get a locked pool); at
+    /// 29.9M, what the keeper and the apps send, it graduates on Monday. The floor stays at 20M so the fallback is
+    /// always callable under Monad's 30M per-transaction cap with room for calldata and smart-wallet overhead.
+    function test_LP1_squatAboveTheRetryFloor_keepsMondayOnlyWithNearFullGas() public {
+        address t = _squattedStuckLaunch(address(usd), 1_100, 211);
+        uint256 floor = factory.MONDAY_RETRY_GAS() + factory.GRADUATION_GAS() + factory.GRADUATION_GAS() / 32 + 50_000;
+        uint256 snap = vm.snapshotState();
+        factory.graduateFallback{gas: floor}(t);
+        assertEq(uint8(_venue(t)), uint8(Types.GraduationVenue.UniswapV4), "the minimum gas moves it to v4");
+        vm.revertToState(snap);
+        factory.graduateFallback{gas: 29_900_000}(t);
+        assertEq(uint8(_venue(t)), uint8(Types.GraduationVenue.Monday), "near-full gas keeps the creator's venue");
+        assertEq(uint8(_phase(t)), uint8(Types.Phase.PoolCreated));
+    }
+
     function test_LP1_heavySquat_minimumGasFallback_keepsMonday() public {
         address t = _squattedStuckLaunch(address(usd), 150, 209);
         factory.graduateFallback{gas: factory.MONDAY_RETRY_GAS() + factory.GRADUATION_GAS() + factory.GRADUATION_GAS() / 32 + 50_000}(t);

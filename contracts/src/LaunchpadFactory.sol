@@ -31,6 +31,9 @@ contract LaunchpadFactory {
     uint256 public constant GRADUATION_GAS = 2_000_000;
     /// @dev v2 (sec2): the least gas `graduateFallback` gives its Monday retry. A caller sending little gas could
     ///      otherwise starve a retry that more gas would have finished, and so move a realignable launch to Uniswap v4.
+    ///      It is a floor, not the retry's whole budget: a squat that needs more than this to realign stays on Monday
+    ///      only if the caller sends more (keepers and apps send ~29.9M). It is not higher so that the fallback stays
+    ///      callable under Monad's 30M per-transaction cap with room for calldata and smart-wallet overhead.
     uint256 public constant MONDAY_RETRY_GAS = 20_000_000;
     /// @dev v2 (sec2): how long a launch quoted in a Monday-only asset must have been stuck before anyone (not only the
     ///      owner) may take the Uniswap v4 fallback, so a dust-tick squat cannot freeze its holders until the owner acts.
@@ -471,8 +474,9 @@ contract LaunchpadFactory {
     ///         much was left for v4 depended on the caller's gas and on call depth.
     function graduateFallback(address token) external {
         // Both budgets are reserved up front; the 1/32 margin covers EIP-150's 63/64 rule on the capped retry. The
-        // retry floor is well above the automatic 2M budget, so only a squat that a near-full-transaction retry cannot
-        // realign falls back: sending little gas can no longer override the creator's (realignable) Monday venue.
+        // retry floor is well above the automatic 2M budget, so sending little gas can no longer move a squat that the
+        // floor realigns. A squat that needs more than the floor keeps its Monday venue only when the caller sends more
+        // (the retry gets everything above the v4 reserve); at the minimum it falls back to Uniswap v4.
         if (gasleft() < MONDAY_RETRY_GAS + GRADUATION_GAS + GRADUATION_GAS / 32) revert InsufficientGasForGraduation();
         // The creator's venue is honoured whenever the Monday graduation works now (e.g. the squat was realignable, or
         // an earlier attempt merely hit a transient failure). The retry gets all the gas above the reserved v4 budget

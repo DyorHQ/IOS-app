@@ -139,11 +139,28 @@ contract Sec2LiveV1Test is Test, Deployers {
             emit log_named_uint(ok ? "v1 graduateFallback OK   at gas" : "v1 graduateFallback FAIL at gas", limits[i]);
             if (limits[i] <= 8_000_000) assertFalse(ok, "too little gas reverts the whole call");
             if (limits[i] >= 16_000_000) {
-                assertTrue(ok, "the live fallback recovers with enough gas (the keeper sends 25M)");
+                assertTrue(ok, "the live fallback recovers with enough gas (the keeper sends 29.9M)");
                 assertEq(uint8(v1.getLaunchedToken(t).graduationVenue), uint8(Types.GraduationVenue.UniswapV4));
                 assertEq(uint8(v1.getLaunchedToken(t).phase), uint8(Types.Phase.PoolCreated));
             }
             vm.revertToState(snap);
+        }
+    }
+
+    /// Why the keeper sends 29.9M: the live fallback gives its Monday retry 63/64 of the gas, so a squat that ~29.9M
+    /// realigns (1,100 and 1,200 dust ticks here) graduates on Monday at 29.9M but moves to Uniswap v4 at 25M, and the
+    /// creator loses the venue. Measured on the EVM gas schedule with the mock pool, not on Monad's.
+    function test_v1_LP1_aSquatJustBelowOneTransaction_keepsMondayOnlyWithFullGas() public {
+        uint256[2] memory densities = [uint256(1_100), 1_200];
+        for (uint256 i = 0; i < densities.length; i++) {
+            (address t,) = _squattedStuck(address(usd), densities[i], 10 + i);
+            uint256 snap = vm.snapshotState();
+            v1.graduateFallback{gas: 25_000_000}(t);
+            assertEq(uint8(v1.getLaunchedToken(t).graduationVenue), uint8(Types.GraduationVenue.UniswapV4), "25M: moved to v4");
+            vm.revertToState(snap);
+            v1.graduateFallback{gas: 29_900_000}(t);
+            assertEq(uint8(v1.getLaunchedToken(t).graduationVenue), uint8(Types.GraduationVenue.Monday), "29.9M: the creator's venue");
+            assertEq(uint8(v1.getLaunchedToken(t).phase), uint8(Types.Phase.PoolCreated));
         }
     }
 
