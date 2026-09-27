@@ -346,33 +346,59 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
     assertEquals(await upload(db, A, "launch-media", moment, { upsert: true, etag: '"e1"' }), 200);
   });
 
-  await t.step("SB-2 / OH-6 / LR-4: edge_rate_gate budgets per subject and per network, never storing an IP", async () => {
+  await t.step("SB-2 / OH-6 / LR-4: edge_rate_gate budgets per subject, per network and overall, never storing an IP", async () => {
     const gate = (scope: string, subject: string | null, ip: string | null) =>
       as<{ r: { ok?: boolean; retryAfter?: number; limit?: string } }>(db, "service_role", null,
         "select public.edge_rate_gate($1, $2, $3) as r", [scope, subject, ip]).then((rows) => rows[0].r);
-    for (let i = 0; i < 10; i++) assertEquals((await gate("pin-media", A, "192.0.2.1")).ok, true);
+    // pin-media: 20 per wallet per 15 minutes.
+    for (let i = 0; i < 20; i++) assertEquals((await gate("pin-media", A, "192.0.2.1")).ok, true);
     const refused = await gate("pin-media", A, "192.0.2.1");
     assertEquals(refused.limit, "subject");
     assert(refused.retryAfter! > 800 && refused.retryAfter! <= 900, `retryAfter ${refused.retryAfter}`);
     // Refusals are not recorded, and scopes are separate budgets.
-    assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.edge_rate_events where scope = 'pin-media'")).n, 10);
+    assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.edge_rate_events where scope = 'pin-media'")).n, 20);
     assertEquals((await gate("aurora", A, "192.0.2.1")).ok, true);
-    // Network: 30 pin-media calls per 15 minutes, whichever wallets make them.
-    for (let i = 0; i < 20; i++) assertEquals((await gate("pin-media", "0x" + i.toString(16).padStart(40, "c"), "192.0.2.1")).ok, true);
+    // Network: 60 pin-media calls per 15 minutes, whichever wallets make them.
+    for (let i = 0; i < 40; i++) assertEquals((await gate("pin-media", wallet(0x100 + i), "192.0.2.1")).ok, true);
     assertEquals((await gate("pin-media", B, "192.0.2.1")).limit, "network");
     assertEquals((await gate("pin-media", B, "192.0.2.2")).ok, true);
     assertEquals((await gate("pin-media", B, null)).ok, true); // no network known: only the subject's limits apply
+    // Overall: 1,000 pins per day, whoever and wherever (a circuit breaker on the Pinata account).
+    const pins = (await one<{ n: number }>(db, "select count(*)::int as n from public.edge_rate_events where scope = 'pin-media'")).n;
+    await db.exec(`insert into public.edge_rate_events (scope, subject, created_at)
+      select 'pin-media', 'filler', now() - interval '1 hour' from generate_series(1, ${1000 - pins})`);
+    const spent = await gate("pin-media", wallet(0x999), "192.0.2.3");
+    assertEquals(spent.limit, "global");
+    assert(spent.retryAfter! > 82_000 && spent.retryAfter! <= 86_400, `retryAfter ${spent.retryAfter}`);
+    await db.exec(`delete from public.edge_rate_events where subject = 'filler'`);
+    assertEquals((await gate("pin-media", wallet(0x999), "192.0.2.3")).ok, true);
+    // aurora-status: 900 polls per wallet per 15 minutes (several bridges tracked at once).
+    for (let i = 0; i < 900; i++) assertEquals((await gate("aurora-status", B, `198.18.${i % 4}.1`)).ok, true);
+    assertEquals((await gate("aurora-status", B, "198.18.9.1")).limit, "subject");
     // Waitlist: 5 per network per 15 minutes.
-    for (let i = 0; i < 5; i++) assertEquals((await gate("waitlist", "all", "2001:db8:1:2::/64")).ok, true);
-    assertEquals((await gate("waitlist", "all", "2001:db8:1:2::/64")).limit, "network");
+    for (let i = 0; i < 5; i++) assertEquals((await gate("waitlist", "all", "2001:db8:1::/48")).ok, true);
+    assertEquals((await gate("waitlist", "all", "2001:db8:1::/48")).limit, "network");
     // Calls older than a window stop counting.
     await db.exec(`update public.edge_rate_events set created_at = now() - interval '16 minutes' where scope = 'waitlist'`);
-    assertEquals((await gate("waitlist", "all", "2001:db8:1:2::/64")).ok, true);
+    assertEquals((await gate("waitlist", "all", "2001:db8:1::/48")).ok, true);
+    // wallet-auth (first sign-ins only; no subject): 30 per network per 15 minutes, 200 per day.
+    for (let i = 0; i < 30; i++) assertEquals((await gate("wallet-auth", null, "203.0.113.77")).ok, true);
+    assertEquals((await gate("wallet-auth", null, "203.0.113.77")).limit, "network");
+    assertEquals((await gate("wallet-auth", null, "203.0.113.78")).ok, true);
+    await db.exec(`update public.edge_rate_events set created_at = now() - interval '16 minutes' where scope = 'wallet-auth'`);
+    await db.exec(`insert into public.edge_rate_events (scope, net, created_at)
+      select 'wallet-auth', encode(extensions.hmac(convert_to('dyorhq/edge-rate/v1/net:203.0.113.77', 'UTF8'), s.salt, 'sha256'), 'hex'),
+             now() - interval '2 hours'
+        from public.edge_rate_salt s, generate_series(1, 169)`);
+    assertEquals((await gate("wallet-auth", null, "203.0.113.77")).ok, true); // 30 + 169 + this = 200 today
+    assertEquals((await gate("wallet-auth", null, "203.0.113.77")).limit, "network");
     // No raw address is ever stored.
     const leaked = await one<{ n: number }>(db, `select count(*)::int as n from public.edge_rate_events
-      where coalesce(net, '') like '%192.0.2%' or coalesce(net, '') like '%2001:db8%' or net !~ '^[0-9a-f]{64}$'`);
+      where coalesce(net, '') like '%192.0.2%' or coalesce(net, '') like '%2001:db8%' or coalesce(net, '') like '%203.0.113%'
+         or net !~ '^[0-9a-f]{64}$'`);
     assertEquals(leaked.n, 0);
     await assertRejects(() => gate("anything", A, null), Error, "unknown rate-limit scope");
+    await assertRejects(() => db.exec(`insert into public.edge_rate_events (scope) values ('anything')`), Error, "edge_rate_events_scope_check");
     for (const role of ["anon", "authenticated"] as const) {
       await assertRejects(() => as(db, role, A, "select public.edge_rate_gate('aurora', null, null)"), Error, "permission denied");
     }
