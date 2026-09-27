@@ -71,10 +71,12 @@ enum PerplExchange {
         calldata(Signature.execOrders, [.array(descs.map { .tuple($0) }), .bool(revertOnFail)])
     }
 
+    /// Only Perpl's own `AccountNotFound(address)` revert means "no account" (RI-4). A revert with another error, or a
+    /// bare "execution reverted" from a node that drops the revert data, is a failed read: taken as "no account", it
+    /// would plan a second `createAccount` (and a MON → AUSD swap ahead of it) for an account that exists.
     static func isAccountNotFound(_ error: RPCError) -> Bool {
-        if let data = error.data, data.lowercased().hasPrefix(accountNotFoundSelector) { return true }
-        // EIP-1474 execution error, or a node that only words the revert.
-        return error.code == 3 || error.message.localizedCaseInsensitiveContains("revert")
+        guard let data = error.data else { return false }
+        return data.lowercased().hasPrefix(accountNotFoundSelector)
     }
 
     // MARK: Order descriptions
