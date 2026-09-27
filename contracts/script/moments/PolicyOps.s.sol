@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {Script, console2} from "forge-std/Script.sol";
+import {console2} from "forge-std/Script.sol";
+import {MainnetGuard} from "../lib/MainnetGuard.sol";
 import {MomentTypes} from "../../src/moments/interfaces/IMoments.sol";
 import {MomentsFactory} from "../../src/moments/MomentsFactory.sol";
 
@@ -9,16 +10,19 @@ import {MomentsFactory} from "../../src/moments/MomentsFactory.sol";
 ///         metadata-only by construction). Reads deployments/moments-<chainId>.json.
 ///
 ///           # propose a new policy for FUTURE Moments (48h timelock), e.g. raise the threshold to $1,000:
-///           THRESHOLD_USDC=1000000000 forge script script/moments/PolicyOps.s.sol:PolicyOps --rpc-url monad --broadcast --non-interactive --account owner --sig "proposePolicy()"
-///           forge script ... --sig "applyPolicy()"        # anyone, once the timelock has elapsed
-///           forge script ... --sig "cancelPolicy()"       # owner
+///           THRESHOLD_USDC=1000000000 script/mainnet.sh forge script script/moments/PolicyOps.s.sol:PolicyOps --rpc-url monad --broadcast --non-interactive --account owner --sig "proposePolicy()"
+///           forge script ... --sig "applyPolicy()"        # anyone, once the timelock has elapsed (v2: within 7 days)
+///           forge script ... --sig "cancelPolicy()"       # owner (v2: or the guardian)
 ///           PAUSED=true forge script ... --sig "setPaused()"
+///           PAUSED=true forge script ... --account guardian --sig "setGuardianPaused()"   # v2 factories only
 ///           BASE=https://dyorhq.fun/moments/ forge script ... --sig "setBase()"
 ///           forge script ... --sig "show()"         # read-only
-contract PolicyOps is Script {
+///         Sign with --account (a keystore) or --ledger: a raw private key is refused on Monad mainnet (SEC-1).
+contract PolicyOps is MainnetGuard {
     MomentsFactory factory;
 
     function _load() internal {
+        _refuseRawKeyOnMainnet();
         string memory json = vm.readFile(string.concat("deployments/moments-", vm.toString(block.chainid), ".json"));
         factory = MomentsFactory(vm.parseJsonAddress(json, ".factory"));
     }
@@ -80,6 +84,16 @@ contract PolicyOps is Script {
         factory.setPublishingPaused(paused);
         vm.stopBroadcast();
         console2.log("publishingPaused =", paused);
+    }
+
+    /// v2 factories only: the guardian's own pause (governance cannot lift it).
+    function setGuardianPaused() external {
+        _load();
+        bool paused = vm.envBool("PAUSED");
+        vm.startBroadcast();
+        factory.setGuardianPaused(paused);
+        vm.stopBroadcast();
+        console2.log("guardianPaused =", paused);
     }
 
     function setBase() external {

@@ -32,6 +32,14 @@
 # The deployer key comes from PRIVATE_KEY in the environment, else from ~/Hackathon/.env. It is handed to forge/cast
 # as --private-key and is never printed, logged or stored: every line of tool output is scrubbed of it.
 set -euo pipefail
+
+# RETIRED (security audit 2026-09-26, SEC-1). The relaunch it performed is done (2026-09-23), its source pin
+# (LP_SOURCE_COMMIT) no longer matches contracts/src, which now holds the undeployed v2 fixes, and by default it passed a
+# raw private key to forge/cast on the command line, which mainnet signing must never do again. The v2 deployment runs
+# through script/deploy-v2.sh (Ledger or keystore only). The rest of the file is kept for the record only.
+echo "relaunch-new-wallets.sh is retired: the relaunch is done; deploy v2 with script/deploy-v2.sh (--ledger or --account only)." >&2
+exit 1
+
 umask 077
 # forge/cast honour FOUNDRY_* (compiler config → different bytecode), ETH_* (gas, sender, keystore, rpc), CAST_*
 # (CAST_ASYNC returns before the receipt) and DAPP_* — none may leak in from the owner's shell.

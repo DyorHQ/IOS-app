@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {Script, console2} from "forge-std/Script.sol";
+import {console2} from "forge-std/Script.sol";
+import {MainnetGuard} from "../lib/MainnetGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
@@ -21,23 +22,30 @@ import {MomentHookAddress} from "../../src/moments/libraries/HookAddress.sol";
 ///
 ///         Dry run (no transactions):
 ///           forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad
-///         Real deployment, from the owner's wallet:
-///           forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad --broadcast --private-key $OWNER_KEY
-///         Every parameter below can be overridden with an environment variable of the same name.
-///         Writes deployments/moments-<chainId>.json (never touches the Launchpad's <chainId>.json).
-contract DeployMoments is Script {
+///         Real deployment, from the owner's hardware wallet or keystore (never a raw key): script/deploy-v2.sh
+///           (or: forge script ... --broadcast --ledger | --account <keystore>)
+///         Every parameter below can be overridden with an environment variable of the same name. On Monad mainnet
+///         (chain 143) GOVERNANCE, GUARDIAN, PLATFORM, TREASURY and THRESHOLD_USDC have no default (security audit
+///         2026-09-26, LP-7), and platform, treasury and guardian must differ from the deployer and each other.
+///         Writes deployments/dryrun-|pending-moments-<chainId>.json (see MainnetGuard._recordPath); it never
+///         touches a live record.
+contract DeployMoments is MainnetGuard {
     uint160 internal constant HOOK_FLAGS = Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
         | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
 
     function run() external {
+        _refuseRawKeyOnMainnet();
         address poolManager = vm.envOr("POOL_MANAGER", address(0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e));
         address usdc = vm.envOr("USDC", address(0x754704Bc059F8C67012fEd69BC8A327a5aafb603));
         address permit2 = vm.envOr("PERMIT2", address(0x000000000022D473030F116dDEE9F6B43aC78BA3));
-        address governance = vm.envOr("GOVERNANCE", msg.sender);
-        address platform = vm.envOr("PLATFORM", msg.sender);
-        address treasury = vm.envOr("TREASURY", msg.sender);
+        address governance = _addr("GOVERNANCE", msg.sender);
+        // v2 (sec2, MO-4): a second key that can cancel a pending policy and pause publishing; none if unset off-mainnet.
+        address guardian = _addr("GUARDIAN", address(0));
+        address platform = _addr("PLATFORM", msg.sender);
+        address treasury = _addr("TREASURY", msg.sender);
+        string memory base = vm.envOr("EXTERNAL_BASE_URI", string("https://dyorhq.fun/moments/"));
         MomentTypes.Policy memory policy = MomentTypes.Policy({
-            threshold: vm.envOr("THRESHOLD_USDC", uint256(10_000_000)), // $10 validation launch
+            threshold: _uint("THRESHOLD_USDC", 10_000_000), // off mainnet: the $10 validation launch
             minPrice: vm.envOr("MIN_PRICE_USDC", uint256(100_000)), // $0.10
             creatorBps: uint16(vm.envOr("CREATOR_BPS", uint256(2_000))),
             platformBps: uint16(vm.envOr("PLATFORM_BPS", uint256(500))),
@@ -52,6 +60,13 @@ contract DeployMoments is Script {
         require(poolManager.code.length > 0, "PoolManager has no code on this chain");
         require(usdc.code.length > 0, "USDC has no code on this chain");
         require(permit2.code.length > 0, "Permit2 has no code on this chain");
+        if (block.chainid == MONAD_MAINNET) {
+            require(
+                platform != msg.sender && treasury != msg.sender && guardian != msg.sender && platform != treasury && guardian != platform
+                    && guardian != treasury && guardian != governance,
+                "platform, treasury and guardian must be distinct from each other, the deployer and governance"
+            );
+        }
 
         vm.startBroadcast();
         MomentsFactory factory = new MomentsFactory(msg.sender, policy); // deployer governs only for the wiring
@@ -68,6 +83,8 @@ contract DeployMoments is Script {
         MomentFeeHook hook = new MomentFeeHook{salt: salt}(IPoolManager(poolManager), factory, IERC20(usdc));
         require(address(hook) == predictedHook, "hook landed on an unexpected address");
 
+        if (guardian != address(0)) factory.setGuardian(guardian); // only possible before setModules
+        if (bytes(base).length != 0) factory.setExternalBaseURI(base);
         factory.setModules(address(collect), address(vesting), address(graduation), address(locker), address(hook), address(buyback));
         if (governance != msg.sender) factory.transferGovernance(governance);
         vm.stopBroadcast();
@@ -76,6 +93,7 @@ contract DeployMoments is Script {
         vm.serializeUint(json, "chainId", block.chainid);
         vm.serializeAddress(json, "deployer", msg.sender);
         vm.serializeAddress(json, "governance", governance);
+        vm.serializeAddress(json, "guardian", guardian);
         vm.serializeAddress(json, "platform", platform);
         vm.serializeAddress(json, "treasury", treasury);
         vm.serializeAddress(json, "poolManager", poolManager);
@@ -95,7 +113,7 @@ contract DeployMoments is Script {
         vm.serializeUint(json, "expiryCreatorBps", policy.expiryCreatorBps);
         string memory out = vm.serializeUint(json, "royaltyBps", policy.royaltyBps);
         vm.createDir("deployments", true);
-        string memory path = string.concat("deployments/moments-", vm.toString(block.chainid), ".json");
+        string memory path = _recordPath(string.concat("moments-", vm.toString(block.chainid), ".json"));
         vm.writeJson(out, path);
         console2.log("factory   ", address(factory));
         console2.log("collect   ", address(collect));

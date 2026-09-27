@@ -1,103 +1,100 @@
-# Deploying the DyorHQ launchpad to Monad mainnet
+# Deploying the DyorHQ contracts to Monad mainnet
 
-Nothing here is deployed yet. The wallet that runs `Deploy` becomes the owner of the
-factory, which controls every policy knob (fees, launch templates, approved pairing
-assets, whitelist, takeovers, the stuck-launch valve). Keep that key in a hardware
-wallet or a multisig-controlled signer.
+What is live today is listed in `contracts/deployments/*.json`: the Launchpad factory `0x6B1C…` (2026-09-23) and
+Moments cohort 3 (`moments-143.json`), plus retired stacks that still hold value. `contracts/src` holds the **v2**
+fixes, which are **not deployed** (`contracts/CHANGELOG-v2.md`). The wallet that runs a deploy becomes the owner of
+the new Launchpad factory and, until it hands over, the governance of the new Moments factory. Those keys control
+every policy knob, so:
+
+- **Sign only with a hardware wallet (`--ledger`) or an encrypted Foundry keystore (`--account <name>`).** Never a
+  raw private key, never a key in a `.env` file (security audit 2026-09-26, SEC-1). The scripts refuse
+  `PRIVATE_KEY` and similar variables on chain 143, and `script/mainnet.sh` refuses `--private-key`, `--mnemonic` and
+  `--interactive` on the command line. `ALLOW_RAW_KEY_143=1` overrides both; do not use it for real funds.
+- Prefer a Safe for ownership and governance (`OWNER=` / `GOVERNANCE=` below), and a separate guardian key for Moments.
 
 ## Prerequisites
 
 - Foundry 1.7+ (`forge --version`), submodules checked out: `git submodule update --init --recursive`
-- Every contract fits the 24 KB EIP-170 limit (`forge build --sizes`), so no size overrides are needed
-  even though Monad allows 128 KB.
-- MON on Monad mainnet (chain id 143) for gas. Monad charges gas by the **limit** you set,
-  not by what is used, so keep `--gas-estimate-multiplier` modest.
-- `forge test` green from `contracts/`.
+- `LaunchpadFactory` is above Ethereum's 24 KB EIP-170 limit; Monad allows 128 KB, and `foundry.toml` sets
+  `code_size_limit` accordingly. Ignore forge's "above the contract size limit" lint.
+- MON on Monad mainnet (chain id 143) for gas. Monad charges gas by the **limit** you set, not by what is used, so
+  keep `--gas-estimate-multiplier` modest.
+- `forge test --code-size-limit 100000000` green from `contracts/` (see `CHANGELOG-v2.md` for the fork suites).
 
-## Dry run
-
-```bash
-cd contracts
-forge script script/Deploy.s.sol:Deploy --rpc-url monad
-```
-
-This simulates every transaction, mines the hook salt, and prints the addresses the
-real run will produce (CREATE2 makes the hook address deterministic for a given salt).
-
-## Deploy
+## The v2 deployment: `script/deploy-v2.sh`
 
 ```bash
 cd contracts
-export PROTOCOL_FEE_RECIPIENT=0x...      # TREASURY: launch fees + the protocol share of curve fees (defaults to the deployer)
-export FEES=0x...                        # Monday LP swap-fee recipient (MondayFeeVault); must differ from owner and treasury
-export LAUNCH_FEE_WEI=5000000000000000000 # 5 MON per launch (the script's default is 1 MON)
-export MON_USD_E8=...                    # live MON price × 1e8 (sets MON's phantom reserve from LAUNCH_FDV_USD, default $2,000)
-export ABIL_USD_E8=...                   # live aBIL price × 1e8 (Monday aBIL/USDC 0.3% pool 0xb8700E0D0Df2B0b09A1374FbCdCC85E2E14F7898)
-forge script script/Deploy.s.sol:Deploy --rpc-url https://rpc3.monad.xyz --sender $OWNER            # dry run first
-forge script script/Deploy.s.sol:Deploy --rpc-url https://rpc3.monad.xyz --broadcast --private-key $OWNER_KEY
+export GOV=0x…            # the signer: your Ledger / keystore address (owner of the new stacks unless OWNER/GOVERNANCE)
+export TREASURY=0x…       # launch fees + the protocol share of curve/pool fees; the Moments treasury (expiry share)
+export FEES=0x…           # Monday LP swap fees (MondayFeeVault) and the Moments platform share
+export GUARDIAN=0x…       # Moments guardian: a different key that can cancel a pending policy and pause publishing
+export LAUNCH_FEE_WEI=5000000000000000000   # 5 MON per launch, as on the live stack
+export THRESHOLD_USDC=771428571             # Moments graduation threshold ($2,000 FDV, as cohort 3)
+# optional: OWNER=0x<Safe> GOVERNANCE=0x<Safe>  (two-step: the Safe calls acceptOwnership() / acceptGovernance())
+DRY_RUN=1 script/deploy-v2.sh            # pre-flight, live prices, both simulations; sends nothing
+LEDGER=1 script/deploy-v2.sh             # or: ACCOUNT=<keystore name> script/deploy-v2.sh
 ```
 
-The dry run needs no key: it simulates every transaction from `--sender`, prints the addresses the real run will
-produce, the gas total, and writes `deployments/143.json` — restore that file (`git checkout -- deployments/143.json`)
-if you are not broadcasting right away. Ignore forge's "above the contract size limit (… > 24576)" lint at the
-end: Monad's limit is 128 KB and `foundry.toml` sets `code_size_limit` accordingly.
+It refuses raw keys, checks chain 143 on two RPCs, the roles (four distinct addresses) and the balance, reads live
+MON and aBIL prices from two sources (`relaunch/prices.py`, 2% agreement), then for each stack simulates, asks, and
+broadcasts. `Deploy.s.sol` seals the Launchpad modules in the same run (`sealModules()`), so no module can be swapped
+before the first launch. Rehearse it first on a fork (`FORK=1`, below).
 
-The script deploys, in order: `LaunchpadFactory`, `FeeEscrow`, `HolderFeeSharing`, `LaunchLocker`, the
-`MemeHook` at a mined CREATE2 address, `GraduationExecutor`, `LaunchAndBuyRouter`, `LaunchDeployer` (which
-creates its `CurveDeployer`), then wires them with `setModules`, adds launch config 0 and approves MON as a
-pairing asset. About 24 M gas in total; Monad charges the gas **limit**, so budget roughly 5 MON at 200 gwei.
+Records: a dry run writes `deployments/dryrun-143.json` / `dryrun-moments-143.json`; a broadcast on chain 143 writes
+`deployments/pending-143.json` / `pending-moments-143.json`. Both kinds are git-ignored. **No script writes
+`143.json` or `moments-143.json`**: the keepers and `npm run sync:deployment` trust those files, and a dry run or fork
+rehearsal used to overwrite them. After the broadcast:
 
-Addresses are written to `contracts/deployments/143.json` (commit it). Then, from the repo root:
+1. Verify every new contract on Sourcify: `RECORD=deployments/pending-143.json script/verify-143.sh` and
+   `RECORD=deployments/pending-moments-143.json script/moments/verify-moments-143.sh`.
+2. If `OWNER` / `GOVERNANCE` is a Safe, accept ownership / governance from it.
+3. Retire the old stacks: on `0x6B1C…` `setWhitelistEnabled(true)` + `setLaunchConfigEnabled(0, false)`; on cohort 3
+   `setPublishingPaused(true)`.
+4. Promote the records: `git mv deployments/143.json deployments/143-retired-0x6B1C.json`, then
+   `mv deployments/pending-143.json deployments/143.json` (the same for Moments, keeping cohort 3 as
+   `moments-143-cohort3.json`), update `LIVE_FACTORIES` and the file lists in `keepers/lib/deployments.mjs`, and commit.
+5. Rewire the apps (`npm run sync:deployment`, `python3 scripts/dev/check-launchpad-addresses.py`, the iOS
+   constants, `app/lib/moments-deployment.json`) for the v2 ABI changes listed in `CHANGELOG-v2.md`.
+
+Other knobs (optional): `PROTOCOL_FEE_SHARE_BPS` (5000 = half of the 1% base fee), `MAX_CREATOR_TAX_BPS` (1000),
+`SUPPLY`, `CURVE_FEE_BPS`, `POOL_FEE_BPS`, `TICK_SPACING`, `POOL_MANAGER`, `EXTERNAL_BASE_URI` (Moments link base,
+default `https://dyorhq.fun/moments/`).
+
+## Rehearse on a local fork first
 
 ```bash
-npm run sync:deployment                       # app/lib/deployment.json + the iOS constant (LaunchpadAddresses.monadMainnet)
-python3 scripts/dev/check-launchpad-addresses.py   # every copy agrees with contracts/deployments/143.json
+anvil --fork-url https://rpc3.monad.xyz --no-rate-limit --auto-impersonate --disable-code-size-limit --port 8620   # terminal 1
+cd contracts && FORK=1 RPC=http://127.0.0.1:8620 YES=1 GOV=… TREASURY=… FEES=… GUARDIAN=… \
+  LAUNCH_FEE_WEI=… THRESHOLD_USDC=… script/deploy-v2.sh
 ```
 
-Then rebuild both apps (`vinext deploy` for the web; `xcodegen generate` + an archive for iOS) and retire the previous
-factory (`setWhitelistEnabled(true)`, `setLaunchConfigEnabled(0, false)`) so nothing new launches on it.
+`FORK=1` signs with `--unlocked` as `GOV` on the fork and restores `deployments/`, `broadcast/` and `cache/` on
+exit. `--disable-code-size-limit` matters: anvil enforces Ethereum's 24 KB limit by default, and `LaunchpadFactory` is
+bigger (Monad allows 128 KB). A fork of Monad also
+reports chain 143. Use fresh addresses for anything you sign with on a fork: anvil's default accounts carry EIP-7702
+code on Monad mainnet.
 
-## Verify on Monadscan
+## Ops on a live factory
 
-Monadscan uses the Etherscan v2 API (chain id 143). With an Etherscan API key:
-
-```bash
-forge verify-contract --chain 143 --verifier etherscan --etherscan-api-key $ETHERSCAN_KEY \
-  --constructor-args $(cast abi-encode "constructor(address,address,uint256,uint16,uint16)" 0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e $PROTOCOL_FEE_RECIPIENT 1000000000000000000 5000 1000) \
-  $FACTORY src/LaunchpadFactory.sol:LaunchpadFactory
-```
-
-Repeat for the other contracts (constructor arguments are in `broadcast/Deploy.s.sol/143/run-latest.json`), or
-add `--verify --verifier etherscan --etherscan-api-key $ETHERSCAN_KEY` to the deploy command to verify as you go.
-
-Other knobs (all optional): `PROTOCOL_FEE_SHARE_BPS` (5000 = half of the 1% base fee),
-`MAX_CREATOR_TAX_BPS` (1000 = creators may add up to 10%), `SUPPLY`, `CURVE_FEE_BPS`,
-`POOL_FEE_BPS`, `TICK_SPACING`, `POOL_MANAGER`.
-
-## Add a custom pairing asset (tokenized stock, stablecoin)
+Every forge/cast call that can sign goes through `script/mainnet.sh`:
 
 ```bash
 FACTORY=0x... PAIR_TOKEN=0x... PHANTOM_QUOTE=1000000000 GRADUATION_THRESHOLD=4000000000 \
-forge script script/AddPairToken.s.sol:AddPairToken --rpc-url monad --broadcast --private-key $OWNER_KEY
+script/mainnet.sh forge script script/AddPairToken.s.sol:AddPairToken --rpc-url monad --broadcast --ledger
+script/mainnet.sh cast send 0x6B1C… 'setWhitelistEnabled(bool)' true --rpc-url https://rpc1.monad.xyz --account owner
 ```
 
-Amounts are in the pairing token's own units (the example is 1,000 / 4,000 of a 6-decimal token).
+Moments governance operations are in `script/moments/PolicyOps.s.sol` (propose/apply/cancel a policy, pause, the link
+base; on v2 factories also the guardian's pause).
 
-## Rehearse on a local fork first (optional, recommended)
+## Verify
 
-```bash
-anvil --fork-url https://rpc.monad.xyz --chain-id 143          # terminal 1
-cd contracts && forge script script/Deploy.s.sol:Deploy --rpc-url http://127.0.0.1:8545 --broadcast \
-  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80   # anvil's first key
-cd .. && node scripts/dev/seed-fork.mjs contracts/deployments/143.json              # launches, buys, graduates
-```
+Contracts are verified on Sourcify (`script/verify-143.sh`, `script/moments/verify-moments-143.sh`; Monad's instance
+is https://sourcify-api-monad.blockvision.org). `forge verify-contract --verifier sourcify` also works per contract;
+constructor arguments are in `broadcast/<script>/143/run-latest.json`.
 
-Delete `contracts/deployments/143.json` afterwards so the fork addresses are never mistaken for mainnet ones.
+## Retired scripts
 
-## After deployment
-
-- `factory.setWhitelistEnabled(true)` plus `setWhitelisted([...], true)` if launches should start
-  closed, as Pons currently runs.
-- `factory.transferOwnership(multisig)` then `acceptOwnership()` from the multisig once you are done configuring.
-- The hook, locker, escrow and holder-fee-sharing contracts are fixed for life once the first token
-  launches; the graduation executor and router can still be swapped.
+`relaunch/relaunch-new-wallets.sh` (the 2026-09-23 relaunch) and `relaunch/rehearse.sh`, `moments/redeploy-cohort2.sh`
+and `DeployFeeVault.s.sol` exit at once. They are kept for the record.
