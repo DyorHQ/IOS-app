@@ -53,30 +53,36 @@ public actor NewsService {
     }
 
     /// The latest headlines across every source, newest first. Feeds are fetched concurrently; one failing feed
-    /// never hides the others. Results are cached for two minutes.
+    /// never hides the others. A complete answer is cached for two minutes; one that a feed failed (or a cancellation
+    /// cut short) is returned but not cached, so the next call asks again instead of serving the gap as fresh
+    /// (security audit 2026-09-26, RS-10).
     public func latest(limit: Int = 120, force: Bool = false) async -> [NewsArticle] {
         if !force, let cache, Date().timeIntervalSince(cache.at) < 120 { return Array(cache.articles.prefix(limit)) }
-        let articles = await withTaskGroup(of: [NewsArticle].self) { group in
+        let (articles, complete) = await withTaskGroup(of: [NewsArticle]?.self) { group in
             for source in sources {
                 group.addTask { await self.fetch(source) }
             }
             var all: [NewsArticle] = []
-            for await batch in group { all.append(contentsOf: batch) }
-            return all
+            var complete = true
+            for await batch in group {
+                if let batch { all.append(contentsOf: batch) } else { complete = false }
+            }
+            return (all, complete)
         }
         var seen = Set<String>()
         let merged = articles
             .filter { seen.insert($0.id).inserted }
             .sorted { ($0.published ?? .distantPast) > ($1.published ?? .distantPast) }
-        cache = (Date(), merged)
+        if complete, !Task.isCancelled { cache = (Date(), merged) }
         return Array(merged.prefix(limit))
     }
 
-    private func fetch(_ source: NewsSource) async -> [NewsArticle] {
+    /// One feed's articles, or nil when it couldn't be read.
+    private func fetch(_ source: NewsSource) async -> [NewsArticle]? {
         var request = URLRequest(url: source.feed)
         request.timeoutInterval = 15
         request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
-        guard let (data, response) = try? await session.data(for: request), (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true else { return [] }
+        guard let (data, response) = try? await session.data(for: request), (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true else { return nil }
         return RSSParser.parse(data, source: source.name)
     }
 }

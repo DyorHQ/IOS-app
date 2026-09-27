@@ -308,6 +308,11 @@ final class PortfolioModel {
         if loadedFor != address { reset() }
         loading = true
         defer { loading = false }
+        // Nothing is published until every read is back, and a failed read never replaces what the last good one
+        // showed: an interrupted log scan comes back empty rather than failing, so a load cancelled part-way (the
+        // screen went away) publishes nothing, and a load with a failed read keeps the earlier data for that part, says
+        // so, and isn't cached as fresh (security audit 2026-09-26, RS-10). `reset` above already cleared another
+        // wallet's data, so what is kept is always this wallet's.
 
         // Reference data first: the launch list (curves + pair assets), the Moments list (coins + pools), the token universe.
         // Launches on retired factories are history too: the coins and trades stay part of the wallet's record.
@@ -315,12 +320,11 @@ final class PortfolioModel {
         async let momentsTask = env.moments.moments(limit: 200)
         // Moments of the retired cohorts are history too (their collects, claims and withdrawals); keyed by (factory, id).
         async let retiredMomentsTask = PastMomentsModel.allMoments(env: env)
-        let launches = (try? await launchesTask) ?? []
-        let moments = ((try? await momentsTask) ?? []) + (await retiredMomentsTask)
-        launchesByCurve = Dictionary(launches.map { ($0.curve, $0) }, uniquingKeysWith: { first, _ in first })
-        launchesByToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
-        momentsByCoin = Dictionary(moments.map { ($0.moment.coin, $0) }, uniquingKeysWith: { first, _ in first })
-        momentsByKey = Dictionary(moments.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        let fetchedLaunches = try? await launchesTask
+        let fetchedMoments = try? await momentsTask
+        let retiredMoments = await retiredMomentsTask
+        let launches = fetchedLaunches ?? Array(launchesByCurve.values)
+        let moments = fetchedMoments.map { $0 + retiredMoments } ?? Array(momentsByKey.values)
 
         var universe = KnownTokenStore.universe(owner: address)
         universe += launches.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
@@ -329,27 +333,44 @@ final class PortfolioModel {
             guard !pair.isZero, !universe.contains(where: { $0.address == pair }), let launch = launches.first(where: { $0.pairToken == pair }) else { return nil }
             return Token(address: pair, symbol: launch.pair.symbol, name: launch.pair.symbol, decimals: launch.pair.decimals)
         }
-        tokens = Dictionary(universe.map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
+        let tokenMap = Dictionary(universe.map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
+        let curves = Set(launches.map(\.curve))
+        let momentsCoins = Set(moments.map(\.moment.coin))
 
         // Histories, all at once.
-        let decimals = tokens.mapValues(\.decimals)
+        let decimals = tokenMap.mapValues(\.decimals)
         // Whole-history scans: rpc1 answers a wallet's complete transfer history in one call, so every section counts
-        // everything the wallet ever did, not the last 30 days.
-        let head = await env.swapHistory.head() ?? 0
-        async let swapsTask = env.swapHistory.swaps(wallet: address, fromBlock: 0, toBlock: head, decimals: decimals, limit: 2000)
-        async let launchTask = env.launchpad.walletHistory(wallet: address, lookbackBlocks: UInt64.max, curves: Set(launchesByCurve.keys))
+        // everything the wallet ever did, not the last 30 days. No head means the chain can't be read right now, and
+        // the scans below would come back empty, not failed.
+        let head = await env.swapHistory.head()
+        async let swapsTask = env.swapHistory.swaps(wallet: address, fromBlock: 0, toBlock: head ?? 0, decimals: decimals, limit: 2000)
+        async let launchTask = env.launchpad.walletHistory(wallet: address, lookbackBlocks: UInt64.max, curves: curves)
         async let momentsHistoryTask = env.moments.history(account: address)
         async let retiredHistoryTask = Self.retiredHistory(env: env, address: address)
-        let priceable = universe.filter { !$0.isLaunchpad && momentsByCoin[$0.address] == nil }
+        let priceable = universe.filter { !$0.isLaunchpad && !momentsCoins.contains($0.address) }
         async let pricesTask = env.prices.prices(for: priceable)
         async let perpsTask = loadPerps(env: env, key: perplKey)
 
-        swaps = await swapsTask
-        launchHistory = await launchTask
-        momentsHistory = MomentsAccountHistory.merged([await momentsHistoryTask] + (await retiredHistoryTask))
-        Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio scans for \(address.short, privacy: .public): head \(head) swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count)")
-        var priced: [Address: Double] = [:]
-        if let map = try? await pricesTask { for (address, info) in map { priced[address] = info.usd } }
+        let scannedSwaps = await swapsTask
+        let scannedLaunch = await launchTask
+        let scannedMoments = MomentsAccountHistory.merged([await momentsHistoryTask] + (await retiredHistoryTask))
+        let fetchedPrices = try? await pricesTask
+        let perps = await perpsTask
+        guard !Task.isCancelled else { return }
+
+        launchesByCurve = Dictionary(launches.map { ($0.curve, $0) }, uniquingKeysWith: { first, _ in first })
+        launchesByToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
+        momentsByCoin = Dictionary(moments.map { ($0.moment.coin, $0) }, uniquingKeysWith: { first, _ in first })
+        momentsByKey = Dictionary(moments.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        tokens = tokenMap
+        if head != nil {
+            swaps = scannedSwaps
+            launchHistory = scannedLaunch
+            momentsHistory = scannedMoments
+        }
+        Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio scans for \(address.short, privacy: .public): head \(head ?? 0) swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count)")
+        var priced: [Address: Double] = fetchedPrices == nil ? prices : [:]
+        if let map = fetchedPrices { for (address, info) in map { priced[address] = info.usd } }
         for stable in Self.stables { priced[stable] = 1 }
         // Launch coins at their curve price; Moment coins at their pool price.
         for launch in launches {
@@ -357,15 +378,19 @@ final class PortfolioModel {
         }
         for info in moments { if let pool = info.pool { priced[info.moment.coin] = pool.usdcPerCoin } }
         prices = priced
-        let perps = await perpsTask
         fills = perps.fills
         closed = perps.closed
         perpsNote = perps.note
 
         loadedFor = address
         hasLoaded = true
-        updatedAt = .now
-        error = nil
+        if fetchedLaunches == nil || fetchedMoments == nil || head == nil || fetchedPrices == nil {
+            error = "Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh."
+            updatedAt = nil
+        } else {
+            error = nil
+            updatedAt = .now
+        }
     }
 
     private func reset() {

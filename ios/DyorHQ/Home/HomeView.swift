@@ -562,6 +562,8 @@ final class HomeModel {
     /// Tokens the wallet was sent rather than chose (`KnownTokenStore.unverified`): marked in holdings, and never
     /// ranked in Top Tokens.
     private(set) var unverified: Set<Address> = []
+    /// Whose data the model holds.
+    private var loadedFor: Address?
 
     var holdings: [MarketRow] { rows.filter { $0.balance > 0 }.sorted { ($0.value ?? 0) > ($1.value ?? 0) } }
 
@@ -638,6 +640,11 @@ final class HomeModel {
     func load(env: AppEnvironment, address: Address?) async {
         loading = true
         defer { loading = false }
+        // Another account: nothing of the previous one's may stay on screen, even when a read below fails.
+        if address != loadedFor {
+            rows = []; launchHoldings = []; positions = []; perpEquity = nil; momentRows = []; updatedAt = nil
+            loadedFor = address
+        }
         // The curated list plus anything the wallet has acquired (swapped into, launched), so held tokens like an
         // RWA or a launched coin still show up with a balance and a price.
         let tokens = KnownTokenStore.universe(owner: address).filter { $0.symbol != "WMON" }
@@ -647,43 +654,59 @@ final class HomeModel {
         async let launches = env.launchpad.allLaunches(limit: 30)
         async let perps = loadPerps(env: env, address: address)
         async let moments = loadMoments(env: env, address: address)
-        var priceMap: [Address: PriceInfo] = [:]
-        do {
-            priceMap = try await prices
-            let balanceMap = await balances
+        var priceMap: [Address: PriceInfo]?
+        var priceError: Error?
+        do { priceMap = try await prices } catch { priceError = error }
+        let balanceMap = await balances
+        let launchList = try? await launches
+        let perpState = await perps
+        let momentState = await moments
+        let holdings = await loadLaunchHoldings(env: env, address: address, launches: launchList ?? self.launches, priceMap: priceMap ?? [:])
+        // A read that failed keeps what the last good one showed, and says so; a load cancelled part-way (the screen
+        // went away, the account changed) publishes nothing (security audit 2026-09-26, RS-10).
+        guard !Task.isCancelled, address == loadedFor else { return }
+        if let priceMap {
+            let previous = Dictionary(rows.map { ($0.id, $0.balance) }, uniquingKeysWith: { first, _ in first })
             rows = tokens.map { token in
-                MarketRow(token: token, usd: priceMap[token.address]?.usd, change24h: priceMap[token.address]?.change24h, balance: balanceMap[token.address] ?? 0)
+                MarketRow(token: token, usd: priceMap[token.address]?.usd, change24h: priceMap[token.address]?.change24h,
+                          balance: balanceMap?[token.address] ?? previous[token.address] ?? 0)
             }
+        }
+        if let priceError {
+            error = describe(priceError)
+        } else if balanceMap == nil {
+            error = "Your balances couldn't be read just now — showing the last ones read."
+        } else {
             error = nil
             updatedAt = .now
-        } catch {
-            self.error = describe(error)
         }
-        let launchList = (try? await launches) ?? []
-        self.launches = launchList
-        launchHoldings = await loadLaunchHoldings(env: env, address: address, launches: launchList, priceMap: priceMap)
-        let perpState = await perps
-        positions = perpState.positions
-        perpEquity = perpState.equity
-        momentRows = await moments
+        if let launchList { self.launches = launchList }
+        if let holdings { launchHoldings = holdings }
+        if let perpState {
+            positions = perpState.positions
+            perpEquity = perpState.equity
+        }
+        if let momentState { momentRows = momentState }
     }
 
-    private func loadMoments(env: AppEnvironment, address: Address?) async -> [MomentPortfolioRow] {
+    /// The wallet's Moments stakes, or nil when they couldn't be read.
+    private func loadMoments(env: AppEnvironment, address: Address?) async -> [MomentPortfolioRow]? {
         guard let address, env.config.moments.isDeployed else { return [] }
-        return (try? await env.moments.portfolio(account: address, limit: 100))?.rows ?? []
+        return (try? await env.moments.portfolio(account: address, limit: 100))?.rows
     }
 
-    private func walletBalances(env: AppEnvironment, address: Address?, tokens: [Token]) async -> [Address: BigUInt] {
+    /// The wallet's balances of `tokens`, or nil when they couldn't be read (never read as zero).
+    private func walletBalances(env: AppEnvironment, address: Address?, tokens: [Token]) async -> [Address: BigUInt]? {
         guard let address else { return [:] }
-        return (try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
+        return try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall)
     }
 
     /// The wallet's launch-coin balances (and coins it created), each valued at the curve price × the pair asset's
-    /// USD price, in one balanceOf multicall over the recent launches.
-    private func loadLaunchHoldings(env: AppEnvironment, address: Address?, launches: [Launch], priceMap: [Address: PriceInfo]) async -> [LaunchHolding] {
+    /// USD price, in one balanceOf multicall over the recent launches; nil when the balances couldn't be read.
+    private func loadLaunchHoldings(env: AppEnvironment, address: Address?, launches: [Launch], priceMap: [Address: PriceInfo]) async -> [LaunchHolding]? {
         guard let address, !launches.isEmpty else { return [] }
         let tokens = launches.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
-        let balances = (try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
+        guard let balances = try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall) else { return nil }
         return launches.compactMap { launch -> LaunchHolding? in
             let balance = balances[launch.token] ?? 0
             let created = launch.deployer == address
@@ -695,10 +718,13 @@ final class HomeModel {
         .sorted { $0.valueUSD > $1.valueUSD }
     }
 
-    private func loadPerps(env: AppEnvironment, address: Address?) async -> (positions: [PerpPosition], equity: Double?) {
-        guard let address, let account = try? await env.perpl.account(address) else { return ([], nil) }
-        let markets = (try? await env.perpl.markets()) ?? []
-        let positions = (try? await env.perpl.positions(account, markets: markets)) ?? []
+    /// The Perpl account's positions and equity: none without an account, nil when a read failed.
+    private func loadPerps(env: AppEnvironment, address: Address?) async -> (positions: [PerpPosition], equity: Double?)? {
+        guard let address else { return ([], nil) }
+        let found: PerpAccount?
+        do { found = try await env.perpl.account(address) } catch { return nil }
+        guard let account = found else { return ([], nil) }
+        guard let markets = try? await env.perpl.markets(), let positions = try? await env.perpl.positions(account, markets: markets) else { return nil }
         let equity = Amount.units(account.balance, decimals: Perpl.collateralDecimals) + positions.reduce(0) { $0 + $1.unrealized }
         return (positions, equity)
     }

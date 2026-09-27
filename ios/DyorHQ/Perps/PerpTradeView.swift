@@ -24,6 +24,10 @@ struct PerpTradeView: View {
     @State private var candles: [PerpCandle] = []
     @State private var resolution = 3600
     @State private var loadingCandles = true
+    /// The timeframe `candles` belong to: another timeframe's candles are never shown under this one's name (RS-10).
+    @State private var candlesResolution: Int?
+    /// The last candle read failed: the chart says so rather than "no history".
+    @State private var candlesFailed = false
     @State private var viewMode: ViewMode = .trade
     @State private var chartDataTab: ChartDataTab = .book
     @State private var bottomTab: BottomTab = .positions
@@ -280,7 +284,17 @@ struct PerpTradeView: View {
                 .overlay {
                     if candles.isEmpty {
                         if loadingCandles { ProgressView() }
+                        else if candlesFailed { ContentUnavailableView("Chart Unavailable", systemImage: "wifi.exclamationmark", description: Text("Perpl's candles couldn't be loaded. Retrying every 15 seconds.")) }
                         else { ContentUnavailableView("No Candles", systemImage: "chart.bar.xaxis", description: Text("Perpl has no candle history for this market yet.")) }
+                    }
+                }
+                .overlay(alignment: .bottomLeading) {
+                    if candlesFailed, !candles.isEmpty {
+                        Label("Not updating", systemImage: "wifi.exclamationmark")
+                            .font(.caption2.weight(.medium)).foregroundStyle(Color.attention)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(.regularMaterial, in: Capsule())
+                            .padding(8)
                     }
                 }
             timeframePicker
@@ -300,7 +314,7 @@ struct PerpTradeView: View {
 
     /// The chart in words: the period, the last price, the change over the period, and its range.
     private var chartSummary: String {
-        guard let first = candles.first, let last = candles.last else { return loadingCandles ? "Loading" : "No candle history yet" }
+        guard let first = candles.first, let last = candles.last else { return loadingCandles ? "Loading" : candlesFailed ? "Couldn't load the chart" : "No candle history yet" }
         let span = Self.resolutions.first { $0.0 == resolution }?.1 ?? ""
         let high = candles.map(\.high).max() ?? last.high
         let low = candles.map(\.low).min() ?? last.low
@@ -1174,13 +1188,25 @@ struct PerpTradeView: View {
         return f.string(from: value as NSNumber) ?? String(value)
     }
 
+    /// Reads the current timeframe's candles. The answer only counts for the timeframe it was asked for; a failed read
+    /// keeps that timeframe's last candles (marked not updating) but never another timeframe's (RS-10).
     private func loadCandles(showSpinner: Bool = true) async {
+        let requested = resolution
         if showSpinner { loadingCandles = true }
         let to = Date()
-        let from = to.addingTimeInterval(-Double(resolution) * 150)
-        let fetched = (try? await env.perpl.candles(marketId: market.id, resolution: resolution, from: from, to: to, priceDecimals: market.priceDecimals)) ?? []
-        if !fetched.isEmpty { candles = fetched }
+        let from = to.addingTimeInterval(-Double(requested) * 150)
+        let fetched = try? await env.perpl.candles(marketId: market.id, resolution: requested, from: from, to: to, priceDecimals: market.priceDecimals)
+        // Cut short (the screen closed), or another timeframe was picked meanwhile and its own read follows.
+        guard !Task.isCancelled, requested == resolution else { return }
         loadingCandles = false
+        if let fetched {
+            candles = fetched
+            candlesResolution = requested
+            candlesFailed = false
+        } else {
+            if candlesResolution != requested { candles = []; candlesResolution = nil }
+            candlesFailed = true
+        }
     }
 }
 
