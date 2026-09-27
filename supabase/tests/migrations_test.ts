@@ -1,6 +1,7 @@
 // Applies every migration to a throwaway in-memory Postgres (PGlite, with supabase_stub.sql standing in for the
-// platform), re-applies the security-audit migrations to prove they are idempotent, and checks their grants, RLS and
-// rate limits from each API role's point of view. Nothing here touches a real project.
+// platform), re-applies the security-audit migrations to prove they are idempotent, and checks their grants, RLS,
+// triggers and rate limits from each API role's point of view. Uploads are driven the way Storage drives them (a
+// permission probe as the caller, rolled back, then the write as the service role). Nothing here touches a real project.
 //
 //   deno test -A --no-config --node-modules-dir=none supabase/tests/migrations_test.ts   (about 2 minutes)
 import { PGlite, type Transaction } from "npm:@electric-sql/pglite@0.5.8";
@@ -18,6 +19,7 @@ const A = "0x" + "a".repeat(40);
 const B = "0x" + "b".repeat(40);
 const hex64 = (n: number) => n.toString(16).padStart(64, "0");
 const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
+const wallet = (n: number) => "0x" + n.toString(16).padStart(40, "0");
 
 async function migrationFiles(): Promise<string[]> {
   const names: string[] = [];
@@ -41,6 +43,72 @@ async function one<T = Record<string, unknown>>(db: PGlite, sql: string, params:
   return (await db.query<T>(sql, params)).rows[0];
 }
 
+// ── Storage, as it writes an upload (supabase/storage: src/storage/uploader.ts canUpload / completeUpload, and
+// src/storage/database/pg.ts createObject / upsertObject; read 2026-09-27). Before reading any bytes, a permission
+// probe as the caller — createObject, or upsertObject with x-upsert: true — with version '1' and the declared type and
+// length, always rolled back. Once the bytes are stored, the completion as the service role: a taken path is refused
+// unless upserting, then upsertObject with the real size and eTag and a new version. Storage answers SQLSTATE 42501
+// as 403 and 23505 as 409 (src/storage/database/errors.ts).
+const CREATE = `insert into storage.objects (bucket_id, name, owner_id, metadata, user_metadata, version)
+  values ($1, $2, $3, $4, '{}', $5)`;
+const UPSERT = CREATE + `
+  on conflict (bucket_id, name collate "C") where archived_at is null
+  do update set metadata = excluded.metadata, user_metadata = excluded.user_metadata, version = excluded.version,
+                owner_id = excluded.owner_id`;
+
+type Upload = { upsert?: boolean; size?: number; etag?: string; mime?: string; role?: Role };
+class Rollback extends Error {}
+
+function storageStatus(err: unknown): number {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === "42501") return 403;
+  if (code === "23505") return 409;
+  throw err;
+}
+
+async function probe(db: PGlite, who: string, bucket: string, name: string, u: Upload = {}): Promise<number> {
+  const role = u.role ?? "authenticated";
+  try {
+    await db.transaction(async (tx: Transaction) => {
+      await tx.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ role, wallet_address: who })]);
+      await tx.exec(`set local role ${role}`);
+      await tx.query(u.upsert ? UPSERT : CREATE,
+        [bucket, name, who, JSON.stringify({ mimetype: u.mime ?? "image/jpeg", contentLength: u.size ?? 1000 }), "1"]);
+      throw new Rollback();
+    });
+  } catch (err) {
+    return err instanceof Rollback ? 200 : storageStatus(err);
+  }
+  return 200;
+}
+
+async function complete(db: PGlite, who: string, bucket: string, name: string, u: Upload = {}): Promise<number> {
+  try {
+    await db.transaction(async (tx: Transaction) => {
+      await tx.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ role: "service_role" })]);
+      await tx.exec("set local role service_role");
+      const taken = await tx.query("select version from storage.objects where bucket_id = $1 and name = $2 and archived_at is null for update", [bucket, name]);
+      if (!u.upsert && taken.rows.length > 0) throw Object.assign(new Error("The resource already exists"), { code: "23505" });
+      const size = u.size ?? 1000;
+      await tx.query(UPSERT, [bucket, name, who,
+        JSON.stringify({ mimetype: u.mime ?? "image/jpeg", size, contentLength: size, eTag: u.etag ?? `"${name}"` }), crypto.randomUUID()]);
+    });
+    return 200;
+  } catch (err) {
+    return storageStatus(err);
+  }
+}
+
+async function upload(db: PGlite, who: string, bucket: string, name: string, u: Upload = {}): Promise<number> {
+  const probed = await probe(db, who, bucket, name, u);
+  return probed === 200 ? await complete(db, who, bucket, name, u) : probed;
+}
+
+const stored = (db: PGlite, name: string) =>
+  one<{ etag: string; size: number; n: number }>(db,
+    `select metadata->>'eTag' as etag, (metadata->>'size')::int as size, count(*) over ()::int as n
+       from storage.objects where bucket_id = 'launch-media' and name = $1`, [name]);
+
 Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
   const db = await PGlite.create({ extensions: { pgcrypto, citext } });
   await db.exec(await Deno.readTextFile(STUB));
@@ -55,12 +123,17 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
   });
 
   await t.step("24–29 re-apply without error or change", async () => {
-    const before = await one<{ n: number }>(db, "select count(*)::int as n from pg_policies");
+    const count = async () => ({
+      policies: (await one<{ n: number }>(db, "select count(*)::int as n from pg_policies")).n,
+      triggers: (await one<{ n: number }>(db, "select count(*)::int as n from pg_trigger where tgrelid = 'storage.objects'::regclass and not tgisinternal")).n,
+    });
+    const before = await count();
     for (const name of files.filter((f) => REAPPLY.some((p) => f.startsWith(p)))) {
       try { await db.exec(await Deno.readTextFile(new URL(name, MIGRATIONS))); }
       catch (err) { throw new Error(`re-applying ${name}: ${(err as Error).message}`); }
     }
-    assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from pg_policies")).n, before.n);
+    assertEquals(await count(), before);
+    assertEquals(before.triggers, 4); // Storage's two, and 26's two
     assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.edge_rate_salt")).n, 1);
     assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.app_config")).n, 1);
   });
@@ -121,60 +194,156 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
     await db.exec(`update public.app_config set value = jsonb_set(value, '{min_build}', '0') where key = 'ios'`);
   });
 
-  await t.step("SB-6 / OH-6: launch-media is write-once, names are pinned, uploads are capped per wallet", async () => {
-    const put = (wallet: string, bucket: string, name: string, upsert = false) => as(db, "authenticated", wallet,
-      `insert into storage.objects (bucket_id, name, metadata) values ($1, $2, '{"size": 1000}')` +
-      (upsert ? " on conflict (bucket_id, name) do update set metadata = excluded.metadata" : ""), [bucket, name]);
+  await t.step("SB-6: launch-media is write-once at the database, whatever the concurrency", async () => {
+    const lm = "launch-media";
     const moment = `${A}/moment-${hex64(9)}.jpg`;
-    await put(A, "launch-media", moment, true); // a first upload with x-upsert: true needs no UPDATE policy
-    await assertRejects(() => put(A, "launch-media", moment, true), Error, "row-level security"); // no overwrite
-    await assertRejects(() => put(A, "launch-media", moment), Error, "duplicate key"); // x-upsert: false → 409
-    const updated = await as(db, "authenticated", A,
-      "update storage.objects set metadata = '{\"size\": 1}' where bucket_id = 'launch-media' and name = $1 returning id", [moment]);
-    assertEquals(updated.length, 0, "an UPDATE must not reach a launch-media object");
-    await put(A, "launch-media", `${A}/${uuid(4)}.jpg`);
-    await put(A, "launch-media", `${A}/moment-${uuid(5)}.mov`);
-    await put(A, "launch-media", `${A}/moment-${hex64(10)}.mp4`);
+    // A first upload with x-upsert: true (what every build sends) needs no UPDATE policy.
+    assertEquals(await upload(db, A, lm, moment, { upsert: true, etag: '"e1"' }), 200);
+    // INTERIM: the same bytes again under a content-addressed name (a retry with the same media) still succeed…
+    assertEquals(await upload(db, A, lm, moment, { upsert: true, etag: '"e1"' }), 200);
+    // …but different bytes are refused when Storage writes them, and the stored object is untouched.
+    assertEquals(await upload(db, A, lm, moment, { upsert: true, etag: '"e2"' }), 409);
+    assertEquals(await upload(db, A, lm, moment, { upsert: true, etag: '"e1"', size: 999 }), 409);
+    assertEquals(await upload(db, A, lm, moment, { upsert: true, etag: '"e1"', mime: "video/mp4" }), 409);
+    assertEquals(await stored(db, moment), { etag: '"e1"', size: 1000, n: 1 });
+    // x-upsert: false on a taken path is 409 at the probe (the future app: "already uploaded").
+    assertEquals(await probe(db, A, lm, moment), 409);
+    // The race the probe cannot see: two uploads to one new path both pass it; the later completion is refused.
+    const raced = `${A}/moment-${hex64(12)}.mp4`;
+    assertEquals(await probe(db, A, lm, raced, { upsert: true, mime: "video/mp4" }), 200);
+    assertEquals(await probe(db, A, lm, raced, { upsert: true, mime: "video/mp4" }), 200);
+    assertEquals(await complete(db, A, lm, raced, { upsert: true, mime: "video/mp4", etag: '"benign"' }), 200);
+    assertEquals(await complete(db, A, lm, raced, { upsert: true, mime: "video/mp4", etag: '"swap"' }), 409);
+    assertEquals((await stored(db, raced)).etag, '"benign"');
+    // Launch logos (<uuid>.jpg) and pre-hash Moment names are write-once outright: refused at the probe (no UPDATE
+    // policy), and even the same bytes are refused when written.
+    const logo = `${A}/${uuid(4)}.jpg`;
+    assertEquals(await upload(db, A, lm, logo, { upsert: true, etag: '"logo"' }), 200);
+    assertEquals(await upload(db, A, lm, logo, { upsert: true, etag: '"logo"' }), 403);
+    assertEquals(await complete(db, A, lm, logo, { upsert: true, etag: '"logo"' }), 409);
+    assertEquals(await complete(db, A, lm, logo, { upsert: true, etag: '"other"' }), 409);
+    const oldMoment = `${A}/moment-${uuid(5)}.mov`;
+    assertEquals(await upload(db, A, lm, oldMoment, { mime: "video/quicktime" }), 200);
+    assertEquals(await complete(db, A, lm, oldMoment, { upsert: true, mime: "video/quicktime", etag: '"x"' }), 409);
+    // No role may move or rename a launch-media object, into or out of the bucket; takedowns (DELETE) still work.
+    await assertRejects(() => as(db, "service_role", null,
+      "update storage.objects set name = $1 where bucket_id = 'launch-media' and name = $2", [`${A}/moment-${hex64(99)}.jpg`, moment]), Error, "moved or renamed");
+    await assertRejects(() => as(db, "service_role", null,
+      "update storage.objects set bucket_id = 'avatars' where bucket_id = 'launch-media' and name = $1", [logo]), Error, "moved or renamed");
+    await db.exec(`insert into storage.objects (bucket_id, name, metadata, version) values ('avatars', '${A}/moved.jpg', '{"size": 1}', 'v')`);
+    await assertRejects(() => db.exec(`update storage.objects set bucket_id = 'launch-media' where name = '${A}/moved.jpg'`), Error, "moved or renamed");
+    await db.exec(`update storage.objects set updated_at = now(), owner_id = 'x' where name = '${logo}'`); // no content change
+    await db.exec(`begin; set local storage.allow_delete_query = 'true'; delete from storage.objects where name in ('${logo}', '${A}/moved.jpg'); commit;`);
+    assertEquals((await one<{ n: number }>(db, `select count(*)::int as n from storage.objects where name = '${logo}'`)).n, 0);
+    // Other buckets are not affected: an avatar can be replaced by its owner.
+    assertEquals(await upload(db, A, "avatars", `${A}/avatar.jpg`, { upsert: true, etag: '"a1"' }), 200);
+    assertEquals(await upload(db, A, "avatars", `${A}/avatar.jpg`, { upsert: true, etag: '"a2"' }), 200);
+  });
+
+  await t.step("SB-6 / OH-6: upload names are pinned; blocklist and budgets hold when Storage writes, not only at the probe", async () => {
+    const lm = "launch-media";
     for (const bad of [`${A}/evil.html`, `${A}/moment-${hex64(11)}.gif`, `${A}/x/${uuid(6)}.jpg`, `${A}/${uuid(7)}.png`]) {
-      await assertRejects(() => put(A, "launch-media", bad), Error, "row-level security", bad);
+      assertEquals(await probe(db, A, lm, bad), 403, bad);
     }
-    await assertRejects(() => put(A, "launch-media", `${B}/${uuid(8)}.jpg`), Error, "row-level security");
-    await assertRejects(() => as(db, "anon", null,
-      `insert into storage.objects (bucket_id, name) values ('launch-media', $1)`, [`${A}/${uuid(9)}.jpg`]), Error, "row-level security");
-    // Quota: 40 objects per wallet per 24 h (A has 4; objects older than a day do not count).
-    await db.exec(`insert into storage.objects (bucket_id, name, metadata, created_at)
-      select 'launch-media', '${A}/old-' || g || '.jpg', '{"size": 1000}', now() - interval '25 hours' from generate_series(1, 50) g`);
-    for (let i = 0; i < 36; i++) await put(A, "launch-media", `${A}/${uuid(100 + i)}.jpg`);
-    await assertRejects(() => put(A, "launch-media", `${A}/${uuid(200)}.jpg`), Error, "row-level security");
-    await put(B, "launch-media", `${B}/${uuid(201)}.jpg`); // another wallet's quota is its own
-    // …and 500 MB per wallet per 24 h.
-    await db.exec(`insert into storage.objects (bucket_id, name, metadata)
-      select 'launch-media', '${B}/big-' || g || '.mp4', '{"size": 104857600}' from generate_series(1, 4) g`);
-    await put(B, "launch-media", `${B}/${uuid(202)}.jpg`); // 400 MB + 2 KB so far
-    await db.exec(`insert into storage.objects (bucket_id, name, metadata) values ('launch-media', '${B}/big-5.mp4', '{"size": 104857600}')`);
-    await assertRejects(() => put(B, "launch-media", `${B}/${uuid(203)}.jpg`), Error, "row-level security");
-    // avatars: only <wallet>/avatar.jpg, which the owner may overwrite.
-    await put(A, "avatars", `${A}/avatar.jpg`, true);
-    await put(A, "avatars", `${A}/avatar.jpg`, true);
-    await assertRejects(() => put(A, "avatars", `${A}/other.jpg`), Error, "row-level security");
-    await assertRejects(() => put(A, "avatars", `${B}/avatar.jpg`), Error, "row-level security");
+    assertEquals(await probe(db, A, lm, `${B}/${uuid(8)}.jpg`), 403); // another wallet's folder
+    assertEquals(await probe(db, A, lm, `${A}/${uuid(9)}.jpg`, { role: "anon" }), 403);
+    assertEquals(await probe(db, A, "avatars", `${A}/other.jpg`, { upsert: true }), 403);
+    assertEquals(await probe(db, A, "avatars", `${B}/avatar.jpg`, { upsert: true }), 403);
+
+    // Per wallet: 40 objects in 24 hours (older ones do not count). Probes see only committed rows, so they all pass;
+    // the writes stop at 40, however many uploads were started together.
+    const D = wallet(0xd);
+    await db.exec(`insert into storage.objects (bucket_id, name, metadata, version, created_at)
+      select 'launch-media', '${D}/old-' || g || '.jpg', '{"size": 1000}', 'v' || g, now() - interval '25 hours' from generate_series(1, 50) g`);
+    for (let i = 0; i < 37; i++) assertEquals(await upload(db, D, lm, `${D}/${uuid(100 + i)}.jpg`), 200);
+    const late = [0, 1, 2, 3, 4].map((i) => `${D}/${uuid(200 + i)}.jpg`);
+    for (const name of late) assertEquals(await probe(db, D, lm, name), 200);
+    assertEquals(await Promise.all(late.map((name) => complete(db, D, lm, name))), [200, 200, 200, 403, 403]);
+    assertEquals(await probe(db, D, lm, `${D}/${uuid(210)}.jpg`), 403); // and now the probe refuses too
+    assertEquals(await upload(db, B, lm, `${B}/${uuid(211)}.jpg`), 200); // another wallet's budget is its own
+    // Per wallet: 500 MiB in 24 hours, counting the upload being written.
+    const E = wallet(0xe);
+    await db.exec(`insert into storage.objects (bucket_id, name, metadata, version)
+      select 'launch-media', '${E}/big-' || g || '.mp4', '{"size": 104857600}', 'v' || g from generate_series(1, 4) g`); // 400 MiB
+    assertEquals(await probe(db, E, lm, `${E}/moment-${hex64(20)}.mp4`, { mime: "video/mp4", size: 52428800 }), 200);
+    assertEquals(await complete(db, E, lm, `${E}/moment-${hex64(20)}.mp4`, { mime: "video/mp4", size: 52428800 }), 200); // 450 MiB
+    assertEquals(await probe(db, E, lm, `${E}/moment-${hex64(21)}.mp4`, { mime: "video/mp4", size: 52428800 }), 200); // declared: exactly 500
+    assertEquals(await complete(db, E, lm, `${E}/moment-${hex64(21)}.mp4`, { mime: "video/mp4", size: 52428801 }), 403); // actual: over
+
+    // Takedown: a blocklisted wallet can upload to neither bucket — also an upload that passed the probe first — nor
+    // replace its avatar; nobody but the owner sees the list.
+    const C = "0x" + "c".repeat(40);
+    await db.exec(`insert into public.profiles (wallet) values ('${C}')`);
+    assertEquals(await upload(db, C, "avatars", `${C}/avatar.jpg`, { upsert: true }), 200);
+    assertEquals(await probe(db, C, lm, `${C}/${uuid(300)}.jpg`), 200);
+    await db.exec(`insert into public.upload_blocklist (wallet, reason) values ('${C}', 'test')`);
+    assertEquals(await complete(db, C, lm, `${C}/${uuid(300)}.jpg`), 403);
+    assertEquals(await probe(db, C, lm, `${C}/${uuid(301)}.jpg`), 403);
+    assertEquals(await upload(db, C, "avatars", `${C}/avatar.jpg`, { upsert: true, etag: '"new"' }), 403);
+    for (const role of ["anon", "authenticated"] as const) {
+      await assertRejects(() => as(db, role, C, "select count(*) from public.upload_blocklist"), Error, "permission denied");
+    }
+
+    // Overall: 1,000 uploads or 5 GiB in 24 hours across every wallet (a circuit breaker). Probes leave no trace.
+    const count = () => one<{ n: number }>(db, "select count(*)::int as n from public.storage_upload_events where bucket_id = 'launch-media'").then((r) => r.n);
+    const before = await count();
+    assertEquals(await probe(db, B, lm, `${B}/${uuid(400)}.jpg`), 200);
+    assertEquals(await count(), before);
+    await db.exec(`insert into public.storage_upload_events (bucket_id, bytes)
+      select 'launch-media', 1 from generate_series(1, ${999 - before})`);
+    const F = wallet(0xf);
+    assertEquals(await upload(db, F, lm, `${F}/${uuid(401)}.jpg`), 200); // the 1,000th
+    assertEquals(await upload(db, F, lm, `${F}/${uuid(402)}.jpg`), 403);
+    assertEquals(await upload(db, A, "avatars", `${A}/avatar.jpg`, { upsert: true, etag: '"a3"' }), 200); // avatars are not counted
+    await db.exec(`update public.storage_upload_events set created_at = now() - interval '25 hours'`);
+    assertEquals(await upload(db, F, lm, `${F}/${uuid(403)}.jpg`), 200);
+    await db.exec(`insert into public.storage_upload_events (bucket_id, bytes) values ('launch-media', 5368709120 - 52428800)`);
+    assertEquals(await upload(db, F, lm, `${F}/moment-${hex64(30)}.mp4`, { mime: "video/mp4", size: 52428800 }), 403); // 5 GiB + 1,000 bytes
+    // Rows older than two days are purged by the next upload.
+    await db.exec(`update public.storage_upload_events set created_at = now() - interval '3 days'`);
+    assertEquals(await upload(db, F, lm, `${F}/${uuid(404)}.jpg`), 200);
+    assertEquals(await count(), 1);
+
     const buckets = await db.query<{ id: string; file_size_limit: number; allowed_mime_types: string[] }>(
       "select id, file_size_limit, allowed_mime_types from storage.buckets order by id");
     assertEquals(buckets.rows.map((b) => [b.id, Number(b.file_size_limit), b.allowed_mime_types]), [
       ["avatars", 5242880, ["image/jpeg"]],
       ["launch-media", 52428800, ["image/jpeg", "video/mp4", "video/quicktime"]],
     ]);
-    await assertRejects(() => as(db, "anon", null, "select public.storage_upload_allowed('launch-media')"), Error, "permission denied");
-    // Takedown: a blocklisted wallet can upload to neither bucket, nor overwrite its avatar; nobody but the owner sees the list.
-    const C = "0x" + "c".repeat(40);
-    await db.exec(`insert into public.profiles (wallet) values ('${C}')`);
-    await put(C, "avatars", `${C}/avatar.jpg`, true);
-    await db.exec(`insert into public.upload_blocklist (wallet, reason) values ('${C}', 'test')`);
-    await assertRejects(() => put(C, "launch-media", `${C}/${uuid(300)}.jpg`), Error, "row-level security");
-    await assertRejects(() => put(C, "avatars", `${C}/avatar.jpg`, true), Error, "row-level security");
-    for (const role of ["anon", "authenticated"] as const) {
-      await assertRejects(() => as(db, role, C, "select count(*) from public.upload_blocklist"), Error, "permission denied");
+    for (const role of ["anon", "authenticated", "service_role"] as const) {
+      await assertRejects(() => as(db, role, A, "select count(*) from public.storage_upload_events"), Error, "permission denied");
+      await assertRejects(() => as(db, role, A, "select public.storage_wallet_upload_budget($1, 0)", [A]), Error, "permission denied");
     }
+    await assertRejects(() => as(db, "anon", null, "select public.storage_upload_allowed('launch-media')"), Error, "permission denied");
+  });
+
+  await t.step("OH-6: migration 26 refuses to install budgets whose owner cannot see every object", async () => {
+    await db.exec("create role quota_owner nologin noinherit");
+    await db.exec("alter function public.storage_wallet_upload_budget(text, bigint) owner to quota_owner");
+    const m26 = await Deno.readTextFile(new URL("26_storage_write_once_and_upload_limits.sql", MIGRATIONS));
+    await assertRejects(() => db.exec(m26), Error, "must bypass RLS and be able to read storage.objects");
+    await db.exec("alter role quota_owner bypassrls");
+    await assertRejects(() => db.exec(m26), Error, "must bypass RLS and be able to read storage.objects"); // no SELECT yet
+    await db.exec("alter function public.storage_wallet_upload_budget(text, bigint) owner to postgres");
+    await db.exec(m26);
+  });
+
+  await t.step("SB-6 strict (deferred 31): refuses until ready; then no launch-media object can be uploaded over", async () => {
+    const template = await Deno.readTextFile(new URL("31_launch_media_strict_write_once.sql", DEFERRED));
+    await assertRejects(() => db.exec(template), Error, "not ready");
+    const ready = template.replace("v_ready constant boolean := false;", "v_ready constant boolean := true;");
+    assert(ready !== template, "the readiness placeholder moved");
+    await db.exec(ready);
+    await db.exec(ready); // idempotent
+    const moment = `${A}/moment-${hex64(9)}.jpg`;
+    assertEquals(await probe(db, A, "launch-media", moment, { upsert: true }), 403); // no UPDATE policy
+    assertEquals(await probe(db, A, "launch-media", moment), 409); // x-upsert: false: "already uploaded"
+    assertEquals(await complete(db, A, "launch-media", moment, { upsert: true, etag: '"e1"' }), 409); // the same bytes
+    assertEquals(await upload(db, A, "launch-media", `${A}/moment-${hex64(40)}.jpg`), 200);
+    assertEquals(await upload(db, A, "avatars", `${A}/avatar.jpg`, { upsert: true, etag: '"a4"' }), 200);
+    // Reverse: re-running 26 restores the interim exception.
+    await db.exec(await Deno.readTextFile(new URL("26_storage_write_once_and_upload_limits.sql", MIGRATIONS)));
+    assertEquals(await upload(db, A, "launch-media", moment, { upsert: true, etag: '"e1"' }), 200);
   });
 
   await t.step("SB-2 / OH-6 / LR-4: edge_rate_gate budgets per subject and per network, never storing an IP", async () => {

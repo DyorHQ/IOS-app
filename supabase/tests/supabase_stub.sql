@@ -22,7 +22,9 @@ create function auth.jwt() returns jsonb language sql stable as
 create function auth.uid() returns uuid language sql stable as
   $$ select nullif(auth.jwt() ->> 'sub', '')::uuid $$;
 
--- storage: the columns and helpers the policies and migrations touch, owned by a non-postgres role as on the platform.
+-- storage: the columns, indexes, triggers and helpers the policies and migrations touch, owned by a non-postgres role as
+-- on the platform. storage.objects matches the live table as read on 2026-09-27 (Storage with object versioning: no
+-- plain (bucket_id, name) key; Storage's upsert targets idx_objects_current_version).
 create schema storage authorization supabase_storage_admin;
 grant usage on schema storage to anon, authenticated, service_role;
 create table storage.buckets (
@@ -40,16 +42,22 @@ create table storage.objects (
   bucket_id        text references storage.buckets (id),
   name             text,
   owner            uuid,
-  owner_id         text,
   created_at       timestamptz default now(),
   updated_at       timestamptz default now(),
   last_accessed_at timestamptz default now(),
   metadata         jsonb,
+  path_tokens      text[] generated always as (string_to_array(name, '/')) stored,
   version          text,
+  owner_id         text,
   user_metadata    jsonb,
-  unique (bucket_id, name)
+  archived_at      timestamptz,
+  is_delete_marker boolean not null default false,
+  is_versioned     boolean not null default false
 );
 create index idx_objects_bucket_id_name on storage.objects (bucket_id, name collate "C");
+create unique index objects_bucket_id_name_version_key on storage.objects (bucket_id, name collate "C", version) nulls not distinct;
+create unique index idx_objects_current_version on storage.objects (bucket_id, name collate "C") where archived_at is null;
+create unique index idx_objects_null_version on storage.objects (bucket_id, name collate "C") where not is_versioned;
 alter table storage.objects enable row level security;
 alter table storage.buckets enable row level security;
 grant all on storage.objects, storage.buckets to anon, authenticated, service_role;
@@ -60,6 +68,25 @@ begin
   return _parts[1:array_length(_parts, 1) - 1];
 end
 $$;
+create function storage.update_updated_at_column() returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end
+$$;
+create trigger update_objects_updated_at before update on storage.objects
+  for each row execute function storage.update_updated_at_column();
+-- Deletes go through the Storage API, which sets storage.allow_delete_query.
+create function storage.protect_delete() returns trigger language plpgsql as $$
+begin
+  if coalesce(current_setting('storage.allow_delete_query', true), 'false') != 'true' then
+    raise exception 'Direct deletion from storage tables is not allowed. Use the Storage API instead.' using errcode = '42501';
+  end if;
+  return null;
+end
+$$;
+create trigger protect_objects_delete before delete on storage.objects
+  for each statement execute function storage.protect_delete();
 alter table storage.objects owner to supabase_storage_admin;
 alter table storage.buckets owner to supabase_storage_admin;
 
