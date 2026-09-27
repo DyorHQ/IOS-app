@@ -172,14 +172,17 @@ final class PerplTrading: MeraSessionLifecycle {
     ///
     /// An order already on the wire keeps its socket until Perpl answers it (security audit GL-1): the session often
     /// ends because the app left the foreground mid-bracket, and closing then fails the unanswered frames — the entry
-    /// may be live at Perpl while its stop-loss was never sent. The socket is detached at once, so nothing new can use
-    /// it, and closed as soon as its acks are in, or after the 8 s an ack is given at most. Whatever is still waiting
-    /// then fails as "outcome unknown", which the order sheet shows as such, never as a failure to retry.
+    /// may be live at Perpl while its stop-loss was never sent. So does an approved operation still running (a bracket,
+    /// a cancel-then-place of a TP/SL, a cancel): between its steps nothing is in flight, but closing then would leave
+    /// the old stop cancelled and the new one unsent. The socket is detached at once, so nothing new can use it, and
+    /// closed as soon as its acks are in and its operation is done — after the 8 s an ack is given at most, or 20 s for
+    /// a running operation. Whatever is still waiting then fails as "outcome unknown", which the sheets show as such,
+    /// never as a failure to retry.
     func meraSessionDidEnd(_ session: MeraSession) {
         guard boundToPasskey else { return }
         stopKeepAlive()
         key = nil
-        if let busy = client, busy.hasRequestsInFlight {
+        if let busy = client, busy.hasRequestsInFlight || operationsRunning > 0 {
             client = nil
             openOrders = []
             drain(busy)
@@ -192,6 +195,8 @@ final class PerplTrading: MeraSessionLifecycle {
 
     /// A socket detached from the session, kept only until the requests already on it are answered.
     private var draining: PerplTradeClient?
+    /// Approved operations still running (`operation`), which keep a detached socket open until they finish.
+    private var operationsRunning = 0
 
     private func drain(_ socket: PerplTradeClient) {
         draining?.disconnect()
@@ -200,10 +205,26 @@ final class PerplTrading: MeraSessionLifecycle {
         let background = PerplBackgroundTime("Perpl trading")
         Task { @MainActor [weak self] in
             defer { background.end() }
-            let deadline = Date().addingTimeInterval(8)
-            while socket.hasRequestsInFlight, Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
+            let start = Date()
+            while Date().timeIntervalSince(start) < 20 {
+                let operating = (self?.operationsRunning ?? 0) > 0
+                guard socket.hasRequestsInFlight || operating else { break }
+                if !operating, Date().timeIntervalSince(start) >= 8 { break }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
             socket.disconnect()
             if self?.draining === socket { self?.draining = nil }
+        }
+    }
+
+    /// Starts an operation the user approved (a bracket, a TP/SL change, a cancel): it holds background time, and a
+    /// passkey session that ends meanwhile keeps its socket until it is done (`drain`, GL-1). Call the result when it is.
+    private func operation(_ name: String) -> () -> Void {
+        let background = PerplBackgroundTime(name)
+        operationsRunning += 1
+        return { [weak self] in
+            background.end()
+            self?.operationsRunning -= 1
         }
     }
 
@@ -520,8 +541,8 @@ final class PerplTrading: MeraSessionLifecycle {
             guard let mera else { throw PerplTradeError.notSignedIn }
             try mera.requireStepUp(approval, for: .cancelOrder)
         }
-        let background = PerplBackgroundTime("Perpl cancel")
-        defer { background.end() }
+        let done = operation("Perpl cancel")
+        defer { done() }
         await ensureConnected()
         let client = try liveClient()
         guard let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
@@ -539,8 +560,8 @@ final class PerplTrading: MeraSessionLifecycle {
             guard let mera else { throw PerplTradeError.notSignedIn }
             try mera.requireStepUp(approval, for: .cancelOrder)
         }
-        let background = PerplBackgroundTime("Perpl cancel")
-        defer { background.end() }
+        let done = operation("Perpl cancel")
+        defer { done() }
         await ensureConnected()
         let client = try liveClient()
         guard let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
@@ -604,9 +625,10 @@ final class PerplTrading: MeraSessionLifecycle {
             let cancels = changes.contains { !$0.replacing.isEmpty }
             try mera.requireStepUp(approval, for: cancels ? .cancelOrder : .reduceOnlyClose)
         }
-        // Cancel-then-place: leaving the app between the two must not freeze the socket with the old stop gone (GL-1).
-        let background = PerplBackgroundTime("Perpl TP/SL")
-        defer { background.end() }
+        // Cancel-then-place: leaving the app between the two must not freeze or close the socket with the old stop gone
+        // and the new one unsent (GL-1).
+        let done = operation("Perpl TP/SL")
+        defer { done() }
         await ensureConnected()
         let client = try liveClient()
         guard let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
@@ -699,10 +721,10 @@ final class PerplTrading: MeraSessionLifecycle {
                        approval: MeraSession.StepUp? = nil, onChainPositions: [PerpPosition], onChainOrders: [PerpOrder]) async throws -> BracketResult {
         try Self.checkTriggers(input: input, takeProfit: takeProfit, stopLoss: stopLoss)
         let charge = try authorize(input, approval: approval)
-        // The entry and its stop-loss go out one after the other: leaving the app between them must not freeze the
-        // socket with the entry live and the stop-loss unsent (GL-1).
-        let background = PerplBackgroundTime("Perpl order")
-        defer { background.end() }
+        // The entry and its stop-loss go out one after the other: leaving the app between them must not freeze or close
+        // the socket with the entry live and the stop-loss unsent (GL-1).
+        let done = operation("Perpl order")
+        defer { done() }
         await ensureConnected()
         let client: PerplTradeClient
         do {
