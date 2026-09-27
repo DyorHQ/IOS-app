@@ -41,30 +41,20 @@ public enum RemoteMedia {
     }
 
     /// GETs `url` (https only) and returns its body, reading at most `maxBytes`: refused up front when the declared
-    /// Content-Length is larger, and cancelled as soon as the body grows past the cap.
+    /// Content-Length is larger, and cancelled as soon as the body grows past the cap. The body arrives in the chunks
+    /// the network delivers (a task delegate), so the cap costs nothing per byte.
     public static func fetch(_ url: URL, session: URLSession, maxBytes: Int = maxImageBytes) async throws -> Data {
         guard url.scheme?.lowercased() == "https" else { throw Failure.insecureURL }
         var request = URLRequest(url: url)
         request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
-        let (bytes, response) = try await session.bytes(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            bytes.task.cancel()
-            throw Failure.status(http.statusCode)
+        let task = session.dataTask(with: request)
+        let load = CappedLoad(maxBytes: maxBytes)
+        task.delegate = load
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in load.start(task, continuation) }
+        } onCancel: {
+            task.cancel()
         }
-        if response.expectedContentLength > Int64(maxBytes) {
-            bytes.task.cancel()
-            throw Failure.tooLarge
-        }
-        var data = Data()
-        data.reserveCapacity(Int(min(max(response.expectedContentLength, 0), Int64(maxBytes))))
-        for try await byte in bytes {
-            guard data.count < maxBytes else {
-                bytes.task.cancel()
-                throw Failure.tooLarge
-            }
-            data.append(byte)
-        }
-        return data
     }
 
     /// Decodes `data` as a thumbnail whose longer side is at most `maxPixelSize` (never scaled up), after checking the
@@ -87,5 +77,55 @@ public enum RemoteMedia {
         ] as CFDictionary
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else { throw Failure.notAnImage }
         return image
+    }
+}
+
+/// One capped download: checks the response, appends the body's chunks up to the cap, and answers once. Its callbacks
+/// run on the session's serial delegate queue; `start` runs before the task is resumed.
+private final class CappedLoad: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let maxBytes: Int
+    private var data = Data()
+    private var failure: RemoteMedia.Failure?
+    private var continuation: CheckedContinuation<Data, Error>?
+
+    init(maxBytes: Int) { self.maxBytes = maxBytes }
+
+    func start(_ task: URLSessionDataTask, _ continuation: CheckedContinuation<Data, Error>) {
+        // Cancelled before it started: a never-resumed task may never report back.
+        guard task.state != .canceling else { continuation.resume(throwing: CancellationError()); return }
+        self.continuation = continuation
+        task.resume()
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            failure = .status(http.statusCode)
+            completionHandler(.cancel)
+        } else if response.expectedContentLength > Int64(maxBytes) {
+            failure = .tooLarge
+            completionHandler(.cancel)
+        } else {
+            data.reserveCapacity(Int(max(response.expectedContentLength, 0)))
+            completionHandler(.allow)
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        guard failure == nil else { return }
+        guard data.count + chunk.count <= maxBytes else {
+            failure = .tooLarge
+            dataTask.cancel()
+            return
+        }
+        data.append(chunk)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let continuation else { return }
+        self.continuation = nil
+        if let failure { continuation.resume(throwing: failure) }
+        else if let error { continuation.resume(throwing: error) }
+        else { continuation.resume(returning: data) }
     }
 }

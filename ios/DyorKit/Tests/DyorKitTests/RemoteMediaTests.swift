@@ -65,6 +65,20 @@ final class RemoteMediaTests: XCTestCase {
         await XCTAssertThrowsFailure(.status(429)) { try await RemoteMedia.fetch(URL(string: "https://ipfs.io/ipfs/bafy")!, session: MediaStub.session()) }
     }
 
+    func testACancelledFetchEnds() async {
+        MediaStub.reply = (200, [:], Data(repeating: 1, count: 2048))
+        let task = Task { () -> Data in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await RemoteMedia.fetch(URL(string: "https://cdn.example/logo.png")!, session: MediaStub.session())
+        }
+        do {
+            _ = try await task.value
+            XCTFail("a cancelled fetch must not return data")
+        } catch {
+            XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled, "\(error)")
+        }
+    }
+
     func testOnlyHTTPSIsFetched() async {
         await XCTAssertThrowsFailure(.insecureURL) { try await RemoteMedia.fetch(URL(string: "http://cdn.example/logo.png")!, session: MediaStub.session()) }
         XCTAssertTrue(MediaStub.requests.isEmpty)
