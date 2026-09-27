@@ -247,6 +247,42 @@ contract Sec2MomentsTest is MomentsMarketBase {
         f.cancelPolicy();
     }
 
+    /// Renouncing the guardian while its pause is on would make the pause permanent (nobody could lift it, and
+    /// governance cannot name a new guardian), so it is refused; handing the role on, or unpausing first, still works.
+    function test_MO4_guardianCannotRenounceWhilePaused() public {
+        address g1 = makeAddr("guardian1");
+        address g2 = makeAddr("guardian2");
+        MomentsFactory f = _factoryWithGuardian(g1);
+        vm.startPrank(g1);
+        f.setGuardianPaused(true);
+        vm.expectRevert(MomentsFactory.UnpauseFirst.selector);
+        f.setGuardian(address(0));
+        f.setGuardian(g2); // a successor can still lift the pause
+        vm.stopPrank();
+        vm.startPrank(g2);
+        f.setGuardianPaused(false);
+        f.setGuardian(address(0));
+        vm.stopPrank();
+        assertEq(f.guardian(), address(0));
+        assertFalse(f.guardianPaused());
+        bytes32 terms = f.termsHash();
+        vm.prank(creator);
+        f.publish(_params(PRICE, 0, 1), terms);
+    }
+
+    /// The same refusal while wiring: governance cannot drop a guardian that has already paused.
+    function test_MO4_wiringCannotDropAPausedGuardian() public {
+        address g1 = makeAddr("guardian1");
+        MomentsFactory f = new MomentsFactory(gov, _policy(THRESHOLD));
+        vm.prank(gov);
+        f.setGuardian(g1);
+        vm.prank(g1);
+        f.setGuardianPaused(true);
+        vm.prank(gov);
+        vm.expectRevert(MomentsFactory.UnpauseFirst.selector);
+        f.setGuardian(address(0));
+    }
+
     /// A fresh factory wired the way script/moments/Deploy.s.sol wires it: guardian first, then the modules.
     function _factoryWithGuardian(address guardianKey) internal returns (MomentsFactory f) {
         f = new MomentsFactory(gov, _policy(THRESHOLD));

@@ -102,6 +102,7 @@ contract MomentsFactory is IMomentsFactory {
     error Paused();
     error NotGuardian();
     error NotGovernanceOrGuardian();
+    error UnpauseFirst();
     error PolicyLapsed();
     error TermsChanged();
     error BaseURITooLong();
@@ -139,11 +140,14 @@ contract MomentsFactory is IMomentsFactory {
     }
 
     /// @notice v2 (sec2, MO-4): names the guardian. Governance can do this only while wiring (before `setModules`);
-    ///         after that only the current guardian can hand the role on (or renounce it with address(0)).
+    ///         after that only the current guardian can hand the role on (or renounce it with address(0)). Renouncing
+    ///         is refused while the guardian's pause is on (`UnpauseFirst`): nobody could ever lift it afterwards.
+    ///         Nobody can replace a lost guardian key either; that means a new cohort.
     function setGuardian(address _guardian) external {
         bool wiring = !modulesSet && msg.sender == governance;
         bool handOn = guardian != address(0) && msg.sender == guardian;
         if (!wiring && !handOn) revert NotGuardian();
+        if (_guardian == address(0) && guardianPaused) revert UnpauseFirst();
         guardian = _guardian;
         emit GuardianSet(_guardian);
     }
