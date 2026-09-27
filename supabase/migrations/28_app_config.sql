@@ -1,12 +1,18 @@
 -- 28_app_config — public, read-only app configuration; first key: the minimum iOS build (security audit 2026-09-26,
 -- GP-2: builds 12 and earlier hard-code retired contract stacks, and nothing could make them update).
 --
--- The app reads GET <SUPABASE_URL>/rest/v1/app_config?key=eq.ios&select=value with the publishable key it already
--- uses, at launch and on returning to the foreground (at most every 10 minutes). When its CFBundleVersion is below
--- value.min_build it shows a blocking "Update required" screen (value.message, a link to value.url) that still allows
--- viewing balances and exporting keys but disables every signing action. It fails open on any network or parse
--- error, so a broken row can never lock anyone out of their funds — which is also why the 'ios' row is CHECKed to
--- keep the shape the app parses.
+-- This is the server switch only. NO BUILD READS IT YET (checked 2026-09-27 on main and the sec2 iOS branches):
+-- raising min_build blocks nothing until the first build with the check below ships, and it never affects a build
+-- without that check — builds 12 and earlier included. Retiring those builds needs App Store Connect / TestFlight
+-- expiry; every deploy step written as "once build N is the minimum" means "once build N (with this check and the new
+-- behaviour) has shipped AND every older build is expired", not merely "once min_build is raised".
+--
+-- The contract a build implements: GET <SUPABASE_URL>/rest/v1/app_config?key=eq.ios&select=value with the publishable
+-- key it already uses, at launch and on returning to the foreground (at most every 10 minutes). When its
+-- CFBundleVersion is below value.min_build it shows a blocking "Update required" screen (value.message, a link to
+-- value.url) that still allows viewing balances and exporting keys but disables every signing action. It fails open on
+-- any network or parse error, so a broken row can never lock anyone out of their funds — which is also why the 'ios'
+-- row is CHECKed to keep the shape the app parses.
 --
 -- Access: RLS on; anon and authenticated may SELECT (policy "app config is public"); nobody but the service role and
 -- the dashboard can write (no write policies, and no write grants for anon or authenticated). Never store a secret
@@ -56,7 +62,7 @@ values ('ios', '{"min_build": 0, "message": "", "url": "https://testflight.apple
 on conflict (key) do nothing;
 
 comment on table public.app_config is
-  'Public, read-only app configuration (anyone with the publishable key can read every row: never store a secret). Written only by the service role / dashboard. Key ''ios'': {min_build, message, url} — the minimum CFBundleVersion the iOS app accepts before showing "Update required".';
+  'Public, read-only app configuration (anyone with the publishable key can read every row: never store a secret). Written only by the service role / dashboard. Key ''ios'': {min_build, message, url} — the minimum CFBundleVersion below which a build that implements the check shows "Update required" (builds without the check ignore it).';
 
 -- Fail the migration if the access rules did not take.
 do $$

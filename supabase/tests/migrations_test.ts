@@ -193,11 +193,14 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
       on conflict (id) do update set title = excluded.title`, [uuid(1), A]);
   });
 
-  await t.step("SB-5 B (deferred): refuses until min_build is raised, then scopes ids to the wallet", async () => {
+  await t.step("SB-5 B (deferred): refuses until armed, older builds expired and min_build raised; then scopes ids to the wallet", async () => {
     const template = await Deno.readTextFile(new URL("30_activity_primary_key_wallet_id.sql", DEFERRED));
     await assertRejects(() => db.exec(template), Error, "set v_required_build");
-    const armed = template.replace("v_required_build constant int := 0;", "v_required_build constant int := 15;");
-    assert(armed !== template, "the build placeholder moved");
+    const build = template.replace("v_required_build       constant int := 0;", "v_required_build       constant int := 15;");
+    assert(build !== template, "the build placeholder moved");
+    await assertRejects(() => db.exec(build), Error, "expire every build older than 15");
+    const armed = build.replace("v_older_builds_expired constant boolean := false;", "v_older_builds_expired constant boolean := true;");
+    assert(armed !== build, "the expiry placeholder moved");
     await assertRejects(() => db.exec(armed), Error, "below build 15");
     await db.exec(`update public.app_config set value = jsonb_set(value, '{min_build}', '15') where key = 'ios'`);
     await db.exec(armed);

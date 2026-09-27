@@ -10,9 +10,10 @@
 --     ?on_conflict=wallet,id and Prefer: resolution=merge-duplicates. The id-only primary key still exists, so a
 --     squatted id still fails the insert until B; nothing else changes and no existing client is affected.
 --   B (supabase/migrations-deferred/30_activity_primary_key_wallet_id.sql): make (wallet, id) the primary key and drop
---     the id-only uniqueness. Apply it only once the first app build that upserts with on_conflict=wallet,id is the
---     minimum build (app_config 'ios'.min_build, migration 28): older builds send on_conflict=id, which PostgREST
---     refuses (42P10) once no unique constraint on id alone exists.
+--     the id-only uniqueness. Apply it only once the first app build that upserts with on_conflict=wallet,id has
+--     shipped AND every older build is expired in App Store Connect / TestFlight (raising app_config ios.min_build,
+--     migration 28, does not stop builds that never read it): older builds send on_conflict=id, which PostgREST
+--     refuses (42P10) once no unique constraint on id alone exists. Until B, the squat above still works.
 --
 -- Reverse: alter table public.activity drop constraint activity_wallet_id_key;
 -- Verify after apply:

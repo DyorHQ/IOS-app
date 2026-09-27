@@ -2,11 +2,16 @@
 -- SB-5). Step A is migration 25.
 --
 -- DEFERRED: this file lives outside supabase/migrations on purpose, so no `db push` applies it early. Apply it only
--- once the first iOS build that upserts activity with ?on_conflict=wallet,id is the MINIMUM build
--- (app_config 'ios'.min_build, migration 28). Older builds upsert with on_conflict=id, which PostgREST refuses (42P10)
--- as soon as no unique constraint on id alone exists — their activity mirror would stop syncing.
+-- once BOTH hold:
+--   (a) the first iOS build that upserts activity with ?on_conflict=wallet,id has shipped, and app_config
+--       'ios'.min_build (migration 28) is at least that build; and
+--   (b) every older build is expired in App Store Connect / TestFlight. (a) alone is not enough: builds without the
+--       "Update required" check (every build shipped so far) ignore min_build.
+-- Older builds upsert with on_conflict=id, which PostgREST refuses (42P10) as soon as no unique constraint on id alone
+-- exists — their activity mirror would stop syncing.
 -- Before applying: set v_required_build below to that build number (the guard refuses while it is 0, and while the
--- live min_build is lower), then move this file into supabase/migrations/ so the repository matches the database.
+-- live min_build is lower) and v_older_builds_expired to true once (b) holds, then move this file into
+-- supabase/migrations/ so the repository matches the database.
 --
 -- What it does: the primary key becomes (wallet, id) and the id-only uniqueness goes (the (wallet, id) constraint from
 -- migration 25 is dropped too, since the new primary key is the same index). A row id is then only unique within its
@@ -22,11 +27,15 @@
 
 do $$
 declare
-  v_required_build constant int := 0;  -- SET THIS to the first build that sends on_conflict=wallet,id
-  v_min_build      int;
+  v_required_build       constant int := 0;          -- SET THIS to the first build that sends on_conflict=wallet,id
+  v_older_builds_expired constant boolean := false;  -- SET TRUE once every older build is expired (App Store Connect)
+  v_min_build            int;
 begin
   if v_required_build <= 0 then
     raise exception 'set v_required_build to the first iOS build that upserts activity with on_conflict=wallet,id';
+  end if;
+  if not v_older_builds_expired then
+    raise exception 'expire every build older than % in App Store Connect / TestFlight first, then set v_older_builds_expired', v_required_build;
   end if;
   select (value->>'min_build')::int into v_min_build from public.app_config where key = 'ios';
   if v_min_build is null or v_min_build < v_required_build then
