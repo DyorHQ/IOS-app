@@ -28,6 +28,8 @@ struct PerpTradeView: View {
     @State private var candlesResolution: Int?
     /// The last candle read failed: the chart says so rather than "no history".
     @State private var candlesFailed = false
+    /// The candles the chart draws: the selected timeframe's only, so a switch shows the spinner, not the old ones.
+    private var shownCandles: [PerpCandle] { candlesResolution == resolution ? candles : [] }
     @State private var viewMode: ViewMode = .trade
     @State private var chartDataTab: ChartDataTab = .book
     @State private var bottomTab: BottomTab = .positions
@@ -273,7 +275,7 @@ struct PerpTradeView: View {
 
     private var chartSection: some View {
         VStack(spacing: 10) {
-            TradingViewChart(candles: candles, levels: chartLevels)
+            TradingViewChart(candles: shownCandles, levels: chartLevels)
                 .frame(height: 300)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 // The chart is a canvas in a web view: VoiceOver gets a spoken summary instead (security audit AI-10).
@@ -282,14 +284,14 @@ struct PerpTradeView: View {
                 .accessibilityValue(chartSummary)
                 .overlay(alignment: .topTrailing) { positionBadge }
                 .overlay {
-                    if candles.isEmpty {
+                    if shownCandles.isEmpty {
                         if loadingCandles { ProgressView() }
                         else if candlesFailed { ContentUnavailableView("Chart Unavailable", systemImage: "wifi.exclamationmark", description: Text("Perpl's candles couldn't be loaded. Retrying every 15 seconds.")) }
                         else { ContentUnavailableView("No Candles", systemImage: "chart.bar.xaxis", description: Text("Perpl has no candle history for this market yet.")) }
                     }
                 }
                 .overlay(alignment: .bottomLeading) {
-                    if candlesFailed, !candles.isEmpty {
+                    if candlesFailed, !shownCandles.isEmpty {
                         Label("Not updating", systemImage: "wifi.exclamationmark")
                             .font(.caption2.weight(.medium)).foregroundStyle(Color.attention)
                             .padding(.horizontal, 8).padding(.vertical, 4)
@@ -314,12 +316,12 @@ struct PerpTradeView: View {
 
     /// The chart in words: the period, the last price, the change over the period, and its range.
     private var chartSummary: String {
-        guard let first = candles.first, let last = candles.last else { return loadingCandles ? "Loading" : candlesFailed ? "Couldn't load the chart" : "No candle history yet" }
+        guard let first = shownCandles.first, let last = shownCandles.last else { return loadingCandles ? "Loading" : candlesFailed ? "Couldn't load the chart" : "No candle history yet" }
         let span = Self.resolutions.first { $0.0 == resolution }?.1 ?? ""
-        let high = candles.map(\.high).max() ?? last.high
-        let low = candles.map(\.low).min() ?? last.low
+        let high = shownCandles.map(\.high).max() ?? last.high
+        let low = shownCandles.map(\.low).min() ?? last.low
         let change = first.open > 0 ? (last.close - first.open) / first.open * 100 : 0
-        return "\(candles.count) \(span) candles. Last \(NumberStyle.number(last.close)), \(change >= 0 ? "up" : "down") \(NumberStyle.percent(abs(change), signed: false)) over the period. High \(NumberStyle.number(high)), low \(NumberStyle.number(low))."
+        return "\(shownCandles.count) \(span) candles. Last \(NumberStyle.number(last.close)), \(change >= 0 ? "up" : "down") \(NumberStyle.percent(abs(change), signed: false)) over the period. High \(NumberStyle.number(high)), low \(NumberStyle.number(low))."
     }
 
     private var timeframePicker: some View {

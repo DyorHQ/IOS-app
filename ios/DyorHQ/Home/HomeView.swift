@@ -681,7 +681,7 @@ final class HomeModel {
             updatedAt = .now
         }
         if let launchList { self.launches = launchList }
-        if let holdings { launchHoldings = holdings }
+        if let holdings, priceMap != nil { launchHoldings = holdings } // valued at the pair's price: not without one
         if let perpState {
             positions = perpState.positions
             perpEquity = perpState.equity
