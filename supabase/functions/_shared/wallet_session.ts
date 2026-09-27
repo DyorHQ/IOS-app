@@ -9,12 +9,14 @@
 //     imports for APP_JWT_SIGNING_JWK, OH-7);
 // and requires aud "authenticated", role "authenticated", an exp in the future and a 0x wallet_address. Anything else —
 // the publishable, anon or service-role key, a token from another project, a forged or expired one — is not a session.
+// Without APP_JWT_SECRET no HS256 token is one: that is the state once the owner has moved sessions to an ES256 key and
+// unset the secret (supabase/README.md, "Session signing key").
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from "npm:jose@5";
 
 export type SessionKeys = { secret: Uint8Array | null; jwks: JWTVerifyGetKey | null };
 
-// The keys a token needs could not be had (the JWKS did not answer or did not parse, or APP_JWT_SECRET is not set for
-// an HS256 token): the caller answers 503 and logs it, never "not signed in".
+// The keys a token needs could not be had (the JWKS did not answer or did not parse, or SUPABASE_URL is not set): the
+// caller answers 503 and logs it, never "not signed in".
 export class SessionKeysUnavailable extends Error {}
 
 // jose's codes for a token that does not verify. Any other failure (the JWKS fetch timing out or failing) means the
@@ -35,7 +37,7 @@ export async function sessionWallet(authorization: string | null, keys: SessionK
   let payload: JWTPayload;
   try {
     if (alg === "HS256") {
-      if (!keys.secret) throw new SessionKeysUnavailable("APP_JWT_SECRET is not set");
+      if (!keys.secret) return null;
       ({ payload } = await jwtVerify(token, keys.secret, { algorithms: ["HS256"], audience: "authenticated", requiredClaims: ["exp"] }));
     } else if (alg === "ES256" || alg === "RS256") {
       if (!keys.jwks) throw new SessionKeysUnavailable("SUPABASE_URL is not set");

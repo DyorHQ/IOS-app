@@ -66,9 +66,12 @@ Deno.test("SB-9: anything but a valid, unexpired wallet session is not one", asy
   assertEquals(await sessionWallet(`Bearer ${forged}`, { secret: null, jwks: ours.jwks }), null);
 });
 
-Deno.test("SB-9: missing keys are an outage (503), never 'not signed in'", async () => {
+Deno.test("SB-9: without APP_JWT_SECRET no HS256 token is a session (the state after the move to an ES256 key)", async () => {
   const hs = await mintSession(WALLET, (await sessionSigner({ secret: SECRET }))!, nowS());
-  await assertRejects(() => sessionWallet(`Bearer ${hs}`, { secret: null, jwks: null }), SessionKeysUnavailable);
+  assertEquals(await sessionWallet(`Bearer ${hs}`, { secret: null, jwks: null }), null);
+});
+
+Deno.test("SB-9: an unreachable or unset JWKS is an outage (503), never 'not signed in'", async () => {
   const { privateJwk } = await es256Keys();
   const es = await mintSession(WALLET, (await sessionSigner({ jwk: privateJwk }))!, nowS());
   await assertRejects(() => sessionWallet(`Bearer ${es}`, { secret: null, jwks: null }), SessionKeysUnavailable);
