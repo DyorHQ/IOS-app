@@ -2,19 +2,20 @@
 
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import type { Address } from "viem";
+import { formatUnits, type Address } from "viem";
 import { Icon } from "../ui/icons";
 import { Progress, Skeleton, toneFor } from "../launchpad/ui";
 import { MOMENTS_DEPLOYED, USDC } from "../lib/moments/config";
 import { fetchHolderStats } from "../lib/moments/holders";
 import { STATES, fdvUsd, fetchNftHolders, type MomentInfo, type Provenance } from "../lib/moments/reads";
 import { useAsync } from "../lib/use-async";
-import { bpsToPct, fmtNumber, fmtUnits, shortAddress, timeAgo } from "../lib/format";
+import { bpsToPct, fmtNumber, fmtUnits, fmtUsd, shortAddress, timeAgo } from "../lib/format";
 
 /* Shared Moments pieces. Containment (spec §12): every coin shows holder count + top-holder share, every Moment is
    labelled early / low-cap / validation, and there is no "proven demand" badge anywhere. */
 
-export const usd = (units: bigint, opts?: { compact?: boolean; dp?: number }) => `$${fmtUnits(units, USDC.decimals, opts)}`;
+/** USDC amounts as dollars, formatted like every other dollar value in the app (fmtUsd). */
+export const usd = (units: bigint) => fmtUsd(Number(formatUnits(units, USDC.decimals)));
 export const coinsOf = (wei: bigint, symbol: string, compact = true) => `${fmtUnits(wei, 18, { compact })} $${symbol}`;
 
 /** A gateway URL for an ipfs:// URI, the URI itself when it is http(s), and "" for anything else: media URIs are
@@ -26,7 +27,9 @@ export function ipfsToHttp(uri: string): string {
 }
 const isVideo = (uri: string) => /\.(mp4|webm|mov|m4v)(\?|$)/i.test(uri);
 
-export function MomentMedia({ provenance, name, hero = false }: { provenance: Pick<Provenance, "mediaURI" | "animationURI">; name: string; hero?: boolean }) {
+/** The Moment's image or video. `still`: inside a link (a card), where interactive content is not allowed, the video has
+    no controls and the media has no name of its own; the card's heading names it. */
+export function MomentMedia({ provenance, name, hero = false, still = false }: { provenance: Pick<Provenance, "mediaURI" | "animationURI">; name: string; hero?: boolean; still?: boolean }) {
   const [broken, setBroken] = useState(false);
   const image = ipfsToHttp(provenance.mediaURI);
   const animation = provenance.animationURI ? ipfsToHttp(provenance.animationURI) : "";
@@ -34,9 +37,9 @@ export function MomentMedia({ provenance, name, hero = false }: { provenance: Pi
   return (
     <div className={`moment-media ${hero ? "hero" : ""}`}>
       {animation && isVideo(animation) ? (
-        <video src={animation} poster={usable ? image : undefined} controls muted playsInline preload="metadata" aria-label={name} />
+        <video src={animation} poster={usable ? image : undefined} controls={!still} muted playsInline preload="metadata" aria-label={still ? undefined : name} aria-hidden={still || undefined} />
       ) : usable ? (
-        <img src={image} alt={name} loading="lazy" onError={() => setBroken(true)} />
+        <img src={image} alt={still ? "" : name} loading="lazy" onError={() => setBroken(true)} />
       ) : (
         <span className="placeholder" aria-hidden="true"><Icon name="rocket" /></span>
       )}
@@ -69,7 +72,7 @@ export function MomentCard({ moment, now }: { moment: MomentInfo; now: number })
   const price = moment.pool ? moment.pool.usdcPerCoin : null;
   return (
     <Link href={`/moments/${moment.id}`} className="card moment-card link">
-      <div className="media"><MomentMedia provenance={moment.provenance} name={moment.name} /></div>
+      <div className="media"><MomentMedia provenance={moment.provenance} name={moment.name} still /></div>
       <div className="body">
         <div className="launch-top" style={{ marginBottom: 6 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -80,9 +83,9 @@ export function MomentCard({ moment, now }: { moment: MomentInfo; now: number })
         </div>
         <div className="trust"><EarlyLabel /><em className="badge">{moment.editions} edition{moment.editions === 1 ? "" : "s"}</em></div>
         <div className="progress-label"><span>{moment.graduated ? "Pool locked on Uniswap v4" : moment.ledger.state === 3 ? "Wound down" : "Reserve to graduation"}</span><b>{(moment.progressBps / 100).toFixed(1)}%</b></div>
-        <Progress bps={moment.progressBps} />
+        <Progress bps={moment.progressBps} label="Reserve to graduation" />
         <div className="launch-stats">
-          <span>{moment.graduated ? "Coin price" : "Collect price"}<b>{moment.graduated && price !== null ? `$${fmtNumber(price)}` : usd(moment.price)}</b></span>
+          <span>{moment.graduated ? "Coin price" : "Collect price"}<b>{moment.graduated && price !== null ? fmtUsd(price) : usd(moment.price)}</b></span>
           <span>{moment.graduated && price !== null ? "FDV" : "Raised"}<b>{moment.graduated && price !== null ? `$${fmtNumber(fdvUsd(price), { compact: true })}` : usd(moment.ledger.totalGross)}</b></span>
           <span>{moment.ledger.state === 0 ? "Window" : "Collectors' coins"}<b>{moment.ledger.state === 0 ? <Countdown until={moment.deadline} now={now} /> : fmtUnits(moment.entitlements, 18, { compact: true })}</b></span>
         </div>

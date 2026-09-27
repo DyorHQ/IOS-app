@@ -1,9 +1,10 @@
-import { erc20Abi, type Address, type Hex } from "viem";
+import { erc20Abi, formatUnits, type Address, type Hex } from "viem";
 import { publicClient } from "../chain";
 import { describeError } from "../errors";
 import { waitFor } from "../use-tx";
 import type { Wallet } from "../wallet";
 import { perplExchangeAbi } from "./abi";
+import { PERP_MARKETS } from "./markets";
 
 /* Perpl: the fully on-chain perpetuals order book on Monad (https://docs.perpl.xyz). Positions, orders and
    collateral live in the Exchange contract; market data streams from Perpl's public WebSocket. Everything the
@@ -19,15 +20,7 @@ export const PERPL = {
   minDeposit: 10_000_000n, // 10 AUSD
 } as const;
 
-export const PERP_MARKETS = [
-  { id: 1, symbol: "BTC", name: "Bitcoin", tv: "BINANCE:BTCUSDT.P" },
-  { id: 10, symbol: "MON", name: "Monad", tv: "BINANCE:MONUSDT.P" },
-  { id: 20, symbol: "ETH", name: "Ether", tv: "BINANCE:ETHUSDT.P" },
-  { id: 31, symbol: "SOL", name: "Solana", tv: "BINANCE:SOLUSDT.P" },
-  { id: 40, symbol: "HYPE", name: "Hyperliquid", tv: "BINANCE:HYPEUSDT.P" },
-  { id: 50, symbol: "ZEC", name: "Zcash", tv: "BINANCE:ZECUSDT.P" },
-] as const;
-export type PerpMarket = (typeof PERP_MARKETS)[number];
+export { PERP_MARKETS, type PerpMarket } from "./markets";
 
 /** OrderDesc.orderType as the SDK encodes it (RequestType as u8). */
 export const ORDER_TYPE = { OpenLong: 0, OpenShort: 1, CloseLong: 2, CloseShort: 3, Cancel: 4, IncreasePositionCollateral: 5, Change: 6 } as const;
@@ -67,6 +60,8 @@ export type PerpPosition = {
   leverage: number;
   liquidation: number | null;
   notional: number;
+  /** The market as read with the position, so the position can be closed even when the listed markets' read lacks it. */
+  perp: PerpInfo;
 };
 export type PerpOrder = { perpId: number; symbol: string; orderId: number; type: number; side: "buy" | "sell"; price: number; size: number; leverage: number; expiryBlock: number; reduceOnly: boolean };
 
@@ -74,10 +69,12 @@ const scale = (v: bigint, decimals: number) => Number(v) / 10 ** decimals;
 export const fromCNS = (v: bigint) => Number(v) / 10 ** PERPL.collateralDecimals;
 export const toCNS = (v: number) => BigInt(Math.round(v * 10 ** PERPL.collateralDecimals));
 
-export async function fetchPerps(ids: readonly number[] = PERP_MARKETS.map((m) => m.id)): Promise<PerpInfo[]> {
+type Reader = Pick<typeof publicClient, "multicall">;
+
+export async function fetchPerps(ids: readonly number[] = PERP_MARKETS.map((m) => m.id), client: Reader = publicClient): Promise<PerpInfo[]> {
   const [infos, margins] = await Promise.all([
-    publicClient.multicall({ contracts: ids.map((id) => ({ ...exchange, functionName: "getPerpetualInfo", args: [BigInt(id)] }) as const), allowFailure: true }),
-    publicClient.multicall({ contracts: ids.map((id) => ({ ...exchange, functionName: "getMarginFractions", args: [BigInt(id), 0n] }) as const), allowFailure: true }),
+    client.multicall({ contracts: ids.map((id) => ({ ...exchange, functionName: "getPerpetualInfo", args: [BigInt(id)] }) as const), allowFailure: true }),
+    client.multicall({ contracts: ids.map((id) => ({ ...exchange, functionName: "getMarginFractions", args: [BigInt(id), 0n] }) as const), allowFailure: true }),
   ]);
   const out: PerpInfo[] = [];
   ids.forEach((id, i) => {
@@ -130,15 +127,28 @@ export function liquidationPrice(side: "long" | "short", entry: number, size: nu
   return Math.max(0, entry + (sign * (mmr - margin - premium)) / size);
 }
 
-export async function fetchPositions(account: PerpAccount, perps: PerpInfo[]): Promise<PerpPosition[]> {
-  if (account.positionPerps.length === 0) return [];
-  const results = await publicClient.multicall({ contracts: account.positionPerps.map((id) => ({ ...exchange, functionName: "getPosition", args: [BigInt(id), BigInt(account.accountId)] }) as const), allowFailure: true });
+export type PositionsRead = { positions: PerpPosition[]; unreadable: number[] };
+
+/** Every open position of the account, and the markets (perp ids) where the account has a position that could not be
+    read. One market that can't be read (its position or its market info reverts) never hides the others, which keep
+    their Close buttons; it is named instead, so nothing says "no positions" while one is missing. A market the app
+    doesn't list is read too. Only a failure of the whole read throws. */
+export async function fetchPositions(account: PerpAccount, perps: PerpInfo[], client: Reader = publicClient): Promise<PositionsRead> {
+  if (account.positionPerps.length === 0) return { positions: [], unreadable: [] };
+  const unlisted = account.positionPerps.filter((id) => !perps.some((p) => p.id === id));
+  const markets = unlisted.length ? [...perps, ...(await fetchPerps(unlisted, client))] : perps;
+  const results = await client.multicall({ contracts: account.positionPerps.map((id) => ({ ...exchange, functionName: "getPosition", args: [BigInt(id), BigInt(account.accountId)] }) as const), allowFailure: true });
   const out: PerpPosition[] = [];
+  const unreadable: number[] = [];
   results.forEach((r, i) => {
-    if (r.status !== "success") return;
+    const perpId = account.positionPerps[i];
+    const perp = markets.find((p) => p.id === perpId);
+    if (r.status !== "success" || !perp) {
+      unreadable.push(perpId);
+      return;
+    }
     const [pos, markPNS] = r.result;
-    const perp = perps.find((p) => p.id === account.positionPerps[i]);
-    if (!perp || pos.lotLNS === 0n) return;
+    if (pos.lotLNS === 0n) return;
     const size = scale(pos.lotLNS, perp.lotDecimals);
     const entry = scale(pos.pricePNS, perp.priceDecimals);
     const mark = markPNS > 0n ? scale(markPNS, perp.priceDecimals) : perp.mark;
@@ -147,9 +157,16 @@ export async function fetchPositions(account: PerpAccount, perps: PerpInfo[]): P
     const premium = fromCNS(pos.premiumPnlCNS);
     const unrealized = (side === "long" ? mark - entry : entry - mark) * size + premium;
     const notional = size * mark;
-    out.push({ perpId: perp.id, symbol: perp.symbol, side, size, entry, mark, margin, unrealized, premium, leverage: margin > 0 ? notional / margin : 0, liquidation: liquidationPrice(side, entry, size, margin, premium, perp.maintMarginFrac), notional });
+    out.push({ perpId: perp.id, symbol: perp.symbol, side, size, entry, mark, margin, unrealized, premium, leverage: margin > 0 ? notional / margin : 0, liquidation: liquidationPrice(side, entry, size, margin, premium, perp.maintMarginFrac), notional, perp });
   });
-  return out;
+  return { positions: out, unreadable };
+}
+
+/** "Couldn't read your position in BTC-PERP." for the perp ids fetchPositions could not read. */
+export function unreadablePositionsText(ids: readonly number[]): string {
+  const names = ids.map((id) => { const m = PERP_MARKETS.find((p) => p.id === id); return m ? `${m.symbol}-PERP` : `Perpl market ${id}`; });
+  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0] ?? "";
+  return `Couldn't read your position${ids.length === 1 ? "" : "s"} in ${list}.`;
 }
 
 /** Open orders of an account: walk the perp's order-id bitmap index, read each order, keep the account's own. */
@@ -213,17 +230,25 @@ async function send<TArgs extends readonly unknown[]>(wallet: Wallet, functionNa
   return hash;
 }
 
-/** Approves AUSD when needed, then opens the account (first deposit) or tops it up. */
-export async function deposit(wallet: Wallet, amountCNS: bigint, hasAccount: boolean, onSent: OnSent): Promise<Hex> {
+/** Opens the account (first deposit) or tops it up, approving AUSD first when needed. Whether the account exists is
+    read from the chain here, not taken from the screen, and the balance and the opening minimum are checked before
+    anything is signed: an approval for a deposit that can't happen is a wasted transaction. */
+export async function deposit(wallet: Wallet, amountCNS: bigint, onSent: OnSent): Promise<Hex> {
   const owner = wallet.account.address;
-  const allowance = await publicClient.readContract({ address: PERPL.collateral, abi: erc20Abi, functionName: "allowance", args: [owner, PERPL.exchange] });
+  const [existing, balance, allowance] = await Promise.all([
+    fetchAccount(owner),
+    publicClient.readContract({ address: PERPL.collateral, abi: erc20Abi, functionName: "balanceOf", args: [owner] }),
+    publicClient.readContract({ address: PERPL.collateral, abi: erc20Abi, functionName: "allowance", args: [owner, PERPL.exchange] }),
+  ]);
+  if (!existing && amountCNS < PERPL.minDeposit) throw new Error(`The first deposit opens your Perpl account and must be at least ${formatUnits(PERPL.minDeposit, PERPL.collateralDecimals)} AUSD.`);
+  if (balance < amountCNS) throw new Error(`Your wallet holds ${formatUnits(balance, PERPL.collateralDecimals)} AUSD, less than the deposit.`);
   if (allowance < amountCNS) {
     const { request } = await publicClient.simulateContract({ address: PERPL.collateral, abi: erc20Abi, functionName: "approve", args: [PERPL.exchange, amountCNS], account: wallet.account });
     const hash = await wallet.writeContract(request);
     onSent(hash);
     await waitFor(hash);
   }
-  return send(wallet, hasAccount ? "depositCollateral" : "createAccount", [amountCNS] as const, onSent);
+  return send(wallet, existing ? "depositCollateral" : "createAccount", [amountCNS] as const, onSent);
 }
 
 export const withdraw = (wallet: Wallet, amountCNS: bigint, onSent: OnSent) => send(wallet, "withdrawCollateral", [amountCNS] as const, onSent);
@@ -233,7 +258,11 @@ export type OrderInput = {
   side: "long" | "short";
   kind: "market" | "limit";
   size: number; // base units
+  /** The exact size in lots, when the caller parsed it (the order form); otherwise `size` is rounded to the lot. */
+  lotLNS?: bigint;
   price?: number; // limit price; market orders derive it from the mark and slippage
+  /** The exact limit price in the market's price units, when the caller parsed it. */
+  pricePNS?: bigint;
   leverage: number;
   reduceOnly?: boolean;
   slippageBps?: number;
@@ -258,8 +287,8 @@ export function buildOrderDesc(input: OrderInput) {
     perpId: BigInt(perp.id),
     orderType,
     orderId: 0n,
-    pricePNS: BigInt(Math.round(price * 10 ** perp.priceDecimals)),
-    lotLNS: BigInt(Math.round(input.size * 10 ** perp.lotDecimals)),
+    pricePNS: input.kind === "limit" && input.pricePNS !== undefined ? input.pricePNS : BigInt(Math.round(price * 10 ** perp.priceDecimals)),
+    lotLNS: input.lotLNS ?? BigInt(Math.round(input.size * 10 ** perp.lotDecimals)),
     expiryBlock: 0n,
     postOnly: !!input.postOnly && input.kind === "limit",
     fillOrKill: false,
@@ -288,8 +317,8 @@ export const perpError = describeError;
 
 /** Perpl's public market context through the app's proxy: 24h reference price and volume per market. */
 export type MarketContext = { id: number; name: string; priceDecimals: number; sizeDecimals: number; mark: number; last: number; prev24h: number; volume24h: number; openInterest: number; fundingRate: number; isOpen: boolean };
-export async function fetchPerplContext(): Promise<MarketContext[]> {
-  const res = await fetch("/api/perpl/v1/pub/context");
+export async function fetchPerplContext(signal?: AbortSignal): Promise<MarketContext[]> {
+  const res = await fetch("/api/perpl/v1/pub/context", { signal });
   if (!res.ok) throw new Error(`Perpl context unavailable (${res.status})`);
   const json = (await res.json()) as { markets?: { id: number; name: string; config?: { price_decimals: number; size_decimals: number; is_open: boolean }; state?: { mrk: number; lst: number; prv: number; dv: number; oi: number }; funding?: { rate: number; div: number } }[] };
   return (json.markets ?? []).filter((m) => m.config && m.state).map((m) => {

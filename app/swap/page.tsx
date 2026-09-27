@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { isAddress, type Address, type Hex } from "viem";
 import { Icon } from "../ui/icons";
+import { useModal } from "../ui/modal";
 import { DEPLOYED, explorerToken } from "../lib/chain";
 import { fetchLaunches } from "../lib/launchpad";
 import { fetchQuotes, fetchVenueQuote, isWrap, quoteAgeSeconds, rankQuotes, runPlan } from "../lib/swap/engine";
-import { CORE_TOKENS, findToken, loadBalances, loadToken, sameToken, type TokenInfo } from "../lib/swap/tokens";
+import { CORE_TOKENS, findToken, loadBalances, loadToken, sameToken, tokenNamed, type TokenInfo } from "../lib/swap/tokens";
 import { VENUE_LABEL, type Venue, type VenueQuote } from "../lib/swap/types";
 import { useAsync, useNow } from "../lib/use-async";
 import { useDebounced } from "../lib/use-debounced";
@@ -34,6 +35,11 @@ function VenueMark({ venue }: { venue: Venue }) {
 
 function TokenPicker({ tokens, balances, exclude, onPick, onClose }: { tokens: TokenInfo[]; balances: Record<string, bigint>; exclude: TokenInfo; onPick: (t: TokenInfo) => void; onClose: () => void }) {
   const [query, setQuery] = useState("");
+  const searchId = useId();
+  const ref = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+  // Mounted only while open: modal from mount to unmount, starting in the search and returning to the token button.
+  useModal(ref, true, () => search.current);
   const custom = useAsync(async () => (isAddress(query.trim()) && !findToken(tokens, query.trim()) ? loadToken(query.trim()) : null), `custom:${query.trim().toLowerCase()}`);
   const q = query.trim().toLowerCase();
   const list = tokens.filter((t) => !sameToken(t.address, exclude.address) && (!q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.address.toLowerCase() === q));
@@ -43,14 +49,14 @@ function TokenPicker({ tokens, balances, exclude, onPick, onClose }: { tokens: T
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div className="picker" role="dialog" aria-modal="true" aria-label="Choose a token" onClick={onClose}>
+    <div ref={ref} className="picker" role="dialog" aria-modal="true" aria-labelledby={`${searchId}-title`} onClick={onClose}>
       <div className="card panel" onClick={(e) => e.stopPropagation()}>
-        <div className="hd" style={{ marginBottom: 0 }}><h2>Choose a token</h2><button type="button" className="iconbtn" aria-label="Close" onClick={onClose}><Icon name="x" /></button></div>
-        <input className="search-in" placeholder="Search by name, symbol or paste an address" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus />
+        <div className="hd" style={{ marginBottom: 0 }}><h2 id={`${searchId}-title`}><label htmlFor={searchId}>Choose a token</label></h2><button type="button" className="iconbtn" aria-label="Close" onClick={onClose}><Icon name="x" /></button></div>
+        <input ref={search} id={searchId} className="search-in" placeholder="Search by name, symbol or paste an address" value={query} onChange={(e) => setQuery(e.target.value)} />
         <div className="picker-list">
           {custom.data && (
             <button type="button" onClick={() => onPick(custom.data as TokenInfo)}>
-              <TokenLogo src="" name={custom.data.symbol} address={custom.data.address} size="sm" />
+              <TokenLogo src="" name={custom.data.symbol} size="sm" />
               <span><b>{custom.data.symbol}</b><small>{custom.data.name} · {shortAddress(custom.data.address)} · unlisted, verify before trading</small></span>
             </button>
           )}
@@ -58,7 +64,7 @@ function TokenPicker({ tokens, balances, exclude, onPick, onClose }: { tokens: T
             const bal = balances[t.address.toLowerCase()];
             return (
               <button key={t.address} type="button" onClick={() => onPick(t)}>
-                <TokenLogo src={t.logo} name={t.symbol} address={t.address} size="sm" />
+                <TokenLogo src={t.logo} name={t.symbol} size="sm" />
                 <span><b>{t.symbol}{t.launchpad && <em className="badge accent" style={{ marginLeft: 6 }}>Launchpad</em>}</b><small>{t.name}</small></span>
                 {bal !== undefined && <span className="bal">{fmtUnits(bal, t.decimals, { compact: true })}<small>{t.symbol}</small></span>}
               </button>
@@ -85,28 +91,45 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const [tokenIn, setTokenIn] = useState<TokenInfo>(CORE_TOKENS[0]);
   const [tokenOut, setTokenOut] = useState<TokenInfo>(CORE_TOKENS[2]);
   const [seeded, setSeeded] = useState(false);
+  // Set by the user's first pick, flip or amount: from then on the link no longer decides the pair or its direction.
+  const edited = useRef(false);
+  // Tokens the link chose that are not on the app's list (anyone can deploy a token called "USDC"), and whether the
+  // user has confirmed checking them.
+  const [linked, setLinked] = useState<Address[]>([]);
+  const [linkChecked, setLinkChecked] = useState(false);
   const [amount, setAmount] = useState("");
   const [slippageBps, setSlippage] = useState(100);
   const [choice, setChoice] = useState<Venue | null>(null);
   const [picking, setPicking] = useState<"in" | "out" | null>(null);
   const [step, setStep] = useState<{ label: string; hash?: Hex } | null>(null);
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, reset, dismiss, busy, locked } = useTx();
   const debouncedAmount = useDebounced(amount, 400);
+  const ids = useId();
   const amountIn = parseAmount(debouncedAmount, tokenIn.decimals) ?? 0n;
 
-  // Preselect from ?in= and ?out= (symbols or addresses) once the token list, including graduated launches, is known.
+  // Preselect from the screen that opened the swap (initialIn / initialOut) or from ?in= and ?out= (symbols or
+  // addresses) once the token list, including graduated launches, is known, unless the user has already chosen: a slow
+  // list or token lookup must never overwrite their pick. A symbol names only a core token: launchpad tickers are not
+  // unique, so a later launch with a popular ticker must not be what a shared link picks. Launches go by address.
   useEffect(() => {
     if (seeded || (DEPLOYED && !launched.data)) return;
-    const pick = (raw: string | null): TokenInfo | undefined => raw ? tokens.find((t) => t.symbol.toLowerCase() === raw.toLowerCase() || t.address.toLowerCase() === raw.toLowerCase()) : undefined;
+    let live = true;
     const wantIn = initialIn ?? params.get("in");
     const wantOut = initialOut ?? params.get("out");
-    const inTok = pick(wantIn);
-    const outTok = pick(wantOut);
+    // The app's own presets were chosen by the app; only a URL parameter was chosen by whoever wrote the link.
+    const fromLink = [initialIn === undefined, initialOut === undefined];
+    const inTok = tokenNamed(tokens, wantIn);
+    const outTok = tokenNamed(tokens, wantOut);
     Promise.all([inTok ?? (wantIn && isAddress(wantIn) ? loadToken(wantIn) : null), outTok ?? (wantOut && isAddress(wantOut) ? loadToken(wantOut) : null)]).then(([i, o]) => {
-      if (i) setTokenIn(i);
-      if (o) setTokenOut(o);
+      if (!live) return;
+      if (!edited.current) {
+        if (i) setTokenIn(i);
+        if (o) setTokenOut(o);
+        setLinked([fromLink[0] && !inTok && i ? i.address : null, fromLink[1] && !outTok && o ? o.address : null].filter((a): a is Address => a !== null));
+      }
       setSeeded(true);
     });
+    return () => { live = false; };
   }, [seeded, launched.data, params, tokens, initialIn, initialOut]);
 
   const balances = useAsync(async (): Promise<Record<string, bigint>> => (account ? loadBalances(tokens, account) : {}), `balances:${account ?? ""}:${tokens.length}`, 15_000);
@@ -114,9 +137,9 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const quoteKey = `${tokenIn.address}:${tokenOut.address}:${amountIn}:${slippageBps}:${account ?? ""}`;
   const wrapping = isWrap(req);
   // Each venue streams in on its own; a slow venue never delays the others.
-  const kuru = useAsync(async () => (amountIn > 0n && !wrapping ? fetchVenueQuote("kuru", req) : null), `kuru:${quoteKey}`, 12_000);
-  const uni = useAsync(async () => (amountIn > 0n && !wrapping ? fetchVenueQuote("uniswap", req) : null), `uniswap:${quoteKey}`, 12_000);
-  const monday = useAsync(async () => (amountIn > 0n && !wrapping ? fetchVenueQuote("monday", req) : null), `monday:${quoteKey}`, 12_000);
+  const kuru = useAsync(async (signal) => (amountIn > 0n && !wrapping ? fetchVenueQuote("kuru", req, signal) : null), `kuru:${quoteKey}`, 12_000);
+  const uni = useAsync(async (signal) => (amountIn > 0n && !wrapping ? fetchVenueQuote("uniswap", req, signal) : null), `uniswap:${quoteKey}`, 12_000);
+  const monday = useAsync(async (signal) => (amountIn > 0n && !wrapping ? fetchVenueQuote("monday", req, signal) : null), `monday:${quoteKey}`, 12_000);
   const wrap = useAsync(async () => (amountIn > 0n && wrapping ? fetchVenueQuote("wmon", req) : null), `wmon:${quoteKey}`);
   const venueState = { kuru, uniswap: uni, monday, wmon: wrap } as const;
   const quotes = {
@@ -132,9 +155,17 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const insufficient = balIn !== undefined && amountIn > balIn;
   const impact = selected?.priceImpactBps ?? null;
   const highImpact = impact !== null && impact > 300;
+  // Selected tokens that are not on the list (pasted in the picker or chosen by a link). A link's choice must be
+  // confirmed before the swap is offered: the link, not the user, picked that contract.
+  const unlisted = [tokenIn, tokenOut].filter((t) => !t.native && !findToken(tokens, t.address));
+  const fromLink = unlisted.some((t) => linked.some((a) => sameToken(a, t.address)));
+  const needsCheck = fromLink && !linkChecked;
 
-  const flip = () => { setTokenIn(tokenOut); setTokenOut(tokenIn); setAmount(""); setChoice(null); reset(); };
+  const flip = () => { edited.current = true; setTokenIn(tokenOut); setTokenOut(tokenIn); setAmount(""); setChoice(null); reset(); };
+  // Typing an amount or tapping Max: the user's edit, so a link still being resolved no longer changes the pair.
+  const editAmount = (value: string) => { edited.current = true; setAmount(value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } };
   const pickToken = (t: TokenInfo) => {
+    edited.current = true;
     if (picking === "in") { if (sameToken(t.address, tokenOut.address)) setTokenOut(tokenIn); setTokenIn(t); }
     else if (picking === "out") { if (sameToken(t.address, tokenIn.address)) setTokenIn(tokenOut); setTokenOut(t); }
     setPicking(null);
@@ -161,7 +192,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   };
 
   const outText = selected ? fmtUnits(selected.amountOut, tokenOut.decimals) : amountIn > 0n && quotes.loading ? "…" : "0";
-  const buttonLabel = !amountIn ? "Enter an amount" : insufficient ? `Not enough ${tokenIn.symbol}` : quotes.loading && !selected ? "Finding the best price…" : !selected ? "No route found" : highImpact ? `Swap anyway via ${VENUE_LABEL[selected.venue]}` : selected.venue === "wmon" ? selected.route.split(",")[0] : `Swap via ${VENUE_LABEL[selected.venue]}`;
+  const buttonLabel = !amountIn ? "Enter an amount" : needsCheck ? "Check the unlisted token first" : insufficient ? `Not enough ${tokenIn.symbol}` : quotes.loading && !selected ? "Finding the best price…" : !selected ? "No route found" : highImpact ? `Swap anyway via ${VENUE_LABEL[selected.venue]}` : selected.venue === "wmon" ? selected.route.split(",")[0] : `Swap via ${VENUE_LABEL[selected.venue]}`;
 
   return (
     <>
@@ -169,22 +200,22 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
         <section className="card swapcard">
           <div className="swap-head">
             <h1>Swap</h1>
-            <div className="slip"><span style={{ marginRight: 0 }}>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
+            <div className="slip" role="group" aria-labelledby={`${ids}-slippage`}><span id={`${ids}-slippage`} style={{ marginRight: 0 }}>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
           </div>
           <div className="swap-field">
-            <div className="lbl"><span>You pay</span>{balIn !== undefined && <button type="button" onClick={() => setAmount(exactDown(balIn, tokenIn.decimals, 8))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
+            <div className="lbl"><label htmlFor={`${ids}-pay`}>You pay</label>{balIn !== undefined && <button type="button" onClick={() => editAmount(exactDown(balIn, tokenIn.decimals, 8))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
             <div className="rowin">
-              <input inputMode="decimal" placeholder="0" aria-label="Amount to pay" value={amount} onChange={(e) => { setAmount(e.target.value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } }} />
-              <button type="button" className="tokbtn" onClick={() => setPicking("in")}><TokenLogo src={tokenIn.logo} name={tokenIn.symbol} address={tokenIn.address} size="sm" />{tokenIn.symbol}<Icon name="chev-down" /></button>
+              <input id={`${ids}-pay`} inputMode="decimal" placeholder="0" value={amount} onChange={(e) => editAmount(e.target.value)} />
+              <button type="button" className="tokbtn" onClick={() => setPicking("in")}><TokenLogo src={tokenIn.logo} name={tokenIn.symbol} size="sm" />{tokenIn.symbol}<Icon name="chev-down" /></button>
             </div>
-            <div className="sub">{insufficient ? <span className="impact-bad">Insufficient balance</span> : ""}</div>
+            <div className="sub" role="status">{insufficient ? <span className="impact-bad">Insufficient balance</span> : ""}</div>
           </div>
           <button type="button" className="flip" aria-label="Switch tokens" onClick={flip}><Icon name="swap" /></button>
           <div className="swap-field">
-            <div className="lbl"><span>You receive</span>{balances.data?.[tokenOut.address.toLowerCase()] !== undefined && <span>Balance {fmtUnits(balances.data[tokenOut.address.toLowerCase()], tokenOut.decimals, { compact: true })}</span>}</div>
+            <div className="lbl"><label htmlFor={`${ids}-receive`}>You receive</label>{balances.data?.[tokenOut.address.toLowerCase()] !== undefined && <span>Balance {fmtUnits(balances.data[tokenOut.address.toLowerCase()], tokenOut.decimals, { compact: true })}</span>}</div>
             <div className="rowin">
-              <input readOnly aria-label="Amount to receive" value={outText} placeholder="0" />
-              <button type="button" className="tokbtn" onClick={() => setPicking("out")}><TokenLogo src={tokenOut.logo} name={tokenOut.symbol} address={tokenOut.address} size="sm" />{tokenOut.symbol}<Icon name="chev-down" /></button>
+              <input id={`${ids}-receive`} readOnly value={outText} placeholder="0" />
+              <button type="button" className="tokbtn" onClick={() => setPicking("out")}><TokenLogo src={tokenOut.logo} name={tokenOut.symbol} size="sm" />{tokenOut.symbol}<Icon name="chev-down" /></button>
             </div>
             <div className="sub">{selected && amountIn > 0n ? `1 ${tokenIn.symbol} = ${fmtNumber(rate(amountIn, tokenIn.decimals, selected.amountOut, tokenOut.decimals))} ${tokenOut.symbol}` : ""}</div>
           </div>
@@ -198,11 +229,17 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
               <div><span>Quote age</span><b>{now ? `${Math.max(0, now - selected.at)}s` : "—"}</b></div>
             </div>
           )}
+          {unlisted.length > 0 && (
+            <div className="warnbox">
+              <b>{fromLink ? "Unlisted token from a link." : "Unlisted token."}</b> {unlisted.map((t, i) => <span key={t.address}>{i > 0 ? " and " : ""}{t.symbol} (<a href={explorerToken(t.address)} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>{shortAddress(t.address)}</a>)</span>)} {unlisted.length === 1 ? "is" : "are"} not on DyorHQ&apos;s token list{fromLink ? ", and the link you opened chose it" : ""}. Anyone can deploy a token with any name and symbol: check the contract before you swap.
+              {fromLink && <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}><input type="checkbox" checked={linkChecked} onChange={(e) => setLinkChecked(e.target.checked)} />I checked this contract address.</label>}
+            </div>
+          )}
           {highImpact && <div className="warnbox"><b>High price impact.</b> This trade moves the market by {bpsToPct(impact)}. Consider a smaller amount or a different venue.</div>}
           {step && busy && <p className="hint">{step.label}{step.hash ? " · sent" : "…"}</p>}
-          <TxStatus tx={tx} onDismiss={() => { reset(); setStep(null); }} />
+          <TxStatus tx={tx} onDismiss={() => { dismiss(); setStep(null); }} />
           {/* Not ready until the typed amount has settled: the quote and the swap use the debounced amount. */}
-          <ActionButton ready={!!selected && amountIn > 0n && !insufficient && amount === debouncedAmount} busy={busy} label={buttonLabel} onClick={submit} requireLaunchpad={false} />
+          <ActionButton ready={!!selected && amountIn > 0n && !insufficient && !needsCheck && amount === debouncedAmount && !locked} busy={busy} label={buttonLabel} onClick={submit} requireLaunchpad={false} />
           <p className="hint">Quotes are compared live across Kuru Flow, Uniswap (v3 and v4) and Monday Trade. You trade from your own wallet; DyorHQ never holds funds.</p>
         </section>
 

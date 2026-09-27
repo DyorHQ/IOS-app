@@ -6,24 +6,83 @@ export const bpsToPct = (bps: number, dp = 2) => `${trimZeros((bps / 100).toFixe
 
 const SUBSCRIPT = "₀₁₂₃₄₅₆₇₈₉";
 const subscript = (n: number) => String(n).split("").map((d) => SUBSCRIPT[Number(d)]).join("");
+/** The one minus sign every formatter here uses (U+2212, the width of "+"), never a hyphen. */
+const MINUS = "−";
+const COMPACT: [number, string][] = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
 
 /** Human number formatting for balances and prices: compact suffixes for large values, trading-style
     leading-zero notation (0.0₆42) for dust prices. */
 export function fmtNumber(n: number, opts: { compact?: boolean; dp?: number } = {}): string {
   if (!Number.isFinite(n)) return "—";
   const abs = Math.abs(n);
-  const sign = n < 0 ? "−" : "";
+  const sign = n < 0 ? MINUS : "";
   if (abs === 0) return "0";
   if (opts.compact && abs >= 1e3) {
-    const units: [number, string][] = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
-    for (const [v, s] of units) if (abs >= v) return sign + trimZeros((abs / v).toFixed(2)) + s;
+    for (let i = 0; i < COMPACT.length; i++) {
+      const [v, s] = COMPACT[i];
+      if (abs < v) continue;
+      // 999,999 rounds to "1000K": it is shown in the next unit up ("1M").
+      if (i > 0 && Number((abs / v).toFixed(2)) >= 1000) return sign + trimZeros((abs / COMPACT[i - 1][0]).toFixed(2)) + COMPACT[i - 1][1];
+      return sign + trimZeros((abs / v).toFixed(2)) + s;
+    }
   }
   if (abs >= 1000) return sign + abs.toLocaleString("en-US", { maximumFractionDigits: opts.dp ?? 2 });
   if (abs >= 1) return sign + trimZeros(abs.toFixed(opts.dp ?? 4));
   if (abs >= 1e-4) return sign + trimZeros(abs.toFixed(6));
   const m = abs.toFixed(20).match(/^0\.(0*)(\d{1,4})/);
   if (!m) return sign + abs.toPrecision(3);
-  return `${sign}0.0${subscript(m[1].length)}${trimZeros(m[2])}`;
+  // The significant digits have no decimal point, so their trailing zeros are cut directly ("0.0₆95", not "0.0₆9500").
+  return `${sign}0.0${subscript(m[1].length)}${m[2].replace(/0+$/, "") || "0"}`;
+}
+
+/** Grouped with exactly `dp` decimals ("1,234.50"), for dollar values and sizes that keep their width. A value that
+    rounds to zero carries no sign ("0.00", never "−0.00"). */
+export function fmtFixed(n: number, dp = 2): string {
+  if (!Number.isFinite(n)) return "—";
+  const digits = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  return (n < 0 && /[1-9]/.test(digits) ? MINUS : "") + digits;
+}
+
+/** US dollars, the same everywhere: cents from $1 up ("$1.50", "$2,493.35", "$102.725"), up to six decimals below $1
+    ("$0.50", "$0.0321") and fmtNumber's leading-zero notation for dust ("$0.0₆95"), never exponent notation. */
+export function fmtUsd(n: number): string {
+  if (!Number.isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  const body = abs >= 1 ? abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: abs >= 1000 ? 2 : 4 })
+    : abs >= 1e-4 || abs === 0 ? abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })
+    : fmtNumber(abs);
+  return (n < 0 && /[1-9]/.test(body) ? MINUS : "") + "$" + body;
+}
+
+/** US dollars with exactly `dp` decimals, grouped, the sign before the "$" ("$1,234.50", "−$12.00"): totals, balances and
+    margins that keep their width (fmtUsd is for prices). A value that rounds to zero carries no sign ("$0.00"). */
+export function fmtUsdFixed(n: number, dp = 2): string {
+  if (!Number.isFinite(n)) return "—";
+  const digits = fmtFixed(Math.abs(n), dp);
+  return (n < 0 && /[1-9]/.test(digits) ? MINUS : "") + "$" + digits;
+}
+
+/** A signed change in dollars: "+$1.23", "−$1.23", and "$0.00" for anything that rounds to zero. */
+export function fmtSignedUsd(n: number, dp = 2): string {
+  if (!Number.isFinite(n)) return "—";
+  const digits = fmtFixed(Math.abs(n), dp);
+  const sign = !/[1-9]/.test(digits) ? "" : n > 0 ? "+" : MINUS;
+  return `${sign}$${digits}`;
+}
+
+/** The direction a signed value shows at `dp` decimals, for its up/down colour: "" when it rounds to zero, so the colour
+    always matches the sign that is shown (never a red "0.00%"). */
+export function trend(n: number, dp = 2): "up" | "down" | "" {
+  if (!Number.isFinite(n) || !/[1-9]/.test(Math.abs(n).toFixed(dp))) return "";
+  return n > 0 ? "up" : "down";
+}
+
+/** A signed percentage change: "+12.80%", "−2.06%", and "0.00%" for anything that rounds to zero. */
+export function fmtPct(n: number, dp = 2): string {
+  if (!Number.isFinite(n)) return "—";
+  const digits = Math.abs(n).toFixed(dp);
+  const sign = !/[1-9]/.test(digits) ? "" : n > 0 ? "+" : MINUS;
+  return `${sign}${digits}%`;
 }
 
 export const fmtUnits = (value: bigint, decimals: number, opts?: { compact?: boolean; dp?: number }) => fmtNumber(Number(formatUnits(value, decimals)), opts);
@@ -76,7 +135,12 @@ export function parseAmount(input: string, decimals: number): bigint | null {
   return BigInt((whole || "0") + fraction.slice(0, decimals).padEnd(decimals, "0"));
 }
 
-export const fmtDate = (ts: number) => new Date(ts * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+/** "Sep 26, 04:05 PM"; "—" for a time that isn't one (a half-typed date, or a window too long for a date), never
+    "Invalid Date". */
+export const fmtDate = (ts: number) => {
+  const date = new Date(ts * 1000);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+};
 export function timeAgo(ts: number, now: number) {
   const d = Math.max(0, now - ts);
   if (d < 60) return `${d}s ago`;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { encodeFunctionData, erc20Abi, formatUnits, getAddress, isAddress, type Address } from "viem";
 import { Icon, Sprite, type IconName } from "./ui/icons";
 import { Seg, cssVars, type SegOpt } from "./ui/components";
@@ -9,22 +9,27 @@ import { HomeScreen, LaunchScreen, MarketsScreen, ProfileScreen, SwapScreen } fr
 import PerpsScreen from "./perps-screen";
 import PreviewControls, { THEME_OPTS, setPrefs, useApplyPrefs, type ScreenName } from "./preview-controls";
 import * as Glass from "./ui/liquid-glass";
+import { useModal } from "./ui/modal";
 import { Wordmark } from "./ui/wordmark";
 import { useWallet } from "./lib/wallet";
 import { useMarkets } from "./lib/app-data";
-import { DEPLOYED, EXPLORER, explorerAddress } from "./lib/chain";
+import { DEPLOYED, EXPLORER, explorerAddress, publicClient } from "./lib/chain";
 import { fetchLaunchpadActivity } from "./lib/launchpad/events";
 import { useAsync, useNow } from "./lib/use-async";
 import { useTx } from "./lib/use-tx";
 import { waitFor } from "./lib/use-tx";
 import { fmtUnits, parseAmount, shortAddress, timeAgo } from "./lib/format";
+import { CODE_UNREADABLE, checkRecipient } from "./lib/send-checks";
+import { COPY_FEEDBACK, useCopy } from "./lib/clipboard";
 import { TxStatus } from "./launchpad/ui";
 import "./launchpad/launchpad.css";
 
 const TABS: [Tab, IconName, string][] = [["home", "home", "Home"], ["markets", "markets", "Markets"], ["launch", "rocket", "Launch"], ["trade", "trade", "Trade"], ["profile", "profile", "Profile"]];
 const MODE_OPTS: SegOpt<TradeMode>[] = [{ v: "swap", l: "Swap" }, { v: "perps", l: "Perps" }];
 const MENU_ITEMS: [IconName, string, Tab, TradeMode | undefined][] = [["home", "Home", "home", undefined], ["markets", "Markets", "markets", undefined], ["rocket", "Launchpad", "launch", undefined], ["swap", "Swap", "trade", "swap"], ["trend-up", "Perps", "trade", "perps"], ["profile", "Portfolio", "profile", undefined]];
-const isPhone = () => matchMedia("(max-width:759px)").matches;
+const PHONE = "(max-width:759px)";
+const isPhone = () => matchMedia(PHONE).matches;
+const SHEET_TITLE = "sheet-title";
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("home");
@@ -39,8 +44,16 @@ export default function Home() {
   const { prefs } = useApplyPrefs();
   const wallet = useWallet();
   const account = wallet.account;
+  const menuRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const screenRef = useRef<HTMLDivElement>(null);
+  // Set when navigation takes away what had focus (a control in the old screen, a menu item): the new screen's <main>
+  // is focused once it mounts, so keyboard and screen-reader users land on it and hear its name. The tab bar and the
+  // desktop studio keep focus on the control that was pressed.
+  const focusScreen = useRef(false);
 
-  const go = (t: Tab, m?: TradeMode, p?: Preset) => { if (m) setMode(m); setTab(t); setPreset(p); setNav((n) => n + 1); setMenu(false); setStudioOpen(false); setSheet(null); setSearchFocus(false); };
+  const navigate = (t: Tab, m: TradeMode | undefined, p: Preset | undefined, focus: boolean) => { focusScreen.current = focus; if (m) setMode(m); setTab(t); setPreset(p); setNav((n) => n + 1); setMenu(false); setStudioOpen(false); setSheet(null); setSearchFocus(false); };
+  const go = (t: Tab, m?: TradeMode, p?: Preset) => navigate(t, m, p, true);
   const toast = (text: ReactNode) => setToastMsg((m) => ({ text, show: true, n: (m?.n ?? 0) + 1 }));
   const openStudio = () => { setMenu(false); if (isPhone()) setStudioOpen(true); else toast("Appearance controls are in the studio panel"); };
   const openSheet = (s: SheetName) => { setMenu(false); setSheet(s); };
@@ -61,11 +74,28 @@ export default function Home() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [sheet, menu, studioOpen]);
+  // The studio is a full-screen overlay only at phone width; past it, the studio is the side panel again.
+  useEffect(() => {
+    if (!studioOpen) return;
+    const phone = matchMedia(PHONE);
+    const onChange = () => { if (!phone.matches) setStudioOpen(false); };
+    phone.addEventListener("change", onChange);
+    return () => phone.removeEventListener("change", onChange);
+  }, [studioOpen]);
+  useModal(menuRef, menu);
+  useModal(sheetRef, sheet !== null);
 
   const studioScreen: ScreenName = tab === "trade" ? (mode === "perps" ? "perps" : "trade") : tab;
-  const onStudioScreen = (s: ScreenName) => { if (s === "perps") go("trade", "perps"); else if (s === "trade") go("trade", "swap"); else go(s); };
+  // From the phone-width studio (a modal that closes) focus moves to the screen; the desktop studio keeps it.
+  const onStudioScreen = (s: ScreenName) => { const focus = studioOpen; if (s === "perps") navigate("trade", "perps", undefined, focus); else if (s === "trade") navigate("trade", "swap", undefined, focus); else navigate(s, undefined, undefined, focus); };
   const tabIndex = TABS.findIndex((t) => t[0] === tab);
   const screenKey = `${tab === "trade" ? `trade-${mode}` : tab}-${nav}`;
+  // Runs after the overlays' focus restore (effect cleanups run first), so it wins when navigation closed a menu.
+  useEffect(() => {
+    if (!focusScreen.current) return;
+    focusScreen.current = false;
+    screenRef.current?.querySelector<HTMLElement>("main")?.focus({ preventScroll: true });
+  }, [screenKey]);
   const initials = account ? account.slice(2, 4).toUpperCase() : null;
 
   const menuBtn = <button type="button" className="circ glass" data-glass="circ" onClick={() => setMenu(true)} aria-label="Open menu"><Icon name="menu" /></button>;
@@ -73,7 +103,7 @@ export default function Home() {
   const circ = (icon: IconName, label: string, onClick: () => void) => <button type="button" className="circ glass" data-glass="circ" onClick={onClick} aria-label={label}><Icon name={icon} /></button>;
   const topbar = tab === "markets" ? <>{menuBtn}<h1 className="bar-title">Markets</h1>{avatar}</>
     : tab === "launch" ? <>{menuBtn}<h1 className="bar-title">Launchpad</h1>{circ("bell", "Activity", () => openSheet("activity"))}</>
-    : tab === "trade" ? <>{menuBtn}<div className="bar-seg glass" data-glass="pill"><Seg options={MODE_OPTS} value={mode} onChange={(m) => { setMode(m); setNav((n) => n + 1); }} /></div>{avatar}</>
+    : tab === "trade" ? <>{menuBtn}<div className="bar-seg glass" data-glass="pill"><Seg label="Trade mode" options={MODE_OPTS} value={mode} onChange={(m) => { setMode(m); setNav((n) => n + 1); }} /></div>{avatar}</>
     : tab === "profile" ? <>{menuBtn}<h1 className="bar-title">Portfolio</h1>{circ("sliders", "Preview studio", openStudio)}</>
     : <>{menuBtn}<button type="button" className="search glass" data-glass="pill" onClick={() => { setSearchFocus(true); setTab("markets"); setNav((n) => n + 1); }}><Icon name="search" /><span>Search tokens</span></button>{avatar}</>;
 
@@ -85,7 +115,7 @@ export default function Home() {
         <div className="device">
           <div className="edge">
             <div className="status" aria-hidden="true"><span className="num">9:41</span><span className="island" /><span className="sys"><Icon name="signal" /><Icon name="wifi" /><span className="battery" /></span></div>
-            <div className="app-scroll" key={screenKey}>
+            <div className="app-scroll" key={screenKey} ref={screenRef}>
               {tab === "home" && <HomeScreen go={go} toast={toast} openSheet={openSheet} />}
               {tab === "markets" && <MarketsScreen go={go} preset={preset} autoFocus={searchFocus} />}
               {tab === "launch" && <LaunchScreen go={go} toast={toast} preset={preset} />}
@@ -96,12 +126,12 @@ export default function Home() {
             <div className="scrim" aria-hidden="true" />
             <div className="topbar">{topbar}</div>
             <nav className="tabbar glass" aria-label="Primary" data-glass="bar">
-              <span className={`tab-thumb ${tab === "launch" ? "hide" : ""}`} style={cssVars({ "--i": tabIndex })} aria-hidden="true" />
-              {TABS.map(([id, icon, label]) => <button key={id} type="button" className={`tab${id === tab ? " active" : ""}${id === "launch" ? " launch" : ""}`} aria-current={id === tab ? "page" : undefined} onClick={() => go(id)}>{id === "launch" ? <span className="ring-l"><Icon name={icon} /></span> : <Icon name={icon} />}<span>{label}</span></button>)}
+              <span className="tab-thumb" style={cssVars({ "--i": tabIndex })} aria-hidden="true" />
+              {TABS.map(([id, icon, label]) => <button key={id} type="button" className={`tab${id === tab ? " active" : ""}`} aria-current={id === tab ? "page" : undefined} onClick={() => navigate(id, undefined, undefined, false)}><Icon name={icon} /><small>{label}</small></button>)}
             </nav>
-            <div className={`menu ${menu ? "open" : ""}`} inert={!menu}>
+            <div className={`menu ${menu ? "open" : ""}`} inert={!menu} ref={menuRef}>
               <div className="backdrop" onClick={() => setMenu(false)} />
-              <aside aria-label="Menu">
+              <aside role="dialog" aria-modal="true" aria-label="Menu">
                 <div className="brandrow"><div className="wordmark"><Wordmark /><small>The RWA HQ for social trading</small></div><button type="button" className="circ" onClick={() => setMenu(false)} aria-label="Close menu"><Icon name="x" /></button></div>
                 {account ? (
                   <button type="button" className="usercard" onClick={() => go("profile")}><span className="avatar">{initials}</span><div style={{ flex: 1, minWidth: 0 }}><b>{wallet.active?.info.name ?? "Wallet"}</b><small>{shortAddress(account, 6)}{wallet.onMonad ? " · Monad" : " · wrong network"}</small></div><Icon name="chev-right" className="chev" /></button>
@@ -109,7 +139,7 @@ export default function Home() {
                   <button type="button" className="usercard" onClick={() => { setMenu(false); onAvatar(); }}><span className="avatar"><Icon name="wallet" /></span><div style={{ flex: 1, minWidth: 0 }}><b>Connect wallet</b><small>{wallet.wallets.length ? `${wallet.wallets.length} wallet${wallet.wallets.length === 1 ? "" : "s"} detected` : "No wallet detected"}</small></div><Icon name="chev-right" className="chev" /></button>
                 )}
                 <nav>{MENU_ITEMS.map(([icon, label, t, m]) => <button key={label} type="button" onClick={() => go(t, m)}><Icon name={icon} /><span>{label}</span><Icon name="chev-right" className="chev" /></button>)}</nav>
-                <div className="menu-sec"><span className="label">Appearance</span><Seg options={THEME_OPTS} value={prefs.theme} onChange={(v) => setPrefs({ ...prefs, theme: v })} small /></div>
+                <div className="menu-sec"><span className="label">Appearance</span><Seg label="Appearance" options={THEME_OPTS} value={prefs.theme} onChange={(v) => setPrefs({ ...prefs, theme: v })} small /></div>
                 <div className="menu-sec"><nav>
                   <button type="button" onClick={openStudio}><Icon name="sliders" /><span>Preview studio</span><Icon name="chev-right" className="chev" /></button>
                   <button type="button" onClick={() => openSheet("help")}><Icon name="help" /><span>Help &amp; links</span><Icon name="chev-right" className="chev" /></button>
@@ -117,10 +147,10 @@ export default function Home() {
                 </nav></div>
               </aside>
             </div>
-            <div className={`sheet ${sheet ? "open" : ""}`} inert={!sheet}>
+            <div className={`sheet ${sheet ? "open" : ""}`} inert={!sheet} ref={sheetRef}>
               <div className="backdrop" onClick={() => setSheet(null)} />
-              <div className="panel" role="dialog" aria-modal="true" aria-label={sheet ?? "Sheet"}>
-                {sheet === "receive" && <ReceiveSheet onClose={() => setSheet(null)} />}
+              <div className="panel" role="dialog" aria-modal="true" aria-labelledby={SHEET_TITLE}>
+                {sheet === "receive" && <ReceiveSheet onClose={() => setSheet(null)} toast={toast} />}
                 {sheet === "send" && <SendSheet onClose={() => setSheet(null)} toast={toast} />}
                 {sheet === "activity" && <ActivitySheet onClose={() => setSheet(null)} />}
                 {sheet === "wallets" && <WalletsSheet onClose={() => setSheet(null)} />}
@@ -136,12 +166,12 @@ export default function Home() {
 }
 
 function SheetHead({ title, onClose }: { title: string; onClose: () => void }) {
-  return <div className="hd"><h2 style={{ margin: 0 }}>{title}</h2><button type="button" className="circ" onClick={onClose} aria-label="Close"><Icon name="x" /></button></div>;
+  return <div className="hd"><h2 id={SHEET_TITLE} style={{ margin: 0 }}>{title}</h2><button type="button" className="circ" onClick={onClose} aria-label="Close"><Icon name="x" /></button></div>;
 }
 
-function ReceiveSheet({ onClose }: { onClose: () => void }) {
+function ReceiveSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNode) => void }) {
   const wallet = useWallet();
-  const [copied, setCopied] = useState(false);
+  const [copied, copy] = useCopy();
   if (!wallet.account) return <><SheetHead title="Receive" onClose={onClose} /><p className="hint">Connect a wallet first.</p></>;
   const address = wallet.account;
   return (
@@ -149,7 +179,7 @@ function ReceiveSheet({ onClose }: { onClose: () => void }) {
       <SheetHead title="Receive on Monad" onClose={onClose} />
       <p className="hint" style={{ marginBottom: 10 }}>Send MON or any Monad token to this address. Only use the Monad network (chain id 143).</p>
       <div className="addr-box">{address}</div>
-      <div className="flow-actions"><button type="button" className="btn primary" onClick={() => { navigator.clipboard?.writeText(address).then(() => setCopied(true)); }}>{copied ? "Copied" : "Copy address"}</button><a className="btn secondary" href={explorerAddress(address)} target="_blank" rel="noreferrer">Monadscan <Icon name="arrow-ur" /></a></div>
+      <div className="flow-actions"><button type="button" className="btn primary" onClick={() => { void copy(address).then((ok) => toast(ok ? COPY_FEEDBACK.copied : `${COPY_FEEDBACK.failed}. Select it above and copy it.`)); }}>{copied === "copied" ? "Copied" : "Copy address"}</button><a className="btn secondary" href={explorerAddress(address)} target="_blank" rel="noreferrer">Monadscan <Icon name="arrow-ur" /></a></div>
     </>
   );
 }
@@ -161,18 +191,37 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
   const [token, setToken] = useState<string>("0x0000000000000000000000000000000000000000");
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("");
-  const { tx, run, reset, busy } = useTx();
+  const [confirmedContract, setConfirmedContract] = useState<string | null>(null);
+  const { tx, run, dismiss, locked } = useTx();
   const row = markets.rows.find((r) => r.address.toLowerCase() === token.toLowerCase()) ?? owned[0];
   const parsed = row ? parseAmount(amount, row.decimals) : null;
-  const valid = !!row && !!parsed && parsed > 0n && parsed <= row.balance && isAddress(to);
+  const recipient = to.trim();
+  // The recipient's bytecode: a contract recipient must be confirmed (app/lib/send-checks.ts). A failed read is retried,
+  // and until one answers the recipient is unknown, never cleared as "no code".
+  const code = useAsync(async () => (isAddress(recipient) ? (await publicClient.getCode({ address: recipient })) ?? "0x" : null), `code:${recipient}`, 5_000);
+  const check = row ? checkRecipient(recipient, row, wallet.account, code.data ?? (code.error ? CODE_UNREADABLE : null)) : null;
+  const unconfirmed = !!check?.contract && confirmedContract !== recipient;
+  // Why Send is disabled, in the order the user fills the form.
+  const reason = !markets.balancesReady ? (markets.balancesError ? "Couldn't read your balances. Retrying…" : "Reading your balances…")
+    : !row ? "This wallet holds nothing to send yet."
+    : !recipient ? "Enter the recipient's address."
+    : check?.block ? null // shown under the address
+    : !amount.trim() ? "Enter an amount."
+    : parsed === null ? "Enter the amount as a plain number, like 2.5."
+    : parsed === 0n ? "Enter an amount above zero."
+    : parsed > row.balance ? `That is more than your ${row.symbol} balance.`
+    : check?.wait ? check.wait
+    : unconfirmed ? "Confirm the contract recipient first."
+    : null;
+  const valid = !!row && !!parsed && !check?.block && reason === null;
   const send = async () => {
     const client = wallet.client;
-    if (!client || !row || !parsed || !isAddress(to)) return;
+    if (!client || !row || !parsed || !valid || !isAddress(recipient)) return;
     const shown = formatUnits(parsed, row.decimals); // what is signed, not what was typed
     const done = await run(`Send ${shown} ${row.symbol}`, async (onSent) => {
       const hash = row.native
-        ? await client.sendTransaction({ account: client.account, chain: client.chain, to: getAddress(to), value: parsed })
-        : await client.sendTransaction({ account: client.account, chain: client.chain, to: row.address, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [getAddress(to), parsed] }) });
+        ? await client.sendTransaction({ account: client.account, chain: client.chain, to: getAddress(recipient), value: parsed })
+        : await client.sendTransaction({ account: client.account, chain: client.chain, to: row.address, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [getAddress(recipient), parsed] }) });
       onSent(hash);
       await waitFor(hash);
       return hash;
@@ -183,11 +232,20 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
   return (
     <>
       <SheetHead title="Send" onClose={onClose} />
-      <label className="field">Asset<select className="select" value={row?.address ?? token} onChange={(e) => setToken(e.target.value)}>{owned.map((r) => <option key={r.address} value={r.address}>{r.symbol} · {fmtUnits(r.balance, r.decimals, { compact: true })}</option>)}{owned.length === 0 && <option value="">No balances</option>}</select></label>
-      <label className="field">To address<input placeholder="0x…" value={to} onChange={(e) => setTo(e.target.value)} /></label>
-      <label className="field">Amount<input inputMode="decimal" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />{row && <span className="help">Balance {fmtUnits(row.balance, row.decimals)} {row.symbol}</span>}</label>
-      <TxStatus tx={tx} onDismiss={reset} />
-      <button type="button" className="btn primary big" disabled={!valid || busy || !wallet.onMonad} onClick={send}>{wallet.onMonad ? `Send ${row?.symbol ?? ""}` : "Switch to Monad first"}</button>
+      <label className="field">Asset<select className="select" value={row?.address ?? token} onChange={(e) => setToken(e.target.value)}>{owned.map((r) => <option key={r.address} value={r.address}>{r.symbol} · {fmtUnits(r.balance, r.decimals, { compact: true })}</option>)}{owned.length === 0 && <option value="">{markets.balancesReady ? "No balances" : markets.balancesError ? "Couldn't read balances" : "Reading balances…"}</option>}</select></label>
+      <label className="field">To address<input placeholder="0x…" value={to} onChange={(e) => setTo(e.target.value)} aria-invalid={recipient && check?.block ? true : undefined} aria-describedby={recipient && check?.block ? "send-to-err" : undefined} />{recipient && check?.block && <span className="hint err" id="send-to-err">{check.block}</span>}</label>
+      {check?.warn && (
+        <div className="warnbox">
+          {check.warn}
+          {check.contract && row && <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}><input type="checkbox" checked={confirmedContract === recipient} onChange={(e) => setConfirmedContract(e.target.checked ? recipient : null)} />I know this contract can receive {row.symbol}.</label>}
+        </div>
+      )}
+      <label className="field">Amount<input inputMode="decimal" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />{row && <span className="help">{markets.balancesReady ? `Balance ${fmtUnits(row.balance, row.decimals)} ${row.symbol}` : markets.balancesError ? "Couldn't read your balance" : "Reading balance…"}</span>}</label>
+      <TxStatus tx={tx} onDismiss={dismiss} />
+      {wallet.onMonad && reason && <p className="hint">{reason}</p>}
+      {/* On another network the button switches the wallet to Monad (as ActionButton does elsewhere), never a dead end. */}
+      {wallet.onMonad ? <button type="button" className="btn primary big" disabled={!valid || locked} onClick={send}>{`Send ${row?.symbol ?? ""}`}</button>
+        : <button type="button" className="btn primary big" onClick={() => wallet.switchToMonad().catch(() => undefined)}>Switch to Monad</button>}
     </>
   );
 }
@@ -198,7 +256,10 @@ function ActivitySheet({ onClose }: { onClose: () => void }) {
   const now = useNow();
   const curves = new Map(markets.launches.map((l) => [l.curve.toLowerCase(), l.token as Address]));
   const activity = useAsync(async () => (DEPLOYED ? fetchLaunchpadActivity(curves, 18_000n) : []), `activity-sheet:${markets.launches.length}`, 30_000);
-  const symbol = (token: Address | null) => markets.launches.find((l) => token && l.token.toLowerCase() === token.toLowerCase())?.symbol ?? (token ? shortAddress(token) : "token");
+  const launchOf = (token: Address | null) => markets.launches.find((l) => token && l.token.toLowerCase() === token.toLowerCase());
+  const symbol = (token: Address | null) => launchOf(token)?.symbol ?? (token ? shortAddress(token) : "token");
+  // A curve trade's amount is in the launch's pair asset, with that asset's decimals.
+  const tradeAmount = (token: Address | null, quote: bigint) => { const pair = launchOf(token)?.pair; return pair ? `${fmtUnits(quote, pair.decimals, { compact: true })} ${pair.symbol}` : ""; };
   return (
     <>
       <SheetHead title="On-chain activity" onClose={onClose} />
@@ -209,10 +270,11 @@ function ActivitySheet({ onClose }: { onClose: () => void }) {
           <a key={a.tx + a.kind + a.block} className="act-row" href={`${EXPLORER}/tx/${a.tx}`} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>
             <Icon name={a.kind === "launch" ? "rocket" : a.kind === "graduated" ? "graduate" : a.side === "buy" ? "trend-up" : "trend-down"} />
             <span className="row-main"><b>{a.kind === "launch" ? `Launched $${symbol(a.token)}` : a.kind === "graduated" ? `$${symbol(a.token)} graduated` : `${a.side === "buy" ? "Bought" : "Sold"} $${symbol(a.token)}`}</b><small>{now ? timeAgo(a.time, now) : ""}</small></span>
-            {a.kind === "trade" && <span className="amt">{fmtUnits(a.quote, 18, { compact: true })} MON</span>}
+            {a.kind === "trade" && <span className="amt">{tradeAmount(a.token, a.quote)}</span>}
           </a>
         ))}
-        {activity.data && activity.data.length === 0 && DEPLOYED && <p className="hint">Nothing in the last two hours.</p>}
+        {activity.error && <p className="hint err">Couldn&apos;t read recent activity ({activity.error}). Retrying.</p>}
+        {activity.data && activity.data.length === 0 && DEPLOYED && !activity.error && <p className="hint">Nothing in the last two hours.</p>}
       </div>
     </>
   );

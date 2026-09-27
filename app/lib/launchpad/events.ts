@@ -32,18 +32,26 @@ async function anchor(): Promise<Anchor> {
 }
 const timeOf = (a: Anchor, block: bigint) => Math.round(a.time - Number(a.block - block) * BLOCK_SECONDS);
 
-/** Splits [from, to] into chunks the endpoint accepts and runs them with bounded concurrency. */
-async function chunkedLogs<T>(from: bigint, to: bigint, fetchRange: (a: bigint, b: bigint) => Promise<T[]>, concurrency = 6): Promise<T[]> {
+/** Splits [from, to] into chunks the endpoint accepts and runs them with bounded concurrency. A chunk that fails is
+    tried once more; one that fails again fails the whole read, because a window with a hole in it would show missing
+    trades as "nothing happened" and draw candles from part of the trades. */
+export async function chunkedLogs<T>(from: bigint, to: bigint, fetchRange: (a: bigint, b: bigint) => Promise<T[]>, concurrency = 6, chunk = CHUNK): Promise<T[]> {
   const ranges: [bigint, bigint][] = [];
-  for (let start = from; start <= to; start += CHUNK) ranges.push([start, start + CHUNK - 1n > to ? to : start + CHUNK - 1n]);
+  for (let start = from; start <= to; start += chunk) ranges.push([start, start + chunk - 1n > to ? to : start + chunk - 1n]);
   const out: T[] = [];
   let next = 0;
+  let failed = 0;
   await Promise.all(Array.from({ length: Math.min(concurrency, ranges.length) }, async () => {
-    while (next < ranges.length) {
+    while (next < ranges.length && failed === 0) {
       const [a, b] = ranges[next++];
-      try { out.push(...(await fetchRange(a, b))); } catch { /* a failed chunk leaves a gap rather than failing the whole window */ }
+      try {
+        out.push(...(await fetchRange(a, b)));
+      } catch {
+        try { out.push(...(await fetchRange(a, b))); } catch { failed++; }
+      }
     }
   }));
+  if (failed > 0) throw new Error("The RPC didn't return every block range of this window.");
   return out;
 }
 

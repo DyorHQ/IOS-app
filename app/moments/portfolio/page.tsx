@@ -16,7 +16,7 @@ export default function Portfolio() {
   const wallet = useWallet();
   const now = useNow();
   const account = wallet.account;
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, locked } = useTx();
   const portfolio = useAsync(() => (account ? fetchPortfolio(account) : Promise.resolve(null)), `portfolio:${account ?? ""}`, 10_000);
   const p = portfolio.data;
   const claimableIds = p ? p.rows.filter((r) => r.claimableCollector + r.claimableCreator > 0n).map((r) => r.moment.id) : [];
@@ -43,10 +43,10 @@ export default function Portfolio() {
         <div className="toolbar">
           <span className="hint">{shortAddress(account)}</span>
           <span className="spacer" />
-          <button type="button" className="btn primary sm" disabled={busy || claimableIds.length === 0 || !wallet.client} onClick={() => { const client = wallet.client; if (client) void run(`Claim ${claimableIds.length} Moment${claimableIds.length === 1 ? "" : "s"}`, (onSent) => claimAll(client, claimableIds, onSent), () => portfolio.refresh()); }}>Claim all ({claimableIds.length}) <Icon name="arrow-ur" /></button>
+          <button type="button" className="btn primary sm" disabled={locked || claimableIds.length === 0 || !wallet.client} onClick={() => { const client = wallet.client; if (client) void run(`Claim ${claimableIds.length} Moment${claimableIds.length === 1 ? "" : "s"}`, (onSent) => claimAll(client, claimableIds, onSent), () => portfolio.refresh()); }}>Claim all ({claimableIds.length}) <Icon name="arrow-ur" /></button>
         </div>
       )}
-      <TxStatus tx={tx} onDismiss={reset} />
+      <TxStatus tx={tx} onDismiss={dismiss} />
       {portfolio.error && <p className="tx bad" role="alert">{portfolio.error}</p>}
       <section className="stack-cards" style={{ marginTop: 16 }}>
         {p?.rows.map((r) => {
@@ -62,7 +62,7 @@ export default function Portfolio() {
               <div style={{ textAlign: "right" }}>
                 <b className="num">{m.graduated ? coins(claimable) : coins(r.entitlement)}</b>
                 <div className="hint">{m.graduated ? "claimable now" : "at graduation"}</div>
-                {m.graduated && <button type="button" className="btn secondary sm" style={{ marginTop: 6 }} disabled={busy || claimable === 0n || !wallet.client} onClick={() => { const client = wallet.client; if (client) void run(`Claim $${m.symbol}`, (onSent) => claim(client, m.id, onSent), () => portfolio.refresh()); }}>Claim</button>}
+                {m.graduated && <button type="button" className="btn secondary sm" style={{ marginTop: 6 }} disabled={locked || claimable === 0n || !wallet.client} onClick={() => { const client = wallet.client; if (client) void run(`Claim $${m.symbol}`, (onSent) => claim(client, m.id, onSent), () => portfolio.refresh()); }}>Claim</button>}
               </div>
             </div>
           );

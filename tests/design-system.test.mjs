@@ -32,7 +32,20 @@ test('active typography cannot switch back to retired fonts or colors', () => {
   assert.match(readFileSync('app/globals.css','utf8'),/public\/design-tokens\.css/);
 });
 test('component and brand styles do not define new hex colors', () => {
-  for(const file of ['app/globals.css','app/brand/brand.css','app/launchpad/launchpad.css']) assert.deepEqual(readFileSync(file,'utf8').match(/#[0-9a-f]{3,8}\b/gi) ?? [], [], file);
+  for(const file of ['app/globals.css','app/brand/brand.css','app/launchpad/launchpad.css','app/moments/moments.css']) assert.deepEqual(readFileSync(file,'utf8').match(/#[0-9a-f]{3,8}\b/gi) ?? [], [], file);
+});
+test('Moments styles use the tokens, and the early-stage risk label is legible in every theme', () => {
+  const moments=readFileSync('app/moments/moments.css','utf8');
+  assert.deepEqual(moments.match(/rgba?\(|opacity:|var\(--(panel-2|line)\b/g) ?? [], [], 'untokenized colours or text opacity');
+  assert.match(moments,/\.label-early \{[^}]*background: var\(--warning-soft\); color: var\(--warning\);/);
+  assert.doesNotMatch(moments,/data-theme/, 'theme-specific overrides bypass the tokens');
+  for (const tokens of [light, dark, automatic]) assert.ok(contrast(tokens['--warning'], tokens['--warning-soft']) >= 4.5);
+  assert.match(moments,/\.qty button \{[^}]*var\(--control-border\)/);
+});
+test('charts take their colors from the design tokens', () => {
+  const chart=readFileSync('app/ui/tradingview.tsx','utf8');
+  assert.deepEqual(chart.match(/#[0-9a-f]{3,8}\b|rgba?\(/gi) ?? [], []);
+  for(const token of ['--muted','--up','--down']) assert.match(chart,new RegExp(`"${token}"`));
 });
 test('design-system downloads and current logo are available', () => {
   assert.ok(readFileSync('public/brand/dyorhq-design-system.md').length>1000);

@@ -52,14 +52,7 @@ export const PERP = { sym: "ETH", mid: 2493.35, mark: 2493.1, high: 2531.2, low:
 export const JENSEN_PRICE = 0.0842;
 export const SWAP_BALANCE = 1840;
 
-/* ---------- formatting ---------- */
-export const fmtNum = (n: number, d = 2) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
-export const fmtPrice = (p: number) => (p >= 1000 ? fmtNum(p, 2) : p >= 100 ? fmtNum(p, 3) : p >= 1 ? fmtNum(p, 4) : String(+p.toPrecision(5)));
-export const fmtUSD = (p: number) => "$" + fmtPrice(p);
-export const fmtPct = (c: number) => (c > 0 ? "+" : c < 0 ? "−" : "") + Math.abs(c).toFixed(2) + "%";
-const trim = (s: string) => s.replace(/\.0+$|(\.\d*?)0+$/, "$1");
-export const compact = (n: number) => (n >= 1e9 ? trim((n / 1e9).toFixed(2)) + "B" : n >= 1e6 ? trim((n / 1e6).toFixed(1)) + "M" : n >= 1e3 ? trim((n / 1e3).toFixed(1)) + "K" : String(n));
-export const capitalize = (s: string) => s[0].toUpperCase() + s.slice(1);
+/* Formatting lives in app/lib/format.ts (fmtFixed, fmtUsd, fmtPct, fmtNumber): one family for every screen. */
 
 /* ---------- deterministic sample series ---------- */
 export function rng(seed: number) {

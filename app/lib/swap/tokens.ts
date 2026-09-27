@@ -39,6 +39,14 @@ export function findToken(list: TokenInfo[], address: string): TokenInfo | undef
   return list.find((t) => t.address.toLowerCase() === address.toLowerCase());
 }
 
+/** The token a swap link or preset names: any token in `list` by its address, but by symbol only a core token.
+    Launchpad tickers are not unique, so a symbol must never pick a launch (a later one can copy a popular ticker). */
+export function tokenNamed(list: TokenInfo[], raw: string | null | undefined): TokenInfo | undefined {
+  const want = raw?.toLowerCase();
+  if (!want) return undefined;
+  return findToken(list, want) ?? CORE_TOKENS.find((t) => t.symbol.toLowerCase() === want);
+}
+
 /** Reads symbol, name and decimals for an arbitrary ERC-20 so any Monad token can be swapped by address. */
 export async function loadToken(address: string): Promise<TokenInfo | null> {
   if (!isAddress(address)) return null;

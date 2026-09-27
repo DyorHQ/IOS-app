@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Wordmark } from "./ui/wordmark";
 import { Icon } from "./ui/icons";
 import { Range, Seg, Switch, type SegOpt } from "./ui/components";
 import * as Glass from "./ui/liquid-glass";
+import { useModal } from "./ui/modal";
 
 export type ScreenName = "home" | "markets" | "launch" | "trade" | "perps" | "profile";
 export const screenOptions: { id: ScreenName; title: string; note: string }[] = [
@@ -71,8 +72,11 @@ export default function PreviewControls({ screen, onScreen, open, onClose }: { s
   const { prefs } = usePrefs();
   const refract = useSyncExternalStore(noop, () => Glass.supported(), () => null);
   const set = (patch: Partial<Preferences>) => setPrefs({ ...prefs, ...patch });
+  // Open only at phone width, where the studio covers the app as a full-screen modal; on desktop it is a side panel.
+  const ref = useRef<HTMLElement>(null);
+  useModal(ref, open);
   return (
-    <aside className={`studio ${open ? "open" : ""}`} id="preview-studio" aria-label="Preview studio">
+    <aside ref={ref} className={`studio ${open ? "open" : ""}`} id="preview-studio" aria-label="Preview studio" role={open ? "dialog" : undefined} aria-modal={open || undefined}>
       <button type="button" className="studio-close" onClick={onClose} aria-label="Close studio"><Icon name="x" /></button>
       <div className="studio-brand"><Wordmark /><small>The RWA HQ for social trading</small></div>
       <p className="studio-intro">Explore the app in light or dark. Typography and colors follow the DyorHQ design system.</p>
@@ -81,7 +85,7 @@ export default function PreviewControls({ screen, onScreen, open, onClose }: { s
         {screenOptions.map((item, i) => <button key={item.id} type="button" aria-current={screen === item.id ? "page" : undefined} onClick={() => onScreen(item.id)}><span>0{i + 1}</span><div><b>{item.title}</b><small>{item.note}</small></div><Icon name="chev-right" className="chev" /></button>)}
       </nav>
       <div className="studio-sec"><h2>Appearance</h2>
-        <div><span className="lbl">Theme</span><div style={{ marginTop: 8 }}><Seg options={THEME_OPTS} value={prefs.theme} onChange={(v) => set({ theme: v })} small /></div></div>
+        <div><span className="lbl">Theme</span><div style={{ marginTop: 8 }}><Seg label="Theme" options={THEME_OPTS} value={prefs.theme} onChange={(v) => set({ theme: v })} small /></div></div>
         <dl className="studio-fonts"><div><dt>Headings</dt><dd>Bodoni Moda</dd></div><div><dt>Interface</dt><dd>Manrope</dd></div><div><dt>Numbers</dt><dd>IBM Plex Mono</dd></div></dl>
         <div><div className="opt"><span className="lbl">Text size</span><output>{Math.round(prefs.textScale * 100)}%</output></div><Range value={prefs.textScale} min={1} max={1.2} step={0.05} onChange={(v) => set({ textScale: v })} label="Text size" /></div>
         <div><div className="opt"><span className="lbl">Liquid glass</span><output>{prefs.glass}%</output></div><Range value={prefs.glass} min={0} max={100} onChange={(v) => set({ glass: v })} label="Glass refraction strength" />

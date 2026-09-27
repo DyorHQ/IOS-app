@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useDeferredValue, useState } from "react";
+import { useDeferredValue, useId, useState } from "react";
 import { Icon } from "../ui/icons";
 import { Seg, type SegOpt } from "../ui/components";
 import { quoteBuy, quoteSell, type AccountView, type LaunchDetail } from "../lib/launchpad";
@@ -10,7 +10,7 @@ import { useAsync, useNow } from "../lib/use-async";
 import { useTx } from "../lib/use-tx";
 import { useWallet } from "../lib/wallet";
 import { bpsToPct, exactDown, fmtAmount, fmtUnits, parseAmount, seconds, shortAddress } from "../lib/format";
-import { ActionButton, TxStatus } from "./ui";
+import { ActionButton, LiveHint, TxStatus } from "./ui";
 
 /* Panels shared by the web token page and the in-app launch screen: curve trading, graduation state, position. */
 
@@ -30,8 +30,9 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
   const [side, setSide] = useState<Side>("buy");
   const [amount, setAmount] = useState("");
   const [slippageBps, setSlippage] = useState(100);
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, reset, dismiss, busy, locked } = useTx();
   const now = useNow();
+  const slipId = useId();
   const deferredAmount = useDeferredValue(amount);
   const decimals = side === "buy" ? pair.decimals : 18;
   const parsed = parseAmount(deferredAmount, decimals);
@@ -70,12 +71,12 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
   const insufficient = balance !== undefined && parsed !== null && parsed > balance + (side === "buy" ? 0n : 0n);
   return (
     <div className="card trade">
-      <Seg options={SIDES} value={side} onChange={(s) => { setSide(s); setAmount(""); reset(); }} tone="dir" />
+      <Seg label="Trade side" options={SIDES} value={side} onChange={(s) => { setSide(s); setAmount(""); reset(); }} tone="dir" />
       <label className="amount">
         <input inputMode="decimal" placeholder="0" aria-label={side === "buy" ? `Amount in ${pair.symbol}` : `Amount in ${launch.symbol}`} value={amount} onChange={(e) => setAmount(e.target.value)} />
         <span className="tok">{side === "buy" ? pair.symbol : `$${launch.symbol}`}</span>
       </label>
-      <div className="presets">
+      <div className="presets" role="group" aria-label={side === "buy" ? "Amount presets" : "Share of your balance"}>
         {side === "buy" ? BUY_PRESETS.map((p) => <button key={p} type="button" aria-pressed={amount === p} onClick={() => setPreset(p)}>{p} {pair.symbol}</button>) : SELL_PRESETS.map((p) => <button key={p} type="button" onClick={() => setPreset(p)} disabled={!view}>{p}%</button>)}
       </div>
       {balance !== undefined && <p className="hint">Balance: {fmtAmount(balance, decimals, side === "buy" ? pair.symbol : launch.symbol)}</p>}
@@ -90,18 +91,18 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
         {q && q.kind === "sell" && <div><span>Trade fee {bpsToPct(launch.feeBps)}{launch.creatorTaxBps ? ` + creator tax ${bpsToPct(launch.creatorTaxBps)}` : ""}</span><b>{fmtAmount(q.fee + q.tax, pair.decimals, pair.symbol)}</b></div>}
         <div><span>Minimum after slippage</span><b>{q ? fmtUnits(minOut, side === "buy" ? 18 : pair.decimals) : "—"}</b></div>
       </div>
-      <div className="slip"><span>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
-      <TxStatus tx={tx} onDismiss={reset} />
-      {quote.error && <p className="hint err">{quote.error}</p>}
-      {insufficient && <p className="hint err">Insufficient balance.</p>}
-      <ActionButton ready={!!q && out > 0n && !insufficient} busy={busy || (quote.loading && !!parsed)} label={side === "buy" ? `Buy $${launch.symbol}` : `Sell $${launch.symbol}`} onClick={submit} className={`btn big ${side === "buy" ? "tone-up" : "tone-down"}`} />
+      <div className="slip" role="group" aria-labelledby={slipId}><span id={slipId}>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
+      <TxStatus tx={tx} onDismiss={dismiss} />
+      <LiveHint text={quote.error} />
+      <LiveHint text={insufficient && "Insufficient balance."} />
+      <ActionButton ready={!!q && out > 0n && !insufficient && !locked} busy={busy || (quote.loading && !!parsed)} label={side === "buy" ? `Buy $${launch.symbol}` : `Sell $${launch.symbol}`} onClick={submit} className={`btn big ${side === "buy" ? "tone-up" : "tone-down"}`} />
     </div>
   );
 }
 
 export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: () => void }) {
   const wallet = useWallet();
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, busy, locked } = useTx();
   const pending = launch.hookPendingFees + launch.hookPendingTax;
   const venue = launch.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4";
   if (launch.phase === 2) {
@@ -114,11 +115,11 @@ export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: (
           <Row label="Swept into the pool" value={fmtAmount(launch.sweptQuote, launch.pair.decimals, launch.pair.symbol, { compact: true })} />
           <Row label="Undistributed pool fees" value={fmtAmount(pending, launch.pair.decimals, launch.pair.symbol)} />
         </div>
-        <TxStatus tx={tx} onDismiss={reset} />
+        <TxStatus tx={tx} onDismiss={dismiss} />
         <div className="flow-actions" style={{ marginTop: 4 }}>
           <Link className="btn primary" href={`/swap?in=${launch.pair.native ? "MON" : launch.pairToken}&out=${launch.token}`}>Trade ${launch.symbol} <Icon name="arrow-ur" /></Link>
           {pending > 0n && wallet.client && (
-            <button type="button" className="btn secondary" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run("Distribute pool fees", (onSent) => sweepPoolFees(client, launch.stack.hook, launch.poolId, launch.pairToken, onSent), onDone); }}>Distribute pool fees</button>
+            <button type="button" className="btn secondary" disabled={locked} onClick={() => { const client = wallet.client; if (client) void run("Distribute pool fees", (onSent) => sweepPoolFees(client, launch.stack.hook, launch.poolId, launch.pairToken, onSent), onDone); }}>Distribute pool fees</button>
           )}
         </div>
       </div>
@@ -136,15 +137,15 @@ export function StatePanel({ launch, onDone }: { launch: LaunchDetail; onDone: (
     <div className="card state-card">
       <h3>Graduation pending</h3>
       <p>The curve is complete but the {venue} pool has not opened yet. Anyone can retry the migration; if it keeps failing, the owner can enable refunds after seven days.</p>
-      <TxStatus tx={tx} onDismiss={reset} />
-      <ActionButton ready={!busy} busy={busy} label="Retry graduation" className="btn secondary" onClick={() => { const client = wallet.client; if (client) void run("Graduate", (onSent) => retryGraduation(client, launch.factory, launch.token, onSent), onDone); }} />
+      <TxStatus tx={tx} onDismiss={dismiss} />
+      <ActionButton ready={!locked} busy={busy} label="Retry graduation" className="btn secondary" onClick={() => { const client = wallet.client; if (client) void run("Graduate", (onSent) => retryGraduation(client, launch.factory, launch.token, onSent), onDone); }} />
     </div>
   );
 }
 
 export function Position({ launch, view, onDone }: { launch: LaunchDetail; view: AccountView; onDone: () => void }) {
   const wallet = useWallet();
-  const { tx, run, reset, busy } = useTx();
+  const { tx, run, dismiss, locked } = useTx();
   const { pair } = launch;
   const value = (view.tokenBalance * launch.price) / 10n ** 18n;
   return (
@@ -157,16 +158,16 @@ export function Position({ launch, view, onDone }: { launch: LaunchDetail; view:
       {(launch.holderFeeSharing || view.pendingRewards > 0n) && (
         <div className="claim" style={{ marginTop: 10 }}>
           <div><span>Holder rewards</span><b>{fmtAmount(view.pendingRewards, pair.decimals, pair.symbol)}</b></div>
-          <button type="button" className="btn secondary sm" disabled={busy || view.pendingRewards === 0n} onClick={() => { const client = wallet.client; if (client) void run("Claim holder rewards", (onSent) => claimHolderRewards(client, launch.stack.holderFeeSharing, launch.token, onSent), onDone); }}>Claim</button>
+          <button type="button" className="btn secondary sm" disabled={locked || view.pendingRewards === 0n} onClick={() => { const client = wallet.client; if (client) void run("Claim holder rewards", (onSent) => claimHolderRewards(client, launch.stack.holderFeeSharing, launch.token, onSent), onDone); }}>Claim</button>
         </div>
       )}
       {view.escrowBalance > 0n && (
         <div className="claim" style={{ marginTop: 10 }}>
           <div><span>Creator fees in escrow</span><b>{fmtAmount(view.escrowBalance, pair.decimals, pair.symbol)}</b></div>
-          <button type="button" className="btn secondary sm" disabled={busy} onClick={() => { const client = wallet.client; if (client) void run("Claim creator fees", (onSent) => claimEscrow(client, launch.stack.escrow, launch.pairToken, pair.native, onSent), onDone); }}>Claim</button>
+          <button type="button" className="btn secondary sm" disabled={locked} onClick={() => { const client = wallet.client; if (client) void run("Claim creator fees", (onSent) => claimEscrow(client, launch.stack.escrow, launch.pairToken, pair.native, onSent), onDone); }}>Claim</button>
         </div>
       )}
-      <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={reset} /></div>
+      <div style={{ marginTop: 10 }}><TxStatus tx={tx} onDismiss={dismiss} /></div>
     </div>
   );
 }

@@ -20,16 +20,19 @@ export default function TokenPage() {
   const now = useNow();
   const launch = useAsync(() => (address ? fetchLaunch(address) : Promise.resolve(null)), `launch:${address ?? ""}`, 6_000);
   const data = launch.data;
+  // A phase change re-reads the position but keeps it (and the panels holding a pending transaction) mounted.
   const view = useAsync(
     () => (wallet.account && data ? fetchAccountView(data, wallet.account) : Promise.resolve(null)),
-    `view:${address ?? ""}:${wallet.account ?? ""}:${data ? data.phase : "loading"}`,
+    `view:${address ?? ""}:${wallet.account ?? ""}`,
     8_000,
+    data ? String(data.phase) : "loading",
   );
   const refreshAll = () => { launch.refresh(); view.refresh(); };
 
   if (!address) return <div className="empty"><span className="glyph"><Icon name="search" /></span><b>Not a token address</b><p>Open a token from the launchpad list.</p></div>;
   if (!DEPLOYED) return <DeployNotice />;
-  if (launch.error) return <p className="tx bad" role="alert">{launch.error}</p>;
+  // Only a first read that failed replaces the page; a failed refresh keeps the last values and the open panels.
+  if (launch.error && !data) return <p className="tx bad" role="alert">{launch.error}</p>;
   if (!data) {
     if (!launch.loading) return <div className="empty"><span className="glyph"><Icon name="rocket" /></span><b>Unknown token</b><p>This address was not launched on the DyorHQ launchpad.</p><Link className="btn secondary sm" href="/launchpad">Back to launches</Link></div>;
     return <div className="token-hero"><Skeleton h={76} w={76} style={{ borderRadius: 22 }} /><div className="token-who"><Skeleton h={28} w="50%" /><Skeleton h={14} w="30%" style={{ marginTop: 10 }} /></div></div>;
@@ -50,7 +53,7 @@ export default function TokenPage() {
     <>
       <p style={{ margin: "6px 0 0" }}><Link href="/launchpad" className="sec link" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, fontWeight: 600, color: "var(--accent-ink)", textDecoration: "none" }}><Icon name="chev-left" /> All launches</Link></p>
       <section className="token-hero">
-        <TokenLogo src={data.logo} name={data.name} address={data.token} size="lg" />
+        <TokenLogo src={data.logo} name={data.name} size="lg" />
         <div className="token-who">
           <h1>{data.name} <span className="ticker">${data.symbol}</span> <PhaseBadge launch={data} /> <RetiredBadge launch={data} /></h1>
           <div className="meta">
@@ -67,6 +70,7 @@ export default function TokenPage() {
         </div>
       </section>
 
+      {launch.error && <p className="hint err" role="alert">Couldn&apos;t refresh this launch ({launch.error}). Showing the last values read; retrying.</p>}
       <div className="stats-4">
         <Tile label="Price" value={`${fmtNumber(priceNumber(data))} ${pair.symbol}`} sub="on the curve" />
         <Tile label="Market cap" value={fmtAmount(data.marketCap, pair.decimals, pair.symbol, { compact: true })} sub={`${fmtUnits(data.supply, 18, { compact: true })} supply`} />

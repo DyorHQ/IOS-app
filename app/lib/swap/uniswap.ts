@@ -305,11 +305,17 @@ export async function quoteUniswap(req: SwapRequest): Promise<VenueQuote | null>
   // v4 pools hold native MON directly; WMON legs stay on v3.
   const v4Eligible = !sameToken(req.tokenIn.address, WMON) && !sameToken(req.tokenOut.address, WMON);
   const venue: V3Venue = { factory: UNISWAP.v3Factory, quoter: UNISWAP.quoterV2, tiers: UNISWAP.v3FeeTiers };
+  // One version failing still leaves the other's quote; but "no route" is only said when both actually answered.
+  let failure: unknown = null;
+  const settle = <T,>(p: Promise<T | null>) => p.catch((error: unknown) => { failure ??= error; return null; });
   const [v3, v4] = await Promise.all([
-    bestV3Route(venue, tokenIn, tokenOut, req.amountIn).catch(() => null),
-    v4Eligible ? bestV4(req.tokenIn.address, req.tokenOut.address, req.amountIn).catch(() => null) : Promise.resolve(null),
+    settle(bestV3Route(venue, tokenIn, tokenOut, req.amountIn)),
+    v4Eligible ? settle(bestV4(req.tokenIn.address, req.tokenOut.address, req.amountIn)) : Promise.resolve(null),
   ]);
-  if (!v3 && !v4) return null;
+  if (!v3 && !v4) {
+    if (failure) throw failure;
+    return null;
+  }
   const useV4 = !!v4 && (!v3 || v4.amountOut >= v3.amountOut);
   const amountOut = useV4 ? v4!.amountOut : v3!.amountOut;
   const minOut = minAfterSlippage(amountOut, req.slippageBps);

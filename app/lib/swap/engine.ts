@@ -48,13 +48,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
-/** One venue's quote, or null when it has no route. Throws with a readable message on failure or timeout. */
-export async function fetchVenueQuote(venue: Venue, req: SwapRequest): Promise<VenueQuote | null> {
+/** One venue's quote, or null when it has no route. Throws with a readable message on failure or timeout. `signal`
+    cancels the venue's HTTP request (Kuru's API) when the quote is superseded; on-chain quotes just finish unused. */
+export async function fetchVenueQuote(venue: Venue, req: SwapRequest, signal?: AbortSignal): Promise<VenueQuote | null> {
   if (sameToken(req.tokenIn.address, req.tokenOut.address) || req.amountIn <= 0n) return null;
   if (isWrap(req)) return venue === "wmon" ? wrapQuote(req) : null;
   if (venue === "wmon") return null;
   const label = { kuru: "Kuru Flow", uniswap: "Uniswap", monday: "Monday Trade" }[venue];
-  const quote = venue === "kuru" ? quoteKuru(req) : venue === "uniswap" ? quoteUniswap(req) : quoteMonday(req);
+  const quote = venue === "kuru" ? quoteKuru(req, signal) : venue === "uniswap" ? quoteUniswap(req) : quoteMonday(req);
   return withTimeout(quote, QUOTE_TIMEOUT_MS, label);
 }
 
