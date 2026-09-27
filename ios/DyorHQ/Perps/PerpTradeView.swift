@@ -272,6 +272,10 @@ struct PerpTradeView: View {
             TradingViewChart(candles: candles, levels: chartLevels)
                 .frame(height: 300)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                // The chart is a canvas in a web view: VoiceOver gets a spoken summary instead (security audit AI-10).
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(market.asset) price chart")
+                .accessibilityValue(chartSummary)
                 .overlay(alignment: .topTrailing) { positionBadge }
                 .overlay {
                     if candles.isEmpty {
@@ -292,6 +296,16 @@ struct PerpTradeView: View {
                 TradesTape(trades: feed.trades, symbol: market.asset).frame(minHeight: 260)
             }
         }
+    }
+
+    /// The chart in words: the period, the last price, the change over the period, and its range.
+    private var chartSummary: String {
+        guard let first = candles.first, let last = candles.last else { return loadingCandles ? "Loading" : "No candle history yet" }
+        let span = Self.resolutions.first { $0.0 == resolution }?.1 ?? ""
+        let high = candles.map(\.high).max() ?? last.high
+        let low = candles.map(\.low).min() ?? last.low
+        let change = first.open > 0 ? (last.close - first.open) / first.open * 100 : 0
+        return "\(candles.count) \(span) candles. Last \(NumberStyle.number(last.close)), \(change >= 0 ? "up" : "down") \(NumberStyle.percent(abs(change), signed: false)) over the period. High \(NumberStyle.number(high)), low \(NumberStyle.number(low))."
     }
 
     private var timeframePicker: some View {
@@ -447,7 +461,10 @@ struct PerpTradeView: View {
 
             // Summary
             VStack(spacing: 8) {
-                summaryRow("Liq. Price", liquidationPairText, tint: nil, split: true)
+                // Named in words, not told apart by green and red alone (security audit AI-3): the side isn't chosen
+                // until Long or Short is tapped, so both are shown.
+                summaryRow("Liq. if long", liquidationLong.map { NumberStyle.number($0) } ?? "—", tint: liquidationLong == nil ? nil : .positive)
+                summaryRow("Liq. if short", liquidationShort.map { NumberStyle.number($0) } ?? "—", tint: liquidationShort == nil ? nil : .negative)
                 summaryRow("Max", "\(NumberStyle.number(maxNotional, maximumFractionDigits: 2)) AUSD")
                 summaryRow("Fee", "\(NumberStyle.number(estFee, maximumFractionDigits: 2)) AUSD")
             }
@@ -562,21 +579,14 @@ struct PerpTradeView: View {
         .accessibilityAddTraits(isOn.wrappedValue ? [.isButton, .isSelected] : .isButton)
     }
 
-    private func summaryRow(_ label: String, _ value: String, tint: Color? = nil, split: Bool = false) -> some View {
+    private func summaryRow(_ label: String, _ value: String, tint: Color? = nil) -> some View {
         HStack {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
             Spacer(minLength: 8)
-            if split, liquidationLong != nil || liquidationShort != nil {
-                HStack(spacing: 3) {
-                    Text(liquidationLong.map { NumberStyle.number($0) } ?? "—").foregroundStyle(Color.positive)
-                    Text("/").foregroundStyle(.secondary)
-                    Text(liquidationShort.map { NumberStyle.number($0) } ?? "—").foregroundStyle(Color.negative)
-                }
-                .font(.subheadline.weight(.medium)).monospacedDigit()
-            } else {
-                Text(value).font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(tint ?? .primary)
-            }
+            Text(value).font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(tint ?? .primary)
+                .lineLimit(1).minimumScaleFactor(0.8)
         }
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: Long / Short
@@ -1056,9 +1066,6 @@ struct PerpTradeView: View {
         let margin = notional / max(ticket.leverage, 1)
         return PerplService.liquidationPrice(side: .short, entry: refPrice, size: baseSize, margin: margin, premium: 0, maintenanceFraction: market.maintMarginFraction)
     }
-    private var liquidationPairText: String {
-        "\(liquidationLong.map { NumberStyle.number($0) } ?? "—") / \(liquidationShort.map { NumberStyle.number($0) } ?? "—")"
-    }
     /// The liquidation price the position will have after this order, to check a stop-loss against (security audit
     /// GT-8): the order's own when it opens a position, the combined one when it adds to a position on the same side.
     private func projectedLiquidation(side: PositionSide) -> Double? {
@@ -1238,7 +1245,7 @@ struct SideOrderBook: View {
                 let maxTotal = max(asks.map(\.total).max() ?? 1, bids.map(\.total).max() ?? 1)
 
                 ForEach(asks.reversed(), id: \.price) { level in
-                    bookRow(level, tint: .negative, maxTotal: maxTotal)
+                    bookRow(level, side: "Ask", tint: .negative, maxTotal: maxTotal)
                 }
 
                 HStack(spacing: 6) {
@@ -1252,14 +1259,24 @@ struct SideOrderBook: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, wide ? 6 : 4)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Mid price \(NumberStyle.number(centerPrice))\(book.spread.map { ", spread \(NumberStyle.number($0))" } ?? "")")
 
                 ForEach(bids, id: \.price) { level in
-                    bookRow(level, tint: .positive, maxTotal: maxTotal)
+                    bookRow(level, side: "Bid", tint: .positive, maxTotal: maxTotal)
                 }
 
                 ratioBar
             }
         }
+        // Asks and bids are told apart by colour and position on screen; each row also says which it is (AI-10).
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(bookSummary)
+    }
+
+    private var bookSummary: String {
+        guard let bid = book.bestBid, let ask = book.bestAsk else { return "Order book" }
+        return "Order book. Best bid \(NumberStyle.number(bid)), best ask \(NumberStyle.number(ask))."
     }
 
     private struct Level { let price: Double; let total: Double }
@@ -1281,7 +1298,7 @@ struct SideOrderBook: View {
         return levels.map { running += $0.size; return Level(price: $0.price, total: running) }
     }
 
-    private func bookRow(_ level: Level, tint: Color, maxTotal: Double) -> some View {
+    private func bookRow(_ level: Level, side: String, tint: Color, maxTotal: Double) -> some View {
         ZStack(alignment: .leading) {
             GeometryReader { geo in
                 Rectangle().fill(tint.opacity(0.16))
@@ -1296,6 +1313,8 @@ struct SideOrderBook: View {
             .padding(.horizontal, 4)
         }
         .frame(height: wide ? 22 : 19)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(side) \(NumberStyle.number(level.price)), total \(NumberStyle.number(level.total, compact: true)) \(symbol)")
     }
 
     private var ratioBar: some View {
@@ -1316,6 +1335,8 @@ struct SideOrderBook: View {
             .font(.caption2.weight(.medium)).monospacedDigit()
         }
         .padding(.top, 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Bids \(NumberStyle.percent(buy * 100, fractionDigits: 0, signed: false)) of visible depth, asks \(NumberStyle.percent((1 - buy) * 100, fractionDigits: 0, signed: false))")
     }
 }
 
@@ -1327,6 +1348,7 @@ struct SideOrderBook: View {
 struct PercentSizeSlider: View {
     @Binding var percent: Double
     var onChange: (Double) -> Void
+    @Environment(\.isEnabled) private var isEnabled
 
     private let stops = [0.0, 25, 50, 75, 100]
 
@@ -1374,6 +1396,25 @@ struct PercentSizeSlider: View {
                 )
             }
             .frame(height: 22)
+        }
+        // One adjustable control for VoiceOver and Switch Control, in the 25% steps the track snaps to, instead of a
+        // drag-only shape and a loose percentage text (security audit AI-4).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Size, share of available margin")
+        .accessibilityValue("\(Int(percent.rounded())) percent")
+        .accessibilityAdjustableAction { direction in
+            guard isEnabled else { return }
+            let step = 25.0
+            let next: Double
+            switch direction {
+            case .increment: next = min(100, (percent / step).rounded(.down) * step + step)
+            case .decrement: next = max(0, (percent / step).rounded(.up) * step - step)
+            @unknown default: return
+            }
+            guard next != percent else { return }
+            Haptics.selection()
+            percent = next
+            onChange(next)
         }
     }
 
@@ -1438,6 +1479,8 @@ struct LeverageSheet: View {
                             .foregroundStyle(Int(rounded) == pick ? Color.brand : Color.primary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(pick == Int(maxLeverage) ? "Maximum leverage, \(pick) times" : "\(pick) times leverage")
+                    .accessibilityAddTraits(Int(rounded) == pick ? .isSelected : [])
                 }
             }
             .padding(.top, 30).padding(.horizontal, 20)
@@ -1568,6 +1611,23 @@ struct LeverageRuler: View {
                         withAnimation(.easeOut(duration: 0.16)) { value = min(max(lo, value.rounded()), hi) }
                     }
             )
+        }
+        // The tick labels and value pill are one adjustable control: swipe up or down for 1× steps, so any leverage
+        // can be chosen without dragging, not only the quick picks (security audit AI-4).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Leverage")
+        .accessibilityValue("\(Int(value.rounded())) times")
+        .accessibilityAdjustableAction { direction in
+            let current = value.rounded()
+            let next: Double
+            switch direction {
+            case .increment: next = min(hi, current + 1)
+            case .decrement: next = max(lo, current - 1)
+            @unknown default: return
+            }
+            guard next != value else { return }
+            Haptics.selection()
+            value = next
         }
     }
 }
@@ -1812,6 +1872,9 @@ struct TradesTape: View {
                         Text(trade.time, style: .time).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     .frame(height: 18)
+                    // Buy or sell is shown by colour only; say it (AI-10).
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(trade.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(trade.size, maximumFractionDigits: 4)) \(symbol) at \(NumberStyle.number(trade.price)), \(trade.time.formatted(date: .omitted, time: .standard))")
                 }
             }
         }
