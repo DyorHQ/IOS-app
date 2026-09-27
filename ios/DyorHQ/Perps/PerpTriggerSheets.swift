@@ -63,6 +63,7 @@ struct PositionTriggersSheet: View {
         }
         for change in changes {
             guard let price = change.price else { continue }
+            if change.kind == .stopLoss, market.maintMarginFraction == nil { return PerplTriggerRules.liquidationUnknownMessage }
             if let problem = PerplTriggerRules.problem(change.kind, price: price, side: position.side, reference: mark, liquidation: position.liquidation, priceDecimals: market.priceDecimals) {
                 return problem.message(market: market, referenceName: "the mark price")
             }

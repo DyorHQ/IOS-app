@@ -669,6 +669,7 @@ struct PerpTradeView: View {
         for (kind, text) in [(PerplTriggerKind.takeProfit, ticket.takeProfitText), (.stopLoss, ticket.stopLossText)] {
             guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
             guard let price = text.perpDouble else { return "Enter the \(kind == .takeProfit ? "take-profit" : "stop-loss") as a number, or leave it empty." }
+            if kind == .stopLoss, market.maintMarginFraction == nil { return PerplTriggerRules.liquidationUnknownMessage }
             if let problem = PerplTriggerRules.problem(kind, price: price, side: side, reference: refPrice, liquidation: projectedLiquidation(side: side), priceDecimals: market.priceDecimals) {
                 return problem.message(market: market)
             }

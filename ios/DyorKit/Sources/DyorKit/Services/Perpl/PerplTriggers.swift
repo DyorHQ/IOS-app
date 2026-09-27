@@ -39,6 +39,10 @@ public enum PerplTriggerRules {
         return size <= positionSize * (1 + 1e-9)
     }
 
+    /// Why a stop-loss is refused while the market's maintenance margin (so the liquidation price) can't be read: it
+    /// can't be checked against liquidation. A take-profit doesn't depend on it.
+    public static let liquidationUnknownMessage = "The liquidation price can't be read right now, so this stop-loss can't be checked against it. Try again in a moment."
+
     /// The price as a whole number of ticks (`price × 10^decimals`), or nil when it isn't one: off the tick grid,
     /// below one tick, or not representable.
     public static func ticks(_ price: Double, decimals: Int) -> Int? {
