@@ -19,7 +19,7 @@ import { useAsync, useNow } from "./lib/use-async";
 import { useTx } from "./lib/use-tx";
 import { waitFor } from "./lib/use-tx";
 import { fmtUnits, parseAmount, shortAddress, timeAgo } from "./lib/format";
-import { checkRecipient } from "./lib/send-checks";
+import { CODE_UNREADABLE, checkRecipient } from "./lib/send-checks";
 import { COPY_FEEDBACK, useCopy } from "./lib/clipboard";
 import { TxStatus } from "./launchpad/ui";
 import "./launchpad/launchpad.css";
@@ -196,9 +196,10 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
   const row = markets.rows.find((r) => r.address.toLowerCase() === token.toLowerCase()) ?? owned[0];
   const parsed = row ? parseAmount(amount, row.decimals) : null;
   const recipient = to.trim();
-  // The recipient's bytecode: a contract recipient must be confirmed (app/lib/send-checks.ts).
-  const code = useAsync(async () => (isAddress(recipient) ? (await publicClient.getCode({ address: recipient })) ?? "0x" : null), `code:${recipient}`);
-  const check = row ? checkRecipient(recipient, row, wallet.account, code.loading ? null : code.data ?? undefined) : null;
+  // The recipient's bytecode: a contract recipient must be confirmed (app/lib/send-checks.ts). A failed read is retried,
+  // and until one answers the recipient is unknown, never cleared as "no code".
+  const code = useAsync(async () => (isAddress(recipient) ? (await publicClient.getCode({ address: recipient })) ?? "0x" : null), `code:${recipient}`, 5_000);
+  const check = row ? checkRecipient(recipient, row, wallet.account, code.data ?? (code.error ? CODE_UNREADABLE : null)) : null;
   const unconfirmed = !!check?.contract && confirmedContract !== recipient;
   // Why Send is disabled, in the order the user fills the form.
   const reason = !markets.balancesReady ? (markets.balancesError ? "Couldn't read your balances. Retrying…" : "Reading your balances…")
@@ -209,7 +210,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
     : parsed === null ? "Enter the amount as a plain number, like 2.5."
     : parsed === 0n ? "Enter an amount above zero."
     : parsed > row.balance ? `That is more than your ${row.symbol} balance.`
-    : code.loading ? "Checking the address…"
+    : check?.wait ? check.wait
     : unconfirmed ? "Confirm the contract recipient first."
     : null;
   const valid = !!row && !!parsed && !check?.block && reason === null;
@@ -232,7 +233,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
     <>
       <SheetHead title="Send" onClose={onClose} />
       <label className="field">Asset<select className="select" value={row?.address ?? token} onChange={(e) => setToken(e.target.value)}>{owned.map((r) => <option key={r.address} value={r.address}>{r.symbol} · {fmtUnits(r.balance, r.decimals, { compact: true })}</option>)}{owned.length === 0 && <option value="">{markets.balancesReady ? "No balances" : markets.balancesError ? "Couldn't read balances" : "Reading balances…"}</option>}</select></label>
-      <label className="field">To address<input placeholder="0x…" value={to} onChange={(e) => setTo(e.target.value)} aria-invalid={recipient && check?.block ? true : undefined} aria-describedby={recipient && check?.block ? "send-to-err" : undefined} />{recipient && check?.block && <span className="hint err" id="send-to-err">{check.block}</span>}{code.error && <span className="help">Couldn&apos;t check whether this address is a contract.</span>}</label>
+      <label className="field">To address<input placeholder="0x…" value={to} onChange={(e) => setTo(e.target.value)} aria-invalid={recipient && check?.block ? true : undefined} aria-describedby={recipient && check?.block ? "send-to-err" : undefined} />{recipient && check?.block && <span className="hint err" id="send-to-err">{check.block}</span>}</label>
       {check?.warn && (
         <div className="warnbox">
           {check.warn}
