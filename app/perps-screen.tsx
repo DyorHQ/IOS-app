@@ -22,6 +22,7 @@ const BOOKS = ["Order book", "Trades"] as const;
 const SIDES = ["Long", "Short"] as const;
 const PTABS = ["Positions", "Orders", "Collateral"] as const;
 const NO_TX: TxState = { status: "idle", label: "" };
+const TX_TAB = { positions: "Positions", orders: "Orders", collateral: "Collateral" } as const;
 const px = (v: number, perp: PerpInfo) => v / 10 ** perp.priceDecimals;
 const sz = (v: number, perp: PerpInfo) => v / 10 ** perp.lotDecimals;
 
@@ -48,8 +49,10 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
   const collatId = useId();
   const { tx, run, reset, dismiss, busy } = useTx();
   // One transaction at a time, reported once, where it was started: the order ticket, a position, an order or collateral.
+  // When the tab it started in is closed, the always-visible order ticket shows it, so it can still be read and dismissed.
   const [txAt, setTxAt] = useState<"order" | "positions" | "orders" | "collateral">("order");
-  const txFor = (at: typeof txAt) => (txAt === at ? tx : NO_TX);
+  const txShownAt = txAt === "order" || TX_TAB[txAt] === tab ? txAt : "order";
+  const txFor = (at: typeof txAt) => (txShownAt === at ? tx : NO_TX);
   // Never moves the status of a transaction that is still running (run refuses a second one anyway).
   const startAt = (at: typeof txAt) => { if (!busy) setTxAt(at); };
   const orders = useAsync(async () => (acct && perps.length ? fetchOpenOrders(acct, perps) : []), `orders:${acct?.accountId ?? 0}:${perps.length}`, 10_000);
