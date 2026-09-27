@@ -99,6 +99,14 @@ final class RemoteMediaTests: XCTestCase {
         await fulfillment(of: [done], timeout: 30)
     }
 
+    func testSmallThumbnailsGetSmallCaps() {
+        let logo = RemoteMedia.caps(forThumbnail: 34 * 3)
+        XCTAssertEqual(logo, RemoteMedia.Caps(maxBytes: 2 * 1024 * 1024, maxSourcePixels: 16_000_000))
+        XCTAssertEqual(RemoteMedia.caps(forThumbnail: RemoteMedia.smallThumbnail), logo)
+        XCTAssertEqual(RemoteMedia.caps(forThumbnail: 1200), RemoteMedia.Caps(maxBytes: RemoteMedia.maxImageBytes, maxSourcePixels: RemoteMedia.maxSourcePixels),
+                       "a Moment's detail artwork keeps the full caps")
+    }
+
     func testOnlyHTTPSIsFetched() async {
         await XCTAssertThrowsFailure(.insecureURL) { try await RemoteMedia.fetch(URL(string: "http://cdn.example/logo.png")!, session: MediaStub.session()) }
         XCTAssertTrue(MediaStub.requests.isEmpty)

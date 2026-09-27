@@ -60,8 +60,9 @@ struct MomentImageSource: Sendable {
 /// Fetches Moment images from an ordered list of sources and remembers the outcome per media URI for the session —
 /// hits under a memory budget, misses for a minute — so a feed neither re-downloads an image on every scroll nor
 /// re-probes a dead link (an unrecoverable directory CID, say) on every appearance. One in-flight fetch is shared by
-/// every view showing the same Moment. Media URIs are written on-chain by whoever publishes, so each fetch is capped
-/// and only a thumbnail is decoded (`RemoteMedia`, security audit 2026-09-26, RI-5).
+/// every view showing the same Moment, and cancelled once none of them is on screen. Media URIs are written on-chain by
+/// whoever publishes, so each fetch is capped, fetches and decodes run a few at a time app-wide, and only a thumbnail
+/// is decoded (`RemoteMedia`, security audit 2026-09-26, RI-5).
 @MainActor
 final class MomentMediaLoader {
     static let shared = MomentMediaLoader()
@@ -73,7 +74,7 @@ final class MomentMediaLoader {
         return cache
     }()
     private var misses: [String: Date] = [:]
-    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private let loads = SharedLoads<UIImage>()
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 12
@@ -119,22 +120,27 @@ final class MomentMediaLoader {
     func load(key: String, sources: [MomentImageSource]) async -> UIImage? {
         if let hit = cached(key) { return hit }
         if let missed = misses[key], Date().timeIntervalSince(missed) < 60 { return nil }
-        if let task = inFlight[key] { return await task.value }
         let session = self.session
         let maxPixelSize = Self.maxPixelSize
-        let task = Task<UIImage?, Never>.detached(priority: .userInitiated) { // fetch and decode off the main thread
+        let caps = RemoteMedia.caps(forThumbnail: maxPixelSize)
+        let result = await loads.value(for: key) { // fetched and decoded off the main thread
             for source in sources {
-                guard let data = try? await RemoteMedia.fetch(source.url, session: session),
+                guard !Task.isCancelled else { return nil }
+                guard let data = try? await RemoteMedia.fetches.run({ try await RemoteMedia.fetch(source.url, session: session, maxBytes: caps.maxBytes) }),
                       source.keccak.map({ Keccak.hash256(data) == $0 }) ?? true, // a swapped mirror falls through to IPFS
-                      let image = try? RemoteMedia.thumbnail(data, maxPixelSize: maxPixelSize) else { continue } // an HTML directory listing never decodes
-                return UIImage(cgImage: image)
+                      let image = try? await RemoteMedia.decodes.run({ // an HTML directory listing never decodes
+                          UIImage(cgImage: try RemoteMedia.thumbnail(data, maxPixelSize: maxPixelSize, maxSourcePixels: caps.maxSourcePixels))
+                      }) else { continue }
+                return image
             }
             return nil
         }
-        inFlight[key] = task
-        let result = await task.value
-        inFlight[key] = nil
-        if let result { images.setObject(result, forKey: key as NSString, cost: RemoteImageLoader.cost(result)); misses[key] = nil } else { misses[key] = Date() }
+        if let result {
+            images.setObject(result, forKey: key as NSString, cost: RemoteImageLoader.cost(result))
+            misses[key] = nil
+        } else if !Task.isCancelled {
+            misses[key] = Date()
+        }
         return result
     }
 }

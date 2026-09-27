@@ -15,6 +15,29 @@ public enum RemoteMedia {
     /// The most pixels an image may declare and still be decoded (a 48 MP camera photo fits).
     public static let maxSourcePixels = 50_000_000
 
+    /// What one image may cost before it is refused: bytes read, and pixels it may declare.
+    public struct Caps: Equatable, Sendable {
+        public let maxBytes: Int
+        public let maxSourcePixels: Int
+        public init(maxBytes: Int, maxSourcePixels: Int) { self.maxBytes = maxBytes; self.maxSourcePixels = maxSourcePixels }
+    }
+
+    /// The largest thumbnail, in pixels across, that is held to the small caps.
+    public static let smallThumbnail = 512
+
+    /// The caps for an image shown at most `maxPixelSize` pixels across. A logo, avatar, chain badge or list thumbnail
+    /// (up to `smallThumbnail`) needs no more than 2 MB and 16 MP, and a scrolling list loads dozens of them; larger
+    /// artwork keeps the full caps.
+    public static func caps(forThumbnail maxPixelSize: Int) -> Caps {
+        maxPixelSize <= smallThumbnail ? Caps(maxBytes: 2 * 1024 * 1024, maxSourcePixels: 16_000_000)
+            : Caps(maxBytes: maxImageBytes, maxSourcePixels: maxSourcePixels)
+    }
+
+    /// Remote image downloads, app-wide, at once: a list of hostile 10 MB logos can't hold hundreds of MB of bodies.
+    public static let fetches = AsyncLimiter(4)
+    /// Remote image decodes, app-wide, at once: an image ImageIO can't subsample (a PNG) may need its full bitmap.
+    public static let decodes = AsyncLimiter(2)
+
     public enum Failure: Error, Equatable {
         /// Only https is fetched.
         case insecureURL

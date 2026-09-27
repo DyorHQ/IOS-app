@@ -2,9 +2,12 @@ import DyorKit
 import SwiftUI
 
 /// The one way the app shows an image from a host it doesn't control (security audit 2026-09-26, RI-5): coin logos,
-/// launch artwork, avatars, NFT art, news thumbnails. Each fetch is capped (`RemoteMedia.fetch`) and only a thumbnail
-/// at the size the view asks for is decoded (`RemoteMedia.thumbnail`), never the full image. Thumbnails are cached for
-/// the session under a memory budget, misses for a minute, and one fetch is shared by every view showing the same URL.
+/// launch artwork, avatars, NFT art, news thumbnails. Each fetch is capped (`RemoteMedia.fetch`) — tighter for a logo-
+/// sized image (`RemoteMedia.caps(forThumbnail:)`) — and only a thumbnail at the size the view asks for is decoded
+/// (`RemoteMedia.thumbnail`), never the full image. Fetches and decodes run a few at a time app-wide
+/// (`RemoteMedia.fetches` / `.decodes`), so a list of hostile images can't all be in memory at once. Thumbnails are
+/// cached for the session under a memory budget, misses for a minute, and one fetch is shared by every view showing
+/// the same URL — and cancelled once none of them is on screen any more.
 @MainActor
 final class RemoteImageLoader {
     static let shared = RemoteImageLoader()
@@ -14,7 +17,7 @@ final class RemoteImageLoader {
         return cache
     }()
     private var misses: [String: Date] = [:]
-    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private let loads = SharedLoads<UIImage>()
     private let session = RemoteMedia.makeSession()
 
     private static func key(_ url: URL, _ maxPixelSize: Int) -> String { "\(maxPixelSize)|\(url.absoluteString)" }
@@ -27,17 +30,20 @@ final class RemoteImageLoader {
         let key = Self.key(url, maxPixelSize)
         if let hit = images.object(forKey: key as NSString) { return hit }
         if let missed = misses[key], Date().timeIntervalSince(missed) < 60 { return nil }
-        if let task = inFlight[key] { return await task.value }
         let session = self.session
-        let task = Task<UIImage?, Never>.detached(priority: .userInitiated) { // fetch and decode off the main thread
-            guard let data = try? await RemoteMedia.fetch(url, session: session),
-                  let image = try? RemoteMedia.thumbnail(data, maxPixelSize: maxPixelSize) else { return nil }
-            return UIImage(cgImage: image)
+        let caps = RemoteMedia.caps(forThumbnail: maxPixelSize)
+        let result = await loads.value(for: key) { // fetched and decoded off the main thread
+            guard let data = try? await RemoteMedia.fetches.run({ try await RemoteMedia.fetch(url, session: session, maxBytes: caps.maxBytes) }) else { return nil }
+            return try? await RemoteMedia.decodes.run {
+                UIImage(cgImage: try RemoteMedia.thumbnail(data, maxPixelSize: maxPixelSize, maxSourcePixels: caps.maxSourcePixels))
+            }
         }
-        inFlight[key] = task
-        let result = await task.value
-        inFlight[key] = nil
-        if let result { images.setObject(result, forKey: key as NSString, cost: Self.cost(result)); misses[key] = nil } else { misses[key] = Date() }
+        if let result {
+            images.setObject(result, forKey: key as NSString, cost: Self.cost(result))
+            misses[key] = nil
+        } else if !Task.isCancelled {
+            misses[key] = Date() // a view that left before the answer came doesn't make it a miss
+        }
         return result
     }
 
