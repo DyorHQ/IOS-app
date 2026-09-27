@@ -153,6 +153,8 @@ struct ConfirmationSheet<Details: View>: View {
     @State private var cleanedUp = false
     /// The most the plan's network fees can come to at today's fees, read once the plan is built (IOST-1).
     @State private var fee: TransactionSender.FeePreview?
+    /// Who the plan's exact approvals take a standing unlimited allowance away from, read once the plan is built (IOST-14).
+    @State private var replacedUnlimited: [String] = []
 
     private var confirmLabel: String {
         session.isPasskeyAccount && assessment?.needsFaceID == true ? "Confirm with \(BiometricGate.promptName)" : confirmTitle
@@ -165,6 +167,13 @@ struct ConfirmationSheet<Details: View>: View {
                 if !unlimitedApprovals.isEmpty, !run.isDone {
                     Section {
                         ForEach(unlimitedApprovals, id: \.self) { DetailRow("Approval", "Unlimited approval to \($0)", tint: .attention) }
+                    }
+                }
+                if !replacedUnlimited.isEmpty, !run.isDone {
+                    Section {
+                        ForEach(replacedUnlimited, id: \.self) { DetailRow("Approval", "Replaces your unlimited approval to \($0)") }
+                    } footer: {
+                        Text("An earlier approval lets it spend any amount. This plan approves exactly what it needs instead.")
                     }
                 }
                 if let fee, !run.isDone {
@@ -246,7 +255,10 @@ struct ConfirmationSheet<Details: View>: View {
         .task {
             do { steps = try await build() } catch { buildError = describe(error) }
             preparing = false
-            if buildError == nil, let address = session.address { fee = await env.sender.feePreview(steps, from: address) }
+            if buildError == nil, let address = session.address {
+                fee = await env.sender.feePreview(steps, from: address)
+                replacedUnlimited = await env.sender.unlimitedAllowancesReplaced(by: steps, owner: address).map(Self.spenderName)
+            }
         }
         .task(id: scopeKey) { await reassess() }
     }
@@ -257,7 +269,7 @@ struct ConfirmationSheet<Details: View>: View {
         steps.compactMap { step in
             switch step.kind {
             case .approve(_, let spender, let amount), .permit2Approve(_, let spender, let amount, _):
-                return amount >= BigUInt(1) << 128 ? Self.spenderName(spender) : nil
+                return amount >= TransactionSender.unlimitedAllowance ? Self.spenderName(spender) : nil
             case .call:
                 return nil
             }

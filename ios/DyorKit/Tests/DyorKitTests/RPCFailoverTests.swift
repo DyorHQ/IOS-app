@@ -321,6 +321,8 @@ final class SimulatedChain: @unchecked Sendable {
     var receiptReadFailures = 0
     /// Whether mined transactions succeed; false makes every receipt a revert.
     var receiptsSucceed = true
+    /// When set, every multicall read answers one successful call returning this word (an ERC-20 allowance).
+    var allowance: BigUInt?
     private(set) var blockNumberReads = 0
     private(set) var balanceReads = 0
     private(set) var sent: [(raw: String, head: UInt64)] = []
@@ -345,7 +347,9 @@ final class SimulatedChain: @unchecked Sendable {
         case "eth_getBalance":
             balanceReads += 1
             return result(quantity(balance))
-        case "eth_call": return result(.string("0x"))
+        case "eth_call":
+            guard let allowance else { return result(.string("0x")) }
+            return result(.string(try! ABI.encode([.array([.tuple([.bool(true), .bytes(allowance.word)])])], [.array(.tuple([.bool, .bytes]))]).hexString))
         case "eth_getTransactionCount": return result(.string("0x0"))
         case "eth_estimateGas": return estimate.map { result(.string($0)) } ?? failure("execution reverted")
         case "eth_sendRawTransaction":

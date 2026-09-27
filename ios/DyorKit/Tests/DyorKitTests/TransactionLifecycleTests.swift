@@ -210,6 +210,32 @@ final class TransactionLifecycleTests: XCTestCase {
         }
     }
 
+    // MARK: Standing approvals (IOST-14)
+
+    /// An exact approval whose amount a standing, effectively unlimited allowance already covers is sent anyway,
+    /// replacing it, and the sheet can name it; an ordinary covering allowance still skips the step.
+    func testStandingUnlimitedApprovalIsReplacedByTheExactOne() async throws {
+        let owner = CountingWallet().address
+        let token = Address(literal: "0x3333333333333333333333333333333333333333")
+        let step = TransactionStep.approve(token: token, spender: Uniswap.permit2, amount: 50, label: "Approve")
+        chain.allowance = SwapCalldata.maxUint160
+        let replaced = try await sender().request(for: step, owner: owner)
+        XCTAssertEqual(replaced, TransactionRequest(to: token, data: try ERC20.approveCalldata(spender: Uniswap.permit2, amount: 50)))
+        let named = await sender().unlimitedAllowancesReplaced(by: [step, .call(request, label: "Swap")], owner: owner)
+        XCTAssertEqual(named, [Uniswap.permit2])
+
+        chain.allowance = 50
+        let covered = try await sender().request(for: step, owner: owner)
+        XCTAssertNil(covered)
+        let none = await sender().unlimitedAllowancesReplaced(by: [step], owner: owner)
+        XCTAssertEqual(none, [])
+
+        // A step that itself asks for an unlimited amount is covered by an unlimited allowance, as before.
+        chain.allowance = SwapCalldata.maxUint160
+        let unlimited = try await sender().request(for: .approve(token: token, spender: Uniswap.permit2, amount: SwapCalldata.maxUint160, label: "Approve"), owner: owner)
+        XCTAssertNil(unlimited)
+    }
+
     // MARK: Receipt wait (GL-2)
 
     private func broadcastOne() async throws -> Data {

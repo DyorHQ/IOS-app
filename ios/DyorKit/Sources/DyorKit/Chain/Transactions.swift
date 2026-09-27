@@ -211,12 +211,14 @@ public struct TransactionSender: Sendable {
     }
 
     /// The transaction `step` sends from `owner` now, or nil when it has nothing to send: an approval the allowance
-    /// already covers (a Permit2 one for at least another minute), or a call step without a request.
+    /// already covers (a Permit2 one for at least another minute), or a call step without a request. An exact approval
+    /// is sent even when a standing, effectively unlimited allowance covers it — one an earlier build or another app
+    /// left — so that allowance is replaced by the exact amount instead of staying unseen (IOST-14).
     func request(for step: TransactionStep, owner: Address) async throws -> TransactionRequest? {
         switch step.kind {
         case .approve(let token, let spender, let amount):
             let allowance = try await multicall.readAll([try ERC20.allowance(token, owner: owner, spender: spender)])[0][0].uint
-            if allowance >= amount { return nil }
+            if allowance >= amount, allowance < Self.unlimitedAllowance || amount >= Self.unlimitedAllowance { return nil }
             return TransactionRequest(to: token, data: try ERC20.approveCalldata(spender: spender, amount: amount))
         case .permit2Approve(let token, let spender, let amount, _):
             let allowance = try await multicall.readAll([try SwapCalldata.permit2Allowance(owner: owner, token: token, spender: spender)])[0]
@@ -225,6 +227,23 @@ public struct TransactionSender: Sendable {
         case .call:
             return step.request
         }
+    }
+
+    /// An allowance this large is effectively unlimited: what the confirmation sheet flags, and what an exact approval
+    /// step replaces (`request(for:)`).
+    public static let unlimitedAllowance = BigUInt(1) << 128
+
+    /// The spenders whose standing, effectively unlimited allowance `steps` replace with an exact one (`request(for:)`),
+    /// for the confirmation sheet to name. A read that fails names nothing.
+    public func unlimitedAllowancesReplaced(by steps: [TransactionStep], owner: Address) async -> [Address] {
+        var spenders: [Address] = []
+        for step in steps {
+            guard case .approve(let token, let spender, let amount) = step.kind, amount < Self.unlimitedAllowance,
+                  let read = try? await multicall.readAll([try ERC20.allowance(token, owner: owner, spender: spender)]),
+                  let allowance = read.first?.first?.uint, allowance >= Self.unlimitedAllowance else { continue }
+            spenders.append(spender)
+        }
+        return spenders
     }
 
     public func send(_ request: TransactionRequest, from wallet: Wallet) async throws -> Data {
