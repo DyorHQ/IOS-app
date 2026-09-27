@@ -276,6 +276,7 @@ struct DeleteAccountView: View {
     @ViewBuilder private func passkeySections(_ address: Address) -> some View {
         Section {
             Text(address.checksummed)
+                .speechSpellsOutCharacters()
                 .font(.footnote.monospaced())
                 .textSelection(.enabled)
                 .padding(.vertical, 2)

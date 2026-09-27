@@ -202,6 +202,7 @@ struct AddressRow: View {
     var body: some View {
         LabeledContent(title) {
             Text(address.short)
+                .speechSpellsOutCharacters()
                 .font(.body.monospaced())
                 .foregroundStyle(.secondary)
         }
@@ -297,18 +298,21 @@ struct DetailRow: View {
     let label: String
     let value: String
     var tint: Color = .primary
+    /// VoiceOver reads the value character by character: an address, a hash (AI-13).
+    var spellsOut = false
 
-    init(_ label: String, _ value: String, tint: Color = .primary) {
+    init(_ label: String, _ value: String, tint: Color = .primary, spellsOut: Bool = false) {
         self.label = label
         self.value = value
         self.tint = tint
+        self.spellsOut = spellsOut
     }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(label).foregroundStyle(.secondary)
             Spacer(minLength: 16)
-            Text(value).monospacedDigit().foregroundStyle(tint).multilineTextAlignment(.trailing)
+            Text(value).speechSpellsOutCharacters(spellsOut).monospacedDigit().foregroundStyle(tint).multilineTextAlignment(.trailing)
         }
     }
 }

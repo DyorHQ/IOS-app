@@ -247,6 +247,7 @@ struct ReceiveSheet: View {
                 }
                 VStack(spacing: 8) {
                     Text(address.checksummed)
+                        .speechSpellsOutCharacters()
                         .font(.footnote.monospaced())
                         .multilineTextAlignment(.center)
                         .textSelection(.enabled)
@@ -393,7 +394,7 @@ struct SendSheet: View {
                         subtitle: "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol) → \(review.to.short)",
                         hash: hash, section: "wallet", usd: stable ? Amount.units(review.amount, decimals: review.token.decimals) : nil), owner: session.address)
                 }, intent: .alwaysAsks(.send)) {
-                    DetailRow("To", review.to.checksummed) // in full: this review is the last check before funds leave
+                    DetailRow("To", review.to.checksummed, spellsOut: true) // in full: this review is the last check before funds leave
                     if review.toContract { DetailRow("Recipient", "A contract, not a wallet", tint: .attention) }
                     DetailRow("Amount", "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol)")
                     DetailRow("Network", "Monad")
