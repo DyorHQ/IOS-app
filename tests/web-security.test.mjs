@@ -117,9 +117,34 @@ test("the Perpl REST relay serves the charts' candle windows and nothing near th
     `/api/perpl/v1/market-data/10/candles/3600/${to - 150 * hour + 1}-${to}`,
     `/api/perpl/v1/market-data/10/candles/3600/${to - 2000 * hour}-${to}`,
     `/api/perpl/v1/market-data/10/orders/3600/${to - 150 * hour}-${to}`,
+    `/api/perpl/v1/market-data/10/candles/3600/${to - 149 * hour}-${to}`, // another window size
+    `/api/perpl/v1/market-data/10/candles/3600/${to - 390 * hour}-${to - 240 * hour}`, // a historical window
+    `/api/perpl/v1/market-data/10/candles/3600/${to + 90 * hour}-${to + 240 * hour}`, // a future window
   ]) assert.equal((await call(bad)).status, 404, bad);
   assert.equal((await call(path, { headers: { Origin: "https://evil.example" } })).status, 403);
   assert.deepEqual(upstreamCalls, [], "a refused path must not reach Perpl");
+});
+
+test("the relay answers repeat reads from the edge cache: many viewers, one upstream read", async () => {
+  const hour = 3_600_000;
+  const to = Math.ceil(Date.now() / hour) * hour;
+  const path = `/api/perpl/v1/market-data/20/candles/3600/${to - 150 * hour}-${to}`;
+  const stored = new Map();
+  globalThis.caches = { default: { async match(key) { return stored.get(key.url)?.clone(); }, async put(key, response) { stored.set(key.url, response); } } };
+  try {
+    upstreamCalls = [];
+    for (const query of ["", "?v=1", "?v=2"]) assert.equal((await call(`${path}${query}`, { headers: { "sec-fetch-site": "same-origin" } })).status, 200, query);
+    assert.equal(upstreamCalls.length, 1, "one upstream read");
+    assert.deepEqual([...stored.keys()], [`${ORIGIN}${path}`], "keyed on the validated route, never the query string");
+    const hit = await call(path);
+    assertSecured(hit);
+    assert.equal(hit.headers.get("content-type"), "application/json; charset=utf-8");
+    assert.equal(hit.headers.get("cache-control"), "public, max-age=15");
+    assert.equal((await call(path, { headers: { Origin: "https://evil.example" } })).status, 403, "the cache does not bypass the site check");
+    assert.equal(upstreamCalls.length, 1);
+  } finally {
+    delete globalThis.caches;
+  }
 });
 
 test("no third-party script is loaded into the wallet origin", () => {

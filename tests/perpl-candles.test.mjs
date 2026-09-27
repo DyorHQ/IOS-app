@@ -3,7 +3,7 @@ import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
 /* app/lib/perps/candles.ts: the charts read Perpl's candles through the app's proxy, and the proxy relays only the
-   candle paths the app itself builds. */
+   candle paths the app itself builds at the current time. */
 
 const candles = await tsImport("../app/lib/perps/candles.ts", import.meta.url);
 const HOUR = 3_600_000;
@@ -14,8 +14,17 @@ test("the window ends at the next candle boundary and spans 150 candles", () => 
   const to = Date.UTC(2026, 8, 26, 13);
   assert.equal(path, `v1/market-data/10/candles/3600/${to - 150 * HOUR}-${to}`);
   assert.equal(candles.candlesPath(10, 3600, NOW + 60_000), path, "the same URL for everyone within the hour");
-  assert.equal(candles.isCandlesRoute(path), true);
-  for (const res of candles.CANDLE_RESOLUTIONS) assert.equal(candles.isCandlesRoute(candles.candlesPath(1, res, NOW)), true, String(res));
+  assert.equal(candles.isCandlesRoute(path, NOW), true);
+  for (const res of candles.CANDLE_RESOLUTIONS) assert.equal(candles.isCandlesRoute(candles.candlesPath(1, res, NOW), NOW), true, String(res));
+});
+
+test("a visitor's clock may be a few minutes off", () => {
+  for (const res of candles.CANDLE_RESOLUTIONS) {
+    for (const skew of [-4 * 60_000, 4 * 60_000]) assert.equal(candles.isCandlesRoute(candles.candlesPath(10, res, NOW + skew), NOW), true, `${res} s, ${skew} ms`);
+  }
+  assert.equal(candles.isCandlesRoute(candles.candlesPath(10, 60, NOW + 7 * 60_000), NOW), false, "minute candles, seven minutes ahead");
+  assert.equal(candles.isCandlesRoute(candles.candlesPath(10, 86400, NOW - 36 * HOUR), NOW), true, "daily candles: one candle back is within a step");
+  assert.equal(candles.isCandlesRoute(candles.candlesPath(10, 86400, NOW - 60 * HOUR), NOW), false, "daily candles, two candles back");
 });
 
 test("the proxy refuses every other candle path", () => {
@@ -26,6 +35,10 @@ test("the proxy refuses every other candle path", () => {
     `v1/market-data/10/candles/7200/${from}-${to}`, // not a listed resolution
     `v1/market-data/10/candles/3600/${from + 1}-${to}`, // unaligned (cache busting)
     `v1/market-data/10/candles/3600/${to - 1025 * HOUR}-${to}`, // more than 1024 candles
+    `v1/market-data/10/candles/3600/${from + HOUR}-${to}`, // another window size (149 candles)
+    `v1/market-data/10/candles/3600/${from - HOUR}-${to}`, // another window size (151 candles)
+    `v1/market-data/10/candles/3600/${from - 240 * HOUR}-${to - 240 * HOUR}`, // a historical window
+    `v1/market-data/10/candles/3600/${from + 240 * HOUR}-${to + 240 * HOUR}`, // a future window
     `v1/market-data/10/candles/3600/${to}-${from}`, // backwards
     `v1/market-data/10/candles/3600/${from}-${to}/x`,
     `v1/market-data/10/candles/3600/${from}`,
@@ -34,7 +47,7 @@ test("the proxy refuses every other candle path", () => {
     `v1/market-data/10/candles/3600/${from}-${to}?x=1`,
     `../v1/market-data/10/candles/3600/${from}-${to}`,
   ];
-  for (const route of refused) assert.equal(candles.isCandlesRoute(route), false, route);
+  for (const route of refused) assert.equal(candles.isCandlesRoute(route, NOW), false, route);
 });
 
 test("Perpl's series becomes ascending, unscaled chart candles, one per time", () => {
