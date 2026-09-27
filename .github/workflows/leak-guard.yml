@@ -55,9 +55,12 @@ jobs:
           set -euo pipefail
           G="$RUNNER_TEMP/leak-guard"
           src="refs/remotes/origin/$DEFAULT_BRANCH"
-          if ! git cat-file -e "$src:scripts/dev/secret-scan.sh" 2>/dev/null; then
+          # Until the default branch has this version of the guard (both checkers, --config), the pushed copy runs.
+          git show "$src:scripts/dev/secret-scan.sh" > "$RUNNER_TEMP/scanner-probe" 2>/dev/null || : > "$RUNNER_TEMP/scanner-probe"
+          if ! git cat-file -e "$src:scripts/dev/forbidden-paths.sh" 2>/dev/null ||
+             ! grep -q -- '--config FILE' "$RUNNER_TEMP/scanner-probe"; then
             src=HEAD
-            echo "::warning::$DEFAULT_BRANCH has no leak guard yet: this run uses the pushed copy (the Guard changes step flags it)."
+            echo "::warning::$DEFAULT_BRANCH has no current leak guard yet: this run uses the pushed copy (the Guard changes step flags it)."
           fi
           for f in $GUARD_FILES; do
             mkdir -p "$G/$(dirname "$f")"
