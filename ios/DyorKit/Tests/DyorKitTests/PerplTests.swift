@@ -426,6 +426,15 @@ final class PerplTests: XCTestCase {
         // Once its market reads (MON's info stands in), the position is decoded with it and shown.
         let monInfo = try! ABI.decode(hex(f["chain"]["perpetualInfo"]["10"]["data"].string!), PerplExchange.Returns.perpetualInfo)
         install(PerplExchange.Signature.getPerpetualInfo, [.uint(999)], returning: monInfo, types: PerplExchange.Returns.perpetualInfo)
+        // The slot on market 1 can't be read (nothing answers getPosition for it): an error, never a silent drop.
+        do {
+            _ = try await service.positions(account, markets: markets)
+            XCTFail("a position slot that failed to read was dropped")
+        } catch PerplError.malformedResponse(let what) {
+            XCTAssertEqual(what, "position 1")
+        }
+        // Once it reads as an empty slot (zero lot), it is skipped: not a position.
+        install(PerplExchange.Signature.getPosition, [.uint(1), .uint(4638)], returning: position(type: 0, lot: 0, price: 0, deposit: 0, premium: 0, markPNS: 0), types: PerplExchange.Returns.position)
         let positions = try await service.positions(account, markets: markets)
         XCTAssertEqual(positions.map(\.perpId), [10, 999])
         XCTAssertEqual(positions.first, long!)

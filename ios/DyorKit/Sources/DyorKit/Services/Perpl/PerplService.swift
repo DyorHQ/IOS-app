@@ -91,7 +91,12 @@ public actor PerplService {
         let results = try await multicall.read(calls)
         var out: [PerpPosition] = []
         for (perpId, result) in zip(account.positionPerpIds, results) {
-            guard case .success(let values) = result, let perp = markets.first(where: { $0.id == perpId }), let position = PerplExchange.position(perp: perp, values: values) else { continue }
+            // A slot that can't be read is an error, never a list that silently leaves the position out; only a
+            // successful read of an empty slot (zero lot) is skipped.
+            guard case .success(let values) = result, let perp = markets.first(where: { $0.id == perpId }) else {
+                throw PerplError.malformedResponse("position \(perpId)")
+            }
+            guard let position = PerplExchange.position(perp: perp, values: values) else { continue }
             out.append(position)
         }
         return out
