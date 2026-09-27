@@ -48,6 +48,9 @@ struct PerpTradeView: View {
     /// background (keep-alive, reconnects, drops), and re-deciding inside the sheet would swap a sheet with an order in
     /// flight for a fresh one with an enabled button — a second order (security audit 2026-09-26).
     @State private var authedOrderAccount: Int?
+    /// The order as it stood when Review was tapped: the review renders it and the plan signs it, so a mark that moves
+    /// under an open review (a USD-sized order re-derives its size from the price) can't change one without the other.
+    @State private var reviewInput: OrderInput?
     @State private var showLeverage = false
     @State private var showOrderType = false
     @State private var showUnitPref = false
@@ -136,7 +139,7 @@ struct PerpTradeView: View {
         .onChange(of: ticket.reduceOnly) { _, on in if on { ticket.tpslEnabled = false } }
         .onChange(of: bottomTab) { _, tab in if tab == .history { Task { await loadFills() } } }
         .onChange(of: model.fillSignal) { _, _ in if model.lastFilledPerpId == market.id { Task { await loadFills() } } }
-        .sheet(isPresented: $showConfirm) { orderConfirmSheet }
+        .sheet(isPresented: $showConfirm, onDismiss: { reviewInput = nil }) { orderConfirmSheet }
         .sheet(isPresented: $showLeverage) {
             LeverageSheet(leverage: ticket.leverage, maxLeverage: maxLeverage) { chosen in
                 ticket.leverage = chosen
@@ -643,6 +646,7 @@ struct PerpTradeView: View {
             Haptics.warning(); ticketError = reason; return
         }
         ticketError = nil
+        reviewInput = ticket.input(market: market, refPrice: refPrice)
         Haptics.commit()
         // Use the authenticated path when the socket is live, OR when the wallet has an enrolled key and the user wants
         // TP/SL (its submit awaits ensureConnected()); otherwise the on-chain path. Decided here, once per confirmation.
@@ -887,13 +891,16 @@ struct PerpTradeView: View {
 
     // MARK: Confirmation
 
+    /// The order under review (`reviewInput`), or the live ticket when no review is open.
+    private var reviewedInput: OrderInput { reviewInput ?? ticket.input(market: market, refPrice: refPrice) }
+
     @ViewBuilder private var orderConfirmSheet: some View {
         // Use the authenticated (keeper-forwarded) path when the socket is live, OR when the wallet has an enrolled key
         // and the user wants TP/SL — its submit() awaits ensureConnected(), so a socket that idled to `.enrolled` still
         // reconnects and carries the triggers instead of silently dropping to a bare on-chain entry. A plain order with
         // no triggers still falls through to the on-chain path when not live, so trading never depends on one-click.
         if let accountId = authedOrderAccount {
-            AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1),
+            AuthedOrderSheet(market: market, input: reviewedInput, takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1),
                              triggerSize: invertedSize(side: ticket.side), triggerNote: turnaroundNote, onChainPositions: model.positions, onChainOrders: model.orders,
                              onSent: { if ticket.effectiveReduceOnly { model.noteUserClose(market.id) } }) {
                 ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""; sizePercent = 0
@@ -909,12 +916,12 @@ struct PerpTradeView: View {
             if ticket.effectiveReduceOnly { model.noteUserClose(market.id) }
             Activity.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }, intent: orderIntent) {
-            let signed = ticket.input(market: market, refPrice: refPrice)
+            let signed = reviewedInput
             DetailRow("Market", "\(market.asset)-PERP")
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
-            DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(NumberStyle.number(signed.price ?? mark))")
-            // The parsed values this order signs, not the typed text (audit F4).
-            DetailRow("Size", "\(NumberStyle.number(signed.size)) \(market.asset)")
+            DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(NumberStyle.number(signed.price ?? mark, maximumFractionDigits: market.priceDecimals))")
+            // The parsed values this order signs, not the typed text (audit F4), at the market's full precision.
+            DetailRow("Size", "\(NumberStyle.number(signed.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
             DetailRow("Leverage", "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
             DetailRow("Margin", (notional / max(ticket.leverage, 1)).formatted(.currency(code: "USD")))
             // This path (perplTrading not ready) places a bare on-chain entry — it cannot attach TP/SL. Don't advertise
@@ -935,7 +942,7 @@ struct PerpTradeView: View {
     /// An on-chain opening order, valued at its worst-case notional and declared by its terms (market, side, size,
     /// leverage), which the wallet checks against the calldata it signs; a reduce-only close always asks (MERA-PLAN §3).
     private var orderIntent: Mera.Intent {
-        let input = ticket.input(market: market, refPrice: refPrice)
+        let input = reviewedInput
         return input.reduceOnly ? .alwaysAsks(.closePosition) : .perplOrder(usd: Mera.SpendingCaps.notionalUSD(of: input), order: .init(input))
     }
 
@@ -1004,7 +1011,7 @@ struct PerpTradeView: View {
     /// brought up first when it can be without a prompt; a passkey account's stays down until its session opens, and
     /// the review says the check couldn't run (`leftoversUnchecked`).
     private func checkedOrderPlan() async throws -> [TransactionStep] {
-        let input = ticket.input(market: market, refPrice: refPrice)
+        let input = reviewedInput
         if !input.reduceOnly {
             if perplTrading.isEnrolled, !(perplTrading.ordersAreLive && perplTrading.positionsAreLive) {
                 await perplTrading.awaitLiveStream(timeout: 4)
@@ -2212,6 +2219,7 @@ private struct ClosePositionSheet: View {
     /// close trades the opposite side of the position.
     private var limitProblem: String? {
         guard isLimit, let limitPrice, limitPrice > 0 else { return nil }
+        if let offTick = OrderTicket.offTickProblem(price: limitPrice, market: market) { return offTick }
         return OrderTicket.throughMarkProblem(price: limitPrice, side: position.side == .long ? .short : .long, mark: mark, market: market)
     }
     private var canConfirm: Bool { session.canSign && !run.isRunning && (!isLimit || (limitPrice ?? 0) > 0) && limitProblem == nil }
@@ -2242,7 +2250,7 @@ private struct ClosePositionSheet: View {
                                 .keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
                         }
                         // The price this close signs, read back from the typed text (audit F4).
-                        if let limitPrice, limitPrice > 0 { DetailRow("Limit at", NumberStyle.number(limitPrice)) }
+                        if let limitPrice, limitPrice > 0 { DetailRow("Limit at", NumberStyle.number(limitPrice, maximumFractionDigits: market.priceDecimals)) }
                         if let limitProblem { Text(limitProblem).font(.footnote).foregroundStyle(Color.attention) }
                         Toggle("Post only (maker)", isOn: $postOnly)
                         Text("Rests as a reduce-only limit at your price until it fills. It won't reduce your position until then.")
@@ -2485,8 +2493,8 @@ struct AuthedOrderSheet: View {
                 Section {
                     DetailRow("Market", "\(market.asset)-PERP")
                     DetailRow("Side", input.side == .long ? "Long" : "Short", tint: sideColor)
-                    DetailRow("Type", input.kind == .market ? "Market · \(NumberStyle.basisPoints(input.slippageBps)) slippage" : "Limit at \(NumberStyle.number(input.price ?? market.mark))")
-                    DetailRow("Size", "\(NumberStyle.number(input.size)) \(market.asset)")
+                    DetailRow("Type", input.kind == .market ? "Market · \(NumberStyle.basisPoints(input.slippageBps)) slippage" : "Limit at \(NumberStyle.number(input.price ?? market.mark, maximumFractionDigits: market.priceDecimals))")
+                    DetailRow("Size", "\(NumberStyle.number(input.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
                     DetailRow("Leverage", "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
                     DetailRow("Margin", summaryMargin.formatted(.currency(code: "USD")))
                     // Each closes this order's size, fixed when placed (security audit GT-5).
@@ -2676,6 +2684,7 @@ struct OrderTicket {
         let size = baseSize(market: market, price: price)
         guard size > 0 else { return amountUnit == .usd ? "Enter an amount in AUSD." : "Enter a size in \(market.asset)." }
         if kind == .limit, (priceText.perpDouble ?? 0) <= 0 { return "Enter a limit price." }
+        if kind == .limit, let limit = priceText.perpDouble, let reason = Self.offTickProblem(price: limit, market: market) { return reason }
         if kind == .limit, let limit = priceText.perpDouble, let reason = Self.throughMarkProblem(price: limit, side: side, mark: mark, market: market) { return reason }
         if account == nil, !effectiveReduceOnly { return "Deposit AUSD to open a trading account first." }
         if account != nil, !effectiveReduceOnly {
@@ -2693,6 +2702,14 @@ struct OrderTicket {
         let below = side == .short && price < mark * 0.95
         guard above || below else { return nil }
         return "Limit \(NumberStyle.number(price, maximumFractionDigits: market.priceDecimals)) is \(above ? "above" : "below") the mark (\(NumberStyle.number(mark))) and would fill at once. Check the price."
+    }
+
+    /// A limit between ticks: refused rather than rounded, so the price reviewed is the price signed.
+    static func offTickProblem(price: Double, market: PerpMarket) -> String? {
+        guard PerplTriggerRules.ticks(price, decimals: market.priceDecimals) == nil else { return nil }
+        let d = market.priceDecimals
+        return d == 0 ? "The limit price must be a whole number on \(market.asset)."
+            : "The limit price can have at most \(d) decimal\(d == 1 ? " place" : " places") on \(market.asset)."
     }
 
     func input(market: PerpMarket, refPrice: Double) -> OrderInput {

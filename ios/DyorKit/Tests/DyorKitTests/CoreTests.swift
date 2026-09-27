@@ -268,6 +268,13 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(NumberStyle.number(0.00012), "0.00012")
         XCTAssertEqual(NumberStyle.number(0.000000042), "0.0₇42")
         XCTAssertEqual(NumberStyle.number(-3), "−3")
+        // A market's price/lot precision shows the value in full (the review rows of a perp order).
+        XCTAssertEqual(NumberStyle.number(1.23456, maximumFractionDigits: 5), "1.23456")
+        XCTAssertEqual(NumberStyle.number(95_000.1, maximumFractionDigits: 1), "95,000.1")
+        XCTAssertEqual(NumberStyle.number(0.12345678, maximumFractionDigits: 8), "0.12345678")
+        XCTAssertEqual(NumberStyle.number(0.12345678, maximumFractionDigits: 2), "0.123457")
+        XCTAssertEqual(NumberStyle.number(0.0000123456, maximumFractionDigits: 10), "0.0₄123456")
+        XCTAssertEqual(NumberStyle.number(0.000000042, maximumFractionDigits: 2), "0.0₇42")
         XCTAssertEqual(NumberStyle.percent(1.234), "+1.23%")
         XCTAssertEqual(NumberStyle.percent(-0.5), "−0.50%")
         XCTAssertEqual(NumberStyle.basisPoints(30), "0.3%")

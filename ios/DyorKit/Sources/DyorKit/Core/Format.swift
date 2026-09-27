@@ -123,7 +123,9 @@ public enum NumberStyle {
     private static let subscripts = Array("₀₁₂₃₄₅₆₇₈₉")
 
     /// Balances and prices: compact suffixes for large values (1.2M), trailing zeros trimmed, and
-    /// leading-zero notation (0.0₆42) for dust prices so tiny tokens stay readable.
+    /// leading-zero notation (0.0₆42) for dust prices so tiny tokens stay readable. A `maximumFractionDigits` above the
+    /// defaults (6 below 1, 4 significant for dust) is honored there too, so a value on a market's price/lot grid shows
+    /// in full.
     public static func number(_ value: Double, compact: Bool = false, maximumFractionDigits: Int? = nil) -> String {
         guard value.isFinite else { return "—" }
         let magnitude = abs(value)
@@ -142,13 +144,13 @@ public enum NumberStyle {
             return sign + (formatter.string(from: NSNumber(value: magnitude)) ?? String(magnitude))
         }
         if magnitude >= 1 { return sign + trim(String(format: "%.\(maximumFractionDigits ?? 4)f", magnitude)) }
-        if magnitude >= 1e-4 { return sign + trim(String(format: "%.6f", magnitude)) }
+        if magnitude >= 1e-4 { return sign + trim(String(format: "%.\(max(6, maximumFractionDigits ?? 6))f", magnitude)) }
         // 0.000000042 → 0.0₇42
         let text = String(format: "%.20f", magnitude)
         guard let dot = text.firstIndex(of: ".") else { return sign + String(magnitude) }
         let fraction = text[text.index(after: dot)...]
         let zeros = fraction.prefix { $0 == "0" }.count
-        var significant = String(fraction.dropFirst(zeros).prefix(4))
+        var significant = String(fraction.dropFirst(zeros).prefix(max(4, (maximumFractionDigits ?? 0) - zeros)))
         while significant.count > 1, significant.hasSuffix("0") { significant.removeLast() }
         return "\(sign)0.0\(String(zeros).map { subscripts[Int(String($0))!] }.map(String.init).joined())\(significant)"
     }
