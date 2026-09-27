@@ -9,7 +9,7 @@ import { useModal } from "../ui/modal";
 import { DEPLOYED, explorerToken } from "../lib/chain";
 import { fetchLaunches } from "../lib/launchpad";
 import { fetchQuotes, fetchVenueQuote, isWrap, quoteAgeSeconds, rankQuotes, runPlan } from "../lib/swap/engine";
-import { CORE_TOKENS, findToken, loadBalances, loadToken, sameToken, type TokenInfo } from "../lib/swap/tokens";
+import { CORE_TOKENS, findToken, loadBalances, loadToken, sameToken, tokenNamed, type TokenInfo } from "../lib/swap/tokens";
 import { VENUE_LABEL, type Venue, type VenueQuote } from "../lib/swap/types";
 import { useAsync, useNow } from "../lib/use-async";
 import { useDebounced } from "../lib/use-debounced";
@@ -107,22 +107,25 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const ids = useId();
   const amountIn = parseAmount(debouncedAmount, tokenIn.decimals) ?? 0n;
 
-  // Preselect from ?in= and ?out= (symbols or addresses) once the token list, including graduated launches, is known,
-  // unless the user has already chosen: a slow list or token lookup must never overwrite their pick.
+  // Preselect from the screen that opened the swap (initialIn / initialOut) or from ?in= and ?out= (symbols or
+  // addresses) once the token list, including graduated launches, is known, unless the user has already chosen: a slow
+  // list or token lookup must never overwrite their pick. A symbol names only a core token: launchpad tickers are not
+  // unique, so a later launch with a popular ticker must not be what a shared link picks. Launches go by address.
   useEffect(() => {
     if (seeded || (DEPLOYED && !launched.data)) return;
     let live = true;
-    const pick = (raw: string | null): TokenInfo | undefined => raw ? tokens.find((t) => t.symbol.toLowerCase() === raw.toLowerCase() || t.address.toLowerCase() === raw.toLowerCase()) : undefined;
     const wantIn = initialIn ?? params.get("in");
     const wantOut = initialOut ?? params.get("out");
-    const inTok = pick(wantIn);
-    const outTok = pick(wantOut);
+    // The app's own presets were chosen by the app; only a URL parameter was chosen by whoever wrote the link.
+    const fromLink = [initialIn === undefined, initialOut === undefined];
+    const inTok = tokenNamed(tokens, wantIn);
+    const outTok = tokenNamed(tokens, wantOut);
     Promise.all([inTok ?? (wantIn && isAddress(wantIn) ? loadToken(wantIn) : null), outTok ?? (wantOut && isAddress(wantOut) ? loadToken(wantOut) : null)]).then(([i, o]) => {
       if (!live) return;
       if (!edited.current) {
         if (i) setTokenIn(i);
         if (o) setTokenOut(o);
-        setLinked([!inTok && i ? i.address : null, !outTok && o ? o.address : null].filter((a): a is Address => a !== null));
+        setLinked([fromLink[0] && !inTok && i ? i.address : null, fromLink[1] && !outTok && o ? o.address : null].filter((a): a is Address => a !== null));
       }
       setSeeded(true);
     });
