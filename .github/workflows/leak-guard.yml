@@ -154,9 +154,9 @@ jobs:
             "$GITLEAKS_IMAGE" git /repo --config /guard/.gitleaks.toml --log-opts="$RANGE" --max-decode-depth=2 \
             --redact --no-banner --verbose --exit-code 1
 
-      - name: Leak guard self-test (the pushed copy)
+      - name: Leak guard and Claude secret guard self-tests (the pushed copies)
         if: ${{ !cancelled() }}
-        run: node --test tests/leak-guard.test.mjs
+        run: node --test tests/leak-guard.test.mjs tests/secret-guard.test.mjs
 
   history:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

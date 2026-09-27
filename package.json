@@ -7,8 +7,9 @@
   },
   "type": "module",
   "scripts": {
-    "test": "node --test tests/leak-guard.test.mjs",
+    "test": "node --test tests/leak-guard.test.mjs tests/secret-guard.test.mjs",
     "test:leak-guard": "node --test tests/leak-guard.test.mjs",
+    "test:secret-guard": "node --test tests/secret-guard.test.mjs",
     "keepers:test": "node --test contracts/keepers/test/abis.test.mjs contracts/keepers/test/decide.test.mjs contracts/keepers/test/jobs.test.mjs contracts/keepers/test/send.test.mjs"
   },
   "dependencies": {
