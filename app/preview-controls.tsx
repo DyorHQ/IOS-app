@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Wordmark } from "./ui/wordmark";
 import { Icon } from "./ui/icons";
 import { Range, Seg, Switch, type SegOpt } from "./ui/components";
 import * as Glass from "./ui/liquid-glass";
+import { useModal } from "./ui/modal";
 
 export type ScreenName = "home" | "markets" | "launch" | "trade" | "perps" | "profile";
 export const screenOptions: { id: ScreenName; title: string; note: string }[] = [
@@ -71,8 +72,11 @@ export default function PreviewControls({ screen, onScreen, open, onClose }: { s
   const { prefs } = usePrefs();
   const refract = useSyncExternalStore(noop, () => Glass.supported(), () => null);
   const set = (patch: Partial<Preferences>) => setPrefs({ ...prefs, ...patch });
+  // Open only at phone width, where the studio covers the app as a full-screen modal; on desktop it is a side panel.
+  const ref = useRef<HTMLElement>(null);
+  useModal(ref, open);
   return (
-    <aside className={`studio ${open ? "open" : ""}`} id="preview-studio" aria-label="Preview studio">
+    <aside ref={ref} className={`studio ${open ? "open" : ""}`} id="preview-studio" aria-label="Preview studio" role={open ? "dialog" : undefined} aria-modal={open || undefined}>
       <button type="button" className="studio-close" onClick={onClose} aria-label="Close studio"><Icon name="x" /></button>
       <div className="studio-brand"><Wordmark /><small>The RWA HQ for social trading</small></div>
       <p className="studio-intro">Explore the app in light or dark. Typography and colors follow the DyorHQ design system.</p>

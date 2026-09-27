@@ -87,7 +87,7 @@ export function HomeScreen({ go, openSheet }: ScreenProps) {
   const activity = useAsync(async () => (DEPLOYED ? fetchLaunchpadActivity(curves, 9_000n) : []), `activity:${markets.launches.length}`, 20_000);
   const feed = usePerplFeed(10);
   return (
-    <main className="screen" data-screen="home">
+    <main className="screen" data-screen="home" tabIndex={-1} aria-label="Home">
       {account ? (
         <>
           <section className="balance">
@@ -186,10 +186,10 @@ export function MarketsScreen({ go, preset, autoFocus = false }: { go: Go; prese
   const rows = markets.rows.filter((r) => !q || r.symbol.toLowerCase().includes(q) || r.name.toLowerCase().includes(q) || r.address.toLowerCase() === q);
   const sorted = filter === "Gainers" ? [...rows].sort((a, b) => (b.change24h ?? -1e9) - (a.change24h ?? -1e9)) : filter === "Losers" ? [...rows].sort((a, b) => (a.change24h ?? 1e9) - (b.change24h ?? 1e9)) : rows;
   const detail = selected ? markets.rows.find((r) => r.address.toLowerCase() === selected.toLowerCase()) : null;
-  if (stock) { const s = STOCKS.find((x) => x[0] === stock)!; return <main className="screen" data-screen="markets"><StockDetail symbol={s[0]} name={s[1]} onBack={() => setStock(null)} /></main>; }
-  if (detail) return <main className="screen" data-screen="markets"><TokenDetail row={detail} go={go} onBack={() => setSelected(null)} /></main>;
+  if (stock) { const s = STOCKS.find((x) => x[0] === stock)!; return <main className="screen" data-screen="markets" tabIndex={-1} aria-label="Markets"><StockDetail symbol={s[0]} name={s[1]} onBack={() => setStock(null)} /></main>; }
+  if (detail) return <main className="screen" data-screen="markets" tabIndex={-1} aria-label="Markets"><TokenDetail row={detail} go={go} onBack={() => setSelected(null)} /></main>;
   return (
-    <main className="screen" data-screen="markets">
+    <main className="screen" data-screen="markets" tabIndex={-1} aria-label="Markets">
       <label className="mkt-search"><Icon name="search" /><span className="sr-only">Search tokens</span><input placeholder="Search tokens or paste an address" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus={autoFocus} /></label>
       <Seg label="Market type" options={opts(MSEGS)} value={seg} onChange={setSeg} />
       {seg !== "Perps" && seg !== "Stocks" && <div style={{ marginTop: 10 }}><Seg label="Sort markets" options={MFILTERS} value={filter} onChange={setFilter} small /></div>}
@@ -260,9 +260,9 @@ export function LaunchScreen({ preset }: { go: Go; toast: Toast; preset?: Preset
   const [selected, setSelected] = useState<Address | null>((preset?.token as Address) ?? null);
   const launches = useAsync(async () => (DEPLOYED ? fetchLaunches(60) : []), "launches", 8_000);
   const now = useNow();
-  if (selected) return <main className="screen" data-screen="launch"><LaunchDetail token={selected} onBack={() => setSelected(null)} /></main>;
+  if (selected) return <main className="screen" data-screen="launch" tabIndex={-1} aria-label="Launchpad"><LaunchDetail token={selected} onBack={() => setSelected(null)} /></main>;
   return (
-    <main className="screen" data-screen="launch">
+    <main className="screen" data-screen="launch" tabIndex={-1} aria-label="Launchpad">
       <Seg label="Launchpad view" options={LMODES} value={mode} onChange={setMode} />
       {mode === "create" ? (
         <div style={{ marginTop: 14 }}>
@@ -294,7 +294,7 @@ export function LaunchScreen({ preset }: { go: Go; toast: Toast; preset?: Preset
 
 export function SwapScreen({ preset }: { preset?: Preset }) {
   return (
-    <main className="screen" data-screen="trade">
+    <main className="screen" data-screen="trade" tabIndex={-1} aria-label="Swap">
       <Swap key={`${preset?.in ?? ""}-${preset?.out ?? ""}`} embedded initialIn={preset?.in ?? "MON"} initialOut={preset?.out ?? "USDC"} />
     </main>
   );
@@ -315,9 +315,9 @@ export function ProfileScreen({ go, toast, openSheet }: ScreenProps) {
   const holdings = markets.rows.filter((r) => r.balance > 0n).sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
   const tokenValue = holdings.reduce((s, r) => s + (r.value ?? 0), 0);
   const perpEquity = perps.account ? Number(perps.account.balance) / 1e6 + perps.positions.reduce((s, p) => s + p.unrealized, 0) : 0;
-  if (!account) return <main className="screen" data-screen="profile"><ConnectCard text="Your portfolio is read straight from Monad: token balances, launchpad positions and Perpl perps." /></main>;
+  if (!account) return <main className="screen" data-screen="profile" tabIndex={-1} aria-label="Portfolio"><ConnectCard text="Your portfolio is read straight from Monad: token balances, launchpad positions and Perpl perps." /></main>;
   return (
-    <main className="screen" data-screen="profile">
+    <main className="screen" data-screen="profile" tabIndex={-1} aria-label="Portfolio">
       <section className="usercard" style={{ marginBottom: 14 }}>
         <span className="avatar">{account.slice(2, 4).toUpperCase()}</span>
         <div style={{ flex: 1, minWidth: 0 }}><b>{wallet.active?.info.name ?? "Wallet"}</b><small>{shortAddress(account, 6)}</small></div>

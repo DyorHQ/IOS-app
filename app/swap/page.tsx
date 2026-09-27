@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { isAddress, type Address, type Hex } from "viem";
 import { Icon } from "../ui/icons";
+import { useModal } from "../ui/modal";
 import { DEPLOYED, explorerToken } from "../lib/chain";
 import { fetchLaunches } from "../lib/launchpad";
 import { fetchQuotes, fetchVenueQuote, isWrap, quoteAgeSeconds, rankQuotes, runPlan } from "../lib/swap/engine";
@@ -35,6 +36,10 @@ function VenueMark({ venue }: { venue: Venue }) {
 function TokenPicker({ tokens, balances, exclude, onPick, onClose }: { tokens: TokenInfo[]; balances: Record<string, bigint>; exclude: TokenInfo; onPick: (t: TokenInfo) => void; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const searchId = useId();
+  const ref = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+  // Mounted only while open: modal from mount to unmount, starting in the search and returning to the token button.
+  useModal(ref, true, () => search.current);
   const custom = useAsync(async () => (isAddress(query.trim()) && !findToken(tokens, query.trim()) ? loadToken(query.trim()) : null), `custom:${query.trim().toLowerCase()}`);
   const q = query.trim().toLowerCase();
   const list = tokens.filter((t) => !sameToken(t.address, exclude.address) && (!q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.address.toLowerCase() === q));
@@ -44,10 +49,10 @@ function TokenPicker({ tokens, balances, exclude, onPick, onClose }: { tokens: T
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div className="picker" role="dialog" aria-modal="true" aria-label="Choose a token" onClick={onClose}>
+    <div ref={ref} className="picker" role="dialog" aria-modal="true" aria-labelledby={`${searchId}-title`} onClick={onClose}>
       <div className="card panel" onClick={(e) => e.stopPropagation()}>
-        <div className="hd" style={{ marginBottom: 0 }}><h2><label htmlFor={searchId}>Choose a token</label></h2><button type="button" className="iconbtn" aria-label="Close" onClick={onClose}><Icon name="x" /></button></div>
-        <input id={searchId} className="search-in" placeholder="Search by name, symbol or paste an address" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus />
+        <div className="hd" style={{ marginBottom: 0 }}><h2 id={`${searchId}-title`}><label htmlFor={searchId}>Choose a token</label></h2><button type="button" className="iconbtn" aria-label="Close" onClick={onClose}><Icon name="x" /></button></div>
+        <input ref={search} id={searchId} className="search-in" placeholder="Search by name, symbol or paste an address" value={query} onChange={(e) => setQuery(e.target.value)} />
         <div className="picker-list">
           {custom.data && (
             <button type="button" onClick={() => onPick(custom.data as TokenInfo)}>

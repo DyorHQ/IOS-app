@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { encodeFunctionData, erc20Abi, formatUnits, getAddress, isAddress, type Address } from "viem";
 import { Icon, Sprite, type IconName } from "./ui/icons";
 import { Seg, cssVars, type SegOpt } from "./ui/components";
@@ -9,6 +9,7 @@ import { HomeScreen, LaunchScreen, MarketsScreen, ProfileScreen, SwapScreen } fr
 import PerpsScreen from "./perps-screen";
 import PreviewControls, { THEME_OPTS, setPrefs, useApplyPrefs, type ScreenName } from "./preview-controls";
 import * as Glass from "./ui/liquid-glass";
+import { useModal } from "./ui/modal";
 import { Wordmark } from "./ui/wordmark";
 import { useWallet } from "./lib/wallet";
 import { useMarkets } from "./lib/app-data";
@@ -26,7 +27,9 @@ import "./launchpad/launchpad.css";
 const TABS: [Tab, IconName, string][] = [["home", "home", "Home"], ["markets", "markets", "Markets"], ["launch", "rocket", "Launch"], ["trade", "trade", "Trade"], ["profile", "profile", "Profile"]];
 const MODE_OPTS: SegOpt<TradeMode>[] = [{ v: "swap", l: "Swap" }, { v: "perps", l: "Perps" }];
 const MENU_ITEMS: [IconName, string, Tab, TradeMode | undefined][] = [["home", "Home", "home", undefined], ["markets", "Markets", "markets", undefined], ["rocket", "Launchpad", "launch", undefined], ["swap", "Swap", "trade", "swap"], ["trend-up", "Perps", "trade", "perps"], ["profile", "Portfolio", "profile", undefined]];
-const isPhone = () => matchMedia("(max-width:759px)").matches;
+const PHONE = "(max-width:759px)";
+const isPhone = () => matchMedia(PHONE).matches;
+const SHEET_TITLE = "sheet-title";
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("home");
@@ -41,8 +44,16 @@ export default function Home() {
   const { prefs } = useApplyPrefs();
   const wallet = useWallet();
   const account = wallet.account;
+  const menuRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const screenRef = useRef<HTMLDivElement>(null);
+  // Set when navigation takes away what had focus (a control in the old screen, a menu item): the new screen's <main>
+  // is focused once it mounts, so keyboard and screen-reader users land on it and hear its name. The tab bar and the
+  // desktop studio keep focus on the control that was pressed.
+  const focusScreen = useRef(false);
 
-  const go = (t: Tab, m?: TradeMode, p?: Preset) => { if (m) setMode(m); setTab(t); setPreset(p); setNav((n) => n + 1); setMenu(false); setStudioOpen(false); setSheet(null); setSearchFocus(false); };
+  const navigate = (t: Tab, m: TradeMode | undefined, p: Preset | undefined, focus: boolean) => { focusScreen.current = focus; if (m) setMode(m); setTab(t); setPreset(p); setNav((n) => n + 1); setMenu(false); setStudioOpen(false); setSheet(null); setSearchFocus(false); };
+  const go = (t: Tab, m?: TradeMode, p?: Preset) => navigate(t, m, p, true);
   const toast = (text: ReactNode) => setToastMsg((m) => ({ text, show: true, n: (m?.n ?? 0) + 1 }));
   const openStudio = () => { setMenu(false); if (isPhone()) setStudioOpen(true); else toast("Appearance controls are in the studio panel"); };
   const openSheet = (s: SheetName) => { setMenu(false); setSheet(s); };
@@ -63,11 +74,28 @@ export default function Home() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [sheet, menu, studioOpen]);
+  // The studio is a full-screen overlay only at phone width; past it, the studio is the side panel again.
+  useEffect(() => {
+    if (!studioOpen) return;
+    const phone = matchMedia(PHONE);
+    const onChange = () => { if (!phone.matches) setStudioOpen(false); };
+    phone.addEventListener("change", onChange);
+    return () => phone.removeEventListener("change", onChange);
+  }, [studioOpen]);
+  useModal(menuRef, menu);
+  useModal(sheetRef, sheet !== null);
 
   const studioScreen: ScreenName = tab === "trade" ? (mode === "perps" ? "perps" : "trade") : tab;
-  const onStudioScreen = (s: ScreenName) => { if (s === "perps") go("trade", "perps"); else if (s === "trade") go("trade", "swap"); else go(s); };
+  // From the phone-width studio (a modal that closes) focus moves to the screen; the desktop studio keeps it.
+  const onStudioScreen = (s: ScreenName) => { const focus = studioOpen; if (s === "perps") navigate("trade", "perps", undefined, focus); else if (s === "trade") navigate("trade", "swap", undefined, focus); else navigate(s, undefined, undefined, focus); };
   const tabIndex = TABS.findIndex((t) => t[0] === tab);
   const screenKey = `${tab === "trade" ? `trade-${mode}` : tab}-${nav}`;
+  // Runs after the overlays' focus restore (effect cleanups run first), so it wins when navigation closed a menu.
+  useEffect(() => {
+    if (!focusScreen.current) return;
+    focusScreen.current = false;
+    screenRef.current?.querySelector<HTMLElement>("main")?.focus({ preventScroll: true });
+  }, [screenKey]);
   const initials = account ? account.slice(2, 4).toUpperCase() : null;
 
   const menuBtn = <button type="button" className="circ glass" data-glass="circ" onClick={() => setMenu(true)} aria-label="Open menu"><Icon name="menu" /></button>;
@@ -87,7 +115,7 @@ export default function Home() {
         <div className="device">
           <div className="edge">
             <div className="status" aria-hidden="true"><span className="num">9:41</span><span className="island" /><span className="sys"><Icon name="signal" /><Icon name="wifi" /><span className="battery" /></span></div>
-            <div className="app-scroll" key={screenKey}>
+            <div className="app-scroll" key={screenKey} ref={screenRef}>
               {tab === "home" && <HomeScreen go={go} toast={toast} openSheet={openSheet} />}
               {tab === "markets" && <MarketsScreen go={go} preset={preset} autoFocus={searchFocus} />}
               {tab === "launch" && <LaunchScreen go={go} toast={toast} preset={preset} />}
@@ -99,11 +127,11 @@ export default function Home() {
             <div className="topbar">{topbar}</div>
             <nav className="tabbar glass" aria-label="Primary" data-glass="bar">
               <span className="tab-thumb" style={cssVars({ "--i": tabIndex })} aria-hidden="true" />
-              {TABS.map(([id, icon, label]) => <button key={id} type="button" className={`tab${id === tab ? " active" : ""}`} aria-current={id === tab ? "page" : undefined} onClick={() => go(id)}><Icon name={icon} /><small>{label}</small></button>)}
+              {TABS.map(([id, icon, label]) => <button key={id} type="button" className={`tab${id === tab ? " active" : ""}`} aria-current={id === tab ? "page" : undefined} onClick={() => navigate(id, undefined, undefined, false)}><Icon name={icon} /><small>{label}</small></button>)}
             </nav>
-            <div className={`menu ${menu ? "open" : ""}`} inert={!menu}>
+            <div className={`menu ${menu ? "open" : ""}`} inert={!menu} ref={menuRef}>
               <div className="backdrop" onClick={() => setMenu(false)} />
-              <aside aria-label="Menu">
+              <aside role="dialog" aria-modal="true" aria-label="Menu">
                 <div className="brandrow"><div className="wordmark"><Wordmark /><small>The RWA HQ for social trading</small></div><button type="button" className="circ" onClick={() => setMenu(false)} aria-label="Close menu"><Icon name="x" /></button></div>
                 {account ? (
                   <button type="button" className="usercard" onClick={() => go("profile")}><span className="avatar">{initials}</span><div style={{ flex: 1, minWidth: 0 }}><b>{wallet.active?.info.name ?? "Wallet"}</b><small>{shortAddress(account, 6)}{wallet.onMonad ? " · Monad" : " · wrong network"}</small></div><Icon name="chev-right" className="chev" /></button>
@@ -119,9 +147,9 @@ export default function Home() {
                 </nav></div>
               </aside>
             </div>
-            <div className={`sheet ${sheet ? "open" : ""}`} inert={!sheet}>
+            <div className={`sheet ${sheet ? "open" : ""}`} inert={!sheet} ref={sheetRef}>
               <div className="backdrop" onClick={() => setSheet(null)} />
-              <div className="panel" role="dialog" aria-modal="true" aria-label={sheet ?? "Sheet"}>
+              <div className="panel" role="dialog" aria-modal="true" aria-labelledby={SHEET_TITLE}>
                 {sheet === "receive" && <ReceiveSheet onClose={() => setSheet(null)} toast={toast} />}
                 {sheet === "send" && <SendSheet onClose={() => setSheet(null)} toast={toast} />}
                 {sheet === "activity" && <ActivitySheet onClose={() => setSheet(null)} />}
@@ -138,7 +166,7 @@ export default function Home() {
 }
 
 function SheetHead({ title, onClose }: { title: string; onClose: () => void }) {
-  return <div className="hd"><h2 style={{ margin: 0 }}>{title}</h2><button type="button" className="circ" onClick={onClose} aria-label="Close"><Icon name="x" /></button></div>;
+  return <div className="hd"><h2 id={SHEET_TITLE} style={{ margin: 0 }}>{title}</h2><button type="button" className="circ" onClick={onClose} aria-label="Close"><Icon name="x" /></button></div>;
 }
 
 function ReceiveSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNode) => void }) {

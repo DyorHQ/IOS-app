@@ -30,6 +30,8 @@ svg.sprite{position:absolute;width:0;height:0;overflow:hidden}
 .app-scroll::-webkit-scrollbar{display:none}
 .screen{padding:126px 20px 128px;animation:screenIn var(--duration-normal) var(--ease)}
 @keyframes screenIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+/* The screen is focused after navigation so it is announced; it is a landmark, not a control, so it draws no ring. */
+.screen:focus{outline:none}
 .scrim{position:absolute;left:0;right:0;top:0;height:124px;z-index:15;pointer-events:none;background:linear-gradient(color-mix(in srgb,var(--bg) 82%,transparent) 30%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);-webkit-mask-image:linear-gradient(var(--mask-opaque) 40%,transparent);mask-image:linear-gradient(var(--mask-opaque) 40%,transparent)}
 
 /* ===================== liquid glass ===================== */
@@ -375,6 +377,8 @@ button.row:active{background:var(--inner)}
 .sheet.open{pointer-events:auto}.sheet.open .backdrop{background:rgba(6,8,12,.42)}
 .sheet .panel{position:absolute;left:0;right:0;bottom:0;background:var(--card);border-radius:var(--r-sheet) var(--r-sheet) 0 0;padding:12px 20px calc(24px + env(safe-area-inset-bottom,0px));transform:translateY(105%);transition:transform var(--duration-panel) var(--ease);box-shadow:var(--shadow-float)}
 .sheet.open .panel{transform:none}
+/* Short frames (landscape phones, desktop zoom): the sheet scrolls instead of pushing its top out of view. */
+.sheet .panel{max-height:calc(100% - var(--safe-top) - 16px);overflow-y:auto;overscroll-behavior:contain}
 .grabber{width:36px;height:5px;border-radius:3px;background:var(--inner2);margin:0 auto 14px}
 .colorpick{width:26px;height:26px;border:0;padding:0;background:none;border-radius:50%;cursor:pointer}
 .colorpick::-webkit-color-swatch-wrapper{padding:0}.colorpick::-webkit-color-swatch{border:0;border-radius:50%}

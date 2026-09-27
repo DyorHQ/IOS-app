@@ -135,7 +135,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
   const pf = perp ?? ({ priceDecimals: mctx?.priceDecimals ?? 6, lotDecimals: mctx?.sizeDecimals ?? 0 } as PerpInfo);
 
   return (
-    <main className="screen" data-screen="trade">
+    <main className="screen" data-screen="trade" tabIndex={-1} aria-label="Perps">
       <div className="pairhd">
         <span className="coin lg" style={{ background: "var(--asset-violet, #7C5CFF)" }}>{market.symbol[0]}</span>
         <div>
