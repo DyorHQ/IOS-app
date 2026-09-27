@@ -213,7 +213,8 @@ while [ $# -gt 0 ]; do
     --pre-push) MODE=push; REMOTE=${2:-}; URL=${3:-}; break ;; # git passes the remote and its URL; refs on stdin
     --history) MODE=history; shift; HIST_ARGS=("$@"); break ;; # the rest are git-log revision arguments
     --commit-msg) [ $# -ge 2 ] || usage; MODE=msg; MSG_FILE=$2; shift ;;
-    --config) [ $# -ge 2 ] || usage; [ -f "$2" ] || die "no such config file: $2"; CONFIGS[${#CONFIGS[@]}]=$2; shift ;;
+    --config) [ $# -ge 2 ] || usage; [ -f "$2" ] || die "no such config file: $2"
+      CONFIGS[${#CONFIGS[@]}]="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift ;; # absolute: the scan cds
     --repo) [ $# -ge 2 ] || usage; REPO=$2; shift ;;
     --install-hook) MODE=install ;;
     --force) FORCE=1 ;;
