@@ -5,7 +5,7 @@ import { tsImport } from "tsx/esm/api";
 /* app/lib/format.ts: dates built from half-typed form input render as "—", never "Invalid Date". Numbers come from one
    formatter family, so the same kind of value reads the same on every screen. */
 
-const { fmtDate, fmtFixed, fmtNumber, fmtPct, fmtUsd } = await tsImport("../app/lib/format.ts", import.meta.url);
+const { fmtDate, fmtFixed, fmtNumber, fmtPct, fmtSignedUsd, fmtUsd, fmtUsdFixed, trend } = await tsImport("../app/lib/format.ts", import.meta.url);
 
 test("a time that isn't one renders as a dash", () => {
   for (const ts of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 1e20]) assert.equal(fmtDate(ts), "—", String(ts));
@@ -41,6 +41,28 @@ test("one minus sign (U+2212) everywhere, and no sign on what rounds to zero", (
   assert.equal(fmtPct(0.004), "0.00%");
   assert.equal(fmtPct(-0.0012, 4), "−0.0012%");
   for (const s of [fmtFixed(-3), fmtNumber(-3), fmtPct(-3), fmtUsd(-3), fmtNumber(-3000, { compact: true })]) assert.doesNotMatch(s, /-/, s);
+});
+
+test("dollar totals and changes put the sign before the $, and none on what rounds to zero", () => {
+  assert.equal(fmtUsdFixed(1234.5), "$1,234.50");
+  assert.equal(fmtUsdFixed(-12), "−$12.00", "negative equity reads −$12.00, never $−12.00");
+  assert.equal(fmtUsdFixed(-0.004), "$0.00");
+  assert.equal(fmtUsdFixed(Number.NaN), "—");
+  assert.equal(fmtSignedUsd(1.234), "+$1.23");
+  assert.equal(fmtSignedUsd(-1.235), "−$1.24");
+  assert.equal(fmtSignedUsd(-0.004), "$0.00", "a day change of −$0.004 is not −$0.00");
+  assert.equal(fmtSignedUsd(0), "$0.00");
+  for (const s of [fmtUsdFixed(-3), fmtSignedUsd(-3)]) assert.doesNotMatch(s, /-/, s);
+});
+
+test("the up/down colour follows the sign that is shown", () => {
+  assert.equal(trend(2.06), "up");
+  assert.equal(trend(-2.06), "down");
+  assert.equal(trend(-0.001), "", "shown as 0.00%: no red");
+  assert.equal(trend(0.004), "");
+  assert.equal(trend(0), "");
+  assert.equal(trend(-0.0012, 4), "down");
+  assert.equal(trend(Number.NaN), "");
 });
 
 test("compact numbers roll over to the next unit instead of showing 1000K", () => {

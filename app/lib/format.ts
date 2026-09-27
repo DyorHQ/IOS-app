@@ -54,6 +54,29 @@ export function fmtUsd(n: number): string {
   return (n < 0 && /[1-9]/.test(body) ? MINUS : "") + "$" + body;
 }
 
+/** US dollars with exactly `dp` decimals, grouped, the sign before the "$" ("$1,234.50", "−$12.00"): totals, balances and
+    margins that keep their width (fmtUsd is for prices). A value that rounds to zero carries no sign ("$0.00"). */
+export function fmtUsdFixed(n: number, dp = 2): string {
+  if (!Number.isFinite(n)) return "—";
+  const digits = fmtFixed(Math.abs(n), dp);
+  return (n < 0 && /[1-9]/.test(digits) ? MINUS : "") + "$" + digits;
+}
+
+/** A signed change in dollars: "+$1.23", "−$1.23", and "$0.00" for anything that rounds to zero. */
+export function fmtSignedUsd(n: number, dp = 2): string {
+  if (!Number.isFinite(n)) return "—";
+  const digits = fmtFixed(Math.abs(n), dp);
+  const sign = !/[1-9]/.test(digits) ? "" : n > 0 ? "+" : MINUS;
+  return `${sign}$${digits}`;
+}
+
+/** The direction a signed value shows at `dp` decimals, for its up/down colour: "" when it rounds to zero, so the colour
+    always matches the sign that is shown (never a red "0.00%"). */
+export function trend(n: number, dp = 2): "up" | "down" | "" {
+  if (!Number.isFinite(n) || !/[1-9]/.test(Math.abs(n).toFixed(dp))) return "";
+  return n > 0 ? "up" : "down";
+}
+
 /** A signed percentage change: "+12.80%", "−2.06%", and "0.00%" for anything that rounds to zero. */
 export function fmtPct(n: number, dp = 2): string {
   if (!Number.isFinite(n)) return "—";

@@ -3,7 +3,7 @@
 import type { ButtonHTMLAttributes, CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { Icon, type IconName } from "./icons";
 import { TONES, type Token, type Tone } from "./data";
-import { fmtPct, fmtUsd } from "../lib/format";
+import { fmtPct, fmtUsd, trend } from "../lib/format";
 
 export const cssVars = (o: Record<string, string | number>) => o as CSSProperties;
 
@@ -25,7 +25,7 @@ export function Seg<T extends string>({ options, value, onChange, tone = "", sma
   );
 }
 
-export const Chip = ({ chg }: { chg: number }) => <span className={`chip ${chg >= 0 ? "up" : "down"}`}>{fmtPct(chg)}</span>;
+export const Chip = ({ chg }: { chg: number }) => <span className={`chip ${trend(chg) || "neutral"}`}>{fmtPct(chg)}</span>;
 
 export function Coin({ sym, tone, size = "" }: { sym: string; tone: Tone; size?: "" | "lg" | "sm" }) {
   return <span className={`coin ${size}`} style={{ background: TONES[tone] }} aria-hidden="true">{sym.replace(/^a/, "")[0].toUpperCase()}</span>;

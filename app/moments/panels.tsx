@@ -10,7 +10,7 @@ import { fdvUsd, quoteCollect, type AccountView, type MomentDetail } from "../li
 import { useAsync, useNow } from "../lib/use-async";
 import { useTx } from "../lib/use-tx";
 import { useWallet } from "../lib/wallet";
-import { bpsToPct, fmtDate, fmtNumber, fmtUnits, fmtUsd, shortAddress } from "../lib/format";
+import { bpsToPct, fmtDate, fmtNumber, fmtPct, fmtUnits, fmtUsd, shortAddress } from "../lib/format";
 import { Countdown, DisclosureBox, KV, coinsOf, usd } from "./ui";
 
 const DISCLOSURE_KEY = "dyorhq-moments-disclosure";
@@ -122,7 +122,7 @@ export function StatePanel({ moment, onDone }: { moment: MomentDetail; onDone: (
         <div className="kvlist">
           <KV label="Coin price" value={`${fmtUsd(price)} · FDV $${fmtNumber(fdvUsd(price), { compact: true })}`} />
           <KV label="Seeded" value={`${usd(p.reserveSeed)} + ${coinsOf(p.poolCoins, moment.symbol)}`} />
-          <KV label="Locked liquidity vs seed" value={`${depth.toFixed(2)}% (${depth > 100 ? "+" : ""}${(depth - 100).toFixed(2)}% from fees and buybacks)`} />
+          <KV label="Locked liquidity vs seed" value={`${depth.toFixed(2)}% (${fmtPct(depth - 100)} from fees and buybacks)`} />
           <KV label="Trading fee" value="1.5% = 0.5% pool + 0.2% creator + 0.3% DyorHQ + 0.5% buyback" />
           <KV label="Fees accrued" value={`creator ${usd(p.fees.creator)} · DyorHQ ${usd(p.fees.platform)} · buyback ${usd(p.fees.buyback)}`} />
           <KV label="Buyback carry" value={usd(p.buybackCarry)} />
