@@ -14,26 +14,47 @@ struct PriceAlert: Codable, Identifiable, Hashable, Sendable {
     var createdAt = Date()
 }
 
-/// Local, on-device storage for price alerts. Kept out of the backend for now (server push would need APNs); the
-/// in-app watcher fires a local notification when one triggers.
+/// On-device storage for price alerts, per wallet like the activity log and the notification center: each account
+/// has its own alerts, and they are mirrored to that wallet's rows only (security audit 2026-09-26, RS-7). The in-app
+/// watcher fires a local notification when one triggers.
 enum PriceAlertStore {
-    private static let key = "priceAlerts.v1"
+    private static func key(_ owner: Address) -> String { "priceAlerts.v1.\(owner.hex)" }
+    /// The device-wide list builds before per-wallet storage kept; it moves to the first wallet that reads its alerts.
+    private static let legacyKey = "priceAlerts.v1"
 
-    static func all() -> [PriceAlert] {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
+    static func all(owner: Address?) -> [PriceAlert] {
+        guard let owner else { return [] }
+        adoptLegacy(owner: owner)
+        guard let data = UserDefaults.standard.data(forKey: key(owner)) else { return [] }
         return (try? JSONDecoder().decode([PriceAlert].self, from: data)) ?? []
     }
 
-    /// Mirrors the list to the backend (installed by the app environment).
-    nonisolated(unsafe) static var onChange: (([PriceAlert]) -> Void)?
+    /// Mirrors a wallet's list to its backend rows (installed by the app environment).
+    nonisolated(unsafe) static var onChange: (([PriceAlert], Address) -> Void)?
 
-    static func save(_ alerts: [PriceAlert]) {
-        UserDefaults.standard.set(try? JSONEncoder().encode(alerts), forKey: key)
-        onChange?(alerts)
+    static func save(_ alerts: [PriceAlert], owner: Address?) {
+        guard let owner else { return }
+        UserDefaults.standard.set(try? JSONEncoder().encode(alerts), forKey: key(owner))
+        onChange?(alerts, owner)
     }
 
-    static func add(_ alert: PriceAlert) { var a = all(); a.append(alert); save(a) }
-    static func remove(_ id: UUID) { save(all().filter { $0.id != id }) }
+    static func add(_ alert: PriceAlert, owner: Address?) { var a = all(owner: owner); a.append(alert); save(a, owner: owner) }
+    static func remove(_ id: UUID, owner: Address?) { save(all(owner: owner).filter { $0.id != id }, owner: owner) }
+
+    /// Drops the alerts that fired, re-reading the list first so one added or deleted meanwhile stays as it is.
+    static func removeFired(_ ids: Set<UUID>, owner: Address) {
+        guard !ids.isEmpty else { return }
+        let current = all(owner: owner)
+        let remaining = current.filter { !ids.contains($0.id) }
+        if remaining.count != current.count { save(remaining, owner: owner) }
+    }
+
+    private static func adoptLegacy(owner: Address) {
+        let defaults = UserDefaults.standard
+        guard let legacy = defaults.data(forKey: legacyKey) else { return }
+        if defaults.data(forKey: key(owner)) == nil { defaults.set(legacy, forKey: key(owner)) }
+        defaults.removeObject(forKey: legacyKey)
+    }
 }
 
 /// Polls prices for the alerted tokens and fires a local notification when one crosses its target, then removes it.
@@ -42,32 +63,35 @@ enum PriceAlertStore {
 final class AlertWatcher {
     private var task: Task<Void, Never>?
 
-    func start(env: AppEnvironment, settings: AppSettings) {
+    /// `owner` is the signed-in wallet, read on every check: only its alerts are watched.
+    func start(env: AppEnvironment, settings: AppSettings, owner: @escaping @MainActor () -> Address?) {
         guard task == nil else { return }
         task = Task { [weak env, weak settings] in
             while !Task.isCancelled {
-                if let env, let settings { await Self.check(env: env, settings: settings) }
+                if let env, let settings, let address = owner() { await Self.check(env: env, settings: settings, owner: address) }
                 try? await Task.sleep(for: .seconds(45))
             }
         }
     }
 
-    private static func check(env: AppEnvironment, settings: AppSettings) async {
+    private static func check(env: AppEnvironment, settings: AppSettings, owner: Address) async {
         guard settings.notificationsEnabled, settings.notifyPriceAlerts else { return }
-        let alerts = PriceAlertStore.all()
+        let alerts = PriceAlertStore.all(owner: owner)
         guard !alerts.isEmpty else { return }
         let tokens = alerts.map { Token(address: $0.token, symbol: $0.symbol, name: $0.symbol, decimals: $0.decimals) }
         guard let prices = try? await env.prices.prices(for: tokens) else { return }
-        var remaining = alerts
+        // The account may have changed during the read: its alerts are not this one's to fire.
+        guard NotificationHub.shared.owner == owner else { return }
+        var fired: Set<UUID> = []
         for alert in alerts {
             guard let price = prices[alert.token]?.usd else { continue }
             let crossed = alert.above ? price >= alert.target : price <= alert.target
             if crossed {
                 Notifications.priceAlert(symbol: alert.symbol, above: alert.above, target: alert.target, price: price)
-                remaining.removeAll { $0.id == alert.id }
+                fired.insert(alert.id)
             }
         }
-        if remaining.count != alerts.count { PriceAlertStore.save(remaining) }
+        PriceAlertStore.removeFired(fired, owner: owner)
     }
 }
 
@@ -76,7 +100,7 @@ struct PriceAlertsView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
     @Environment(AppSettings.self) private var settings
-    @State private var alerts = PriceAlertStore.all()
+    @State private var alerts: [PriceAlert] = []
     @State private var showCreate = false
 
     var body: some View {
@@ -105,8 +129,8 @@ struct PriceAlertsView: View {
                         }
                     }
                     .onDelete { indexSet in
-                        for i in indexSet { PriceAlertStore.remove(alerts[i].id) }
-                        alerts = PriceAlertStore.all()
+                        for i in indexSet { PriceAlertStore.remove(alerts[i].id, owner: session.address) }
+                        alerts = PriceAlertStore.all(owner: session.address)
                     }
                 }
             } header: {
@@ -119,7 +143,8 @@ struct PriceAlertsView: View {
         }
         .navigationTitle("Price Alerts")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showCreate) { CreateAlertView { alerts = PriceAlertStore.all() } }
+        .sheet(isPresented: $showCreate) { CreateAlertView { alerts = PriceAlertStore.all(owner: session.address) } }
+        .task(id: session.address) { alerts = PriceAlertStore.all(owner: session.address) }
     }
 }
 
@@ -185,7 +210,7 @@ private struct CreateAlertView: View {
 
     private func save() {
         guard let t = target, t > 0 else { return }
-        PriceAlertStore.add(PriceAlert(token: token.address, symbol: token.symbol, decimals: token.decimals, target: t, above: above))
+        PriceAlertStore.add(PriceAlert(token: token.address, symbol: token.symbol, decimals: token.decimals, target: t, above: above), owner: session.address)
         // Setting an alert implies you want it to fire, so turn the alert delivery on and make sure the OS
         // permission is granted — otherwise the watcher stays silent behind an off-by-default toggle.
         if !settings.notifyPriceAlerts { settings.notifyPriceAlerts = true }

@@ -156,6 +156,7 @@ struct SecurityView: View {
 /// and perp-order completion and when a price alert triggers.
 struct NotificationsView: View {
     @Environment(AppSettings.self) private var settings
+    @Environment(Session.self) private var session
     @State private var denied = false
 
     var body: some View {
@@ -174,7 +175,7 @@ struct NotificationsView: View {
                     HStack {
                         Label("Manage Price Alerts", systemImage: "bell.badge")
                         Spacer()
-                        Text("\(PriceAlertStore.all().count)").foregroundStyle(.secondary)
+                        Text("\(PriceAlertStore.all(owner: session.address).count)").foregroundStyle(.secondary)
                     }
                 }
             } header: {

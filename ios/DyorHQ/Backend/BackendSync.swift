@@ -1,18 +1,28 @@
 import DyorKit
 import Foundation
+import UIKit
 
 /// Mirrors what the app records on the device into the wallet's own rows on Supabase — activity with its dollar
 /// size, the notification center, price alerts and settings — and restores them on a fresh device
 /// after one sign-in (for a passkey account, which keeps nothing on the device, that is its whole local history). Every write goes through the wallet's backend session (row-level security by wallet);
-/// nothing here touches a key. Uploads are debounced and best-effort: the local stores stay the source of truth,
-/// and anything that failed is retried the next time that store changes or the session connects.
+/// nothing here touches a key. Uploads are debounced and best-effort: the local stores stay the source of truth.
+/// Nothing waits on the session being up (security audit 2026-09-26, RS-4): each activity record joins a per-wallet
+/// queue kept on the device (`BackendMirrorQueue`) until an upload succeeds, and a store whose upload was skipped or
+/// failed stays marked for another try. Both are retried whenever the wallet's session connects (`restore`), the app
+/// returns to the foreground, and a new record arrives.
 @MainActor
 final class BackendSync {
     private let social: SocialSession
     private var settings: AppSettings?
     private var address: () -> Address? = { nil }
-    private var debounced: [String: Task<Void, Never>] = [:]
+    private var debounced: [Store: Task<Void, Never>] = [:]
+    /// Bumped by each upload scheduled for a store, so only the latest one can mark it as synced.
+    private var generation: [Store: Int] = [:]
     private var restoring = false
+    /// Wallets waiting for a `flush`, and the one running them.
+    private var flushQueue: [Address] = []
+    private var flushTask: Task<Void, Never>?
+    private var foreground: NSObjectProtocol?
     private(set) var lastError: String?
 
     init(social: SocialSession) { self.social = social }
@@ -23,29 +33,72 @@ final class BackendSync {
         self.address = address
         ActivityLog.onRecord = { record, owner in Task { @MainActor [weak self] in self?.activity(record, owner: owner) } }
         NotificationStore.onChange = { items, owner in Task { @MainActor [weak self] in self?.notifications(items, owner: owner) } }
-        PriceAlertStore.onChange = { alerts in Task { @MainActor [weak self] in self?.alerts(alerts) } }
+        PriceAlertStore.onChange = { alerts, owner in Task { @MainActor [weak self] in self?.alerts(alerts, owner: owner) } }
         AppSettings.onChange = { Task { @MainActor [weak self] in self?.settingsChanged() } }
+        // Back in the foreground: whatever is still waiting for the signed-in wallet goes now.
+        foreground = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, let owner = self.address() else { return }
+                self.flush(owner: owner)
+            }
+        }
     }
 
     // MARK: Uploads
 
-    private struct ActivityRow: Encodable {
+    private struct ActivityRow: Codable, Sendable {
         let id: String, wallet: String, kind: String, section: String, title: String, subtitle: String
         let tx_hash: String?, usd: Double?, fee_usd: Double?, occurred_at: String
     }
 
+    /// A new record joins the wallet's queue on the device first, then the queue is sent.
     private func activity(_ record: ActivityRecord, owner: Address) {
         let row = ActivityRow(id: Self.stableID(record).uuidString.lowercased(), wallet: owner.checksummed.lowercased(), kind: record.kind.rawValue,
                               section: record.section ?? "wallet", title: String(record.title.prefix(120)), subtitle: String(record.subtitle.prefix(300)),
                               tx_hash: record.txHashHex?.lowercased(), usd: record.usd, fee_usd: record.feeUsd, occurred_at: Self.iso(record.time))
-        schedule("activity-\(row.id)", delay: 0) { [social] in try await social.client.upsertRows("activity", [row], onConflict: "id") }
+        Self.updateActivityQueue(owner) { $0.enqueue(id: row.id, row: row) }
+        flush(owner: owner)
     }
 
-    /// The same settled transaction always maps to the same row, so re-recording it can never double a row.
+    /// The same settled transaction always maps to the same row, so re-recording it can never double a row. The row
+    /// is keyed by wallet and id together (`on_conflict=wallet,id`, security audit 2026-09-26, SB-5): the id comes from
+    /// a public transaction hash, so another wallet claiming it first must not keep this wallet's row out.
     private static func stableID(_ record: ActivityRecord) -> UUID {
         guard let hash = record.txHash, hash.count >= 16 else { return record.id }
         let b = [UInt8](hash.prefix(16))
         return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
+    }
+
+    /// Sends the wallet's queued activity rows, up to 100 per request. Rows the server takes leave the queue; when it
+    /// refuses a batch, each row is sent on its own so one bad row can't hold back the rest, and a row refused
+    /// `maxAttempts` times is dropped. An outage stops the flush; everything stays queued for the next one.
+    private func flushActivity(owner: Address) async {
+        let pending = Self.activityQueue(owner).entries
+        var start = 0
+        while start < pending.count {
+            let batch = Array(pending[start..<min(start + 100, pending.count)])
+            start += batch.count
+            do {
+                try await social.client.upsertRows("activity", batch.map(\.row), onConflict: "wallet,id")
+                Self.updateActivityQueue(owner) { $0.uploaded(batch) }
+            } catch where BackendMirror.outcome(of: error) == .refused {
+                for entry in batch {
+                    do {
+                        try await social.client.upsertRows("activity", [entry.row], onConflict: "wallet,id")
+                        Self.updateActivityQueue(owner) { $0.uploaded([entry]) }
+                    } catch where BackendMirror.outcome(of: error) == .refused {
+                        Self.updateActivityQueue(owner) { $0.refused([entry]) }
+                        lastError = error.localizedDescription
+                    } catch {
+                        lastError = error.localizedDescription
+                        return
+                    }
+                }
+            } catch {
+                lastError = error.localizedDescription
+                return
+            }
+        }
     }
 
     private struct NotificationRow: Encodable {
@@ -54,9 +107,13 @@ final class BackendSync {
 
     private func notifications(_ items: [AppNotification], owner: Address?) {
         guard !restoring, let owner else { return }
+        uploadNotifications(items, owner: owner, delay: 2)
+    }
+
+    private func uploadNotifications(_ items: [AppNotification], owner: Address, delay: Double) {
         let wallet = owner.checksummed.lowercased()
         let rows = items.prefix(200).map { NotificationRow(wallet: wallet, id: $0.id.uuidString.lowercased(), kind: $0.kind.rawValue, title: $0.title, body: $0.body, read: $0.read, data: $0, created_at: Self.iso($0.time)) }
-        schedule("notifications", delay: 2) { [social] in
+        schedule(.notifications, owner: owner, delay: delay) { [social] in
             if rows.isEmpty {
                 try await social.client.delete("notifications", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
             } else {
@@ -65,17 +122,31 @@ final class BackendSync {
         }
     }
 
+    /// A price alert row. Its primary key is the alert's own id (also `client_id`): the table's unique index on
+    /// (wallet, client_id) is partial, which `on_conflict` can't name, so the upsert goes by id.
     private struct AlertRow: Encodable {
-        let wallet: String, client_id: String, kind: String, market: String, op: String, threshold: Double, enabled: Bool, payload: PriceAlert
+        let id: String, wallet: String, client_id: String, kind: String, market: String, op: String, threshold: Double, enabled: Bool, payload: PriceAlert
     }
 
-    private func alerts(_ alerts: [PriceAlert]) {
-        guard !restoring, let owner = address() else { return }
+    private func alerts(_ alerts: [PriceAlert], owner: Address) {
+        guard !restoring else { return }
+        uploadAlerts(alerts, owner: owner, delay: 2)
+    }
+
+    /// Mirrors the wallet's own alert list (security audit 2026-09-26, RS-7): upsert what the device has, then delete
+    /// what it no longer has — so the wallet's alerts are never missing server-side in between, and a failed request
+    /// leaves the previous list rather than none.
+    private func uploadAlerts(_ alerts: [PriceAlert], owner: Address, delay: Double) {
         let wallet = owner.checksummed.lowercased()
-        let rows = alerts.map { AlertRow(wallet: wallet, client_id: $0.id.uuidString.lowercased(), kind: "price", market: $0.token.checksummed.lowercased(), op: $0.above ? "above" : "below", threshold: $0.target, enabled: true, payload: $0) }
-        schedule("alerts", delay: 2) { [social] in
-            try await social.client.delete("alerts", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)"), URLQueryItem(name: "kind", value: "eq.price")])
-            try await social.client.upsertRows("alerts", rows, onConflict: "wallet,client_id")
+        let rows = alerts.map { alert -> AlertRow in
+            let id = alert.id.uuidString.lowercased()
+            return AlertRow(id: id, wallet: wallet, client_id: id, kind: "price", market: alert.token.checksummed.lowercased(), op: alert.above ? "above" : "below",
+                            threshold: alert.target, enabled: true, payload: alert)
+        }
+        let prune = BackendMirror.pruneQuery(wallet: wallet, kind: "price", keeping: rows.map(\.client_id))
+        schedule(.alerts, owner: owner, delay: delay) { [social] in
+            try await social.client.upsertRows("alerts", rows, onConflict: "id")
+            try await social.client.delete("alerts", query: prune)
         }
     }
 
@@ -83,10 +154,15 @@ final class BackendSync {
 
     private func settingsChanged() {
         UserDefaults.standard.set(true, forKey: "settings.touched")
-        guard !restoring, let owner = address(), let settings else { return }
+        guard !restoring, let owner = address() else { return }
+        uploadSettings(owner: owner, delay: 2)
+    }
+
+    private func uploadSettings(owner: Address, delay: Double) {
+        guard let settings else { return }
         let wallet = owner.checksummed.lowercased()
         let data = settings.snapshot.compactMapValues(JSONValue.init(any:))
-        schedule("settings", delay: 2) { [social] in
+        schedule(.settings, owner: owner, delay: delay) { [social] in
             try await social.client.upsertRows("user_settings", [SettingsRow(wallet: wallet, data: data, updated_at: Self.iso(Date()))], onConflict: "wallet")
         }
     }
@@ -99,12 +175,14 @@ final class BackendSync {
 
     /// A fresh device: pulls what the wallet has on the backend into every local store that is still empty, and
     /// merges its activity into the device's (MERA-PLAN §6). Restored rows are checked before they're applied
-    /// (`BackendRestore`): they're the wallet's own, but not the app's to trust blindly.
+    /// (`BackendRestore`): they're the wallet's own, but not the app's to trust blindly. A store with changes the
+    /// backend hasn't got yet keeps them. Then whatever is waiting for this wallet is sent (`flush`).
     func restore(owner: Address) async {
         guard social.isSignedIn else { return }
         let wallet = owner.checksummed.lowercased()
+        let dirty = Self.dirty(owner)
         restoring = true
-        defer { restoring = false }
+        defer { restoring = false; flush(owner: owner) }
         func rows<T: Decodable>(_ table: String, _ extra: [URLQueryItem], select: String = "*") async -> [T] {
             (try? await social.client.read(table, query: [URLQueryItem(name: "select", value: select), URLQueryItem(name: "wallet", value: "eq.\(wallet)")] + extra, authed: true)) ?? []
         }
@@ -115,13 +193,13 @@ final class BackendSync {
                                                                select: BackendRestore.activityColumns)
         let restored = activity.compactMap { BackendRestore.Activity($0) }.map(ActivityRecord.init(restored:))
         if !restored.isEmpty { ActivityLog.merge(restored: restored, owner: owner) }
-        if NotificationStore.all(owner: owner).isEmpty {
+        if NotificationStore.all(owner: owner).isEmpty, !dirty.contains(.notifications) {
             let list: [NotificationDown] = await rows("notifications", [URLQueryItem(name: "order", value: "created_at.desc"), URLQueryItem(name: "limit", value: "200")])
             if !list.isEmpty { NotificationStore.save(list.map(\.data), owner: owner); NotificationHub.shared.bind(owner: owner) }
         }
-        if PriceAlertStore.all().isEmpty {
+        if PriceAlertStore.all(owner: owner).isEmpty, !dirty.contains(.alerts) {
             let list: [AlertDown] = await rows("alerts", [URLQueryItem(name: "kind", value: "eq.price")])
-            if !list.isEmpty { PriceAlertStore.save(list.map(\.payload)) }
+            if !list.isEmpty { PriceAlertStore.save(list.map(\.payload), owner: owner) }
         }
         if !UserDefaults.standard.bool(forKey: "settings.touched"), let settings {
             let list: [SettingsDown] = await rows("user_settings", [])
@@ -129,16 +207,94 @@ final class BackendSync {
         }
     }
 
+    // MARK: Retry
+
+    /// Sends everything still waiting for `owner` — its queued activity rows, and each store marked for another try
+    /// (from its current contents) — once its backend session is up. One flush at a time; wallets asked for meanwhile
+    /// follow.
+    func flush(owner: Address) {
+        if !flushQueue.contains(owner) { flushQueue.append(owner) }
+        guard flushTask == nil else { return }
+        flushTask = Task { @MainActor [weak self] in
+            while let self, !self.flushQueue.isEmpty {
+                let next = self.flushQueue.removeFirst()
+                await self.flushOnce(owner: next)
+            }
+            self?.flushTask = nil
+        }
+    }
+
+    private func flushOnce(owner: Address) async {
+        guard await isConnected(as: owner) else { return }
+        for store in Self.dirty(owner) where debounced[store] == nil {
+            switch store {
+            case .notifications: uploadNotifications(NotificationStore.all(owner: owner), owner: owner, delay: 0)
+            case .alerts: uploadAlerts(PriceAlertStore.all(owner: owner), owner: owner, delay: 0)
+            case .settings: if address() == owner { uploadSettings(owner: owner, delay: 0) }
+            }
+        }
+        await flushActivity(owner: owner)
+    }
+
+    /// Whether the backend session is this wallet's own right now.
+    private func isConnected(as owner: Address) async -> Bool {
+        guard social.isSignedIn, social.isBound(to: owner) else { return false }
+        return await social.client.signedInWallet == owner.checksummed.lowercased()
+    }
+
     // MARK: Plumbing
 
-    private func schedule(_ key: String, delay: Double, _ work: @escaping @Sendable () async throws -> Void) {
-        debounced[key]?.cancel()
-        debounced[key] = Task { @MainActor [weak self] in
+    /// A store the device mirrors whole.
+    private enum Store: String, CaseIterable { case notifications, alerts, settings }
+
+    /// Uploads a store's current contents after `delay`, replacing an upload still waiting. The store stays marked
+    /// for another try (`dirty`) until an upload of its latest contents succeeds — including when this one is skipped
+    /// because the wallet's session is down.
+    private func schedule(_ store: Store, owner: Address, delay: Double, _ work: @escaping @Sendable () async throws -> Void) {
+        Self.setDirty(store, true, owner: owner)
+        let current = (generation[store] ?? 0) + 1
+        generation[store] = current
+        debounced[store]?.cancel()
+        debounced[store] = Task { @MainActor [weak self] in
+            defer { if let self, self.generation[store] == current { self.debounced[store] = nil } }
             if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-            guard !Task.isCancelled, let self else { return }
-            guard self.social.isSignedIn else { return } // retried on the next change once the session connects
-            do { try await work(); self.lastError = nil } catch { self.lastError = error.localizedDescription }
+            guard !Task.isCancelled, let self, await self.isConnected(as: owner) else { return } // retried by `flush`
+            do {
+                try await work()
+                if self.generation[store] == current { Self.setDirty(store, false, owner: owner) }
+                self.lastError = nil
+            } catch {
+                self.lastError = error.localizedDescription
+            }
         }
+    }
+
+    private static func activityQueueKey(_ owner: Address) -> String { "backendSync.activityQueue.v1.\(owner.hex)" }
+
+    private static func activityQueue(_ owner: Address) -> BackendMirrorQueue<ActivityRow> {
+        guard let data = UserDefaults.standard.data(forKey: activityQueueKey(owner)),
+              let queue = try? JSONDecoder().decode(BackendMirrorQueue<ActivityRow>.self, from: data) else { return BackendMirrorQueue(cap: ActivityLog.cap) }
+        return queue
+    }
+
+    /// Re-reads the wallet's queue (records may have joined it during an upload), changes it and stores it.
+    private static func updateActivityQueue(_ owner: Address, _ change: (inout BackendMirrorQueue<ActivityRow>) -> Void) {
+        var queue = activityQueue(owner)
+        change(&queue)
+        if queue.isEmpty { UserDefaults.standard.removeObject(forKey: activityQueueKey(owner)) }
+        else { UserDefaults.standard.set(try? JSONEncoder().encode(queue), forKey: activityQueueKey(owner)) }
+    }
+
+    private static func dirtyKey(_ owner: Address) -> String { "backendSync.dirty.v1.\(owner.hex)" }
+
+    private static func dirty(_ owner: Address) -> Set<Store> {
+        Set((UserDefaults.standard.stringArray(forKey: dirtyKey(owner)) ?? []).compactMap(Store.init(rawValue:)))
+    }
+
+    private static func setDirty(_ store: Store, _ dirty: Bool, owner: Address) {
+        var set = Self.dirty(owner)
+        guard dirty ? set.insert(store).inserted : set.remove(store) != nil else { return }
+        UserDefaults.standard.set(set.map(\.rawValue).sorted(), forKey: dirtyKey(owner))
     }
 
     private static let isoFormatter: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()
