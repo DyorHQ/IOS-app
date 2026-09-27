@@ -9,10 +9,12 @@
 import {
   momentsFactoryAbi,
   momentsFactoryV1Abi,
+  momentsFactoryV2Abi,
   momentCollectAbi,
   momentGraduationAbi,
   momentFeeHookAbi,
   momentBuybackAbi,
+  momentLockerV2Abi,
   launchpadFactoryAbi,
   launchpadFactoryLegacyAbi,
   launchpadFactoryV2Abi,
@@ -206,7 +208,11 @@ export async function momentsGraduationJob({ client, cohorts, sender, reporter, 
 
 // ------------------------------------------------------------------------------------------------ MO-2
 
-/** Executes every due buyback round (bounded by its own simulation) and watches each cohort's idle locker USDC. */
+/**
+ * Executes every due buyback round (bounded by its own simulation) and watches idle locker USDC: per Moment on a v2
+ * locker (`heldOf`), where each round adds at most 0.5% of the position and a remainder is normal; for the whole
+ * cohort on a live (v1) locker, which adds everything it holds every round.
+ */
 export async function buybacksJob({ client, cohorts, sender, reporter, simAccount = DEFAULT_SIM_ACCOUNT, slippageBps = 50n, lockerIdleAlert = 50_000_000n, gasLimit = 3_000_000n }) {
   const t = await now(client);
   for (const c of cohorts) {
@@ -216,11 +222,18 @@ export async function buybacksJob({ client, cohorts, sender, reporter, simAccoun
         client.readContract({ address: c.buyback, abi: momentBuybackAbi, functionName: "MIN_AMOUNT" }),
         client.readContract({ address: c.buyback, abi: momentBuybackAbi, functionName: "MIN_INTERVAL" }),
       ]);
+      let perMoment = false;
       for (let id = 1n; id <= count; id++) {
         const target = `${c.label} moment #${id}`;
         await guard(reporter, "buybacks", target, async () => {
           const s = Number(await client.readContract({ address: c.collect, abi: momentCollectAbi, functionName: "state", args: [id] }));
           if (s !== MOMENT_STATE.Graduated) return;
+          const held = await readOr(client, { address: c.locker, abi: momentLockerV2Abi, functionName: "heldOf", args: [id, c.usdc] }, null);
+          if (held !== null) {
+            perMoment = true;
+            const li = decideLockerIdle({ lockerUsdc: held, alertAbove: lockerIdleAlert, perMoment: true });
+            if (li.action === "alert") reporter.alert({ job: "buybacks", target: `${target} locker`, severity: li.severity, reason: li.reason });
+          }
           const [accrued, carry, lastRun] = await Promise.all([
             client.readContract({ address: c.hook, abi: momentFeeHookAbi, functionName: "buybackAccrued", args: [id] }),
             client.readContract({ address: c.buyback, abi: momentBuybackAbi, functionName: "carry", args: [id] }),
@@ -239,6 +252,7 @@ export async function buybacksJob({ client, cohorts, sender, reporter, simAccoun
           await safeSend(sender, reporter, "buybacks", target, { to: c.buyback, signature: "execute(uint256,uint256)", args: [id, minCoinOut], gasLimit: gas, label: `buyback ${target}` });
         });
       }
+      if (perMoment) return;
       const idle = await client.readContract({ address: c.usdc, abi: erc20Abi, functionName: "balanceOf", args: [c.locker] });
       const li = decideLockerIdle({ lockerUsdc: idle, alertAbove: lockerIdleAlert });
       if (li.action === "alert") reporter.alert({ job: "buybacks", target: `${c.label} locker`, severity: li.severity, reason: li.reason });
@@ -434,13 +448,41 @@ export async function launchpadGraduationJob({ client, launchpads, sender, repor
 
 // ------------------------------------------------------------------------------------------------ governance watch
 
-// Every owner/governance action that could redirect money or swap code, per contract kind.
-const LAUNCHPAD_GOV_EVENTS = ["ModulesSet", "MondayExecutorSet", "OwnershipTransferStarted", "FeePolicySet", "LaunchFeeSet", "PairEconomicsSet", "PairMondayOnlySet", "WhitelistSet", "LaunchConfigEnabled"];
-const VAULT_GOV_EVENTS = ["LpFeeRecipientSet", "OwnershipTransferStarted"];
-const MOMENTS_GOV_EVENTS = ["GovernanceTransferStarted", "PolicyProposed", "PublishingPaused", "ExternalBaseURISet"];
+// Every owner/governance action that could redirect money, swap code or change who may launch or leave, per contract
+// kind. CreatorFeeRecipientChangeProposed is the owner's most direct money lever on the live factories: anyone can
+// execute it after 3 days unless the creator vetoes, and a pending takeover cannot be read from state, so this scan is
+// the only way to see it in time. The v2-only events (ModulesSealed, GuardianSet, GuardianPaused) match nothing on the
+// live contracts.
+export const LAUNCHPAD_GOV_EVENTS = [
+  "ModulesSet", "MondayExecutorSet", "ModulesSealed", "OwnershipTransferStarted", "FeePolicySet", "LaunchFeeSet", "MaxCreatorTaxSet",
+  "PairEconomicsSet", "PairMondayOnlySet", "WhitelistSet", "WhitelistedSet", "LaunchConfigAdded", "LaunchConfigEnabled",
+  "CreatorFeeRecipientChangeProposed", "V4FallbackAllowed", "LaunchRescued",
+];
+export const VAULT_GOV_EVENTS = ["LpFeeRecipientSet", "OwnershipTransferStarted"];
+export const MOMENTS_GOV_EVENTS = [
+  "GovernanceTransferStarted", "PolicyProposed", "PolicyApplied", "PolicyCancelled", "PublishingPaused", "ExternalBaseURISet", "GuardianSet", "GuardianPaused",
+];
 
-function events(abi, names) {
-  return abi.filter((x) => x.type === "event" && names.includes(x.name));
+/** The events named in `names` from every ABI given; an event that more than one ABI declares with the same topic
+    (signature) is listed once. */
+function events(abis, names) {
+  const out = new Map();
+  for (const abi of abis) {
+    for (const x of abi) {
+      if (x.type !== "event" || !names.includes(x.name)) continue;
+      out.set(`${x.name}(${x.inputs.map((i) => i.type === "tuple" ? `(${i.components.map((c) => c.type).join(",")})` : i.type).join(",")})`, x);
+    }
+  }
+  return [...out.values()];
+}
+
+/** What a governance event says beyond its name, when a human needs it to act. */
+function eventDetail(l) {
+  if (l.eventName === "CreatorFeeRecipientChangeProposed") {
+    const a = l.args ?? {};
+    return `: owner takeover of ${a.token}'s creator fees to ${a.newRecipient}, executable by anyone from ${a.effectiveAt} to ${a.expiresAt} unless the creator (or the owner) cancels it; warn the creator now`;
+  }
+  return "";
 }
 
 const eqAddr = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
@@ -522,14 +564,14 @@ export async function governanceJob({ client, launchpads, cohorts, reporter, sta
   await guard(reporter, job, "governance event scan", async () => {
     const range = await lookbackRange(client, logsLookback);
     const scans = [
-      [launchpads.map((l) => l.factory), events(launchpadFactoryAbi, LAUNCHPAD_GOV_EVENTS)],
-      [launchpads.map((l) => l.feeVault).filter((a) => a && !eqAddr(a, ZERO)), events(mondayFeeVaultAbi, VAULT_GOV_EVENTS)],
-      [cohorts.map((c) => c.factory), events(momentsFactoryAbi, MOMENTS_GOV_EVENTS)],
+      [launchpads.map((l) => l.factory), events([launchpadFactoryAbi, launchpadFactoryV2Abi], LAUNCHPAD_GOV_EVENTS)],
+      [launchpads.map((l) => l.feeVault).filter((a) => a && !eqAddr(a, ZERO)), events([mondayFeeVaultAbi], VAULT_GOV_EVENTS)],
+      [cohorts.map((c) => c.factory), events([momentsFactoryAbi, momentsFactoryV1Abi, momentsFactoryV2Abi], MOMENTS_GOV_EVENTS)],
     ];
     for (const [address, evs] of scans) {
       if (address.length === 0) continue;
       const logs = await getLogsChunked(client, { address, events: evs, ...range, chunk: logsChunk });
-      for (const l of logs) critical(l.address, `governance event ${l.eventName} in block ${l.blockNumber} (tx ${l.transactionHash})`);
+      for (const l of logs) critical(l.address, `governance event ${l.eventName} in block ${l.blockNumber} (tx ${l.transactionHash})${eventDetail(l)}`);
     }
   });
 }

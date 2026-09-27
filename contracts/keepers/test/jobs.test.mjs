@@ -148,6 +148,34 @@ test("MO-2: executes due buybacks with a simulated minCoinOut and flags idle loc
   assert.match(h.reporter.alerts[0].reason, /idle USDC/);
 });
 
+// A v2 locker adds at most 0.5% of a position per round, so the cohort's shared balance is mostly remainders held for
+// their Moments: the alert follows each Moment's own heldOf, not the whole locker (which would fire on every run).
+test("MO-2: on a v2 locker the idle alert is per Moment (heldOf), not the whole locker", async () => {
+  const client = mockClient({
+    reads: {
+      [`${cohort.factory}:momentCount:`]: 2n,
+      [`${cohort.buyback}:MIN_AMOUNT:`]: 1_000_000n,
+      [`${cohort.buyback}:MIN_INTERVAL:`]: 3600n,
+      [`${cohort.collect}:state:1`]: 2,
+      [`${cohort.collect}:state:2`]: 2,
+      [`${cohort.locker}:heldOf:1,${cohort.usdc}`]: 40_000_000n,
+      [`${cohort.locker}:heldOf:2,${cohort.usdc}`]: 60_000_000n,
+      [`${cohort.hook}:buybackAccrued:1`]: 10n,
+      [`${cohort.buyback}:carry:1`]: 0n,
+      [`${cohort.buyback}:lastRun:1`]: 0n,
+      [`${cohort.hook}:buybackAccrued:2`]: 10n,
+      [`${cohort.buyback}:carry:2`]: 0n,
+      [`${cohort.buyback}:lastRun:2`]: 0n,
+      [`${cohort.usdc}:balanceOf:${cohort.locker}`]: 100_000_000n,
+    },
+  });
+  const h = harness();
+  await buybacksJob({ client, cohorts: [cohort], ...h, lockerIdleAlert: 50_000_000n });
+  assert.equal(h.reporter.alerts.length, 1, "only the Moment above the threshold");
+  assert.match(h.reporter.alerts[0].target, /moment #2 locker/);
+  assert.match(h.reporter.alerts[0].reason, /this Moment 60000000 idle USDC/);
+});
+
 // ---------------------------------------------------------------- Launchpad fixtures
 
 const lp = { label: "launchpad (live)", factory: a(0xfa), hook: a(0x4a) };
@@ -578,6 +606,53 @@ test("sec2 governance: every governance event in the lookback is critical", asyn
   await governanceJob({ client, launchpads: [govPad], cohorts: [govCohort], expected, logsLookback: 99n, ...h });
   assert.equal(h.reporter.alerts.length, 1);
   assert.match(h.reporter.alerts[0].reason, /governance event ModulesSet in block 9950/);
+});
+
+// The watch claims every owner/governance action that could redirect money or swap code; the owner's creator-fee
+// takeover (proposeCreatorFeeRecipient) was missing, and it is the one a creator must hear about within 3 days.
+test("sec2 governance: the event scan watches every money, code and access lever on each contract kind", async () => {
+  const watched = [];
+  const client = mockClient({
+    reads: govReads(),
+    head: 10_000n,
+    getLogs: ({ address, events }) => {
+      watched.push({ address, names: new Set(events.map((e) => e.name)), topics: events.length });
+      return [];
+    },
+  });
+  const h = harness();
+  await governanceJob({ client, launchpads: [govPad], cohorts: [govCohort, oldCohort], expected, logsLookback: 99n, ...h });
+  const byAddr = (addr) => watched.find((w) => w.address.includes(addr));
+  const pad = byAddr(govPad.factory).names;
+  for (const n of ["CreatorFeeRecipientChangeProposed", "V4FallbackAllowed", "LaunchRescued", "LaunchConfigAdded", "MaxCreatorTaxSet", "WhitelistedSet", "ModulesSealed", "ModulesSet", "MondayExecutorSet", "FeePolicySet", "OwnershipTransferStarted", "PairMondayOnlySet"]) {
+    assert.ok(pad.has(n), `launchpad scan misses ${n}`);
+  }
+  const vault = byAddr(govPad.feeVault).names;
+  for (const n of ["LpFeeRecipientSet", "OwnershipTransferStarted"]) assert.ok(vault.has(n), `vault scan misses ${n}`);
+  const moments = byAddr(govCohort.factory);
+  for (const n of ["PolicyProposed", "PolicyApplied", "PolicyCancelled", "GuardianSet", "GuardianPaused", "GovernanceTransferStarted", "PublishingPaused", "ExternalBaseURISet"]) {
+    assert.ok(moments.names.has(n), `Moments scan misses ${n}`);
+  }
+  assert.equal(moments.topics, moments.names.size + 2, "the pre-royalty v1 cohort's PolicyProposed and PolicyApplied topics too");
+});
+
+test("sec2 governance: a creator-fee takeover proposal names the token, the new recipient and the window", async () => {
+  const token = a(0x7001);
+  const client = mockClient({
+    reads: govReads(),
+    head: 10_000n,
+    getLogs: ({ address, events }) =>
+      address.includes(govPad.factory) && events.some((e) => e.name === "CreatorFeeRecipientChangeProposed")
+        ? [{ address: govPad.factory, eventName: "CreatorFeeRecipientChangeProposed", blockNumber: 9_990n, transactionHash: "0xdef", args: { token, newRecipient: a(0xbad), effectiveAt: NOW + 3n * DAY, expiresAt: NOW + 6n * DAY } }]
+        : [],
+  });
+  const h = harness();
+  await governanceJob({ client, launchpads: [govPad], cohorts: [], expected, logsLookback: 99n, ...h });
+  assert.equal(h.reporter.alerts.length, 1);
+  const [x] = h.reporter.alerts;
+  assert.equal(x.severity, "critical");
+  assert.match(x.reason, new RegExp(`CreatorFeeRecipientChangeProposed.*${token}.*0x0+bad.*${NOW + 3n * DAY}.*${NOW + 6n * DAY}`));
+  assert.match(x.reason, /warn the creator/);
 });
 
 // ---------------------------------------------------------------- sec2: deployment records

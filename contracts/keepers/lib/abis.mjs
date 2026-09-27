@@ -13,14 +13,22 @@ export const momentsFactoryAbi = parseAbi([
   "function externalBaseURI() view returns (string)",
   "event GovernanceTransferStarted(address indexed from, address indexed to)",
   "event PolicyProposed((uint256 threshold, uint256 minPrice, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 maxCreatorAllocBps, uint16 expiryCreatorBps, uint16 royaltyBps, address platform, address treasury) policy, uint64 applicableAt)",
+  "event PolicyApplied((uint256 threshold, uint256 minPrice, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 maxCreatorAllocBps, uint16 expiryCreatorBps, uint16 royaltyBps, address platform, address treasury) policy)",
+  "event PolicyCancelled()",
   "event PublishingPaused(bool paused)",
   "event ExternalBaseURISet(string base)",
   "function getMoment(uint256 momentId) view returns ((address creator, address platform, address treasury, address coin, address nft, uint256 price, uint256 threshold, uint256 rateNum, uint256 rateDen, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 creatorAllocBps, uint16 expiryCreatorBps, uint16 royaltyBps, uint64 publishedAt, uint64 deadline))",
 ]);
 
+// v2 only (NOT deployed): the guardian's events. Absent on every live cohort.
+export const momentsFactoryV2Abi = parseAbi(["event GuardianSet(address indexed guardian)", "event GuardianPaused(bool paused)"]);
+
 // Cohort 0 ("v1") predates `royaltyBps`; its Moment struct has one field fewer. Used as a fallback decoder.
 export const momentsFactoryV1Abi = parseAbi([
   "function getMoment(uint256 momentId) view returns ((address creator, address platform, address treasury, address coin, address nft, uint256 price, uint256 threshold, uint256 rateNum, uint256 rateDen, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 creatorAllocBps, uint16 expiryCreatorBps, uint64 publishedAt, uint64 deadline))",
+  // Its Policy has no royaltyBps either, so its policy events have their own topics.
+  "event PolicyProposed((uint256 threshold, uint256 minPrice, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 maxCreatorAllocBps, uint16 expiryCreatorBps, address platform, address treasury) policy, uint64 applicableAt)",
+  "event PolicyApplied((uint256 threshold, uint256 minPrice, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 maxCreatorAllocBps, uint16 expiryCreatorBps, address platform, address treasury) policy)",
 ]);
 
 export const momentCollectAbi = parseAbi([
@@ -37,6 +45,10 @@ export const momentGraduationAbi = parseAbi([
 ]);
 
 export const momentFeeHookAbi = parseAbi(["function buybackAccrued(uint256 momentId) view returns (uint256)"]);
+
+// v2 only (NOT deployed): the locker attributes its balances per Moment and adds at most MAX_INCREASE_BPS per round,
+// so a Moment's remainder waits here between rounds. Reverts on every live (v1) locker.
+export const momentLockerV2Abi = parseAbi(["function heldOf(uint256 momentId, address currency) view returns (uint256)"]);
 
 // Permissionless: MomentBuyback.execute(id, minCoinOut). At most once per MIN_INTERVAL per Moment.
 export const momentBuybackAbi = parseAbi([
@@ -77,6 +89,12 @@ export const launchpadFactoryAbi = parseAbi([
   "event PairMondayOnlySet(address indexed pairToken, bool mondayOnly)",
   "event WhitelistSet(bool enabled)",
   "event LaunchConfigEnabled(uint256 indexed id, bool enabled)",
+  "event CreatorFeeRecipientChangeProposed(address indexed token, address newRecipient, uint256 effectiveAt, uint256 expiresAt)",
+  "event V4FallbackAllowed(address indexed token)",
+  "event LaunchRescued(address indexed token)",
+  "event LaunchConfigAdded(uint256 indexed id)",
+  "event MaxCreatorTaxSet(uint16 bps)",
+  "event WhitelistedSet(address indexed account, bool allowed)",
 ]);
 
 // The retired 0xad3d factory predates the graduation-venue choice: its launch record has no `graduationVenue`
@@ -86,7 +104,7 @@ export const launchpadFactoryLegacyAbi = parseAbi([
 ]);
 
 // v2 only (NOT deployed): sealing the modules before the first launch. Absent on every live factory.
-export const launchpadFactoryV2Abi = parseAbi(["function modulesSealed() view returns (bool)"]);
+export const launchpadFactoryV2Abi = parseAbi(["function modulesSealed() view returns (bool)", "event ModulesSealed()"]);
 
 export const mondayFeeVaultAbi = parseAbi([
   "function owner() view returns (address)",

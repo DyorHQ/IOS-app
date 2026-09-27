@@ -80,6 +80,7 @@ test("MO-2: minOut applies slippage, floors, and rejects silly bps", () => {
 test("MO-2: idle locker USDC above the threshold alerts", () => {
   assert.equal(decideLockerIdle({ lockerUsdc: 10n, alertAbove: 10n }).action, "none");
   assert.equal(decideLockerIdle({ lockerUsdc: 11n, alertAbove: 10n }).action, "alert");
+  assert.match(decideLockerIdle({ lockerUsdc: 11n, alertAbove: 10n, perMoment: true }).reason, /this Moment/);
 });
 
 // ---------------------------------------------------------------- LP-2

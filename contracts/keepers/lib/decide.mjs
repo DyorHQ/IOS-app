@@ -68,11 +68,16 @@ export function minOutWithSlippage(simulated, slippageBps) {
   return (simulated * (10_000n - slippageBps)) / 10_000n;
 }
 
-/** MO-2 monitor: USDC idle in a cohort's shared locker is what a spot-price sandwich could extract. */
-export function decideLockerIdle({ lockerUsdc, alertAbove }) {
-  return lockerUsdc > alertAbove
-    ? { action: "alert", severity: "warning", reason: `locker holds ${lockerUsdc} idle USDC units (> ${alertAbove})` }
-    : { action: "none" };
+/**
+ * MO-2 monitor: USDC idle in a cohort's shared locker is what a spot-price sandwich could extract. On a v2 locker the
+ * balance is per Moment (`perMoment`): each round adds at most 0.5% of the position, so a remainder there is normal,
+ * and only one Moment's own large remainder is worth a look (a price held away from the market across rounds can
+ * spend it).
+ */
+export function decideLockerIdle({ lockerUsdc, alertAbove, perMoment = false }) {
+  if (lockerUsdc <= alertAbove) return { action: "none" };
+  const where = perMoment ? "locker holds this Moment" : "locker holds";
+  return { action: "alert", severity: "warning", reason: `${where} ${lockerUsdc} idle USDC units (> ${alertAbove})` };
 }
 
 // ------------------------------------------------------------------------------------------------ LP-2

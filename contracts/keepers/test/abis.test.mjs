@@ -12,10 +12,12 @@ const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "out");
 
 const MAP = {
   momentsFactoryAbi: "MomentsFactory",
+  momentsFactoryV2Abi: "MomentsFactory",
   momentCollectAbi: "MomentCollect",
   momentGraduationAbi: "MomentGraduation",
   momentFeeHookAbi: "MomentFeeHook",
   momentBuybackAbi: "MomentBuyback",
+  momentLockerV2Abi: "MomentLocker",
   launchpadFactoryAbi: "LaunchpadFactory",
   bondingCurveAbi: "BondingCurve",
   mondayExecutorAbi: "MondayGraduationExecutor",
