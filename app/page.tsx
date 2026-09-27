@@ -97,8 +97,8 @@ export default function Home() {
             <div className="scrim" aria-hidden="true" />
             <div className="topbar">{topbar}</div>
             <nav className="tabbar glass" aria-label="Primary" data-glass="bar">
-              <span className={`tab-thumb ${tab === "launch" ? "hide" : ""}`} style={cssVars({ "--i": tabIndex })} aria-hidden="true" />
-              {TABS.map(([id, icon, label]) => <button key={id} type="button" className={`tab${id === tab ? " active" : ""}${id === "launch" ? " launch" : ""}`} aria-current={id === tab ? "page" : undefined} onClick={() => go(id)}>{id === "launch" ? <span className="ring-l"><Icon name={icon} /></span> : <Icon name={icon} />}<span>{label}</span></button>)}
+              <span className="tab-thumb" style={cssVars({ "--i": tabIndex })} aria-hidden="true" />
+              {TABS.map(([id, icon, label]) => <button key={id} type="button" className={`tab${id === tab ? " active" : ""}`} aria-current={id === tab ? "page" : undefined} onClick={() => go(id)}><Icon name={icon} /><small>{label}</small></button>)}
             </nav>
             <div className={`menu ${menu ? "open" : ""}`} inert={!menu}>
               <div className="backdrop" onClick={() => setMenu(false)} />
