@@ -33,67 +33,90 @@ export const reconnectDelay = (attempt: number, random = Math.random) => {
   return Math.round(base * (1 + 0.2 * random()));
 };
 
+const OPEN = 1; // WebSocket.OPEN
+
+/** The one socket a feed holds: what connectPerplFeed uses of the browser's WebSocket. */
+export type FeedSocket = Pick<WebSocket, "readyState" | "send" | "close" | "onopen" | "onmessage" | "onerror" | "onclose">;
+/** What a feed needs from the browser (sockets, timers, randomness), so tests can drive it. Timers return their cancel. */
+export type FeedRuntime = { open: (url: string) => FeedSocket; later: (fn: () => void, ms: number) => () => void; every: (fn: () => void, ms: number) => () => void; random: () => number };
+
+const browser: FeedRuntime = {
+  open: (url) => new WebSocket(url),
+  later: (fn, ms) => { const id = setTimeout(fn, ms); return () => clearTimeout(id); },
+  every: (fn, ms) => { const id = setInterval(fn, ms); return () => clearInterval(id); },
+  random: Math.random,
+};
+
+/** Keeps one market's feed open on `url`, reconnecting with backoff, and reports every change through `update` until
+    the returned stop is called. */
+export function connectPerplFeed(marketId: number, url: string, update: (change: (feed: Feed) => Feed) => void, runtime: FeedRuntime = browser): () => void {
+  let ws: FeedSocket | null = null;
+  let closed = false;
+  let attempt = 0;
+  let stopPing: (() => void) | null = null;
+  let cancelRetry: (() => void) | null = null;
+  const connect = () => {
+    cancelRetry = null;
+    // Every handler talks to its own socket, never the shared `ws`, so a socket that is being replaced can't write
+    // into the new one or into the feed of the market that replaced it.
+    const socket = runtime.open(url);
+    ws = socket;
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ mt: 5, subs: [{ stream: `order-book@${marketId}`, subscribe: true }, { stream: `trades@${marketId}`, subscribe: true }, { stream: "market-state@143", subscribe: true }] }));
+      stopPing = runtime.every(() => { if (socket.readyState === OPEN) socket.send(JSON.stringify({ mt: 1 })); }, 30_000);
+      update((f) => ({ ...f, connected: true, error: null }));
+    };
+    socket.onmessage = (e) => {
+      let m: Msg;
+      try {
+        m = JSON.parse(e.data) as Msg;
+      } catch {
+        return;
+      }
+      // The backoff restarts once data flows, not on open: a relay that accepts and then drops the socket (Perpl
+      // refusing it upstream) must keep backing off rather than be redialled every second.
+      attempt = 0;
+      if (m.mt === 15) update((f) => ({ ...f, book: { bids: applyLevels([], m.bid ?? [], true), asks: applyLevels([], m.ask ?? [], false) } }));
+      else if (m.mt === 16) update((f) => ({ ...f, book: { bids: applyLevels(f.book.bids, m.bid ?? [], true), asks: applyLevels(f.book.asks, m.ask ?? [], false) } }));
+      else if (m.mt === 17 || m.mt === 18) {
+        const d = (m.d ?? []) as { at: { t: number; txid?: string }; p: number; s: number; sd: number }[];
+        const incoming: Trade[] = d.map((t) => ({ t: t.at.t, p: t.p, s: t.s, side: t.sd === 1 ? "buy" : "sell", tx: t.at.txid }));
+        update((f) => ({ ...f, trades: (m.mt === 17 ? incoming : [...incoming, ...f.trades]).slice(0, 60) }));
+      } else if (m.mt === 9) {
+        const d = m.d as Record<string, MarketState> | undefined;
+        const s = d?.[String(marketId)];
+        if (s) update((f) => ({ ...f, state: s }));
+      }
+    };
+    socket.onerror = () => update((f) => ({ ...f, error: "Perpl market data unavailable" }));
+    socket.onclose = () => {
+      stopPing?.();
+      stopPing = null;
+      update((f) => ({ ...f, connected: false }));
+      if (!closed) cancelRetry = runtime.later(connect, reconnectDelay(attempt++, runtime.random));
+    };
+  };
+  connect();
+  return () => {
+    closed = true;
+    stopPing?.();
+    cancelRetry?.();
+    // Detach first: the old socket's late messages and close event must not reach the next market's feed.
+    if (ws) {
+      ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+      ws.close();
+    }
+  };
+}
+
 export function usePerplFeed(marketId: number | null): Feed {
   const [feed, setFeed] = useState<Feed>(empty);
   useEffect(() => {
     if (marketId === null || typeof window === "undefined") return;
-    let ws: WebSocket | null = null;
-    let closed = false;
-    let attempt = 0;
-    let ping: ReturnType<typeof setInterval> | null = null;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-    const connect = () => {
-      retry = null;
-      const url = PERPL.ws.startsWith("/") ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${PERPL.ws}` : PERPL.ws;
-      // Every handler talks to its own socket, never the shared `ws`, so a socket that is being replaced can't write
-      // into the new one or into the feed of the market that replaced it.
-      const socket = new WebSocket(url);
-      ws = socket;
-      socket.onopen = () => {
-        socket.send(JSON.stringify({ mt: 5, subs: [{ stream: `order-book@${marketId}`, subscribe: true }, { stream: `trades@${marketId}`, subscribe: true }, { stream: "market-state@143", subscribe: true }] }));
-        ping = setInterval(() => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ mt: 1 })); }, 30_000);
-        setFeed((f) => ({ ...f, connected: true, error: null }));
-      };
-      socket.onmessage = (e) => {
-        let m: Msg;
-        try {
-          m = JSON.parse(e.data) as Msg;
-        } catch {
-          return;
-        }
-        // The backoff restarts once data flows, not on open: a relay that accepts and then drops the socket (Perpl
-        // refusing it upstream) must keep backing off rather than be redialled every second.
-        attempt = 0;
-        if (m.mt === 15) setFeed((f) => ({ ...f, book: { bids: applyLevels([], m.bid ?? [], true), asks: applyLevels([], m.ask ?? [], false) } }));
-        else if (m.mt === 16) setFeed((f) => ({ ...f, book: { bids: applyLevels(f.book.bids, m.bid ?? [], true), asks: applyLevels(f.book.asks, m.ask ?? [], false) } }));
-        else if (m.mt === 17 || m.mt === 18) {
-          const d = (m.d ?? []) as { at: { t: number; txid?: string }; p: number; s: number; sd: number }[];
-          const incoming: Trade[] = d.map((t) => ({ t: t.at.t, p: t.p, s: t.s, side: t.sd === 1 ? "buy" : "sell", tx: t.at.txid }));
-          setFeed((f) => ({ ...f, trades: (m.mt === 17 ? incoming : [...incoming, ...f.trades]).slice(0, 60) }));
-        } else if (m.mt === 9) {
-          const d = m.d as Record<string, MarketState> | undefined;
-          const s = d?.[String(marketId)];
-          if (s) setFeed((f) => ({ ...f, state: s }));
-        }
-      };
-      socket.onerror = () => setFeed((f) => ({ ...f, error: "Perpl market data unavailable" }));
-      socket.onclose = () => {
-        if (ping) clearInterval(ping);
-        ping = null;
-        setFeed((f) => ({ ...f, connected: false }));
-        if (!closed) retry = setTimeout(connect, reconnectDelay(attempt++));
-      };
-    };
-    connect();
+    const url = PERPL.ws.startsWith("/") ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${PERPL.ws}` : PERPL.ws;
+    const stop = connectPerplFeed(marketId, url, setFeed);
     return () => {
-      closed = true;
-      if (ping) clearInterval(ping);
-      if (retry) clearTimeout(retry);
-      // Detach first: the old socket's late messages and close event must not reach the next market's feed.
-      if (ws) {
-        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
-        ws.close();
-      }
+      stop();
       setFeed(empty);
     };
   }, [marketId]);
