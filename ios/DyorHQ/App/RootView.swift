@@ -41,9 +41,9 @@ struct RootView: View {
         // Privacy cover for the app-switcher snapshot: iOS screenshots the UI whenever the app leaves the foreground,
         // and that image is written to the app container. If a recovery phrase / private key were on screen (Import
         // Wallet), it would land in that snapshot. Covering the whole hierarchy the instant we're not active means the
-        // snapshot only ever captures the cover, never a secret. The one exception is a passkey ceremony: its system
-        // sheet makes the scene .inactive, and the cover must not blank the app behind it. Only a passkey (Mera)
-        // ceremony counts, so a build without passkey accounts covers exactly as before. The cover is a window of its
+        // snapshot only ever captures the cover, never a secret. The exceptions are the owner's own prompts: a passkey
+        // ceremony's system sheet and App Lock's Face ID or passcode prompt (`BiometricGate`) make the scene .inactive,
+        // and the cover must not blank the app — the sheet being confirmed — behind them. The cover is a window of its
         // own above every other, so it also hides a sheet or full-screen cover (Export Wallet, the recovery phrase),
         // which an overlay on this view never reached (IOSK-13).
         .onChange(of: privacyCovered, initial: true) { _, covered in PrivacyShield.update(covered: covered) }
@@ -120,9 +120,10 @@ struct RootView: View {
 }
 
 extension RootView {
-    /// Whether the privacy cover is up: whenever the app isn't foreground-active, except behind a passkey prompt.
+    /// Whether the privacy cover is up: whenever the app isn't foreground-active, except behind a passkey or App Lock
+    /// prompt. Leaving the app during one still covers it: the scene is then in the background.
     private var privacyCovered: Bool {
-        !(scenePhase == .active || (scenePhase == .inactive && session.mera.isPrompting))
+        !(scenePhase == .active || (scenePhase == .inactive && (session.mera.isPrompting || BiometricGate.isPrompting)))
     }
 }
 

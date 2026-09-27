@@ -127,15 +127,31 @@ enum BiometricGate {
     /// Verifies the device owner before a sensitive action: Face ID / Touch ID, falling back to the device passcode
     /// (after a biometric lockout, or when no biometrics are enrolled). FAILS CLOSED — if the owner can't be verified
     /// at all (no passcode set) or verification fails, it returns false and the action must not proceed.
+    @MainActor
     static func authenticate(reason: String) async -> Bool {
         let context = LAContext()
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else { return false }
+        BiometricPrompt.shared.showing += 1
+        defer { BiometricPrompt.shared.showing -= 1 }
         return await withCheckedContinuation { continuation in
             context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, _ in
                 continuation.resume(returning: success)
             }
         }
     }
+
+    /// Whether an `authenticate` prompt is on screen: its system UI makes the scene `.inactive`, and the privacy cover
+    /// stays off behind it (RootView), as it does behind a passkey prompt. Observable.
+    @MainActor
+    static var isPrompting: Bool { BiometricPrompt.shared.showing > 0 }
+}
+
+/// The `BiometricGate` prompts on screen, observed through `BiometricGate.isPrompting`.
+@Observable
+@MainActor
+final class BiometricPrompt {
+    static let shared = BiometricPrompt()
+    fileprivate(set) var showing = 0
 }
 
 /// Light / Dark / System, the same three choices Apple's own apps offer.
