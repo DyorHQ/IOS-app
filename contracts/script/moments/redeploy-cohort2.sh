@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # Cohort-2 redeploy of the Moments stack on Monad mainnet with the $2,000 graduation FDV baked into the factory's
 # constructor policy (threshold 771.428571 USDC; split, min price, allocation cap, expiry share, royalty and the
-# platform/treasury beneficiaries unchanged), then retire the cohort-1 stack. Run it from your own terminal, the way
-# every deployment here is run: the deployer key comes from PRIVATE_KEY in your environment (or from the repo .env),
-# is handed to forge as --private-key, and is never printed, logged or stored by this script.
+# platform/treasury beneficiaries unchanged), then retire the cohort-1 stack. Run it from your own terminal. It signs
+# with a Ledger or a Foundry keystore account and never reads a plaintext key.
 #
 #   cd /Users/jerry/Hackathon-moments/contracts && ./script/moments/redeploy-cohort2.sh
 #
 #   DRY_RUN=1      simulate only (no key needed, nothing sent)
 #   YES=1          skip the confirmation prompts
-#   LEDGER=1       sign on a Ledger instead of PRIVATE_KEY
-#   ENV_FILE=path  where to look for PRIVATE_KEY when it is not exported (default: ../.env, then ~/Hackathon/.env)
+#   LEDGER=1       sign on a Ledger
+#   ACCOUNT=name   sign with a Foundry keystore account (cast wallet import <name> --interactive)
 #
 # What it does, in order, stopping at the first failure:
 #   0. pre-flight: chain 143, the signer is the cohort-1 governance wallet, enough MON, cohort-1 record kept
@@ -19,7 +18,8 @@
 #   3. pause publishing on the cohort-1 factory (its Moments stay on-chain; they leave the app once it is re-pointed)
 #   4. verify every new contract on Sourcify (no key)
 #   5. print the new addresses + deploy block and run the invariant monitor against them
-# Rehearsed end to end on an anvil fork on 2026-09-22 (see docs/moments-mainnet-runbook.md §1b).
+# Rehearsed end to end on an anvil fork on 2026-09-22
+# (see DyorHQ/internal: ios-app/docs/moments-mainnet-runbook.md §1b).
 set -euo pipefail
 
 # RETIRED (security audit 2026-09-26). Cohort 2 is itself retired (publishing paused 2026-09-23), and this script would
@@ -53,14 +53,9 @@ if [ "${DRY_RUN:-0}" = 1 ]; then
 elif [ "${LEDGER:-0}" = 1 ]; then
   SIGN=(--ledger); ADDR=$EXPECTED_DEPLOYER
 else
-  if [ -z "${PRIVATE_KEY:-}" ]; then
-    for f in "${ENV_FILE:-}" ../.env /Users/jerry/Hackathon/.env; do
-      [ -n "$f" ] && [ -f "$f" ] && PRIVATE_KEY=$(grep -m1 '^PRIVATE_KEY=' "$f" | cut -d= -f2- | tr -d "\"' \r") && [ -n "$PRIVATE_KEY" ] && break
-    done
-  fi
-  [ -n "${PRIVATE_KEY:-}" ] || die "PRIVATE_KEY is not set and was not found in an .env file (export it or pass ENV_FILE=...)"
-  ADDR=$($CAST wallet address --private-key "$PRIVATE_KEY") || die "PRIVATE_KEY is not a valid key"
-  SIGN=(--private-key "$PRIVATE_KEY")
+  [ -n "${ACCOUNT:-}" ] || die "set LEDGER=1 or ACCOUNT=<Foundry keystore account>: this script never reads a plaintext key"
+  ADDR=$($CAST wallet address --account "$ACCOUNT") || die "cannot read the keystore account $ACCOUNT"
+  SIGN=(--account "$ACCOUNT")
 fi
 echo "signer: $ADDR"
 if [ "$ADDR" != "$EXPECTED_DEPLOYER" ] && [ "${ALLOW_OTHER_DEPLOYER:-0}" != 1 ]; then

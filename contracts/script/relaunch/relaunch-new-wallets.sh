@@ -25,12 +25,12 @@
 #   cd /Users/jerry/Hackathon/contracts && ./script/relaunch/relaunch-new-wallets.sh
 #
 #   DRY_RUN=1   pre-flight + prices + both deploy simulations, and the list of transactions it WOULD send; sends nothing
-#   LEDGER=1    sign on a Ledger instead of PRIVATE_KEY
+#   LEDGER=1    sign on a Ledger
+#   ACCOUNT=n   sign with the Foundry keystore account n (cast wallet import n --interactive)
 #   YES=1       no confirmation prompts
 #   FORK=1      rehearsal against a local anvil fork (RPC=http://127.0.0.1:8545); signs with --unlocked as governance
 #
-# The deployer key comes from PRIVATE_KEY in the environment, else from ~/Hackathon/.env. It is handed to forge/cast
-# as --private-key and is never printed, logged or stored: every line of tool output is scrubbed of it.
+# A real run signs with a Ledger or a keystore account; the script never reads a plaintext key.
 set -euo pipefail
 umask 077
 # forge/cast honour FOUNDRY_* (compiler config → different bytecode), ETH_* (gas, sender, keystore, rpc), CAST_*
@@ -141,14 +141,9 @@ elif [ "${FORK:-0}" = 1 ]; then
 elif [ "${LEDGER:-0}" = 1 ]; then
   MODE=ledger; ADDR=$GOV; FORGE_SIGN=(--ledger); CAST_SIGN=(--ledger --from "$GOV")
 else
-  PK=${PRIVATE_KEY:-}
-  if [ -z "$PK" ] && [ -f /Users/jerry/Hackathon/.env ]; then
-    PK=$(grep -m1 '^PRIVATE_KEY=' /Users/jerry/Hackathon/.env | cut -d= -f2- | tr -d "\"' \r")
-  fi
-  [ -n "$PK" ] || die "PRIVATE_KEY is not set and is not in ~/Hackathon/.env (or run with LEDGER=1)"
-  case "$PK" in 0x*) ;; *) PK=0x$PK ;; esac
-  ADDR=$($CAST wallet address --private-key "$PK" 2>/dev/null) || die "PRIVATE_KEY is not a valid key"
-  FORGE_SIGN=(--private-key "$PK"); CAST_SIGN=(--private-key "$PK")
+  [ -n "${ACCOUNT:-}" ] || die "set LEDGER=1 or ACCOUNT=<Foundry keystore account>: this script never reads a plaintext key"
+  ADDR=$($CAST wallet address --account "$ACCOUNT") || die "cannot read the keystore account $ACCOUNT"
+  FORGE_SIGN=(--account "$ACCOUNT"); CAST_SIGN=(--account "$ACCOUNT")
 fi
 say "mode: $MODE   signer: $ADDR   rpc: $RPC   log: $LOG"
 eq "$ADDR" "$GOV" || die "the signer $ADDR is not the governance wallet $GOV — it owns every contract this run touches"

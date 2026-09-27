@@ -18,13 +18,10 @@ import {TransferHelper} from "./libraries/TransferHelper.sol";
 ///         received for sells. Exact-output sells are the one case charged in the launch token. Only the graduation
 ///         executor may initialize a registered pool, so nobody can front-run graduation with a mispriced pool.
 ///
-///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), LP-2: for a launch with holder fee sharing, the
-///         holders' cut of a quote-denominated fee is handed to HolderFeeSharing in the SAME swap that earned it
-///         (exactly like the bonding curve does on every curve trade), instead of waiting in the hook for a
-///         permissionless `sweepPoolFees`. In v1 an unswept backlog could be captured by anyone who bought, swept,
-///         and held for a single block boundary; now there is never a backlog — a reward only ever reaches the
-///         balances that held through the block the fee was paid in. The protocol's cut still waits here
-///         (`pendingProtocolFees`) and is paid out by `sweepPoolFees`.
+///         For a launch with holder fee sharing, the holders' cut of a quote-denominated fee is handed to
+///         HolderFeeSharing in the same swap that earned it (as the bonding curve does on every curve trade), so a
+///         reward only ever reaches the balances that held through the block the fee was paid in. The protocol's cut
+///         waits here (`pendingProtocolFees`) and is paid out by `sweepPoolFees`.
 contract MemeHook is IHooks {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -36,12 +33,12 @@ contract MemeHook is IHooks {
     mapping(PoolId => Types.PoolLaunch) private _launches;
     mapping(PoolId => mapping(Currency => uint256)) public pendingFees;
     mapping(PoolId => mapping(Currency => uint256)) public pendingCreatorTax;
-    /// @notice v2 (LP-2): the protocol's cut of fees whose holders' cut was already forwarded in the swap.
+    /// @notice The protocol's cut of fees whose holders' cut was already forwarded in the swap.
     mapping(PoolId => mapping(Currency => uint256)) public pendingProtocolFees;
 
     event PoolRegistered(PoolId indexed poolId, address indexed token, address indexed pairToken);
     event FeesTaken(PoolId indexed poolId, Currency indexed currency, uint256 fee, uint256 tax);
-    /// v2 (LP-2): the holders' cut forwarded to HolderFeeSharing inside the swap.
+    /// The holders' cut forwarded to HolderFeeSharing inside the swap.
     event HolderFeesForwarded(PoolId indexed poolId, Currency indexed currency, uint256 amount);
     event PoolFeesSwept(PoolId indexed poolId, Currency indexed currency, uint256 protocolFee, uint256 creatorFee);
     event CreatorFeeRecipientUpdated(PoolId indexed poolId, address indexed recipient);
@@ -227,7 +224,7 @@ contract MemeHook is IHooks {
         if (!launch.registered) revert PoolNotRegistered();
         uint256 fee = pendingFees[id][currency];
         uint256 tax = pendingCreatorTax[id][currency];
-        uint256 protocolOnly = pendingProtocolFees[id][currency]; // v2 (LP-2): holders' cut already forwarded
+        uint256 protocolOnly = pendingProtocolFees[id][currency]; // holders' cut already forwarded
         if (fee + tax + protocolOnly == 0) return;
         pendingFees[id][currency] = 0;
         pendingCreatorTax[id][currency] = 0;
@@ -273,7 +270,7 @@ contract MemeHook is IHooks {
         emit FeesTaken(id, currency, fee, tax);
         Types.PoolLaunch storage launch = _launches[id];
         if (launch.holderFeeSharing && Currency.unwrap(currency) == launch.quoteToken) {
-            // v2 (LP-2): forward the holders' cut now (same split as `sweepPoolFees`); keep the protocol's here.
+            // Forward the holders' cut now (same split as `sweepPoolFees`); keep the protocol's here.
             uint256 protocolCut = CurveMath.feeOf(fee, launch.protocolShareBps);
             uint256 holderCut = fee - protocolCut + tax;
             pendingProtocolFees[id][currency] += protocolCut;
@@ -284,7 +281,7 @@ contract MemeHook is IHooks {
         pendingCreatorTax[id][currency] += tax;
     }
 
-    /// @dev v2 (LP-2): queues `amount` of the quote asset for the launch's holders (released a block later).
+    /// @dev Queues `amount` of the quote asset for the launch's holders (released a block later).
     function _forwardToHolders(PoolId id, address token, Currency currency, uint256 amount) internal {
         address sharing = ILaunchpadFactory(factory).holderFeeSharing();
         if (currency.isAddressZero()) {

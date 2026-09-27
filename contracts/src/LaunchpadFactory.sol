@@ -428,11 +428,9 @@ contract LaunchpadFactory {
     ///         the 7-day rescue lock-up. Monday-only quote assets (aBIL) keep their rule unless the owner has
     ///         explicitly allowed the fallback for that launch with `allowV4Fallback`.
     ///
-    ///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), LP-1: a full `GRADUATION_GAS` budget (+1/32) is
-    ///         reserved for the Uniswap v4 graduation before the Monday retry runs, and the call must carry at least
-    ///         that reserve plus `GRADUATION_GAS` for the retry. Before, the retry was forwarded
-    ///         63/64 of all gas, so a squatted Monday pool full of dust-liquidity ticks (every tick crossed by the
-    ///         realign swap costs gas) could burn it and leave the v4 path starving on the last 1/64.
+    ///         A full `GRADUATION_GAS` budget (+1/32) is reserved for the Uniswap v4 graduation before the Monday
+    ///         retry runs, and the call must carry at least that reserve plus `GRADUATION_GAS` for the retry, so the
+    ///         retry can never use up the gas the Uniswap v4 graduation needs.
     function graduateFallback(address token) external {
         // Both budgets are reserved up front; the 1/32 margin covers EIP-150's 63/64 rule on the capped retry.
         if (gasleft() < 2 * GRADUATION_GAS + GRADUATION_GAS / 32) revert InsufficientGasForGraduation();
@@ -441,7 +439,7 @@ contract LaunchpadFactory {
         // transient failure), that is the result. The retry gets all the gas above the reserved v4 budget (at least
         // `GRADUATION_GAS`), so a caller who brings more gas lets a heavy-but-realignable Monday pool still graduate on
         // Monday. Only a Monday path that still reverts with that gas falls back to Uniswap v4, and the reserve is
-        // never spent by the retry, so a squatted pool can no longer starve the fallback.
+        // never spent by the retry, so a squatted pool cannot starve the fallback.
         try this.graduate{gas: gasleft() - (GRADUATION_GAS + GRADUATION_GAS / 32)}(token) {
             return;
         } catch {}

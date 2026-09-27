@@ -1,4 +1,4 @@
-# Phase 3 targets from docs/moments-analysis/economics.py ($10 threshold, 20/5/75, 10% creator alloc)
+# Phase 3 targets from DyorHQ/internal: ios-app/docs/moments-analysis/economics.py ($10 threshold, 20/5/75, 10% creator alloc)
 
 Model (exact rationals, no fees):
 - rate = 3,857,142.857142857 coins per USDC; pool 38,571,428.571 coins + 10 USDC; collectors 51,428,571.429; creator 10,000,000

@@ -26,14 +26,16 @@ interface IPermit2Allowance {
 
 /// @notice FORK-ONLY rehearsal of the $10 lifecycle, for app development against `anvil --fork-url monad`
 ///         (chain id 143 on the fork too). It is NOT a mainnet procedure: the live lifecycle is exercised through
-///         the DyorHQ app by ordinary, low-value wallets (see docs/moments-mainnet-runbook.md). Never run this with
+///         the DyorHQ app by ordinary, low-value wallets (see
+///         DyorHQ/internal: ios-app/docs/moments-mainnet-runbook.md). Never run this with
 ///         a real key: it publishes, collects and trades from whatever key broadcasts it. The `FORK_REHEARSAL=1`
 ///         guard exists so a mainnet RPC + real key cannot run it by accident.
 ///
 ///           anvil --fork-url https://rpc.monad.xyz --chain-id 143   # in another shell
-///           export FORK_REHEARSAL=1 RPC=http://127.0.0.1:8545 KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80  # anvil #0
-///           forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url $RPC --broadcast --private-key $KEY --sig "publish()"
-///           MOMENT_ID=1 forge script ... --sig "collectUntilGraduated()"   # fund the anvil account with USDC first (anvil_setStorageAt / deal)
+///           cast wallet new ~/.foundry/keystores fork-rehearsal   # once: a fresh key used only on forks
+///           export FORK_REHEARSAL=1 RPC=http://127.0.0.1:8545
+///           forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url $RPC --broadcast --account fork-rehearsal --sig "publish()"
+///           MOMENT_ID=1 forge script ... --sig "collectUntilGraduated()"   # fund that account with MON and USDC first (anvil_setBalance / anvil_setStorageAt)
 ///           MOMENT_ID=1 forge script ... --sig "trade()"                   # $1 buy through the real Universal Router
 ///           MOMENT_ID=1 forge script ... --sig "claim()" | "withdraw()" | "buyback()" | "status()"
 contract MomentsLifecycle is Script {

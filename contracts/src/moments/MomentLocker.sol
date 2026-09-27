@@ -20,14 +20,12 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 ///         it on every increase. There is no function that removes liquidity, no `take` to any address but
 ///         itself, no token transfer except paying the PoolManager what a position add costs, and no owner.
 ///
-///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md):
-///         - MO-1: an add requested while the PoolManager is ALREADY unlocked (graduation reached from inside
-///           someone else's `unlock` callback, e.g. a terminal collect made by a contract holding the lock) runs
-///           in-line instead of calling `unlock` again, which would revert `AlreadyUnlocked` and fail graduation.
-///           This is safe because v4 books deltas per caller: every delta this contract creates is settled to zero
-///           within the same call (sync → transfer → settle, or take), so the outer unlocker's accounting is
-///           untouched and it cannot make ours non-zero.
-///         - MO-2: balances are attributed per Moment. USDC is shared by every Moment's pool, so an add for one
+///         - An add requested while the PoolManager is already unlocked (graduation reached from inside someone
+///           else's `unlock` callback, e.g. a terminal collect made by a contract holding the lock) runs in-line,
+///           without calling `unlock` again. This is safe because v4 books deltas per caller: every delta this
+///           contract creates is settled to zero within the same call (sync → transfer → settle, or take), so the
+///           outer unlocker's accounting is untouched and it cannot make ours non-zero.
+///         - Balances are attributed per Moment. USDC is shared by every Moment's pool, so an add for one
 ///           Moment may only spend what that Moment owns here (its dust, its folded LP fees, and whatever arrived
 ///           untracked just before the add — the reserve at seed, the buyback's top-up at increase), never another
 ///           Moment's idle USDC.
@@ -48,9 +46,9 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
     }
 
     mapping(uint256 => Position) private _positions;
-    /// @notice v2 (MO-2): the balance of each currency this contract holds on behalf of each Moment.
+    /// @notice The balance of each currency this contract holds on behalf of each Moment.
     mapping(uint256 => mapping(Currency => uint256)) public heldOf;
-    /// @notice v2 (MO-2): Σ heldOf over all Moments, per currency. Anything above it is untracked (it just arrived)
+    /// @notice Σ heldOf over all Moments, per currency. Anything above it is untracked (it just arrived)
     ///         and is credited to the next Moment whose position is added to.
     mapping(Currency => uint256) public tracked;
 
@@ -92,7 +90,7 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
     }
 
     function _add(uint256 momentId, PoolKey memory key) private returns (uint128 liquidity, uint256 used0, uint256 used1) {
-        // v2 (MO-1): already inside an unlock (someone else's) -> modify in-line; our deltas net to zero here.
+        // Already inside an unlock (someone else's) -> modify in-line; our deltas net to zero here.
         if (poolManager.isUnlocked()) return _modify(momentId, key);
         bytes memory result = poolManager.unlock(abi.encode(momentId, key));
         (liquidity, used0, used1) = abi.decode(result, (uint128, uint256, uint256));
@@ -143,7 +141,7 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
         used1 = _settle(momentId, key.currency1, delta.amount1());
     }
 
-    /// @dev v2 (MO-2): attributes a currency's untracked balance (what arrived since the last add) to `momentId`.
+    /// @dev Attributes a currency's untracked balance (what arrived since the last add) to `momentId`.
     function _creditUntracked(uint256 momentId, Currency currency) private {
         uint256 bal = currency.balanceOfSelf();
         uint256 t = tracked[currency];
@@ -182,7 +180,7 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
         return _positions[momentId].liquidity;
     }
 
-    /// @notice v2 (MO-2): what the next add for `momentId` could spend of `currency` — its own balance here plus
+    /// @notice What the next add for `momentId` could spend of `currency` — its own balance here plus
     ///         the untracked balance that the add would credit to it first.
     function available(uint256 momentId, Currency currency) external view returns (uint256) {
         uint256 bal = currency.balanceOfSelf();
