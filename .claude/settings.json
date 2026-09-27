@@ -53,11 +53,11 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Read|Edit|Write|MultiEdit|NotebookEdit|Grep",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/secret-guard.py\"",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.claude/hooks/secret-guard.py\"; [ ! -f \"$f\" ] || python3 \"$f\"",
             "timeout": 10
           }
         ]
