@@ -2,6 +2,7 @@ import DyorKit
 import Foundation
 import Observation
 import Security
+import UIKit
 
 /// Coordinates authenticated Perpl trading: enroll an Ed25519 API key with the wallet's EIP-712 signature (stored
 /// in the Keychain), sign in to the trading WebSocket, enable one-click order forwarding, and place market / limit
@@ -195,7 +196,10 @@ final class PerplTrading: MeraSessionLifecycle {
     private func drain(_ socket: PerplTradeClient) {
         draining?.disconnect()
         draining = socket
+        // Held so iOS doesn't suspend the app, and freeze the socket, before its answers are in (GL-1).
+        let background = PerplBackgroundTime("Perpl trading")
         Task { @MainActor [weak self] in
+            defer { background.end() }
             let deadline = Date().addingTimeInterval(8)
             while socket.hasRequestsInFlight, Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
             socket.disconnect()
@@ -516,6 +520,8 @@ final class PerplTrading: MeraSessionLifecycle {
             guard let mera else { throw PerplTradeError.notSignedIn }
             try mera.requireStepUp(approval, for: .cancelOrder)
         }
+        let background = PerplBackgroundTime("Perpl cancel")
+        defer { background.end() }
         await ensureConnected()
         let client = try liveClient()
         guard let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
@@ -533,6 +539,8 @@ final class PerplTrading: MeraSessionLifecycle {
             guard let mera else { throw PerplTradeError.notSignedIn }
             try mera.requireStepUp(approval, for: .cancelOrder)
         }
+        let background = PerplBackgroundTime("Perpl cancel")
+        defer { background.end() }
         await ensureConnected()
         let client = try liveClient()
         guard let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
@@ -596,6 +604,9 @@ final class PerplTrading: MeraSessionLifecycle {
             let cancels = changes.contains { !$0.replacing.isEmpty }
             try mera.requireStepUp(approval, for: cancels ? .cancelOrder : .reduceOnlyClose)
         }
+        // Cancel-then-place: leaving the app between the two must not freeze the socket with the old stop gone (GL-1).
+        let background = PerplBackgroundTime("Perpl TP/SL")
+        defer { background.end() }
         await ensureConnected()
         let client = try liveClient()
         guard let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
@@ -688,6 +699,10 @@ final class PerplTrading: MeraSessionLifecycle {
                        approval: MeraSession.StepUp? = nil, onChainPositions: [PerpPosition], onChainOrders: [PerpOrder]) async throws -> BracketResult {
         try Self.checkTriggers(input: input, takeProfit: takeProfit, stopLoss: stopLoss)
         let charge = try authorize(input, approval: approval)
+        // The entry and its stop-loss go out one after the other: leaving the app between them must not freeze the
+        // socket with the entry live and the stop-loss unsent (GL-1).
+        let background = PerplBackgroundTime("Perpl order")
+        defer { background.end() }
         await ensureConnected()
         let client: PerplTradeClient
         do {
@@ -940,6 +955,8 @@ final class PerplTrading: MeraSessionLifecycle {
                 guard self.boundOwner == owner, let client = self.client, let accountId = client.accountId,
                       let leftovers = self.leftovers(of: ended) else { return }
                 self.cancelsSent.formUnion(leftovers.map(\.id))
+                let background = PerplBackgroundTime("Cancel leftover TP/SL")
+                defer { background.end() }
                 guard let acks = try? await client.sendEach(leftovers.map { PerplOrders.cancel(perpId: $0.marketId, orderId: $0.oid, accountId: accountId, head: 0) }) else { return }
                 self.recordLeftoversCancelled(acks.filter(\.accepted).count, of: ended, owner: owner)
                 return
@@ -1046,5 +1063,26 @@ enum PerplKeychain {
     static func delete(address: String) {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: address]
         SecItemDelete(query as CFDictionary)
+    }
+}
+
+/// The background time iOS grants an app that leaves the foreground (about 30 s), held while frames are on their way to
+/// Perpl or their answers are awaited (security audit 2026-09-26, GL-1): a suspended app freezes its socket, which could
+/// leave an entry live with its stop-loss unsent, or an old stop cancelled with the new one unsent. Always handed back:
+/// by `end` when the work is done, or when the time runs out.
+@MainActor
+private final class PerplBackgroundTime {
+    private var id: UIBackgroundTaskIdentifier = .invalid
+
+    init(_ name: String) {
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { [self] in
+            MainActor.assumeIsolated { self.end() }
+        }
+    }
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
     }
 }

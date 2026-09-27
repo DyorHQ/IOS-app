@@ -2558,8 +2558,15 @@ struct AuthedOrderSheet: View {
             }
         } catch let error as PerplTradeError where error.outcomeUnknown {
             // The entry frame went out but was never acknowledged: it may be live. Resending would place a second
-            // order, so this sheet only closes (and reloads orders and positions) from here.
-            phase = .unknown("Order status unknown — Perpl didn't confirm this order, so it may have been placed. Check Open Orders and Positions before placing it again.")
+            // order, so this sheet only closes (and reloads orders and positions) from here. Its triggers are sent only
+            // after the entry is answered, so none of them went out (GL-1): if the entry is live, it has no TP/SL.
+            let triggers = [takeProfit != nil ? "take-profit" : nil, stopLoss != nil ? "stop-loss" : nil].compactMap { $0 }
+            var message = "Order status unknown — Perpl didn't confirm this order, so it may have been placed. Check Open Orders and Positions before placing it again."
+            if !triggers.isEmpty {
+                let one = triggers.count == 1
+                message += " Its \(triggers.joined(separator: " and ")) \(one ? "was" : "were") not sent: if the order is open, set \(one ? "it" : "them") with TP/SL on the position."
+            }
+            phase = .unknown(message)
         } catch {
             phase = .failed(describe(error))
         }
