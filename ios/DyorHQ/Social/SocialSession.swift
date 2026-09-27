@@ -276,51 +276,55 @@ final class SocialSession {
     }
 
     /// Uploads a launchpad coin image to the wallet's folder in the public `launch-media` bucket and returns its
-    /// public URL — which the caller writes on-chain as the token's logo. Requires a DyorHQ Social session.
+    /// public URL — which the caller writes on-chain as the token's logo. Requires a DyorHQ Social session. The bucket
+    /// is write-once (its URLs go on-chain) and every logo gets a fresh name.
     func uploadLaunchImage(jpeg: Data) async throws -> URL {
         guard await client.signedInWallet != nil else { throw SupabaseError.notSignedIn }
         let wallet = await client.signedInWallet!
         let name = UUID().uuidString.lowercased()
-        return try await client.uploadPublic(bucket: "launch-media", path: "\(wallet)/\(name).jpg", data: jpeg, contentType: "image/jpeg")
+        return try await client.uploadPublic(bucket: "launch-media", path: "\(wallet)/\(name).jpg", data: jpeg, contentType: "image/jpeg", upsert: false)
     }
 
-    /// Uploads a Moment's photo to the wallet's folder in the public `launch-media` bucket and returns its public
-    /// URL — the caller writes it on-chain as the NFT's `mediaURI` next to the keccak-256 of these exact bytes.
-    func uploadMomentImage(jpeg: Data) async throws -> URL {
-        try await uploadMomentMedia(jpeg, contentType: "image/jpeg", fileExtension: "jpg")
+    /// Moment media in the wallet's folder of the public `launch-media` bucket: its object path (what `pinMomentMedia`
+    /// pins) and its public URL, the fast in-app mirror.
+    struct MomentUpload: Sendable {
+        let path: String
+        let mirror: URL
     }
 
-    /// Uploads any Moment media file (photo, video, or a video's cover frame) to the wallet's folder in the public
-    /// `launch-media` bucket and returns its public URL, which the Moment writes on-chain as the NFT's image or
-    /// animation. Videos are accepted up to 50 MB.
-    func uploadMomentMedia(_ data: Data, contentType: String, fileExtension: String) async throws -> URL {
-        try await uploadAndPinMomentMedia(data, contentType: contentType, fileExtension: fileExtension).mirror
-    }
-
-    /// Uploads Moment media to the public bucket and pins it to IPFS, so the NFT's on-chain pointer is a permanent
-    /// `ipfs://` CID that outlives DyorHQ's servers. Returns the URI to write on-chain — the `ipfs://` CID, or the
-    /// Supabase https URL as a fallback when pinning is unavailable (e.g. the Pinata secret is not set yet) — plus
-    /// the Supabase URL as a fast in-app mirror. The provenance hash is of these exact bytes regardless of storage.
-    /// The object is named after the keccak-256 of `data` (`moment-<hash>`), so the mirror can be derived later from
-    /// the on-chain provenance alone (`MomentsMath.mirrorURL`); pass `name` to file it under another hash — a video's
-    /// poster frame is stored under the video's hash, which is the hash the NFT records.
-    func uploadAndPinMomentMedia(_ data: Data, contentType: String, fileExtension: String, name: String? = nil) async throws -> (onchain: String, mirror: URL) {
+    /// Uploads Moment media (a photo, or a video's cover frame) to the public bucket. The object is named after the
+    /// keccak-256 of `data` (`moment-<hash>`), so the mirror can be derived later from the on-chain provenance alone
+    /// (`MomentsMath.mirrorURL`); pass `name` to file it under another hash — a video's poster frame is stored under
+    /// the video's hash, which is the hash the NFT records. The bucket is write-once: an object already there under
+    /// that name was uploaded from the same bytes (or, for a poster, the same video), so it is used as is.
+    func uploadMomentMedia(_ data: Data, contentType: String, fileExtension: String, name: String? = nil) async throws -> MomentUpload {
         guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
-        let name = name ?? MomentsMath.mediaName(hash: Keccak.hash256(data))
-        let path = "\(wallet)/\(name).\(fileExtension)"
-        let url = try await client.uploadPublic(bucket: "launch-media", path: path, data: data, contentType: contentType)
-        let onchain = (try? await client.pinToIPFS(bucket: "launch-media", path: path)) ?? url.absoluteString
-        return (onchain, url)
+        let path = "\(wallet)/\(name ?? MomentsMath.mediaName(hash: Keccak.hash256(data))).\(fileExtension)"
+        do {
+            return MomentUpload(path: path, mirror: try await client.uploadPublic(bucket: "launch-media", path: path, data: data, contentType: contentType, upsert: false))
+        } catch where SupabaseClient.isDuplicateUpload(error) {
+            return MomentUpload(path: path, mirror: client.publicURL(bucket: "launch-media", path: path))
+        }
     }
 
-    /// `uploadAndPinMomentMedia` for a file on disk (a picked video), streamed from the file so it is never read into
-    /// memory whole. `hash` is the keccak-256 of its bytes (`Keccak.hash256(file:)`), which names the object.
-    func uploadAndPinMomentMedia(file: URL, hash: Data, contentType: String, fileExtension: String) async throws -> (onchain: String, mirror: URL) {
+    /// `uploadMomentMedia` for a file on disk (a picked video), streamed from the file so it is never read into memory
+    /// whole. `hash` is the keccak-256 of its bytes (`Keccak.hash256(file:)`), which names the object.
+    func uploadMomentMedia(file: URL, hash: Data, contentType: String, fileExtension: String) async throws -> MomentUpload {
         guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
         let path = "\(wallet)/\(MomentsMath.mediaName(hash: hash)).\(fileExtension)"
-        let url = try await client.uploadPublic(bucket: "launch-media", path: path, file: file, contentType: contentType)
-        let onchain = (try? await client.pinToIPFS(bucket: "launch-media", path: path)) ?? url.absoluteString
-        return (onchain, url)
+        do {
+            return MomentUpload(path: path, mirror: try await client.uploadPublic(bucket: "launch-media", path: path, file: file, contentType: contentType, upsert: false))
+        } catch where SupabaseClient.isDuplicateUpload(error) {
+            return MomentUpload(path: path, mirror: client.publicURL(bucket: "launch-media", path: path))
+        }
+    }
+
+    /// Pins uploaded Moment media to IPFS and returns its `ipfs://` URI, the NFT's permanent on-chain pointer that
+    /// outlives DyorHQ's servers. Throws when pinning fails or times out: the caller shows that before anything is
+    /// published, and the https mirror is never written on-chain in its place without the user choosing it (security
+    /// audit 2026-09-26, RI-9).
+    func pinMomentMedia(_ upload: MomentUpload) async throws -> String {
+        try await client.pinToIPFS(bucket: "launch-media", path: upload.path)
     }
 
     /// Uploads a new profile picture (JPEG bytes) to the wallet's own folder in the public `avatars` bucket, then

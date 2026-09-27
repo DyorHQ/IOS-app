@@ -84,12 +84,13 @@ final class MomentMediaLoader {
     }()
 
     /// Where to look for a Moment's image, best first. The Supabase mirror derived from the creator + media hash (only
-    /// meaningful for an `ipfs://` pointer — an https pointer *is* the mirror) is an object its creator can overwrite
-    /// after publishing, so it is never trusted blindly:
+    /// meaningful for an `ipfs://` pointer — an https pointer *is* the mirror) is a DyorHQ-hosted object, so it is
+    /// never shown on trust (security audit 2026-09-26, PR-2):
     /// - a photo Moment's provenance hash is the keccak-256 of the very JPEG in the mirror, so the mirror goes first (it
     ///   is fast and DyorHQ-run) but its bytes count only while they still match that hash;
-    /// - a video Moment's hash is the video's, while the mirror holds its poster frame, which cannot be checked — so the
-    ///   content-addressed IPFS copy goes first and the mirror is only the last fallback.
+    /// - a video Moment's hash is the video's, while the mirror holds its poster frame, which nothing on-chain can check
+    ///   — so the mirror is not a source at all, and the image comes from the content-addressed IPFS pointer only.
+    /// Any other https pointer is the creator's own link, shown as it is.
     static func imageSources(provenance: MomentProvenance, creator: Address?) -> [MomentImageSource] {
         let gateways = MomentsMath.gatewayURLs(provenance.mediaURI).map { MomentImageSource(url: $0) }
         guard let creator,
@@ -97,7 +98,8 @@ final class MomentMediaLoader {
             return gateways
         }
         guard provenance.mediaURI.lowercased().hasPrefix("ipfs://") else {
-            // An https pointer that is this photo's own mirror (published when pinning failed) is checked the same way.
+            // An https pointer that is this photo's own mirror (published, by the creator's choice, when pinning
+            // failed) is checked the same way.
             if provenance.animationURI.isEmpty, gateways.count == 1, gateways[0].url == mirror {
                 return [MomentImageSource(url: mirror, keccak: provenance.mediaHash)]
             }
@@ -106,7 +108,7 @@ final class MomentMediaLoader {
         if provenance.animationURI.isEmpty {
             return [MomentImageSource(url: mirror, keccak: provenance.mediaHash)] + gateways
         }
-        return gateways + [MomentImageSource(url: mirror)]
+        return gateways
     }
 
     func cached(_ key: String) -> UIImage? { images.object(forKey: key as NSString) }
