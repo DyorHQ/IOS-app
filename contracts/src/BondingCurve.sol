@@ -63,6 +63,7 @@ contract BondingCurve {
     error Reentrancy();
     error InsufficientRealReserve();
     error AlreadySwept();
+    error UnsupportedQuoteToken();
 
     modifier nonReentrant() {
         if (_entered != 1) revert Reentrancy();
@@ -179,9 +180,10 @@ contract BondingCurve {
         emit RescueEnabled();
     }
 
+    /// @dev v2 (sec2): no snipe-tax exemption for the new recipient. The initial recipient is exempted at launch; a
+    ///      hand-off (possibly a chain of them inside the 4-second window) must not exempt wallets past MAX_EXEMPTIONS.
     function setCreatorFeeRecipient(address recipient) external onlyFactory {
         creatorFeeRecipient = recipient;
-        snipeTaxExempt[recipient] = true;
         emit CreatorFeeRecipientUpdated(recipient);
     }
 
@@ -277,7 +279,11 @@ contract BondingCurve {
             if (msg.value != quoteIn) revert NativeValueMismatch();
         } else {
             if (msg.value != 0) revert UnexpectedNativeValue();
+            // v2 (sec2, LP-6): the curve books exactly `quoteIn`, so a fee-on-transfer quote asset (which delivers
+            // less) would make it insolvent. Such an asset can never trade here.
+            uint256 before = IERC20(pairToken).balanceOf(address(this));
             TransferHelper.safeTransferFrom(pairToken, msg.sender, address(this), quoteIn);
+            if (IERC20(pairToken).balanceOf(address(this)) - before != quoteIn) revert UnsupportedQuoteToken();
         }
     }
 
