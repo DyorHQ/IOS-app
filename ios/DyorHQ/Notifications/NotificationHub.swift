@@ -90,9 +90,9 @@ enum NotificationStore {
 }
 
 /// The platform-wide notification system: one place every feature posts to. A post is recorded in the in-app center
-/// (badge on Home, list with routes) and, when the user allowed it, delivered as a system notification so it also
-/// arrives while the app is in the background. There is no push server: everything is generated on-device while the
-/// app runs, which is why the center keeps a durable record.
+/// (badge on Home, list with routes) and, when the user allowed it, delivered as a system notification (a banner in
+/// the app, kept in Notification Center). There is no push server: everything is generated on-device while the app
+/// runs — nothing arrives while it is suspended or closed — which is why the center keeps a durable record.
 @Observable
 @MainActor
 final class NotificationHub {

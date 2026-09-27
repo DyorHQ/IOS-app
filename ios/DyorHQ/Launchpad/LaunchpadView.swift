@@ -259,7 +259,7 @@ struct LaunchRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            LaunchArtwork(symbol: launch.symbol, logo: launch.logo)
+            LaunchArtwork(symbol: launch.symbol, logo: launch.logo, pointSize: 40)
                 .frame(width: 40, height: 40)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
@@ -281,17 +281,18 @@ struct LaunchRow: View {
     }
 }
 
-/// A coin's artwork: its uploaded image, or a monogram on a tinted ground when it has none.
+/// A coin's artwork: its uploaded image, or a monogram on a tinted ground when it has none. The logo is whatever string
+/// the coin's launcher wrote on-chain, so only an https link is loaded, through the capped loader (RemoteImage).
 struct LaunchArtwork: View {
     let symbol: String
     let logo: String
+    /// How wide the artwork is drawn, in points: the thumbnail is decoded for this size.
+    var pointSize: CGFloat = 240
 
     var body: some View {
-        if let url = URL(string: logo), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image { image.resizable().scaledToFill() }
-                else if phase.error != nil { placeholder }
-                else { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } }
+        if let url = URL(string: logo), url.scheme?.lowercased() == "https" {
+            RemoteImage(url: url, pointSize: pointSize) { loading in
+                if loading { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } } else { placeholder }
             }
         } else {
             placeholder
@@ -929,7 +930,7 @@ struct CreateLaunchView: View {
     private var imageSection: some View {
         Section {
             HStack(spacing: 16) {
-                LaunchArtwork(symbol: symbol.isEmpty ? "?" : symbol, logo: logo)
+                LaunchArtwork(symbol: symbol.isEmpty ? "?" : symbol, logo: logo, pointSize: 72)
                     .frame(width: 72, height: 72)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {

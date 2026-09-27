@@ -108,6 +108,8 @@ struct PortfolioView: View {
             }
             if model.loading, model.hasLoaded {
                 HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Refreshing…").font(.caption2).foregroundStyle(.tertiary) }
+            } else if let error = model.error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(Color.attention)
             } else if let updated = model.updatedAt {
                 Text("Updated \(updated, style: .relative) ago").font(.caption2).foregroundStyle(.tertiary)
             }

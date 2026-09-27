@@ -114,7 +114,7 @@ struct RootView: View {
                   let address = session.address, env.social.isBound(to: address), let wallet = session.backgroundWallet else { return }
             await env.social.signIn(address: address, wallet: wallet)
         }
-        .task { env.alertWatcher.start(env: env, settings: settings) }
+        .task { env.alertWatcher.start(env: env, settings: settings, owner: { session.address }) }
         .task { await env.refreshVenueTokens() }
     }
 }

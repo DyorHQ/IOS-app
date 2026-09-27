@@ -266,27 +266,57 @@ public actor SupabaseClient {
 
     // MARK: Storage
 
-    /// Uploads bytes to a public Storage bucket (upserting) and returns the public URL. Requires a session; RLS on
+    /// Uploads bytes to a public Storage bucket and returns the public URL. Requires a session; RLS on
     /// `storage.objects` decides whether the wallet may write to that path. Only the resulting public URL is stored
-    /// in a row — never the bytes.
+    /// in a row — never the bytes. `upsert: false` for a write-once bucket (launch-media, whose URLs go on-chain):
+    /// an object that already exists is then refused (`isDuplicateUpload`) instead of overwritten.
     @discardableResult
-    public func uploadPublic(bucket: String, path: String, data: Data, contentType: String) async throws -> URL {
+    public func uploadPublic(bucket: String, path: String, data: Data, contentType: String, upsert: Bool = true) async throws -> URL {
+        let request = try storageUpload(bucket: bucket, path: path, contentType: contentType, upsert: upsert)
+        let (respData, response) = try await session.upload(for: request, from: data)
+        return try uploaded(bucket: bucket, path: path, respData, response)
+    }
+
+    /// `uploadPublic`, streaming the body from a file (a picked video) so it is never read into memory whole.
+    @discardableResult
+    public func uploadPublic(bucket: String, path: String, file: URL, contentType: String, upsert: Bool = true) async throws -> URL {
+        let request = try storageUpload(bucket: bucket, path: path, contentType: contentType, upsert: upsert)
+        let (respData, response) = try await session.upload(for: request, fromFile: file)
+        return try uploaded(bucket: bucket, path: path, respData, response)
+    }
+
+    /// The public URL of an object in a public bucket.
+    public nonisolated func publicURL(bucket: String, path: String) -> URL {
+        baseURL.appending(path: "storage/v1/object/public/\(bucket)/\(path)")
+    }
+
+    /// Whether Storage refused an upload sent with `upsert: false` because the object already exists: HTTP 409, or
+    /// the older API's 400 whose body carries statusCode "409" / error "Duplicate".
+    public static func isDuplicateUpload(_ error: Error) -> Bool {
+        guard case .http(let code, let body)? = error as? SupabaseError else { return false }
+        if code == 409 { return true }
+        guard code == 400, let object = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any] else { return false }
+        return (object["statusCode"].map { "\($0)" } == "409") || (object["error"] as? String) == "Duplicate"
+    }
+
+    private func storageUpload(bucket: String, path: String, contentType: String, upsert: Bool) throws -> URLRequest {
         guard let token = currentSession?.accessToken else { throw SupabaseError.notSignedIn }
         var request = URLRequest(url: baseURL.appending(path: "storage/v1/object/\(bucket)/\(path)"))
         request.httpMethod = "POST"
-        request.httpBody = data
         request.setValue(anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        request.setValue("true", forHTTPHeaderField: "x-upsert")
+        request.setValue(upsert ? "true" : "false", forHTTPHeaderField: "x-upsert")
         request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
+        return request
+    }
 
-        let (respData, response) = try await session.data(for: request)
+    private func uploaded(bucket: String, path: String, _ data: Data, _ response: URLResponse) throws -> URL {
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw SupabaseError.http(http.statusCode, String(data: respData, encoding: .utf8) ?? "")
+            throw SupabaseError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
-        return baseURL.appending(path: "storage/v1/object/public/\(bucket)/\(path)")
+        return publicURL(bucket: bucket, path: path)
     }
 
     /// Deletes every object under `prefix` (a folder) in a Storage bucket: lists first, then removes what is there,
@@ -326,13 +356,25 @@ public actor SupabaseClient {
 
     // MARK: Edge Functions
 
+    /// How long the app waits for `pin-media`. The function answers within its own 20 s budget (BUDGET_MS in
+    /// supabase/functions/pin-media/index.ts) and sends nothing before it answers, so this bounds the whole call and
+    /// leaves room for a cold start and the network (security audit 2026-09-26, RW-9).
+    public static let pinMediaTimeout: TimeInterval = 25
+
     /// Pins an already-uploaded public object to IPFS through the `pin-media` Edge Function (Pinata) and returns its
     /// `ipfs://<cid>` URI, for writing on-chain as a Moment's permanent media pointer. Requires a session; throws if
-    /// the function is unavailable or its Pinata secret is not configured (the caller falls back to the https URL).
+    /// the function is unavailable, busy (`rateLimited`) or doesn't answer in `pinMediaTimeout` — the caller tells the
+    /// user and never writes the https URL on-chain in its place on its own (RI-9).
     public func pinToIPFS(bucket: String, path: String) async throws -> String {
         guard currentSession != nil else { throw SupabaseError.notSignedIn }
         let body = try JSONSerialization.data(withJSONObject: ["bucket": bucket, "path": path])
-        let data = try await send(method: "POST", path: "functions/v1/pin-media", query: [], body: body, prefer: nil, authed: true)
+        let data: Data
+        do {
+            data = try await send(method: "POST", path: "functions/v1/pin-media", query: [], body: body, prefer: nil, authed: true,
+                                  timeout: Self.pinMediaTimeout)
+        } catch SupabaseError.http(429, let text) {
+            throw SupabaseError.rateLimited(retryAfter: Self.retryAfter(text))
+        }
         struct Response: Decodable { let uri: String }
         guard let response = try? JSONDecoder().decode(Response.self, from: data), response.uri.hasPrefix("ipfs://") else {
             throw SupabaseError.decoding("the pin-media response")
@@ -444,7 +486,7 @@ public actor SupabaseClient {
     private enum AuthorizationHeader { case standard, bearer(String), none }
 
     private func send(method: String, path: String, query: [URLQueryItem], body: Data?, prefer: String?, authed: Bool,
-                      authorization: AuthorizationHeader = .standard) async throws -> Data {
+                      authorization: AuthorizationHeader = .standard, timeout: TimeInterval = 25) async throws -> Data {
         var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { components.queryItems = query }
         var request = URLRequest(url: components.url!)
@@ -464,7 +506,7 @@ public actor SupabaseClient {
         request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         if let prefer { request.setValue(prefer, forHTTPHeaderField: "Prefer") }
-        request.timeoutInterval = 25
+        request.timeoutInterval = timeout
 
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {

@@ -69,13 +69,14 @@ public actor PriceService {
 
     public let rpc: RPCClient
     private let multicall: Multicall
-    /// Tokens whose pool has been looked up; `misses` are the ones without any pool so they are not searched again.
-    private var discovered: [Address: Source] = [:]
-    private var misses: Set<Address> = []
+    /// Each token's pool as last looked up, and the tokens without one — both for a while only (`PoolLookupCache`).
+    private var pools = PoolLookupCache<Source>()
+    private let now: @Sendable () -> Date
 
-    public init(rpc: RPCClient) {
+    public init(rpc: RPCClient, now: @escaping @Sendable () -> Date = Date.init) {
         self.rpc = rpc
         multicall = Multicall(rpc: rpc)
+        self.now = now
     }
 
     // MARK: Public
@@ -97,7 +98,7 @@ public actor PriceService {
             }
             guard let usd = now[token.address] else { continue }
             let change = before[token.address].flatMap { prev in prev != 0 ? (usd - prev) / prev * 100 : nil }
-            map[token.address] = PriceInfo(usd: usd, change24h: change, source: discovered[token.address]?.label ?? "Uniswap v3")
+            map[token.address] = PriceInfo(usd: usd, change24h: change, source: pools.source(token.address)?.label ?? "Uniswap v3")
         }
         return map
     }
@@ -120,12 +121,12 @@ public actor PriceService {
         if Self.isUSD(token) { return blocks.map { PricePoint(block: $0, time: time($0), usd: 1) } }
 
         try await discover([token])
-        guard let source = discovered[token.address] else { return [] }
+        guard let source = pools.source(token.address) else { return [] }
         // WMON-quoted pools need MON's own price at every sample to become USD.
         var monSource: Source?
         if source.isWMONQuoted {
             try await discover([Token.mon])
-            guard let mon = discovered[Monad.native] else { return [] }
+            guard let mon = pools.source(Monad.native) else { return [] }
             monSource = mon
         }
         let call = try source.priceCall
@@ -158,11 +159,12 @@ public actor PriceService {
 
     // MARK: Discovery
 
-    /// Finds the deepest pool for each token not yet looked up: for MON/WMON the v4 native/USDC pool (falling back
+    /// Finds the deepest pool for each token not looked up lately: for MON/WMON the v4 native/USDC pool (falling back
     /// to v3), for everything else the v3 pool against USDC, or against WMON when no USDC pool has liquidity.
     private func discover(_ tokens: [Token]) async throws {
+        let time = now()
         var todo: [Token] = []
-        for token in tokens where discovered[token.address] == nil && !misses.contains(token.address) && !Self.isUSD(token) && !todo.contains(where: { $0.address == token.address }) {
+        for token in tokens where self.pools.needsLookup(token.address, now: time) && !Self.isUSD(token) && !todo.contains(where: { $0.address == token.address }) {
             todo.append(token)
         }
         guard !todo.isEmpty else { return }
@@ -195,10 +197,13 @@ public actor PriceService {
         async let token0Read = multicall.read(token0Calls)
         let (liquidities, token0s) = try await (liquidityRead, token0Read)
 
+        // Tokens with a read that failed: "no pool" for them may be an outage, so it isn't remembered.
+        var incomplete: Set<Address> = []
         var bestV3: [Address: (weight: BigUInt, source: Source)] = [:]
         for (k, entry) in existing.enumerated() {
-            guard case .success(let liquidity) = liquidities[k], liquidity[0].uint > 0, case .success(let token0) = token0s[k] else { continue }
             let pair = pairs[entry.index]
+            guard case .success(let liquidity) = liquidities[k], case .success(let token0) = token0s[k] else { incomplete.insert(pair.token); continue }
+            guard liquidity[0].uint > 0 else { continue }
             // Prefer dollar-quoted pools: USDC first, then AUSD, then a WMON pool only when no stable pool has depth.
             let weight: BigUInt = pair.quote == Monad.usdc ? liquidity[0].uint * 1_000_000
                 : (pair.quote == Monad.ausd ? liquidity[0].uint * 1_000 : liquidity[0].uint)
@@ -207,7 +212,7 @@ public actor PriceService {
         }
         var v4Best: (liquidity: BigUInt, id: Data)?
         for (i, result) in v4Liquidity.enumerated() {
-            guard case .success(let values) = result else { continue }
+            guard case .success(let values) = result else { incomplete.insert(Monad.wmon); continue }
             let liquidity = values[0].uint
             if liquidity > 0, v4Best.map({ liquidity > $0.liquidity }) ?? true { v4Best = (liquidity, v4Ids[i]) }
         }
@@ -227,8 +232,8 @@ public actor PriceService {
                 async let token0Read = multicall.read(try v2Pairs.map { try SwapCalldata.v3Token0(pool: $0.pool) })
                 let (reserves, token0s) = try await (reserveRead, token0Read)
                 for (k, pair) in v2Pairs.enumerated() {
-                    guard case .success(let r) = reserves[k], r.count >= 2, r[0].uint > 0, r[1].uint > 0,
-                          case .success(let t0) = token0s[k] else { continue }
+                    guard case .success(let r) = reserves[k], case .success(let t0) = token0s[k] else { incomplete.insert(pair.token); continue }
+                    guard r.count >= 2, r[0].uint > 0, r[1].uint > 0 else { continue }
                     v2Best[pair.token] = .v2(pool: pair.pool, token: pair.token, quote: Monad.wmon, token0: t0[0].address)
                 }
             }
@@ -236,19 +241,21 @@ public actor PriceService {
 
         for token in todo {
             let source: Source?
+            let base = token.isNative ? Monad.wmon : token.address
             if token.isNative || token.address == Monad.wmon {
                 source = v4Best.map { .v4(poolId: $0.id) } ?? bestV3[Monad.wmon]?.source
             } else {
                 source = bestV3[token.address]?.source ?? v2Best[token.address]
             }
-            if let source { discovered[token.address] = source } else { misses.insert(token.address) }
+            if let source { self.pools.found(token.address, source, now: time) }
+            else if !incomplete.contains(base) { self.pools.noPool(token.address, now: time) }
         }
     }
 
     private func resolve(_ tokens: [Token]) -> [(token: Token, source: Source)] {
         var seen: Set<Address> = []
         return tokens.compactMap { token in
-            guard seen.insert(token.address).inserted, let source = discovered[token.address] else { return nil }
+            guard seen.insert(token.address).inserted, let source = pools.source(token.address) else { return nil }
             return (token, source)
         }
     }
@@ -340,4 +347,37 @@ public actor PriceService {
     }
 
     static func isUSD(_ token: Token) -> Bool { token.address == Monad.usdc || token.address == Monad.ausd }
+}
+
+/// Which tokens' pools are known, and for how long (security audit 2026-09-26, RS-12). A chosen pool is looked up again
+/// after `hitTTL` — liquidity moves, and a deeper pool can appear — and a token with no pool after `missTTL`, rather than
+/// either lasting as long as the app runs. The pool last found keeps pricing its token until a new lookup says
+/// otherwise, and a lookup whose reads failed records nothing, so an outage is never remembered as "no pool".
+struct PoolLookupCache<Source: Sendable>: Sendable {
+    var hitTTL: TimeInterval = 30 * 60
+    var missTTL: TimeInterval = 5 * 60
+    private var hits: [Address: (source: Source, at: Date)] = [:]
+    private var misses: [Address: Date] = [:]
+
+    /// Whether `token` is due a lookup: never looked up, its pool is older than `hitTTL`, or its miss older than
+    /// `missTTL`.
+    func needsLookup(_ token: Address, now: Date) -> Bool {
+        if let hit = hits[token] { return now.timeIntervalSince(hit.at) >= hitTTL }
+        if let missed = misses[token] { return now.timeIntervalSince(missed) >= missTTL }
+        return true
+    }
+
+    /// The pool last found for `token`, however old.
+    func source(_ token: Address) -> Source? { hits[token]?.source }
+
+    mutating func found(_ token: Address, _ source: Source, now: Date) {
+        hits[token] = (source, now)
+        misses[token] = nil
+    }
+
+    /// A complete lookup found no pool with liquidity (a pool that was drained included).
+    mutating func noPool(_ token: Address, now: Date) {
+        hits[token] = nil
+        misses[token] = now
+    }
 }

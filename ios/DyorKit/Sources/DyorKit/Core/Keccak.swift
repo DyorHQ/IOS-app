@@ -27,12 +27,42 @@ public enum Keccak {
         var state = [UInt64](repeating: 0, count: 25)
         // Re-base into a fresh 0-indexed buffer: a `Data` slice (e.g. from `suffix`) keeps its parent's indices,
         // and the integer subscripting below assumes 0-based, so a slice would be padded and read incorrectly.
-        var padded = Data(message)
+        absorb(padded(Data(message)), into: &state)
+        return squeeze(state)
+    }
+
+    /// The keccak-256 of a file's bytes, read a megabyte at a time so a large file (a picked video) is never held in
+    /// memory whole. Equal to `hash256(Data(contentsOf: file))`.
+    public static func hash256(file: URL) throws -> Data { try hash256(file: file, chunkSize: 1 << 20) }
+
+    static func hash256(file: URL, chunkSize: Int) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        var state = [UInt64](repeating: 0, count: 25)
+        var pending = Data()
+        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
+            pending.append(chunk)
+            let whole = pending.count - pending.count % rate
+            guard whole > 0 else { continue }
+            absorb(Data(pending.prefix(whole)), into: &state)
+            pending = Data(pending.dropFirst(whole))
+        }
+        absorb(padded(pending), into: &state)
+        return squeeze(state)
+    }
+
+    /// The message's last bytes with Ethereum's keccak padding (0x01 … 0x80) out to a whole number of blocks.
+    private static func padded(_ tail: Data) -> Data {
+        var padded = Data(tail)
         padded.append(0x01)
         while padded.count % rate != 0 { padded.append(0) }
         padded[padded.count - 1] |= 0x80
+        return padded
+    }
 
-        padded.withUnsafeBytes { raw in
+    /// XORs whole `rate`-byte blocks (a 0-indexed buffer) into the state, permuting after each.
+    private static func absorb(_ blocks: Data, into state: inout [UInt64]) {
+        blocks.withUnsafeBytes { raw in
             let bytes = raw.bindMemory(to: UInt8.self)
             var offset = 0
             while offset < bytes.count {
@@ -45,7 +75,9 @@ public enum Keccak {
                 offset += rate
             }
         }
+    }
 
+    private static func squeeze(_ state: [UInt64]) -> Data {
         var out = Data(capacity: 32)
         for lane in 0..<4 {
             var word = state[lane]

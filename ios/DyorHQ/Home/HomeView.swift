@@ -80,7 +80,8 @@ struct HomeView: View {
             .sheet(isPresented: $showSend) { SendSheet() }
             .sheet(isPresented: $showTransfer) { TransferSheet() }
             .sheet(isPresented: $showSearch) {
-                TokenPickerSheet(selected: .mon, balances: Dictionary(uniqueKeysWithValues: model.rows.map { ($0.token.address, $0.balance) }), universe: KnownTokenStore.universe(owner: session.address), tradableOnly: false) { token in
+                TokenPickerSheet(selected: .mon, balances: Dictionary(uniqueKeysWithValues: model.rows.map { ($0.token.address, $0.balance) }), universe: KnownTokenStore.universe(owner: session.address), tradableOnly: false,
+                                 unverified: KnownTokenStore.unverified(owner: session.address)) { token in
                     // Open the token's page; a token outside the priced list gets a bare row (price loads on the page).
                     searchTarget = model.rows.first { $0.token.address == token.address } ?? MarketRow(token: token, usd: nil, change24h: nil, balance: 0)
                 }
@@ -271,7 +272,7 @@ struct HomeView: View {
                 else {
                     VStack(spacing: 0) {
                         ForEach(Array(model.holdings.enumerated()), id: \.element.id) { index, row in
-                            NavigationLink(value: row) { HoldingRow(row: row) }.buttonStyle(.plain)
+                            NavigationLink(value: row) { HoldingRow(row: row, unverified: model.unverified.contains(row.id)) }.buttonStyle(.plain)
                             if index < model.holdings.count - 1 { Divider().padding(.leading, 44) }
                         }
                     }
@@ -435,12 +436,17 @@ private struct TokenListRow: View {
 /// A wallet holding row: logo, symbol + amount, value + 24h.
 private struct HoldingRow: View {
     let row: MarketRow
+    /// Found in the wallet's history, not chosen in the app (`KnownTokenStore.unverified`).
+    var unverified = false
 
     var body: some View {
         HStack(spacing: 12) {
             TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: 34)
             VStack(alignment: .leading, spacing: 1) {
-                Text(row.token.symbol).font(.subheadline.weight(.semibold))
+                HStack(spacing: 6) {
+                    Text(row.token.symbol).font(.subheadline.weight(.semibold))
+                    if unverified { UnverifiedBadge() }
+                }
                 AmountText(amount: row.balance, token: row.token, compact: true, font: .caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -464,7 +470,7 @@ private struct LaunchHoldingRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            LaunchArtwork(symbol: holding.launch.symbol, logo: holding.launch.logo)
+            LaunchArtwork(symbol: holding.launch.symbol, logo: holding.launch.logo, pointSize: 34)
                 .frame(width: 34, height: 34)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
@@ -553,6 +559,11 @@ final class HomeModel {
     private(set) var loading = false
     private(set) var error: String?
     private(set) var updatedAt: Date?
+    /// Tokens the wallet was sent rather than chose (`KnownTokenStore.unverified`): marked in holdings, and never
+    /// ranked in Top Tokens.
+    private(set) var unverified: Set<Address> = []
+    /// Whose data the model holds.
+    private var loadedFor: Address?
 
     var holdings: [MarketRow] { rows.filter { $0.balance > 0 }.sorted { ($0.value ?? 0) > ($1.value ?? 0) } }
 
@@ -587,7 +598,7 @@ final class HomeModel {
     /// Top-tokens list per tab. Popular keeps the curated order; the movers sort by 24h change; hot ranks by the
     /// strength of the move in either direction (a stand-in for volume, which the price service does not surface).
     func topTokens(_ tab: HomeTokenTab) -> [MarketRow] {
-        let priced = rows.filter { $0.usd != nil }
+        let priced = rows.filter { $0.usd != nil && !unverified.contains($0.id) }
         switch tab {
         case .popular: return priced
         case .hot: return priced.sorted { abs($0.change24h ?? 0) > abs($1.change24h ?? 0) }
@@ -606,8 +617,9 @@ final class HomeModel {
     }
 
     /// Finds ERC-20s the wallet holds on-chain that aren't in its universe yet (received outside the app, airdropped,
-    /// bridged), persists them to the shared token store, and reloads — so every held token appears in holdings and
-    /// the swap picker. Runs once per wallet; the persisted tokens then price and balance like any curated asset.
+    /// bridged), persists them to the shared token store as Unverified, and reloads — so every held token appears in
+    /// holdings, marked, while the swap picker lists it only when searched for (IOST-12). Runs once per wallet; the
+    /// persisted tokens then price and balance like any curated asset.
     func discoverHeldTokens(env: AppEnvironment, address: Address?) async {
         guard let address, discoveredFor != address else { return }
         discoveredFor = address
@@ -620,7 +632,7 @@ final class HomeModel {
             let enriched = token.logoURL == nil && logos[token.address] != nil
                 ? Token(address: token.address, symbol: token.symbol, name: token.name, decimals: token.decimals, logoURL: logos[token.address], isLaunchpad: token.isLaunchpad)
                 : token
-            KnownTokenStore.add(enriched, owner: address)
+            KnownTokenStore.addDiscovered(enriched, owner: address)
         }
         await load(env: env, address: address)
     }
@@ -628,51 +640,73 @@ final class HomeModel {
     func load(env: AppEnvironment, address: Address?) async {
         loading = true
         defer { loading = false }
+        // Another account: nothing of the previous one's may stay on screen, even when a read below fails.
+        if address != loadedFor {
+            rows = []; launchHoldings = []; positions = []; perpEquity = nil; momentRows = []; updatedAt = nil
+            loadedFor = address
+        }
         // The curated list plus anything the wallet has acquired (swapped into, launched), so held tokens like an
         // RWA or a launched coin still show up with a balance and a price.
         let tokens = KnownTokenStore.universe(owner: address).filter { $0.symbol != "WMON" }
+        unverified = KnownTokenStore.unverified(owner: address)
         async let prices = env.prices.prices(for: tokens)
         async let balances = walletBalances(env: env, address: address, tokens: tokens)
         async let launches = env.launchpad.allLaunches(limit: 30)
         async let perps = loadPerps(env: env, address: address)
         async let moments = loadMoments(env: env, address: address)
-        var priceMap: [Address: PriceInfo] = [:]
-        do {
-            priceMap = try await prices
-            let balanceMap = await balances
+        var priceMap: [Address: PriceInfo]?
+        var priceError: Error?
+        do { priceMap = try await prices } catch { priceError = error }
+        let balanceMap = await balances
+        let launchList = try? await launches
+        let perpState = await perps
+        let momentState = await moments
+        let holdings = await loadLaunchHoldings(env: env, address: address, launches: launchList ?? self.launches, priceMap: priceMap ?? [:])
+        // A read that failed keeps what the last good one showed, and says so; a load cancelled part-way (the screen
+        // went away, the account changed) publishes nothing (security audit 2026-09-26, RS-10).
+        guard !Task.isCancelled, address == loadedFor else { return }
+        if let priceMap {
+            let previous = Dictionary(rows.map { ($0.id, $0.balance) }, uniquingKeysWith: { first, _ in first })
             rows = tokens.map { token in
-                MarketRow(token: token, usd: priceMap[token.address]?.usd, change24h: priceMap[token.address]?.change24h, balance: balanceMap[token.address] ?? 0)
+                MarketRow(token: token, usd: priceMap[token.address]?.usd, change24h: priceMap[token.address]?.change24h,
+                          balance: balanceMap?[token.address] ?? previous[token.address] ?? 0)
             }
+        }
+        if let priceError {
+            error = describe(priceError)
+        } else if balanceMap == nil {
+            error = "Your balances couldn't be read just now — showing the last ones read."
+        } else {
             error = nil
             updatedAt = .now
-        } catch {
-            self.error = describe(error)
         }
-        let launchList = (try? await launches) ?? []
-        self.launches = launchList
-        launchHoldings = await loadLaunchHoldings(env: env, address: address, launches: launchList, priceMap: priceMap)
-        let perpState = await perps
-        positions = perpState.positions
-        perpEquity = perpState.equity
-        momentRows = await moments
+        if let launchList { self.launches = launchList }
+        if let holdings, priceMap != nil { launchHoldings = holdings } // valued at the pair's price: not without one
+        if let perpState {
+            positions = perpState.positions
+            perpEquity = perpState.equity
+        }
+        if let momentState { momentRows = momentState }
     }
 
-    private func loadMoments(env: AppEnvironment, address: Address?) async -> [MomentPortfolioRow] {
+    /// The wallet's Moments stakes, or nil when they couldn't be read.
+    private func loadMoments(env: AppEnvironment, address: Address?) async -> [MomentPortfolioRow]? {
         guard let address, env.config.moments.isDeployed else { return [] }
-        return (try? await env.moments.portfolio(account: address, limit: 100))?.rows ?? []
+        return (try? await env.moments.portfolio(account: address, limit: 100))?.rows
     }
 
-    private func walletBalances(env: AppEnvironment, address: Address?, tokens: [Token]) async -> [Address: BigUInt] {
+    /// The wallet's balances of `tokens`, or nil when they couldn't be read (never read as zero).
+    private func walletBalances(env: AppEnvironment, address: Address?, tokens: [Token]) async -> [Address: BigUInt]? {
         guard let address else { return [:] }
-        return (try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
+        return try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall)
     }
 
     /// The wallet's launch-coin balances (and coins it created), each valued at the curve price × the pair asset's
-    /// USD price, in one balanceOf multicall over the recent launches.
-    private func loadLaunchHoldings(env: AppEnvironment, address: Address?, launches: [Launch], priceMap: [Address: PriceInfo]) async -> [LaunchHolding] {
+    /// USD price, in one balanceOf multicall over the recent launches; nil when the balances couldn't be read.
+    private func loadLaunchHoldings(env: AppEnvironment, address: Address?, launches: [Launch], priceMap: [Address: PriceInfo]) async -> [LaunchHolding]? {
         guard let address, !launches.isEmpty else { return [] }
         let tokens = launches.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
-        let balances = (try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
+        guard let balances = try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall) else { return nil }
         return launches.compactMap { launch -> LaunchHolding? in
             let balance = balances[launch.token] ?? 0
             let created = launch.deployer == address
@@ -684,10 +718,13 @@ final class HomeModel {
         .sorted { $0.valueUSD > $1.valueUSD }
     }
 
-    private func loadPerps(env: AppEnvironment, address: Address?) async -> (positions: [PerpPosition], equity: Double?) {
-        guard let address, let account = try? await env.perpl.account(address) else { return ([], nil) }
-        let markets = (try? await env.perpl.markets()) ?? []
-        let positions = (try? await env.perpl.positions(account, markets: markets)) ?? []
+    /// The Perpl account's positions and equity: none without an account, nil when a read failed.
+    private func loadPerps(env: AppEnvironment, address: Address?) async -> (positions: [PerpPosition], equity: Double?)? {
+        guard let address else { return ([], nil) }
+        let found: PerpAccount?
+        do { found = try await env.perpl.account(address) } catch { return nil }
+        guard let account = found else { return ([], nil) }
+        guard let markets = try? await env.perpl.markets(), let positions = try? await env.perpl.positions(account, markets: markets) else { return nil }
         let equity = Amount.units(account.balance, decimals: Perpl.collateralDecimals) + positions.reduce(0) { $0 + $1.unrealized }
         return (positions, equity)
     }
@@ -698,6 +735,7 @@ struct TokenDetailView: View {
     let row: MarketRow
     @Environment(AppEnvironment.self) private var env
     @Environment(Router.self) private var router
+    @Environment(Session.self) private var session
     @State private var history: [PricePoint] = []
     @State private var loadingHistory = true
 
@@ -714,6 +752,13 @@ struct TokenDetailView: View {
                         .frame(height: 180)
                 }
                 .padding(.vertical, 6)
+            }
+            if KnownTokenStore.isUnverified(row.token.address, owner: session.address) {
+                Section {
+                    Label("Unverified token", systemImage: "exclamationmark.shield").font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
+                    Text("This token arrived in your wallet without you choosing it in DyorHQ. Anyone can send any token to any wallet, with any name — including a real token's. Check the contract below before you trade it, and never follow a link or site its name points to.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             if row.balance > 0 {
                 Section("Your Balance") {

@@ -256,7 +256,7 @@ private struct PositionRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            LaunchArtwork(symbol: position.launch.symbol, logo: position.launch.logo)
+            LaunchArtwork(symbol: position.launch.symbol, logo: position.launch.logo, pointSize: 36)
                 .frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(position.launch.symbol).font(.subheadline.weight(.semibold))
@@ -287,7 +287,7 @@ private struct CreatedRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            LaunchArtwork(symbol: item.launch.symbol, logo: item.launch.logo)
+            LaunchArtwork(symbol: item.launch.symbol, logo: item.launch.logo, pointSize: 36)
                 .frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {

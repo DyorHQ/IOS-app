@@ -152,10 +152,11 @@ struct SecurityView: View {
     }
 }
 
-/// Notification preferences. Turning them on requests the system permission; local notifications then fire on swap
-/// and perp-order completion and when a price alert triggers.
+/// Notification preferences. Turning them on requests the system permission. Every notification is made on the
+/// device while DyorHQ runs — there is no push server — and the copy says so (security audit 2026-09-26, GL-4).
 struct NotificationsView: View {
     @Environment(AppSettings.self) private var settings
+    @Environment(Session.self) private var session
     @State private var denied = false
 
     var body: some View {
@@ -165,7 +166,7 @@ struct NotificationsView: View {
                 Toggle("Enable Notifications", isOn: $settings.notificationsEnabled)
             } footer: {
                 if denied { Text("Notifications are turned off for DyorHQ in iOS Settings. Enable them there to receive alerts.").foregroundStyle(Color.attention) }
-                else { Text("Get notified when a swap or perp order completes, or when a price alert triggers.") }
+                else { Text("DyorHQ notices fills and price alerts only while it's open. iOS pauses the app in the background, so they can't reach your lock screen while DyorHQ is closed.") }
             }
             Section {
                 Toggle("Swaps & Fills", isOn: $settings.notifyFills)
@@ -174,13 +175,13 @@ struct NotificationsView: View {
                     HStack {
                         Label("Manage Price Alerts", systemImage: "bell.badge")
                         Spacer()
-                        Text("\(PriceAlertStore.all().count)").foregroundStyle(.secondary)
+                        Text("\(PriceAlertStore.all(owner: session.address).count)").foregroundStyle(.secondary)
                     }
                 }
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("Swaps, fills and price alerts. Everything is also kept in the in-app center.")
+                Text("Order fills are noticed while the Perps screen is open, and price alerts while DyorHQ is open. Don't rely on either to protect a position: set a stop-loss on it. Everything is also kept in the in-app center.")
             }
             .disabled(!settings.notificationsEnabled)
         }
@@ -235,6 +236,10 @@ struct PerplTradingView: View {
     @Environment(AppSettings.self) private var settings
     @State private var busy = false
     @State private var error: String?
+    @State private var confirmRemoveKey = false
+
+    /// The TP/SL live on Perpl right now, which removing the key leaves armed and out of this device's sight.
+    private var liveTriggerCount: Int { trading.ordersAreLive ? trading.openOrders.filter(\.isTrigger).count : 0 }
 
     var body: some View {
         List {
@@ -298,9 +303,19 @@ struct PerplTradingView: View {
 
             if trading.isEnrolled {
                 Section {
-                    Button("Remove API Key", role: .destructive) { if let address = session.address { trading.forget(address: address) } }.disabled(busy)
+                    Button("Remove API Key", role: .destructive) { confirmRemoveKey = true }.disabled(busy)
                 } footer: {
-                    Text("Deletes the key from this device.")
+                    Text("Deletes the key from this device. Take-profit and stop-loss orders already on Perpl stay live.")
+                }
+                .confirmationDialog("Remove the API key?", isPresented: $confirmRemoveKey, titleVisibility: .visible) {
+                    Button("Remove API Key", role: .destructive) { if let address = session.address { trading.forget(address: address) } }
+                } message: {
+                    // Removing the key cancels nothing (security audit GT-3): say what stays armed where the app can't see it.
+                    if liveTriggerCount > 0 {
+                        Text("You have \(liveTriggerCount) take-profit/stop-loss order\(liveTriggerCount == 1 ? "" : "s") live on Perpl. Removing the key doesn't cancel \(liveTriggerCount == 1 ? "it" : "them"): \(liveTriggerCount == 1 ? "it stays" : "they stay") armed, and this device can't show or cancel \(liveTriggerCount == 1 ? "it" : "them") until you connect again.")
+                    } else {
+                        Text("Any take-profit or stop-loss you have on Perpl stays live. This device can't show or cancel them until you connect again.")
+                    }
                 }
             }
         }

@@ -10,7 +10,8 @@ import UIKit
 final class AppSettings {
     var appearance: AppearanceMode { didSet { store(appearance.rawValue, "settings.appearance"); appearance.apply() } }
     var notificationsEnabled: Bool { didSet { store(notificationsEnabled, "settings.notifications") } }
-    /// Notify on fills and liquidations (a preference; delivery needs the system permission).
+    /// Notify on completed swaps and on order fills the app sees while it runs (a preference; delivery needs the system
+    /// permission).
     var notifyFills: Bool { didSet { store(notifyFills, "settings.notifyFills") } }
     var notifyPriceAlerts: Bool { didSet { store(notifyPriceAlerts, "settings.notifyPrice") } }
     /// Require Face ID / Touch ID before signing a transaction — a device-side second factor for a self-custodial

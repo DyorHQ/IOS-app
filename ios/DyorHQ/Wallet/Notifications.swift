@@ -4,8 +4,9 @@ import Foundation
 import UserNotifications
 
 /// On-device notifications for completed actions and triggered price alerts, via the system UserNotifications
-/// framework. There is no push server (that would need APNs); these are local notifications, so they arrive whether
-/// the app is foregrounded, backgrounded, or the action completed while the user was elsewhere in the app.
+/// framework. There is no push server (that would need APNs): these are local notifications, posted by the app while
+/// it runs — in the foreground, or in the few seconds before iOS suspends it. While the app is suspended or closed
+/// nothing is noticed, so nothing is posted.
 @MainActor
 enum Notifications {
     /// Installs the delegate that lets our notifications appear while the app is in the foreground — call once at

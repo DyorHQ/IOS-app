@@ -112,6 +112,10 @@ struct MomentsView: View {
                 if policy.publishingPaused {
                     Label("Publishing is paused by governance; collecting continues.", systemImage: "pause.circle").font(.caption).foregroundStyle(Color.attention)
                 }
+                if policy.pending != nil {
+                    // MO-4: Publish a Moment shows what the queued policy would change.
+                    Label("New terms for new Moments are queued; Publish a Moment shows what changes.", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention)
+                }
             }
         }
     }
@@ -124,6 +128,8 @@ struct MomentsView: View {
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if filter == .all, session.canSign {
                 Button("Publish a Moment") { Haptics.tap(); showCreate = true }.buttonStyle(.borderedProminent).foregroundStyle(.white).padding(.top, 4)
+            } else if filter != .all {
+                Button("Show All Moments") { Haptics.selection(); filter = .all }.padding(.top, 4)
             }
         }
         .frame(maxWidth: .infinity)

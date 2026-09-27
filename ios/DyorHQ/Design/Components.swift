@@ -12,18 +12,13 @@ struct TokenLogo: View {
 
     var body: some View {
         Group {
-            // Curated tokens ship a rasterized logo (the token list only publishes SVGs, which AsyncImage cannot
-            // draw); anything else tries the remote image and falls back to a monogram.
+            // Curated tokens ship a rasterized logo (the token list only publishes SVGs, which the app cannot
+            // draw); anything else tries the remote image (capped and downsampled, RemoteImage) and falls back to a
+            // monogram.
             if let bundled = UIImage(named: "logo-\(symbol)") {
                 Image(uiImage: bundled).resizable().scaledToFit()
             } else {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFit()
-                    } else {
-                        monogram
-                    }
-                }
+                RemoteImage(url: url, pointSize: size, contentMode: .fit) { _ in monogram }
             }
         }
         .frame(width: size, height: size)
@@ -47,6 +42,18 @@ struct TokenLogo: View {
     }
 }
 
+/// Marks a token or NFT that reached the wallet without the user choosing it in DyorHQ: anyone can send any token
+/// or NFT to any wallet, so its name and symbol prove nothing (security audit 2026-09-26, IOST-12).
+struct UnverifiedBadge: View {
+    var body: some View {
+        Text("Unverified")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Color.attention)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(Color.attention.opacity(0.14), in: Capsule())
+    }
+}
+
 /// A circular profile avatar: the uploaded image when there is one, otherwise the wallet's initials on a neutral
 /// fill. Used in the Profile header and the DyorHQ Social screens.
 struct Avatar: View {
@@ -57,10 +64,8 @@ struct Avatar: View {
     var body: some View {
         Group {
             if let url {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image { image.resizable().scaledToFill() }
-                    else if phase.error != nil { placeholder }
-                    else { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } }
+                RemoteImage(url: url, pointSize: size) { loading in
+                    if loading { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } } else { placeholder }
                 }
             } else {
                 placeholder

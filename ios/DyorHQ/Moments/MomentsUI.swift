@@ -58,29 +58,43 @@ struct MomentImageSource: Sendable {
 }
 
 /// Fetches Moment images from an ordered list of sources and remembers the outcome per media URI for the session —
-/// hits for good, misses for a minute — so a feed neither re-downloads an image on every scroll nor re-probes a dead
-/// link (an unrecoverable directory CID, say) on every appearance. One in-flight fetch is shared by every view
-/// showing the same Moment.
+/// hits under a memory budget, misses for a minute — so a feed neither re-downloads an image on every scroll nor
+/// re-probes a dead link (an unrecoverable directory CID, say) on every appearance. One in-flight fetch is shared by
+/// every view showing the same Moment, and cancelled once none of them is on screen. Media URIs are written on-chain by
+/// whoever publishes, so each fetch is capped, fetches and decodes run a few at a time app-wide, and only a thumbnail
+/// is decoded (`RemoteMedia`, security audit 2026-09-26, RI-5).
 @MainActor
 final class MomentMediaLoader {
     static let shared = MomentMediaLoader()
-    private let images = NSCache<NSString, UIImage>()
+    /// The longest side, in pixels, a Moment image is decoded at: the full-width detail artwork on a 3x screen.
+    static let maxPixelSize = 1200
+    private let images: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = 64 * 1024 * 1024
+        return cache
+    }()
     private var misses: [String: Date] = [:]
-    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private let loads = SharedLoads<UIImage>()
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 12
+        config.timeoutIntervalForResource = 30
+        config.httpShouldSetCookies = false
         config.requestCachePolicy = .returnCacheDataElseLoad
         return URLSession(configuration: config)
     }()
 
     /// Where to look for a Moment's image, best first. The Supabase mirror derived from the creator + media hash (only
-    /// meaningful for an `ipfs://` pointer — an https pointer *is* the mirror) is an object its creator can overwrite
-    /// after publishing, so it is never trusted blindly:
+    /// meaningful for an `ipfs://` pointer — an https pointer *is* the mirror) is a DyorHQ-hosted object, so it is
+    /// never shown on trust (security audit 2026-09-26, PR-2):
     /// - a photo Moment's provenance hash is the keccak-256 of the very JPEG in the mirror, so the mirror goes first (it
     ///   is fast and DyorHQ-run) but its bytes count only while they still match that hash;
-    /// - a video Moment's hash is the video's, while the mirror holds its poster frame, which cannot be checked — so the
-    ///   content-addressed IPFS copy goes first and the mirror is only the last fallback.
+    /// - a video Moment's hash is the video's, while the mirror holds its poster frame, which nothing on-chain can check
+    ///   — so the mirror is not a source at all, and the image comes from the content-addressed IPFS pointer only.
+    ///   That includes a video Moment whose on-chain image IS that mirror (earlier builds wrote it when pinning failed):
+    ///   it shows the placeholder, since until the bucket is write-once (supabase migration 26) the creator can swap
+    ///   those bytes.
+    /// Any other https pointer is the creator's own link, shown as it is.
     static func imageSources(provenance: MomentProvenance, creator: Address?) -> [MomentImageSource] {
         let gateways = MomentsMath.gatewayURLs(provenance.mediaURI).map { MomentImageSource(url: $0) }
         guard let creator,
@@ -88,16 +102,17 @@ final class MomentMediaLoader {
             return gateways
         }
         guard provenance.mediaURI.lowercased().hasPrefix("ipfs://") else {
-            // An https pointer that is this photo's own mirror (published when pinning failed) is checked the same way.
-            if provenance.animationURI.isEmpty, gateways.count == 1, gateways[0].url == mirror {
-                return [MomentImageSource(url: mirror, keccak: provenance.mediaHash)]
+            // An https pointer that is this photo's own mirror (published, by the creator's choice, when pinning
+            // failed) is checked the same way.
+            if gateways.count == 1, gateways[0].url == mirror {
+                return provenance.animationURI.isEmpty ? [MomentImageSource(url: mirror, keccak: provenance.mediaHash)] : []
             }
             return gateways
         }
         if provenance.animationURI.isEmpty {
             return [MomentImageSource(url: mirror, keccak: provenance.mediaHash)] + gateways
         }
-        return gateways + [MomentImageSource(url: mirror)]
+        return gateways
     }
 
     func cached(_ key: String) -> UIImage? { images.object(forKey: key as NSString) }
@@ -105,22 +120,27 @@ final class MomentMediaLoader {
     func load(key: String, sources: [MomentImageSource]) async -> UIImage? {
         if let hit = cached(key) { return hit }
         if let missed = misses[key], Date().timeIntervalSince(missed) < 60 { return nil }
-        if let task = inFlight[key] { return await task.value }
         let session = self.session
-        let task = Task<UIImage?, Never>.detached(priority: .userInitiated) { // decode off the main thread
+        let maxPixelSize = Self.maxPixelSize
+        let caps = RemoteMedia.caps(forThumbnail: maxPixelSize)
+        let result = await loads.value(for: key) { // fetched and decoded off the main thread
             for source in sources {
-                guard let (data, response) = try? await session.data(from: source.url),
-                      let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                guard !Task.isCancelled else { return nil }
+                guard let data = try? await RemoteMedia.fetches.run({ try await RemoteMedia.fetch(source.url, session: session, maxBytes: caps.maxBytes) }),
                       source.keccak.map({ Keccak.hash256(data) == $0 }) ?? true, // a swapped mirror falls through to IPFS
-                      let image = UIImage(data: data) else { continue } // an HTML directory listing never decodes
+                      let image = try? await RemoteMedia.decodes.run({ // an HTML directory listing never decodes
+                          UIImage(cgImage: try RemoteMedia.thumbnail(data, maxPixelSize: maxPixelSize, maxSourcePixels: caps.maxSourcePixels))
+                      }) else { continue }
                 return image
             }
             return nil
         }
-        inFlight[key] = task
-        let result = await task.value
-        inFlight[key] = nil
-        if let result { images.setObject(result, forKey: key as NSString); misses[key] = nil } else { misses[key] = Date() }
+        if let result {
+            images.setObject(result, forKey: key as NSString, cost: RemoteImageLoader.cost(result))
+            misses[key] = nil
+        } else if !Task.isCancelled {
+            misses[key] = Date()
+        }
         return result
     }
 }

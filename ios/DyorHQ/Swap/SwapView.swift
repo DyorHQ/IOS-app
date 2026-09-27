@@ -43,7 +43,8 @@ struct SwapView: View {
             }
             .keyboardDoneButton()
             .sheet(item: $picking) { side in
-                TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: KnownTokenStore.universe(owner: session.address)) { token in
+                TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: KnownTokenStore.universe(owner: session.address),
+                                 unverified: KnownTokenStore.unverified(owner: session.address)) { token in
                     // Remember any token the user picks (a pasted ERC-20 included) so it shows a balance and price in
                     // holdings and the picker from now on, not only after a completed swap.
                     KnownTokenStore.add(token, owner: session.address)
@@ -270,7 +271,10 @@ struct SwapView: View {
             HStack(spacing: 12) {
                 TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(token.symbol).font(.headline)
+                    HStack(spacing: 6) {
+                        Text(token.symbol).font(.headline)
+                        if KnownTokenStore.isUnverified(token.address, owner: session.address) { UnverifiedBadge() }
+                    }
                     Text(token.name).font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -297,6 +301,8 @@ struct SwapView: View {
             // just acquired, and the one paid with (a partial swap leaves a balance still worth showing).
             KnownTokenStore.add(review.tokenOut, owner: session.address)
             KnownTokenStore.add(review.tokenIn, owner: session.address)
+            // Bought here on purpose: no longer an unverified token that merely arrived in the wallet (IOST-12).
+            KnownTokenStore.markChosen(review.tokenOut.address, owner: session.address)
             if settings.notificationsEnabled, settings.notifyFills {
                 Notifications.swapped(review.amountIn, review.tokenIn, review.quote.amountOut, review.tokenOut)
             }
@@ -640,6 +646,9 @@ struct TokenPickerSheet: View {
     /// Choosing a swap side (the default): a retired cohort's Moment coin is never offered. Home's search passes false —
     /// it only opens a token's page, which shows such a coin as "Past cohort · trading closed" with no swap.
     var tradableOnly = true
+    /// Tokens found in the wallet rather than chosen (`KnownTokenStore.unverified`): left out of the list, and shown —
+    /// marked — only when a search matches them (security audit 2026-09-26, IOST-12).
+    var unverified: Set<Address> = []
     let onPick: (Token) -> Void
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
@@ -650,7 +659,7 @@ struct TokenPickerSheet: View {
 
     private var tokens: [Token] {
         // A retired cohort's Moment coin is never offered as a swap side: trading it is closed in the app.
-        let base = tradableOnly ? universe.filter(SwapEngine.isTradable) : universe
+        let base = (tradableOnly ? universe.filter(SwapEngine.isTradable) : universe).filter { !unverified.contains($0.address) }
         let filtered = query.isEmpty ? base : base.filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
         // Assets the wallet holds float to the top, keeping the curated order within each group.
         return filtered.enumerated().sorted { a, b in
@@ -660,11 +669,20 @@ struct TokenPickerSheet: View {
         }.map(\.element)
     }
 
+    /// Unverified tokens in the wallet that match the search, in their own marked section.
+    private var unverifiedMatches: [Token] {
+        guard !query.isEmpty else { return [] }
+        return universe.filter { token in
+            unverified.contains(token.address) && token.address != custom?.address && (!tradableOnly || SwapEngine.isTradable(token))
+                && (token.symbol.localizedCaseInsensitiveContains(query) || token.name.localizedCaseInsensitiveContains(query))
+        }
+    }
+
     /// Search hits for tokens not in the popular default list: the Uniswap/Monday venue list (accurate symbols +
     /// logos, matched locally) plus Kuru's directory. Only while searching — the default list stays popular-only.
     private var remoteMatches: [Token] {
         guard !query.isEmpty else { return [] }
-        var seen = Set(tokens.map(\.address))
+        var seen = Set(tokens.map(\.address)).union(unverifiedMatches.map(\.address))
         if let custom { seen.insert(custom.address) }
         let venueHits = VenueTokenStore.all().filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
         var out: [Token] = []
@@ -683,8 +701,17 @@ struct TokenPickerSheet: View {
                 Section {
                     ForEach(tokens) { row($0) }
                 } footer: {
-                    if tokens.isEmpty, custom == nil, remoteMatches.isEmpty {
+                    if tokens.isEmpty, custom == nil, remoteMatches.isEmpty, unverifiedMatches.isEmpty {
                         Text(lookingUp ? "Looking up this token…" : "No token matches. Paste a contract address to add any Monad token.")
+                    }
+                }
+                if !unverifiedMatches.isEmpty {
+                    Section {
+                        ForEach(unverifiedMatches) { row($0) }
+                    } header: {
+                        Text("Unverified — in your wallet")
+                    } footer: {
+                        Text("These arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you trade.")
                     }
                 }
                 if !remoteMatches.isEmpty {
@@ -737,7 +764,10 @@ struct TokenPickerSheet: View {
             HStack(spacing: 12) {
                 TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(token.symbol).font(.headline)
+                    HStack(spacing: 6) {
+                        Text(token.symbol).font(.headline)
+                        if unverified.contains(token.address) { UnverifiedBadge() }
+                    }
                     // Only Home's search lists a retired coin; its page has no swap either.
                     Text(SwapEngine.isTradable(token) ? token.name : "Past cohort · trading closed").font(.footnote).foregroundStyle(.secondary)
                 }

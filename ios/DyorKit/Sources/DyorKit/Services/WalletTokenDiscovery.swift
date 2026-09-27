@@ -18,6 +18,15 @@ public struct WalletTokenDiscovery: Sendable {
 
     private static let transferSig = "Transfer(address,address,uint256)"
 
+    /// The tokens to show as Unverified once, after an upgrade from builds that stored every token found in the
+    /// wallet's history as if the user had chosen it (security audit 2026-09-26, IOST-12) — discovery skips a token
+    /// already stored, so it would never be marked otherwise. That is all of `stored` except native MON and the curated
+    /// list, plus those already marked: nothing recorded which of them the user bought in the app, so each is marked,
+    /// and a later swap into it clears the mark.
+    public static func unverifiedAfterUpgrade(stored: [Token], alreadyUnverified: Set<Address>) -> Set<Address> {
+        alreadyUnverified.union(stored.filter { !$0.isNative && Token.core($0.address) == nil }.map(\.address))
+    }
+
     /// The ERC-20 tokens the wallet currently holds (balance > 0), resolved to `Token` metadata. `window` bounds how
     /// far back the incoming-transfer scan looks; `known` addresses (already-surfaced tokens, native MON) are skipped
     /// so only NEW tokens are read.

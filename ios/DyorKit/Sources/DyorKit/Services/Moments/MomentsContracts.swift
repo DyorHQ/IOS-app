@@ -26,6 +26,8 @@ enum MomentsABI {
 
     enum Factory {
         static let policy = "policy()"
+        static let pendingPolicy = "pendingPolicy()"
+        static let pendingPolicyAt = "pendingPolicyAt()"
         static let momentCount = "momentCount()"
         static let publishingPaused = "publishingPaused()"
         static let externalBaseURI = "externalBaseURI()"

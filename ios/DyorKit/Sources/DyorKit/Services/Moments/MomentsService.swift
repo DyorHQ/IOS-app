@@ -57,13 +57,26 @@ public actor MomentsService {
             MomentsABI.call(f, MomentsABI.Factory.momentCount, returns: "uint256"),
             MomentsABI.call(f, MomentsABI.Factory.publishingPaused, returns: "bool"),
             MomentsABI.call(f, MomentsABI.Factory.externalBaseURI, returns: "string"),
+            MomentsABI.call(f, MomentsABI.Factory.pendingPolicy, returns: MomentsABI.policyFlat),
+            MomentsABI.call(f, MomentsABI.Factory.pendingPolicyAt, returns: "uint64"),
         ])
         let p = values[0]
-        return MomentPolicy(
+        var policy = MomentPolicy(
             threshold: p[0].uint, minPrice: p[1].uint, creatorBps: MomentsABI.int(p[2]), platformBps: MomentsABI.int(p[3]), reserveBps: MomentsABI.int(p[4]),
             maxCreatorAllocBps: MomentsABI.int(p[5]), expiryCreatorBps: MomentsABI.int(p[6]), royaltyBps: MomentsABI.int(p[7]), platform: p[8].address, treasury: p[9].address,
             momentCount: MomentsABI.int(values[1][0]), publishingPaused: values[2][0].bool, externalBaseURI: values[3][0].string
         )
+        // A proposed policy is pending while pendingPolicyAt is set (0 = none): the time it can first be applied.
+        let applicableAt = values[5][0].uint
+        if applicableAt > 0 {
+            let n = values[4]
+            policy.pending = PendingMomentPolicy(
+                threshold: n[0].uint, minPrice: n[1].uint, creatorBps: MomentsABI.int(n[2]), platformBps: MomentsABI.int(n[3]), reserveBps: MomentsABI.int(n[4]),
+                maxCreatorAllocBps: MomentsABI.int(n[5]), expiryCreatorBps: MomentsABI.int(n[6]), royaltyBps: MomentsABI.int(n[7]), platform: n[8].address, treasury: n[9].address,
+                applicableAt: Date(timeIntervalSince1970: TimeInterval(Int(clamping: applicableAt)))
+            )
+        }
+        return policy
     }
 
     // MARK: - Moments
