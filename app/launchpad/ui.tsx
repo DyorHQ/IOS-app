@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Icon } from "../ui/icons";
 import { TONES } from "../ui/data";
 import { DEPLOYED, explorerAddress, explorerTx } from "../lib/chain";
@@ -35,9 +35,9 @@ export function RetiredBadge({ launch }: { launch: Pick<LaunchInfo, "stack"> }) 
   return <em className="badge" title="Launched on a retired launchpad factory. Trading, claims and graduation still run through its own contracts.">Retired launchpad</em>;
 }
 
-export function Progress({ bps }: { bps: number }) {
+export function Progress({ bps, label = "Graduation progress" }: { bps: number; label?: string }) {
   const pct = Math.min(100, bps / 100);
-  return <div className="progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${pct}%` }} /></div>;
+  return <div className="progress" role="progressbar" aria-label={label} aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100} aria-valuetext={`${pct.toFixed(1)}%`}><i style={{ width: `${pct}%` }} /></div>;
 }
 
 export function Tile({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
@@ -122,20 +122,28 @@ export function NetworkPill() {
 export function WalletButton({ className = "btn primary sm" }: { className?: string }) {
   const wallet = useWallet();
   const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const popover = useId();
   const account = wallet.account;
+  // A disclosure, not an ARIA menu: Tab walks its items, and Escape closes it and returns focus to its button.
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape" || !open) return;
+    setOpen(false);
+    trigger.current?.focus();
+  };
   if (account) {
     const icon = wallet.active?.info.icon;
     return (
-      <div className="menu-anchor">
-        <button type="button" className="iconbtn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <div className="menu-anchor" onKeyDown={onKeyDown}>
+        <button ref={trigger} type="button" className="iconbtn" aria-expanded={open} aria-controls={open ? popover : undefined} onClick={() => setOpen((o) => !o)}>
           {icon ? <img className="wicon" src={icon} alt="" /> : <Icon name="wallet" />}{shortAddress(account)}<Icon name="chev-down" />
         </button>
         {open && (
-          <div className="popover card" role="menu">
+          <div className="popover card" id={popover}>
             <small>{wallet.active?.info.name ?? "Wallet"}</small>
-            <a href={explorerAddress(account)} target="_blank" rel="noreferrer" role="menuitem"><Icon name="arrow-ur" />View on Monadscan</a>
-            <button type="button" role="menuitem" onClick={() => { navigator.clipboard?.writeText(account); setOpen(false); }}><Icon name="copy" />Copy address</button>
-            <button type="button" role="menuitem" onClick={() => { wallet.disconnect(); setOpen(false); }}><Icon name="logout" />Disconnect</button>
+            <a href={explorerAddress(account)} target="_blank" rel="noreferrer"><Icon name="arrow-ur" />View on Monadscan</a>
+            <button type="button" onClick={() => { navigator.clipboard?.writeText(account); setOpen(false); }}><Icon name="copy" />Copy address</button>
+            <button type="button" onClick={() => { wallet.disconnect(); setOpen(false); }}><Icon name="logout" />Disconnect</button>
           </div>
         )}
       </div>
@@ -148,13 +156,13 @@ export function WalletButton({ className = "btn primary sm" }: { className?: str
     return <button type="button" className={className} disabled={wallet.connecting} onClick={() => wallet.connect(only.info.rdns)}>{wallet.connecting ? "Connecting…" : "Connect wallet"}</button>;
   }
   return (
-    <div className="menu-anchor">
-      <button type="button" className={className} aria-haspopup="menu" aria-expanded={open} disabled={wallet.connecting} onClick={() => setOpen((o) => !o)}>{wallet.connecting ? "Connecting…" : "Connect wallet"}</button>
+    <div className="menu-anchor" onKeyDown={onKeyDown}>
+      <button ref={trigger} type="button" className={className} aria-expanded={open} aria-controls={open ? popover : undefined} disabled={wallet.connecting} onClick={() => setOpen((o) => !o)}>{wallet.connecting ? "Connecting…" : "Connect wallet"}</button>
       {open && (
-        <div className="popover card" role="menu">
+        <div className="popover card" id={popover}>
           <small>Choose a wallet</small>
           {wallet.wallets.map((w) => (
-            <button key={w.info.rdns} type="button" role="menuitem" onClick={() => { setOpen(false); wallet.connect(w.info.rdns); }}>
+            <button key={w.info.rdns} type="button" onClick={() => { setOpen(false); wallet.connect(w.info.rdns); }}>
               {w.info.icon ? <img className="wicon" src={w.info.icon} alt="" /> : <Icon name="wallet" />}{w.info.name}
             </button>
           ))}

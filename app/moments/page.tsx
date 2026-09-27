@@ -55,7 +55,7 @@ export default function Explore() {
       <MomentsDeployNotice />
 
       <div className="toolbar">
-        <Seg options={FILTERS} value={filter} onChange={setFilter} small />
+        <Seg label="Filter Moments" options={FILTERS} value={filter} onChange={setFilter} small />
         <select className="select sm" value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort Moments">
           <option value="newest">Newest first</option>
           <option value="progress">Closest to graduation</option>

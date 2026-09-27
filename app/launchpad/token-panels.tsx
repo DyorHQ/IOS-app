@@ -70,7 +70,7 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
   const insufficient = balance !== undefined && parsed !== null && parsed > balance + (side === "buy" ? 0n : 0n);
   return (
     <div className="card trade">
-      <Seg options={SIDES} value={side} onChange={(s) => { setSide(s); setAmount(""); reset(); }} tone="dir" />
+      <Seg label="Trade side" options={SIDES} value={side} onChange={(s) => { setSide(s); setAmount(""); reset(); }} tone="dir" />
       <label className="amount">
         <input inputMode="decimal" placeholder="0" aria-label={side === "buy" ? `Amount in ${pair.symbol}` : `Amount in ${launch.symbol}`} value={amount} onChange={(e) => setAmount(e.target.value)} />
         <span className="tok">{side === "buy" ? pair.symbol : `$${launch.symbol}`}</span>

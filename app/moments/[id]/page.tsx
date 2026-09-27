@@ -75,7 +75,7 @@ export default function MomentPage() {
         <Tile label={data.graduated && price !== null ? "Coin price" : "Collect price"} value={data.graduated && price !== null ? fmtUsd(price) : usd(data.price)} sub={data.graduated && price !== null ? `FDV $${fmtNumber(fdvUsd(price), { compact: true })}` : "per edition, USDC"} />
         <Tile label={data.graduated ? "Seeded" : "Reserve"} value={data.graduated ? usd(data.pool?.reserveSeed ?? data.threshold) : usd(data.ledger.reserve)} sub={data.graduated ? `${usd(data.ledger.totalGross)} collected in total` : `of ${usd(data.threshold)} to graduate`} />
         <Tile label="Editions" value={String(data.editions)} sub={`${data.ledger.collects} collect${data.ledger.collects === 1 ? "" : "s"}`} />
-        <Tile label="Progress" value={`${(data.progressBps / 100).toFixed(1)}%`} sub={<Progress bps={data.progressBps} />} />
+        <Tile label="Progress" value={`${(data.progressBps / 100).toFixed(1)}%`} sub={<Progress bps={data.progressBps} label="Reserve to graduation" />} />
       </div>
 
       <div className="token-layout">

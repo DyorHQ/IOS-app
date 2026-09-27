@@ -74,7 +74,7 @@ export default function Home() {
   const circ = (icon: IconName, label: string, onClick: () => void) => <button type="button" className="circ glass" data-glass="circ" onClick={onClick} aria-label={label}><Icon name={icon} /></button>;
   const topbar = tab === "markets" ? <>{menuBtn}<h1 className="bar-title">Markets</h1>{avatar}</>
     : tab === "launch" ? <>{menuBtn}<h1 className="bar-title">Launchpad</h1>{circ("bell", "Activity", () => openSheet("activity"))}</>
-    : tab === "trade" ? <>{menuBtn}<div className="bar-seg glass" data-glass="pill"><Seg options={MODE_OPTS} value={mode} onChange={(m) => { setMode(m); setNav((n) => n + 1); }} /></div>{avatar}</>
+    : tab === "trade" ? <>{menuBtn}<div className="bar-seg glass" data-glass="pill"><Seg label="Trade mode" options={MODE_OPTS} value={mode} onChange={(m) => { setMode(m); setNav((n) => n + 1); }} /></div>{avatar}</>
     : tab === "profile" ? <>{menuBtn}<h1 className="bar-title">Portfolio</h1>{circ("sliders", "Preview studio", openStudio)}</>
     : <>{menuBtn}<button type="button" className="search glass" data-glass="pill" onClick={() => { setSearchFocus(true); setTab("markets"); setNav((n) => n + 1); }}><Icon name="search" /><span>Search tokens</span></button>{avatar}</>;
 
@@ -110,7 +110,7 @@ export default function Home() {
                   <button type="button" className="usercard" onClick={() => { setMenu(false); onAvatar(); }}><span className="avatar"><Icon name="wallet" /></span><div style={{ flex: 1, minWidth: 0 }}><b>Connect wallet</b><small>{wallet.wallets.length ? `${wallet.wallets.length} wallet${wallet.wallets.length === 1 ? "" : "s"} detected` : "No wallet detected"}</small></div><Icon name="chev-right" className="chev" /></button>
                 )}
                 <nav>{MENU_ITEMS.map(([icon, label, t, m]) => <button key={label} type="button" onClick={() => go(t, m)}><Icon name={icon} /><span>{label}</span><Icon name="chev-right" className="chev" /></button>)}</nav>
-                <div className="menu-sec"><span className="label">Appearance</span><Seg options={THEME_OPTS} value={prefs.theme} onChange={(v) => setPrefs({ ...prefs, theme: v })} small /></div>
+                <div className="menu-sec"><span className="label">Appearance</span><Seg label="Appearance" options={THEME_OPTS} value={prefs.theme} onChange={(v) => setPrefs({ ...prefs, theme: v })} small /></div>
                 <div className="menu-sec"><nav>
                   <button type="button" onClick={openStudio}><Icon name="sliders" /><span>Preview studio</span><Icon name="chev-right" className="chev" /></button>
                   <button type="button" onClick={() => openSheet("help")}><Icon name="help" /><span>Help &amp; links</span><Icon name="chev-right" className="chev" /></button>

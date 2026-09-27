@@ -1,6 +1,6 @@
 "use client";
 // Shared building blocks: segmented control, chips, coins, rows, empty states, switches, ranges.
-import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { Icon, type IconName } from "./icons";
 import { TONES, type Token, type Tone } from "./data";
 import { fmtPct, fmtUsd } from "../lib/format";
@@ -13,7 +13,8 @@ export function Button({ variant = "primary", size = "regular", busy = false, cl
 
 export type SegOpt<T extends string> = { v: T; l: string; i?: IconName };
 export const opts = <T extends string>(vals: readonly T[]): SegOpt<T>[] => vals.map((v) => ({ v, l: v }));
-export function Seg<T extends string>({ options, value, onChange, tone = "", small = false, className = "", label = "Options" }: { options: SegOpt<T>[]; value: T; onChange: (v: T) => void; tone?: "" | "dir"; small?: boolean; className?: string; label?: string }) {
+/** A labelled group of toggle buttons (aria-pressed). `label` names the group for assistive technology, so it is required. */
+export function Seg<T extends string>({ options, value, onChange, tone = "", small = false, className = "", label }: { options: SegOpt<T>[]; value: T; onChange: (v: T) => void; tone?: "" | "dir"; small?: boolean; className?: string; label: string }) {
   const i = Math.max(0, options.findIndex((o) => o.v === value));
   const toneCls = tone === "dir" ? (i === 0 ? "tone-up" : "tone-down") : "";
   return (
@@ -44,9 +45,32 @@ export const Empty = ({ icon, title, text }: { icon: IconName; title: string; te
   <div className="empty"><span className="glyph"><Icon name={icon} /></span><b>{title}</b><p>{text}</p></div>
 );
 
-export function Subtabs<T extends string>({ options, value, onChange }: { options: readonly T[]; value: T; onChange: (v: T) => void }) {
-  return <div className="subtabs" role="tablist">{options.map((o) => <button key={o} type="button" role="tab" aria-selected={o === value} onClick={() => onChange(o)}>{o}</button>)}</div>;
+const tabKey = (o: string) => o.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+/** Tabs that switch the panel below them (WAI-ARIA tabs): only the selected tab is in the Tab order; the arrow keys, Home
+    and End move to another tab and select it. Give the panel `tabPanel(id, value)` so it is named by its tab. */
+export function Subtabs<T extends string>({ id, label, options, value, onChange }: { id: string; label: string; options: readonly T[]; value: T; onChange: (v: T) => void }) {
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const tabs = Array.from(event.currentTarget.parentElement?.children ?? []) as HTMLElement[];
+    const i = tabs.indexOf(event.currentTarget);
+    const key = event.key;
+    const next = key === "ArrowRight" ? (i + 1) % options.length : key === "ArrowLeft" ? (i - 1 + options.length) % options.length : key === "Home" ? 0 : key === "End" ? options.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    onChange(options[next]);
+    tabs[next]?.focus();
+  };
+  return (
+    <div className="subtabs" role="tablist" aria-label={label}>
+      {options.map((o) => <button key={o} id={`${id}-tab-${tabKey(o)}`} type="button" role="tab" aria-selected={o === value} aria-controls={o === value ? `${id}-panel` : undefined} tabIndex={o === value ? 0 : -1} onKeyDown={onKeyDown} onClick={() => onChange(o)}>{o}</button>)}
+    </div>
+  );
 }
+export const tabPanel = (id: string, value: string) => ({ role: "tabpanel", id: `${id}-panel`, "aria-labelledby": `${id}-tab-${tabKey(value)}` }) as const;
+
+/** A trade's side in text as well as colour: an arrow to see and the word for screen readers. */
+export const SideMark = ({ side }: { side: "buy" | "sell" }) => (
+  <><span className="side-mark" aria-hidden="true">{side === "buy" ? "▲" : "▼"}</span><span className="sr-only">{side === "buy" ? "Buy " : "Sell "}</span></>
+);
 
 export const Switch = ({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) => (
   <button type="button" className="switch" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} />

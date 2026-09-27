@@ -435,6 +435,7 @@ input::placeholder,textarea::placeholder{color:var(--faint);opacity:1}
 .tape .t{display:grid;grid-template-columns:1fr 1fr 1fr;padding:5px 4px;border-bottom:1px solid var(--track)}
 .tape .t:last-child{border-bottom:0}
 .tape .t span:nth-child(2){text-align:center}.tape .t span:last-child{text-align:right;color:var(--muted)}
+.side-mark{font-size:.7em;margin-right:4px;vertical-align:.08em}
 .act-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--track);font-size:14px}
 .act-row:last-child{border-bottom:0}
 .act-row .ic{width:20px;height:20px;color:var(--strong);flex:none}

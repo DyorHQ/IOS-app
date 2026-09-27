@@ -51,7 +51,7 @@ export default function Explore() {
       {!DEPLOYED && <DeployNotice />}
 
       <div className="toolbar">
-        <Seg options={FILTERS} value={filter} onChange={setFilter} small />
+        <Seg label="Filter launches" options={FILTERS} value={filter} onChange={setFilter} small />
         <select className="select sm" value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort launches">
           <option value="newest">Newest first</option>
           <option value="progress">Closest to graduation</option>

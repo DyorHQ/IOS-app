@@ -2,7 +2,7 @@
 
 import { Fragment, useState } from "react";
 import { formatUnits } from "viem";
-import { Empty, Seg, Subtabs, opts } from "./ui/components";
+import { Empty, Seg, SideMark, Subtabs, opts, tabPanel } from "./ui/components";
 import type { Go, Preset, Toast } from "./ui/nav";
 import { PerplChart } from "./ui/tradingview";
 import { usePerpsAccount } from "./lib/app-data";
@@ -140,9 +140,9 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
         <div><span className="label">Mark price</span><div className="big">{mark ? fmtUsd(mark) : "—"}</div><span className="label">Last {last ? fmtUsd(last) : "—"} · Oracle {perp ? fmtUsd(perp.oracle) : "—"}</span></div>
         <div className="stats-mini"><span>Open interest</span><b>{mctx ? fmtNumber(Math.round(mctx.openInterest), { compact: true }) : "—"} {market.symbol}</b><span>24h volume</span><b>{mctx ? fmtNumber(Math.round(mctx.volume24h), { compact: true }) : "—"} {market.symbol}</b><span>Funding</span><b>{mctx ? fmtPct(mctx.fundingRate * 100, 4) : "—"}</b><span>Max leverage</span><b>{maxLev}×</b></div>
       </div>
-      <Seg options={PERIODS.map(([v, l]) => ({ v, l }))} value={period} onChange={setPeriod} small />
+      <Seg label="Chart interval" options={PERIODS.map(([v, l]) => ({ v, l }))} value={period} onChange={setPeriod} small />
       <div style={{ marginTop: 12 }}><PerplChart marketId={market.id} resolution={Number(period)} height={300} /></div>
-      <div style={{ marginTop: 16 }}><Seg options={opts(BOOKS)} value={book} onChange={setBook} /></div>
+      <div style={{ marginTop: 16 }}><Seg label="Order book or trades" options={opts(BOOKS)} value={book} onChange={setBook} /></div>
       {book === "Order book" ? (
         <>
           <div className="ratio"><span className="up">Bids {buyPct}%</span><span className="down">{100 - buyPct}% Asks</span></div>
@@ -161,12 +161,12 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
       ) : (
         <div className="tape">
           <div className="t" style={{ color: "var(--muted)", fontSize: 12 }}><span>Price</span><span>Size ({market.symbol})</span><span>Time</span></div>
-          {feed.trades.slice(0, 14).map((t, i) => <div className="t" key={i}><span className={t.side === "buy" ? "up" : "down"}>{fmtFixed(px(t.p, pf), pf.priceDecimals)}</span><span>{fmtFixed(sz(t.s, pf), pf.lotDecimals)}</span><span>{now ? timeAgo(Math.floor(t.t / 1000), now) : ""}</span></div>)}
+          {feed.trades.slice(0, 14).map((t, i) => <div className="t" key={i}><span className={t.side === "buy" ? "up" : "down"}><SideMark side={t.side} />{fmtFixed(px(t.p, pf), pf.priceDecimals)}</span><span>{fmtFixed(sz(t.s, pf), pf.lotDecimals)}</span><span>{now ? timeAgo(Math.floor(t.t / 1000), now) : ""}</span></div>)}
           {feed.trades.length === 0 && <p className="hint">Waiting for trades…</p>}
         </div>
       )}
 
-      <div style={{ marginTop: 18 }}><Seg options={opts(SIDES)} value={side} onChange={setSide} tone="dir" /></div>
+      <div style={{ marginTop: 18 }}><Seg label="Order side" options={opts(SIDES)} value={side} onChange={setSide} tone="dir" /></div>
       <section className="card order" style={{ marginTop: 12 }}>
         <div className="settings2"><span className="pill-static">Isolated</span><select className="select" aria-label="Leverage" value={lev} onChange={(e) => setLev(Number(e.target.value))}>{levOptions.map((x) => <option key={x} value={x}>{x}×</option>)}</select></div>
         <div className="between"><span>Available margin</span><b>{acct ? `$${fmtFixed(available)}` : accountText ?? "No Perpl account yet"}</b></div>
@@ -187,7 +187,8 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
         <p className="hint">Orders are placed on Perpl&apos;s on-chain order book by your wallet. Market orders are immediate-or-cancel at 1% slippage.</p>
       </section>
 
-      <Subtabs options={PTABS} value={tab} onChange={setTab} />
+      <Subtabs id="perps-account" label="Your Perpl account" options={PTABS} value={tab} onChange={setTab} />
+      <div {...tabPanel("perps-account", tab)}>
       {tab === "Positions" && (
         <section className="stack-cards" style={{ marginTop: 12 }}>
           {account && accountError && <p className="hint err" role="alert">Couldn&apos;t read your Perpl account or positions ({accountError}). Retrying{positions.length ? "; the positions below may be out of date" : ""}.</p>}
@@ -230,6 +231,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
           )}
         </section>
       )}
+      </div>
     </main>
   );
 }

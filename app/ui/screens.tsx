@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { Address } from "viem";
 import { Icon, type IconName } from "./icons";
-import { Empty, Seg, Subtabs, opts, type SegOpt } from "./components";
+import { Empty, Seg, SideMark, Subtabs, opts, tabPanel, type SegOpt } from "./components";
 import type { Go, OpenSheet, Preset, Toast } from "./nav";
 import { LightweightChart, PERPL_CHARTS, PerplChart, TV_SYMBOLS, tradingViewUrl } from "./tradingview";
 import { useMarkets, usePerpsAccount, type MarketRow } from "../lib/app-data";
@@ -118,7 +118,7 @@ export function HomeScreen({ go, openSheet }: ScreenProps) {
       ) : (
         <section className="card" style={{ padding: "12px 16px" }}>
           <div className="hd" style={{ marginBottom: 6 }}><b>Perps tape · MON</b><span className={`pill-live ${feed.connected ? "" : "off"}`}><i />{feed.connected ? "Perpl live" : "connecting"}</span></div>
-          <div className="tape">{feed.trades.slice(0, 6).map((t, i) => <div className="t" key={i}><span className={t.side === "buy" ? "up" : "down"}>{fmtUsd(t.p / 1e6)}</span><span>{fmtFixed(t.s, 0)} MON</span><span>{now ? timeAgo(Math.floor(t.t / 1000), now) : ""}</span></div>)}{feed.trades.length === 0 && <p className="hint">Waiting for trades…</p>}</div>
+          <div className="tape">{feed.trades.slice(0, 6).map((t, i) => <div className="t" key={i}><span className={t.side === "buy" ? "up" : "down"}><SideMark side={t.side} />{fmtUsd(t.p / 1e6)}</span><span>{fmtFixed(t.s, 0)} MON</span><span>{now ? timeAgo(Math.floor(t.t / 1000), now) : ""}</span></div>)}{feed.trades.length === 0 && <p className="hint">Waiting for trades…</p>}</div>
         </section>
       )}
     </main>
@@ -190,8 +190,8 @@ export function MarketsScreen({ go, preset, autoFocus = false }: { go: Go; prese
   return (
     <main className="screen" data-screen="markets">
       <label className="mkt-search"><Icon name="search" /><input placeholder="Search tokens or paste an address" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus={autoFocus} /></label>
-      <Seg options={opts(MSEGS)} value={seg} onChange={setSeg} />
-      {seg !== "Perps" && seg !== "Stocks" && <div style={{ marginTop: 10 }}><Seg options={MFILTERS} value={filter} onChange={setFilter} small /></div>}
+      <Seg label="Market type" options={opts(MSEGS)} value={seg} onChange={setSeg} />
+      {seg !== "Perps" && seg !== "Stocks" && <div style={{ marginTop: 10 }}><Seg label="Sort markets" options={MFILTERS} value={filter} onChange={setFilter} small /></div>}
       {seg === "Perps" ? (
         <>
           <div className="meta-row"><span>{perpsCtx.data?.length ?? 0} perpetual markets on Perpl</span><span className="live"><i />On-chain</span></div>
@@ -262,7 +262,7 @@ export function LaunchScreen({ preset }: { go: Go; toast: Toast; preset?: Preset
   if (selected) return <main className="screen" data-screen="launch"><LaunchDetail token={selected} onBack={() => setSelected(null)} /></main>;
   return (
     <main className="screen" data-screen="launch">
-      <Seg options={LMODES} value={mode} onChange={setMode} />
+      <Seg label="Launchpad view" options={LMODES} value={mode} onChange={setMode} />
       {mode === "create" ? (
         <div style={{ marginTop: 14 }}>
           {DEPLOYED ? <Create embedded onLaunched={(t) => { setSelected(t); setMode("discover"); }} /> : <Empty icon="rocket" title="Launchpad not deployed" text="Deploy the contracts from the owner wallet and sync the addresses to launch tokens." />}
@@ -328,7 +328,8 @@ export function ProfileScreen({ go, toast, openSheet }: ScreenProps) {
         <button type="button" className="action" onClick={() => openSheet("send")}><Icon name="send" />Send</button>
         <button type="button" className="action" onClick={() => go("trade", "swap")}><Icon name="swap" />Swap</button>
       </section>
-      <Subtabs options={PTABS} value={tab} onChange={setTab} />
+      <Subtabs id="portfolio" label="Portfolio sections" options={PTABS} value={tab} onChange={setTab} />
+      <div {...tabPanel("portfolio", tab)}>
       {tab === "Holdings" && (
         <section className="list" style={{ marginTop: 6 }}>
           {holdings.map((r, i) => <TokenRowLive key={r.address} row={r} i={i} onClick={() => go("markets", undefined, { token: r.address })} />)}
@@ -351,6 +352,7 @@ export function ProfileScreen({ go, toast, openSheet }: ScreenProps) {
           {activity.data && activity.data.length === 0 && !activity.error && <p className="hint" style={{ padding: "12px 0" }}>{DEPLOYED ? "No launchpad activity from this wallet in the last two hours." : "Launchpad activity appears once the contracts are deployed."} <a href={`${EXPLORER}/address/${account}`} target="_blank" rel="noreferrer">Full history on Monadscan ↗</a></p>}
         </section>
       )}
+      </div>
       <div className="divider" />
       <button type="button" className="btn secondary" style={{ width: "100%" }} onClick={() => { wallet.disconnect(); toast("Wallet disconnected"); }}><Icon name="logout" />Disconnect wallet</button>
     </main>

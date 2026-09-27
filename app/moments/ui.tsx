@@ -81,7 +81,7 @@ export function MomentCard({ moment, now }: { moment: MomentInfo; now: number })
         </div>
         <div className="trust"><EarlyLabel /><em className="badge">{moment.editions} edition{moment.editions === 1 ? "" : "s"}</em></div>
         <div className="progress-label"><span>{moment.graduated ? "Pool locked on Uniswap v4" : moment.ledger.state === 3 ? "Wound down" : "Reserve to graduation"}</span><b>{(moment.progressBps / 100).toFixed(1)}%</b></div>
-        <Progress bps={moment.progressBps} />
+        <Progress bps={moment.progressBps} label="Reserve to graduation" />
         <div className="launch-stats">
           <span>{moment.graduated ? "Coin price" : "Collect price"}<b>{moment.graduated && price !== null ? fmtUsd(price) : usd(moment.price)}</b></span>
           <span>{moment.graduated && price !== null ? "FDV" : "Raised"}<b>{moment.graduated && price !== null ? `$${fmtNumber(fdvUsd(price), { compact: true })}` : usd(moment.ledger.totalGross)}</b></span>
