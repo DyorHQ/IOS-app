@@ -236,6 +236,12 @@ final class MeraSession {
     @ObservationIgnored private var endsWhenIdle = false
     /// The background time iOS grants for those actions to finish; when it runs out the session ends regardless.
     @ObservationIgnored private var backgroundTime: BackgroundTime?
+    /// And a deadline of its own, whatever iOS grants (GL-7): checked on every use of the session, and a timer ends it.
+    @ObservationIgnored private var idleDeadline: Date?
+    @ObservationIgnored private var idleDeadlineTimer: Task<Void, Never>?
+    /// How long a session may outlive the app leaving the foreground for an approved action to finish: about the
+    /// background time iOS grants.
+    private static let backgroundGrace: TimeInterval = 30
     private let ceremony: PasskeyCeremony
     /// Where this build reports a passkey as unknown: orphan cleanup here, and account deletion (`AccountDeletion`,
     /// through `Mera.AccountDeletion.run`, which alone decides when it is sent).
@@ -540,29 +546,46 @@ final class MeraSession {
     func endAction() {
         runningActions = max(0, runningActions - 1)
         guard runningActions == 0, endsWhenIdle else { return }
-        endsWhenIdle = false
-        backgroundTime?.end()
-        backgroundTime = nil
         end()
     }
 
     /// The app left the foreground (RootView). The session ends now, or — while an approved action is still running — the
-    /// moment the last one finishes, within the background time iOS grants (about 30 s); when that runs out it ends
-    /// regardless. It still ends even if the app comes back first, and nothing new can start from the background, so
-    /// whoever picks the phone up next has to present the passkey again.
+    /// moment the last one finishes, within `backgroundGrace` (about the background time iOS grants); when that runs out
+    /// it ends regardless. It still ends even if the app comes back first, and nothing new can start from the background,
+    /// so whoever picks the phone up next has to present the passkey again.
     func endWhenIdle() {
         inBackground = true
         guard runningActions > 0, live != nil else { end(); return }
+        endWithLastAction()
+    }
+
+    /// The live session ends when the last running action does, and no later than `backgroundGrace` from now (GL-7):
+    /// the background time iOS grants ends it when it runs out, and so does a deadline of its own, which holds when iOS
+    /// grants none or suspends the app before either fires — `liveSession` checks it on every use.
+    private func endWithLastAction() {
         endsWhenIdle = true
-        if backgroundTime == nil {
-            backgroundTime = BackgroundTime("Passkey session") { [weak self] in
-                guard let self else { return }
-                self.backgroundTime = nil
-                self.endsWhenIdle = false
-                self.end()
-            }
+        guard idleDeadline == nil else { return }
+        idleDeadline = Date().addingTimeInterval(Self.backgroundGrace)
+        backgroundTime = BackgroundTime("Passkey session") { [weak self] in self?.end() }
+        idleDeadlineTimer = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.backgroundGrace))
+            guard !Task.isCancelled, let self, self.endsWhenIdle else { return }
+            self.end()
         }
     }
+
+    /// Nothing ends the session with its running actions any more: it ended, or a ceremony in the foreground replaced it.
+    private func cancelEndWithLastAction() {
+        endsWhenIdle = false
+        idleDeadline = nil
+        idleDeadlineTimer?.cancel()
+        idleDeadlineTimer = nil
+        backgroundTime?.end()
+        backgroundTime = nil
+    }
+
+    /// Whether a session waiting on its running actions has passed its deadline (`endWithLastAction`).
+    private var pastIdleDeadline: Bool { idleDeadline.map { Date() >= $0 } ?? false }
 
     /// The app is active again. A session waiting on a running action still ends with it (`endWhenIdle`).
     func enteredForeground() {
@@ -578,6 +601,7 @@ final class MeraSession {
         expiry?.cancel()
         expiry = nil
         pendingStepUp = nil
+        cancelEndWithLastAction() // whatever ended it, nothing waits on its running actions any more
         guard let session = live else { return }
         live = nil
         // Perpl first, so its references to the trading secret are gone before the session wipes its copy.
@@ -644,15 +668,16 @@ final class MeraSession {
     /// signing and authorize paths only.
     private func liveSession() -> Mera.SigningSession? {
         guard let live else { return nil }
-        if live.isLive() { return live }
+        if live.isLive(), !pastIdleDeadline { return live }
         end()
         return nil
     }
 
-    /// The live session for a query (a badge, the Perpl key): nil once expired, without ending it, so reading it never
-    /// changes observed state — a view body may read it. The expiry timer, or the next signature, ends the session.
+    /// The live session for a query (a badge, the Perpl key): nil once expired or past its deadline in the background,
+    /// without ending it, so reading it never changes observed state — a view body may read it. The timers, or the next
+    /// signature, end the session.
     private var openSession: Mera.SigningSession? {
-        guard let live, live.isLive() else { return nil }
+        guard let live, live.isLive(), !pastIdleDeadline else { return nil }
         return live
     }
 
@@ -674,16 +699,21 @@ final class MeraSession {
         MeraCredentialStore.save(credentialID: result.credentialID, address: session.address)
         lifecycle?.meraSessionDidOpen(self)
         // A ceremony that finished after the app left the foreground (GL-7): the session serves the call that asked for
-        // it, then ends — with the last running action, or, when none runs, as soon as that call has it.
+        // it, then ends — with the last running action, within the same deadline as `endWhenIdle`, or, when none runs, as
+        // soon as that call has it.
         if inBackground {
             if runningActions > 0 {
-                endsWhenIdle = true
+                endWithLastAction()
             } else {
                 Task { @MainActor [weak self, weak session] in
                     guard let self, let session, self.live === session, self.inBackground, self.runningActions == 0 else { return }
                     self.end()
                 }
             }
+        } else {
+            // The owner presented the passkey with the app in front: this session doesn't end with actions an earlier
+            // one left running in the background.
+            cancelEndWithLastAction()
         }
         return session
     }
