@@ -160,6 +160,14 @@ final class MeraSession {
     @ObservationIgnored private var expiry: Task<Void, Never>?
     /// The step-up approval waiting to be spent, and the session its ceremony opened.
     @ObservationIgnored private var pendingStepUp: (id: UUID, session: Mera.SigningSession)?
+    /// Approved actions still signing or sending (`beginAction`): a plan's later steps, a Perpl bracket's frames.
+    @ObservationIgnored private var runningActions = 0
+    /// The app is in the background (`endWhenIdle` until `enteredForeground`).
+    @ObservationIgnored private var inBackground = false
+    /// The app left the foreground while an action ran: the session ends when the last one finishes (GL-1).
+    @ObservationIgnored private var endsWhenIdle = false
+    /// The background time iOS grants for those actions to finish; when it runs out the session ends regardless.
+    @ObservationIgnored private var backgroundTime: BackgroundTime?
     private let ceremony: PasskeyCeremony
     /// Where this build reports a passkey as unknown: orphan cleanup here, and account deletion (`AccountDeletion`,
     /// through `Mera.AccountDeletion.run`, which alone decides when it is sent).
@@ -452,6 +460,47 @@ final class MeraSession {
         if live === session { lifecycle?.meraSessionDidOpen(self) }
     }
 
+    // MARK: Leaving the app (security audit 2026-09-26, GL-1 and GL-7)
+
+    /// An action the owner already approved starts signing or sending — a plan (`TransactionRun`), a Perpl bracket
+    /// (`PerpTradeView`). While one runs, leaving the app doesn't end the session under it. Pair with `endAction`.
+    func beginAction() {
+        runningActions += 1
+    }
+
+    /// An approved action finished. If the app left the foreground meanwhile, the last one to finish ends the session.
+    func endAction() {
+        runningActions = max(0, runningActions - 1)
+        guard runningActions == 0, endsWhenIdle else { return }
+        endsWhenIdle = false
+        backgroundTime?.end()
+        backgroundTime = nil
+        end()
+    }
+
+    /// The app left the foreground (RootView). The session ends now, or — while an approved action is still running — the
+    /// moment the last one finishes, within the background time iOS grants (about 30 s); when that runs out it ends
+    /// regardless. It still ends even if the app comes back first, and nothing new can start from the background, so
+    /// whoever picks the phone up next has to present the passkey again.
+    func endWhenIdle() {
+        inBackground = true
+        guard runningActions > 0, live != nil else { end(); return }
+        endsWhenIdle = true
+        if backgroundTime == nil {
+            backgroundTime = BackgroundTime("Passkey session") { [weak self] in
+                guard let self else { return }
+                self.backgroundTime = nil
+                self.endsWhenIdle = false
+                self.end()
+            }
+        }
+    }
+
+    /// The app is active again. A session waiting on a running action still ends with it (`endWhenIdle`).
+    func enteredForeground() {
+        inBackground = false
+    }
+
     // MARK: Ending
 
     /// Ends the live session (expiry, Lock, the app leaving the foreground, sign-out): Perpl trading drops its key and
@@ -556,6 +605,18 @@ final class MeraSession {
         scheduleExpiry(of: session)
         MeraCredentialStore.save(credentialID: result.credentialID, address: session.address)
         lifecycle?.meraSessionDidOpen(self)
+        // A ceremony that finished after the app left the foreground (GL-7): the session serves the call that asked for
+        // it, then ends — with the last running action, or, when none runs, as soon as that call has it.
+        if inBackground {
+            if runningActions > 0 {
+                endsWhenIdle = true
+            } else {
+                Task { @MainActor [weak self, weak session] in
+                    guard let self, let session, self.live === session, self.inBackground, self.runningActions == 0 else { return }
+                    self.end()
+                }
+            }
+        }
         return session
     }
 

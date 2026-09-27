@@ -47,9 +47,11 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             // A passkey (Mera) signing session must not outlive the user leaving the app: whoever picks the phone up
             // next has to present the passkey again. Ending it also closes a passkey account's Perpl socket and drops
-            // its trading key.
-            if phase == .background { session.mera.end() }
+            // its trading key. An approved plan or order still running keeps it until it finishes, within the
+            // background time iOS grants (GL-1).
+            if phase == .background { session.mera.endWhenIdle() }
             if phase == .active {
+                session.mera.enteredForeground()
                 settings.appearance.apply()
                 // The minimum supported build, at most every ten minutes (GP-2).
                 Task { await env.updateGate.check(client: env.social.client) }

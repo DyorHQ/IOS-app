@@ -2151,6 +2151,9 @@ struct AuthedOrderSheet: View {
     private func place(approval: MeraSession.StepUp? = nil) async {
         // App Lock covers leveraged orders too (this path signs with the Perpl API key, not a confirmation sheet).
         if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm order")) { return }
+        // A passkey session (and its trading socket) outlives leaving the app until this bracket is sent (GL-1).
+        session.mera.beginAction()
+        defer { session.mera.endAction() }
         phase = .placing
         do {
             // Bracket placement reports per-frame acceptance, so we record only the TP/SL Perpl actually admitted and

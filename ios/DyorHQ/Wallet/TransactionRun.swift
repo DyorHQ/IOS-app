@@ -36,13 +36,17 @@ final class TransactionRun {
         }
         let passkey = session.isPasskeyAccount
         let owner = session.address
+        let mera = session.mera
         phase = .running
         events = []
+        // An approved plan keeps a passkey account's session until its last step, even if the app leaves the
+        // foreground meanwhile (GL-1): its later steps never ask for the passkey again.
+        mera.beginAction()
         Task {
             // A lock or an app switch mid-plan suspends it: ask for the time iOS grants so the step in flight can still
             // broadcast and see its receipt (GL-2).
             let background = BackgroundTime("Transaction")
-            defer { background.end() }
+            defer { background.end(); mera.endAction() }
             do {
                 let hash = try await sender.run(steps, from: wallet) { event in
                     Task { @MainActor in self.record(event, owner: owner) }
@@ -89,14 +93,18 @@ final class TransactionRun {
 }
 
 /// The background time iOS grants an app that leaves the foreground (about 30 s), held while a plan runs. Ends when
-/// the run does, or when the time is up.
+/// the run does, or when the time is up — after `onExpire`, when given.
 @MainActor
 final class BackgroundTime {
     private var id: UIBackgroundTaskIdentifier = .invalid
 
-    init(_ name: String) {
+    init(_ name: String, onExpire: (@MainActor () -> Void)? = nil) {
         id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
-            MainActor.assumeIsolated { self?.end() }
+            MainActor.assumeIsolated {
+                let held = self // `onExpire` may drop the last other reference; the task must still be handed back
+                onExpire?()
+                held?.end()
+            }
         }
     }
 
