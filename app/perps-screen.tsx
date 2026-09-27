@@ -56,6 +56,9 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
   // Never moves the status of a transaction that is still running (run refuses a second one anyway).
   const startAt = (at: typeof txAt) => { if (!locked) setTxAt(at); };
   const orders = useAsync(async () => (acct && perps.length ? fetchOpenOrders(acct, perps) : []), `orders:${acct?.accountId ?? 0}:${perps.length}`, 10_000);
+  // Open orders are read market by market: without the market list they are unknown, never "none".
+  const ordersUnknown = !!acct && perps.length === 0;
+  const ordersError = orders.error ?? (ordersUnknown ? accountError : null);
   const collat = useAsync(async () => (account ? collateralBalances(account) : null), `collat:${account ?? ""}`, 10_000);
 
   const mark = feed.state ? px(feed.state.mrk, perp ?? { priceDecimals: mctx?.priceDecimals ?? 6 } as PerpInfo) : perp?.mark ?? mctx?.mark ?? 0;
@@ -229,8 +232,8 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
               <button type="button" className="btn secondary sm" disabled={locked} onClick={() => { const client = wallet.client; if (!client) return; startAt("orders"); void run(`Cancel order #${o.orderId}`, (onSent) => cancelOrder(client, o.perpId, o.orderId, onSent), refreshAll); }}>Cancel</button>
             </div>
           ))}
-          {orders.error && <p className="hint err" role="alert">Couldn&apos;t read your open orders ({orders.error}). Retrying.</p>}
-          {(orders.data ?? []).length === 0 && !orders.error && <Empty icon="file" title={orders.loading || (account && !accountKnown) ? "Reading the book…" : "No open orders"} text="Resting limit orders on Perpl appear here." />}
+          {ordersError && <p className="hint err" role="alert">Couldn&apos;t read your open orders ({ordersError}). Retrying.</p>}
+          {(orders.data ?? []).length === 0 && !ordersError && <Empty icon="file" title={orders.loading || ordersUnknown || (account && !accountKnown) ? "Reading the book…" : "No open orders"} text="Resting limit orders on Perpl appear here." />}
         </section>
       )}
       {tab === "Collateral" && (
