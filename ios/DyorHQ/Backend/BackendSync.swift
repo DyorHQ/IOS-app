@@ -51,6 +51,22 @@ final class BackendSync {
     private struct ActivityRow: Codable, Sendable {
         let id: String, wallet: String, kind: String, section: String, title: String, subtitle: String
         let tx_hash: String?, usd: Double?, fee_usd: Double?, occurred_at: String
+
+        /// Every key in every row, an absent value as JSON null: PostgREST refuses a bulk upsert whose objects don't all
+        /// have the same keys (PGRST102), and a row without a hash or a dollar value would otherwise leave those out.
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(id, forKey: .id)
+            try c.encode(wallet, forKey: .wallet)
+            try c.encode(kind, forKey: .kind)
+            try c.encode(section, forKey: .section)
+            try c.encode(title, forKey: .title)
+            try c.encode(subtitle, forKey: .subtitle)
+            if let tx_hash { try c.encode(tx_hash, forKey: .tx_hash) } else { try c.encodeNil(forKey: .tx_hash) }
+            if let usd { try c.encode(usd, forKey: .usd) } else { try c.encodeNil(forKey: .usd) }
+            if let fee_usd { try c.encode(fee_usd, forKey: .fee_usd) } else { try c.encodeNil(forKey: .fee_usd) }
+            try c.encode(occurred_at, forKey: .occurred_at)
+        }
     }
 
     /// A new record joins the wallet's queue on the device first, then the queue is sent.
