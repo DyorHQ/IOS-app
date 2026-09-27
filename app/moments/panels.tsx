@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useSyncExternalStore } from "react";
+import { useId, useState, useSyncExternalStore } from "react";
 import { Icon } from "../ui/icons";
 import { ActionButton, TxStatus } from "../launchpad/ui";
 import { BPS, MAX_BATCH, MOMENTS_DEPLOYED, MONTH_SECONDS, ONRAMP_URL, STUCK_GRACE_SECONDS, SUPPLY, USDC } from "../lib/moments/config";
@@ -50,6 +50,7 @@ export function CollectPanel({ moment, view, onDone }: { moment: MomentDetail; v
   const [qty, setQty] = useState(1);
   const [mode, setMode] = useState<CollectMode>("permit2");
   const [agreed, setAgreed] = useDisclosure();
+  const payWithId = useId();
   const { tx, run, dismiss, busy } = useTx();
   const quote = useAsync(() => quoteCollect(moment.id, qty), `quote:${moment.id}:${qty}`, 6_000);
   const q = quote.data?.quote ?? null;
@@ -87,8 +88,8 @@ export function CollectPanel({ moment, view, onDone }: { moment: MomentDetail; v
       {quote.data?.reason && <p className="hint err">{quote.data.reason}</p>}
       {closed && <p className="hint err">The collect window closed {fmtDate(moment.deadline)}.</p>}
       <DisclosureBox checked={agreed} onChange={setAgreed} moment={moment} />
-      <div className="slip" style={{ marginTop: 10 }}>
-        <span>Pay with</span>
+      <div className="slip" style={{ marginTop: 10 }} role="group" aria-labelledby={payWithId}>
+        <span id={payWithId}>Pay with</span>
         <button type="button" aria-pressed={mode === "permit2"} onClick={() => setMode("permit2")} title="Approve Permit2 once, then sign each collect">Permit2 signature</button>
         <button type="button" aria-pressed={mode === "approve"} onClick={() => setMode("approve")} title="An exact USDC approval of the collect contract, then the collect">Plain approval</button>
       </div>

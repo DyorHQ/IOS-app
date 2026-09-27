@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { keccak256, stringToHex, type Hex } from "viem";
 import { Icon } from "../../ui/icons";
 import { ActionButton, TxStatus } from "../../launchpad/ui";
@@ -61,6 +61,7 @@ export default function Create() {
   // Only the latest pick may set the hash: an earlier, larger file that finishes hashing later must not overwrite it.
   const pickId = useRef(0);
   const [touched, setTouched] = useState(false);
+  const ids = useId();
   const { tx, run, dismiss, busy } = useTx();
   const policy = useAsync(fetchPolicy, "moments-policy", 60_000);
   const preview = useMemo(() => (file ? URL.createObjectURL(file) : ""), [file]);
@@ -107,12 +108,12 @@ export default function Create() {
         <form className="card form" onSubmit={(e) => { e.preventDefault(); void submit(); }} noValidate>
           <div className="step-head"><div><span className="eyebrow">New Moment · Monad</span><h1>Publish a Moment</h1></div></div>
 
-          <div className="field"><span>Media</span>
+          <div className="field"><label htmlFor={`${ids}-media`}>Media</label>
             <div className="file-pick">
               {preview ? <img className="thumb" src={preview} alt="" /> : <span className="thumb" aria-hidden="true" />}
               <div style={{ flex: 1 }}>
-                <input type="file" accept="image/*,video/*" onChange={(e) => pickFile(e.target.files?.[0] ?? null)} />
-                <span className="help">Pick the original file to fingerprint it: its keccak-256 hash goes on-chain as the provenance record. Nothing is uploaded from here.</span>
+                <input id={`${ids}-media`} type="file" accept="image/*,video/*" aria-describedby={`${ids}-media-help`} onChange={(e) => pickFile(e.target.files?.[0] ?? null)} />
+                <span className="help" id={`${ids}-media-help`}>Pick the original file to fingerprint it: its keccak-256 hash goes on-chain as the provenance record. Nothing is uploaded from here.</span>
                 {fileHash && <span className="help mono-sm">hash {fileHash}</span>}
                 {file && !fileHash && <span className={fileFailed ? "hint err" : "help"}>{fileFailed ? "Couldn't read that file." : "Fingerprinting…"}</span>}
               </div>

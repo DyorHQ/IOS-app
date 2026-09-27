@@ -189,7 +189,7 @@ export function MarketsScreen({ go, preset, autoFocus = false }: { go: Go; prese
   if (detail) return <main className="screen" data-screen="markets"><TokenDetail row={detail} go={go} onBack={() => setSelected(null)} /></main>;
   return (
     <main className="screen" data-screen="markets">
-      <label className="mkt-search"><Icon name="search" /><input placeholder="Search tokens or paste an address" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus={autoFocus} /></label>
+      <label className="mkt-search"><Icon name="search" /><span className="sr-only">Search tokens</span><input placeholder="Search tokens or paste an address" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus={autoFocus} /></label>
       <Seg label="Market type" options={opts(MSEGS)} value={seg} onChange={setSeg} />
       {seg !== "Perps" && seg !== "Stocks" && <div style={{ marginTop: 10 }}><Seg label="Sort markets" options={MFILTERS} value={filter} onChange={setFilter} small /></div>}
       {seg === "Perps" ? (

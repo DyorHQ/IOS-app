@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { erc20Abi, getAddress, isAddress, type Address } from "viem";
 import { Icon } from "../../ui/icons";
 import { Switch } from "../../ui/components";
@@ -111,6 +111,7 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
   const [form, setForm] = useState<Form>(EMPTY);
   const [advanced, setAdvanced] = useState(false);
   const [touched, setTouched] = useState(false);
+  const ids = useId();
   const { tx, run, dismiss, busy } = useTx();
   const protocol = useAsync(fetchProtocol, "protocol", 60_000);
   const pairs = protocol.data?.pairs.filter((p) => p.approved) ?? [];
@@ -179,8 +180,8 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
           </div>
           <label className="field">Website (optional)<input type="url" placeholder="https://" value={form.website} onChange={(e) => set({ website: e.target.value })} />{touched && errors.website && <span className="hint err">{errors.website}</span>}</label>
 
-          <div className="field"><span>Paired asset</span>
-            <div className="pair-pick">
+          <div className="field"><span id={`${ids}-pair`}>Paired asset</span>
+            <div className="pair-pick" role="group" aria-labelledby={`${ids}-pair`}>
               {pairs.map((p) => (
                 <button key={p.address} type="button" aria-pressed={pair?.address === p.address} onClick={() => set({ pair: p.address })}>
                   <span className="coin sm" style={{ background: p.native ? "var(--asset-violet)" : toneFor(p.address) }} aria-hidden="true">{p.symbol[0]}</span>
@@ -192,8 +193,8 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
             <span className="help">The curve collects this asset. At graduation it becomes the other side of the {venueLabel(effectiveVenue)} pool.</span>
           </div>
 
-          <div className="field"><span>Graduation venue</span>
-            <div className="pair-pick">
+          <div className="field"><span id={`${ids}-venue`}>Graduation venue</span>
+            <div className="pair-pick" role="group" aria-labelledby={`${ids}-venue`}>
               {VENUES.map(({ v, label }) => (
                 <button key={v} type="button" aria-pressed={effectiveVenue === v} disabled={pairMondayOnly && v !== 1} onClick={() => set({ graduationVenue: v })}>
                   <span><b>{label}</b></span>

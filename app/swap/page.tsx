@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { isAddress, type Address, type Hex } from "viem";
 import { Icon } from "../ui/icons";
 import { DEPLOYED, explorerToken } from "../lib/chain";
@@ -34,6 +34,7 @@ function VenueMark({ venue }: { venue: Venue }) {
 
 function TokenPicker({ tokens, balances, exclude, onPick, onClose }: { tokens: TokenInfo[]; balances: Record<string, bigint>; exclude: TokenInfo; onPick: (t: TokenInfo) => void; onClose: () => void }) {
   const [query, setQuery] = useState("");
+  const searchId = useId();
   const custom = useAsync(async () => (isAddress(query.trim()) && !findToken(tokens, query.trim()) ? loadToken(query.trim()) : null), `custom:${query.trim().toLowerCase()}`);
   const q = query.trim().toLowerCase();
   const list = tokens.filter((t) => !sameToken(t.address, exclude.address) && (!q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.address.toLowerCase() === q));
@@ -45,8 +46,8 @@ function TokenPicker({ tokens, balances, exclude, onPick, onClose }: { tokens: T
   return (
     <div className="picker" role="dialog" aria-modal="true" aria-label="Choose a token" onClick={onClose}>
       <div className="card panel" onClick={(e) => e.stopPropagation()}>
-        <div className="hd" style={{ marginBottom: 0 }}><h2>Choose a token</h2><button type="button" className="iconbtn" aria-label="Close" onClick={onClose}><Icon name="x" /></button></div>
-        <input className="search-in" placeholder="Search by name, symbol or paste an address" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus />
+        <div className="hd" style={{ marginBottom: 0 }}><h2><label htmlFor={searchId}>Choose a token</label></h2><button type="button" className="iconbtn" aria-label="Close" onClick={onClose}><Icon name="x" /></button></div>
+        <input id={searchId} className="search-in" placeholder="Search by name, symbol or paste an address" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus />
         <div className="picker-list">
           {custom.data && (
             <button type="button" onClick={() => onPick(custom.data as TokenInfo)}>
@@ -98,6 +99,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const [step, setStep] = useState<{ label: string; hash?: Hex } | null>(null);
   const { tx, run, reset, dismiss, busy } = useTx();
   const debouncedAmount = useDebounced(amount, 400);
+  const ids = useId();
   const amountIn = parseAmount(debouncedAmount, tokenIn.decimals) ?? 0n;
 
   // Preselect from ?in= and ?out= (symbols or addresses) once the token list, including graduated launches, is known,
@@ -188,21 +190,21 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
         <section className="card swapcard">
           <div className="swap-head">
             <h1>Swap</h1>
-            <div className="slip"><span style={{ marginRight: 0 }}>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
+            <div className="slip" role="group" aria-labelledby={`${ids}-slippage`}><span id={`${ids}-slippage`} style={{ marginRight: 0 }}>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
           </div>
           <div className="swap-field">
-            <div className="lbl"><span>You pay</span>{balIn !== undefined && <button type="button" onClick={() => setAmount(exactDown(balIn, tokenIn.decimals, 8))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
+            <div className="lbl"><label htmlFor={`${ids}-pay`}>You pay</label>{balIn !== undefined && <button type="button" onClick={() => setAmount(exactDown(balIn, tokenIn.decimals, 8))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
             <div className="rowin">
-              <input inputMode="decimal" placeholder="0" aria-label="Amount to pay" value={amount} onChange={(e) => { edited.current = true; setAmount(e.target.value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } }} />
+              <input id={`${ids}-pay`} inputMode="decimal" placeholder="0" value={amount} onChange={(e) => { edited.current = true; setAmount(e.target.value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } }} />
               <button type="button" className="tokbtn" onClick={() => setPicking("in")}><TokenLogo src={tokenIn.logo} name={tokenIn.symbol} size="sm" />{tokenIn.symbol}<Icon name="chev-down" /></button>
             </div>
             <div className="sub">{insufficient ? <span className="impact-bad">Insufficient balance</span> : ""}</div>
           </div>
           <button type="button" className="flip" aria-label="Switch tokens" onClick={flip}><Icon name="swap" /></button>
           <div className="swap-field">
-            <div className="lbl"><span>You receive</span>{balances.data?.[tokenOut.address.toLowerCase()] !== undefined && <span>Balance {fmtUnits(balances.data[tokenOut.address.toLowerCase()], tokenOut.decimals, { compact: true })}</span>}</div>
+            <div className="lbl"><label htmlFor={`${ids}-receive`}>You receive</label>{balances.data?.[tokenOut.address.toLowerCase()] !== undefined && <span>Balance {fmtUnits(balances.data[tokenOut.address.toLowerCase()], tokenOut.decimals, { compact: true })}</span>}</div>
             <div className="rowin">
-              <input readOnly aria-label="Amount to receive" value={outText} placeholder="0" />
+              <input id={`${ids}-receive`} readOnly value={outText} placeholder="0" />
               <button type="button" className="tokbtn" onClick={() => setPicking("out")}><TokenLogo src={tokenOut.logo} name={tokenOut.symbol} size="sm" />{tokenOut.symbol}<Icon name="chev-down" /></button>
             </div>
             <div className="sub">{selected && amountIn > 0n ? `1 ${tokenIn.symbol} = ${fmtNumber(rate(amountIn, tokenIn.decimals, selected.amountOut, tokenOut.decimals))} ${tokenOut.symbol}` : ""}</div>

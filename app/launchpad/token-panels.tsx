@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useDeferredValue, useState } from "react";
+import { useDeferredValue, useId, useState } from "react";
 import { Icon } from "../ui/icons";
 import { Seg, type SegOpt } from "../ui/components";
 import { quoteBuy, quoteSell, type AccountView, type LaunchDetail } from "../lib/launchpad";
@@ -32,6 +32,7 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
   const [slippageBps, setSlippage] = useState(100);
   const { tx, run, reset, dismiss, busy } = useTx();
   const now = useNow();
+  const slipId = useId();
   const deferredAmount = useDeferredValue(amount);
   const decimals = side === "buy" ? pair.decimals : 18;
   const parsed = parseAmount(deferredAmount, decimals);
@@ -75,7 +76,7 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
         <input inputMode="decimal" placeholder="0" aria-label={side === "buy" ? `Amount in ${pair.symbol}` : `Amount in ${launch.symbol}`} value={amount} onChange={(e) => setAmount(e.target.value)} />
         <span className="tok">{side === "buy" ? pair.symbol : `$${launch.symbol}`}</span>
       </label>
-      <div className="presets">
+      <div className="presets" role="group" aria-label={side === "buy" ? "Amount presets" : "Share of your balance"}>
         {side === "buy" ? BUY_PRESETS.map((p) => <button key={p} type="button" aria-pressed={amount === p} onClick={() => setPreset(p)}>{p} {pair.symbol}</button>) : SELL_PRESETS.map((p) => <button key={p} type="button" onClick={() => setPreset(p)} disabled={!view}>{p}%</button>)}
       </div>
       {balance !== undefined && <p className="hint">Balance: {fmtAmount(balance, decimals, side === "buy" ? pair.symbol : launch.symbol)}</p>}
@@ -90,7 +91,7 @@ export function TradePanel({ launch, view, onDone }: { launch: LaunchDetail; vie
         {q && q.kind === "sell" && <div><span>Trade fee {bpsToPct(launch.feeBps)}{launch.creatorTaxBps ? ` + creator tax ${bpsToPct(launch.creatorTaxBps)}` : ""}</span><b>{fmtAmount(q.fee + q.tax, pair.decimals, pair.symbol)}</b></div>}
         <div><span>Minimum after slippage</span><b>{q ? fmtUnits(minOut, side === "buy" ? 18 : pair.decimals) : "—"}</b></div>
       </div>
-      <div className="slip"><span>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
+      <div className="slip" role="group" aria-labelledby={slipId}><span id={slipId}>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
       <TxStatus tx={tx} onDismiss={dismiss} />
       {quote.error && <p className="hint err">{quote.error}</p>}
       {insufficient && <p className="hint err">Insufficient balance.</p>}

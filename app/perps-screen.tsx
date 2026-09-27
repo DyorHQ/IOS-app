@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useId, useState } from "react";
 import { formatUnits } from "viem";
 import { Empty, Seg, SideMark, Subtabs, opts, tabPanel } from "./ui/components";
 import type { Go, Preset, Toast } from "./ui/nav";
@@ -44,6 +44,7 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
   const [tab, setTab] = useState<(typeof PTABS)[number]>("Positions");
   const [period, setPeriod] = useState("3600");
   const [collatAmount, setCollatAmount] = useState("");
+  const collatId = useId();
   const { tx, run, reset, dismiss, busy } = useTx();
   const orders = useAsync(async () => (acct && perps.length ? fetchOpenOrders(acct, perps) : []), `orders:${acct?.accountId ?? 0}:${perps.length}`, 10_000);
   const collat = useAsync(async () => (account ? collateralBalances(account) : null), `collat:${account ?? ""}`, 10_000);
@@ -222,7 +223,8 @@ export default function PerpsScreen({ toast, preset }: { toast: Toast; go: Go; p
           <div className="collat"><div><span>Perpl account</span><b>{acct ? `$${fmtFixed(fromCNS(acct.balance))}` : accountText ?? "Not opened"}</b>{acct && <span>locked ${fmtFixed(fromCNS(acct.locked))}</span>}</div><div style={{ textAlign: "right" }}><span>AUSD in wallet</span><b>{collat.data ? fmtUnits(collat.data.wallet, 6) : collat.error ? "Couldn't read" : "—"}</b></div></div>
           {!account ? <Empty icon="wallet" title="Connect a wallet" text="Deposits go to the Perpl Exchange contract from your wallet." /> : (
             <>
-              <div className="inline-form"><input inputMode="decimal" placeholder="AUSD amount" value={collatAmount} onChange={(e) => setCollatAmount(e.target.value)} /><button type="button" className="btn primary sm" disabled={busy || !accountKnown || !collatAmt || !!depositIssue} onClick={doDeposit}>{acct ? "Deposit" : "Open account"}</button><button type="button" className="btn secondary sm" disabled={busy || !acct || !collatAmt || withdrawIssue} onClick={doWithdraw}>Withdraw</button></div>
+              <label className="label" htmlFor={collatId} style={{ display: "block", marginBottom: 6 }}>Amount (AUSD)</label>
+              <div className="inline-form"><input id={collatId} inputMode="decimal" placeholder="0" value={collatAmount} onChange={(e) => setCollatAmount(e.target.value)} /><button type="button" className="btn primary sm" disabled={busy || !accountKnown || !collatAmt || !!depositIssue} onClick={doDeposit}>{acct ? "Deposit" : "Open account"}</button><button type="button" className="btn secondary sm" disabled={busy || !acct || !collatAmt || withdrawIssue} onClick={doWithdraw}>Withdraw</button></div>
               {depositIssue && <p className="hint err" style={{ marginTop: 8 }}>{depositIssue}</p>}
               {acct && <p className={`hint ${withdrawIssue ? "err" : ""}`} style={{ marginTop: 8 }}>${fmtFixed(fromCNS(freeCNS))} is available to withdraw.</p>}
               <p className="hint" style={{ marginTop: 8 }}>Collateral is AUSD. First deposit opens your account (minimum 10 AUSD). Need AUSD? <button type="button" className="link" style={{ color: "var(--accent-ink)", fontWeight: 600 }} onClick={() => toast("Swap MON to AUSD on the Swap tab")}>Swap for it</button>.</p>
