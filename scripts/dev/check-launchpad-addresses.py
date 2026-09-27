@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Every place the apps learn the launchpad's addresses must agree with contracts/deployments/143.json.
 
-Checks the DyorKit constant, app/lib/deployment.json, and — when they set the keys — the gitignored local configs
-(ios Secrets.xcconfig, web .env and .env.local). Also fails when the web app's live factory is a retired one, or when
-a retired payout wallet appears anywhere in app/lib. Exit 1 on any problem. Run after a redeploy and before a release.
+Checks the DyorKit constant and — when they set the keys — the gitignored local configs (ios Secrets.xcconfig, and
+the .env / .env.local that scripts read). Also fails when the deployment record's factory is a retired one, or when a
+local config holds a retired payout wallet. Exit 1 on any problem. Run after a redeploy and before a
+release.
 Local config values are compared, never printed: a problem there names the key only.
 """
 import glob, json, os, re, sys
@@ -17,7 +18,7 @@ KEYS = {  # record key → (xcconfig key, web env key, Swift field)
     "holderFeeSharing": ("HOLDER_FEE_SHARING", "NEXT_PUBLIC_HOLDER_FEE_SHARING", "holderFeeSharing"),
     "hook": ("MEME_HOOK", "NEXT_PUBLIC_MEME_HOOK", "hook"),
 }
-# Retired launchpad factories (closed to new launches; the web app still serves their existing launches).
+# Retired launchpad factories (closed to new launches; the app still serves their existing launches).
 RETIRED_FACTORIES = {
     "0x10f34a174d9c393a90aff94bded7e1db185446d7",
     "0x2f02972e166de71097eeac8303ce7fe6b6ebe9f4",
@@ -45,20 +46,8 @@ for key, (_, _, field) in KEYS.items():
     m = re.search(rf'{field}: Address\(literal: "(0x[0-9a-fA-F]{{40}})"\)', block)
     check("DyorKit LaunchpadAddresses.monadMainnet", key, m.group(1) if m else "<missing>")
 
-# Web deployment record (copied by `npm run sync:deployment 143`)
-web = json.load(open(os.path.join(ROOT, "app/lib/deployment.json")))
-for key in KEYS:
-    check("app/lib/deployment.json", key, web.get(key, "<missing>"))
-for where, factory in (("app/lib/deployment.json", web.get("factory", "")), ("contracts/deployments/143.json", record["factory"])):
-    if factory.lower() in RETIRED_FACTORIES:
-        problems.append(f"{where}: factory {factory} is a retired launchpad")
-
-# No app/lib source or data file may carry a retired payout wallet.
-for path in sorted(glob.glob(os.path.join(ROOT, "app/lib/**/*.json"), recursive=True) + glob.glob(os.path.join(ROOT, "app/lib/**/*.ts"), recursive=True)):
-    text = open(path).read().lower()
-    for wallet, label in OLD_WALLETS.items():
-        if wallet in text:
-            problems.append(f"{os.path.relpath(path, ROOT)}: contains the {label} {wallet}")
+if record["factory"].lower() in RETIRED_FACTORIES:
+    problems.append(f"contracts/deployments/143.json: factory {record['factory']} is a retired launchpad")
 
 # Local overrides, when present. An xcconfig/env that sets the keys must set them to the current deployment
 # (or point at a fork on purpose — then this script is expected to complain).
@@ -75,7 +64,7 @@ def kv_file(path, pattern):
 xc = kv_file(os.path.join(ROOT, "ios/DyorHQ/Config/Secrets.xcconfig"), r"^([A-Z_]+)\s*=\s*(.+)$")
 for key, (xkey, _, _) in KEYS.items():
     check("ios Secrets.xcconfig", key, xc.get(xkey), reveal=False)
-# Web env files: compared by key name, values never printed (the same files hold private keys).
+# Script env files: compared by key name, values never printed (the same files hold private keys).
 def env_value(raw):
     return raw.split(" #", 1)[0].strip().strip("'\"").lower()
 
@@ -101,6 +90,6 @@ if problems:
     print("Launchpad address drift:\n  " + "\n  ".join(problems))
     sys.exit(1)
 active = [k for k, (xkey, _, _) in KEYS.items() if xkey in xc]
-print(f"OK: DyorKit, app/lib/deployment.json"
+print(f"OK: DyorKit"
       + (", Secrets.xcconfig" if active else ", Secrets.xcconfig (no override)")
-      + "".join(f", {name}" for name in envs) + f" all match factory {record['factory']}; no retired payout wallet in app/lib")
+      + "".join(f", {name}" for name in envs) + f" all match factory {record['factory']}")
