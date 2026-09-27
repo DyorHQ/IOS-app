@@ -25,6 +25,18 @@ public enum PerplTriggerRules {
         /// Take-profit / stop-loss on a reduce-only order: its triggers would close the opposite side, which the
         /// account doesn't hold.
         case reduceOnly
+        /// Take-profit / stop-loss on an order that only shrinks the open position on the other side (`position` is
+        /// that position's side): like a reduce-only order, it opens nothing for its triggers to close.
+        case reducesPosition(PositionSide)
+    }
+
+    /// Whether an order of `size` on `side` only shrinks an open position of `positionSize` on the other side
+    /// (security audit GT-6): Perpl activates the order's triggers when it trades, and they would then close a position
+    /// on `side` the account doesn't hold. An order larger than the position turns it around, and its triggers close
+    /// what is left on the new side (Perpl clamps a close to the position).
+    public static func onlyReduces(side: PositionSide, size: Double, positionSide: PositionSide?, positionSize: Double) -> Bool {
+        guard let positionSide, positionSide != side, positionSize > 0, size > 0 else { return false }
+        return size <= positionSize * (1 + 1e-9)
     }
 
     /// The price as a whole number of ticks (`price × 10^decimals`), or nil when it isn't one: off the tick grid,
@@ -87,6 +99,9 @@ extension PerplTriggerRules.Problem {
             return "Stop-loss must be \(side == .long ? "above" : "below") the liquidation price (\(NumberStyle.number(liquidation))). Liquidation would come first, so it would never protect you."
         case .reduceOnly:
             return "Take-profit and stop-loss can't be attached to a reduce-only order. Set them on the position instead."
+        case .reducesPosition(let side):
+            let other = side == .long ? "short" : "long"
+            return "This order only reduces your \(side == .long ? "long" : "short"), so its take-profit and stop-loss would have no \(other) to close and would stay armed for your next \(other) here. Set them with TP/SL on the position instead."
         }
     }
 }

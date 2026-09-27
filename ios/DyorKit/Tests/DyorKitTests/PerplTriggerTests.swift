@@ -328,4 +328,15 @@ final class PerplTriggerTests: XCTestCase {
         XCTAssertNil(PerplTradeClient.triggerOutcome(status: 5, reason: 28), "cancelled")
         XCTAssertNil(PerplTradeClient.triggerOutcome(status: 8, reason: 0))
     }
+
+    func testAnOrderThatOnlyReducesTheOtherSideTakesNoTriggers() {
+        // Holding 1 BTC long: a 0.3 short only shrinks it; a 1.3 short turns it into a 0.3 short.
+        XCTAssertTrue(PerplTriggerRules.onlyReduces(side: .short, size: 0.3, positionSide: .long, positionSize: 1))
+        XCTAssertTrue(PerplTriggerRules.onlyReduces(side: .short, size: 1, positionSide: .long, positionSize: 1), "closes it exactly")
+        XCTAssertFalse(PerplTriggerRules.onlyReduces(side: .short, size: 1.3, positionSide: .long, positionSize: 1))
+        XCTAssertFalse(PerplTriggerRules.onlyReduces(side: .long, size: 0.3, positionSide: .long, positionSize: 1), "adds to it")
+        XCTAssertFalse(PerplTriggerRules.onlyReduces(side: .short, size: 0.3, positionSide: nil, positionSize: 0))
+        XCTAssertEqual(PerplTriggerRules.Problem.reducesPosition(.long).message(market: btc()),
+                       "This order only reduces your long, so its take-profit and stop-loss would have no short to close and would stay armed for your next short here. Set them with TP/SL on the position instead.")
+    }
 }

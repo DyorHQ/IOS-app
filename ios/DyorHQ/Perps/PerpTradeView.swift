@@ -657,6 +657,11 @@ struct PerpTradeView: View {
     /// `tp: 0`, a close that fires at once), off the market's tick, and a stop-loss at or beyond the liquidation price.
     private func triggerProblem(side: PositionSide) -> String? {
         guard ticket.effectiveTPSL else { return nil }
+        // An order that only shrinks the position on the other side opens nothing for its triggers to close (GT-6).
+        let wantsTriggers = [ticket.takeProfitText, ticket.stopLossText].contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        if wantsTriggers, let position, PerplTriggerRules.onlyReduces(side: side, size: baseSize, positionSide: position.side, positionSize: position.size) {
+            return PerplTriggerRules.Problem.reducesPosition(position.side).message(market: market)
+        }
         for (kind, text) in [(PerplTriggerKind.takeProfit, ticket.takeProfitText), (.stopLoss, ticket.stopLossText)] {
             guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
             guard let price = text.perpDouble else { return "Enter the \(kind == .takeProfit ? "take-profit" : "stop-loss") as a number, or leave it empty." }
@@ -888,7 +893,8 @@ struct PerpTradeView: View {
         // reconnects and carries the triggers instead of silently dropping to a bare on-chain entry. A plain order with
         // no triggers still falls through to the on-chain path when not live, so trading never depends on one-click.
         if let accountId = authedOrderAccount {
-            AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1)) {
+            AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1),
+                             triggerSize: invertedSize(side: ticket.side), triggerNote: turnaroundNote) {
                 if ticket.effectiveReduceOnly { model.noteUserClose(market.id) }
                 ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""; sizePercent = 0
                 Task { await model.load(env: env, address: session.address) }
@@ -984,6 +990,13 @@ struct PerpTradeView: View {
         return "\(leftovers.count) take-profit/stop-loss order\(one ? "" : "s") from an earlier \(market.asset) \(side == .long ? "long" : "short") \(one ? "is" : "are") still armed on Perpl and would act on this new position. Cancel \(one ? "it" : "them") from Orders first."
     }
     private var sideColor: Color { ticket.side == .long ? .positive : .negative }
+
+    /// For an order that turns the position around (GT-6): what its triggers act on.
+    private var turnaroundNote: String? {
+        guard wantsTriggers, let position, let residual = invertedSize(side: ticket.side) else { return nil }
+        let new = ticket.side == .long ? "long" : "short"
+        return "This order closes your \(NumberStyle.number(position.size)) \(market.asset) \(position.side == .long ? "long" : "short") and opens a \(NumberStyle.number(residual)) \(market.asset) \(new): its take-profit and stop-loss close that \(new) only."
+    }
 
     /// What to tell the user about whether their take-profit / stop-loss will actually be placed, and whether it needs
     /// them to act. An enrolled key means the triggers WILL be placed (the order path reconnects on submit), so that
@@ -1083,7 +1096,8 @@ struct PerpTradeView: View {
         return PerplService.liquidationPrice(side: .short, entry: refPrice, size: baseSize, margin: margin, premium: 0, maintenanceFraction: market.maintMarginFraction)
     }
     /// The liquidation price the position will have after this order, to check a stop-loss against (security audit
-    /// GT-8): the order's own when it opens a position, the combined one when it adds to a position on the same side.
+    /// GT-8): the order's own when it opens a position, the combined one when it adds to a position on the same side,
+    /// and the new side's when it turns a position around (GT-6: its triggers act on what is left on that side).
     private func projectedLiquidation(side: PositionSide) -> Double? {
         guard baseSize > 0, refPrice > 0 else { return nil }
         let margin = notional / max(ticket.leverage, 1)
@@ -1092,7 +1106,18 @@ struct PerpTradeView: View {
             let entry = (position.entry * position.size + refPrice * baseSize) / size
             return PerplService.liquidationPrice(side: side, entry: entry, size: size, margin: position.margin + margin, premium: position.premium, maintenanceFraction: market.maintMarginFraction)
         }
+        if let residual = invertedSize(side: side) {
+            return PerplService.liquidationPrice(side: side, entry: refPrice, size: residual, margin: residual * refPrice / max(ticket.leverage, 1), premium: 0, maintenanceFraction: market.maintMarginFraction)
+        }
         return PerplService.liquidationPrice(side: side, entry: refPrice, size: baseSize, margin: margin, premium: 0, maintenanceFraction: market.maintMarginFraction)
+    }
+
+    /// The size left on `side` when this order turns the open position on the other side around, or nil when it
+    /// doesn't.
+    private func invertedSize(side: PositionSide) -> Double? {
+        guard let position, position.side != side, position.size > 0, baseSize > 0,
+              !PerplTriggerRules.onlyReduces(side: side, size: baseSize, positionSide: position.side, positionSize: position.size) else { return nil }
+        return baseSize - position.size
     }
 
     private var chartLevels: [ChartLevel] {
@@ -2362,6 +2387,10 @@ struct AuthedOrderSheet: View {
     let accountId: Int
     let sideColor: Color
     let summaryMargin: Double
+    /// What the triggers close when it isn't the order's size: what is left on the new side of a position the order
+    /// turns around (GT-6), with a note saying so.
+    var triggerSize: Double? = nil
+    var triggerNote: String? = nil
     let onDone: () -> Void
 
     @Environment(PerplTrading.self) private var perplTrading
@@ -2398,12 +2427,16 @@ struct AuthedOrderSheet: View {
                     DetailRow("Leverage", "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
                     DetailRow("Margin", summaryMargin.formatted(.currency(code: "USD")))
                     // Each closes this order's size, fixed when placed (security audit GT-5).
-                    if let takeProfit { DetailRow("Take profit", "\(NumberStyle.number(takeProfit)) · closes \(NumberStyle.number(input.size)) \(market.asset)", tint: .positive) }
-                    if let stopLoss { DetailRow("Stop loss", "\(NumberStyle.number(stopLoss)) · closes \(NumberStyle.number(input.size)) \(market.asset)", tint: .negative) }
+                    if let takeProfit { DetailRow("Take profit", "\(NumberStyle.number(takeProfit)) · closes \(NumberStyle.number(triggerSize ?? input.size)) \(market.asset)", tint: .positive) }
+                    if let stopLoss { DetailRow("Stop loss", "\(NumberStyle.number(stopLoss)) · closes \(NumberStyle.number(triggerSize ?? input.size)) \(market.asset)", tint: .negative) }
                 } header: {
                     Text("Review Order · Perpl")
                 } footer: {
-                    Text("Signed and forwarded by your Perpl API key over the trading connection.")
+                    if let triggerNote, takeProfit != nil || stopLoss != nil {
+                        Text(triggerNote + " Signed and forwarded by your Perpl API key over the trading connection.")
+                    } else {
+                        Text("Signed and forwarded by your Perpl API key over the trading connection.")
+                    }
                 }
                 if !isPlaced, let scopeAssessment {
                     Section { SessionScopeBadge(assessment: scopeAssessment) }
