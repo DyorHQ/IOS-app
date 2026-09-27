@@ -37,6 +37,11 @@
 @allow ios/DyorKit/Tests/DyorKitTests/WalletAuthClientTests.swift 32-byte hex key after a key-like name
 @allow ios/DyorKit/Tests/DyorKitTests/WalletImportTests.swift 32-byte hex key after a key-like name
 
+# vinext writes a fresh random prerenderSecret (randomBytes(32), node_modules/vinext/dist/index.js) into the SERVER build
+# on every build; it only guards vinext's own /__vinext/prerender/* endpoints and never comes from an env file.
+@allow dist/server/vinext-server.json 32-byte hex key after a key-like name
+@allow dist/server/ssr/vinext-server.json 32-byte hex key after a key-like name
+
 # Secrets and credentials beyond the built-in list
 .netrc
 .pgpass
