@@ -18,6 +18,8 @@ struct RootView: View {
                 // A passkey account just deleted: what's left to do about the passkey, then onboarding.
                 if let done = session.passkeyDeletion {
                     AccountDeletedView(done: done) { session.passkeyDeletion = nil }
+                } else if let notice = session.deletionNotice {
+                    DeletionNoticeView(message: notice) { session.deletionNotice = nil }
                 } else if let required = env.updateGate.required {
                     UpdateRequiredView(minimum: required)
                 } else {

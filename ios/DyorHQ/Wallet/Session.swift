@@ -59,6 +59,9 @@ final class Session {
     /// deleted." screen, which RootView shows in place of onboarding until it is closed. It outlives the deletion's own
     /// sheet, which goes with the signed-in screens. Memory only.
     var passkeyDeletion: Mera.AccountDeletion.Done?
+    /// What a deletion that finished on this device left to do (a Privy account that couldn't be deleted,
+    /// `AccountDeletion.run`), shown by RootView in place of onboarding until closed. Memory only.
+    var deletionNotice: String?
 
     var account: Account? { if case .signedIn(let account) = state { return account } else { return nil } }
     var address: Address? { account?.address }
@@ -575,9 +578,11 @@ final class Session {
     }
 
     /// The signed-in Privy user's access token (nil for imported, passkey-derived and watch-only accounts). A
-    /// server function uses it to prove the caller owns the Privy account it is asked to delete.
-    func privyAccessToken() async throws -> String? {
+    /// server function uses it to prove the caller owns the Privy account it is asked to delete. `fresh` renews the
+    /// Privy session first: delete-account takes only a token issued in the last 15 minutes.
+    func privyAccessToken(fresh: Bool = false) async throws -> String? {
         guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return nil }
+        if fresh { try await user.refresh() }
         return try await user.getAccessToken()
     }
 
