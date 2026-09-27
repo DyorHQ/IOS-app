@@ -6,15 +6,17 @@ import Security
 
 /// The only things the app remembers about a passkey account, both public: which credential backs it (so a
 /// sign-in can be pinned to it) and the address it derives to (so the app can show the account while locked — the
-/// address Receive shows). Neither is a secret, but both must be what this app wrote: they live in this device's
-/// Keychain (not synced, not in backups made on another device), where another app or an edited backup can't swap in
-/// someone else's address (security audit 2026-09-26, IOSK-12). Builds before that kept them in UserDefaults: the first
-/// read moves them over, then deletes that copy. A fresh device reconstructs everything from the passkey alone.
+/// address Receive shows). Neither is a secret, but both must be what this app wrote after a passkey ceremony derived
+/// the address: they live in this device's Keychain (not synced, not in backups made on another device), where another
+/// app or an edited backup can't swap in someone else's address (security audit 2026-09-26, IOSK-12). Builds before
+/// that kept them in UserDefaults, which a restored or edited backup can plant, so that copy is never trusted: it is
+/// deleted, and the account comes back with "I already have a passkey", which derives the address from the passkey. A
+/// fresh device reconstructs everything from the passkey alone.
 @MainActor
 enum MeraCredentialStore {
     private static let service = "fun.dyorhq.mera"
     private static let account = "account.v1"
-    /// Where builds before the Keychain move kept the pair (UserDefaults).
+    /// Where builds before the Keychain move kept the pair (UserDefaults): deleted, never read.
     private static let legacyCredentialKey = "mera.credential.v1"
     private static let legacyAddressKey = "mera.address.v1"
 
@@ -50,26 +52,13 @@ enum MeraCredentialStore {
             cached = .some(stored)
             return stored
         case .missing:
-            let migrated = migrateFromUserDefaults()
-            cached = .some(migrated)
-            return migrated
+            UserDefaults.standard.removeObject(forKey: legacyCredentialKey)
+            UserDefaults.standard.removeObject(forKey: legacyAddressKey)
+            cached = .some(nil)
+            return nil
         case .unreadable:
             return nil // the Keychain is locked (before the first unlock): not remembered, so the next read tries again
         }
-    }
-
-    /// The pair an earlier build left in UserDefaults, moved into the Keychain. That copy is deleted only once the
-    /// Keychain holds the pair, so a failed write (the device still locked) leaves it for the next launch to retry.
-    private static func migrateFromUserDefaults() -> Record? {
-        let defaults = UserDefaults.standard
-        guard let credential = defaults.string(forKey: legacyCredentialKey), Mera.Base64URL.decode(credential) != nil,
-              let address = defaults.string(forKey: legacyAddressKey).flatMap(Address.init) else { return nil }
-        let record = Record(credential: credential, address: address.checksummed)
-        if write(record) {
-            defaults.removeObject(forKey: legacyCredentialKey)
-            defaults.removeObject(forKey: legacyAddressKey)
-        }
-        return record
     }
 
     private static var query: [String: Any] {
