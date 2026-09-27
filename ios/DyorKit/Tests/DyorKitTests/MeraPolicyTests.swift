@@ -444,8 +444,13 @@ final class MeraPolicyTests: XCTestCase {
         let nonce = String(repeating: "ab", count: 32)
         let millis = unix * 1000 + 123
         func signIn(_ address: String, _ nonce: String, _ issued: Int) -> Data { Data(SupabaseClient.signInMessage(address: address, nonce: nonce, issuedAt: issued).utf8) }
+        func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self) }
         XCTAssertEqual(Policy.check(message: signIn(account.checksummed, nonce, millis), account: account, now: now), .allowed)
-        XCTAssertEqual(Policy.check(message: signIn(account.hex, nonce, millis), account: account, now: now), .allowed, "lowercase address as sent")
+        // The address line must carry the EIP-55 checksum (an all-digit address like `account` has no letters to case).
+        let lettered = Address(literal: "0x52908400098527886E0F7030069857D2E4169EE7")
+        XCTAssertEqual(Policy.check(message: signIn(lettered.checksummed, nonce, millis), account: lettered, now: now), .allowed)
+        XCTAssertEqual(Policy.check(message: signIn(lettered.hex, nonce, millis), account: lettered, now: now), .ask(.alwaysAsks(.message)))
+        let good = text(signIn(account.checksummed, nonce, millis))
         let asks: [(String, Data)] = [
             ("another wallet", signIn(stranger.checksummed, nonce, millis)),
             ("issued six minutes ago", signIn(account.checksummed, nonce, millis - 6 * 60 * 1000)),
@@ -453,7 +458,14 @@ final class MeraPolicyTests: XCTestCase {
             ("an uppercase nonce", signIn(account.checksummed, nonce.uppercased(), millis)),
             ("a short nonce", signIn(account.checksummed, "abcd", millis)),
             ("a trailing newline", signIn(account.checksummed, nonce, millis) + Data("\n".utf8)),
-            ("a carriage return", Data("DyorHQ Sign-In\r\n\r\nWallet: \(account.checksummed)\r\nNonce: \(nonce)\r\nIssued At: \(millis)".utf8)),
+            ("a carriage return", Data(good.replacingOccurrences(of: "\n", with: "\r\n").utf8)),
+            ("another domain", Data(good.replacingOccurrences(of: "dyorhq.fun wants", with: "evil.fun wants").utf8)),
+            ("another URI", Data(good.replacingOccurrences(of: "URI: https://dyorhq.fun", with: "URI: https://dyorhq.fun.evil.com").utf8)),
+            ("another chain", Data(good.replacingOccurrences(of: "Chain ID: 143", with: "Chain ID: 1").utf8)),
+            ("a longer validity", Data(good.replacingOccurrences(of: "Expiration Time: \(SupabaseClient.iso8601(millis: millis + 600_000))",
+                                                              with: "Expiration Time: \(SupabaseClient.iso8601(millis: millis + 3_600_000))").utf8)),
+            ("an appended resource", Data((good + "\nResources:\n- https://evil.example").utf8)),
+            ("the retired DyorHQ Sign-In template", Data("DyorHQ Sign-In\n\nWallet: \(account.checksummed)\nNonce: \(nonce)\nIssued At: \(millis)".utf8)),
             ("an arbitrary message", Data("Transfer all funds".utf8)),
             ("the email rebind message", Data("DyorHQ Email Rebind\n\nEmail: a@b.c\nAddress: \(account.hex)\nIssued At: \(millis)".utf8)),
             ("not UTF-8", Data([0xff, 0xfe, 0x00])),

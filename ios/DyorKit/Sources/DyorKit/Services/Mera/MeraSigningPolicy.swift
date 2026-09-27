@@ -536,22 +536,20 @@ extension Mera {
 
         // MARK: Messages
 
-        /// A message is prompt-free only when it is, byte for byte, DyorHQ's wallet-auth sign-in for this account
-        /// (`SupabaseClient.signInMessage`), issued within five minutes of `now`. Everything else asks.
+        /// A message is prompt-free only when it is, byte for byte, DyorHQ's EIP-4361 wallet-auth sign-in for this
+        /// account (`SupabaseClient.signInMessage`: this wallet's checksummed address, dyorhq.fun, chain 143), issued
+        /// within five minutes of `now`. Everything else asks, the old "DyorHQ Sign-In" template included: this app no
+        /// longer signs it.
         public static func check(message: Data, account: Address, now: Date = Date()) -> Verdict {
             guard let text = String(data: message, encoding: .utf8) else { return .ask(.alwaysAsks(.message)) }
             let lines = text.components(separatedBy: "\n")
-            guard lines.count == 5, lines[0] == "DyorHQ Sign-In", lines[1].isEmpty,
-                  lines[2].hasPrefix("Wallet: "), lines[3].hasPrefix("Nonce: "), lines[4].hasPrefix("Issued At: ") else { return .ask(.alwaysAsks(.message)) }
-            let wallet = String(lines[2].dropFirst("Wallet: ".count))
-            let nonce = String(lines[3].dropFirst("Nonce: ".count))
-            let issued = String(lines[4].dropFirst("Issued At: ".count))
+            guard lines.count == 11, lines[8].hasPrefix("Nonce: "), lines[9].hasPrefix("Issued At: ") else { return .ask(.alwaysAsks(.message)) }
+            let nonce = String(lines[8].dropFirst("Nonce: ".count))
             let hex = Set("0123456789abcdef")
-            guard wallet.count == 42, Address(wallet) == account,
-                  nonce.count == 64, nonce.allSatisfy(hex.contains),
-                  issued.count == 13, issued.allSatisfy(\.isASCIIDigit), let millis = Int(issued),
+            guard nonce.count == 64, nonce.allSatisfy(hex.contains),
+                  let millis = SupabaseClient.millis(iso8601: String(lines[9].dropFirst("Issued At: ".count))),
                   abs(Double(millis) / 1000 - now.timeIntervalSince1970) <= 5 * 60,
-                  SupabaseClient.signInMessage(address: wallet, nonce: nonce, issuedAt: millis) == text else { return .ask(.alwaysAsks(.message)) }
+                  SupabaseClient.signInMessage(address: account.checksummed, nonce: nonce, issuedAt: millis) == text else { return .ask(.alwaysAsks(.message)) }
             return .allowed
         }
 

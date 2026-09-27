@@ -103,7 +103,9 @@ public actor SupabaseClient {
     /// wallet while this ran checks first, then `restore`s it.
     public func signIn(address: String, adopt: Bool = true, sign: (Data) async throws -> Data) async throws -> SupabaseSession {
         let nonce = try await signInNonce(address: address)
-        let message = Self.signInMessage(address: address, nonce: nonce, issuedAt: Int(Date().timeIntervalSince1970 * 1000))
+        // The message names the wallet with its EIP-55 checksum, whatever case the request carries.
+        let message = Self.signInMessage(address: Address(address)?.checksummed ?? address, nonce: nonce,
+                                         issuedAt: Int(Date().timeIntervalSince1970 * 1000))
         let signature = try await sign(Data(message.utf8)).hexString
         let body = try JSONSerialization.data(withJSONObject: ["address": address, "message": message, "signature": signature])
         let data = try await walletAuth(body)
@@ -114,11 +116,66 @@ public actor SupabaseClient {
         return created
     }
 
-    /// The exact message wallet-auth verifies. Its template match is anchored, so not a byte may differ: `address` as
-    /// sent in the request, the server's nonce, and the signing time in unix milliseconds.
+    /// The exact EIP-4361 (Sign-In with Ethereum) message wallet-auth verifies (security audit 2026-09-26, IOSK-7): bound
+    /// to DyorHQ's domain and to Monad, around the server's nonce, and valid for ten minutes from `issuedAt` (unix
+    /// milliseconds). The server's parse is anchored, so not a byte may differ: `address` is the wallet with its EIP-55
+    /// checksum, lines are separated by a single "\n", and there is no trailing newline.
     public static func signInMessage(address: String, nonce: String, issuedAt: Int) -> String {
-        "DyorHQ Sign-In\n\nWallet: \(address)\nNonce: \(nonce)\nIssued At: \(issuedAt)"
+        [
+            "\(signInDomain) wants you to sign in with your Ethereum account:",
+            address,
+            "",
+            "Sign in to DyorHQ.",
+            "",
+            "URI: https://\(signInDomain)",
+            "Version: 1",
+            "Chain ID: \(signInChainId)",
+            "Nonce: \(nonce)",
+            "Issued At: \(iso8601(millis: issuedAt))",
+            "Expiration Time: \(iso8601(millis: issuedAt + signInLifetimeMillis))",
+        ].joined(separator: "\n")
     }
+
+    /// The sign-in's fixed EIP-4361 fields: DyorHQ's domain, and Monad mainnet's chain id (143), which wallet-auth
+    /// requires whatever RPC this build talks to.
+    static let signInDomain = "dyorhq.fun"
+    static let signInChainId = 143
+    /// How long a signed sign-in stays valid (its Expiration Time); wallet-auth refuses anything longer.
+    static let signInLifetimeMillis = 10 * 60 * 1000
+
+    /// `millis` (unix milliseconds) as ISO-8601 UTC with milliseconds, "2026-09-26T12:34:56.789Z" — exactly what
+    /// JavaScript's `Date.prototype.toISOString` prints, which wallet-auth compares against. Integer arithmetic on the
+    /// milliseconds, so the digits never pick up a floating-point rounding.
+    static func iso8601(millis: Int) -> String {
+        let (seconds, milliseconds) = millis.quotientAndRemainder(dividingBy: 1000)
+        let c = utcCalendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: Date(timeIntervalSince1970: TimeInterval(seconds)))
+        return String(format: "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", c.year ?? 0, c.month ?? 0, c.day ?? 0,
+                      c.hour ?? 0, c.minute ?? 0, c.second ?? 0, milliseconds)
+    }
+
+    /// The unix milliseconds of a timestamp in exactly `iso8601(millis:)`'s form, or nil: anything else, or a date that
+    /// doesn't exist (it must print back unchanged).
+    static func millis(iso8601 text: String) -> Int? {
+        let chars = Array(text.utf8)
+        let separators: [Int: UInt8] = [4: 45, 7: 45, 10: 84, 13: 58, 16: 58, 19: 46, 23: 90] // - - T : : . Z
+        guard chars.count == 24 else { return nil }
+        for (i, byte) in chars.enumerated() {
+            if let separator = separators[i] { guard byte == separator else { return nil } }
+            else if !(48...57).contains(byte) { return nil }
+        }
+        func number(_ from: Int, _ length: Int) -> Int { Int(String(decoding: chars[from..<from + length], as: UTF8.self)) ?? -1 }
+        let components = DateComponents(year: number(0, 4), month: number(5, 2), day: number(8, 2),
+                                        hour: number(11, 2), minute: number(14, 2), second: number(17, 2))
+        guard let date = utcCalendar.date(from: components) else { return nil }
+        let millis = Int(date.timeIntervalSince1970) * 1000 + number(20, 3)
+        return iso8601(millis: millis) == text ? millis : nil
+    }
+
+    private static let utcCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }()
 
     /// A fresh single-use nonce from wallet-auth (32 random bytes as 64 lowercase hex), bound to `address` for 5 minutes.
     private func signInNonce(address: String) async throws -> String {
