@@ -155,9 +155,11 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
   // otherwise. The picker is then forced to Monday and disabled.
   const pairMondayOnly = pair?.mondayOnly ?? false;
   const effectiveVenue = pairMondayOnly ? 1 : form.graduationVenue;
-  // The creator wallet is set under Advanced but matters to everyone: it is paid the creator share and tax, and it
-  // controls that role (it can hand it on, and veto an owner takeover). It is always shown, and a wallet other than
-  // the connected one is called out; an Advanced field with an error opens the section.
+  // The creator wallet is set under Advanced but matters to everyone: it controls the creator role (it can hand it on,
+  // and veto an owner takeover) and is paid the creator share of fees and the creator tax. With holder fee sharing on,
+  // those go to holders when paid in the pair asset (BondingCurve._distributeFees, MemeHook); only any taken in the
+  // launch token itself still go to the creator wallet. It is always shown, and a wallet other than the connected one
+  // is called out; an Advanced field with an error opens the section.
   const creatorWallet = form.creatorWallet.trim() || account || "";
   const creatorIsOther = !!account && isAddress(creatorWallet) && getAddress(creatorWallet) !== getAddress(account);
   const showAdvanced = advanced || !!(errorOf("creatorWallet") || errorOf("creatorTax") || errorOf("exemptions"));
@@ -229,13 +231,15 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
           {showAdvanced && (
             <div className="advanced">
               <div className="toggle-row"><div><b>Holder fee sharing</b><small>Route the creator share of every trade fee to token holders, pro rata, instead of one wallet. Cannot be changed later.</small></div><Switch checked={form.holderFeeSharing} onChange={(v) => set({ holderFeeSharing: v })} label="Holder fee sharing" /></div>
-              <label className="field">Creator wallet<input placeholder={account ?? "0x…"} value={form.creatorWallet} onChange={(e) => set({ creatorWallet: e.target.value })} {...wire("creatorWallet", true)} /><span className="help" id={`${ids}-creatorWallet-help`}>Receives creator fees and any creator tax, and is exempt from the snipe tax. Defaults to your connected wallet.</span>{errorText("creatorWallet")}</label>
-              <label className="field">Creator tax (%)<input inputMode="decimal" value={form.creatorTax} onChange={(e) => set({ creatorTax: e.target.value })} {...wire("creatorTax", true)} /><span className="help" id={`${ids}-creatorTax-help`}>An extra tax on every trade, paid to the creator wallet on top of the {protocol.data ? bpsToPct(protocol.data.curveFeeBps) : "—"} trade fee. Maximum {protocol.data ? bpsToPct(protocol.data.maxCreatorTaxBps) : "—"}.</span>{errorText("creatorTax")}</label>
+              <label className="field">Creator wallet<input placeholder={account ?? "0x…"} value={form.creatorWallet} onChange={(e) => set({ creatorWallet: e.target.value })} {...wire("creatorWallet", true)} /><span className="help" id={`${ids}-creatorWallet-help`}>{form.holderFeeSharing ? `Controls the creator role and is exempt from the snipe tax. With holder fee sharing on, creator fees and tax paid in ${pair?.symbol ?? "the paired asset"} go to holders; any taken in the token itself go to this wallet.` : "Receives the creator share of fees and any creator tax, and is exempt from the snipe tax."} Defaults to your connected wallet.</span>{errorText("creatorWallet")}</label>
+              <label className="field">Creator tax (%)<input inputMode="decimal" value={form.creatorTax} onChange={(e) => set({ creatorTax: e.target.value })} {...wire("creatorTax", true)} /><span className="help" id={`${ids}-creatorTax-help`}>An extra tax on every trade on top of the {protocol.data ? bpsToPct(protocol.data.curveFeeBps) : "—"} trade fee, paid to {form.holderFeeSharing ? "holders while holder fee sharing is on (any taken in the token itself goes to the creator wallet)" : "the creator wallet"}. Maximum {protocol.data ? bpsToPct(protocol.data.maxCreatorTaxBps) : "—"}.</span>{errorText("creatorTax")}</label>
               <label className="field">Snipe-tax exemptions<textarea placeholder="One address per line" value={form.exemptions} onChange={(e) => set({ exemptions: e.target.value })} {...wire("exemptions", true)} /><span className="help" id={`${ids}-exemptions-help`}>Wallets allowed to buy during the first {protocol.data ? seconds(protocol.data.snipeSchedule.length) : "seconds"} without the snipe tax. You and the creator wallet are always exempt. Up to {MAX_EXEMPTIONS}.</span>{errorText("exemptions")}</label>
             </div>
           )}
 
-          {creatorIsOther && <div className="warnbox"><b>Creator fees go to another wallet.</b> {shortAddress(creatorWallet)} (not your connected wallet) receives the creator share of fees and any creator tax, and controls that role: it can hand it to another wallet. Set under Advanced options.</div>}
+          {creatorIsOther && <div className="warnbox">{form.holderFeeSharing
+            ? <><b>The creator role goes to another wallet.</b> {shortAddress(creatorWallet)} (not your connected wallet) controls the creator role and can hand it to another wallet. With holder fee sharing on, creator fees and tax paid in {pair?.symbol ?? "the paired asset"} go to holders; any taken in the token itself go to that wallet. Set under Advanced options.</>
+            : <><b>Creator fees go to another wallet.</b> {shortAddress(creatorWallet)} (not your connected wallet) receives the creator share of fees and any creator tax, and controls the creator role: it can hand it to another wallet. Set under Advanced options.</>}</div>}
           {allowed.data === false && <div className="warnbox"><b>Whitelist only.</b> Launching is currently limited to whitelisted wallets and yours is not on the list.</div>}
           <TxStatus tx={tx} onDismiss={dismiss} />
           {reason && <p className="hint">{reason}</p>}
