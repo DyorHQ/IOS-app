@@ -9,8 +9,9 @@ import Foundation
 ///
 /// Every chain: a gas limit under `maxGasLimit`, a tip no higher than the max fee, and `gasLimit × maxFeePerGas` (the
 /// most the network can charge) under `maxNetworkFee`. Monad, where the fee market is known, also bounds the fee per
-/// gas: under `maxFeePerGas`, and when the base fee is known, a tip no higher than twice it (today's suggestion is 2%
-/// of it; twice leaves room for congestion) and a max fee no higher than the `2 × base + tip` the app sets. Other chains (the Bridge's source side) are bounded by their total alone, since tips
+/// gas: under `maxFeePerGas`, and when the base fee is known, a tip no higher than twice it or `tipFloor`, whichever is
+/// more (today's suggestion is 2% of the base fee; twice leaves room for congestion), and a max fee no higher than the
+/// `2 × base + tip` the app sets. Other chains (the Bridge's source side) are bounded by their total alone, since tips
 /// there routinely exceed the base fee.
 public enum NetworkFeeLimits {
     public struct Limits: Sendable, Equatable {
@@ -39,6 +40,8 @@ public enum NetworkFeeLimits {
     /// and 10,000 gwei per gas (today's base fee is 100 gwei). A normal swap commits about 0.07 MON; the largest
     /// transaction the app sends, a launch with its first buy (~6.2M gas limit), about 1.3 MON.
     public static let monad = Limits(maxGasLimit: 15_000_000, maxNetworkFee: 5 * ether, maxFeePerGas: 10_000 * gwei)
+    /// The tip Monad always allows, whatever the base fee: twice the base fee bounds it only above this.
+    static let tipFloor = 10 * gwei
 
     /// The bounds for `chainId`. The source chains only ever carry a Bridge deposit (a transfer), so their totals sit
     /// far above a busy day's transfer fee and far below a balance-draining one.
@@ -64,7 +67,9 @@ public enum NetworkFeeLimits {
         if maxPriorityFeePerGas > maxFeePerGas { return .tip }
         if let ceiling = limits.maxFeePerGas, maxFeePerGas > ceiling { return .feePerGas }
         if chainId == Monad.chainId, let baseFee {
-            if maxPriorityFeePerGas > baseFee * 2 { return .tip }
+            // Never below `tipFloor`: a base fee that decays toward zero (a local fork's empty blocks) must not make an
+            // ordinary 1–2 gwei tip read as hostile. The per-gas ceiling and the total still bound it.
+            if maxPriorityFeePerGas > max(baseFee * 2, tipFloor) { return .tip }
             if maxFeePerGas > baseFee * 2 + maxPriorityFeePerGas { return .feePerGas }
         }
         if gasLimit * maxFeePerGas > limits.maxNetworkFee { return .total }

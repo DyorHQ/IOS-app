@@ -79,6 +79,20 @@ final class NetworkFeeLimitsTests: XCTestCase {
         await assertRefused("unusual gas price")
     }
 
+    /// A base fee that decayed toward zero (a local fork's empty blocks) with the node's usual 1 gwei tip: still an
+    /// ordinary fee. The base-relative bound applies only above a 10 gwei floor.
+    func testTipBoundHasAFloorForADecayedBaseFee() async throws {
+        RPCStub.baseFee = hex(gwei / 5) // 0.2 gwei
+        RPCStub.tip = hex(gwei)
+        let prepared = try await sender().prepare(request, from: CountingWallet())
+        XCTAssertEqual(prepared.maxPriorityFeePerGas, gwei)
+        XCTAssertEqual(prepared.maxFeePerGas, gwei * 2 / 5 + gwei)
+        RPCStub.tip = hex(10 * gwei)
+        _ = try await sender().prepare(request, from: CountingWallet())
+        RPCStub.tip = hex(10 * gwei + 1)
+        await assertRefused("unusual gas price")
+    }
+
     /// Without a suggested tip the fee falls back to the gas price (tip = price, a little over the base fee): no base-fee
     /// check applies to a fee that isn't derived from the base fee.
     func testGasPriceFallbackIsNotMistakenForAHostileTip() async throws {
@@ -108,6 +122,8 @@ final class NetworkFeeLimitsTests: XCTestCase {
         XCTAssertEqual(v(21_000, 10_000 * gwei + 1, 1, nil, Monad.chainId), .feePerGas)
         XCTAssertEqual(v(21_000, 202 * gwei, 203 * gwei, nil, Monad.chainId), .tip)
         XCTAssertEqual(v(21_000, 300 * gwei, 2 * gwei, 100 * gwei, Monad.chainId), .feePerGas, "above 2 × base + tip")
+        XCTAssertNil(v(21_000, gwei * 2 / 5 + 10 * gwei, 10 * gwei, gwei / 5, Monad.chainId), "a 10 gwei tip whatever the base fee")
+        XCTAssertEqual(v(21_000, gwei * 2 / 5 + 10 * gwei + 1, 10 * gwei + 1, gwei / 5, Monad.chainId), .tip)
         XCTAssertNil(v(2_000_000, gwei / 10, gwei / 10, gwei / 1000, 42161), "Arbitrum: a big estimate at a tiny fee")
         XCTAssertEqual(v(78_000, 700 * gwei, 2 * gwei, 349 * gwei, 1), .total, "Ethereum over 0.05 ETH")
         XCTAssertNil(v(78_000, 600 * gwei, 2 * gwei, 299 * gwei, 1))
