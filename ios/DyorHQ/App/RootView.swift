@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Chooses between onboarding and the app, following the session state.
 struct RootView: View {
@@ -40,8 +41,10 @@ struct RootView: View {
         // Wallet), it would land in that snapshot. Covering the whole hierarchy the instant we're not active means the
         // snapshot only ever captures the cover, never a secret. The one exception is a passkey ceremony: its system
         // sheet makes the scene .inactive, and the cover must not blank the app behind it. Only a passkey (Mera)
-        // ceremony counts, so a build without passkey accounts covers exactly as before.
-        .overlay { PrivacyCover(active: scenePhase == .active || (scenePhase == .inactive && session.mera.isPrompting)) }
+        // ceremony counts, so a build without passkey accounts covers exactly as before. The cover is a window of its
+        // own above every other, so it also hides a sheet or full-screen cover (Export Wallet, the recovery phrase),
+        // which an overlay on this view never reached (IOSK-13).
+        .onChange(of: privacyCovered, initial: true) { _, covered in PrivacyShield.update(covered: covered) }
         .task { session.start(); settings.appearance.apply(); Notifications.configure() }
         .task { await env.updateGate.check(client: env.social.client) }
         .onChange(of: scenePhase) { _, phase in
@@ -114,19 +117,47 @@ struct RootView: View {
     }
 }
 
+extension RootView {
+    /// Whether the privacy cover is up: whenever the app isn't foreground-active, except behind a passkey prompt.
+    private var privacyCovered: Bool {
+        !(scenePhase == .active || (scenePhase == .inactive && session.mera.isPrompting))
+    }
+}
+
+/// The privacy cover's window: above every other window of the scene, so it hides the tabs and whatever is presented
+/// over them — sheets, full-screen covers, alerts — from the snapshot iOS takes when the app leaves the foreground
+/// (IOSK-13). Shown while `update(covered: true)`, gone the moment the app is active again. It never becomes the key
+/// window, so a keyboard or a focused field underneath is left as it was.
+@MainActor
+enum PrivacyShield {
+    private static var window: UIWindow?
+
+    static func update(covered: Bool) {
+        guard covered else {
+            window?.isHidden = true
+            window = nil
+            return
+        }
+        guard window == nil, let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+        let shield = UIWindow(windowScene: scene)
+        shield.windowLevel = .alert + 1
+        shield.overrideUserInterfaceStyle = scene.windows.first?.overrideUserInterfaceStyle ?? .unspecified
+        shield.rootViewController = UIHostingController(rootView: PrivacyCover())
+        shield.isHidden = false
+        window = shield
+    }
+}
+
 /// An opaque cover shown whenever the app is not foreground-active, so the OS snapshot can't capture on-screen secrets.
 private struct PrivacyCover: View {
-    let active: Bool
     var body: some View {
-        if !active {
-            ZStack {
-                Color(.systemBackground).ignoresSafeArea()
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 48, weight: .semibold))
-                    .foregroundStyle(Color.brand)
-            }
-            .transition(.opacity)
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 48, weight: .semibold))
+                .foregroundStyle(Color.brand)
         }
+        .accessibilityHidden(true)
     }
 }
 
