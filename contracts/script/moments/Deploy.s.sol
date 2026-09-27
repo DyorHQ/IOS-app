@@ -22,7 +22,8 @@ import {MomentHookAddress} from "../../src/moments/libraries/HookAddress.sol";
 ///         Dry run (no transactions):
 ///           forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad
 ///         Real deployment, from the owner's wallet:
-///           forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad --broadcast --private-key $OWNER_KEY
+///           forge script script/moments/Deploy.s.sol:DeployMoments --rpc-url monad --broadcast --ledger
+///         (or --account <keystore name>; never a plaintext --private-key)
 ///         Every parameter below can be overridden with an environment variable of the same name.
 ///         Writes deployments/moments-<chainId>.json (never touches the Launchpad's <chainId>.json).
 contract DeployMoments is Script {

@@ -29,7 +29,8 @@ import {HookAddress} from "../src/libraries/HookAddress.sol";
 ///         Volatile/RWA quote prices (MON, aBIL) are supplied as USD*1e8 env vars; USDC/AUSD are pinned to $1.
 ///
 ///         Dry run:   forge script script/Deploy.s.sol:Deploy --rpc-url monad
-///         Deploy:    forge script script/Deploy.s.sol:Deploy --rpc-url monad --broadcast --private-key $OWNER_KEY
+///         Deploy:    forge script script/Deploy.s.sol:Deploy --rpc-url monad --broadcast --ledger
+///                    (or --account <keystore name>; never a plaintext --private-key)
 contract Deploy is Script {
     uint160 internal constant HOOK_FLAGS = Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
         | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;

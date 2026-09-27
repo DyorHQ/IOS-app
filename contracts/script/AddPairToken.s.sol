@@ -7,7 +7,8 @@ import {IERC20} from "../src/interfaces/IERC20.sol";
 
 /// @notice Approves an ERC-20 as a pairing asset (e.g. a tokenized stock or a stablecoin) with its own economics.
 ///         FACTORY=0x... PAIR_TOKEN=0x... PHANTOM_QUOTE=<in token units> GRADUATION_THRESHOLD=<in token units>
-///           forge script script/AddPairToken.s.sol:AddPairToken --rpc-url monad --broadcast --private-key $OWNER_KEY
+///           forge script script/AddPairToken.s.sol:AddPairToken --rpc-url monad --broadcast --ledger
+///         (or --account <keystore name>; never a plaintext --private-key)
 contract AddPairToken is Script {
     function run() external {
         LaunchpadFactory factory = LaunchpadFactory(vm.envAddress("FACTORY"));

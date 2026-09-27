@@ -17,7 +17,8 @@ import {Script} from "forge-std/Script.sol";
 ///
 ///         Must be broadcast from the factory OWNER key (setModules/setFeePolicy are onlyOwner):
 ///           FEES=0x.. TREASURY=0x.. OWNER=0x.. \
-///           forge script script/DeployFeeVault.s.sol:DeployFeeVault --rpc-url monad --broadcast --private-key $OWNER_KEY
+///           forge script script/DeployFeeVault.s.sol:DeployFeeVault --rpc-url monad --broadcast --ledger
+///         (or --account <keystore name>; never a plaintext --private-key)
 ///         Dry run first (no --broadcast) to print the addresses and confirm the module re-pass.
 ///
 ///         RETIRED (security audit 2026-09-26): written for the pre-2026-09-17 factory, whose Monday executor sat in the
