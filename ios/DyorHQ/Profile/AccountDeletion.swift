@@ -196,7 +196,7 @@ struct DeleteAccountView: View {
                         case .imported:
                             Text("This wallet's private key is removed from this device. Keep its recovery phrase or key somewhere safe; it is the only way back to the funds.")
                         case .emailPassword:
-                            Text("This wallet is recreated from your email and password. Removing it deletes the device copy; keep your email and password — there is no reset, and they are the only way back to the funds.")
+                            Text("This wallet is recreated from your email and password. Removing it deletes the device copy; keep your email and password, the only way back to the funds. A password reset can't bring them back: it creates a new, empty wallet.")
                         case .meraPasskey, .watchOnly:
                             EmptyView()
                         }

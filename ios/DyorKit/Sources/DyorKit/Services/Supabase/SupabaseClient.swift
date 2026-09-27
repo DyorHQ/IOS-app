@@ -27,6 +27,7 @@ public enum SupabaseError: LocalizedError {
         switch self {
         case .http(let code, let body):
             if code == 500, body.contains("APP_JWT_SECRET") { return "Sign-in isn't finished on the server yet (APP_JWT_SECRET not set)." }
+            if (500...599).contains(code) { return "DyorHQ's server isn't answering right now (\(code)). Try again in a minute." }
             return "Supabase request failed (\(code))."
         case .notSignedIn: return "Sign in to DyorHQ to continue."
         case .decoding(let what): return "Could not read \(what) from the server."
@@ -37,6 +38,15 @@ public enum SupabaseError: LocalizedError {
             guard let seconds = retryAfter, seconds > 0 else { return "Too many attempts. Please wait a few minutes and try again." }
             return "Too many attempts. Try again in \(max(1, (seconds + 59) / 60)) min."
         }
+    }
+
+    /// Whether `error` only means the backend couldn't be reached or answered with a server error (5xx), as opposed
+    /// to refusing the request: nothing the user typed was judged, so a password is not wrong because of it (GE-6).
+    public static func isOutage(_ error: Error) -> Bool {
+        if case .http(let code, _)? = error as? SupabaseError { return (500...599).contains(code) }
+        guard let url = error as? URLError else { return false }
+        return [.timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet,
+                .dnsLookupFailed, .secureConnectionFailed, .dataNotAllowed, .internationalRoamingOff].contains(url.code)
     }
 }
 
@@ -461,6 +471,15 @@ public actor SupabaseClient {
             throw SupabaseError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
         return data
+    }
+
+    /// A Postgres `timestamptz` as PostgREST prints it ("2026-09-20T10:00:00.123456+00:00": fractional seconds of any
+    /// length, or none), to the second; nil for anything else.
+    public static func timestamp(_ text: String) -> Date? {
+        let whole = text.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: whole)
     }
 
     /// Exactly 64 lowercase hex characters (32 bytes), as the server's nonces and peppers are.
