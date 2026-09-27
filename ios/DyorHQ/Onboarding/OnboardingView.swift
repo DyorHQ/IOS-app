@@ -1025,21 +1025,30 @@ struct EmailPasswordView: View {
         busy = true; error = nil
         defer { busy = false }
         do {
+            // A wallet that may be legacy is checked again right before the email moves off it (GE-1): what the user
+            // saw may be out of date. Unknown counts as maybe.
+            let mayBeLegacy = current != nil && conflict?.current == current && conflict?.holdings?.mayBeLegacy != false
             try await session.bindEmailPassword(email: email, password: password, token: verified.token,
-                                                upgradingFrom: upgrade?.legacy, replacing: current, pepper: fetchPepper,
-                                                holdsFunds: legacyHoldsFunds, bind: bindViaServer)
+                                                upgradingFrom: upgrade?.legacy, replacing: current, replacingMayBeLegacy: mayBeLegacy,
+                                                pepper: fetchPepper, holdsFunds: legacyHoldsFunds, bind: bindViaServer)
             await env.social.client.forgetEmailProofs()
         } catch SessionError.emailAlreadyBound(let bound) {
             // Show that wallet and what it holds, and ask, before the email moves off it.
             replaceAcknowledged = false
             conflict = Conflict(current: bound)
             Task { await readConflictHoldings() }
+        } catch SessionError.legacyWalletHasFunds(let funded) where funded == current {
+            // Funds reached it after it was read: show them (a funded legacy wallet is never replaced), and ask again.
+            replaceAcknowledged = false
+            await readConflictHoldings()
         } catch EmailAuthError.verificationExpired {
             self.verified = nil; conflict = nil
             self.error = "Your email verification expired. Send a new code to continue."
         } catch {
+            // A failed Replace Wallet is retried with its own button, which stays on screen.
+            let retry = conflict == nil ? "tap Try Again" : "tap Replace Wallet again"
             self.error = SupabaseError.isOutage(error)
-                ? "We couldn’t reach DyorHQ to finish. Your email is verified, so tap Try Again — no new code needed."
+                ? "We couldn’t reach DyorHQ to finish. Your email is verified, so \(retry) — no new code needed."
                 : describe(error)
         }
     }

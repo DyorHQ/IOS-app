@@ -540,8 +540,12 @@ final class Session {
     /// `SessionError.emailAlreadyBound(current)` unless the request names that wallet (`replacing`, else the upgrade's
     /// legacy wallet), which the caller does only after the user saw what it holds and confirmed. Either way, a bound
     /// wallet that is this very password's legacy one is refused (`samePasswordLegacyBinding`): this password's S is
-    /// guessable against it, and log-in is the way back to it. That address is only ever compared on this device.
+    /// guessable against it, and log-in is the way back to it. That address is only ever compared on this device. A
+    /// replaced wallet that may be legacy (`replacingMayBeLegacy`: no password this app knows reaches it once the email
+    /// moves) must still be empty right before the move, as for the upgrade: funds that arrived after the user saw it
+    /// empty are never stranded.
     func bindEmailPassword(email: String, password: String, token: String, upgradingFrom legacy: Address?, replacing current: Address? = nil,
+                           replacingMayBeLegacy: Bool = false,
                            pepper: (_ e: Data, _ t: Data) async throws -> Data,
                            holdsFunds: (_ legacy: Address) async throws -> Bool,
                            bind: (_ token: String, _ message: String, _ signature: String, _ replace: Address?) async throws -> Void) async throws {
@@ -552,6 +556,7 @@ final class Session {
             try await requireEmptyLegacy(legacy, holdsFunds: holdsFunds)
         }
         if let current, try await legacyWallet(seed: keys.seed).address == current { throw SessionError.samePasswordLegacyBinding }
+        if let current, replacingMayBeLegacy { try await requireEmptyLegacy(current, holdsFunds: holdsFunds) }
         let message = Self.bindChallenge(email: keys.email, address: keys.wallet.address)
         let signature: String
         do { signature = try keys.wallet.signMessage(Data(message.utf8)).hexString }
