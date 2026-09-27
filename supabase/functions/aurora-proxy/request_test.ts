@@ -1,6 +1,6 @@
 // deno test --no-config --node-modules-dir=none -A supabase/functions/aurora-proxy/
 import { assertEquals } from "jsr:@std/assert@1";
-import { quoteBody, REFERRAL, submitBody, upstreamError } from "./request.ts";
+import { appFee, quoteBody, REFERRAL, submitBody, upstreamError } from "./request.ts";
 
 const WALLET = "0x" + "ab".repeat(20);
 const CHECKSUMMED = "0x" + "aB".repeat(20);
@@ -21,6 +21,27 @@ Deno.test("SB-2: the app's quote is forwarded without appFees, with DyorHQ's ref
     slippageTolerance: 100, refundTo: CHECKSUMMED, refundType: "ORIGIN_CHAIN", recipient: CHECKSUMMED,
     recipientType: "DESTINATION_CHAIN", referral: REFERRAL, dry: false,
   });
+});
+
+Deno.test("SB-2: DyorHQ's fee comes from the server, never from the caller", () => {
+  const fee = { recipient: "dyorhq-fees.near", fee: 10 };
+  const out = JSON.parse((quoteBody(appQuote({ appFees: [{ recipient: "attacker.near", fee: 1000 }] }), WALLET, fee) as { body: string }).body);
+  assertEquals(out.appFees, [{ recipient: "dyorhq-fees.near", fee: 10 }]);
+  assertEquals(out.referral, REFERRAL);
+  const none = JSON.parse((quoteBody(appQuote(), WALLET, null) as { body: string }).body);
+  assertEquals("appFees" in none, false);
+});
+
+Deno.test("appFee: a NEAR account and 1–100 bps (default 10) from the environment, else none or invalid", () => {
+  assertEquals(appFee(undefined, undefined), null);
+  assertEquals(appFee("  ", "25"), null);
+  assertEquals(appFee("dyorhq.near", undefined), { recipient: "dyorhq.near", fee: 10 });
+  assertEquals(appFee(" fees_1.dyorhq.near ", "25"), { recipient: "fees_1.dyorhq.near", fee: 25 });
+  assertEquals(appFee("a".repeat(64), ""), { recipient: "a".repeat(64), fee: 10 });
+  for (const [recipient, bps] of [["Dyorhq.near", "10"], ["x", "10"], ["a".repeat(65), "10"], ["bad..near", "10"],
+                                  [".near", "10"], ["ok.near", "0"], ["ok.near", "101"], ["ok.near", "1.5"], ["ok.near", "ten"]]) {
+    assertEquals(appFee(recipient, bps), "invalid", `${recipient} ${bps}`);
+  }
 });
 
 Deno.test("SB-2: recipient and refundTo must both be the session's wallet", () => {

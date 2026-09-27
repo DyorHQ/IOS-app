@@ -1,11 +1,19 @@
 // pin-media: pins an already-uploaded Moment media object from the public launch-media bucket to IPFS via Pinata, so
 // the NFT's on-chain mediaURI can be a permanent ipfs:// CID instead of a Supabase URL. The Pinata JWT lives only in
-// this function's environment (Supabase secret PINATA_JWT). verify_jwt=true (pinned in supabase/config.toml) gates to
-// a valid Supabase JWT; we additionally require role 'authenticated' and a wallet_address claim so the public
-// anon/publishable key (which passes verify_jwt but carries role 'anon') cannot be used to drain the Pinata quota.
+// this function's environment (Supabase secret PINATA_JWT). Only a signed-in wallet may pin: the session is verified
+// here (../_shared/wallet_session.ts: signature, expiry, aud and role authenticated, a wallet_address), not only by the
+// gateway's verify_jwt (pinned in supabase/config.toml), so the publishable, anon or service-role key, or a forged
+// token, can never drain the Pinata quota even if a deploy drops verify_jwt (security audit 2026-09-26, SB-9).
 //
-// A wallet-auth session costs nothing but a fresh key, so each pin also passes edge_rate_gate (migration 27; security
-// audit 2026-09-26, SB-2): 10 per wallet per 15 minutes and 50 per day, 30 per client network per 15 minutes.
+// A wallet-auth session costs nothing but a fresh key, so each pin also passes edge_rate_gate (migration 27; SB-2):
+// 20 per wallet per 15 minutes and 100 per day (a creator's video Moment takes two pins), 60 per client network per
+// 15 minutes, and 1,000 per day overall — a circuit breaker on the Pinata account. The app writes the https mirror
+// on-chain when a pin fails, so the per-wallet budget is kept well above what one creator's session needs.
+//
+// Deploy:  supabase functions deploy pin-media   (verify_jwt = true, supabase/config.toml)
+//          Only after migration 27 is applied: without edge_rate_gate every pin fails closed (503), and the app then
+//          writes the https mirror on-chain instead of ipfs://. Needs APP_JWT_SECRET (set for wallet-auth; secrets are
+//          project-wide) to verify HS256 sessions.
 //
 // Time budget (RW-9): the app gives this call 25 s and then writes the https mirror on-chain instead, so the whole
 // call — reading the object, pinning, checking the gateway — fits in BUDGET_MS. A pin that cannot be confirmed in time
@@ -27,6 +35,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { clientNet } from "../_shared/net.ts";
 import { rateGate } from "../_shared/rate.ts";
+import { sessionKeys, SessionKeysUnavailable, sessionWallet } from "../_shared/wallet_session.ts";
 import { Deadline, pinataResult, pinTarget } from "./pin.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;
@@ -51,16 +60,8 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 }
 
-// Reads a claim from an already-gateway-verified JWT (verify_jwt=true has validated the signature; we only inspect).
-function claims(auth: string): Record<string, unknown> {
-  const token = auth.replace(/^Bearer\s+/i, "").trim();
-  const part = token.split(".")[1];
-  if (!part) return {};
-  try {
-    const b64 = part.replace(/-/g, "+").replace(/_/g, "/").padEnd(part.length + (4 - part.length % 4) % 4, "=");
-    return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
-  } catch { return {}; }
-}
+// Resolved once per isolate, so the project's JWKS is fetched once and cached.
+const keys = sessionKeys(Deno.env);
 
 // True if the URL serves actual file bytes (not a UnixFS directory index, which gateways render as HTML) within
 // timeoutMs.
@@ -104,10 +105,15 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
 
-  const session = claims(req.headers.get("authorization") ?? "");
-  if (session.role !== "authenticated") return json({ error: "a signed-in wallet session is required" }, 403);
-  const wallet = typeof session.wallet_address === "string" ? session.wallet_address.toLowerCase() : "";
-  if (!/^0x[0-9a-f]{40}$/.test(wallet)) return json({ error: "a signed-in wallet session is required" }, 403);
+  let wallet: string | null;
+  try {
+    wallet = await sessionWallet(req.headers.get("authorization"), keys);
+  } catch (err) {
+    if (!(err instanceof SessionKeysUnavailable)) throw err;
+    console.error("pin-media:", err.message); // logs only (SB-11)
+    return json({ error: "pinning is not available right now" }, 503);
+  }
+  if (!wallet) return json({ error: "a signed-in wallet session is required" }, 403);
 
   const jwt = Deno.env.get("PINATA_JWT");
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");

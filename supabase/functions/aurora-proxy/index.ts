@@ -1,22 +1,32 @@
 // aurora-proxy: the Bridge's only route to the Aurora Intents Swap API. It holds the Aurora API key server-side
 // (Supabase secret AURORA_API_KEY) so the key never ships inside the app, and forwards ONLY the four endpoints the
-// bridge uses. verify_jwt=true (pinned in supabase/config.toml) gates to a valid Supabase JWT; we additionally require
-// role 'authenticated' and a wallet_address claim so the public anon/publishable key (role 'anon') cannot use it —
-// only a signed-in DyorHQ wallet session qualifies (the same rule as pin-media). The key is appended as Aurora's path
-// segment here, and scrubbed from every response body (raw and percent-encoded), since Aurora's error bodies can echo
-// the request path.
+// bridge uses. Only a signed-in DyorHQ wallet session qualifies (the same rule as pin-media): the session is verified
+// here (../_shared/wallet_session.ts), not only by the gateway's verify_jwt (pinned in supabase/config.toml), so the
+// publishable, anon or service-role key, or a forged token, never reaches Aurora even if a deploy drops verify_jwt
+// (SB-9). The key is appended as Aurora's path segment here, and scrubbed from every response body (raw and
+// percent-encoded), since Aurora's error bodies can echo the request path.
 //
 // Security audit 2026-09-26 (SB-2, SB-11):
 //   * every call passes edge_rate_gate (migration 27): tokens/quote/deposit-submit 120 per wallet and 360 per client
-//     network per 15 minutes; status polls (every 4 s during a bridge) 300 and 900;
+//     network per 15 minutes; status polls (every 4 s for about 10 minutes per bridge, several bridges at once) 900
+//     and 2,700;
 //   * a quote must deliver to, and refund to, the session's own wallet, with the origin-chain deposit and refund and
-//     destination-chain recipient the app uses; appFees is dropped and referral is always "dyorhq"; only the fields
-//     the app sends are forwarded (request.ts);
+//     destination-chain recipient the app uses; the caller's appFees are dropped — DyorHQ's integrator fee is set here
+//     from AURORA_FEE_RECIPIENT (and AURORA_FEE_BPS, default 10), or, when that is not set, by the fee configured on
+//     the key in Aurora Studio — and referral is always "dyorhq"; only the fields the app sends are forwarded
+//     (request.ts);
 //   * upstream errors reach the client as Aurora's short message only, never the raw body.
+//
+// Deploy:  supabase functions deploy aurora-proxy   (verify_jwt = true, supabase/config.toml)
+//          Only after migration 27 is applied: without edge_rate_gate every call fails closed (503, "bridge temporarily
+//          unavailable"). Before deploying, set AURORA_FEE_RECIPIENT (the NEAR account builds received the fee at) or
+//          confirm the integrator fee is configured on the key in Aurora Studio: this version no longer forwards the
+//          app's appFees. Needs APP_JWT_SECRET (project-wide, set for wallet-auth) to verify HS256 sessions.
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { clientNet } from "../_shared/net.ts";
 import { rateGate } from "../_shared/rate.ts";
-import { quoteBody, submitBody, upstreamError } from "./request.ts";
+import { sessionKeys, SessionKeysUnavailable, sessionWallet } from "../_shared/wallet_session.ts";
+import { appFee, quoteBody, submitBody, upstreamError } from "./request.ts";
 
 const AURORA = "https://intents-api.aurora.dev/api";
 const ROUTES: Record<string, "GET" | "POST"> = {
@@ -38,24 +48,25 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 }
 
-// Reads a claim from an already-gateway-verified JWT (verify_jwt=true has validated the signature; we only inspect).
-function claims(auth: string): Record<string, unknown> {
-  const token = auth.replace(/^Bearer\s+/i, "").trim();
-  const part = token.split(".")[1];
-  if (!part) return {};
-  try {
-    const b64 = part.replace(/-/g, "+").replace(/_/g, "/").padEnd(part.length + (4 - part.length % 4) % 4, "=");
-    return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
-  } catch { return {}; }
-}
+// Resolved once per isolate, so the project's JWKS is fetched once and cached.
+const keys = sessionKeys(Deno.env);
+// DyorHQ's integrator fee, or null to leave it to the key's Aurora Studio configuration. A malformed value is logged
+// and ignored rather than forwarded.
+const fee = appFee(Deno.env.get("AURORA_FEE_RECIPIENT"), Deno.env.get("AURORA_FEE_BPS"));
+if (fee === "invalid") console.error("aurora-proxy: AURORA_FEE_RECIPIENT / AURORA_FEE_BPS malformed; no appFees sent");
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
 
-  const session = claims(req.headers.get("authorization") ?? "");
-  if (session.role !== "authenticated") return json({ error: "a signed-in wallet session is required" }, 403);
-  const wallet = typeof session.wallet_address === "string" ? session.wallet_address.toLowerCase() : "";
-  if (!/^0x[0-9a-f]{40}$/.test(wallet)) return json({ error: "a signed-in wallet session is required" }, 403);
+  let wallet: string | null;
+  try {
+    wallet = await sessionWallet(req.headers.get("authorization"), keys);
+  } catch (err) {
+    if (!(err instanceof SessionKeysUnavailable)) throw err;
+    console.error("aurora-proxy:", err.message); // logs only (SB-11)
+    return json({ error: "bridge not configured" }, 503);
+  }
+  if (!wallet) return json({ error: "a signed-in wallet session is required" }, 403);
 
   const key = Deno.env.get("AURORA_API_KEY");
   const url = Deno.env.get("SUPABASE_URL");
@@ -79,7 +90,7 @@ Deno.serve(async (req) => {
   if (method === "POST") {
     const raw = await req.text();
     if (raw.length > MAX_BODY) return json({ error: "request too large" }, 413);
-    const forward = route === "quote" ? quoteBody(raw, wallet) : submitBody(raw);
+    const forward = route === "quote" ? quoteBody(raw, wallet, fee === "invalid" ? null : fee) : submitBody(raw);
     if ("error" in forward) return json({ error: forward.error }, forward.status);
     body = forward.body;
   }

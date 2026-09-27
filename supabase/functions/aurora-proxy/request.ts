@@ -2,12 +2,30 @@
 // app funds a deposit address from the signed-in wallet and receives on the destination chain at that same address.
 // So a quote may only deliver to, and refund to, the session's wallet — otherwise any session could use DyorHQ's
 // Aurora key as a free bridge to arbitrary recipients — and the integrator fee and referral are DyorHQ's to set, not
-// the caller's: `appFees` is dropped (the fee configured on the key in Aurora Studio applies) and `referral` is always
-// "dyorhq". Only the fields the app sends are forwarded.
+// the caller's: the caller's `appFees` is dropped and replaced by the server's (appFee below; when none is configured,
+// the fee configured on the key in Aurora Studio applies), and `referral` is always "dyorhq". Only the fields the app
+// sends are forwarded.
 export const REFERRAL = "dyorhq";
 const MAX_FIELD = 256;
 
 export type Forward = { body: string } | { error: string; status: number };
+export type AppFee = { recipient: string; fee: number };
+
+// DyorHQ's integrator fee from the function's environment, in the shape the app used to send it (AuroraAppFee):
+// AURORA_FEE_RECIPIENT, the NEAR account that receives it (a named account such as "name.near", or a 64-hex implicit
+// account), and AURORA_FEE_BPS, the fee in basis points (default 10, at most 100). null when no recipient is set;
+// "invalid" when either value is malformed, which the caller logs and treats as none.
+export function appFee(recipient: string | undefined, bps: string | undefined): AppFee | null | "invalid" {
+  const account = (recipient ?? "").trim();
+  if (!account) return null;
+  if (account.length < 2 || account.length > 64 || !/^(?:[a-z0-9]+(?:[-_][a-z0-9]+)*\.)*[a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(account)) {
+    return "invalid";
+  }
+  const raw = (bps ?? "").trim();
+  const fee = raw === "" ? 10 : Number(raw);
+  if (!Number.isInteger(fee) || fee < 1 || fee > 100) return "invalid";
+  return { recipient: account, fee };
+}
 
 const bad = (error: string): Forward => ({ error, status: 400 });
 
@@ -22,8 +40,8 @@ function object(raw: string): Record<string, unknown> | null {
 
 const text = (v: unknown) => typeof v === "string" && v.length > 0 && v.length <= MAX_FIELD;
 
-// POST /quote. `wallet` is the session's wallet (lowercase 0x address).
-export function quoteBody(raw: string, wallet: string): Forward {
+// POST /quote. `wallet` is the session's wallet (lowercase 0x address); `fee` is DyorHQ's integrator fee, if any.
+export function quoteBody(raw: string, wallet: string, fee: AppFee | null = null): Forward {
   const q = object(raw);
   if (!q) return bad("invalid json");
   if (typeof q.recipient !== "string" || typeof q.refundTo !== "string" ||
@@ -45,6 +63,7 @@ export function quoteBody(raw: string, wallet: string): Forward {
     refundType: q.refundType, recipient: q.recipient, recipientType: q.recipientType, referral: REFERRAL,
   };
   if (q.dry !== undefined) forward.dry = q.dry;
+  if (fee) forward.appFees = [{ recipient: fee.recipient, fee: fee.fee }];
   return { body: JSON.stringify(forward) };
 }
 
