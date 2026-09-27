@@ -11,6 +11,9 @@ every policy knob, so:
   `PRIVATE_KEY` and similar variables on chain 143, and `script/mainnet.sh` refuses `--private-key`, `--mnemonic` and
   `--interactive` on the command line. `ALLOW_RAW_KEY_143=1` overrides both; do not use it for real funds.
 - Prefer a Safe for ownership and governance (`OWNER=` / `GOVERNANCE=` below), and a separate guardian key for Moments.
+  Guard it as well as governance: nobody can replace the guardian, so losing its key, or a compromise that lets it
+  cancel every policy proposal and pause publishing for good, means deploying a new Moments cohort (existing Moments
+  keep working). It cannot renounce while its own pause is on (`UnpauseFirst`); it can hand the role on.
 
 ## Prerequisites
 
@@ -87,6 +90,10 @@ script/mainnet.sh cast send 0x6B1C… 'setWhitelistEnabled(bool)' true --rpc-url
 
 Moments governance operations are in `script/moments/PolicyOps.s.sol` (propose/apply/cancel a policy, pause, the link
 base; on v2 factories also the guardian's pause).
+
+A stuck Monday launch retried by hand (`graduate` or `graduateFallback`, which anyone may call) needs
+`--gas-limit 29900000`: with an estimated limit a squat that more gas would realign moves to Uniswap v4
+(`contracts/keepers/README.md`, LP-1).
 
 ## Verify
 
