@@ -90,6 +90,9 @@ final class MomentMediaLoader {
     ///   is fast and DyorHQ-run) but its bytes count only while they still match that hash;
     /// - a video Moment's hash is the video's, while the mirror holds its poster frame, which nothing on-chain can check
     ///   — so the mirror is not a source at all, and the image comes from the content-addressed IPFS pointer only.
+    ///   That includes a video Moment whose on-chain image IS that mirror (earlier builds wrote it when pinning failed):
+    ///   it shows the placeholder, since until the bucket is write-once (supabase migration 26) the creator can swap
+    ///   those bytes.
     /// Any other https pointer is the creator's own link, shown as it is.
     static func imageSources(provenance: MomentProvenance, creator: Address?) -> [MomentImageSource] {
         let gateways = MomentsMath.gatewayURLs(provenance.mediaURI).map { MomentImageSource(url: $0) }
@@ -100,8 +103,8 @@ final class MomentMediaLoader {
         guard provenance.mediaURI.lowercased().hasPrefix("ipfs://") else {
             // An https pointer that is this photo's own mirror (published, by the creator's choice, when pinning
             // failed) is checked the same way.
-            if provenance.animationURI.isEmpty, gateways.count == 1, gateways[0].url == mirror {
-                return [MomentImageSource(url: mirror, keccak: provenance.mediaHash)]
+            if gateways.count == 1, gateways[0].url == mirror {
+                return provenance.animationURI.isEmpty ? [MomentImageSource(url: mirror, keccak: provenance.mediaHash)] : []
             }
             return gateways
         }
