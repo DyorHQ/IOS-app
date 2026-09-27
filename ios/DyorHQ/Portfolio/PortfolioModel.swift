@@ -79,6 +79,9 @@ final class PortfolioModel {
     /// Why perps history is missing, when it is (no Perpl API key on this device).
     private(set) var perpsNote: String?
     private(set) var loadedFor: Address?
+    /// The wallet the latest load is for. A load started for another (a refresh or a reload that outlived an account
+    /// switch) publishes nothing: `reset` cleared that wallet's data, and this one's must not come back (RS-10).
+    private var loadingFor: Address?
 
     // Raw, period-agnostic material.
     private var swaps: [SwapRecord] = []
@@ -306,13 +309,15 @@ final class PortfolioModel {
         // so re-fetch when we now have a key and the last load noted a perps gap. A clean keyed load clears perpsNote.
         if !force, loadedFor == address, !(perpsNote != nil && perplKey != nil), let updatedAt, Date().timeIntervalSince(updatedAt) < 300 { return }
         if loadedFor != address { reset() }
+        loadingFor = address
         loading = true
         defer { loading = false }
         // Nothing is published until every read is back, and a failed read never replaces what the last good one
         // showed: an interrupted log scan comes back empty rather than failing, so a load cancelled part-way (the
         // screen went away) publishes nothing, and a load with a failed read keeps the earlier data for that part, says
         // so, and isn't cached as fresh (security audit 2026-09-26, RS-10). `reset` above already cleared another
-        // wallet's data, so what is kept is always this wallet's.
+        // wallet's data, and a load for a wallet that is no longer the latest one asked for publishes nothing, so what
+        // is kept is always this wallet's.
 
         // Reference data first: the launch list (curves + pair assets), the Moments list (coins + pools), the token universe.
         // Launches on retired factories are history too: the coins and trades stay part of the wallet's record.
@@ -356,7 +361,7 @@ final class PortfolioModel {
         let scannedMoments = MomentsAccountHistory.merged([await momentsHistoryTask] + (await retiredHistoryTask))
         let fetchedPrices = try? await pricesTask
         let perps = await perpsTask
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, loadingFor == address else { return }
 
         launchesByCurve = Dictionary(launches.map { ($0.curve, $0) }, uniquingKeysWith: { first, _ in first })
         launchesByToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
@@ -394,6 +399,7 @@ final class PortfolioModel {
     }
 
     private func reset() {
+        loadingFor = nil
         swaps = []; fills = []; closed = []
         launchHistory = .empty; momentsHistory = .empty
         launchesByCurve = [:]; launchesByToken = [:]; momentsByCoin = [:]; momentsByKey = [:]
