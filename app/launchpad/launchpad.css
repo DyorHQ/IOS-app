@@ -137,7 +137,7 @@
 .warnbox b{color:inherit}
 
 @media(max-width:940px){.create-layout,.token-layout,.page-hero{grid-template-columns:1fr}.sticky{position:static}.stats-4{grid-template-columns:1fr 1fr}}
-@media(max-width:640px){.site-nav{display:none}.stat-strip{grid-template-columns:1fr}.field-row{grid-template-columns:1fr}.toolbar .seg{min-width:0;width:100%}.wrap{padding:12px 14px 64px}.site-head{padding:10px 12px 4px}}
+@media(max-width:640px){.stat-strip{grid-template-columns:1fr}.field-row{grid-template-columns:1fr}.toolbar .seg{min-width:0;width:100%}.wrap{padding:12px 14px 64px}.site-head{padding:10px 12px 4px}}
 
 /* swap */
 .swap-layout{display:grid;grid-template-columns:minmax(0,470px) minmax(280px,420px);gap:20px;justify-content:center;align-items:start;margin-top:22px}
@@ -187,6 +187,8 @@
 .token-hero h1{font-family:var(--sans)}
 .site-head .bar{height:auto;min-height:56px;flex-wrap:wrap;padding:8px 12px;row-gap:8px}
 .site-head .brand .brand-wordmark{width:104px}
+/* Phones and 200% zoom: the nav keeps every link on its own scrollable row under the brand (the bar already wraps). */
+@media(max-width:640px){.site-head .bar{border-radius:var(--r-sheet)}.site-nav{order:10;flex:1 0 100%;margin-left:0;overflow-x:auto;scrollbar-width:none}.site-nav::-webkit-scrollbar{display:none}.site-nav a{flex:none;white-space:nowrap}}
 @media(prefers-reduced-motion:reduce){.skeleton,.spinner{animation:none}}
 
 /* embedded inside the phone frame */
