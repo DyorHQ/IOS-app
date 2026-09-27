@@ -1,3 +1,4 @@
+import DyorKit
 import SwiftUI
 import UIKit
 
@@ -7,6 +8,7 @@ struct RootView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(Router.self) private var router
 
     var body: some View {
         Group {
@@ -35,6 +37,24 @@ struct RootView: View {
             }
         }
         .animation(.default, value: session.state)
+        // Moment links (universal links on m.dyorhq.fun, and dyorhq://moments/…) arrive here, on the one view that is
+        // mounted in every session state; the router only parses and stores. The gate below opens the Moment once the
+        // app may navigate — signed in, not behind the update gate, no confirmation on screen or action running — and
+        // re-decides on every change of what it looks at, so a link that arrived signed out opens after the sign-in.
+        .onOpenURL { router.handle($0) }
+        .onChange(of: linkGateInput, initial: true) { _, _ in applyLinkGate() }
+        .overlay(alignment: .bottom) {
+            if let notice = router.linkNotice {
+                Text(notice)
+                    .font(.footnote.weight(.medium))
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .task { try? await Task.sleep(for: .seconds(2.5)); router.linkNotice = nil }
+            }
+        }
+        .animation(.default, value: router.linkNotice)
         // The appearance lives on a View, not on the App's scene body: a scene body does not re-evaluate reliably on
         // an observable change, and the stale scheme it left on the root view controller shadowed the window.
         .preferredColorScheme(settings.appearance.colorScheme)
@@ -124,6 +144,41 @@ extension RootView {
     /// prompt. Leaving the app during one still covers it: the scene is then in the background.
     private var privacyCovered: Bool {
         !(scenePhase == .active || (scenePhase == .inactive && (session.mera.isPrompting || BiometricGate.isPrompting)))
+    }
+
+    /// Everything the link gate decides on, as one value to observe.
+    private struct LinkGateInput: Hashable {
+        var pending: Bool
+        var phase: MomentLinkGate.Phase
+        var updateRequired: Bool
+        var deletionScreen: Bool
+        var busy: Bool
+    }
+
+    private var linkGateInput: LinkGateInput {
+        let phase: MomentLinkGate.Phase
+        switch session.state {
+        case .loading: phase = .loading
+        case .signedOut: phase = .signedOut
+        case .signedIn: phase = .signedIn
+        }
+        // `runningActions` counts every approved plan (TransactionRun) and Perpl bracket still signing or sending, for
+        // every account type. `linkHolds` counts every review sheet on screen (ConfirmationSheet, the Perps order /
+        // close / margin / TP/SL reviews, Bridge) — a review not yet confirmed, and the moment a run settles before its
+        // caller records it — and the sends and the account deletion that run outside a sheet.
+        return LinkGateInput(pending: router.pendingLink != nil, phase: phase, updateRequired: env.updateGate.required != nil,
+                             deletionScreen: session.passkeyDeletion != nil || session.deletionNotice != nil,
+                             busy: session.mera.runningActions > 0 || router.linkHolds > 0)
+    }
+
+    private func applyLinkGate() {
+        let input = linkGateInput
+        guard input.pending else { return }
+        switch MomentLinkGate.decide(phase: input.phase, updateRequired: input.updateRequired, deletionScreen: input.deletionScreen, busy: input.busy) {
+        case .deliver: router.deliverPendingLink()
+        case .drop: router.pendingLink = nil
+        case .hold, .banner: break // OnboardingView shows the banner while a link waits signed out
+        }
     }
 }
 

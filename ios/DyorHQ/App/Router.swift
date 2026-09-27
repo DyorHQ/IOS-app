@@ -1,6 +1,24 @@
 import DyorKit
 import Foundation
 import Observation
+import SwiftUI
+
+/// A review sheet counts itself in `Router.linkHolds` while it is on screen, so a Moment link waits until it is gone.
+private struct HoldsMomentLinks: ViewModifier {
+    @Environment(Router.self) private var router
+    @State private var counted = false
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { if !counted { counted = true; router.linkHolds += 1 } }
+            .onDisappear { if counted { counted = false; router.linkHolds = max(0, router.linkHolds - 1) } }
+    }
+}
+
+extension View {
+    /// Holds Moment links while this view is on screen (every review sheet that can lead to a signature).
+    func holdsMomentLinks() -> some View { modifier(HoldsMomentLinks()) }
+}
 
 /// Which trading interface the Trade tab shows. Swap and Perps share one tab, switched by a top toggle.
 enum TradeMode: String, CaseIterable, Identifiable {
@@ -35,6 +53,46 @@ final class Router {
     var pendingLaunch: Launch?
     /// A Moment to open on the Moments tab's detail page.
     var pendingMoment: MomentInfo?
+    /// A Moment link that arrived (a universal link or `dyorhq://`) and hasn't been opened yet. It waits here, on the
+    /// App-level router that outlives sign-in, until RootView's gate (`MomentLinkGate`) says the app may navigate.
+    var pendingLink: MomentLink?
+    /// A Moment link to open on the Moments tab: MomentsView pushes `MomentLinkView`, which resolves and loads it.
+    var pendingMomentLink: MomentLink?
+    /// A short notice about the last link handed to the app (not a Moment), shown once by RootView.
+    var linkNotice: String?
+    /// What holds a Moment link back right now: every review sheet on screen (`holdsMomentLinks()` — ConfirmationSheet,
+    /// the Perps order / close / margin / TP/SL reviews, Bridge) and every approved send or deletion no sheet covers
+    /// (`holdingLinks`). RootView's gate waits until it is 0, so a link never tears one down.
+    var linkHolds = 0
+
+    /// Every URL handed to the app. This parses and stores; nothing navigates until the gate delivers. A URL on our
+    /// hosts that isn't a Moment link gets a notice; anything else (Privy's OAuth callback on the `dyorhq` scheme, say)
+    /// is not ours to comment on.
+    func handle(_ url: URL) {
+        if let link = MomentLink(url: url) {
+            pendingLink = link
+        } else if MomentLink.isOurs(url) {
+            linkNotice = "That link isn't a Moment."
+        }
+    }
+
+    /// Runs `work` — an approved send or a deletion that no review sheet covers — holding Moment links until it ends.
+    /// The task takes the count, not the view that started it, because the task outlives that view.
+    func holdingLinks<T>(_ work: () async throws -> T) async rethrows -> T {
+        linkHolds += 1
+        defer { linkHolds = max(0, linkHolds - 1) }
+        return try await work()
+    }
+
+    /// Opens the pending link's Moment: the menu and whatever is presented close, and the Moments tab pushes it.
+    func deliverPendingLink() {
+        guard let link = pendingLink else { return }
+        pendingLink = nil
+        menuOpen = false
+        presented = nil
+        pendingMomentLink = link
+        tab = .moments
+    }
 
     /// Opens Swap on a pair. A retired cohort's Moment coin on either side opens nothing: trading it is closed
     /// everywhere in the app (its pool pays the retired platform wallet), and the engine refuses it too.

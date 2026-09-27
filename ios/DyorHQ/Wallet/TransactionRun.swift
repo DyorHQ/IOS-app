@@ -269,6 +269,8 @@ struct ConfirmationSheet<Details: View>: View {
             onCompleted?(hash)
         }
         .onDisappear { cleanUp() }
+        // A Moment link never tears a review down, running or not (RootView's link gate).
+        .holdsMomentLinks()
         .presentationDetents([.medium, .large])
         // Opaque on purpose: the list fades under the footer, and a translucent sheet would show the presenting
         // screen's dark primary button through that fade.

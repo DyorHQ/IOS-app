@@ -74,7 +74,10 @@ struct PositionTriggersSheet: View {
     private var busy: Bool { phase == .working }
     private var finished: Bool { if case .finished = phase { return true }; return false }
 
-    var body: some View {
+    // A Moment link waits while this review is on screen (RootView's link gate).
+    var body: some View { reviewContent.holdsMomentLinks() }
+
+    @ViewBuilder private var reviewContent: some View {
         NavigationStack {
             List {
                 Section {
@@ -285,7 +288,10 @@ struct CancelTriggersSheet: View {
         return nil
     }
 
-    var body: some View {
+    // A Moment link waits while this review is on screen (RootView's link gate).
+    var body: some View { reviewContent.holdsMomentLinks() }
+
+    @ViewBuilder private var reviewContent: some View {
         NavigationStack {
             List {
                 Section {

@@ -12,7 +12,8 @@ struct MomentsView: View {
     @State private var filter: MomentFilter = .all
     @State private var showCreate = false
     @State private var showPortfolio = false
-    @State private var path: [MomentInfo] = []
+    /// Moments pushed by value (the board, publish, the portfolio) and, from a link, by (factory, id) to load first.
+    @State private var path = NavigationPath()
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -41,6 +42,7 @@ struct MomentsView: View {
             }
             .navigationTitle("Moments")
             .navigationDestination(for: MomentInfo.self) { info in MomentDetailView(info: info, onChanged: { Task { await model.load(env: env) } }) }
+            .navigationDestination(for: MomentLink.self) { link in MomentLinkView(link: link, onChanged: { Task { await model.load(env: env) } }) }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Haptics.tap(); showPortfolio = true } label: { Label("My Moments", systemImage: "person.crop.rectangle.stack") }
@@ -63,13 +65,23 @@ struct MomentsView: View {
             .task { await clock.run() }
             .onChange(of: router.pendingMoment) { _, pending in
                 guard let pending else { return }
-                path = [pending]
+                path = NavigationPath([pending])
                 router.pendingMoment = nil
             }
+            .onChange(of: router.pendingMomentLink) { _, link in
+                guard let link else { return }
+                path = NavigationPath([link])
+                router.pendingMomentLink = nil
+            }
             .onAppear {
+                // The tab is lazy: a request made before it was first shown is waiting here.
                 if let pending = router.pendingMoment {
-                    path = [pending]
+                    path = NavigationPath([pending])
                     router.pendingMoment = nil
+                }
+                if let link = router.pendingMomentLink {
+                    path = NavigationPath([link])
+                    router.pendingMomentLink = nil
                 }
             }
         }

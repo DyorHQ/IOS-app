@@ -32,6 +32,8 @@ struct RetiredMomentDetailView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(info.symbol)
         .navigationBarTitleDisplayMode(.inline)
+        // A retired Moment can still be shown around: its link opens this claim-only page.
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { MomentShareButton(info: info) } }
         .refreshable { await load() }
         .task { await clock.run() }
         .task { await load() }

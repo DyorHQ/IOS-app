@@ -9,6 +9,7 @@ import SwiftUI
 /// quiet alternatives. Apple / Google appear only when the build actually enables them, so no one taps a dead method.
 struct OnboardingView: View {
     @State private var path: [OnboardingStep] = []
+    @Environment(Router.self) private var router
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -22,6 +23,32 @@ struct OnboardingView: View {
                     }
                 }
         }
+        // A Moment link that arrived signed out waits for the sign-in; RootView's gate opens it right after.
+        .safeAreaInset(edge: .top) {
+            if let link = router.pendingLink { PendingLinkBanner(link: link) }
+        }
+        .animation(.default, value: router.pendingLink)
+    }
+}
+
+/// "Sign in to open the Moment you were sent": the link waits on the router until the sign-in, or is dismissed here.
+private struct PendingLinkBanner: View {
+    let link: MomentLink
+    @Environment(Router.self) private var router
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "camera.aperture").foregroundStyle(Color.brand)
+            Text("Sign in to open the Moment you were sent.")
+                .font(.footnote.weight(.medium))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button { router.pendingLink = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                .accessibilityLabel("Dismiss")
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 16).padding(.top, 8)
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 }
 
