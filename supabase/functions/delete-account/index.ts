@@ -3,9 +3,10 @@
 // wallet's row-level security. Two ways in:
 //
 //   * A Privy login (email code, Apple, Google): POST {} with the Privy access token as the bearer. It is verified
-//     against the app's public verification key and must have been issued in the last 15 minutes (security audit
-//     2026-09-26, SB-10 — the app refreshes its Privy session right before calling), then the user is deleted with the
-//     app secret, which lives only in this function's environment.
+//     against the app's public verification key and must have been issued within DELETE_ACCOUNT_TOKEN_MAX_AGE_S
+//     (default an hour, the old behaviour: the builds in use send their cached token; security audit 2026-09-26,
+//     SB-10, deletion.ts), then the user is deleted with the app secret, which lives only in this function's
+//     environment.
 //       200 { deleted: true } | { deleted: true, alreadyGone: true }
 //   * An Email & Password account (SB-7), which keeps no Privy session: its sign-up created a Privy user through the
 //     email one-time code, and nothing deleted it. POST { "method": "email-password" } with the wallet's own Supabase
@@ -15,14 +16,17 @@
 //     else (an embedded or external wallet, Apple/Google sign-in merged in by email, a passkey) means it is also another
 //     way into DyorHQ, and it is kept.
 //       200 { deleted: true, privy: "deleted" | "none" } | { deleted: false, privy: "kept" }
+//       409 { deleted: false, privy: "unknown", error: "no email binding" }   the caller has no binding row (it was
+//           already deleted, or never existed): nothing was deleted, and it is not reported as done
 //
 // Errors: 401 invalid or stale token / no wallet session; 429 too many Privy lookups (Retry-After); 503 Privy or the
 // database unavailable — retry (RO-9: every Privy call has a timeout); 502 Privy refused.
 //
 // Deploy:  supabase functions deploy delete-account --no-verify-jwt   (the bearer is a Privy token or a wallet session)
-//          The 15-minute freshness rule refuses builds that do not refresh their Privy session before deleting: until
-//          the first build that does is the minimum build, set DELETE_ACCOUNT_TOKEN_MAX_AGE_S=3600 (the old
-//          behaviour), then unset it.
+//          Safe to deploy now: with DELETE_ACCOUNT_TOKEN_MAX_AGE_S unset a Privy token may be an hour old, as before.
+//          Set it to 900 only once the first build that refreshes its Privy session right before deleting has shipped
+//          and every older build is expired in App Store Connect / TestFlight. No build sends {"method":
+//          "email-password"} yet: that path is ready for the build that calls it before deleting its rows.
 // Secrets: supabase secrets set PRIVY_APP_SECRET=...   (PRIVY_APP_ID defaults to the DyorHQ app)
 //          SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / the publishable key are auto-injected (the rate-limit gate needs
 //          migration 20 applied).
@@ -30,7 +34,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   deletePrivyUser, onlyLinkedToEmail, privyTokenClaims, PrivyUnavailable, privyUserByEmail, tokenIsFresh,
 } from "../_shared/privy.ts";
-import { deletionMethod, ownBinding, sessionClaims, tokenMaxAge } from "./deletion.ts";
+import { deletionMethod, NO_BINDING, ownBinding, sessionClaims, tokenMaxAge } from "./deletion.ts";
 
 // The Privy-lookup budget's subjects: the same hash email-pepper and email-rebind use (one budget per Privy user),
 // and one per wallet for the Email & Password path.
@@ -148,11 +152,10 @@ Deno.serve(async (req) => {
   }
   const binding = ownBinding(rows);
   if (binding === "invalid") return json({ error: UNAVAILABLE, retryable: true }, 503);
-  if (binding === null) return json({ deleted: true, privy: "none" });
   const session = sessionClaims(token);
-  if (session.role !== "authenticated" || session.wallet !== binding.wallet.toLowerCase()) {
-    return json({ error: "a signed-in wallet session is required" }, 401);
-  }
+  if (session.role !== "authenticated" || !session.wallet) return json({ error: "a signed-in wallet session is required" }, 401);
+  if (binding === null) return json(NO_BINDING, 409);
+  if (session.wallet !== binding.wallet.toLowerCase()) return json({ error: "a signed-in wallet session is required" }, 401);
 
   if (!secret) return secretMissing();
   const refused = await lookupGate(url, serviceKey, WALLET_LABEL + binding.wallet.toLowerCase());

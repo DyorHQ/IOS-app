@@ -1,13 +1,14 @@
 // deno test --no-config --node-modules-dir=none -A supabase/functions/delete-account/
 import { assertEquals } from "jsr:@std/assert@1";
-import { DEFAULT_TOKEN_MAX_AGE_S, deletionMethod, ownBinding, sessionClaims, tokenMaxAge } from "./deletion.ts";
+import { DEFAULT_TOKEN_MAX_AGE_S, deletionMethod, NO_BINDING, ownBinding, sessionClaims, tokenMaxAge } from "./deletion.ts";
 
-Deno.test("SB-10: the Privy token may be 15 minutes old by default; the override is clamped to [1 min, 1 h]", () => {
-  assertEquals(DEFAULT_TOKEN_MAX_AGE_S, 900);
-  assertEquals(tokenMaxAge(undefined), 900);
-  assertEquals(tokenMaxAge(""), 900);
-  assertEquals(tokenMaxAge("abc"), 900);
-  assertEquals(tokenMaxAge("1.5"), 900);
+Deno.test("SB-10: the Privy token may be an hour old by default (the builds in use); the override tightens it within [1 min, 1 h]", () => {
+  assertEquals(DEFAULT_TOKEN_MAX_AGE_S, 3600);
+  assertEquals(tokenMaxAge(undefined), 3600);
+  assertEquals(tokenMaxAge(""), 3600);
+  assertEquals(tokenMaxAge("abc"), 3600);
+  assertEquals(tokenMaxAge("1.5"), 3600);
+  assertEquals(tokenMaxAge("900"), 900);
   assertEquals(tokenMaxAge("3600"), 3600);
   assertEquals(tokenMaxAge("86400"), 3600);
   assertEquals(tokenMaxAge("5"), 60);
@@ -31,6 +32,10 @@ Deno.test("SB-7: only one well-formed row counts as the caller's binding", () =>
                      [{ email: "me@x.io", wallet: "0x1" }], [{ wallet }], [null]]) {
     assertEquals(ownBinding(bad), "invalid", JSON.stringify(bad));
   }
+});
+
+Deno.test("SB-7: with no binding row, nothing is reported as deleted", () => {
+  assertEquals(NO_BINDING, { deleted: false, privy: "unknown", error: "no email binding" });
 });
 
 Deno.test("SB-7: the session's role and wallet are read from the token PostgREST accepted", () => {

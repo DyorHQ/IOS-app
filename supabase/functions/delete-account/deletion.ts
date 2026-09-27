@@ -1,10 +1,13 @@
 // The pure rules delete-account applies (security audit 2026-09-26, SB-7 and SB-10).
 
-// How old the Privy access token for a Privy-login deletion may be (SB-10): deleting the Privy user also deletes its
-// embedded wallet, so a token that leaked in the last hour must not be enough. The app refreshes its Privy session
-// right before it calls (PrivyUser.refresh()). DELETE_ACCOUNT_TOKEN_MAX_AGE_S may relax it for a transition — never
-// below a minute or beyond an hour (Privy's own token lifetime, i.e. the old behaviour).
-export const DEFAULT_TOKEN_MAX_AGE_S = 15 * 60;
+// How old the Privy access token for a Privy-login deletion may be (SB-10). Deleting the Privy user also deletes its
+// embedded wallet, so ideally a token that leaked in the last hour is not enough — but the builds in use send their
+// cached Privy token (Session.swift, user.getAccessToken()), which may be up to an hour old (Privy's token lifetime),
+// and they delete their server rows before calling, so refusing it would leave a half-deleted account. The default is
+// therefore the old behaviour, an hour. DELETE_ACCOUNT_TOKEN_MAX_AGE_S tightens it (e.g. 900) once the first build
+// that refreshes its Privy session right before calling has shipped and every older build is expired; it is clamped
+// to between a minute and an hour.
+export const DEFAULT_TOKEN_MAX_AGE_S = 60 * 60;
 
 export function tokenMaxAge(configured: string | undefined): number {
   const n = Number(configured);
@@ -20,6 +23,11 @@ export function deletionMethod(body: unknown): "privy" | "email-password" | null
   if (method === undefined) return "privy";
   return method === "email-password" ? "email-password" : null;
 }
+
+// The Email & Password path's answer when the caller has no binding row: nothing identifies a Privy user any more (the
+// app deleted its email_accounts row first, or never had one), so the deletion must not be reported as done. The app
+// calls before deleting its rows; a retry after they are gone gets this.
+export const NO_BINDING = { deleted: false, privy: "unknown", error: "no email binding" } as const;
 
 // The caller's own binding, from PostgREST's answer to GET /rest/v1/email_accounts?select=email,wallet made with the
 // caller's session (RLS "owner reads own email binding" returns only rows whose wallet is the session's). null when
