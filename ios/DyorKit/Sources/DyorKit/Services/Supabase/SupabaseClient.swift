@@ -226,6 +226,15 @@ public actor SupabaseClient {
         _ = try await send(method: "POST", path: "rest/v1/\(table)", query: query, body: body, prefer: "return=minimal,resolution=merge-duplicates", authed: true)
     }
 
+    /// The minimum supported iOS build (`MinimumBuild`), read with the publishable key alone. Nil when the row is missing
+    /// or malformed; throws on a network or HTTP failure. The caller fails open on both.
+    public func minimumBuild() async throws -> MinimumBuild? {
+        let data = try await send(method: "GET", path: "rest/v1/app_config",
+                                  query: [URLQueryItem(name: "key", value: "eq.ios"), URLQueryItem(name: "select", value: "value")],
+                                  body: nil, prefer: nil, authed: false)
+        return MinimumBuild.parse(data)
+    }
+
     /// Calls a Postgres function through PostgREST RPC with the current session (or the publishable key).
     public func rpc<T: Decodable>(_ function: String, _ arguments: [String: String] = [:], authed: Bool = false) async throws -> T {
         let body = try JSONSerialization.data(withJSONObject: arguments)

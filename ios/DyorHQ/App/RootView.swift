@@ -17,11 +17,18 @@ struct RootView: View {
                 // A passkey account just deleted: what's left to do about the passkey, then onboarding.
                 if let done = session.passkeyDeletion {
                     AccountDeletedView(done: done) { session.passkeyDeletion = nil }
+                } else if let required = env.updateGate.required {
+                    UpdateRequiredView(minimum: required)
                 } else {
                     OnboardingView()
                 }
             case .signedIn:
-                MainTabView()
+                // A build below the minimum shows balances and export only: nothing that signs is reachable (GP-2).
+                if let required = env.updateGate.required {
+                    UpdateRequiredView(minimum: required)
+                } else {
+                    MainTabView()
+                }
             }
         }
         .animation(.default, value: session.state)
@@ -36,6 +43,7 @@ struct RootView: View {
         // ceremony counts, so a build without passkey accounts covers exactly as before.
         .overlay { PrivacyCover(active: scenePhase == .active || (scenePhase == .inactive && session.mera.isPrompting)) }
         .task { session.start(); settings.appearance.apply(); Notifications.configure() }
+        .task { await env.updateGate.check(client: env.social.client) }
         .onChange(of: scenePhase) { _, phase in
             // A passkey (Mera) signing session must not outlive the user leaving the app: whoever picks the phone up
             // next has to present the passkey again. Ending it also closes a passkey account's Perpl socket and drops
@@ -43,6 +51,8 @@ struct RootView: View {
             if phase == .background { session.mera.end() }
             if phase == .active {
                 settings.appearance.apply()
+                // The minimum supported build, at most every ten minutes (GP-2).
+                Task { await env.updateGate.check(client: env.social.client) }
                 // Transactions sent before the app left the foreground: settle their pending rows (GL-2), and pick up
                 // the bridges iOS suspended (GL-5).
                 Task { await PendingActivity.recheck(owner: session.address, rpc: env.rpc) }

@@ -34,6 +34,8 @@ final class AppEnvironment {
     /// Every bridge deposit sent, tracked until it settles — across relaunches, for the account that sent it.
     let bridgeTracker: BridgeTracker
     let settings = AppSettings()
+    /// The minimum supported build: below it, "Update required" replaces the app (GP-2).
+    let updateGate = UpdateGate()
     /// Authenticated Perpl trading. A passkey account's trading key lives and dies with its session (`session.mera`).
     let perplTrading: PerplTrading
     /// The wallet's cross-section volume / fees / P&L model, shared by Home's Total Volume and the Portfolio page.
