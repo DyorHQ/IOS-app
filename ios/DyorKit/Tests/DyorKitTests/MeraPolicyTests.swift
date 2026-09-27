@@ -42,12 +42,34 @@ final class MeraPolicyTests: XCTestCase {
         call(Uniswap.permit2, try! SwapCalldata.permit2Approve(token: token, spender: spender, amount: amount, expiration: BigUInt(expiration)))
     }
 
-    private var universalRouterSwap: Data { encode("execute(bytes,bytes[],uint256)", [.bytes(Data([0x10])), .array([.bytes(Data([1, 2, 3]))]), .uint(unix + 600)]) }
+    /// Universal Router calldata as the app builds it (`SwapCalldata.universalRouterV4`): `amountIn` of `tokenIn` for at
+    /// least `minOut` of `tokenOut`, through one canonical v4 pool, or `via` a second one.
+    private func urSwap(_ tokenIn: Address, _ amountIn: BigUInt, _ tokenOut: Address, minOut: BigUInt = 990_000, via: Address? = nil) -> Data {
+        var hops = [V4Hop(key: PoolKey.canonical(tokenIn, via ?? tokenOut, fee: 500, tickSpacing: 10), from: tokenIn)!]
+        if let via { hops.append(V4Hop(key: PoolKey.canonical(via, tokenOut, fee: 3000, tickSpacing: 60), from: via)!) }
+        return try! SwapCalldata.universalRouterV4(currencyIn: tokenIn, currencyOut: tokenOut, hops: hops, amountIn: amountIn, minOut: minOut, deadline: BigUInt(unix + 600)).data
+    }
+
+    /// USDC → MON, matching `swapIntent(.uniswap, pay: usdc, usdcIn)` (1,000,000 out, so a 99% minimum of 990,000).
+    private var universalRouterSwap: Data { urSwap(usdc, usdcIn, Monad.native) }
+    /// MON on `value` → USDC, matching `swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc)`.
+    private var monSwap: Data { urSwap(Monad.native, monIn, usdc) }
+
+    /// A v3 route through SwapRouter02 (`SwapCalldata.swapRouter02`), or through Monday Trade's router.
+    private func v3Swap(_ path: [Address], _ amountIn: BigUInt, minOut: BigUInt = 990_000, nativeIn: Bool = false, nativeOut: Bool = false, monday: Bool = false) -> TransactionRequest {
+        let route = V3Route(path: path, fees: Array(repeating: 500, count: path.count - 1))
+        return monday
+            ? try! SwapCalldata.mondaySwap(route: route, amountIn: amountIn, minOut: minOut, account: account, nativeIn: nativeIn, nativeOut: nativeOut, deadline: BigUInt(unix + 600))
+            : try! SwapCalldata.swapRouter02(route: route, amountIn: amountIn, minOut: minOut, account: account, nativeIn: nativeIn, nativeOut: nativeOut, deadline: BigUInt(unix + 600))
+    }
+
+    private func call(_ request: TransactionRequest) -> Policy.Call { call(request.to, request.data, value: request.value) }
 
     /// KuruFlowEntrypoint calldata in the layout read from its bytecode; `recipient` picks the explicit-recipient variant.
-    private func kuru(tokenIn: Address, amountIn: BigUInt, tokenOut: Address, minOut: BigUInt, recipient: Address? = nil) -> Data {
+    private func kuru(tokenIn: Address, amountIn: BigUInt, tokenOut: Address, minOut: BigUInt, recipient: Address? = nil,
+                      fee: [ABIValue]? = nil) -> Data {
         var args: [ABIValue] = [.address(tokenOut), .uint(minOut), .address(tokenIn), .uint(amountIn),
-                                .tuple([.address(stranger), .uint(0), .address(.zero), .uint(0), .bool(true)]), .bytes(Data([0x02, 0x01, 0xff]))]
+                                .tuple(fee ?? [.address(stranger), .uint(0), .address(.zero), .uint(0), .bool(true)]), .bytes(Data([0x02, 0x01, 0xff]))]
         var types = "address,uint256,address,uint256,(address,uint256,address,uint256,bool),bytes"
         if let recipient { args.append(.address(recipient)); types += ",address" }
         let selector = recipient == nil ? KuruFlowSwap.payCaller : KuruFlowSwap.payRecipient
@@ -58,12 +80,20 @@ final class MeraPolicyTests: XCTestCase {
         call(to ?? curve, encode(signature, [.uint(amount), .uint(1), .address(recipient ?? account)]), value: value)
     }
 
-    /// An `execOrders` desc of `type` (0 OpenLong, 1 OpenShort, 2/3 Close, 4 Cancel, 5 IncreasePositionCollateral).
-    private func perplOrders(_ types: [Int]) -> Policy.Call {
+    /// An `execOrders` desc of `type` (0 OpenLong, 1 OpenShort, 2/3 Close, 4 Cancel, 5 IncreasePositionCollateral) on
+    /// market 16, 10 lots at 5×, with the app's defaults; `change` edits one field (by index) first.
+    private func perplOrders(_ types: [Int], change: (Int, ABIValue)? = nil) -> Policy.Call {
         let descs: [[ABIValue]] = types.enumerated().map { i, type in
-            [.uint(i + 1), .uint(16), .uint(type), .uint(0), .uint(100), .uint(10), .uint(0), .bool(false), .bool(false), .bool(true), .uint(0), .uint(500), .uint(0), .uint(0), .uint(300)]
+            var desc: [ABIValue] = [.uint(i + 1), .uint(16), .uint(type), .uint(0), .uint(100), .uint(10), .uint(0), .bool(false), .bool(false), .bool(true), .uint(0), .uint(500), .uint(0), .uint(0), .uint(300)]
+            if let change { desc[change.0] = change.1 }
+            return desc
         }
         return call(Perpl.exchange, PerplExchange.execOrdersCalldata(descs, revertOnFail: true))
+    }
+
+    /// The order `perplOrders` builds, as a sheet declares it.
+    private func perplIntent(_ type: Int = 0, lots: BigUInt = 10, leverage: BigUInt = 500, price: BigUInt = 100, usd: Double? = 80) -> Intent {
+        .perplOrder(usd: usd, order: .init(perpId: 16, orderType: BigUInt(type), lotLNS: lots, leverageHdths: leverage, price: price, postOnly: false, immediateOrCancel: true))
     }
 
     private var usdc: Address { Monad.usdc }
@@ -83,10 +113,18 @@ final class MeraPolicyTests: XCTestCase {
             ("Uniswap v4, USDC → MON with exact approvals and a short Permit2 allowance",
              [approve(usdc, Uniswap.permit2, usdcIn), permit2(usdc, usdcIn, expiration: unix + SwapCalldata.exactPermit2Lifetime), call(Uniswap.universalRouter, universalRouterSwap)],
              swapIntent(.uniswap, pay: usdc, usdcIn)),
-            ("Uniswap v4, MON in on value", [call(Uniswap.universalRouter, universalRouterSwap, value: monIn)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc)),
-            ("Uniswap v3 through SwapRouter02", [approve(usdc, Uniswap.swapRouter02, usdcIn), call(Uniswap.swapRouter02, encode("multicall(uint256,bytes[])", [.uint(unix), .array([])]))],
+            ("Uniswap v4, MON in on value", [call(Uniswap.universalRouter, monSwap, value: monIn)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc)),
+            ("Uniswap v4, two hops", [call(Uniswap.universalRouter, urSwap(Monad.native, monIn, erc20Pair, via: usdc), value: monIn)],
+             swapIntent(.uniswap, pay: Monad.native, monIn, receive: erc20Pair)),
+            ("Uniswap v3 through SwapRouter02, USDC → MON", [approve(usdc, Uniswap.swapRouter02, usdcIn), call(v3Swap([usdc, Monad.wmon], usdcIn, nativeOut: true))],
              swapIntent(.uniswap, pay: usdc, usdcIn)),
-            ("Monday Trade", [approve(usdc, MondayTrade.swapRouter, usdcIn), call(MondayTrade.swapRouter, encode("multicall(bytes[])", [.array([])]))], swapIntent(.monday, pay: usdc, usdcIn)),
+            ("Uniswap v3 through SwapRouter02, MON → token over two hops", [call(v3Swap([Monad.wmon, usdc, erc20Pair], monIn, nativeIn: true))],
+             swapIntent(.uniswap, pay: Monad.native, monIn, receive: erc20Pair)),
+            ("Uniswap v3, WMON the token", [approve(Monad.wmon, Uniswap.swapRouter02, monIn), call(v3Swap([Monad.wmon, usdc], monIn))],
+             swapIntent(.uniswap, pay: Monad.wmon, monIn, receive: usdc)),
+            ("Monday Trade, USDC → MON", [approve(usdc, MondayTrade.swapRouter, usdcIn), call(v3Swap([usdc, Monad.wmon], usdcIn, nativeOut: true, monday: true))],
+             swapIntent(.monday, pay: usdc, usdcIn)),
+            ("Monday Trade, MON → USDC", [call(v3Swap([Monad.wmon, usdc], monIn, nativeIn: true, monday: true))], swapIntent(.monday, pay: Monad.native, monIn, receive: usdc)),
             ("Kuru Flow, output to the caller, 0.5% slippage",
              [approve(usdc, Kuru.entrypoint, usdcIn), call(Kuru.entrypoint, kuru(tokenIn: usdc, amountIn: usdcIn, tokenOut: Monad.native, minOut: kuruOut * 995 / 1000))],
              swapIntent(.kuru, pay: usdc, usdcIn, out: kuruOut)),
@@ -111,7 +149,8 @@ final class MeraPolicyTests: XCTestCase {
             ("Perpl account opening", [approve(Perpl.collateral, Perpl.exchange, usdcIn), call(Perpl.exchange, encode(PerplExchange.Signature.createAccount, [.uint(usdcIn)]))],
              .perplDeposit(amount: usdcIn)),
             ("Perpl withdraw to self", [call(Perpl.exchange, encode(PerplExchange.Signature.withdrawCollateral, [.uint(usdcIn)]))], .perplWithdraw),
-            ("Perpl opening orders", [perplOrders([0, 1])], .perplOrder(usd: 80)),
+            ("Perpl opening a long", [perplOrders([0])], perplIntent()),
+            ("Perpl opening a short", [perplOrders([1])], perplIntent(1)),
             ("Swap MON → AUSD, then deposit it",
              [call(Kuru.entrypoint, kuru(tokenIn: .zero, amountIn: monIn, tokenOut: Monad.ausd, minOut: 995), value: monIn),
               approve(Perpl.collateral, Perpl.exchange, 1000), call(Perpl.exchange, encode(PerplExchange.Signature.depositCollateral, [.uint(1000)]))],
@@ -164,8 +203,11 @@ final class MeraPolicyTests: XCTestCase {
             ("a Permit2 allowance for a stranger", [permit2(usdc, usdcIn, spender: stranger, expiration: unix + 60)], uni, .approval(.spender)),
             ("a Permit2 allowance outside a Uniswap swap", [permit2(usdc, usdcIn, expiration: unix + 60)], swapIntent(.monday, pay: usdc, usdcIn), .notAllowlisted),
             // MON.
-            ("more MON than declared", [call(Uniswap.universalRouter, universalRouterSwap, value: monIn + 1)], swapIntent(.uniswap, pay: Monad.native, monIn), .valueOverDeclared),
-            ("MON with an ERC-20 input", [call(Uniswap.universalRouter, universalRouterSwap, value: 1)], uni, .valueOverDeclared),
+            // A Universal Router swap carries exactly its input in MON when MON pays it, and none otherwise (IOSK-10).
+            ("more MON than declared", [call(Uniswap.universalRouter, monSwap, value: monIn + 1)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc), .notAllowlisted),
+            ("MON with an ERC-20 input", [call(Uniswap.universalRouter, universalRouterSwap, value: 1)], uni, .notAllowlisted),
+            ("MON beyond what a v4 swap settles", [call(Uniswap.universalRouter, urSwap(Monad.native, monIn - 1, usdc), value: monIn)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc), .notAllowlisted),
+            ("less MON than a v4 swap settles", [call(Uniswap.universalRouter, monSwap, value: monIn - 1)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc), .notAllowlisted),
             ("unwrapping more than declared", [call(Monad.wmon, encode("withdraw(uint256)", [.uint(monIn + 1)]))], swapIntent(.wrap, pay: Monad.wmon, monIn), .amountOverDeclared),
             // Kuru Flow.
             ("Kuru output to another address", [call(Kuru.entrypoint, kuru(tokenIn: usdc, amountIn: usdcIn, tokenOut: Monad.native, minOut: kuruOut, recipient: stranger))], kuruIntent, .recipient),
@@ -187,17 +229,113 @@ final class MeraPolicyTests: XCTestCase {
             ("a claim on a stranger contract", [call(stranger, encode(MomentsABI.Vesting.claim, [.uint(7)]))], .momentsClaim, .notAllowlisted),
             // Perpl.
             ("depositing more than declared", [call(Perpl.exchange, encode(PerplExchange.Signature.depositCollateral, [.uint(usdcIn + 1)]))], .perplDeposit(amount: usdcIn), .amountOverDeclared),
-            ("a cancel inside an order", [perplOrders([0, 4])], .perplOrder(usd: 10), .notAllowlisted),
-            ("a reduce-only close", [perplOrders([2])], .perplOrder(usd: 10), .notAllowlisted),
-            ("a margin move", [perplOrders([5])], .perplOrder(usd: 10), .notAllowlisted),
+            ("a cancel inside an order", [perplOrders([0, 4])], perplIntent(), .notAllowlisted),
+            ("a reduce-only close", [perplOrders([2])], perplIntent(), .notAllowlisted),
+            ("a margin move", [perplOrders([5])], perplIntent(), .notAllowlisted),
         ]
         for (name, calls, intent, reason) in cases {
             XCTAssertEqual(review(calls, intent, context: name.contains("unverified") ? Policy.Context(account: account, expiresAt: expiresAt) : nil), .ask(reason), name)
         }
     }
 
+    /// Router and Perpl payloads are read in full (IOSK-10): exactly the shape the app builds is prompt-free, and a
+    /// payload that does anything more — or that the decoder can't read in full — asks.
+    func testRouterAndOrderPayloadsAreReadInFull() {
+        typealias V4 = SwapCalldata.V4
+        let uni = swapIntent(.uniswap, pay: usdc, usdcIn)
+        let monUni = swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc)
+        func single(_ tokenIn: Address, _ tokenOut: Address, amountIn: BigUInt, minOut: BigUInt, hookData: Data = Data()) -> Data {
+            let hop = V4Hop(key: PoolKey.canonical(tokenIn, tokenOut, fee: 500, tickSpacing: 10), from: tokenIn)!
+            return try! ABI.encode([.tuple([hop.key.abiValue, .bool(hop.zeroForOne), .uint(amountIn), .uint(minOut), .bytes(hookData)])],
+                                   "((address,address,uint24,int24,address),bool,uint128,uint128,bytes)")
+        }
+        func pair(_ currency: Address, _ amount: BigUInt) -> Data { try! ABI.encode([.address(currency), .uint(amount)], "address,uint256") }
+        func execute(commands: Data = Data([V4.swapCommand]), actions: Data = Data([V4.swapExactInSingle, V4.settleAll, V4.takeAll]),
+                     params: [Data], extraInputs: [Data] = []) -> Data {
+            let input = try! ABI.encode([.bytes(actions), .array(params.map { .bytes($0) })], "bytes,bytes[]")
+            return encode("execute(bytes,bytes[],uint256)", [.bytes(commands), .array(([input] + extraInputs).map { .bytes($0) }), .uint(unix + 600)])
+        }
+        let swapParams = [single(usdc, Monad.native, amountIn: usdcIn, minOut: 990_000), pair(usdc, usdcIn), pair(Monad.native, 990_000)]
+        XCTAssertEqual(execute(params: swapParams), universalRouterSwap, "the test encoder matches the app's builder")
+        var trailing = universalRouterSwap
+        trailing.append(0)
+        var dirty = universalRouterSwap
+        dirty[4 + 3 * 32 + 1] = 0x01 // inside the padding after the one-byte command
+        let v3Inner = try! SwapCalldata.swapRouter02ExactInputSingle(route: V3Route(path: [usdc, Monad.wmon], fees: [500]), amountIn: usdcIn, minOut: 990_000, recipient: account)
+        XCTAssertEqual(review([call(Uniswap.swapRouter02, encode("multicall(uint256,bytes[])", [.uint(unix), .array([.bytes(v3Inner)])]))], swapIntent(.uniswap, pay: usdc, usdcIn, receive: Monad.wmon)),
+                       .allowed, "the same swap alone is prompt-free")
+
+        let asks: [(String, Policy.Call, Intent, Policy.Reason)] = [
+            ("a second command (a sweep)", call(Uniswap.universalRouter, execute(commands: Data([V4.swapCommand, 0x04]), params: swapParams, extraInputs: [pair(usdc, 0)])), uni, .notAllowlisted),
+            ("a TAKE to someone instead of TAKE_ALL", call(Uniswap.universalRouter, execute(actions: Data([V4.swapExactInSingle, V4.settleAll, 0x0e]), params: swapParams)), uni, .notAllowlisted),
+            ("an extra action", call(Uniswap.universalRouter, execute(actions: Data([V4.swapExactInSingle, V4.settleAll, V4.takeAll, V4.takeAll]), params: swapParams + [pair(usdc, 0)])), uni, .notAllowlisted),
+            ("hook data", call(Uniswap.universalRouter, execute(params: [single(usdc, Monad.native, amountIn: usdcIn, minOut: 990_000, hookData: Data([1])), pair(usdc, usdcIn), pair(Monad.native, 990_000)])), uni, .notAllowlisted),
+            ("settling more than the swap's input", call(Uniswap.universalRouter, execute(params: [swapParams[0], pair(usdc, usdcIn + 1), swapParams[2]])), uni, .notAllowlisted),
+            ("taking less than the swap's minimum", call(Uniswap.universalRouter, execute(params: [swapParams[0], swapParams[1], pair(Monad.native, 1)])), uni, .notAllowlisted),
+            ("settling another currency", call(Uniswap.universalRouter, execute(params: [swapParams[0], pair(Monad.wmon, usdcIn), swapParams[2]])), uni, .notAllowlisted),
+            ("a trailing byte", call(Uniswap.universalRouter, trailing), uni, .notAllowlisted),
+            ("a dirty padding byte", call(Uniswap.universalRouter, dirty), uni, .notAllowlisted),
+            ("the old placeholder payload", call(Uniswap.universalRouter, encode("execute(bytes,bytes[],uint256)", [.bytes(Data([0x10])), .array([.bytes(Data([1, 2, 3]))]), .uint(unix + 600)])), uni, .notAllowlisted),
+            ("a v4 swap of another token", call(Uniswap.universalRouter, urSwap(Monad.wmon, usdcIn, Monad.native)), uni, .differentToken),
+            ("a v4 swap for another token", call(Uniswap.universalRouter, urSwap(usdc, usdcIn, erc20Pair)), uni, .differentToken),
+            ("a v4 swap of more than declared", call(Uniswap.universalRouter, urSwap(usdc, usdcIn + 1, Monad.native)), uni, .amountOverDeclared),
+            ("a v4 minimum below 99% of the quote", call(Uniswap.universalRouter, urSwap(usdc, usdcIn, Monad.native, minOut: 989_999)), uni, .minimumOut),
+            // SwapRouter02.
+            ("a v3 swap paying someone else", call(try! SwapCalldata.swapRouter02(route: V3Route(path: [usdc, Monad.wmon], fees: [500]), amountIn: usdcIn, minOut: 990_000, account: stranger, nativeIn: false, nativeOut: false, deadline: BigUInt(unix))),
+             swapIntent(.uniswap, pay: usdc, usdcIn, receive: Monad.wmon), .notAllowlisted),
+            ("a v3 unwrap to someone else", call(try! SwapCalldata.swapRouter02(route: V3Route(path: [usdc, Monad.wmon], fees: [500]), amountIn: usdcIn, minOut: 990_000, account: stranger, nativeIn: false, nativeOut: true, deadline: BigUInt(unix))), uni, .notAllowlisted),
+            ("a v3 call after the swap", call(Uniswap.swapRouter02, encode("multicall(uint256,bytes[])", [.uint(unix), .array([.bytes(v3Inner), .bytes(encode("sweepToken(address,uint256,address)", [.address(usdc), .uint(0), .address(stranger)]))])])),
+             swapIntent(.uniswap, pay: usdc, usdcIn, receive: Monad.wmon), .notAllowlisted),
+            ("MON on value with no refund", call(Uniswap.swapRouter02, v3Swap([Monad.wmon, usdc], monIn).data, value: monIn), monUni, .notAllowlisted),
+            ("a refund with no MON on value", call(Uniswap.swapRouter02, v3Swap([Monad.wmon, usdc], monIn, nativeIn: true).data), monUni, .notAllowlisted),
+            ("a v3 price limit", call(Uniswap.swapRouter02, encode("multicall(uint256,bytes[])", [.uint(unix), .array([.bytes(encode("exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+                                     [.tuple([.address(usdc), .address(Monad.wmon), .uint(500), .address(account), .uint(usdcIn), .uint(990_000), .uint(1)])]))])])),
+             swapIntent(.uniswap, pay: usdc, usdcIn, receive: Monad.wmon), .notAllowlisted),
+            ("a v3 minimum below 99% of the quote", call(v3Swap([usdc, Monad.wmon], usdcIn, minOut: 989_999, nativeOut: true)), uni, .minimumOut),
+            // Monday Trade.
+            ("a Monday swap paying someone else", call(try! SwapCalldata.mondaySwap(route: V3Route(path: [usdc, Monad.wmon], fees: [500]), amountIn: usdcIn, minOut: 990_000, account: stranger, nativeIn: false, nativeOut: false, deadline: BigUInt(unix))),
+             swapIntent(.monday, pay: usdc, usdcIn, receive: Monad.wmon), .notAllowlisted),
+            ("a Monday swap of more than declared", call(v3Swap([usdc, Monad.wmon], usdcIn + 1, nativeOut: true, monday: true)), swapIntent(.monday, pay: usdc, usdcIn), .amountOverDeclared),
+            ("a SwapRouter02 payload sent to Monday", call(MondayTrade.swapRouter, v3Swap([usdc, Monad.wmon], usdcIn, nativeOut: true).data), swapIntent(.monday, pay: usdc, usdcIn), .notAllowlisted),
+            // Perpl.
+            ("two orders in one call", perplOrders([0, 0]), perplIntent(), .notAllowlisted),
+            ("an order with an expiry", perplOrders([0], change: (6, .uint(1))), perplIntent(), .notAllowlisted),
+            ("an order moving collateral", perplOrders([0], change: (13, .uint(1))), perplIntent(), .notAllowlisted),
+            ("a fill-or-kill order", perplOrders([0], change: (8, .bool(true))), perplIntent(), .notAllowlisted),
+            ("a looser negative-PnL bound", perplOrders([0], change: (14, .uint(1_000))), perplIntent(), .notAllowlisted),
+            ("an order on another market", perplOrders([0], change: (1, .uint(17))), perplIntent(), .amountOverDeclared),
+            ("a short declared as a long", perplOrders([1]), perplIntent(0), .amountOverDeclared),
+            ("more than 2% over the size", perplOrders([0], change: (5, .uint(11))), perplIntent(), .amountOverDeclared),
+            ("higher leverage than shown", perplOrders([0], change: (11, .uint(501))), perplIntent(), .amountOverDeclared),
+            ("a long more than 2% above the price shown", perplOrders([0], change: (4, .uint(103))), perplIntent(), .amountOverDeclared),
+            ("a short more than 2% below the price shown", perplOrders([1], change: (4, .uint(97))), perplIntent(1), .amountOverDeclared),
+            ("a resting order shown as immediate-or-cancel", perplOrders([0], change: (9, .bool(false))), perplIntent(), .amountOverDeclared),
+            ("a post-only order not shown as one", perplOrders([0], change: (7, .bool(true))), perplIntent(), .amountOverDeclared),
+            ("an order with nothing declared", perplOrders([0]), Intent(parts: [.init(kind: .perplOrder)], usd: 10), .notAllowlisted),
+        ]
+        for (name, call, intent, reason) in asks {
+            XCTAssertEqual(review([call], intent), .ask(reason), name)
+        }
+        // Within 2% of the declared size (an order sized in dollars, converted at a mark that moved) is still the order.
+        XCTAssertEqual(review([perplOrders([0], change: (5, .uint(102)))], perplIntent(lots: 100)), .allowed)
+        // So is a price within 2% of the one shown, or better: lower for a long, higher for a short.
+        XCTAssertEqual(review([perplOrders([0], change: (4, .uint(102)))], perplIntent()), .allowed)
+        XCTAssertEqual(review([perplOrders([0], change: (4, .uint(50)))], perplIntent()), .allowed)
+        XCTAssertEqual(review([perplOrders([1], change: (4, .uint(98)))], perplIntent(1)), .allowed)
+        XCTAssertEqual(review([perplOrders([1], change: (4, .uint(150)))], perplIntent(1)), .allowed)
+        // The terms a sheet declares are those the app's own builder encodes.
+        let market = PerpMarket(id: 16, symbol: "BTC", name: "Bitcoin", priceDecimals: 1, lotDecimals: 5, basePricePNS: 0,
+                                mark: 100, last: 100, oracle: 100, markTimestamp: 0, longOI: 0, shortOI: 0,
+                                fundingRatePct100k: 0, status: 0, initMarginFraction: 0.1, maintMarginFraction: 0.05, numOrders: 0)
+        for input in [OrderInput(market: market, side: .long, kind: .market, size: 0.5, leverage: 20), OrderInput(market: market, side: .short, kind: .limit, size: 2, price: 90, leverage: 3)] {
+            let plan = PerplService.buildOrderDesc(input)
+            let data = PerplExchange.execOrdersCalldata([plan], revertOnFail: true)
+            XCTAssertEqual(review([call(Perpl.exchange, data)], .perplOrder(usd: 50, order: .init(input))), .allowed, "\(input.side)")
+        }
+    }
+
     func testCapsAndPricing() {
-        let swap = [call(Uniswap.universalRouter, universalRouterSwap, value: monIn)]
+        let swap = [call(Uniswap.universalRouter, monSwap, value: monIn)]
         func intent(_ usd: Double?) -> Intent { swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc, usd: usd) }
         XCTAssertEqual(review(swap, intent(100)), .allowed, "exactly the per-action cap")
         XCTAssertEqual(review(swap, intent(nil)), .ask(.unpriced))
@@ -220,7 +358,7 @@ final class MeraPolicyTests: XCTestCase {
         let gwei = BigUInt(10).power(9)
         let intent = swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc)
         func prepared(to: Address = Uniswap.universalRouter, data: Data? = nil, value: BigUInt? = nil, gasLimit: BigUInt, maxFee: BigUInt, tip: BigUInt = 2 * gwei, chainId: Int = Monad.chainId) -> Policy.Call {
-            Policy.Call(PreparedTransaction(from: account, to: to, data: data ?? universalRouterSwap, value: value ?? monIn, nonce: 7,
+            Policy.Call(PreparedTransaction(from: account, to: to, data: data ?? monSwap, value: value ?? monIn, nonce: 7,
                                             gasLimit: gasLimit, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip, chainId: chainId))
         }
         func refusal(_ call: Policy.Call, _ intent: Intent) -> Policy.Reason? { Policy.refusal(call, intent: intent, account: account) }
@@ -318,8 +456,13 @@ final class MeraPolicyTests: XCTestCase {
         let nonce = String(repeating: "ab", count: 32)
         let millis = unix * 1000 + 123
         func signIn(_ address: String, _ nonce: String, _ issued: Int) -> Data { Data(SupabaseClient.signInMessage(address: address, nonce: nonce, issuedAt: issued).utf8) }
+        func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self) }
         XCTAssertEqual(Policy.check(message: signIn(account.checksummed, nonce, millis), account: account, now: now), .allowed)
-        XCTAssertEqual(Policy.check(message: signIn(account.hex, nonce, millis), account: account, now: now), .allowed, "lowercase address as sent")
+        // The address line must carry the EIP-55 checksum (an all-digit address like `account` has no letters to case).
+        let lettered = Address(literal: "0x52908400098527886E0F7030069857D2E4169EE7")
+        XCTAssertEqual(Policy.check(message: signIn(lettered.checksummed, nonce, millis), account: lettered, now: now), .allowed)
+        XCTAssertEqual(Policy.check(message: signIn(lettered.hex, nonce, millis), account: lettered, now: now), .ask(.alwaysAsks(.message)))
+        let good = text(signIn(account.checksummed, nonce, millis))
         let asks: [(String, Data)] = [
             ("another wallet", signIn(stranger.checksummed, nonce, millis)),
             ("issued six minutes ago", signIn(account.checksummed, nonce, millis - 6 * 60 * 1000)),
@@ -327,7 +470,14 @@ final class MeraPolicyTests: XCTestCase {
             ("an uppercase nonce", signIn(account.checksummed, nonce.uppercased(), millis)),
             ("a short nonce", signIn(account.checksummed, "abcd", millis)),
             ("a trailing newline", signIn(account.checksummed, nonce, millis) + Data("\n".utf8)),
-            ("a carriage return", Data("DyorHQ Sign-In\r\n\r\nWallet: \(account.checksummed)\r\nNonce: \(nonce)\r\nIssued At: \(millis)".utf8)),
+            ("a carriage return", Data(good.replacingOccurrences(of: "\n", with: "\r\n").utf8)),
+            ("another domain", Data(good.replacingOccurrences(of: "dyorhq.fun wants", with: "evil.fun wants").utf8)),
+            ("another URI", Data(good.replacingOccurrences(of: "URI: https://dyorhq.fun", with: "URI: https://dyorhq.fun.evil.com").utf8)),
+            ("another chain", Data(good.replacingOccurrences(of: "Chain ID: 143", with: "Chain ID: 1").utf8)),
+            ("a longer validity", Data(good.replacingOccurrences(of: "Expiration Time: \(SupabaseClient.iso8601(millis: millis + 600_000))",
+                                                              with: "Expiration Time: \(SupabaseClient.iso8601(millis: millis + 3_600_000))").utf8)),
+            ("an appended resource", Data((good + "\nResources:\n- https://evil.example").utf8)),
+            ("the retired DyorHQ Sign-In template", Data("DyorHQ Sign-In\n\nWallet: \(account.checksummed)\nNonce: \(nonce)\nIssued At: \(millis)".utf8)),
             ("an arbitrary message", Data("Transfer all funds".utf8)),
             ("the email rebind message", Data("DyorHQ Email Rebind\n\nEmail: a@b.c\nAddress: \(account.hex)\nIssued At: \(millis)".utf8)),
             ("not UTF-8", Data([0xff, 0xfe, 0x00])),
@@ -358,6 +508,38 @@ final class MeraPolicyTests: XCTestCase {
         // Whatever sits in the eleventh word is the recipient the contract pays, so it is what the check compares.
         let reread = try XCTUnwrap(KuruFlowSwap(calldata: KuruFlowSwap.payRecipient + Data(kuru(tokenIn: usdc, amountIn: 7, tokenOut: .zero, minOut: 5).dropFirst(4))))
         XCTAssertNotEqual(reread.recipient, account)
+    }
+
+    /// The fee tuple (IOST-7), decoded as the web's `decodeKuruFlowSwap` and judged as its `kuruFeeAllowed`: only zero
+    /// basis points on both sides is a swap the wallet signs; the recipient and referrer are not pinned (at 0 bps they
+    /// receive nothing); a dirty address word or a fee flag that isn't a clean bool decodes to nothing.
+    func testKuruFeeTuple() throws {
+        func swap(_ fee: [ABIValue]) -> Data { kuru(tokenIn: usdc, amountIn: usdcIn, tokenOut: Monad.native, minOut: 995, fee: fee) }
+        let clean = try XCTUnwrap(KuruFlowSwap(calldata: swap([.address(stranger), .uint(7), .address(account), .uint(3), .bool(false)])))
+        XCTAssertEqual(clean.fee, KuruFlowSwap.Fee(recipient: stranger, bps: 7, referrer: account, referrerBps: 3, onOutput: false))
+        XCTAssertFalse(clean.takesNoFee)
+        XCTAssertTrue(try XCTUnwrap(KuruFlowSwap(calldata: swap([.address(stranger), .uint(0), .address(.zero), .uint(0), .bool(true)]))).takesNoFee)
+        XCTAssertTrue(try XCTUnwrap(KuruFlowSwap(calldata: swap([.address(.zero), .uint(0), .address(stranger), .uint(0), .bool(false)]))).takesNoFee)
+        for fee: [ABIValue] in [
+            [.address(stranger), .uint(1), .address(.zero), .uint(0), .bool(true)],
+            [.address(.zero), .uint(0), .address(stranger), .uint(1), .bool(true)],
+            [.address(.zero), .uint(BigUInt(1) << 255), .address(.zero), .uint(0), .bool(false)],
+        ] {
+            XCTAssertFalse(try XCTUnwrap(KuruFlowSwap(calldata: swap(fee))).takesNoFee, "\(fee)")
+        }
+        // Word 4 (fee recipient) or 6 (referrer) with dirty high bytes; word 8 (feeOnOutput) that isn't 0 or 1.
+        for (index, byte) in [(4 * 32, UInt8(1)), (6 * 32, 1), (8 * 32 + 31, 2)] {
+            var bad = swap([.address(stranger), .uint(0), .address(.zero), .uint(0), .bool(true)])
+            bad[4 + index] = byte
+            XCTAssertNil(KuruFlowSwap(calldata: bad), "word \(index / 32)")
+        }
+        // The wallet refuses a fee-taking swap whatever the session (the quote client already blocks it).
+        let taking = call(Kuru.entrypoint, swap([.address(stranger), .uint(30), .address(.zero), .uint(0), .bool(true)]))
+        let kuruIntent = swapIntent(.kuru, pay: usdc, usdcIn, out: 1_000)
+        XCTAssertEqual(Policy.refusal(taking, intent: kuruIntent, account: account), .fee)
+        XCTAssertEqual(Policy.refusal(taking, intent: .ask, account: account), .fee)
+        XCTAssertEqual(Policy.check(taking, intent: kuruIntent, context: context), .ask(.fee))
+        XCTAssertEqual(Policy.Reason.fee.summary, "a swap that pays a fee to someone else")
     }
 
     // MARK: Builders

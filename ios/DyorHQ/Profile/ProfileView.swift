@@ -90,6 +90,7 @@ struct ProfileView: View {
                             .navigationBarTitleDisplayMode(.inline)
                     } label: { SettingsRow("Support", symbol: "questionmark.circle", tint: .accent) }
                     Link(destination: SupportLinks.terms) { SettingsRow("Terms of Use", symbol: "doc.text", tint: .accent) }
+                    Link(destination: SupportLinks.privacy) { SettingsRow("Privacy Policy", symbol: "hand.raised", tint: .accent) }
                 }
 
                 Section("Network") {
@@ -246,6 +247,7 @@ struct ReceiveSheet: View {
                 }
                 VStack(spacing: 8) {
                     Text(address.checksummed)
+                        .speechSpellsOutCharacters()
                         .font(.footnote.monospaced())
                         .multilineTextAlignment(.center)
                         .textSelection(.enabled)
@@ -284,26 +286,74 @@ struct SendSheet: View {
     @State private var recipient = ""
     @State private var amount = ""
     @State private var balance: BigUInt?
-    @State private var showConfirm = false
+    /// What the review shows and signs, frozen when Review is tapped (RT-7): a Max that lands late or an edit behind
+    /// the sheet can't change the amount signed after it was shown.
+    @State private var review: SendReview?
+    /// The pasted text hidden characters were removed from (GR-4), while it is still what the field holds.
+    @State private var cleanedPaste: String?
+    /// Whether the recipient has contract code (GR-3): nil until read, or when it couldn't be read.
+    @State private var recipientIsContract: Bool?
+    @State private var recipientCheckFailed = false
+    /// Sending to a contract (or to an address that couldn't be checked) takes this acknowledgement.
+    @State private var sendToContract = false
 
+    /// What was typed or pasted, without surrounding whitespace or invisible characters (GR-4).
+    private var recipientText: String { Address.cleanedInput(recipient).text }
     /// Nil for a mixed-case address whose EIP-55 checksum is wrong: a mistyped character must never become the recipient.
-    private var recipientAddress: Address? { Address.hasValidChecksum(recipient) ? Address(recipient) : nil }
+    private var recipientAddress: Address? { Address.inputProblem(recipientText) == nil ? Address(recipientText) : nil }
     private var rawAmount: BigUInt? { Amount.parse(amount, decimals: token.decimals) }
+
+    /// Why this can't be sent, in words: nil when it can. Nothing is said about a field still empty.
+    private var problem: String? {
+        if let issue = Address.inputProblem(recipientText) { return issue }
+        if let to = recipientAddress {
+            if to.isZero { return "That's the zero address: anything sent there is lost for good." }
+            // Tokens sent to their own contract are stuck there: almost no token can send them back (GR-3).
+            if !token.isNative, to == token.address { return "That's the \(token.symbol) token contract itself. Tokens sent to it are almost always lost for good." }
+        }
+        if let rawAmount, let balance, rawAmount > balance {
+            return "More than your \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)."
+        }
+        return nil
+    }
+
+    /// A contract recipient, or one whose code couldn't be read, needs the acknowledgement.
+    private var needsContractAcknowledgement: Bool { recipientIsContract == true || recipientCheckFailed }
+
     private var valid: Bool {
-        guard let recipientAddress, !recipientAddress.isZero, let rawAmount, rawAmount > 0 else { return false }
-        if let balance { return rawAmount <= balance }
-        return true
+        guard problem == nil, let recipientAddress, !recipientAddress.isZero, let rawAmount, rawAmount > 0 else { return false }
+        guard recipientIsContract != nil || recipientCheckFailed else { return false } // still checking
+        return !needsContractAcknowledgement || sendToContract
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("To") {
+                Section {
                     TextField("Address", text: $recipient)
                         .font(.body.monospaced())
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    Button("Paste", systemImage: "doc.on.clipboard") { recipient = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? recipient }
+                    Button("Paste", systemImage: "doc.on.clipboard") {
+                        guard let pasted = UIPasteboard.general.string else { return }
+                        let cleaned = Address.cleanedInput(pasted)
+                        recipient = cleaned.text
+                        cleanedPaste = cleaned.removedInvisible ? cleaned.text : nil
+                    }
+                    if needsContractAcknowledgement {
+                        Toggle(recipientIsContract == true ? "Send to this contract anyway" : "Send without that check", isOn: $sendToContract)
+                            .tint(Color.attention)
+                    }
+                } header: {
+                    Text("To")
+                } footer: {
+                    if let cleanedPaste, cleanedPaste == recipient { Text("Hidden characters were removed from the pasted address. Check it matches the source.") }
+                    if let to = recipientAddress, to == session.address { Text("That's your own address.") }
+                    if recipientIsContract == true {
+                        Text("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts \(token.symbol).")
+                    } else if recipientCheckFailed {
+                        Text("Couldn't check whether this address is a contract. Check it before sending.")
+                    }
                 }
                 Section {
                     Picker("Token", selection: $token) {
@@ -313,41 +363,60 @@ struct SendSheet: View {
                 } header: {
                     Text("Amount")
                 } footer: {
-                    if let balance { Text("Available: \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)") }
-                    if !recipient.isEmpty, recipientAddress == nil {
-                        Text(Address(recipient) == nil
-                             ? "Enter a 42-character address starting with 0x."
-                             : "This address's capital letters don't match its checksum, so it may contain a typo. Copy it again from the source.")
-                    }
+                    if let problem { Text(problem).foregroundStyle(Color.attention) }
+                    else if let balance { Text("Available: \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)") }
                 }
             }
             .navigationTitle("Send")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Review") { showConfirm = true }.disabled(!valid) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Review") {
+                        guard let to = recipientAddress, let raw = rawAmount else { return }
+                        review = SendReview(token: token, to: to, amount: raw, toContract: recipientIsContract == true)
+                    }
+                    .disabled(!valid)
+                }
             }
             .task(id: token) {
                 guard let address = session.address else { return }
                 balance = try? await ERC20.balances(of: [token], owner: address, rpc: env.rpc, multicall: env.multicall)[token.address]
             }
-            .sheet(isPresented: $showConfirm) {
-                if let to = recipientAddress, let raw = rawAmount {
-                    ConfirmationSheet(title: "Send \(token.symbol)", confirmTitle: "Send", build: { [.call(transfer(to: to, amount: raw), label: "Send \(token.symbol)")] }, onDone: { dismiss() },
-                                      onCompleted: { hash in
-                        // A send out of the wallet is a withdrawal in the journey. USD is exact for the USD stables the
-                        // send picker offers; left unknown otherwise rather than guessed.
-                        let stable = ["USDC", "USDT0", "USDT", "AUSD", "USDe", "USD1", "mUSD"].contains(token.symbol)
-                        Activity.record(ActivityRecord(kind: .withdraw, title: "Sent \(token.symbol)",
-                            subtitle: "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol) → \(to.short)",
-                            hash: hash, section: "wallet", usd: stable ? Amount.units(raw, decimals: token.decimals) : nil), owner: session.address)
-                    }, intent: .alwaysAsks(.send)) {
-                        DetailRow("To", to.checksummed) // in full: this review is the last check before funds leave
-                        DetailRow("Amount", "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol)")
-                        DetailRow("Network", "Monad")
-                    }
+            .task(id: recipientAddress) { await checkRecipient() }
+            .sheet(item: $review) { review in
+                ConfirmationSheet(title: "Send \(review.token.symbol)", confirmTitle: "Send", build: { [.call(review.request, label: "Send \(review.token.symbol)")] }, onDone: { dismiss() },
+                                  onCompleted: { hash in
+                    // A send out of the wallet is a withdrawal in the journey. USD is exact for the USD stables the
+                    // send picker offers; left unknown otherwise rather than guessed.
+                    let stable = ["USDC", "USDT0", "USDT", "AUSD", "USDe", "USD1", "mUSD"].contains(review.token.symbol)
+                    Activity.record(ActivityRecord(kind: .withdraw, title: "Sent \(review.token.symbol)",
+                        subtitle: "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol) → \(review.to.short)",
+                        hash: hash, section: "wallet", usd: stable ? Amount.units(review.amount, decimals: review.token.decimals) : nil), owner: session.address)
+                }, intent: .alwaysAsks(.send)) {
+                    DetailRow("To", review.to.checksummed, spellsOut: true) // in full: this review is the last check before funds leave
+                    if review.toContract { DetailRow("Recipient", "A contract, not a wallet", tint: .attention) }
+                    DetailRow("Amount", "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol)")
+                    DetailRow("Network", "Monad")
                 }
             }
+        }
+    }
+
+    /// Reads whether the recipient has code. An EIP-7702-delegated account (Monad accounts can carry a `0xef0100`
+    /// delegation) is still a wallet its key controls, so only other code counts as a contract.
+    private func checkRecipient() async {
+        recipientIsContract = nil
+        recipientCheckFailed = false
+        sendToContract = false
+        guard let to = recipientAddress, !to.isZero else { return }
+        do {
+            let code = try await env.rpc.code(at: to)
+            guard to == recipientAddress else { return }
+            recipientIsContract = !code.isEmpty && !(code.count == 23 && code.prefix(3) == Data([0xef, 0x01, 0x00]))
+        } catch {
+            guard !Task.isCancelled, to == recipientAddress else { return }
+            recipientCheckFailed = true
         }
     }
 
@@ -360,12 +429,29 @@ struct SendSheet: View {
         let like = recipientAddress.map { TransactionRequest(to: $0, value: 1) }
         Task {
             let max = await env.sender.maxValue(balance: balance, like: like, from: session.address, budget: NetworkFeeReserve.transferGasLimit)
-            guard token == native, self.balance == balance else { return }
+            // The token or balance changed, or the review opened, while the fee was read: that Max no longer applies.
+            guard token == native, self.balance == balance, review == nil else { return }
             amount = Amount.exact(max, decimals: native.decimals)
         }
     }
+}
 
-    private func transfer(to: Address, amount: BigUInt) -> TransactionRequest {
+/// A send as the review sheet shows and signs it, frozen when Review is tapped.
+private struct SendReview: Identifiable {
+    let id = UUID()
+    let token: Token
+    let to: Address
+    let amount: BigUInt
+    var toContract = false
+
+    init(token: Token, to: Address, amount: BigUInt, toContract: Bool = false) {
+        self.token = token
+        self.to = to
+        self.amount = amount
+        self.toContract = toContract
+    }
+
+    var request: TransactionRequest {
         if token.isNative { return TransactionRequest(to: to, value: amount) }
         return TransactionRequest(to: token.address, data: (try? ERC20.transferCalldata(to: to, amount: amount)) ?? Data())
     }

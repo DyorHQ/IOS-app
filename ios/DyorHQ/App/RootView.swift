@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Chooses between onboarding and the app, following the session state.
 struct RootView: View {
@@ -17,11 +18,20 @@ struct RootView: View {
                 // A passkey account just deleted: what's left to do about the passkey, then onboarding.
                 if let done = session.passkeyDeletion {
                     AccountDeletedView(done: done) { session.passkeyDeletion = nil }
+                } else if let notice = session.deletionNotice {
+                    DeletionNoticeView(message: notice) { session.deletionNotice = nil }
+                } else if let required = env.updateGate.required {
+                    UpdateRequiredView(minimum: required)
                 } else {
                     OnboardingView()
                 }
             case .signedIn:
-                MainTabView()
+                // A build below the minimum shows balances and export only: nothing that signs is reachable (GP-2).
+                if let required = env.updateGate.required {
+                    UpdateRequiredView(minimum: required)
+                } else {
+                    MainTabView()
+                }
             }
         }
         .animation(.default, value: session.state)
@@ -31,18 +41,29 @@ struct RootView: View {
         // Privacy cover for the app-switcher snapshot: iOS screenshots the UI whenever the app leaves the foreground,
         // and that image is written to the app container. If a recovery phrase / private key were on screen (Import
         // Wallet), it would land in that snapshot. Covering the whole hierarchy the instant we're not active means the
-        // snapshot only ever captures the cover, never a secret. The one exception is a passkey ceremony: its system
-        // sheet makes the scene .inactive, and the cover must not blank the app behind it. Only a passkey (Mera)
-        // ceremony counts, so a build without passkey accounts covers exactly as before.
-        .overlay { PrivacyCover(active: scenePhase == .active || (scenePhase == .inactive && session.mera.isPrompting)) }
+        // snapshot only ever captures the cover, never a secret. The exceptions are the owner's own prompts: a passkey
+        // ceremony's system sheet and App Lock's Face ID or passcode prompt (`BiometricGate`) make the scene .inactive,
+        // and the cover must not blank the app — the sheet being confirmed — behind them. The cover is a window of its
+        // own above every other, so it also hides a sheet or full-screen cover (Export Wallet, the recovery phrase),
+        // which an overlay on this view never reached (IOSK-13).
+        .onChange(of: privacyCovered, initial: true) { _, covered in PrivacyShield.update(covered: covered) }
         .task { session.start(); settings.appearance.apply(); Notifications.configure() }
+        .task { await env.updateGate.check(client: env.social.client) }
         .onChange(of: scenePhase) { _, phase in
             // A passkey (Mera) signing session must not outlive the user leaving the app: whoever picks the phone up
             // next has to present the passkey again. Ending it also closes a passkey account's Perpl socket and drops
-            // its trading key.
-            if phase == .background { session.mera.end() }
+            // its trading key. An approved plan or order still running keeps it until it finishes, within the
+            // background time iOS grants (GL-1).
+            if phase == .background { session.mera.endWhenIdle() }
             if phase == .active {
+                session.mera.enteredForeground()
                 settings.appearance.apply()
+                // The minimum supported build, at most every ten minutes (GP-2).
+                Task { await env.updateGate.check(client: env.social.client) }
+                // Transactions sent before the app left the foreground: settle their pending rows (GL-2), and pick up
+                // the bridges iOS suspended (GL-5).
+                Task { await PendingActivity.recheck(owner: session.address, rpc: env.rpc) }
+                env.bridgeTracker.resume()
                 // Reconnect the trading socket the instant the app returns (iOS drops it while suspended), so TP/SL is
                 // ready without waiting for the keep-alive loop's next tick. Never a prompt: a passkey account's
                 // socket reconnects only inside a live session, and there is none right after a return.
@@ -54,19 +75,27 @@ struct RootView: View {
         // authenticated Perpl trading session.
         .task(id: session.address) {
             env.social.bind(address: session.address)
+            // Bridges are tracked for the account that sent them only: a sign-out or switch stops the rest (RS-2).
+            env.bridgeTracker.bind(owner: session.address)
+            // Perpl trading and the notification center follow the account at once, not after the backend sign-in's
+            // round-trip below, so nothing meanwhile trades for or is filed under the previous account (RS-9).
+            env.perplTrading.refresh(account: session.account)
+            NotificationHub.shared.bind(owner: session.address)
             // A wallet that can sign connects to the backend by itself (one signature), so activity and settings are
             // recorded — and restored on a fresh device — without a separate step. Not a passkey account restored
             // locked at launch: that signature would be a passkey prompt nobody asked for. `signInWithMera` starts its
-            // sign-in while its session is live (this joins it), and the background signer never prompts.
+            // sign-in while its session is live (this joins it), and the background signer never prompts. A stored
+            // token `bind` is restoring is this launch's sign-in: this joins it too, and signs only if it didn't restore
+            // (RS-3).
             if session.canSignWithoutPrompt, !env.social.isSignedIn, let address = session.address, let wallet = session.backgroundWallet {
                 await env.social.signIn(address: address, wallet: wallet)
             }
-            env.perplTrading.refresh(account: session.account)
-            NotificationHub.shared.bind(owner: session.address)
             // Ask for notification permission once the user is signed in and can act (so swaps, fills and price
             // alerts actually reach the lock screen). notificationsEnabled defaults on, but the Settings toggle only
             // requests when flipped — so a user who never opened Settings was never prompted.
             if session.canSign, settings.notificationsEnabled { await Notifications.requestAuthorizationIfUndetermined() }
+            // Transactions sent in an earlier run of the app whose confirmation it never saw (GL-2).
+            await PendingActivity.recheck(owner: session.address, rpc: env.rpc)
         }
         // Whenever the account's backend session opens — whoever signed in (the rebind above, the reconnect below,
         // Bridge, a screen that uploads) or a stored token was restored — pull what other devices recorded. Idempotent:
@@ -90,19 +119,48 @@ struct RootView: View {
     }
 }
 
+extension RootView {
+    /// Whether the privacy cover is up: whenever the app isn't foreground-active, except behind a passkey or App Lock
+    /// prompt. Leaving the app during one still covers it: the scene is then in the background.
+    private var privacyCovered: Bool {
+        !(scenePhase == .active || (scenePhase == .inactive && (session.mera.isPrompting || BiometricGate.isPrompting)))
+    }
+}
+
+/// The privacy cover's window: above every other window of the scene, so it hides the tabs and whatever is presented
+/// over them — sheets, full-screen covers, alerts — from the snapshot iOS takes when the app leaves the foreground
+/// (IOSK-13). Shown while `update(covered: true)`, gone the moment the app is active again. It never becomes the key
+/// window, so a keyboard or a focused field underneath is left as it was.
+@MainActor
+enum PrivacyShield {
+    private static var window: UIWindow?
+
+    static func update(covered: Bool) {
+        guard covered else {
+            window?.isHidden = true
+            window = nil
+            return
+        }
+        guard window == nil, let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+        let shield = UIWindow(windowScene: scene)
+        shield.windowLevel = .alert + 1
+        shield.overrideUserInterfaceStyle = scene.windows.first?.overrideUserInterfaceStyle ?? .unspecified
+        shield.rootViewController = UIHostingController(rootView: PrivacyCover())
+        shield.isHidden = false
+        window = shield
+    }
+}
+
 /// An opaque cover shown whenever the app is not foreground-active, so the OS snapshot can't capture on-screen secrets.
 private struct PrivacyCover: View {
-    let active: Bool
     var body: some View {
-        if !active {
-            ZStack {
-                Color(.systemBackground).ignoresSafeArea()
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 48, weight: .semibold))
-                    .foregroundStyle(Color.brand)
-            }
-            .transition(.opacity)
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 48, weight: .semibold))
+                .foregroundStyle(Color.brand)
         }
+        .accessibilityHidden(true)
     }
 }
 

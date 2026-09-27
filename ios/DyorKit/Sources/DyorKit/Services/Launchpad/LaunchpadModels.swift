@@ -170,13 +170,17 @@ public struct PairEconomics: Hashable, Sendable {
     /// The pair can only graduate on Monday Trade (the factory's `pairMondayOnly`); the create screen then forces
     /// the Monday venue and disables the picker. aBIL is the canonical Monday-only quote asset.
     public let mondayOnly: Bool
+    /// `previewLaunchEconomics(configId, pair)`, read in the same call as the terms above: what a launch shown these
+    /// terms must carry (`LaunchpadService.launchPlan`'s `expectedEconomics`).
+    public let economicsHash: Data?
 
-    public init(pair: PairInfo, phantomQuote: BigUInt, graduationThreshold: BigUInt, approved: Bool, mondayOnly: Bool = false) {
+    public init(pair: PairInfo, phantomQuote: BigUInt, graduationThreshold: BigUInt, approved: Bool, mondayOnly: Bool = false, economicsHash: Data? = nil) {
         self.pair = pair
         self.phantomQuote = phantomQuote
         self.graduationThreshold = graduationThreshold
         self.approved = approved
         self.mondayOnly = mondayOnly
+        self.economicsHash = economicsHash
     }
 }
 
@@ -585,11 +589,15 @@ public enum LaunchpadError: Error, LocalizedError, Equatable {
     case unexpectedResponse(String)
     /// The factory's launch fee is no longer the one the screen showed (the new fee, in wei).
     case launchFeeChanged(BigUInt)
+    /// The factory's launch terms (supply, fees, graduation, snipe tax, creator-tax cap) are no longer the ones the
+    /// screen showed, or the screen had none to bind to.
+    case termsChanged
 
     public var errorDescription: String? {
         switch self {
         case .notDeployed: return "The launchpad contracts are not deployed yet."
         case .launchFeeChanged(let fee): return "The launch fee changed to \(NumberStyle.units(fee, decimals: 18)) MON since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new fee."
+        case .termsChanged: return "The launch terms changed since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new terms."
         case .unexpectedResponse(let what): return "The launchpad returned something the app could not read (\(what))."
         }
     }

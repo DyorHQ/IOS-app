@@ -40,7 +40,7 @@ struct ImportWalletView: View {
                         Avatar(url: nil, initials: "", size: 40)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Wallet found").font(.subheadline.weight(.semibold))
-                            Text(derived.address.short).font(.footnote.monospaced()).foregroundStyle(.secondary)
+                            Text(derived.address.short).speechSpellsOutCharacters().font(.footnote.monospaced()).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.positive)

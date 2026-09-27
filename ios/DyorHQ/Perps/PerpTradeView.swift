@@ -793,10 +793,11 @@ struct PerpTradeView: View {
         }
     }
 
-    /// An on-chain opening order, valued at its worst-case notional; a reduce-only close always asks (MERA-PLAN §3).
+    /// An on-chain opening order, valued at its worst-case notional and declared by its terms (market, side, size,
+    /// leverage), which the wallet checks against the calldata it signs; a reduce-only close always asks (MERA-PLAN §3).
     private var orderIntent: Mera.Intent {
         let input = ticket.input(market: market, refPrice: refPrice)
-        return input.reduceOnly ? .alwaysAsks(.closePosition) : .perplOrder(usd: Mera.SpendingCaps.notionalUSD(of: input))
+        return input.reduceOnly ? .alwaysAsks(.closePosition) : .perplOrder(usd: Mera.SpendingCaps.notionalUSD(of: input), order: .init(input))
     }
 
     private func cancelOrderSheet(_ order: PerpOrder) -> some View {
@@ -2150,6 +2151,9 @@ struct AuthedOrderSheet: View {
     private func place(approval: MeraSession.StepUp? = nil) async {
         // App Lock covers leveraged orders too (this path signs with the Perpl API key, not a confirmation sheet).
         if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm order")) { return }
+        // A passkey session (and its trading socket) outlives leaving the app until this bracket is sent (GL-1).
+        session.mera.beginAction()
+        defer { session.mera.endAction() }
         phase = .placing
         do {
             // Bracket placement reports per-frame acceptance, so we record only the TP/SL Perpl actually admitted and

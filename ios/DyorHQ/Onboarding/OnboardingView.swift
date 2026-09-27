@@ -1,4 +1,5 @@
 import AuthenticationServices
+import BigInt
 import Combine
 import DyorKit
 import SwiftUI
@@ -97,11 +98,16 @@ private struct Feature {
     init(_ symbol: String, _ title: String, _ detail: String) { self.symbol = symbol; self.title = title; self.detail = detail }
 }
 
-/// A gentle, swipeable carousel of the four things DyorHQ does. Auto-advances (unless the user prefers reduced motion)
-/// and loops forward seamlessly — it never visibly rewinds to the first card.
+/// A gentle, swipeable carousel of the four things DyorHQ does. Auto-advances — unless the user prefers reduced motion,
+/// VoiceOver or Switch Control is running (a card moving under the cursor, AI-12), or the user has swiped it themselves
+/// — and loops forward seamlessly: it never visibly rewinds to the first card.
 private struct FeatureTour: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
     @State private var index = 0
+    /// The user took over by swiping: the tour stops advancing on its own.
+    @State private var userPaused = false
 
     private let features = [
         Feature("camera.aperture", "Make Moments last forever", "Mint a photo or video as an NFT on Monad. Share it, and earn when it’s collected."),
@@ -123,6 +129,7 @@ private struct FeatureTour: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .simultaneousGesture(DragGesture(minimumDistance: 10).onChanged { _ in userPaused = true })
 
             HStack(spacing: 7) {
                 ForEach(features.indices, id: \.self) { i in
@@ -135,7 +142,7 @@ private struct FeatureTour: View {
             .accessibilityHidden(true)
         }
         .onReceive(advance) { _ in
-            guard !reduceMotion else { return }
+            guard !reduceMotion, !voiceOver, !switchControl, !userPaused else { return }
             withAnimation(.easeInOut(duration: 0.5)) { index += 1 }
         }
         .onChange(of: index) { _, new in
@@ -474,11 +481,13 @@ private struct PressableStyle: ButtonStyle {
 
 /// Email + password onboarding. Sign up **verifies the email with a one-time code** (Privy), then sets a strong
 /// password that deterministically becomes the wallet; log in re-derives the same wallet — no code — but only when the
-/// email is a verified account matching the derived address. An account created before v2 upgrades once at log-in:
-/// a new password and an email re-verify move it to a v2 wallet. If log-in finds the email's anonymous `email-pepper`
-/// budget spent (anyone who knows the address can spend it), it offers the one-time code instead: its Privy token
-/// opens the email's separate verified budget and log-in runs again. See `EmailWallet` (DyorKit), PasswordWallet.swift
-/// and `Session`.
+/// email is a verified account matching the derived address. An account created before v2 is found only when the user
+/// asks ("Signed up before September 24, 2026?") and upgrades once: a new password and an email re-verify move it to a
+/// v2 wallet; while its old wallet still holds funds, log-in opens that wallet so they can be moved out first. If log-in
+/// finds the email's anonymous `email-pepper` budget spent (anyone who knows the address can spend it), it offers the
+/// one-time code instead: its Privy token opens the email's separate verified budget and log-in runs again. An email
+/// already linked to another wallet is never moved off it without showing that wallet and what it holds, and a
+/// confirmation. See `EmailWallet` (DyorKit), PasswordWallet.swift and `Session`.
 struct EmailPasswordView: View {
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
@@ -502,16 +511,32 @@ struct EmailPasswordView: View {
     @State private var offerVerification = false
     /// The code step is proving the email for log-in (not for sign-up or a reset); log-in runs again once it is done.
     @State private var verifyingLogIn = false
+    /// Log-in found no v2 account: offer the check for one created before v2, which only the user can ask for (IOSK-2).
+    @State private var offerLegacyCheck = false
+    /// That check found the account's legacy wallet still funded: log in to it to move them out (GE-4).
+    @State private var fundedLegacy: Address?
     @State private var email = ""
     @State private var password = ""
     @State private var confirm = ""
     @State private var code = ""
     @State private var acknowledged = false
+    /// A reset's own acknowledgement: the current wallet's funds don't move to the new one (GE-2).
+    @State private var fundsStay = false
+    /// The email's code was accepted. Its Privy token proves the email to `email-rebind` for 15 minutes, so a bind that
+    /// failed — or whose answer was lost after the server saved it — is retried with it, not with a new code (GE-5).
+    /// The server's same-wallet re-bind changes nothing, so a retry after a lost answer simply finishes.
+    @State private var verified: VerifiedEmail?
+    /// The email is linked to another wallet (`email-rebind`'s 409, GE-1): what replacing it would leave behind.
+    @State private var conflict: Conflict?
+    @State private var replaceAcknowledged = false
     @State private var busy = false
     @State private var error: String?
     @FocusState private var focus: Field?
+    /// The password fields are UIKit text fields (`PasswordField`), outside `focus`.
+    @State private var passwordFocused = false
+    @State private var confirmFocused = false
 
-    private enum Field { case email, password, confirm, code }
+    private enum Field { case email, code }
 
     private struct Upgrade {
         /// The legacy wallet the email is bound to (already public in `profiles`).
@@ -521,6 +546,31 @@ struct EmailPasswordView: View {
         let used: Bool
         /// The password log-in used, refused as the new one.
         let oldPassword: String
+    }
+
+    private struct VerifiedEmail {
+        let token: String
+        let at: Date
+        /// `email-rebind` takes a Privy token for 15 minutes after it was issued; a minute is kept in hand.
+        var isFresh: Bool { Date().timeIntervalSince(at) < 14 * 60 }
+    }
+
+    /// The wallet the email is linked to, and what the balance check sees in it (nil while it's read).
+    private struct Conflict {
+        let current: Address
+        var holdings: Holdings?
+        var readFailed = false
+    }
+
+    /// What a wallet holds that the balance check can see — MON and every curated token (`Token.core`) — plus how many
+    /// transactions it has sent (it may then hold what balances can't show: Perpl collateral, coins, Moments), and
+    /// whether it may be a legacy (pre-v2) wallet, judged by when its public profile was created.
+    private struct Holdings {
+        let amounts: [String]
+        let transactions: UInt64
+        let mayBeLegacy: Bool
+        var isFunded: Bool { !amounts.isEmpty }
+        var summary: String { amounts.isEmpty ? "no MON or tokens" : ListFormatter.localizedString(byJoining: amounts) }
     }
 
     /// Sign-up and reset share the same "set a password" form and OTP verification; only login is different.
@@ -535,6 +585,7 @@ struct EmailPasswordView: View {
         guard emailValid else { return false }
         if setsPassword {
             return rejection == nil && !confirm.isEmpty && password == confirm && acknowledged && (upgrade?.used != true || movedOut)
+                && (!reset || upgrade != nil || fundsStay)
         }
         return !password.isEmpty
     }
@@ -550,7 +601,7 @@ struct EmailPasswordView: View {
                     .listRowBackground(Color.clear)
                 } else if reset {
                     Section {
-                        Text("Enter your email and a new password. We’ll email a code to confirm it’s you, then this new password becomes your wallet.")
+                        Text("Resetting creates a **new, empty wallet** for your new password. Anything in your current wallet stays at its address and can only be reached with your old password. We’ll email a code to confirm it’s you.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } header: { Text("Reset password") }
                     .listRowBackground(Color.clear)
@@ -568,9 +619,9 @@ struct EmailPasswordView: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .focused($focus, equals: .email)
                         .disabled(upgrade != nil) // the upgrade moves this email's account, found at log-in
-                    PasswordField(title: reset ? "New password" : "Password", text: $password).focused($focus, equals: .password)
+                    PasswordField(title: reset ? "New password" : "Password", text: $password, focused: $passwordFocused)
                     if setsPassword {
-                        PasswordField(title: "Confirm password", text: $confirm).focused($focus, equals: .confirm)
+                        PasswordField(title: "Confirm password", text: $confirm, focused: $confirmFocused)
                     }
                 } footer: {
                     if reset {
@@ -593,22 +644,37 @@ struct EmailPasswordView: View {
                         if !password.isEmpty, let rejection {
                             Label(rejection, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention)
                         }
+                        // The derivation takes the exact characters typed, so a password another keyboard may type
+                        // differently is only warned about, never rewritten (IOSK-9).
+                        if EmailWallet.hasHardToRetypeCharacters(password) {
+                            Label("This password has characters beyond a standard keyboard, like curly quotes, long dashes or accents. It opens your wallet only when typed exactly the same way, so make sure you can type it on every device you’ll use.", systemImage: "character.cursor.ibeam")
+                                .font(.caption).foregroundStyle(Color.attention)
+                        }
                     } header: { Text("Password strength") }
 
                     Section {
                         Label {
-                            Text("This password **is** your wallet. We can’t reset it or send a recovery email. If you lose it, you lose access to your funds — write it down or save it in your password manager.")
+                            if reset {
+                                Text("This new password **is** your new wallet. Keep it safe: if you lose it, you lose access to what you put in this wallet — write it down or save it in your password manager.")
+                            } else {
+                                Text("This password **is** your wallet. We can’t reset it or send a recovery email. If you lose it, you lose access to your funds — write it down or save it in your password manager.")
+                            }
                         } icon: {
                             Image(systemName: "key.horizontal.fill").foregroundStyle(Color.attention)
                         }
                         .font(.footnote)
                         Toggle("I understand my password is the only way back to my wallet", isOn: $acknowledged).font(.footnote)
+                        if reset, upgrade == nil {
+                            Toggle("I understand my current wallet’s funds don’t move to the new one", isOn: $fundsStay).font(.footnote)
+                        }
                         if let upgrade, upgrade.used {
                             Toggle("I’ve moved everything I want to keep out of my previous wallet (\(upgrade.legacy.short)). Anything left there won’t be reachable in DyorHQ after the upgrade.", isOn: $movedOut)
                                 .font(.footnote)
                         }
                     }
                 }
+            } else if verified != nil {
+                verifiedSections
             } else {
                 Section {
                     TextField("6-digit code", text: $code)
@@ -627,13 +693,13 @@ struct EmailPasswordView: View {
                         } else if verifyingLogIn {
                             Text("Enter the code we emailed to \(email). It proves the email is yours, so you can log in even while others are making attempts on it. We’ll log you in right after.")
                         } else if reset {
-                            Text("Enter the code we emailed to \(email). This confirms it’s you before your new password takes over your wallet.")
+                            Text("Enter the code we emailed to \(email). This confirms it’s you before your email moves to the new, empty wallet your new password creates.")
                         } else {
                             Text("Enter the code we emailed to \(email). This proves the email is yours — your wallet is created after you verify, so no fake or unowned emails can register.")
                         }
                         HStack(spacing: 16) {
                             Button("Send a new code") { startSignUp() }.disabled(busy)
-                            Button("Change details") { stage = .form; code = ""; verifyingLogIn = false }.disabled(busy)
+                            Button("Change details") { changeDetails() }.disabled(busy)
                         }
                         .font(.footnote)
                     }
@@ -651,33 +717,140 @@ struct EmailPasswordView: View {
                     Text("We’ll email a one-time code to \(email). Entering it proves the email is yours, then we log you in.")
                 }
             }
+
+            if offerLegacyCheck, mode == .logIn, !reset, !otpStage {
+                Section {
+                    Button("Check for an Older Account", systemImage: "clock.arrow.circlepath") { logInLegacy() }
+                } header: {
+                    Text("Signed up before September 24, 2026?")
+                } footer: {
+                    Text("Accounts created before our email-wallet security upgrade are found with this extra check, then moved to a new password.")
+                }
+            }
+
+            if let legacy = fundedLegacy, !otpStage {
+                Section {
+                    Text("Your account’s original wallet (\(legacy.short)) still holds funds, so its security upgrade waits until they’re moved out. Log in to it now and send them to another wallet you control. Then log out and log in again to finish the upgrade.")
+                        .font(.footnote)
+                    Button("Log In to Move Funds", systemImage: "arrow.right.circle") { continueWithLegacy() }
+                } header: { Text("Security upgrade") }
+            }
         }
         .navigationTitle(otpStage ? "Verify Email" : (upgrade != nil ? "Security Upgrade" : reset ? "Reset Password" : "Email & Password"))
         .navigationBarTitleDisplayMode(.inline)
         .disabled(busy)
+        // No way back mid-request: a reset or sign-up the server may already have saved can't be left half-seen (GE-5).
+        .navigationBarBackButtonHidden(busy)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 if reset, !busy { Button("Cancel") { cancelReset() } }
             }
             ToolbarItem(placement: .confirmationAction) {
                 if busy { ProgressView() }
-                else if otpStage { Button("Verify") { completeVerification() }.disabled(code.count != 6) }
+                else if otpStage { if verified == nil { Button("Verify") { completeVerification() }.disabled(code.count != 6) } }
                 else if mode == .logIn, !reset { Button("Log In") { logIn() }.disabled(!formValid) }
                 else { Button("Continue") { startSignUp() }.disabled(!formValid) }
             }
         }
         .onAppear { focus = .email }
-        // Email proofs only live for this screen's flow; they never outlast it.
-        .onDisappear { let backend = env.social.client; Task { await backend.forgetEmailProofs() } }
-        .onChange(of: mode) { _, _ in stage = .form; code = ""; error = nil; offerVerification = false; verifyingLogIn = false }
-        .onChange(of: email) { _, _ in offerVerification = false }
+        // Email proofs only live for this screen's flow; they never outlast it, and neither does a held legacy wallet.
+        .onDisappear {
+            let backend = env.social.client
+            Task { await backend.forgetEmailProofs() }
+            if fundedLegacy != nil, session.account == nil { dropFundedLegacy() }
+        }
+        .onChange(of: mode) { _, _ in
+            stage = .form; code = ""; error = nil; offerVerification = false; verifyingLogIn = false; offerLegacyCheck = false
+            verified = nil; conflict = nil
+            dropFundedLegacy()
+        }
+        .onChange(of: email) { _, _ in offerVerification = false; offerLegacyCheck = false; dropFundedLegacy() }
+        .onChange(of: password) { _, _ in offerLegacyCheck = false; dropFundedLegacy() }
+    }
+
+    // MARK: Verified email (GE-1, GE-5)
+
+    @ViewBuilder private var verifiedSections: some View {
+        Section {
+            Label("Email verified: \(email)", systemImage: "checkmark.seal.fill")
+                .font(.subheadline)
+                .foregroundStyle(Color.positive)
+        } footer: {
+            Button("Change details") { changeDetails() }.font(.footnote)
+        }
+        if let conflict {
+            conflictSections(conflict)
+        } else {
+            Section {
+                Button("Try Again", systemImage: "arrow.clockwise") { Task { await runBind(replacing: nil) } }
+            } footer: {
+                Text("Your code was accepted, so no new code is needed. If the last attempt went through after all, this just finishes it.")
+            }
+        }
+    }
+
+    @ViewBuilder private func conflictSections(_ conflict: Conflict) -> some View {
+        Section {
+            if reset || upgrade != nil {
+                Text("Your email is linked to the DyorHQ wallet \(conflict.current.checksummed). Going on moves your email to a new, empty wallet. Funds in \(conflict.current.short) stay there, reachable only with its old password.")
+            } else {
+                Text("This email already has a DyorHQ wallet (\(conflict.current.checksummed)). Log in instead, or replace it: funds in \(conflict.current.short) stay there.")
+            }
+            if let holdings = conflict.holdings {
+                Label("\(conflict.current.short) holds \(holdings.summary).", systemImage: holdings.isFunded ? "dollarsign.circle" : "circle.dashed")
+                if holdings.transactions > 0 {
+                    Label("It has sent \(holdings.transactions) transaction\(holdings.transactions == 1 ? "" : "s"), so it may also hold positions, collateral or coins not shown here.", systemImage: "clock.arrow.circlepath")
+                }
+            } else if conflict.readFailed {
+                Label("Couldn’t read what \(conflict.current.short) holds. Check your connection and try again.", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(Color.attention)
+                Button("Try Again", systemImage: "arrow.clockwise") { Task { await readConflictHoldings() } }
+            } else {
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading \(conflict.current.short)…").foregroundStyle(.secondary) }
+            }
+        } header: {
+            Text(reset || upgrade != nil ? "Your current wallet" : "Email already registered")
+        }
+        .font(.footnote)
+
+        if !reset, upgrade == nil {
+            Section {
+                Button("Log In Instead", systemImage: "person.crop.circle") { switchToLogIn() }
+            }
+        }
+
+        if let holdings = conflict.holdings {
+            if holdings.mayBeLegacy, holdings.isFunded {
+                // Never off a funded legacy wallet: no password this app knows could reach it again (GE-1).
+                Section {
+                    InlineError(message: "\(conflict.current.short) was created before our security upgrade and still holds \(holdings.summary). Moving your email off it would leave that out of reach in DyorHQ. Log in with its password (Signed up before September 24, 2026?) to move the funds out first.")
+                }
+                .listRowBackground(Color.clear)
+            } else {
+                Section {
+                    Toggle(replaceAcknowledgement(conflict.current, holdings), isOn: $replaceAcknowledged).font(.footnote)
+                    Button("Replace Wallet", systemImage: "arrow.triangle.swap", role: .destructive) { Task { await runBind(replacing: conflict.current) } }
+                        .disabled(!replaceAcknowledged)
+                }
+            }
+        }
+    }
+
+    /// The confirmation, naming exactly what stays behind.
+    private func replaceAcknowledgement(_ current: Address, _ holdings: Holdings) -> String {
+        let beyond = holdings.transactions > 0 ? ", and anything else it holds," : ""
+        if holdings.isFunded {
+            return "I understand \(current.short) keeps its \(holdings.summary)\(beyond) and this email will no longer open it."
+        }
+        return "I understand this email will no longer open \(current.short), which holds no MON or tokens\(beyond.isEmpty ? "" : " (it may hold other things)")."
     }
 
     // MARK: Actions
 
     /// Send the sign-up OTP, then move to the verify step.
     private func startSignUp() {
-        focus = nil; busy = true; error = nil
+        dismissKeyboard(); busy = true; error = nil
+        verified = nil; conflict = nil
         Task {
             do { try await session.sendSignUpCode(to: email); stage = .otp; code = ""; focus = .code }
             catch { self.error = describe(error) }
@@ -685,34 +858,95 @@ struct EmailPasswordView: View {
         }
     }
 
+    private func changeDetails() {
+        stage = .form; code = ""; verifyingLogIn = false; verified = nil; conflict = nil; error = nil
+    }
+
     private func logIn() {
-        focus = nil; busy = true; error = nil; offerVerification = false
+        dismissKeyboard(); busy = true; error = nil; offerVerification = false; offerLegacyCheck = false
+        dropFundedLegacy()
         Task {
             do {
-                let outcome = try await session.logInWithPassword(email: email, password: password, pepper: fetchPepper,
-                                                                  verify: verifyBinding, holdsFunds: legacyHoldsFunds)
-                if outcome == .signedIn { await env.social.client.forgetEmailProofs() }
-                if case .needsUpgrade(let legacy) = outcome {
-                    await env.social.client.signOut() // the legacy wallet's check-in session is not the user's session
-                    let used: Bool
-                    do { used = try await env.rpc.transactionCount(of: legacy) > 0 }
-                    catch { throw SessionError.legacyBalanceUnavailable }
-                    beginUpgrade(Upgrade(legacy: legacy, used: used, oldPassword: password))
-                }
+                _ = try await session.logInWithPassword(email: email, password: password, pepper: fetchPepper, verify: verifyBinding)
+                await env.social.client.forgetEmailProofs()
             } catch {
                 await env.social.client.signOut() // never leave a check-in session behind a failed log-in
                 // The email's anonymous budget is spent (or a proof went stale): offer the one-time code, not a wait.
                 offerVerification = error is EmailPepperError
-                self.error = describe(error)
+                // No v2 account for this email and password: the older-account check is the user's call (IOSK-2).
+                if case SessionError.emailNotVerified = error { offerLegacyCheck = true }
+                self.error = logInMessage(for: error)
             }
             busy = false
         }
     }
 
+    /// "Signed up before September 24, 2026?" — the log-in check for an account created before v2 (IOSK-2). Empty, it
+    /// upgrades; still funded, it offers to log in to that wallet so the funds can be moved out first (GE-4).
+    private func logInLegacy() {
+        dismissKeyboard(); busy = true; error = nil; offerVerification = false
+        dropFundedLegacy()
+        Task {
+            do {
+                switch try await session.logInToLegacyAccount(email: email, password: password, verify: verifyBinding, holdsFunds: legacyHoldsFunds) {
+                case .needsUpgrade(let legacy):
+                    await env.social.client.signOut() // the legacy wallet's check-in session is not the user's session
+                    let used: Bool
+                    do { used = try await env.rpc.transactionCount(of: legacy) > 0 }
+                    catch { throw SessionError.legacyBalanceUnavailable }
+                    offerLegacyCheck = false
+                    beginUpgrade(Upgrade(legacy: legacy, used: used, oldPassword: password))
+                case .legacyHoldsFunds(let legacy):
+                    // Its check-in session stays: if the user logs in to that wallet, it is theirs.
+                    offerLegacyCheck = false
+                    fundedLegacy = legacy
+                case .signedIn:
+                    break
+                }
+            } catch {
+                await env.social.client.signOut()
+                self.error = logInMessage(for: error)
+            }
+            busy = false
+        }
+    }
+
+    /// Logs in to the funded legacy wallet the older-account check found (GE-4).
+    private func continueWithLegacy() {
+        busy = true
+        Task {
+            fundedLegacy = nil
+            await session.continueWithLegacyWallet()
+            await env.social.client.forgetEmailProofs()
+            busy = false
+        }
+    }
+
+    /// Lets go of a funded legacy wallet the user didn't log in to, and of its check-in session.
+    private func dropFundedLegacy() {
+        guard fundedLegacy != nil else { return }
+        fundedLegacy = nil
+        session.forgetPendingLegacy()
+        let backend = env.social.client
+        Task { await backend.signOut() }
+    }
+
+    /// What a failed log-in says. An outage never reads as a wrong password (GE-6). A password with plain quotes or
+    /// dashes gets a hint: the field no longer lets iOS turn them into curly quotes or long dashes (IOSK-9), which a
+    /// password typed with the eye button on may contain.
+    private func logInMessage(for error: Error) -> String {
+        if SupabaseError.isOutage(error) {
+            return "We couldn’t reach DyorHQ to check your password. Nothing is wrong with your password or your wallet: try again in a few minutes, and don’t reset your password meanwhile — a reset creates a new, empty wallet."
+        }
+        let message = describe(error)
+        guard case SessionError.emailNotVerified = error, password.contains(where: { "'\"-".contains($0) }) else { return message }
+        return message + " If you made this password with it shown (the eye button), iOS may have typed curly quotes or a long dash in it: hold the key down to type those."
+    }
+
     /// Log-in hit `EmailPepperError`: email the one-time code (the same Privy OTP as sign-up), then the code step's
     /// token opens the email's verified budget and log-in runs again (`completeVerification`).
     private func startLogInVerification() {
-        focus = nil; busy = true; error = nil
+        dismissKeyboard(); busy = true; error = nil
         Task {
             do {
                 try await session.sendSignUpCode(to: email)
@@ -726,17 +960,27 @@ struct EmailPasswordView: View {
 
     /// Switch the Log In form into the reset flow: same fields, but a fresh new password and a required email re-verify.
     private func beginReset() {
-        reset = true; stage = .form; password = ""; confirm = ""; code = ""; acknowledged = false; error = nil; focus = .email
-        offerVerification = false; verifyingLogIn = false
+        reset = true; stage = .form; password = ""; confirm = ""; code = ""; acknowledged = false; fundsStay = false; error = nil; focus = .email
+        offerVerification = false; verifyingLogIn = false; offerLegacyCheck = false; verified = nil; conflict = nil
+        dropFundedLegacy()
     }
 
     private func cancelReset() {
-        reset = false; stage = .form; code = ""; error = nil; upgrade = nil; movedOut = false
+        reset = false; stage = .form; code = ""; error = nil; upgrade = nil; movedOut = false; fundsStay = false
+        verified = nil; conflict = nil
     }
 
     /// The pre-v2 upgrade is a reset of this email's account onto a new password (see `upgrade`).
     private func beginUpgrade(_ found: Upgrade) {
-        beginReset(); upgrade = found; movedOut = false; focus = .password
+        beginReset(); upgrade = found; movedOut = false; focus = nil; passwordFocused = true
+    }
+
+    /// From the "email already registered" answer to Sign Up: the same email, on Log In.
+    private func switchToLogIn() {
+        mode = .logIn
+        password = ""; confirm = ""; acknowledged = false; replaceAcknowledged = false
+        verified = nil; conflict = nil
+        passwordFocused = true
     }
 
     /// Verify the email OTP, then bind it to the wallet the password derives — server-side, through the `email-rebind`
@@ -746,21 +990,22 @@ struct EmailPasswordView: View {
     /// so these flows never meet the anonymous limit; a log-in that did (`verifyingLogIn`) just runs again with it.
     private func completeVerification() {
         guard code.count == 6, !busy else { return }
-        focus = nil; busy = true; error = nil
+        dismissKeyboard(); busy = true; error = nil
         Task {
             do {
                 let token = try await session.verifyEmailCapturingToken(email: email, code: code)
                 // Sent only to `email-pepper` (for this email's e) and `email-rebind` — nowhere else.
                 await env.social.client.rememberEmailProof(token, forEmail: email)
+                code = ""
                 if verifyingLogIn {
-                    verifyingLogIn = false; stage = .form; code = ""; busy = false
+                    verifyingLogIn = false; stage = .form; busy = false
                     logIn()
                     return
                 }
-                try await session.bindEmailPassword(email: email, password: password, token: token,
-                                                    upgradingFrom: upgrade?.legacy, pepper: fetchPepper,
-                                                    holdsFunds: legacyHoldsFunds, bind: bindViaServer)
-                await env.social.client.forgetEmailProofs()
+                verified = VerifiedEmail(token: token, at: Date())
+                busy = false
+                await runBind(replacing: nil)
+                return
             } catch {
                 self.error = describe(error)
                 code = ""
@@ -769,25 +1014,95 @@ struct EmailPasswordView: View {
         }
     }
 
+    /// Binds the verified email to the new password's wallet with the verified token: the first attempt, a retry after
+    /// a failure (GE-5), or — `replacing` — the confirmed move off the wallet the email is linked to (GE-1).
+    private func runBind(replacing current: Address?) async {
+        guard let verified, verified.isFresh else {
+            self.verified = nil; conflict = nil
+            self.error = "Your email verification expired. Send a new code to continue."
+            return
+        }
+        busy = true; error = nil
+        defer { busy = false }
+        do {
+            // A wallet that may be legacy is checked again right before the email moves off it (GE-1): what the user
+            // saw may be out of date. Unknown counts as maybe.
+            let mayBeLegacy = current != nil && conflict?.current == current && conflict?.holdings?.mayBeLegacy != false
+            try await session.bindEmailPassword(email: email, password: password, token: verified.token,
+                                                upgradingFrom: upgrade?.legacy, replacing: current, replacingMayBeLegacy: mayBeLegacy,
+                                                pepper: fetchPepper, holdsFunds: legacyHoldsFunds, bind: bindViaServer)
+            await env.social.client.forgetEmailProofs()
+        } catch SessionError.emailAlreadyBound(let bound) {
+            // Show that wallet and what it holds, and ask, before the email moves off it.
+            replaceAcknowledged = false
+            conflict = Conflict(current: bound)
+            Task { await readConflictHoldings() }
+        } catch SessionError.legacyWalletHasFunds(let funded) where funded == current {
+            // Funds reached it after it was read: show them (a funded legacy wallet is never replaced), and ask again.
+            replaceAcknowledged = false
+            await readConflictHoldings()
+        } catch EmailAuthError.verificationExpired {
+            self.verified = nil; conflict = nil
+            self.error = "Your email verification expired. Send a new code to continue."
+        } catch {
+            // A failed Replace Wallet is retried with its own button, which stays on screen.
+            let retry = conflict == nil ? "tap Try Again" : "tap Replace Wallet again"
+            self.error = SupabaseError.isOutage(error)
+                ? "We couldn’t reach DyorHQ to finish. Your email is verified, so \(retry) — no new code needed."
+                : describe(error)
+        }
+    }
+
+    /// Reads what the linked wallet holds (GE-1). A failed read allows nothing: an unknown balance is not an empty one.
+    private func readConflictHoldings() async {
+        guard let current = conflict?.current else { return }
+        conflict?.readFailed = false
+        conflict?.holdings = nil
+        do {
+            let holdings = try await walletHoldings(current)
+            if conflict?.current == current { conflict?.holdings = holdings }
+        } catch {
+            if conflict?.current == current { conflict?.readFailed = true }
+        }
+    }
+
     /// Push the OTP proof (Privy token) and the wallet's signature to the `email-rebind` function, which verifies both
     /// and writes the binding with the service role. This is the ONLY path that writes the email → wallet row — direct
-    /// PostgREST writes are revoked (migration 16) — so an email that wasn't OTP-verified can never be bound.
-    private func bindViaServer(_ token: String, _ message: String, _ signature: String) async throws {
-        struct Body: Encodable { let message: String; let signature: String }
-        let body = try JSONEncoder().encode(Body(message: message, signature: signature))
+    /// PostgREST writes are revoked (migration 16) — so an email that wasn't OTP-verified can never be bound. `replace`
+    /// names the wallet the user confirmed moving off (GE-1); without it, a binding to another wallet is answered 409
+    /// with that wallet, and nothing is written.
+    private func bindViaServer(_ token: String, _ message: String, _ signature: String, _ replace: Address?) async throws {
+        struct Body: Encodable { let message: String; let signature: String; let replace: String? }
+        let body = try JSONEncoder().encode(Body(message: message, signature: signature, replace: replace?.checksummed.lowercased()))
         do { _ = try await env.social.client.invoke(function: "email-rebind", bearer: token, body: body) }
-        catch SupabaseError.http(_, let text) { throw EmailAuthError.bindFailed(Self.serverMessage(text)) }
+        catch SupabaseError.http(409, let text) {
+            guard Self.serverField(text, "error") == "email_already_bound", let current = Self.serverField(text, "current").flatMap({ Address($0) }) else {
+                throw EmailAuthError.bindFailed(Self.serverMessage(text))
+            }
+            throw SessionError.emailAlreadyBound(current)
+        }
+        catch SupabaseError.http(401, let text) where Self.serverField(text, "error")?.contains("expired") == true { throw EmailAuthError.verificationExpired }
+        catch SupabaseError.http(let code, let text) where !(500...599).contains(code) { throw EmailAuthError.bindFailed(Self.serverMessage(text)) }
+    }
+
+    /// One string field of the edge function's JSON answer.
+    private static func serverField(_ text: String, _ key: String) -> String? {
+        guard let data = text.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return obj[key] as? String
     }
 
     /// Surfaces the `{ "error": … }` reason the edge function returns (e.g. wrong code, expired) as a clean sentence.
     private static func serverMessage(_ text: String) -> String {
-        guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let msg = (obj["error"] as? String), !msg.isEmpty else {
+        guard let msg = serverField(text, "error"), !msg.isEmpty else {
             return "We couldn’t confirm that. Please try again."
         }
         let capped = msg.prefix(1).uppercased() + String(msg.dropFirst())
         return capped.hasSuffix(".") ? capped : capped + "."
+    }
+
+    /// Ends editing in every field, the UIKit password fields included.
+    private func dismissKeyboard() {
+        focus = nil; passwordFocused = false; confirmFocused = false
     }
 
     // MARK: v2 derivation inputs
@@ -803,14 +1118,37 @@ struct EmailPasswordView: View {
     /// found, whose address is already public. What balances can't show (Perpl collateral, launchpad or Moment
     /// holdings) takes transactions from the wallet, which log-in turns into an explicit confirmation (`Upgrade.used`).
     private func legacyHoldsFunds(_ legacy: Address) async throws -> Bool {
+        !(try await balances(of: legacy)).isEmpty
+    }
+
+    /// The non-zero balances of MON and every curated token (`Token.core`). Throws when any can't be read.
+    private func balances(of wallet: Address) async throws -> [(token: Token, amount: BigUInt)] {
         let rpc = env.rpc, multicall = env.multicall
-        let calls = try Token.core.filter { !$0.isNative }.map { try ERC20.balanceOf($0.address, legacy) }
-        async let native = rpc.balance(of: legacy)
-        async let tokens = multicall.readAll(calls)
-        let (mon, results) = try await (native, tokens)
-        let balances = results.compactMap { $0.first?.uintOrNil }
-        guard balances.count == calls.count else { throw SessionError.legacyBalanceUnavailable }
-        return mon > 0 || balances.contains { $0 > 0 }
+        let tokens = Token.core.filter { !$0.isNative }
+        let calls = try tokens.map { try ERC20.balanceOf($0.address, wallet) }
+        async let native = rpc.balance(of: wallet)
+        async let results = multicall.readAll(calls)
+        let (mon, read) = try await (native, results)
+        let amounts = read.compactMap { $0.first?.uintOrNil }
+        guard amounts.count == calls.count else { throw SessionError.legacyBalanceUnavailable }
+        let all: [(token: Token, amount: BigUInt)] = [(token: Token.mon, amount: mon)] + zip(tokens, amounts).map { pair in (token: pair.0, amount: pair.1) }
+        return all.filter { $0.amount > 0 }
+    }
+
+    /// What the wallet an email is linked to holds, for the GE-1 confirmation: its balances, how many transactions it
+    /// has sent, and whether it may be a legacy wallet (its public profile predates v2; unknown counts as maybe).
+    private func walletHoldings(_ wallet: Address) async throws -> Holdings {
+        let rpc = env.rpc, backend = env.social.client
+        let held = try await balances(of: wallet)
+        let sent = try await rpc.transactionCount(of: wallet)
+        struct Profile: Decodable { let created_at: String }
+        let profiles: [Profile]? = try? await backend.read("profiles", query: [
+            URLQueryItem(name: "select", value: "created_at"),
+            URLQueryItem(name: "wallet", value: "eq.\(wallet.checksummed.lowercased())"),
+        ])
+        let created = profiles?.first.flatMap { SupabaseClient.timestamp($0.created_at) }
+        let amounts = held.map { "\(NumberStyle.units($0.amount, decimals: $0.token.decimals)) \($0.token.symbol)" }
+        return Holdings(amounts: amounts, transactions: sent, mayBeLegacy: EmailWallet.mayBeLegacy(profileCreatedAt: created))
     }
 
     // MARK: Backend gate (email_accounts)
@@ -842,33 +1180,109 @@ struct EmailPasswordView: View {
 
 enum EmailAuthError: LocalizedError {
     case bindFailed(String)
+    /// `email-rebind` refused the one-time code's token as too old: a new code is needed.
+    case verificationExpired
     var errorDescription: String? {
         switch self {
         case .bindFailed(let message): return message
+        case .verificationExpired: return "Your email verification expired. Send a new code to continue."
         }
     }
 }
 
 /// A password field with a reveal toggle — reveal matters here because a mistyped password derives a different
-/// wallet, and iOS's password content type lets the user save/autofill it (so they don't forget it).
+/// wallet, and iOS's password content type lets the user save/autofill it (so they don't forget it). A UIKit text
+/// field, so that nothing rewrites what is typed (IOSK-9): no smart quotes, smart dashes or smart insert/delete, no
+/// autocorrection, autocapitalization, spell checking or inline predictions, revealed or not. The password is the
+/// wallet, so its characters must be exactly the keys pressed.
 private struct PasswordField: View {
     let title: String
     @Binding var text: String
+    @Binding var focused: Bool
     @State private var reveal = false
 
     var body: some View {
         HStack {
-            Group {
-                if reveal { TextField(title, text: $text) } else { SecureField(title, text: $text) }
-            }
-            .textContentType(.password)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
+            PlainTextField(title: title, text: $text, secure: !reveal, focused: $focused)
             Button { reveal.toggle() } label: {
                 Image(systemName: reveal ? "eye.slash" : "eye").foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(reveal ? "Hide password" : "Show password")
+        }
+    }
+}
+
+/// The UITextField behind `PasswordField`, with every automatic text rewrite off.
+private struct PlainTextField: UIViewRepresentable {
+    let title: String
+    @Binding var text: String
+    let secure: Bool
+    @Binding var focused: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text, focused: $focused) }
+
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.placeholder = title
+        field.accessibilityLabel = title
+        field.textContentType = .password
+        field.autocapitalizationType = .none
+        field.autocorrectionType = .no
+        field.spellCheckingType = .no
+        field.smartQuotesType = .no
+        field.smartDashesType = .no
+        field.smartInsertDeleteType = .no
+        field.inlinePredictionType = .no
+        field.font = .preferredFont(forTextStyle: .body)
+        field.adjustsFontForContentSizeCategory = true
+        field.isSecureTextEntry = secure
+        field.text = text
+        field.delegate = context.coordinator
+        field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateUIView(_ field: UITextField, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.focused = $focused
+        if field.text != text { field.text = text }
+        if field.isSecureTextEntry != secure { field.isSecureTextEntry = secure }
+        field.placeholder = title
+        field.accessibilityLabel = title
+        let wantsFocus = focused
+        if wantsFocus != field.isFirstResponder {
+            // Outside SwiftUI's update pass, and only once the field is in a window.
+            DispatchQueue.main.async {
+                guard field.window != nil, wantsFocus != field.isFirstResponder else { return }
+                if wantsFocus { field.becomeFirstResponder() } else { field.resignFirstResponder() }
+            }
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextField, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 200, height: uiView.intrinsicContentSize.height)
+    }
+
+    @MainActor final class Coordinator: NSObject, UITextFieldDelegate {
+        var text: Binding<String>
+        var focused: Binding<Bool>
+
+        init(text: Binding<String>, focused: Binding<Bool>) {
+            self.text = text
+            self.focused = focused
+        }
+
+        @objc func changed(_ field: UITextField) { text.wrappedValue = field.text ?? "" }
+
+        func textFieldDidBeginEditing(_ field: UITextField) { if !focused.wrappedValue { focused.wrappedValue = true } }
+        func textFieldDidEndEditing(_ field: UITextField) { if focused.wrappedValue { focused.wrappedValue = false } }
+
+        func textFieldShouldReturn(_ field: UITextField) -> Bool {
+            field.resignFirstResponder()
+            return true
         }
     }
 }

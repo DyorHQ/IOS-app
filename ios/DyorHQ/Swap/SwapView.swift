@@ -53,7 +53,7 @@ struct SwapView: View {
             .sheet(item: $reviewing) { review in confirmation(review) }
             .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
             .task(id: session.address) { await model.refreshBalances(env: env, address: session.address) }
-            .task(id: model.quoteKey) { await model.quote(env: env, account: session.address, exactApprovals: session.isPasskeyAccount) }
+            .task(id: model.quoteKey) { await model.quote(env: env, account: session.address) }
             .onChange(of: router.pendingSwap?.tokenOut) { _, _ in applyPending() }
             .onAppear { applyPending() }
         }
@@ -179,7 +179,8 @@ struct SwapView: View {
     /// and the history.
     private var actionSection: some View {
         Section {
-            PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil) { reviewing = model.review }
+            // Disabled while the balance can't cover the input: the title says why (UI-4).
+            PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil || model.insufficient) { reviewing = model.review }
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
         }
@@ -284,6 +285,14 @@ struct SwapView: View {
     private func confirmation(_ review: SwapReview) -> some View {
         SwapConfirmation(review: review, onDone: {
             model.amountText = ""
+            Task { await model.refreshBalances(env: env, address: session.address) }
+        }, onCompleted: { hash in
+            // At settlement, not on Done (GL-3). Record the swap so it shows in Swap History and Recent Activity with
+            // its exact legs (including a native MON leg, which an on-chain Transfer scan can't recover): the ones
+            // reviewed and signed.
+            let text = "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals, compact: true)) \(review.tokenIn.symbol) → \(NumberStyle.units(review.quote.amountOut, decimals: review.tokenOut.decimals, compact: true)) \(review.tokenOut.symbol)"
+            let usd = [review.payUSD, review.receiveUSD].compactMap { $0 }.first { $0 > 0 }
+            ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash, usd: usd), owner: session.address)
             // Remember both sides so they show in holdings and the picker even if they aren't curated: the token
             // just acquired, and the one paid with (a partial swap leaves a balance still worth showing).
             KnownTokenStore.add(review.tokenOut, owner: session.address)
@@ -291,13 +300,6 @@ struct SwapView: View {
             if settings.notificationsEnabled, settings.notifyFills {
                 Notifications.swapped(review.amountIn, review.tokenIn, review.quote.amountOut, review.tokenOut)
             }
-            Task { await model.refreshBalances(env: env, address: session.address) }
-        }, onCompleted: { hash in
-            // Record the swap so it shows in Swap History and Recent Activity with its exact legs (including a
-            // native MON leg, which an on-chain Transfer scan can't recover): the ones reviewed and signed.
-            let text = "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals, compact: true)) \(review.tokenIn.symbol) → \(NumberStyle.units(review.quote.amountOut, decimals: review.tokenOut.decimals, compact: true)) \(review.tokenOut.symbol)"
-            let usd = [review.payUSD, review.receiveUSD].compactMap { $0 }.first { $0 > 0 }
-            ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash, usd: usd), owner: session.address)
         })
     }
 
@@ -401,9 +403,11 @@ final class SwapModel {
         guard let quote = selectedQuote, let price = prices[tokenOut.address] else { return nil }
         return Amount.units(quote.amountOut, decimals: tokenOut.decimals) * price.usd
     }
+    /// The input is more than the wallet holds (a balance that couldn't be read doesn't count).
+    var insufficient: Bool { balances[tokenIn.address].map { amountIn > $0 } ?? false }
     var actionTitle: String {
         if amountIn == 0 { return "Enter an Amount" }
-        if let balance = balances[tokenIn.address], amountIn > balance { return "Insufficient \(tokenIn.symbol)" }
+        if insufficient { return "Insufficient \(tokenIn.symbol)" }
         if SwapEngine.isWrap(tokenIn, tokenOut) { return tokenIn.isNative ? "Wrap MON" : "Unwrap WMON" }
         return "Review Swap"
     }
@@ -474,8 +478,9 @@ final class SwapModel {
     }
 
     /// Debounced by the caller's `.task(id:)`: the task is cancelled and restarted on every keystroke.
-    /// `exactApprovals`: a passkey account's plans approve exactly the input (`SwapRequest.exactApprovals`).
-    func quote(env: AppEnvironment, account: Address?, exactApprovals: Bool = false) async {
+    /// `exactApprovals`: every account's plans approve exactly the input (`SwapRequest.exactApprovals`) — an ERC-20
+    /// into Uniswap v4 costs one approval more per swap, and no unlimited Permit2 allowance is left standing (IOST-14).
+    func quote(env: AppEnvironment, account: Address?, exactApprovals: Bool = true) async {
         guard amountIn > 0, tokenIn != tokenOut else {
             result = nil
             resultKey = nil

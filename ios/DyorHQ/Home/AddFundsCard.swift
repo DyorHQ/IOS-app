@@ -102,6 +102,7 @@ struct AddFundsCard: View {
         Button { Haptics.selection(); withAnimation(.snappy) { revealed.toggle() } } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(revealed ? address.checksummed : address.short)
+                    .speechSpellsOutCharacters()
                     .font(.footnote.monospaced())
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -112,7 +113,7 @@ struct AddFundsCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Your address, \(revealed ? address.checksummed : address.short)")
+        .accessibilityLabel(Text("Your address, ") + Text(revealed ? address.checksummed : address.short).speechSpellsOutCharacters())
         .accessibilityHint(revealed ? "Shows the short address" : "Shows the full address")
     }
 

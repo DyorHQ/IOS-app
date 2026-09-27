@@ -105,17 +105,22 @@ public actor LaunchpadService {
         // the Monday graduation venue (and disable the picker) for aBIL, matching the factory's `PairRequiresMonday`.
         let econCalls = pairTokens.map { LaunchpadABI.call(factory, F.pairTokenEconomics, [.address($0)], returns: "uint256,uint256,uint8,bool") }
         let mondayOnlyCalls = pairTokens.map { LaunchpadABI.call(factory, F.pairMondayOnly, [.address($0)], returns: "bool") }
-        let calls = configCalls + econCalls + mondayOnlyCalls
+        // The terms hash for each pair, in the same multicall (one block) as the terms the screen shows, so a launch
+        // can be bound to exactly what was shown (IOST-2).
+        let hashCalls = pairTokens.map { LaunchpadABI.call(factory, F.previewLaunchEconomics, [.uint(configId), .address($0)], returns: "bytes32") }
+        let calls = configCalls + econCalls + mondayOnlyCalls + hashCalls
         async let economics = multicall.readAll(calls)
         async let infos = pairInfos(pairTokens)
         let (results, pairs) = try await (economics, infos)
         let config = hasConfig ? LaunchpadABI.LaunchConfig(results[0][0]) : nil
         let offset = hasConfig ? 1 : 0
         let mondayOffset = offset + pairTokens.count
+        let hashOffset = mondayOffset + pairTokens.count
         let pairEconomics = pairTokens.enumerated().map { i, token in
             let values = results[offset + i]
             let mondayOnly = results[mondayOffset + i][0].bool
-            return PairEconomics(pair: pairs[token] ?? .mon, phantomQuote: values[0].uint, graduationThreshold: values[1].uint, approved: values[3].bool, mondayOnly: mondayOnly)
+            return PairEconomics(pair: pairs[token] ?? .mon, phantomQuote: values[0].uint, graduationThreshold: values[1].uint, approved: values[3].bool,
+                                 mondayOnly: mondayOnly, economicsHash: results[hashOffset + i][0].bytes)
         }
         return ProtocolInfo(
             launchFee: policy[0][0].uint,
@@ -444,15 +449,25 @@ public actor LaunchpadService {
     /// needs what the form collected. `expectedLaunchFee` is the fee the screen showed: the factory's owner can change
     /// `launchFee` at any time with no cap, and the transaction must pay exactly the current one, so a fee that moved
     /// since the screen loaded is refused rather than signed unseen (security audit 2026-09-26, IOST-2).
-    public func launchPlan(_ input: LaunchInput, from: Address, expectedLaunchFee: BigUInt? = nil) async throws -> [TransactionStep] {
+    /// `expectedEconomics` is the terms hash read with the terms the screen showed (`PairEconomics.economicsHash`): the
+    /// launch carries it, so the factory itself rejects terms changed after it was read, and a change seen here is
+    /// refused before anything is signed. Without it the hash is read now, which binds nothing the screen showed.
+    public func launchPlan(_ input: LaunchInput, from: Address, expectedLaunchFee: BigUInt? = nil, expectedEconomics: Data? = nil) async throws -> [TransactionStep] {
         guard addresses.isDeployed else { throw LaunchpadError.notDeployed }
         async let fee = multicall.readAll([LaunchpadABI.call(addresses.factory, LaunchpadABI.Factory.launchFee, returns: "uint256")])
         async let economics = previewLaunchEconomics(configId: input.configId, pairToken: input.pairToken)
         var filled = input
-        filled.expectedEconomics = try await economics
+        filled.expectedEconomics = try Self.boundEconomics(shown: expectedEconomics, current: try await economics)
         let launchFee = try await fee[0][0].uint
         if let expectedLaunchFee, launchFee != expectedLaunchFee { throw LaunchpadError.launchFeeChanged(launchFee) }
         return launchPlan(filled, launchFee: launchFee, from: from)
+    }
+
+    /// The terms hash a launch carries: the one shown when there is one, refused when the factory's current one differs.
+    static func boundEconomics(shown: Data?, current: Data) throws -> Data {
+        guard let shown else { return current }
+        guard shown == current else { throw LaunchpadError.termsChanged }
+        return shown
     }
 
     /// `HolderFeeSharing.claim(token)` on the launch's own stack: the caller's share of the fees routed to holders.

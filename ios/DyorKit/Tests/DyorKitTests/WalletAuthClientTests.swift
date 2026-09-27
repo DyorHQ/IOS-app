@@ -9,8 +9,12 @@ final class WalletAuthClientTests: XCTestCase {
     private let account = Secp256k1Account(privateKeyHex: "0x" + String(repeating: "11", count: 32))!
     private let serverNonce = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 
-    /// The backend's anchored template (wallet-auth), with the same capture groups.
-    private let template = try! NSRegularExpression(pattern: #"^DyorHQ Sign-In\n\nWallet: (0x[0-9a-fA-F]{40})\nNonce: ([0-9a-f]{64})\nIssued At: (\d{13})$"#)
+    /// The backend's anchored EIP-4361 template (wallet-auth `sign_in.ts`), with the same capture groups: address, nonce,
+    /// Issued At, Expiration Time.
+    private let template = try! NSRegularExpression(pattern:
+        #"^dyorhq\.fun wants you to sign in with your Ethereum account:\n(0x[0-9a-fA-F]{40})\n\nSign in to DyorHQ\.\n\n"# +
+        #"URI: https://dyorhq\.fun\nVersion: 1\nChain ID: 143\nNonce: ([0-9a-f]{64})\n"# +
+        #"Issued At: (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\nExpiration Time: (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$"#)
 
     override func setUp() {
         super.setUp()
@@ -26,17 +30,61 @@ final class WalletAuthClientTests: XCTestCase {
     private func matchesTemplate(_ message: String) -> [String]? {
         let range = NSRange(message.startIndex..., in: message)
         guard let match = template.firstMatch(in: message, range: range), match.range == range else { return nil }
-        return (1...3).map { String(message[Range(match.range(at: $0), in: message)!]) }
+        return (1...4).map { String(message[Range(match.range(at: $0), in: message)!]) }
     }
 
     // MARK: Sign-in message
 
+    /// The IOSK-7 SIWE contract, byte for byte (the same text as wallet-auth's sign_in_test.ts).
     func testSignInMessageIsTheExactTemplate() {
-        let address = account.address.checksummed
-        let message = SupabaseClient.signInMessage(address: address, nonce: serverNonce, issuedAt: 1_758_600_000_123)
-        XCTAssertEqual(message, "DyorHQ Sign-In\n\nWallet: \(address)\nNonce: \(serverNonce)\nIssued At: 1758600000123")
-        XCTAssertEqual(matchesTemplate(message), [address, serverNonce, "1758600000123"])
+        let address = "0x52908400098527886E0F7030069857D2E4169EE7" // an EIP-55 test vector
+        let issued = 1_790_424_000_000 // 2026-09-26T12:00:00.000Z
+        let message = SupabaseClient.signInMessage(address: address, nonce: serverNonce, issuedAt: issued)
+        XCTAssertEqual(message, [
+            "dyorhq.fun wants you to sign in with your Ethereum account:",
+            address,
+            "",
+            "Sign in to DyorHQ.",
+            "",
+            "URI: https://dyorhq.fun",
+            "Version: 1",
+            "Chain ID: 143",
+            "Nonce: \(serverNonce)",
+            "Issued At: 2026-09-26T12:00:00.000Z",
+            "Expiration Time: 2026-09-26T12:10:00.000Z",
+        ].joined(separator: "\n"))
+        XCTAssertEqual(matchesTemplate(message), [address, serverNonce, "2026-09-26T12:00:00.000Z", "2026-09-26T12:10:00.000Z"])
         XCTAssertFalse(message.hasSuffix("\n"))
+        XCTAssertFalse(message.contains("\r"))
+    }
+
+    /// Timestamps are JavaScript's `toISOString` form, from integer milliseconds, and only that form parses back.
+    func testSignInTimestampsMatchToISOString() {
+        XCTAssertEqual(SupabaseClient.iso8601(millis: 1_758_600_000_123), "2025-09-23T04:00:00.123Z")
+        XCTAssertEqual(SupabaseClient.iso8601(millis: 1_790_424_000_007), "2026-09-26T12:00:00.007Z")
+        XCTAssertEqual(SupabaseClient.iso8601(millis: 1_790_424_059_999), "2026-09-26T12:00:59.999Z")
+        XCTAssertEqual(SupabaseClient.iso8601(millis: 0), "1970-01-01T00:00:00.000Z")
+        for millis in [0, 1_758_600_000_123, 1_790_424_000_007, 1_790_424_059_999, 1_709_164_800_000 /* 2024-02-29 */] {
+            XCTAssertEqual(SupabaseClient.millis(iso8601: SupabaseClient.iso8601(millis: millis)), millis)
+        }
+        for bad in ["2026-09-26T12:00:00Z", "2026-09-26T12:00:00.000+00:00", "2026-02-30T12:00:00.000Z", "2026-09-26T24:00:00.000Z",
+                    "2026-09-26T12:00:00.0000Z", "2026-09-26 12:00:00.000Z", "2026-09-26T12:00:00.000z", "", "２026-09-26T12:00:00.000Z"] {
+            XCTAssertNil(SupabaseClient.millis(iso8601: bad), bad)
+        }
+    }
+
+    /// The message names the wallet with its EIP-55 checksum even when the request's address is lowercase.
+    func testSignInMessageChecksumsTheAddress() async throws {
+        let address = account.address.checksummed
+        WalletAuthCapture.replies = [
+            (200, #"{"nonce":"\#(serverNonce)","expiresAt":1758600300000}"#),
+            (200, #"{"access_token":"session.jwt","token_type":"bearer","expires_in":43200,"wallet":"\#(address.lowercased())"}"#),
+        ]
+        _ = try await backend.signIn(address: address.lowercased()) { try self.account.signMessage($0) }
+        let authBody = json(WalletAuthCapture.requests[1])
+        XCTAssertEqual(authBody["address"] as? String, address.lowercased())
+        let fields = try XCTUnwrap(matchesTemplate(try XCTUnwrap(authBody["message"] as? String)))
+        XCTAssertEqual(fields[0], address)
     }
 
     func testSignInSignsTheServerNonce() async throws {
@@ -75,8 +123,9 @@ final class WalletAuthClientTests: XCTestCase {
         let fields = try XCTUnwrap(matchesTemplate(message))
         XCTAssertEqual(fields[0], address)
         XCTAssertEqual(fields[1], serverNonce)
-        let issued = try XCTUnwrap(Int(fields[2]))
+        let issued = try XCTUnwrap(SupabaseClient.millis(iso8601: fields[2]))
         XCTAssertTrue((before...after).contains(issued))
+        XCTAssertEqual(SupabaseClient.millis(iso8601: fields[3]), issued + 10 * 60 * 1000)
         XCTAssertEqual(message, SupabaseClient.signInMessage(address: address, nonce: serverNonce, issuedAt: issued))
         XCTAssertEqual(authBody["signature"] as? String, try account.signMessage(Data(message.utf8)).hexString)
 
@@ -101,6 +150,20 @@ final class WalletAuthClientTests: XCTestCase {
         await backend.restore(session)
         let after = await backend.currentSession
         XCTAssertEqual(after, session)
+    }
+
+    /// A sign-out that finishes late (after its network call) ends only the session it was for: a sign-in adopted
+    /// meanwhile keeps its session (RS-6).
+    func testSignOutOnlyEndsTheSessionItWasFor() async {
+        let old = SupabaseSession(accessToken: "old.jwt", wallet: "0xaa", expiresAt: Date().addingTimeInterval(3600))
+        let new = SupabaseSession(accessToken: "new.jwt", wallet: "0xbb", expiresAt: Date().addingTimeInterval(3600))
+        await backend.restore(new)
+        await backend.signOut(ifAccessToken: old.accessToken)
+        let kept = await backend.currentSession
+        XCTAssertEqual(kept, new, "a newer sign-in survives the late sign-out of an older one")
+        await backend.signOut(ifAccessToken: new.accessToken)
+        let gone = await backend.currentSession
+        XCTAssertNil(gone)
     }
 
     func testMalformedNonceIsRefusedBeforeAnythingIsSigned() async {

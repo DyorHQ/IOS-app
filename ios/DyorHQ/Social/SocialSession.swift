@@ -23,6 +23,13 @@ final class SocialSession {
     /// The wallet-auth sign-in in flight and the wallet it is for. A second request for the same wallet while it runs
     /// (RootView's, while `signInWithMera`'s runs in the background) waits for it instead of signing a second nonce.
     private var pending: (wallet: String, task: Task<Void, Never>)?
+    /// The stored token `bind` is restoring, and the wallet it is for. It is this launch's sign-in: a sign-in for the same
+    /// wallet meanwhile waits for it, and signs a nonce only if the token didn't restore — never a second `sessions` row
+    /// beside it (security audit 2026-09-26, RS-3).
+    private var restoring: (wallet: String, task: Task<Void, Never>)?
+    /// The access token of the session this object adopted, so a sign-out that finishes late ends that session only,
+    /// never a newer one adopted meanwhile (RS-6).
+    private var adoptedToken: String?
     /// Profile work still running — a restored session's (`bind`), a sign-in's follow-up (`startSignIn`, which a new
     /// passkey account doesn't await) — each of which upserts the profile row. Each removes itself when done. Account
     /// deletion waits them out first (`settle`), so a late upsert can't recreate the row it just deleted.
@@ -51,34 +58,46 @@ final class SocialSession {
         let previous = boundWallet
         boundWallet = target
 
-        // Full wallet sign-out: record the sign-out time on the still-authed session, THEN tear down.
+        // Full wallet sign-out: the stored token goes now, the sign-out time is recorded on the still-authed session,
+        // then that session (only that one) ends.
         if target == nil {
+            let token = adoptedToken, rowId = currentSessionRowId
             state = .signedOut; profile = nil; error = nil
             cancelExpiry()
+            adoptedToken = nil; currentSessionRowId = nil
+            if previous != nil { SupabaseSessionStore.clear() }
             Task {
-                if let previous { await closeSession(wallet: previous) }
-                await client.signOut()
-                if previous != nil { SupabaseSessionStore.clear() }
+                if let previous { await closeSession(wallet: previous, id: rowId) }
+                if let token { await client.signOut(ifAccessToken: token) }
             }
             return
         }
 
         reset() // switching to a different wallet: drop the previous wallet's in-memory session
         guard let target, let stored = SupabaseSessionStore.load(), stored.wallet == target, stored.isValid else { return }
-        trackProfileWork {
+        // The stored token is this launch's sign-in (RS-3): registered before anyone can ask for a sign-in, so RootView's
+        // joins it (`signIn(address:wallet:)`) instead of signing a second nonce alongside it.
+        let task = Task { @MainActor in
+            defer { if self.restoring?.wallet == target { self.restoring = nil } }
             await self.client.restore(stored)
-            if await self.client.currentSession != nil, self.boundWallet == target {
-                self.adopted(stored)
+            guard await self.client.currentSession?.accessToken == stored.accessToken else { return }
+            // Signed out or switched while it restored: drop exactly what this restored (RS-6). No later sign-out would,
+            // since this object never adopted it.
+            guard self.boundWallet == target else { await self.client.signOut(ifAccessToken: stored.accessToken); return }
+            self.adopted(stored)
+            self.trackProfileWork {
                 try? await self.ensureProfile(wallet: target) // safety net: a returning wallet always has a profile
                 await self.openSession(wallet: target)        // a restored session on launch is this app-session's sign-in
                 await self.loadProfile()
             }
         }
+        restoring = (target, task)
     }
 
-    /// Waits for the sign-in in flight and all profile work (`profileWork`). Account deletion calls it before deleting
-    /// the profile row, which any of them could otherwise recreate afterwards.
+    /// Waits for the sign-in in flight, a stored token's restore, and all profile work (`profileWork`). Account
+    /// deletion calls it before deleting the profile row, which any of them could otherwise recreate afterwards.
     func settle() async {
+        if let restoring { await restoring.task.value }
         if let pending { await pending.task.value }
         while let running = profileWork.values.first { await running.value }
     }
@@ -96,9 +115,11 @@ final class SocialSession {
         return task
     }
 
-    /// Clears the in-memory session (keeps any stored token). Used when rebinding to a different wallet.
+    /// Clears the in-memory session (keeps any stored token). Used when rebinding to a different wallet: the session
+    /// this object adopted ends, never one adopted after it (RS-6).
     private func reset() {
-        Task { await client.signOut() }
+        if let token = adoptedToken { Task { await client.signOut(ifAccessToken: token) } }
+        adoptedToken = nil
         cancelExpiry()
         state = .signedOut
         profile = nil
@@ -107,6 +128,7 @@ final class SocialSession {
 
     /// `session` is the client's now: signed in until a minute before it expires, for as long as this wallet stays bound.
     private func adopted(_ session: SupabaseSession) {
+        adoptedToken = session.accessToken
         state = .signedIn
         expiry?.cancel()
         let wallet = boundWallet
@@ -132,8 +154,14 @@ final class SocialSession {
         await signIn(address: address, wallet: wallet)
     }
 
-    /// Signs in as `address` with `wallet`, or waits for the sign-in already in flight for it.
+    /// Signs in as `address` with `wallet`, or waits for the sign-in already in flight for it. A stored token being
+    /// restored for it is waited for first, and a nonce is signed only if it didn't restore (RS-3).
     func signIn(address: Address, wallet: any Wallet) async {
+        let target = address.checksummed.lowercased()
+        if let restoring, restoring.wallet == target {
+            await restoring.task.value
+            guard !isSignedIn, boundWallet == target else { return }
+        }
         await startSignIn(address: address, wallet: wallet).value
     }
 
@@ -166,7 +194,8 @@ final class SocialSession {
                 // The app moved on (signed out, or another wallet) while wallet-auth answered: don't adopt it.
                 guard boundWallet == target else { return }
                 await client.restore(created)
-                guard boundWallet == target else { return }
+                // It moved on during that hop: drop exactly what was just restored (RS-6), which no later sign-out would.
+                guard boundWallet == target else { await client.signOut(ifAccessToken: created.accessToken); return }
                 SupabaseSessionStore.save(created)
                 boundWallet = created.wallet
                 adopted(created)
@@ -199,16 +228,17 @@ final class SocialSession {
     }
     #endif
 
-    /// Full sign-out: records the sign-out time, then clears the in-memory session and the stored token.
+    /// Full sign-out: the stored token is cleared at once, the sign-out time is recorded on the still-authed session,
+    /// then that session ends — only that one, so a sign-in that finishes meanwhile keeps its session (RS-6).
     func signOut() {
-        let wallet = boundWallet
+        let wallet = boundWallet, token = adoptedToken, rowId = currentSessionRowId
         state = .signedOut; profile = nil; error = nil
         cancelExpiry()
-        boundWallet = nil
+        boundWallet = nil; adoptedToken = nil; currentSessionRowId = nil
+        SupabaseSessionStore.clear()
         Task {
-            if let wallet { await closeSession(wallet: wallet) } // on the still-authed session
-            await client.signOut()
-            SupabaseSessionStore.clear()
+            if let wallet { await closeSession(wallet: wallet, id: rowId) } // on the still-authed session
+            if let token { await client.signOut(ifAccessToken: token) }
         }
     }
 
@@ -236,13 +266,14 @@ final class SocialSession {
         UserDefaults.standard.set(id, forKey: Self.sessionKey(wallet))
     }
 
-    /// Stamps `signed_out_at` on the wallet's open session row. Must run while the client is still authed.
-    private func closeSession(wallet: String) async {
-        guard let id = currentSessionRowId ?? UserDefaults.standard.string(forKey: Self.sessionKey(wallet)) else { return }
+    /// Stamps `signed_out_at` on the wallet's open session row (`id`, this app-session's, else the one persisted for the
+    /// wallet). Must run while the client is still authed.
+    private func closeSession(wallet: String, id: String?) async {
+        guard let id = id ?? UserDefaults.standard.string(forKey: Self.sessionKey(wallet)) else { return }
         struct Row: Encodable { let id: String; let wallet: String; let signed_out_at: String }
         let _: SessionRow? = try? await client.upsert("sessions", Row(id: id, wallet: wallet, signed_out_at: Self.iso(Date())), onConflict: "id")
-        currentSessionRowId = nil
-        UserDefaults.standard.removeObject(forKey: Self.sessionKey(wallet))
+        // Only this row's record: a sign-in since may have opened (and persisted) a newer one.
+        if UserDefaults.standard.string(forKey: Self.sessionKey(wallet)) == id { UserDefaults.standard.removeObject(forKey: Self.sessionKey(wallet)) }
     }
 
     private static let isoFormatter: ISO8601DateFormatter = {

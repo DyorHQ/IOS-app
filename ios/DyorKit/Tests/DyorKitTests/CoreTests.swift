@@ -247,3 +247,40 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(NumberStyle.basisPoints(30), "0.3%")
     }
 }
+
+/// Recipient text as people paste it (security audit 2026-09-26, GR-4): invisible characters and surrounding
+/// whitespace are removed, and what is still wrong is named precisely.
+final class AddressInputTests: XCTestCase {
+    private let plain = "0x2222222222222222222222222222222222222222"
+    private let checksummed = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+
+    func testCleaningRemovesInvisibleCharactersAndSurroundingWhitespace() {
+        let dirty = "\u{FEFF} \n" + String(plain.prefix(10)) + "\u{200B}\u{202E}" + String(plain.dropFirst(10)) + "\u{2066}\u{00AD}\t "
+        let cleaned = Address.cleanedInput(dirty)
+        XCTAssertEqual(cleaned.text, plain)
+        XCTAssertTrue(cleaned.removedInvisible)
+        XCTAssertNil(Address.inputProblem(cleaned.text))
+        XCTAssertEqual(Address(cleaned.text), Address(plain))
+
+        let clean = Address.cleanedInput("  \(checksummed)\n")
+        XCTAssertEqual(clean.text, checksummed)
+        XCTAssertFalse(clean.removedInvisible, "whitespace isn't reported as hidden characters")
+    }
+
+    func testProblemsAreNamedPrecisely() {
+        XCTAssertNil(Address.inputProblem(""))
+        XCTAssertNil(Address.inputProblem(plain))
+        XCTAssertNil(Address.inputProblem(checksummed))
+        XCTAssertEqual(Address.inputProblem("2222222222222222222222222222222222222222"), "An address starts with 0x.")
+        XCTAssertEqual(Address.inputProblem("0x2222 2222222222222222222222222222222222"), "This address has a space or line break inside it. Copy it again from the source.")
+        XCTAssertEqual(Address.inputProblem("0x222222222222222222222222222222222222222g"), "“g” can't be part of an address: it uses only 0–9 and a–f.")
+        XCTAssertEqual(Address.inputProblem("0x22222"), "An address has 40 characters after 0x; this one has 5.")
+        XCTAssertEqual(Address.inputProblem(plain + "22"), "An address has 40 characters after 0x; this one has 42.")
+        // EIP-55's own mixed-case example, then the same with one letter's case flipped.
+        XCTAssertNil(Address.inputProblem("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"))
+        XCTAssertEqual(Address.inputProblem("0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"),
+                       "This address's capital letters don't match its checksum, so it may contain a typo. Copy it again from the source.")
+        // A full-width digit or an other-script letter that looks like hex is named, not waved through.
+        XCTAssertEqual(Address.inputProblem("0x２222222222222222222222222222222222222222"), "“２” can't be part of an address: it uses only 0–9 and a–f.")
+    }
+}

@@ -59,6 +59,10 @@ struct ActivityRecord: Codable, Identifiable, Hashable {
     /// An id the matching notification can deep-link to (a Moment id, a coin address). Optional and backward
     /// compatible: rows written before this field decode with `nil`.
     var reference: String?
+    /// A row `PendingActivity` wrote for a sent transaction: "pending" until its outcome is seen, then "confirmed",
+    /// "reverted" or "notFound"; nil for every row an action recorded itself, which replaces it (same hash). Optional
+    /// and backward compatible.
+    var status: String?
 
     init(kind: Kind, title: String, subtitle: String, hash: Data?, time: Date = Date(), section: String? = nil, usd: Double? = nil, feeUsd: Double? = nil, reference: String? = nil) {
         self.kind = kind
@@ -141,6 +145,16 @@ enum ActivityLog {
         onRecord?(record, owner)
     }
 
+    /// Rewrites this wallet's log in place, for `PendingActivity`'s rows. Nothing is mirrored to the backend.
+    static func update(owner: Address, _ change: (inout [ActivityRecord]) -> Void) {
+        let before = all(owner: owner)
+        var list = before
+        change(&list)
+        guard list != before else { return }
+        if list.count > cap { list = Array(list.prefix(cap)) }
+        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: key(owner))
+    }
+
     /// Merges records restored from the backend (`BackendSync.restore`, MERA-PLAN §6) into this wallet's log: nothing
     /// already here is replaced or doubled (same id or same transaction hash), newest first, capped like `record`.
     /// Not mirrored back (`onRecord`): these rows came from the backend.
@@ -163,6 +177,111 @@ enum Activity {
         ActivityLog.record(record, owner: owner)
         guard notify, owner != nil else { return }
         NotificationHub.shared.post(kind: record.notificationKind, title: record.title, body: record.subtitle,
-                                    route: record.notificationRoute, reference: record.reference)
+                                    route: record.notificationRoute, reference: record.reference, owner: owner)
+    }
+}
+
+/// Transactions sent whose confirmation the app hasn't seen (security audit 2026-09-26, GL-2). Each step a plan sends is
+/// written as a pending row under its hash the moment it is sent, so a plan that fails afterwards — the phone locked
+/// mid-wait, the connection dropped, the app killed — still leaves the transaction in Recent Activity with its View
+/// link. A step seen confirmed keeps its row, marked confirmed, until it is superseded: by the plan's next step (it was
+/// an approval or another step before the action), or for the last step by the plan's own record of the action, which
+/// replaces it under the same hash. A sheet that goes before it records — its content switched, the account changed,
+/// the app killed while the plan settled in the background — still leaves the confirmed row. What is still pending is
+/// re-checked on the next launch, return to the foreground or Recent Activity load, and becomes confirmed, reverted or
+/// not found. Local only: these rows are never mirrored to the backend.
+@MainActor
+enum PendingActivity {
+    /// `ActivityRecord.status` values.
+    nonisolated static let pendingStatus = "pending"
+    nonisolated static let confirmedStatus = "confirmed"
+    nonisolated static let revertedStatus = "reverted"
+    nonisolated static let notFoundStatus = "notFound"
+
+    /// An icon for a row this wrote, by its status: neutral, since the row stands for any kind of step.
+    static func symbol(for status: String) -> String {
+        switch status {
+        case pendingStatus: return "clock"
+        case confirmedStatus: return "checkmark.circle"
+        case revertedStatus: return "xmark.circle"
+        default: return "questionmark.circle"
+        }
+    }
+
+    /// A step just sent: a pending row under its hash, unless the hash already has one.
+    static func sent(_ hash: Data, label: String, owner: Address?) {
+        guard let owner else { return }
+        ActivityLog.update(owner: owner) { list in
+            guard !list.contains(where: { $0.txHashHex == hash.hexString }) else { return }
+            var row = ActivityRecord(kind: .send, title: label, subtitle: "Sent — confirmation not seen yet", hash: hash)
+            row.status = pendingStatus
+            list.insert(row, at: 0)
+        }
+    }
+
+    /// A step seen confirmed while its plan runs: its row says so, until it is superseded.
+    static func confirmed(_ hash: Data, owner: Address?) {
+        guard let owner else { return }
+        resolve(owner: owner, as: confirmedStatus) { $0.txHashHex == hash.hexString }
+    }
+
+    /// A confirmed step its plan followed with another: an approval or other step before the action, which the plan's
+    /// own record names. Its row goes, whether this plan or a re-check marked it confirmed.
+    static func superseded(_ hash: Data, owner: Address?) {
+        guard let owner else { return }
+        ActivityLog.update(owner: owner) { list in
+            list.removeAll { $0.txHashHex == hash.hexString && ($0.status == pendingStatus || $0.status == confirmedStatus) }
+        }
+    }
+
+    /// A step seen reverted: its row says so.
+    static func reverted(_ hash: Data, owner: Address?) {
+        guard let owner else { return }
+        resolve(owner: owner, as: revertedStatus) { $0.txHashHex == hash.hexString }
+    }
+
+    /// Re-checks every pending row of `owner`, a few at a time: a receipt settles it as confirmed or reverted; a
+    /// transaction the network doesn't know half an hour after it was sent is not found (it never landed); anything else
+    /// stays pending for the next check. Each row is rewritten as soon as its own reads answer.
+    static func recheck(owner: Address?, rpc: RPCClient) async {
+        guard let owner else { return }
+        var queue = ActivityLog.all(owner: owner).filter { $0.status == pendingStatus }.compactMap { row in row.txHash.map { (id: row.id, hash: $0, sent: row.time) } }[...]
+        await withTaskGroup(of: (UUID, String?).self) { group in
+            func checkNext() {
+                guard let row = queue.popFirst() else { return }
+                group.addTask { (row.id, await outcome(of: row.hash, sentAt: row.sent, rpc: rpc)) }
+            }
+            for _ in 0..<4 { checkNext() }
+            for await (id, outcome) in group {
+                if let outcome { resolve(owner: owner, as: outcome) { $0.id == id } }
+                checkNext()
+            }
+        }
+    }
+
+    /// A sent transaction's outcome: confirmed or reverted by its receipt, not found when the network doesn't know it
+    /// half an hour after it was sent; nil while it is still pending, or when a read failed.
+    private nonisolated static func outcome(of hash: Data, sentAt: Date, rpc: RPCClient) async -> String? {
+        do {
+            if let receipt = try await rpc.transactionReceipt(hash) { return receipt.success ? confirmedStatus : revertedStatus }
+        } catch {
+            return nil
+        }
+        if Date().timeIntervalSince(sentAt) > 30 * 60, await rpc.knowsTransaction(hash) == false { return notFoundStatus }
+        return nil
+    }
+
+    /// Rewrites the pending rows `matching` with `outcome`, keeping each row's id, title and time.
+    private static func resolve(owner: Address, as outcome: String, matching: (ActivityRecord) -> Bool) {
+        ActivityLog.update(owner: owner) { list in
+            for i in list.indices where list[i].status == pendingStatus && matching(list[i]) {
+                let subtitle = outcome == revertedStatus ? "Reverted — only the network fee was spent"
+                    : outcome == notFoundStatus ? "Not found on the network — it never confirmed" : "Confirmed"
+                var row = ActivityRecord(kind: list[i].kind, title: list[i].title, subtitle: subtitle, hash: list[i].txHash, time: list[i].time, section: list[i].section)
+                row.id = list[i].id
+                row.status = outcome
+                list[i] = row
+            }
+        }
     }
 }

@@ -59,6 +59,9 @@ final class Session {
     /// deleted." screen, which RootView shows in place of onboarding until it is closed. It outlives the deletion's own
     /// sheet, which goes with the signed-in screens. Memory only.
     var passkeyDeletion: Mera.AccountDeletion.Done?
+    /// What a deletion that finished on this device left to do (a Privy account that couldn't be deleted,
+    /// `AccountDeletion.run`), shown by RootView in place of onboarding until closed. Memory only.
+    var deletionNotice: String?
 
     var account: Account? { if case .signedIn(let account) = state { return account } else { return nil } }
     var address: Address? { account?.address }
@@ -120,10 +123,18 @@ final class Session {
             if case .signedIn = state { return }
             state = .loading
         case .unauthenticated, .authenticatedUnverified:
+            if !suppressPrivyAdoption { EmailCheckMarker.clear() } // no Privy session left behind by an email check
             wallet = nil
             if !loadStoredSession() { state = .signedOut }
         case .authenticated(let user):
             if suppressPrivyAdoption { return } // email verification only — don't adopt the Privy wallet
+            if EmailCheckMarker.isSet {
+                // Left by an email check the app never finished (killed between the code and its logout): ended, never
+                // adopted as the user's wallet (GL-6).
+                await user.logout()
+                EmailCheckMarker.clear()
+                return
+            }
             try? await adoptOnce(user) // a failure is already recorded in lastError and the Privy session ended
         }
     }
@@ -371,9 +382,8 @@ final class Session {
         return PasswordKeys(email: normalizedEmail, seed: seed, wallet: wallet)
     }
 
-    /// The legacy (pre-v2) wallet the same email + password derived, off the main actor.
-    private func legacyWallet(_ keys: PasswordKeys) async throws -> Secp256k1Account {
-        let seed = keys.seed
+    /// The legacy (pre-v2) wallet for the password seed S, off the main actor.
+    private func legacyWallet(seed: Data) async throws -> Secp256k1Account {
         guard let account = await Task.detached(priority: .userInitiated, operation: {
             EmailWallet.legacyAccount(seed: seed)
         }).value else { throw SessionError.passwordDerivationFailed }
@@ -411,28 +421,66 @@ final class Session {
         /// existing user is never silently landed on a different wallet. The old password can't carry over: `legacy`
         /// is public, and it lets anyone test guesses of the old password's S offline.
         case needsUpgrade(legacy: Address)
+        /// The email belongs to an account created before v2, bound to its legacy wallet at `legacy`, which still
+        /// holds funds, so it can't upgrade yet (the email would leave them behind). Nothing was committed:
+        /// `continueWithLegacyWallet()` signs in to that wallet so they can be moved out — no other signed-in device
+        /// needed (security audit 2026-09-26, GE-4) — and the upgrade follows at a later log-in, once it is empty.
+        case legacyHoldsFunds(legacy: Address)
     }
 
     /// Log in (no OTP): derive the v2 wallet, then sign in ONLY if `verify` confirms the email is a verified account
     /// bound to exactly this derived wallet. A wrong password derives a different wallet and fails verification. The
     /// derived account is handed to `verify` so the wallet can prove itself (sign in to the backend and read its own
-    /// binding) — there is no anonymous lookup that could confirm a guessed password. When the v2 wallet is not bound,
-    /// the legacy wallet of the same password is checked the same way: an account created before v2 must upgrade
-    /// (`.needsUpgrade`), and only while its legacy wallet is empty (`holdsFunds`) — otherwise this stops with an error.
+    /// binding) — there is no anonymous lookup that could confirm a guessed password. No legacy wallet is derived here
+    /// (IOSK-2): checking one means signing in with it, which hands the server an address anyone can test guesses of
+    /// this password against offline, so a v2 user's typo must never produce one. `logInToLegacyAccount` does that
+    /// check, only when the user says the account predates v2.
     func logInWithPassword(email: String, password: String,
                            pepper: (_ e: Data, _ t: Data) async throws -> Data,
-                           verify: (_ email: String, _ account: Secp256k1Account) async throws -> Bool,
-                           holdsFunds: (_ legacy: Address) async throws -> Bool) async throws -> PasswordLogin {
+                           verify: (_ email: String, _ account: Secp256k1Account) async throws -> Bool) async throws -> PasswordLogin {
+        pendingLegacy = nil
         let keys = try await derivePassword(email: email, password: password, pepper: pepper)
-        if try await verify(keys.email, keys.wallet) {
-            await commitPasswordWallet(keys.wallet, email: keys.email)
-            return .signedIn
-        }
-        let legacy = try await legacyWallet(keys)
-        guard try await verify(keys.email, legacy) else { throw SessionError.emailNotVerified }
-        try await requireEmptyLegacy(legacy.address, holdsFunds: holdsFunds)
-        return .needsUpgrade(legacy: legacy.address)
+        guard try await verify(keys.email, keys.wallet) else { throw SessionError.emailNotVerified }
+        await commitPasswordWallet(keys.wallet, email: keys.email)
+        return .signedIn
     }
+
+    /// Log in to an account created before v2, which the user said theirs is (IOSK-2): the password's legacy wallet (S
+    /// alone — no pepper, so no request before the check), verified like `logInWithPassword`'s. Empty, it must upgrade
+    /// (`.needsUpgrade`). Still funded, it is held for `continueWithLegacyWallet` (`.legacyHoldsFunds`, GE-4). A balance
+    /// that can't be read stops here: an unknown balance is not an empty one.
+    func logInToLegacyAccount(email: String, password: String,
+                              verify: (_ email: String, _ account: Secp256k1Account) async throws -> Bool,
+                              holdsFunds: (_ legacy: Address) async throws -> Bool) async throws -> PasswordLogin {
+        pendingLegacy = nil
+        let normalizedEmail = EmailWallet.normalize(email)
+        guard let seed = await Task.detached(priority: .userInitiated, operation: {
+            EmailWallet.legacySeed(email: normalizedEmail, password: password)
+        }).value else { throw SessionError.passwordDerivationFailed }
+        let legacy = try await legacyWallet(seed: seed)
+        guard try await verify(normalizedEmail, legacy) else { throw SessionError.legacyAccountNotFound }
+        let funded: Bool
+        do { funded = try await holdsFunds(legacy.address) } catch { throw SessionError.legacyBalanceUnavailable }
+        guard funded else { return .needsUpgrade(legacy: legacy.address) }
+        pendingLegacy = (legacy, normalizedEmail)
+        return .legacyHoldsFunds(legacy: legacy.address)
+    }
+
+    /// Signs in to the funded legacy wallet `logInToLegacyAccount` found and verified, as an Email & Password account,
+    /// so its funds can be moved out (GE-4). The binding doesn't change.
+    func continueWithLegacyWallet() async {
+        guard let pending = pendingLegacy else { return }
+        pendingLegacy = nil
+        await commitPasswordWallet(pending.account, email: pending.email)
+    }
+
+    /// Drops a legacy wallet held for `continueWithLegacyWallet` (the log-in screen closed, or another attempt began).
+    func forgetPendingLegacy() {
+        pendingLegacy = nil
+    }
+
+    /// The funded legacy wallet the last `logInToLegacyAccount` verified, until the user continues or leaves.
+    private var pendingLegacy: (account: Secp256k1Account, email: String)?
 
     // MARK: Email OTP + server-attested binding (shared by sign-up and forgot-password)
 
@@ -442,15 +490,32 @@ final class Session {
     /// OTP requirement is enforced on the backend, not just in this app, and `email-pepper` accepts it to pay for this
     /// email's pepper from its verified budget. Used by sign-up, forgot-password and a rate-limited log-in. The token
     /// goes to those two functions only.
+    ///
+    /// The Privy session the check opens is ended on every path, a failure included, and a marker kept across launches
+    /// covers a check the app never finished (killed in between): that session is ended at the next launch, never
+    /// adopted as the user's wallet (GL-6).
     func verifyEmailCapturingToken(email: String, code: String) async throws -> String {
         let privy = try requirePrivy()
         suppressPrivyAdoption = true
+        EmailCheckMarker.set()
         defer { suppressPrivyAdoption = false }
-        _ = try await privy.email.loginWithCode(code, sentTo: email.trimmingCharacters(in: .whitespacesAndNewlines))
-        let token = try await privyAccessToken()
-        if case .authenticated(let user) = await privy.getAuthState() { await user.logout() }
+        let token: String?
+        do {
+            _ = try await privy.email.loginWithCode(code, sentTo: email.trimmingCharacters(in: .whitespacesAndNewlines))
+            token = try await privyAccessToken()
+        } catch {
+            await endEmailCheck(privy)
+            throw error
+        }
+        await endEmailCheck(privy)
         guard let token else { throw SessionError.emailNotVerified }
         return token
+    }
+
+    /// Ends the Privy session an email check opened, then clears the check's marker.
+    private func endEmailCheck(_ privy: any Privy) async {
+        if case .authenticated(let user) = await privy.getAuthState() { await user.logout() }
+        EmailCheckMarker.clear()
     }
 
     /// The canonical challenge the wallet signs to prove control of itself during a bind. The `email-rebind` function
@@ -465,26 +530,43 @@ final class Session {
     /// prove control of it, and let `bind` push both proofs (the Privy `token` + the signature) to the server, which
     /// writes the binding with the service role after re-verifying them. Only on success does the wallet become the
     /// signer — nothing is committed if the server rejects the proofs, so a failed attempt leaves any existing session
-    /// untouched. Sign-up and reset never derive or look up a legacy wallet: a legacy address is an offline check of
-    /// the password, so a new password's must never reach anyone (the public RPCs included). Only an upgrade checks
-    /// one — `upgradingFrom`, the legacy wallet log-in found bound, whose address is already public: the new password
-    /// must differ from the old one (same password, same S, still guessable against that address), and that wallet
-    /// must still be empty (`holdsFunds`) right before the email moves off it, so the move can never strand funds.
-    func bindEmailPassword(email: String, password: String, token: String, upgradingFrom legacy: Address?,
+    /// untouched. Sign-up and reset never look up a legacy wallet: a legacy address is an offline check of the
+    /// password, so a new password's must never reach anyone (the public RPCs included). An upgrade checks one —
+    /// `upgradingFrom`, the legacy wallet log-in found bound, whose address is already public: the new password must
+    /// differ from the old one (same password, same S, still guessable against that address), and that wallet must
+    /// still be empty (`holdsFunds`) right before the email moves off it, so the move can never strand funds.
+    ///
+    /// The email is never moved off another wallet unconfirmed (security audit 2026-09-26, GE-1): the server answers
+    /// `SessionError.emailAlreadyBound(current)` unless the request names that wallet (`replacing`, else the upgrade's
+    /// legacy wallet), which the caller does only after the user saw what it holds and confirmed. Either way, a bound
+    /// wallet that is this very password's legacy one is refused (`samePasswordLegacyBinding`): this password's S is
+    /// guessable against it, and log-in is the way back to it. That address is only ever compared on this device. A
+    /// replaced wallet that may be legacy (`replacingMayBeLegacy`: no password this app knows reaches it once the email
+    /// moves) must still be empty right before the move, as for the upgrade: funds that arrived after the user saw it
+    /// empty are never stranded.
+    func bindEmailPassword(email: String, password: String, token: String, upgradingFrom legacy: Address?, replacing current: Address? = nil,
+                           replacingMayBeLegacy: Bool = false,
                            pepper: (_ e: Data, _ t: Data) async throws -> Data,
                            holdsFunds: (_ legacy: Address) async throws -> Bool,
-                           bind: (_ token: String, _ message: String, _ signature: String) async throws -> Void) async throws {
+                           bind: (_ token: String, _ message: String, _ signature: String, _ replace: Address?) async throws -> Void) async throws {
         let keys = try await derivePassword(email: email, password: password, pepper: pepper)
         if let legacy {
             // The new password's own legacy address is computed on-device only, for this comparison.
-            if try await legacyWallet(keys).address == legacy { throw SessionError.upgradeNeedsNewPassword }
+            if try await legacyWallet(seed: keys.seed).address == legacy { throw SessionError.upgradeNeedsNewPassword }
             try await requireEmptyLegacy(legacy, holdsFunds: holdsFunds)
         }
+        if let current, try await legacyWallet(seed: keys.seed).address == current { throw SessionError.samePasswordLegacyBinding }
+        if let current, replacingMayBeLegacy { try await requireEmptyLegacy(current, holdsFunds: holdsFunds) }
         let message = Self.bindChallenge(email: keys.email, address: keys.wallet.address)
         let signature: String
         do { signature = try keys.wallet.signMessage(Data(message.utf8)).hexString }
         catch { throw SessionError.passwordDerivationFailed }
-        try await bind(token, message, signature)
+        do {
+            try await bind(token, message, signature, current ?? legacy)
+        } catch SessionError.emailAlreadyBound(let bound) {
+            if try await legacyWallet(seed: keys.seed).address == bound { throw SessionError.samePasswordLegacyBinding }
+            throw SessionError.emailAlreadyBound(bound)
+        }
         await commitPasswordWallet(keys.wallet, email: keys.email)
     }
 
@@ -501,9 +583,11 @@ final class Session {
     }
 
     /// The signed-in Privy user's access token (nil for imported, passkey-derived and watch-only accounts). A
-    /// server function uses it to prove the caller owns the Privy account it is asked to delete.
-    func privyAccessToken() async throws -> String? {
+    /// server function uses it to prove the caller owns the Privy account it is asked to delete. `fresh` renews the
+    /// Privy session first: delete-account takes only a token issued in the last 15 minutes.
+    func privyAccessToken(fresh: Bool = false) async throws -> String? {
         guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return nil }
+        if fresh { try await user.refresh() }
         return try await user.getAccessToken()
     }
 
@@ -550,21 +634,30 @@ enum SessionError: LocalizedError {
     case upgradeNeedsNewPassword
     case appleSignInUnavailable
     case privyPasskeysDisabled
+    /// email-rebind refused to move the email off the wallet it is bound to (GE-1) until the user confirms.
+    case emailAlreadyBound(Address)
+    /// The wallet the email is bound to is this password's own legacy wallet (GE-1).
+    case samePasswordLegacyBinding
+    /// The user asked for an account from before v2, and none is bound to this email and password (IOSK-2).
+    case legacyAccountNotFound
 
     var errorDescription: String? {
         switch self {
         case .privyPasskeysDisabled: return "Passkeys in this build open a DyorHQ passkey account, not a Privy one."
         case .appleSignInUnavailable: return "Sign in with Apple couldn’t start. Make sure this iPhone is signed in to an Apple Account in Settings, then try again."
         case .legacyWalletHasFunds(let legacy):
-            return "Your account’s original wallet (\(legacy.checksummed)) still holds funds. To keep them safe, the security upgrade can’t finish until they’re moved out — send them to another wallet from a device where you’re still signed in, then log in again. Don’t reset your password before then: a reset moves your account to a new wallet and leaves those funds behind."
+            return "Your account’s original wallet (\(legacy.checksummed)) now holds funds, so the security upgrade can’t finish. Log in with your current password to move them out, then log in again to finish the upgrade. Don’t reset your password before then: a reset creates a new, empty wallet and leaves those funds behind."
         case .legacyBalanceUnavailable: return "Couldn’t check your wallet’s balance. Check your connection and try again."
         case .upgradeNeedsNewPassword: return "Choose a new password for the security upgrade — your current one can’t be reused."
+        case .emailAlreadyBound(let current): return "This email already has a DyorHQ wallet (\(current.short))."
+        case .samePasswordLegacyBinding: return "This email’s wallet was created with this same password before our security upgrade. Log in with it instead (choose “Signed up before September 24, 2026?”): log-in takes you through the upgrade."
+        case .legacyAccountNotFound: return "We couldn’t find an account from before September 24, 2026 for that email and password either. Check them and try again."
         case .authenticationRequired: return "Confirm with Face ID, Touch ID or your passcode to continue."
         case .privyNotConfigured: return "Sign-in is not set up in this build. Add the Privy keys to Secrets.xcconfig."
         case .invalidWalletAddress: return "The wallet address returned by Privy is not valid."
         case .readOnly: return "You are watching this address. Sign in to trade."
         case .passwordDerivationFailed: return "Couldn't create your wallet from that email and password. Please try again."
-        case .emailNotVerified: return "We couldn't find a verified account for that email and password. If you're new, tap Sign Up to verify your email first."
+        case .emailNotVerified: return "We couldn't find a verified account for that email and password. If you reset your password or signed up again with this email, it now points to that newer wallet: to go back to this password's wallet, use Forgot password and enter this password. If you're new, tap Sign Up to verify your email first."
         }
     }
 }
@@ -591,6 +684,16 @@ func authenticationServicesError(in error: Error) -> NSError? {
     if ns.domain == ASAuthorizationError.errorDomain || ns.domain == ASWebAuthenticationSessionError.errorDomain { return ns }
     if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error { return authenticationServicesError(in: underlying) }
     return nil
+}
+
+/// An email one-time-code check in progress (`Session.verifyEmailCapturingToken`), remembered across launches: a Privy
+/// session found at launch while it is set was left by a check the app never finished, and is ended rather than adopted
+/// as the user's wallet (GL-6). Public flag only.
+private enum EmailCheckMarker {
+    private static let key = "session.emailCheckInFlight"
+    static var isSet: Bool { UserDefaults.standard.bool(forKey: key) }
+    static func set() { UserDefaults.standard.set(true, forKey: key) }
+    static func clear() { UserDefaults.standard.removeObject(forKey: key) }
 }
 
 /// Remembers a watch-only address between launches.

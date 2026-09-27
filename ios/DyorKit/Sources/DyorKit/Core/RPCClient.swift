@@ -248,20 +248,38 @@ public actor RPCClient {
         try quantity(await call("eth_estimateGas", [tx.json]))
     }
 
-    /// Submits a signed transaction and returns its hash. The hash is keccak-256 of the signed bytes, so when the network
-    /// says it already has this exact transaction — a failover resend after the first endpoint accepted it but its
-    /// answer was lost — that is success, not an error. "Nonce too low" is success only if this very transaction is
+    /// Submits a signed transaction and returns its hash. The hash is keccak-256 of the signed bytes, computed here
+    /// rather than taken from the node's answer, so what the app follows is always the transaction it signed. When the
+    /// network says it already has this exact transaction — a failover resend after the first endpoint accepted it but
+    /// its answer was lost — that is success, not an error. "Nonce too low" is success only if this very transaction is
     /// known; otherwise another transaction used the nonce and the error stands.
     public func sendRawTransaction(_ signed: Data) async throws -> Data {
         let hash = Keccak.hash256(signed)
         do {
-            return try bytes(await call("eth_sendRawTransaction", [.string(signed.hexString)]))
+            guard try bytes(await call("eth_sendRawTransaction", [.string(signed.hexString)])).count == 32 else { throw NetworkError.malformedResponse }
+            return hash
         } catch let error as RPCError {
             let message = error.message.lowercased()
             if message.contains("already known") || message.contains("known transaction") || message.contains("already imported") { return hash }
             if message.contains("nonce too low"), let known = try? await call("eth_getTransactionByHash", [.string(hash.hexString)]), !known.isNull { return hash }
             throw error
         }
+    }
+
+    /// Whether the network has this transaction: mined (a receipt) or waiting (`eth_getTransactionByHash`). Nil when
+    /// neither read got an answer, which says nothing either way.
+    public func knowsTransaction(_ hash: Data) async -> Bool? {
+        var answered = false
+        do {
+            if try await transactionReceipt(hash) != nil { return true }
+            answered = true
+        } catch {}
+        do {
+            let pending = try await call("eth_getTransactionByHash", [.string(hash.hexString)])
+            if !pending.isNull { return true }
+            answered = true
+        } catch {}
+        return answered ? false : nil
     }
 
     public func transactionReceipt(_ hash: Data) async throws -> TransactionReceipt? {
@@ -271,22 +289,31 @@ public actor RPCClient {
         return TransactionReceipt(hash: hash, success: status == "0x1", blockNumber: UInt64(exactly: BigUInt(hexQuantity: block) ?? 0) ?? 0, gasUsed: BigUInt(hexQuantity: gasUsed) ?? 0)
     }
 
-    /// Polls until the transaction is mined. Monad blocks every ~0.4 s, so the interval is short.
-    public func waitForReceipt(_ hash: Data, timeout: TimeInterval = 90) async throws -> TransactionReceipt {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            do {
-                if let receipt = try await transactionReceipt(hash) { return receipt }
-            } catch let error as CancellationError {
-                throw error
-            } catch {
-                // A failed poll (a dropped connection, every endpoint throttled, a malformed answer) says nothing about
-                // the transaction, which is already broadcast: keep polling until the deadline instead of reporting a
-                // failure the user would answer by sending it again.
-            }
-            try await Task.sleep(for: .milliseconds(500))
+    /// Polls until the transaction is mined. Monad blocks every ~0.4 s, so the interval is short. The budget is a number
+    /// of polls (180 × 500 ms, about 90 s of running), not a wall-clock deadline: a run the system suspended (the phone
+    /// locked mid-plan) resumes with the polls it had left instead of finding its deadline gone and reporting a mined
+    /// transaction as unconfirmed. One last read always follows the final wait.
+    public func waitForReceipt(_ hash: Data, polls: Int = 180, interval: Duration = .milliseconds(500)) async throws -> TransactionReceipt {
+        for _ in 0..<max(1, polls) {
+            if let receipt = try await pollReceipt(hash) { return receipt }
+            try await Task.sleep(for: interval)
         }
+        if let receipt = try await pollReceipt(hash) { return receipt }
         throw TransactionError.timedOut(hash)
+    }
+
+    /// One receipt read, nil while the transaction is pending. A failed read (a dropped connection on resume, every
+    /// endpoint throttled, a malformed answer) says nothing about a transaction that is already broadcast, so it is
+    /// also nil — never a failure the user would answer by sending it again. Only cancellation throws.
+    private func pollReceipt(_ hash: Data) async throws -> TransactionReceipt? {
+        do {
+            return try await transactionReceipt(hash)
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            try Task.checkCancellation()
+            return nil
+        }
     }
 
     // MARK: Parsing
@@ -349,12 +376,26 @@ public enum TransactionError: Error, LocalizedError {
     case timedOut(Data)
     case reverted(Data)
     case rejected(String)
+    /// Signed and handed to the network, but no endpoint's answer arrived to say it was taken: it may be live. Follow
+    /// this hash; never sign a replacement for it.
+    case possiblySent(Data)
+
+    /// Sent — or possibly sent — with no confirmation seen.
+    public static let unconfirmed = "Sent — confirmation not seen yet. Check it before trying again."
 
     public var errorDescription: String? {
         switch self {
-        case .timedOut: return "The transaction was sent but has not been confirmed yet."
+        case .timedOut, .possiblySent: return Self.unconfirmed
         case .reverted: return "The transaction was mined but reverted."
         case .rejected(let reason): return reason
+        }
+    }
+
+    /// The transaction this error is about, when it has one.
+    public var hash: Data? {
+        switch self {
+        case .timedOut(let hash), .reverted(let hash), .possiblySent(let hash): return hash
+        case .rejected: return nil
         }
     }
 }

@@ -2,25 +2,93 @@ import CryptoKit
 import DyorKit
 import Foundation
 import Observation
+import Security
 
 /// The only things the app remembers about a passkey account, both public: which credential backs it (so a
-/// sign-in can be pinned to it) and the address it derives to (so the app can show the account while locked).
-/// Neither is a secret; a fresh device reconstructs everything from the passkey alone.
+/// sign-in can be pinned to it) and the address it derives to (so the app can show the account while locked — the
+/// address Receive shows). Neither is a secret, but both must be what this app wrote after a passkey ceremony derived
+/// the address: they live in this device's Keychain (not synced, not in backups made on another device), where another
+/// app or an edited backup can't swap in someone else's address (security audit 2026-09-26, IOSK-12). Builds before
+/// that kept them in UserDefaults, which a restored or edited backup can plant, so that copy is never trusted: it is
+/// deleted, and the account comes back with "I already have a passkey", which derives the address from the passkey. A
+/// fresh device reconstructs everything from the passkey alone.
+@MainActor
 enum MeraCredentialStore {
-    private static let credentialKey = "mera.credential.v1"
-    private static let addressKey = "mera.address.v1"
+    private static let service = "fun.dyorhq.mera"
+    private static let account = "account.v1"
+    /// Where builds before the Keychain move kept the pair (UserDefaults): deleted, never read.
+    private static let legacyCredentialKey = "mera.credential.v1"
+    private static let legacyAddressKey = "mera.address.v1"
 
-    static var credentialID: Data? { UserDefaults.standard.string(forKey: credentialKey).flatMap(Mera.Base64URL.decode) }
-    static var address: Address? { UserDefaults.standard.string(forKey: addressKey).flatMap(Address.init) }
+    private struct Record: Codable, Equatable {
+        let credential: String // base64url
+        let address: String    // checksummed
+    }
+
+    /// Read once per launch, then kept in step with every save and clear.
+    private static var cached: Record??
+
+    static var credentialID: Data? { record.flatMap { Mera.Base64URL.decode($0.credential) } }
+    static var address: Address? { record.flatMap { Address($0.address) } }
 
     static func save(credentialID: Data, address: Address) {
-        UserDefaults.standard.set(Mera.Base64URL.encode(credentialID), forKey: credentialKey)
-        UserDefaults.standard.set(address.checksummed, forKey: addressKey)
+        let record = Record(credential: Mera.Base64URL.encode(credentialID), address: address.checksummed)
+        guard record != cached ?? nil else { return }
+        write(record)
+        cached = .some(record)
     }
 
     static func clear() {
-        UserDefaults.standard.removeObject(forKey: credentialKey)
-        UserDefaults.standard.removeObject(forKey: addressKey)
+        SecItemDelete(query as CFDictionary)
+        UserDefaults.standard.removeObject(forKey: legacyCredentialKey)
+        UserDefaults.standard.removeObject(forKey: legacyAddressKey)
+        cached = .some(nil)
+    }
+
+    private static var record: Record? {
+        if let cached { return cached }
+        switch load() {
+        case .found(let stored):
+            cached = .some(stored)
+            return stored
+        case .missing:
+            UserDefaults.standard.removeObject(forKey: legacyCredentialKey)
+            UserDefaults.standard.removeObject(forKey: legacyAddressKey)
+            cached = .some(nil)
+            return nil
+        case .unreadable:
+            return nil // the Keychain is locked (before the first unlock): not remembered, so the next read tries again
+        }
+    }
+
+    private static var query: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+    }
+
+    private enum Lookup { case found(Record?), missing, unreadable }
+
+    private static func load() -> Lookup {
+        var lookup = query
+        lookup[kSecReturnData as String] = true
+        lookup[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        switch SecItemCopyMatching(lookup as CFDictionary, &item) {
+        case errSecSuccess: return .found((item as? Data).flatMap { try? JSONDecoder().decode(Record.self, from: $0) })
+        case errSecItemNotFound: return .missing
+        default: return .unreadable
+        }
+    }
+
+    @discardableResult
+    private static func write(_ record: Record) -> Bool {
+        guard let data = try? JSONEncoder().encode(record) else { return false }
+        SecItemDelete(query as CFDictionary)
+        var add = query
+        add[kSecValueData as String] = data
+        // Readable after the first unlock, so a relaunch in the background still knows the account; never synced.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        add[kSecAttrSynchronizable as String] = false
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 }
 
@@ -160,6 +228,20 @@ final class MeraSession {
     @ObservationIgnored private var expiry: Task<Void, Never>?
     /// The step-up approval waiting to be spent, and the session its ceremony opened.
     @ObservationIgnored private var pendingStepUp: (id: UUID, session: Mera.SigningSession)?
+    /// Approved actions still signing or sending (`beginAction`): a plan's later steps, a Perpl bracket's frames.
+    @ObservationIgnored private var runningActions = 0
+    /// The app is in the background (`endWhenIdle` until `enteredForeground`).
+    @ObservationIgnored private var inBackground = false
+    /// The app left the foreground while an action ran: the session ends when the last one finishes (GL-1).
+    @ObservationIgnored private var endsWhenIdle = false
+    /// The background time iOS grants for those actions to finish; when it runs out the session ends regardless.
+    @ObservationIgnored private var backgroundTime: BackgroundTime?
+    /// And a deadline of its own, whatever iOS grants (GL-7): checked on every use of the session, and a timer ends it.
+    @ObservationIgnored private var idleDeadline: Date?
+    @ObservationIgnored private var idleDeadlineTimer: Task<Void, Never>?
+    /// How long a session may outlive the app leaving the foreground for an approved action to finish: about the
+    /// background time iOS grants.
+    private static let backgroundGrace: TimeInterval = 30
     private let ceremony: PasskeyCeremony
     /// Where this build reports a passkey as unknown: orphan cleanup here, and account deletion (`AccountDeletion`,
     /// through `Mera.AccountDeletion.run`, which alone decides when it is sent).
@@ -452,6 +534,64 @@ final class MeraSession {
         if live === session { lifecycle?.meraSessionDidOpen(self) }
     }
 
+    // MARK: Leaving the app (security audit 2026-09-26, GL-1 and GL-7)
+
+    /// An action the owner already approved starts signing or sending — a plan (`TransactionRun`), a Perpl bracket
+    /// (`PerpTradeView`). While one runs, leaving the app doesn't end the session under it. Pair with `endAction`.
+    func beginAction() {
+        runningActions += 1
+    }
+
+    /// An approved action finished. If the app left the foreground meanwhile, the last one to finish ends the session.
+    func endAction() {
+        runningActions = max(0, runningActions - 1)
+        guard runningActions == 0, endsWhenIdle else { return }
+        end()
+    }
+
+    /// The app left the foreground (RootView). The session ends now, or — while an approved action is still running — the
+    /// moment the last one finishes, within `backgroundGrace` (about the background time iOS grants); when that runs out
+    /// it ends regardless. It still ends even if the app comes back first, and nothing new can start from the background,
+    /// so whoever picks the phone up next has to present the passkey again.
+    func endWhenIdle() {
+        inBackground = true
+        guard runningActions > 0, live != nil else { end(); return }
+        endWithLastAction()
+    }
+
+    /// The live session ends when the last running action does, and no later than `backgroundGrace` from now (GL-7):
+    /// the background time iOS grants ends it when it runs out, and so does a deadline of its own, which holds when iOS
+    /// grants none or suspends the app before either fires — `liveSession` checks it on every use.
+    private func endWithLastAction() {
+        endsWhenIdle = true
+        guard idleDeadline == nil else { return }
+        idleDeadline = Date().addingTimeInterval(Self.backgroundGrace)
+        backgroundTime = BackgroundTime("Passkey session") { [weak self] in self?.end() }
+        idleDeadlineTimer = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.backgroundGrace))
+            guard !Task.isCancelled, let self, self.endsWhenIdle else { return }
+            self.end()
+        }
+    }
+
+    /// Nothing ends the session with its running actions any more: it ended, or a ceremony in the foreground replaced it.
+    private func cancelEndWithLastAction() {
+        endsWhenIdle = false
+        idleDeadline = nil
+        idleDeadlineTimer?.cancel()
+        idleDeadlineTimer = nil
+        backgroundTime?.end()
+        backgroundTime = nil
+    }
+
+    /// Whether a session waiting on its running actions has passed its deadline (`endWithLastAction`).
+    private var pastIdleDeadline: Bool { idleDeadline.map { Date() >= $0 } ?? false }
+
+    /// The app is active again. A session waiting on a running action still ends with it (`endWhenIdle`).
+    func enteredForeground() {
+        inBackground = false
+    }
+
     // MARK: Ending
 
     /// Ends the live session (expiry, Lock, the app leaving the foreground, sign-out): Perpl trading drops its key and
@@ -461,6 +601,7 @@ final class MeraSession {
         expiry?.cancel()
         expiry = nil
         pendingStepUp = nil
+        cancelEndWithLastAction() // whatever ended it, nothing waits on its running actions any more
         guard let session = live else { return }
         live = nil
         // Perpl first, so its references to the trading secret are gone before the session wipes its copy.
@@ -527,15 +668,16 @@ final class MeraSession {
     /// signing and authorize paths only.
     private func liveSession() -> Mera.SigningSession? {
         guard let live else { return nil }
-        if live.isLive() { return live }
+        if live.isLive(), !pastIdleDeadline { return live }
         end()
         return nil
     }
 
-    /// The live session for a query (a badge, the Perpl key): nil once expired, without ending it, so reading it never
-    /// changes observed state — a view body may read it. The expiry timer, or the next signature, ends the session.
+    /// The live session for a query (a badge, the Perpl key): nil once expired or past its deadline in the background,
+    /// without ending it, so reading it never changes observed state — a view body may read it. The timers, or the next
+    /// signature, end the session.
     private var openSession: Mera.SigningSession? {
-        guard let live, live.isLive() else { return nil }
+        guard let live, live.isLive(), !pastIdleDeadline else { return nil }
         return live
     }
 
@@ -556,6 +698,23 @@ final class MeraSession {
         scheduleExpiry(of: session)
         MeraCredentialStore.save(credentialID: result.credentialID, address: session.address)
         lifecycle?.meraSessionDidOpen(self)
+        // A ceremony that finished after the app left the foreground (GL-7): the session serves the call that asked for
+        // it, then ends — with the last running action, within the same deadline as `endWhenIdle`, or, when none runs, as
+        // soon as that call has it.
+        if inBackground {
+            if runningActions > 0 {
+                endWithLastAction()
+            } else {
+                Task { @MainActor [weak self, weak session] in
+                    guard let self, let session, self.live === session, self.inBackground, self.runningActions == 0 else { return }
+                    self.end()
+                }
+            }
+        } else {
+            // The owner presented the passkey with the app in front: this session doesn't end with actions an earlier
+            // one left running in the background.
+            cancelEndWithLastAction()
+        }
         return session
     }
 

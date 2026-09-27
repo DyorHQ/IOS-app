@@ -63,7 +63,6 @@ targets:
         UIUserInterfaceStyle: Automatic
         ITSAppUsesNonExemptEncryption: false
         NSFaceIDUsageDescription: DyorHQ uses Face ID to unlock your wallet on this device.
-        NSCameraUsageDescription: DyorHQ uses the camera to scan wallet addresses and QR codes.
         NSPhotoLibraryUsageDescription: DyorHQ uses your photos to add a token image when you launch a coin.
         CFBundleURLTypes:
           - CFBundleURLName: fun.dyorhq.app

@@ -103,6 +103,13 @@ public struct TransactionSender: Sendable {
         var spacingTimeout: Duration = .seconds(5)
         /// Before resending a transaction Monad refused because the account's funding is still settling.
         var fundingRetry: Duration = .seconds(1)
+        /// A broadcast that got no answer is resent (the same bytes) and looked up by hash this many times, waiting
+        /// `resendBackoff`, then twice that, and so on, before it is reported as possibly sent.
+        var resendAttempts = 3
+        var resendBackoff: Duration = .seconds(1)
+        /// The receipt wait for each sent step (`RPCClient.waitForReceipt`): a number of polls, not a deadline.
+        var receiptPolls = 180
+        var receiptInterval: Duration = .milliseconds(500)
     }
 
     public init(rpc: RPCClient, chainId: Int = Monad.chainId) {
@@ -121,9 +128,13 @@ public struct TransactionSender: Sendable {
         }
         async let nonce = rpc.transactionCount(of: wallet.address)
         async let estimate = rpc.estimateGas(call)
-        async let fees = feeParameters()
+        async let fees = feeQuote()
         let gasLimit = Self.gasLimit(estimate: try await estimate)
-        let (maxFee, tip) = try await fees
+        let (maxFee, tip, baseFee) = try await fees
+        // The RPC set every one of these: refuse, never clamp, a fee outside the chain's bounds (IOST-1).
+        if let violation = NetworkFeeLimits.violation(gasLimit: gasLimit, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip, baseFee: baseFee, chainId: chainId) {
+            throw TransactionError.rejected(NetworkFeeLimits.refusal(violation, gasLimit: gasLimit, maxFeePerGas: maxFee, chainId: chainId))
+        }
         return PreparedTransaction(from: wallet.address, to: request.to, data: request.data, value: request.value, nonce: try await nonce, gasLimit: gasLimit, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip, chainId: chainId)
     }
 
@@ -157,13 +168,82 @@ public struct TransactionSender: Sendable {
     /// still lands if the base fee doubles. Monad charges gas limit × min(maxFee, base + tip); tipping the whole gas
     /// price (the old rule) roughly doubled every fee there. Falls back to the gas price when a node can't answer.
     func feeParameters() async throws -> (maxFee: BigUInt, tip: BigUInt) {
+        let quote = try await feeQuote()
+        return (quote.maxFee, quote.tip)
+    }
+
+    /// `feeParameters` with the base fee they were derived from — nil on the gas-price fallback, whose fee doesn't come
+    /// from it — for `NetworkFeeLimits`' checks against the base fee.
+    func feeQuote() async throws -> (maxFee: BigUInt, tip: BigUInt, baseFee: BigUInt?) {
         async let baseFee = rpc.latestBaseFee()
         async let suggestedTip = rpc.maxPriorityFeePerGas()
         let base = (try? await baseFee) ?? nil
         let tip = try? await suggestedTip
-        if let base, let tip { return (base * 2 + tip, tip) }
+        if let base, let tip { return (base * 2 + tip, tip, base) }
         let price = try await rpc.gasPrice()
-        return (price * 2, price)
+        return (price * 2, price, nil)
+    }
+
+    /// The most a plan's network fees can come to at today's fees, for the confirmation sheet: each step the node can
+    /// estimate now, at the gas limit and max fee `prepare` would set. A step that depends on an earlier one (a swap
+    /// after its approval) can't be estimated until that one lands, so it is counted in `unestimated` instead; every
+    /// step is still checked against `NetworkFeeLimits` when it is prepared. Approvals the allowance already covers
+    /// are left out, as `run` skips them. Nil when the fees can't be read.
+    public func feePreview(_ steps: [TransactionStep], from: Address) async -> FeePreview? {
+        guard let fees = try? await feeQuote() else { return nil }
+        var total: BigUInt = 0
+        var unestimated = 0
+        for step in steps {
+            let request: TransactionRequest?
+            do { request = try await self.request(for: step, owner: from) } catch { unestimated += 1; continue }
+            guard let request else { continue }
+            if let limit = await gasLimit(for: request, from: from) { total += limit * fees.maxFee } else { unestimated += 1 }
+        }
+        return FeePreview(maxFee: total, unestimated: unestimated, chainId: chainId)
+    }
+
+    public struct FeePreview: Sendable, Equatable {
+        /// The most the estimated steps can be charged, in the chain's native coin (wei).
+        public let maxFee: BigUInt
+        /// Steps that can't be estimated before an earlier one lands.
+        public let unestimated: Int
+        public let chainId: Int
+    }
+
+    /// The transaction `step` sends from `owner` now, or nil when it has nothing to send: an approval the allowance
+    /// already covers (a Permit2 one for at least another minute), or a call step without a request. An exact approval
+    /// is sent even when a standing, effectively unlimited allowance covers it — one an earlier build or another app
+    /// left — so that allowance is replaced by the exact amount instead of staying unseen (IOST-14).
+    func request(for step: TransactionStep, owner: Address) async throws -> TransactionRequest? {
+        switch step.kind {
+        case .approve(let token, let spender, let amount):
+            let allowance = try await multicall.readAll([try ERC20.allowance(token, owner: owner, spender: spender)])[0][0].uint
+            if allowance >= amount, allowance < Self.unlimitedAllowance || amount >= Self.unlimitedAllowance { return nil }
+            return TransactionRequest(to: token, data: try ERC20.approveCalldata(spender: spender, amount: amount))
+        case .permit2Approve(let token, let spender, let amount, _):
+            let allowance = try await multicall.readAll([try SwapCalldata.permit2Allowance(owner: owner, token: token, spender: spender)])[0]
+            if allowance[0].uint >= amount, allowance[1].uint > BigUInt(Int(Date().timeIntervalSince1970) + 60) { return nil }
+            return try step.request(at: Date())
+        case .call:
+            return step.request
+        }
+    }
+
+    /// An allowance this large is effectively unlimited: what the confirmation sheet flags, and what an exact approval
+    /// step replaces (`request(for:)`).
+    public static let unlimitedAllowance = BigUInt(1) << 128
+
+    /// The spenders whose standing, effectively unlimited allowance `steps` replace with an exact one (`request(for:)`),
+    /// for the confirmation sheet to name. A read that fails names nothing.
+    public func unlimitedAllowancesReplaced(by steps: [TransactionStep], owner: Address) async -> [Address] {
+        var spenders: [Address] = []
+        for step in steps {
+            guard case .approve(let token, let spender, let amount) = step.kind, amount < Self.unlimitedAllowance,
+                  let read = try? await multicall.readAll([try ERC20.allowance(token, owner: owner, spender: spender)]),
+                  let allowance = read.first?.first?.uint, allowance >= Self.unlimitedAllowance else { continue }
+            spenders.append(spender)
+        }
+        return spenders
     }
 
     public func send(_ request: TransactionRequest, from wallet: Wallet) async throws -> Data {
@@ -172,24 +252,84 @@ public struct TransactionSender: Sendable {
         return try await broadcast(signed, prepared)
     }
 
+    /// Hands the signed bytes to the network and returns their hash: keccak-256 of those bytes, known before anything is
+    /// sent. A node's refusal of this very transaction (`isRefusal`) settles it, after a look-up by hash in case an
+    /// endpoint before a failover took it. Anything else — no answer at all (the connection dropped with the phone
+    /// locked, every endpoint failed), a reply the client couldn't match, a gateway's "internal error" or "upstream
+    /// timeout", throttling that outlasted the retries — leaves the transaction possibly live, so `confirmUnanswered`
+    /// follows it by hash and never reports it as not sent.
+    ///
     /// Monad's consensus checks a sender's balance as of a few blocks back, so a transaction from an account funded
     /// less than 3 blocks ago is refused with "Signer had insufficient balance" although the funds are visible. The
     /// same signed bytes are sent once more after ~1 s (no second signature, so no second Face ID). If the node still
     /// refuses, the message says what is true: the funds are still settling, or the balance doesn't cover the value
     /// plus the fee.
     func broadcast(_ signed: Data, _ transaction: PreparedTransaction) async throws -> Data {
-        guard chainId == Monad.chainId else { return try await rpc.sendRawTransaction(signed) }
+        let hash = Keccak.hash256(signed)
         do {
-            return try await rpc.sendRawTransaction(signed)
-        } catch let error as RPCError where Self.isFundingInFlight(error) {
-            try await Task.sleep(for: timing.fundingRetry)
             do {
                 return try await rpc.sendRawTransaction(signed)
-            } catch let error as RPCError where Self.isFundingInFlight(error) {
-                throw TransactionError.rejected(await fundingRefusal(transaction))
+            } catch let error as RPCError where chainId == Monad.chainId && Self.isFundingInFlight(error) {
+                try await Task.sleep(for: timing.fundingRetry)
+                do {
+                    return try await rpc.sendRawTransaction(signed)
+                } catch let error as RPCError where Self.isFundingInFlight(error) {
+                    throw TransactionError.rejected(await fundingRefusal(transaction))
+                }
             }
+        } catch let error as RPCError {
+            if await rpc.knowsTransaction(hash) == true { return hash }
+            guard Self.isRefusal(error) else { return try await confirmUnanswered(signed, hash: hash) }
+            // "Nonce too low": a node behind the one that mined this transaction answers it too, so it is looked up a
+            // few more times before another transaction is taken to have used the nonce.
+            if Self.isNonceUsed(error), await becomesKnown(hash) { return hash }
+            throw error
+        } catch let error as TransactionError {
+            throw error
+        } catch {
+            return try await confirmUnanswered(signed, hash: hash)
         }
     }
+
+    /// A broadcast with no answer (PR-4). The same bytes go out again — the same transaction, never a replacement, so
+    /// it can only land once — and the hash is looked up between tries. Anything short of the network taking it or
+    /// having it is `possiblySent`: the caller follows the hash and never signs this step again, since a new signature
+    /// would carry the next nonce and could land the step twice.
+    private func confirmUnanswered(_ signed: Data, hash: Data) async throws -> Data {
+        for attempt in 1...max(1, timing.resendAttempts) {
+            try? await Task.sleep(for: timing.resendBackoff * attempt)
+            if await rpc.knowsTransaction(hash) == true { return hash }
+            if let taken = try? await rpc.sendRawTransaction(signed) { return taken }
+        }
+        if await rpc.knowsTransaction(hash) == true { return hash }
+        throw TransactionError.possiblySent(hash)
+    }
+
+    /// Whether the network turns out to know `hash`, looked up with the same growing waits as `confirmUnanswered`.
+    private func becomesKnown(_ hash: Data) async -> Bool {
+        for attempt in 1...max(1, timing.resendAttempts) {
+            try? await Task.sleep(for: timing.resendBackoff * attempt)
+            if await rpc.knowsTransaction(hash) == true { return true }
+        }
+        return false
+    }
+
+    /// A node's answer that this very transaction is invalid — so no node holds it, and it can't land as signed (PR-4):
+    /// the balance can't pay for it, its gas or fee fields are out of bounds, its nonce is used, it is signed for another
+    /// chain. Deliberately narrow: an error that isn't about the transaction (a gateway's "internal error" or "upstream
+    /// request timeout", the client's own "Missing response", throttling) may come from a path where a node took it.
+    static func isRefusal(_ error: RPCError) -> Bool {
+        let message = error.message.lowercased()
+        return refusals.contains { message.contains($0) }
+    }
+
+    static func isNonceUsed(_ error: RPCError) -> Bool { error.message.lowercased().contains("nonce too low") }
+
+    private static let refusals = [
+        "insufficient funds", "insufficient balance", "intrinsic gas too low", "exceeds block gas limit", "underpriced",
+        "less than block base fee", "tip higher than fee cap", "max priority fee per gas higher than max fee per gas",
+        "nonce too low", "invalid sender", "invalid chain id", "transaction type not supported", "oversized data",
+    ]
 
     /// Monad's refusal for a balance its consensus can't see yet. Other chains say "insufficient funds", which is a
     /// real shortfall and stays one.
@@ -235,25 +375,17 @@ public struct TransactionSender: Sendable {
         var previousBlock: UInt64?
         for step in steps {
             onEvent(.preparing(step.label))
-            let request: TransactionRequest
-            switch step.kind {
-            case .approve(let token, let spender, let amount):
-                let allowance = try await multicall.readAll([try ERC20.allowance(token, owner: wallet.address, spender: spender)])[0][0].uint
-                if allowance >= amount { continue }
-                request = TransactionRequest(to: token, data: try ERC20.approveCalldata(spender: spender, amount: amount))
-            case .permit2Approve(let token, let spender, let amount, _):
-                let allowance = try await multicall.readAll([try SwapCalldata.permit2Allowance(owner: wallet.address, token: token, spender: spender)])[0]
-                if allowance[0].uint >= amount, allowance[1].uint > BigUInt(Int(Date().timeIntervalSince1970) + 60) { continue }
-                guard let r = try step.request(at: Date()) else { continue }
-                request = r
-            case .call:
-                guard let r = step.request else { continue }
-                request = r
-            }
+            guard let request = try await self.request(for: step, owner: wallet.address) else { continue }
             try await waitForReserveSpacing(value: request.value, after: previousBlock, from: wallet.address)
-            let hash = try await send(request, from: wallet)
+            let hash: Data
+            do {
+                hash = try await send(request, from: wallet)
+            } catch TransactionError.possiblySent(let possible) {
+                // No endpoint said it took the broadcast, but it may be live: follow it like any sent step.
+                hash = possible
+            }
             onEvent(.sent(step.label, hash))
-            let receipt = try await rpc.waitForReceipt(hash)
+            let receipt = try await rpc.waitForReceipt(hash, polls: timing.receiptPolls, interval: timing.receiptInterval)
             guard receipt.success else { throw TransactionError.reverted(hash) }
             onEvent(.confirmed(step.label, hash))
             last = hash

@@ -31,7 +31,11 @@ final class AppEnvironment {
     /// Aurora Intents cross-chain bridge (Home "Bridge") + the multi-chain balance reader behind it.
     let aurora: AuroraIntents
     let chainBalances = MultiChainBalances()
+    /// Every bridge deposit sent, tracked until it settles — across relaunches, for the account that sent it.
+    let bridgeTracker: BridgeTracker
     let settings = AppSettings()
+    /// The minimum supported build: below it, "Update required" replaces the app (GP-2).
+    let updateGate = UpdateGate()
     /// Authenticated Perpl trading. A passkey account's trading key lives and dies with its session (`session.mera`).
     let perplTrading: PerplTrading
     /// The wallet's cross-section volume / fees / P&L model, shared by Home's Total Volume and the Portfolio page.
@@ -54,6 +58,7 @@ final class AppEnvironment {
         let backend = social.client
         aurora = AuroraIntents(proxy: backend.functionURL("aurora-proxy"), feeRecipient: config.auroraFeeRecipient,
                                authorize: { try await backend.sessionHeaders() })
+        bridgeTracker = BridgeTracker(aurora: aurora, balances: MultiChainBalances(), monad: EVMChain.monad(rpc: config.rpcURL))
         prices = PriceService(rpc: rpc)
         // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools and those of
         // the retired factories with the current record (the legacy 0xad3d… launches all graduate on Monday Trade).

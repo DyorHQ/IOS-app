@@ -245,6 +245,11 @@ final class RPCStub: URLProtocol {
                 return Self.reply(call)
             }
             body = (try? JSONEncoder().encode(decoded.array == nil ? replies[0] : .array(replies))) ?? Data()
+            // The simulated chain handled the request but its answer never arrives (or the request never did).
+            if let chain = Self.chain, chain.takeTransportFailure() {
+                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                return
+            }
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -300,10 +305,37 @@ final class SimulatedChain: @unchecked Sendable {
     /// The next N broadcasts fail with `sendFailure`.
     var sendFailures = 0
     var sendFailure = "Signer had insufficient balance"
+    /// The next N broadcasts are taken, but their answer is lost on the way back (a transport failure).
+    var lostSendAnswers = 0
+    /// The next N broadcasts never reach the node (a transport failure; nothing is taken).
+    var unreachableSends = 0
+    /// The next N broadcasts are taken, but answered with `sendFailure` (a gateway whose upstream took them).
+    var takenSendFailures = 0
+    /// The next N broadcasts are taken, but answered under another id (a reply the client can't match to its request).
+    var unmatchedSendAnswers = 0
+    /// The next N receipt or by-hash reads answer "unknown" whatever was taken (a node behind the one that took it).
+    var hiddenLookups = 0
+    /// Receipt reads that answer "pending" before a taken transaction's receipt appears.
+    var pendingReceiptReads = 0
+    /// The next N receipt reads fail at the transport (a socket that died while the app was suspended).
+    var receiptReadFailures = 0
+    /// Whether mined transactions succeed; false makes every receipt a revert.
+    var receiptsSucceed = true
+    /// When set, every multicall read answers one successful call returning this word (an ERC-20 allowance).
+    var allowance: BigUInt?
     private(set) var blockNumberReads = 0
     private(set) var balanceReads = 0
     private(set) var sent: [(raw: String, head: UInt64)] = []
     private(set) var receiptBlocks: [UInt64] = []
+    /// Hashes of the broadcasts the chain took: the only transactions it knows and has receipts for.
+    private(set) var accepted: Set<String> = []
+    private var transportFailure = false
+
+    /// Whether the request just answered must fail at the transport instead (read once by `RPCStub`).
+    func takeTransportFailure() -> Bool {
+        defer { transportFailure = false }
+        return transportFailure
+    }
 
     func reply(_ call: JSON, result: (JSON) -> JSON, failure: (String) -> JSON) -> JSON? {
         func quantity(_ n: BigUInt) -> JSON { .string(n.hexQuantity) }
@@ -315,17 +347,33 @@ final class SimulatedChain: @unchecked Sendable {
         case "eth_getBalance":
             balanceReads += 1
             return result(quantity(balance))
-        case "eth_call": return result(.string("0x"))
+        case "eth_call":
+            guard let allowance else { return result(.string("0x")) }
+            return result(.string(try! ABI.encode([.array([.tuple([.bool(true), .bytes(allowance.word)])])], [.array(.tuple([.bool, .bytes]))]).hexString))
         case "eth_getTransactionCount": return result(.string("0x0"))
         case "eth_estimateGas": return estimate.map { result(.string($0)) } ?? failure("execution reverted")
         case "eth_sendRawTransaction":
             let raw = call["params"].array?.first?.string ?? ""
+            if unreachableSends > 0 { unreachableSends -= 1; transportFailure = true; return result(.null) }
             sent.append((raw, head))
             if sendFailures > 0 { sendFailures -= 1; return failure(sendFailure) }
-            return result(.string(Keccak.hash256(Data(hex: raw) ?? Data()).hexString))
+            let hash = Keccak.hash256(Data(hex: raw) ?? Data()).hexString
+            accepted.insert(hash)
+            if takenSendFailures > 0 { takenSendFailures -= 1; return failure(sendFailure) }
+            if unmatchedSendAnswers > 0 { unmatchedSendAnswers -= 1; return .object(["jsonrpc": .string("2.0"), "id": .number(-7), "result": .string(hash)]) }
+            if lostSendAnswers > 0 { lostSendAnswers -= 1; transportFailure = true }
+            return result(.string(hash))
         case "eth_getTransactionReceipt":
+            if receiptReadFailures > 0 { receiptReadFailures -= 1; transportFailure = true; return result(.null) }
+            if hiddenLookups > 0 { hiddenLookups -= 1; return result(.null) }
+            guard let asked = call["params"].array?.first?.string, accepted.contains(asked) else { return result(.null) }
+            if pendingReceiptReads > 0 { pendingReceiptReads -= 1; return result(.null) }
             receiptBlocks.append(head)
-            return result(.object(["status": .string("0x1"), "blockNumber": quantity(BigUInt(head)), "gasUsed": .string("0x5208")]))
+            return result(.object(["status": .string(receiptsSucceed ? "0x1" : "0x0"), "blockNumber": quantity(BigUInt(head)), "gasUsed": .string("0x5208")]))
+        case "eth_getTransactionByHash":
+            if hiddenLookups > 0 { hiddenLookups -= 1; return result(.null) }
+            let asked = call["params"].array?.first?.string ?? ""
+            return result(accepted.contains(asked) ? .object(["hash": .string(asked)]) : .null)
         default: return nil
         }
     }

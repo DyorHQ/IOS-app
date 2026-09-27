@@ -571,14 +571,28 @@ struct LaunchDetailView: View {
                 if q.tax > 0 { DetailRow("Creator tax", "\(NumberStyle.units(q.tax, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
             PrimaryButton(title: side == .buy ? "Buy \(launch.symbol)" : "Sell \(launch.symbol)",
-                          isDisabled: rawAmount == 0 || !session.canSign || (side == .buy ? buyQuote == nil : sellQuote == nil)) { showConfirm = true }
+                          isDisabled: rawAmount == 0 || !session.canSign || (side == .buy ? buyQuote == nil : sellQuote == nil) || shortfall != nil) { showConfirm = true }
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         } header: {
             Text("Trade on the Curve")
         } footer: {
             if !session.canSign { Text("Sign in to trade.") }
+            else if let shortfall { Text(shortfall).foregroundStyle(Color.attention) }
             else if let account { Text("Balance: \(NumberStyle.units(account.tokenBalance, decimals: 18, compact: true)) \(launch.symbol) · \(NumberStyle.units(account.pairBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
         }
+    }
+
+    /// Why the trade can't go ahead on this balance (UI-4): the amount is more than the wallet holds. Nil while the
+    /// balance is unknown; the network still refuses what the wallet can't pay.
+    private var shortfall: String? {
+        guard let account, rawAmount > 0 else { return nil }
+        if side == .buy, rawAmount > account.pairBalance {
+            return "Not enough \(launch.pair.symbol): you have \(NumberStyle.units(account.pairBalance, decimals: launch.pair.decimals))."
+        }
+        if side == .sell, rawAmount > account.tokenBalance {
+            return "Not enough \(launch.symbol): you have \(NumberStyle.units(account.tokenBalance, decimals: 18, compact: true))."
+        }
+        return nil
     }
 
     private var graduatedSection: some View {
@@ -602,7 +616,10 @@ struct LaunchDetailView: View {
             Text(launch.phase == .graduated ? "Graduated" : launch.phase.title)
         } footer: {
             if launch.phase == .graduated {
-                Text("The curve's liquidity is permanently locked in a \(launch.graduationVenue.title) pool — trades now route through the Swap screen. Ongoing pool swap fees stay with the locked liquidity and aren't distributed to holders or the creator.")
+                // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes (GP-6).
+                Text(launch.graduationVenue == .monday
+                     ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's swap fees are harvested to a DyorHQ fees wallet; they aren't paid to holders or the creator."
+                     : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. Fees wait in the hook until they're swept.")
             } else if isStuck {
                 Text(offersFallback
                      ? "The last graduation attempt failed. Anyone can retry it; if Monday Trade keeps rejecting it, the launch can graduate into a locked Uniswap v4 pool right away instead."
@@ -865,19 +882,21 @@ struct CreateLaunchView: View {
                 if let address = session.address, let info = protocolInfo {
                     // Use the async plan: it reads the launch fee and the on-chain economics hash the factory
                     // requires (`expectedEconomics`). The sync overload leaves that hash zero → LaunchEconomicsMismatch.
+                    // Both are bound to what this screen showed: the fee, and the terms hash read with the terms (IOST-2).
                     ConfirmationSheet(
                         title: "Launch \(symbol)", confirmTitle: "Launch \(symbol)",
-                        build: { try await env.launchpad.launchPlan(input, from: address, expectedLaunchFee: info.launchFee) },
+                        build: {
+                            guard let shown = info.pairs.first(where: { $0.pair.address == pair })?.economicsHash else { throw LaunchpadError.termsChanged }
+                            return try await env.launchpad.launchPlan(input, from: address, expectedLaunchFee: info.launchFee, expectedEconomics: shown)
+                        },
                         onDone: { dismiss(); onLaunched() },
                         onCompleted: { hash in
                             Activity.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
                         },
                         onView: { hash in
                             // Route to the coin's in-app page instead of the block explorer (the explorer link lives
-                            // in Recent Activity). Resolve the new token from the launch tx, then open its page.
-                            // "View" and "Done" are mutually exclusive, so record here too (de-duped by hash) — a
-                            // launch tapped straight through to its page still lands in Recent Activity.
-                            ActivityLog.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
+                            // in Recent Activity). Resolve the new token from the launch tx, then open its page. The
+                            // launch was already recorded when it settled (`onCompleted`).
                             Task {
                                 let detail = (try? await env.launchpad.launchResult(transaction: hash)).flatMap { $0 }
                                 if let result = detail, let launch = (try? await env.launchpad.launch(token: result.token)) ?? nil {

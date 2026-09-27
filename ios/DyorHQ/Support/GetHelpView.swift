@@ -8,6 +8,7 @@ enum SupportLinks {
     static let site = URL(string: "https://dyorhq.fun")!
     static let helpCenter = URL(string: "https://dyorhq.fun/support")!
     static let terms = URL(string: "https://dyorhq.fun/terms")!
+    static let privacy = URL(string: "https://dyorhq.fun/privacy")!
     static let supportEmail = "team@dyorhq.fun"
     static let xHandle = "@DyorHQ_"
     static let x: URL? = URL(string: "https://x.com/DyorHQ_")
@@ -64,6 +65,7 @@ struct GetHelpContent: View {
             group("About") {
                 HelpRow(symbol: "globe", title: "dyorhq.fun", detail: SupportLinks.tagline) { openURL(SupportLinks.site) }
                 HelpRow(symbol: "doc.text", title: "Terms of Use", detail: "dyorhq.fun/terms") { openURL(SupportLinks.terms) }
+                HelpRow(symbol: "hand.raised", title: "Privacy Policy", detail: "dyorhq.fun/privacy") { openURL(SupportLinks.privacy) }
             }
             Text("Self-custodial: support can never reach your keys or funds. Never share a recovery phrase with anyone.")
                 .font(.footnote)
