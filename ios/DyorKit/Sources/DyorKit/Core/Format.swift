@@ -70,6 +70,29 @@ public enum Amount {
         return grouped(Substring(s), by: dots > 0 ? "." : ",")
     }
 
+    /// A typed or pasted perps price, size or trigger as a finite number, or nil. The token-amount rules (`decimalPoint`)
+    /// with one change, because for a price a smaller reading is not the safe side: a lone "," followed by exactly three
+    /// digits after a 1-3 digit whole part that doesn't start with 0 ("66,000") is thousands grouping when the locale
+    /// groups with "," (en_US), so a price pasted from a chart isn't read 1000x too low. Where "," is the decimal separator
+    /// (de_DE, fr_FR) it stays the decimal point ("1,234" is 1.234), and "0,5" is one half everywhere. A lone "." is
+    /// always the decimal point, since the app's own writers emit POSIX "." ("65432.125"). ASCII digits and separators
+    /// only: no signs, "inf", "nan" or exponents.
+    public static func fieldNumber(_ input: String, groupingSeparator: String? = Locale.current.groupingSeparator) -> Double? {
+        let s = input.trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty, s.allSatisfy({ $0 == "." || $0 == "," || ($0.isASCII && $0.isNumber) }) else { return nil }
+        var normalized: String
+        if groupingSeparator == ",", !s.contains("."), s.filter({ $0 == "," }).count == 1, let comma = s.firstIndex(of: ","),
+           (1...3).contains(s.distance(from: s.startIndex, to: comma)), s.first != "0",
+           s.distance(from: comma, to: s.endIndex) == 4 {
+            normalized = s.replacingOccurrences(of: ",", with: "")
+        } else {
+            guard let point = decimalPoint(s) else { return nil }
+            normalized = point
+        }
+        guard normalized != "." else { return nil }
+        return Double(normalized).flatMap { $0.isFinite ? $0 : nil }
+    }
+
     /// A share of a balance for an amount field (25 / 50 / 75 %, a native Max after its fee): rounded DOWN to
     /// `significantDigits` significant digits, keeping every whole digit, so it never exceeds the exact share and reads
     /// "0.559465" rather than eighteen decimals. Only fraction digits are dropped. A full ERC-20 balance should stay exact

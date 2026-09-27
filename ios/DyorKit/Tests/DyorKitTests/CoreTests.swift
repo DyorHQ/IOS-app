@@ -182,6 +182,32 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(Amount.parse("1.2.3", decimals: 6))
     }
 
+    /// Perps prices, sizes and triggers (audit F4): a pasted "66,000" is 66000 in en_US, never 66, while the decimal
+    /// comma still works where the locale uses it and "0,5" is one half everywhere.
+    func testFieldNumberCommaGrouping() {
+        let enUS = ",", deDE = ".", frFR = "\u{202F}"
+        XCTAssertEqual(Amount.fieldNumber("66,000", groupingSeparator: enUS), 66_000)
+        XCTAssertEqual(Amount.fieldNumber("1,234", groupingSeparator: enUS), 1_234)
+        XCTAssertEqual(Amount.fieldNumber("999,999", groupingSeparator: enUS), 999_999)
+        XCTAssertEqual(Amount.fieldNumber("0,5", groupingSeparator: enUS), 0.5)
+        XCTAssertEqual(Amount.fieldNumber("0,500", groupingSeparator: enUS), 0.5, "a 0 whole part is never grouped")
+        XCTAssertEqual(Amount.fieldNumber("1,25", groupingSeparator: enUS), 1.25)
+        XCTAssertEqual(Amount.fieldNumber("1,2345", groupingSeparator: enUS), 1.2345)
+        XCTAssertEqual(Amount.fieldNumber("66,000.5", groupingSeparator: enUS), 66_000.5)
+        XCTAssertEqual(Amount.fieldNumber("1,234,567", groupingSeparator: enUS), 1_234_567)
+        XCTAssertEqual(Amount.fieldNumber(" 66,000 ", groupingSeparator: enUS), 66_000)
+        XCTAssertEqual(Amount.fieldNumber("65432.125", groupingSeparator: enUS), 65_432.125, "the app's own writers emit POSIX")
+        XCTAssertEqual(Amount.fieldNumber("65432.125", groupingSeparator: deDE), 65_432.125, "a lone dot is always decimal")
+        XCTAssertEqual(Amount.fieldNumber("1,234", groupingSeparator: deDE), 1.234)
+        XCTAssertEqual(Amount.fieldNumber("1,234", groupingSeparator: frFR), 1.234)
+        XCTAssertEqual(Amount.fieldNumber("0,5", groupingSeparator: deDE), 0.5)
+        XCTAssertEqual(Amount.fieldNumber("1.234,5", groupingSeparator: deDE), 1_234.5)
+        XCTAssertEqual(Amount.fieldNumber("1,234", groupingSeparator: nil), 1.234)
+        for bad in ["", ".", ",", "1,,5", "-1", "1e5", "inf", "nan", "1 000", "0,500,000", "１"] {
+            XCTAssertNil(Amount.fieldNumber(bad, groupingSeparator: enUS), bad)
+        }
+    }
+
     /// A decimal comma (what the decimal pad types in much of Europe and Latin America) is a decimal point, never a
     /// thousands separator to delete: "0,5" must not become 5. Same vectors as the web app's parseAmount.
     func testAmountParseDecimalComma() {

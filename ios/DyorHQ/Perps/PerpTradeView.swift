@@ -909,10 +909,12 @@ struct PerpTradeView: View {
             if ticket.effectiveReduceOnly { model.noteUserClose(market.id) }
             Activity.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }, intent: orderIntent) {
+            let signed = ticket.input(market: market, refPrice: refPrice)
             DetailRow("Market", "\(market.asset)-PERP")
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
-            DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(ticket.priceText)")
-            DetailRow("Size", "\(ticket.sizeText) \(ticket.amountUnit == .usd ? "AUSD" : market.asset)")
+            DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(NumberStyle.number(signed.price ?? mark))")
+            // The parsed values this order signs, not the typed text (audit F4).
+            DetailRow("Size", "\(NumberStyle.number(signed.size)) \(market.asset)")
             DetailRow("Leverage", "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
             DetailRow("Margin", (notional / max(ticket.leverage, 1)).formatted(.currency(code: "USD")))
             // This path (perplTrading not ready) places a bare on-chain entry — it cannot attach TP/SL. Don't advertise
@@ -2228,6 +2230,8 @@ private struct ClosePositionSheet: View {
                             TextField(NumberStyle.number(mark), text: $limitText)
                                 .keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
                         }
+                        // The price this close signs, read back from the typed text (audit F4).
+                        if let limitPrice, limitPrice > 0 { DetailRow("Limit at", NumberStyle.number(limitPrice)) }
                         Toggle("Post only (maker)", isOn: $postOnly)
                         Text("Rests as a reduce-only limit at your price until it fills. It won't reduce your position until then.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -2671,15 +2675,8 @@ struct OrderTicket {
 }
 
 extension String {
-    /// Parses a user-typed decimal. The decimal pad shows the locale separator ("," across much of Europe/LatAm) while
-    /// our own writers (`plainSize`) emit POSIX "." — both are read by the token-amount rules, whatever the device's
-    /// locale (the old locale-grouping strip turned a pasted "0,5" into 5 in en_US). ASCII digits and separators only,
-    /// finite values only: no "inf", "nan", "1e400" or signs, which no field here means.
-    var perpDouble: Double? {
-        // Same rules as token amounts (Amount.decimalPoint): "0,5" is one half in every locale, never 5.
-        let s = trimmingCharacters(in: .whitespaces)
-        guard !s.isEmpty, s.allSatisfy({ $0 == "." || $0 == "," || ($0.isASCII && $0.isNumber) }),
-              let normalized = Amount.decimalPoint(s), normalized != "." else { return nil }
-        return Double(normalized).flatMap { $0.isFinite ? $0 : nil }
-    }
+    /// Parses a user-typed price, size or trigger (`Amount.fieldNumber`). The decimal pad shows the locale separator
+    /// ("," across much of Europe/LatAm) while our own writers (`plainSize`) emit POSIX "."; a pasted "66,000" in en_US
+    /// is 66000, never 66 (audit F4), and "0,5" is one half in every locale, never 5.
+    var perpDouble: Double? { Amount.fieldNumber(self) }
 }
