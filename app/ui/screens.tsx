@@ -41,7 +41,7 @@ function TokenRowLive({ row, i, onClick }: { row: MarketRow; i: number; onClick:
   return (
     <button type="button" className="tok-row" onClick={onClick}>
       <span className="rank">{i + 1}</span>
-      <TokenLogo src={row.logo} name={row.symbol} address={row.address} />
+      <TokenLogo src={row.logo} name={row.symbol} />
       <span className="row-main"><b>{row.symbol}{row.launchpad && <em className="badge accent">Launch</em>}</b><small>{row.name}</small></span>
       <span className="row-end">
         <span className="price">{row.usd === null ? "—" : fmtUsd(row.usd)}</span>
@@ -143,7 +143,7 @@ function TokenDetail({ row, go, onBack }: { row: MarketRow; go: Go; onBack: () =
   return (
     <>
       <button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Markets</button>
-      <div className="detail-head"><TokenLogo src={row.logo} name={row.symbol} address={row.address} size="lg" /><div><h1>{row.symbol}<small>{row.name}</small></h1><div className="detail-price">{row.usd === null ? "—" : fmtUsd(row.usd)}</div>{row.change24h !== null && <span className={`chip ${row.change24h >= 0 ? "up" : "down"}`} style={{ marginTop: 6 }}>{fmtPct(row.change24h)} · 24h</span>}</div></div>
+      <div className="detail-head"><TokenLogo src={row.logo} name={row.symbol} size="lg" /><div><h1>{row.symbol}<small>{row.name}</small></h1><div className="detail-price">{row.usd === null ? "—" : fmtUsd(row.usd)}</div>{row.change24h !== null && <span className={`chip ${row.change24h >= 0 ? "up" : "down"}`} style={{ marginTop: 6 }}>{fmtPct(row.change24h)} · 24h</span>}</div></div>
       {perp ? <PerplChart marketId={perp.id} height={300} /> : launch ? (candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={240} precision={8} /><p className="hint" style={{ padding: "6px 8px 4px" }}>Price in {launch.pair.symbol} per token from curve trades in the last two hours.</p></div> : <div className="card"><p className={`hint ${trades.error ? "err" : ""}`}>{trades.error ? `Couldn't read curve trades (${trades.error}). Retrying.` : trades.loading ? "Reading curve trades…" : "No curve trades in the last two hours."}</p></div>) : <div className="card"><p className="hint">No chart for {row.symbol} in the app. Prices come from its Monad pool.{tv && <> <a href={tradingViewUrl(tv)} target="_blank" rel="noopener noreferrer">{tv} on TradingView ↗</a></>}</p></div>}
       <div className="mini-stats">
         <div className="stat"><span>Your balance</span><b>{fmtUnits(row.balance, row.decimals, { compact: true })} {row.symbol}</b></div>
@@ -240,7 +240,7 @@ function LaunchDetail({ token, onBack }: { token: Address; onBack: () => void })
   return (
     <>
       <button type="button" className="back-btn" onClick={onBack}><Icon name="chev-left" />Launchpad</button>
-      <div className="detail-head"><TokenLogo src={data.logo} name={data.name} address={data.token} size="lg" /><div><h1>{data.name}<small>${data.symbol}</small></h1><div className="detail-price">{fmtNumber(priceNumber(data))} {data.pair.symbol}</div><PhaseBadge launch={data} /> <RetiredBadge launch={data} /></div></div>
+      <div className="detail-head"><TokenLogo src={data.logo} name={data.name} size="lg" /><div><h1>{data.name}<small>${data.symbol}</small></h1><div className="detail-price">{fmtNumber(priceNumber(data))} {data.pair.symbol}</div><PhaseBadge launch={data} /> <RetiredBadge launch={data} /></div></div>
       {candles.length > 1 ? <div className="card" style={{ padding: 8 }}><LightweightChart candles={candles} height={220} precision={8} /></div> : <div className="card"><p className={`hint ${trades.error ? "err" : ""}`}>{trades.error ? `Couldn't read curve trades (${trades.error}). Retrying.` : trades.loading ? "Reading curve trades…" : "No trades in the last two hours yet."}</p></div>}
       <div className="progress-label" style={{ marginTop: 12 }}><span>{data.phase === 2 ? `Graduated to ${data.graduationVenue === 1 ? "Monday Trade" : "Uniswap v4"}` : "Graduation progress"}</span><b>{(data.progressBps / 100).toFixed(1)}%</b></div>
       <Progress bps={data.progressBps} />

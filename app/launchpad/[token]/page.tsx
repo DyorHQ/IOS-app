@@ -53,7 +53,7 @@ export default function TokenPage() {
     <>
       <p style={{ margin: "6px 0 0" }}><Link href="/launchpad" className="sec link" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, fontWeight: 600, color: "var(--accent-ink)", textDecoration: "none" }}><Icon name="chev-left" /> All launches</Link></p>
       <section className="token-hero">
-        <TokenLogo src={data.logo} name={data.name} address={data.token} size="lg" />
+        <TokenLogo src={data.logo} name={data.name} size="lg" />
         <div className="token-who">
           <h1>{data.name} <span className="ticker">${data.symbol}</span> <PhaseBadge launch={data} /> <RetiredBadge launch={data} /></h1>
           <div className="meta">

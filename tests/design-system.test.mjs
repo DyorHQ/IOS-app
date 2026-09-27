@@ -34,6 +34,11 @@ test('active typography cannot switch back to retired fonts or colors', () => {
 test('component and brand styles do not define new hex colors', () => {
   for(const file of ['app/globals.css','app/brand/brand.css','app/launchpad/launchpad.css']) assert.deepEqual(readFileSync(file,'utf8').match(/#[0-9a-f]{3,8}\b/gi) ?? [], [], file);
 });
+test('charts take their colors from the design tokens', () => {
+  const chart=readFileSync('app/ui/tradingview.tsx','utf8');
+  assert.deepEqual(chart.match(/#[0-9a-f]{3,8}\b|rgba?\(/gi) ?? [], []);
+  for(const token of ['--muted','--up','--down']) assert.match(chart,new RegExp(`"${token}"`));
+});
 test('design-system downloads and current logo are available', () => {
   assert.ok(readFileSync('public/brand/dyorhq-design-system.md').length>1000);
   assert.ok(readFileSync('public/brand/dyorhq-wordmark.png').length>1000);

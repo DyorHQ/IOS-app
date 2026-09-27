@@ -165,7 +165,7 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
           <div className="step-head"><div><span className="eyebrow">New launch · Monad</span><h1>Create a token</h1></div></div>
 
           <div className="logo-field">
-            <TokenLogo src={form.logo.trim()} name={form.name || form.symbol} address={account ?? ZERO_ADDRESS} size="lg" />
+            <TokenLogo src={form.logo.trim()} name={form.name || form.symbol} size="lg" />
             <label className="field">Token image<input type="url" placeholder="https://… square PNG, JPG or SVG" value={form.logo} onChange={(e) => set({ logo: e.target.value })} /><span className="help">A hosted image link. It is stored on-chain with the token and shown everywhere the token appears.</span>{touched && errors.logo && <span className="hint err">{errors.logo}</span>}</label>
           </div>
           <div className="field-row">
@@ -231,7 +231,7 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
           <div className="card preview-card">
             <span className="eyebrow">Your token</span>
             <div className="launch-top" style={{ marginTop: 10 }}>
-              <TokenLogo src={form.logo.trim()} name={form.name || form.symbol} address={account ?? ZERO_ADDRESS} />
+              <TokenLogo src={form.logo.trim()} name={form.name || form.symbol} />
               <div style={{ minWidth: 0 }}><h3>{form.name.trim() || "Token name"}</h3><p>${form.symbol || "TICKER"} · paired with {pair?.symbol ?? "MON"}</p></div>
             </div>
             <p className="desc">{form.description.trim() || "Your description shows up here, on the token page and in the app."}</p>

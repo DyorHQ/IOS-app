@@ -50,7 +50,7 @@ function TokenPicker({ tokens, balances, exclude, onPick, onClose }: { tokens: T
         <div className="picker-list">
           {custom.data && (
             <button type="button" onClick={() => onPick(custom.data as TokenInfo)}>
-              <TokenLogo src="" name={custom.data.symbol} address={custom.data.address} size="sm" />
+              <TokenLogo src="" name={custom.data.symbol} size="sm" />
               <span><b>{custom.data.symbol}</b><small>{custom.data.name} · {shortAddress(custom.data.address)} · unlisted, verify before trading</small></span>
             </button>
           )}
@@ -58,7 +58,7 @@ function TokenPicker({ tokens, balances, exclude, onPick, onClose }: { tokens: T
             const bal = balances[t.address.toLowerCase()];
             return (
               <button key={t.address} type="button" onClick={() => onPick(t)}>
-                <TokenLogo src={t.logo} name={t.symbol} address={t.address} size="sm" />
+                <TokenLogo src={t.logo} name={t.symbol} size="sm" />
                 <span><b>{t.symbol}{t.launchpad && <em className="badge accent" style={{ marginLeft: 6 }}>Launchpad</em>}</b><small>{t.name}</small></span>
                 {bal !== undefined && <span className="bal">{fmtUnits(bal, t.decimals, { compact: true })}<small>{t.symbol}</small></span>}
               </button>
@@ -194,7 +194,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
             <div className="lbl"><span>You pay</span>{balIn !== undefined && <button type="button" onClick={() => setAmount(exactDown(balIn, tokenIn.decimals, 8))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
             <div className="rowin">
               <input inputMode="decimal" placeholder="0" aria-label="Amount to pay" value={amount} onChange={(e) => { edited.current = true; setAmount(e.target.value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } }} />
-              <button type="button" className="tokbtn" onClick={() => setPicking("in")}><TokenLogo src={tokenIn.logo} name={tokenIn.symbol} address={tokenIn.address} size="sm" />{tokenIn.symbol}<Icon name="chev-down" /></button>
+              <button type="button" className="tokbtn" onClick={() => setPicking("in")}><TokenLogo src={tokenIn.logo} name={tokenIn.symbol} size="sm" />{tokenIn.symbol}<Icon name="chev-down" /></button>
             </div>
             <div className="sub">{insufficient ? <span className="impact-bad">Insufficient balance</span> : ""}</div>
           </div>
@@ -203,7 +203,7 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
             <div className="lbl"><span>You receive</span>{balances.data?.[tokenOut.address.toLowerCase()] !== undefined && <span>Balance {fmtUnits(balances.data[tokenOut.address.toLowerCase()], tokenOut.decimals, { compact: true })}</span>}</div>
             <div className="rowin">
               <input readOnly aria-label="Amount to receive" value={outText} placeholder="0" />
-              <button type="button" className="tokbtn" onClick={() => setPicking("out")}><TokenLogo src={tokenOut.logo} name={tokenOut.symbol} address={tokenOut.address} size="sm" />{tokenOut.symbol}<Icon name="chev-down" /></button>
+              <button type="button" className="tokbtn" onClick={() => setPicking("out")}><TokenLogo src={tokenOut.logo} name={tokenOut.symbol} size="sm" />{tokenOut.symbol}<Icon name="chev-down" /></button>
             </div>
             <div className="sub">{selected && amountIn > 0n ? `1 ${tokenIn.symbol} = ${fmtNumber(rate(amountIn, tokenIn.decimals, selected.amountOut, tokenOut.decimals))} ${tokenOut.symbol}` : ""}</div>
           </div>

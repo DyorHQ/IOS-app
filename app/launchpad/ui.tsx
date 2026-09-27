@@ -13,12 +13,13 @@ import { useWallet } from "../lib/wallet";
 const TONE_LIST = Object.values(TONES);
 export const toneFor = (address: string) => TONE_LIST[parseInt(address.slice(2, 8), 16) % TONE_LIST.length];
 
-export function TokenLogo({ src, name, address, size = "" }: { src: string; name: string; address: string; size?: "" | "lg" | "sm" }) {
+/** The token's image, or its first letter on the neutral fallback surface (launchpad.css) when there is no usable image. */
+export function TokenLogo({ src, name, size = "" }: { src: string; name: string; size?: "" | "lg" | "sm" }) {
   const [brokenSrc, setBrokenSrc] = useState<string | null>(null);
   const usable = /^https?:\/\//i.test(src) && brokenSrc !== src;
   if (usable) return <img className={`tokenlogo ${size}`} src={src} alt="" onError={() => setBrokenSrc(src)} />;
   const letter = (name.trim()[0] ?? "?").toUpperCase();
-  return <span className={`tokenlogo fallback ${size}`} style={{ background: toneFor(address) }} aria-hidden="true">{letter}</span>;
+  return <span className={`tokenlogo fallback ${size}`} aria-hidden="true">{letter}</span>;
 }
 
 export function PhaseBadge({ launch }: { launch: Pick<LaunchInfo, "phase" | "completed" | "rescued"> }) {
@@ -86,7 +87,7 @@ export function LaunchCard({ launch, now }: { launch: LaunchInfo; now: number })
   return (
     <Link href={`/launchpad/${launch.token}`} className="card launch-card link">
       <div className="launch-top">
-        <TokenLogo src={launch.logo} name={launch.name} address={launch.token} />
+        <TokenLogo src={launch.logo} name={launch.name} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <h3><span>{launch.name}</span><span className="ticker">${launch.symbol}</span></h3>
           <p>paired with <b>{pair.symbol}</b>{now > 0 && ` · ${timeAgo(launch.launchedAt, now)}`}</p>

@@ -45,6 +45,13 @@ function useTheme() {
   return theme;
 }
 
+/** The chart's colours and font from the design tokens (a canvas can't read CSS variables), for the current theme. */
+function chartTokens() {
+  const css = getComputedStyle(document.documentElement);
+  const token = (name: string) => css.getPropertyValue(name).trim();
+  return { text: token("--muted"), grid: token("--inner"), label: token("--inner2"), up: token("--up"), down: token("--down"), font: token("--mono") };
+}
+
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume?: number };
 
 /** A candlestick chart. New candles replace the data in place, so a refresh keeps the viewer's zoom and scroll. */
@@ -57,18 +64,19 @@ export function LightweightChart({ candles, height = 260, precision = 6 }: { can
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const dark = theme === "dark";
+    // Re-created on a theme change (the effect depends on `theme`), so the tokens are read for the theme now showing.
+    const c = chartTokens();
     const chart = createChart(el, {
       height,
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: dark ? "#98A494" : "#5E6A5B", fontFamily: "inherit", attributionLogo: true },
-      grid: { vertLines: { color: dark ? "rgba(255,255,255,0.05)" : "rgba(12,16,13,0.05)" }, horzLines: { color: dark ? "rgba(255,255,255,0.05)" : "rgba(12,16,13,0.05)" } },
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: c.text, fontFamily: c.font, attributionLogo: true },
+      grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
       rightPriceScale: { borderVisible: false },
       timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
-      crosshair: { horzLine: { labelBackgroundColor: dark ? "#2E372F" : "#DDE3D6" }, vertLine: { labelBackgroundColor: dark ? "#2E372F" : "#DDE3D6" } },
+      crosshair: { horzLine: { labelBackgroundColor: c.label }, vertLine: { labelBackgroundColor: c.label } },
     });
     seriesRef.current = chart.addSeries(CandlestickSeries, {
-      upColor: dark ? "#27DB91" : "#0E9F6E", downColor: dark ? "#FF507A" : "#E5484D", borderVisible: false, wickUpColor: dark ? "#27DB91" : "#0E9F6E", wickDownColor: dark ? "#FF507A" : "#E5484D",
+      upColor: c.up, downColor: c.down, borderVisible: false, wickUpColor: c.up, wickDownColor: c.down,
       priceFormat: { type: "price", precision, minMove: 10 ** -precision },
     });
     chartRef.current = chart;
