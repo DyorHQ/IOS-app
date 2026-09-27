@@ -7,7 +7,7 @@ import { TONES } from "../ui/data";
 import { DEPLOYED, explorerAddress, explorerTx } from "../lib/chain";
 import { priceNumber, type LaunchInfo } from "../lib/launchpad";
 import { bpsToPct, fmtAmount, fmtNumber, shortAddress, timeAgo } from "../lib/format";
-import type { TxState } from "../lib/use-tx";
+import { checkTx, type TxState } from "../lib/use-tx";
 import { useWallet } from "../lib/wallet";
 import { COPY_FEEDBACK, useCopy } from "../lib/clipboard";
 
@@ -57,16 +57,24 @@ export function DeployNotice() {
 }
 
 export function TxStatus({ tx, onDismiss }: { tx: TxState; onDismiss?: () => void }) {
+  const [checking, setChecking] = useState(false);
   // The live region stays mounted while idle (empty, out of the layout): a region that appears together with its first
   // message is often not announced. Both branches render the same <div>, so React keeps the one node.
   if (tx.status === "idle") return <div className="sr-only" role="status" />;
   const busy = tx.status === "signing" || tx.status === "pending";
   const text = tx.status === "signing" ? "Confirm in your wallet…" : tx.status === "pending" ? "Waiting for confirmation on Monad…" : tx.status === "success" ? "Confirmed." : tx.message;
-  // "unconfirmed" is neither success nor failure: the transaction is out and may still land.
+  const hash = tx.hash;
+  // "unconfirmed" is neither success nor failure: the transaction is out and may still land. Its receipt is read again
+  // in the background (lib/use-tx.ts); "Check again" reads it now.
+  const recheck = () => {
+    if (!hash || checking) return;
+    setChecking(true);
+    void checkTx(hash).finally(() => setChecking(false));
+  };
   return (
     <div className={`tx ${tx.status === "success" ? "ok" : tx.status === "error" ? "bad" : ""}`} role="status">
       {busy ? <span className="spinner" /> : <Icon name={tx.status === "success" ? "check" : tx.status === "unconfirmed" ? "clock" : "x"} />}
-      <div><b>{tx.label}</b>{text}{tx.hash && <><br /><a href={explorerTx(tx.hash)} target="_blank" rel="noreferrer">View transaction <Icon name="arrow-ur" /></a></>}</div>
+      <div><b>{tx.label}</b>{text}{hash && <><br /><a href={explorerTx(hash)} target="_blank" rel="noreferrer">View transaction <Icon name="arrow-ur" /></a></>}{tx.status === "unconfirmed" && hash && <button type="button" className="tx-check" disabled={checking} onClick={recheck}>{checking ? "Checking…" : "Check again"}</button>}</div>
       {onDismiss && !busy && <button type="button" className="tx-x" aria-label={tx.status === "unconfirmed" ? "I have checked the transaction" : "Dismiss"} onClick={() => onDismiss()}><Icon name="x" /></button>}
     </div>
   );

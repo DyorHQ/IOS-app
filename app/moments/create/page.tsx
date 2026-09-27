@@ -62,7 +62,7 @@ export default function Create() {
   const pickId = useRef(0);
   const [touched, setTouched] = useState(false);
   const ids = useId();
-  const { tx, run, dismiss, busy } = useTx();
+  const { tx, run, dismiss, busy, locked } = useTx();
   const policy = useAsync(fetchPolicy, "moments-policy", 60_000);
   const preview = useMemo(() => (file ? URL.createObjectURL(file) : ""), [file]);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
@@ -152,7 +152,7 @@ export default function Create() {
           <TxStatus tx={tx} onDismiss={dismiss} />
           {reason && <p className="hint">{reason}</p>}
           {p?.publishingPaused && <div className="warnbox"><b>Publishing is paused.</b> Governance has paused new Moments for now.</div>}
-          <ActionButton requireLaunchpad={false} type="submit" ready={MOMENTS_DEPLOYED && !!input && !p?.publishingPaused} busy={busy} label={<>Publish <Icon name="arrow-ur" /></>} onClick={submit} />
+          <ActionButton requireLaunchpad={false} type="submit" ready={MOMENTS_DEPLOYED && !!input && !p?.publishingPaused && !locked} busy={busy} label={<>Publish <Icon name="arrow-ur" /></>} onClick={submit} />
           <p className="hint">Publishing costs gas only. The coin and the NFT contracts deploy in the same transaction; their addresses are fixed by your wallet, so nobody can front-run them.</p>
         </form>
 

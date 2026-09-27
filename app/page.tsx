@@ -192,7 +192,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("");
   const [confirmedContract, setConfirmedContract] = useState<string | null>(null);
-  const { tx, run, dismiss, busy } = useTx();
+  const { tx, run, dismiss, locked } = useTx();
   const row = markets.rows.find((r) => r.address.toLowerCase() === token.toLowerCase()) ?? owned[0];
   const parsed = row ? parseAmount(amount, row.decimals) : null;
   const recipient = to.trim();
@@ -244,7 +244,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
       <TxStatus tx={tx} onDismiss={dismiss} />
       {wallet.onMonad && reason && <p className="hint">{reason}</p>}
       {/* On another network the button switches the wallet to Monad (as ActionButton does elsewhere), never a dead end. */}
-      {wallet.onMonad ? <button type="button" className="btn primary big" disabled={!valid || busy} onClick={send}>{`Send ${row?.symbol ?? ""}`}</button>
+      {wallet.onMonad ? <button type="button" className="btn primary big" disabled={!valid || locked} onClick={send}>{`Send ${row?.symbol ?? ""}`}</button>
         : <button type="button" className="btn primary big" onClick={() => wallet.switchToMonad().catch(() => undefined)}>Switch to Monad</button>}
     </>
   );

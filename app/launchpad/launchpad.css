@@ -52,6 +52,8 @@
 .tx b{color:var(--text);display:block}
 .tx a{display:inline-flex;align-items:center;gap:4px;font-weight:600;color:var(--accent-ink);text-decoration:none;margin-top:4px}
 .tx a .ic{width:14px;height:14px}
+.tx-check{margin:4px 0 0 14px;font-weight:600;color:var(--accent-ink)}
+.tx-check:disabled{color:var(--muted)}
 .tx.ok{background:var(--up-soft);color:var(--up-text)}.tx.ok b,.tx.ok a{color:inherit}
 .tx.bad{background:var(--down-soft);color:var(--down-text)}.tx.bad b{color:inherit}
 .tx>.ic{width:18px;height:18px;flex:none;margin-top:1px}
