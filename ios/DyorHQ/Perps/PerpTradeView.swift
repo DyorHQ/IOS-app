@@ -53,6 +53,8 @@ struct PerpTradeView: View {
     @State private var closingPosition: PerpPosition?
     @State private var addingMargin: PerpPosition?
     @State private var cancellingOrder: PerpOrder?
+    @State private var editingTriggers: PerpPosition?
+    @State private var cancellingTriggers: TriggerCancelRequest?
 
     @State private var fills: [PerplFill] = []
     @State private var pnlByOrder: [Int: Double] = [:]
@@ -118,7 +120,14 @@ struct PerpTradeView: View {
             Task { await perplTrading.ensureConnected() }
             await loadFills()
         }
-        .onChange(of: ticket.tpslEnabled) { _, on in if on { Task { await perplTrading.ensureConnected() } } }
+        .onChange(of: ticket.tpslEnabled) { _, on in
+            guard on else { return }
+            // TP/SL and Reduce Only exclude each other (security audit GT-6): a reduce-only order's triggers would close
+            // the side the account doesn't hold.
+            ticket.reduceOnly = false
+            Task { await perplTrading.ensureConnected() }
+        }
+        .onChange(of: ticket.reduceOnly) { _, on in if on { ticket.tpslEnabled = false } }
         .onChange(of: bottomTab) { _, tab in if tab == .history { Task { await loadFills() } } }
         .onChange(of: model.fillSignal) { _, _ in if model.lastFilledPerpId == market.id { Task { await loadFills() } } }
         .sheet(isPresented: $showConfirm) { orderConfirmSheet }
@@ -161,12 +170,21 @@ struct PerpTradeView: View {
         .sheet(isPresented: $showWithdraw) { CollateralSheet(kind: .withdraw, model: model) }
         .sheet(isPresented: $showPortfolio) { PerpsPortfolioView(model: model) }
         .sheet(item: $closingPosition) { position in
-            ClosePositionSheet(market: market, position: position, mark: mark) { Task { await model.load(env: env, address: session.address) } }
+            ClosePositionSheet(market: market, position: position, mark: mark, leftoverTriggers: triggersProtecting(position)) {
+                model.noteUserClose(market.id)
+                Task { await model.load(env: env, address: session.address) }
+            }
         }
         .sheet(item: $addingMargin) { position in
             AddMarginSheet(market: market, position: position, available: availableMargin) { Task { await model.load(env: env, address: session.address) } }
         }
         .sheet(item: $cancellingOrder) { order in cancelOrderSheet(order) }
+        .sheet(item: $editingTriggers) { position in
+            PositionTriggersSheet(market: market, position: position, mark: mark) { Task { await model.load(env: env, address: session.address) } }
+        }
+        .sheet(item: $cancellingTriggers) { request in
+            CancelTriggersSheet(market: market, orders: request.orders, title: request.title, note: request.note) { Task { await model.load(env: env, address: session.address) } }
+        }
     }
 
     // MARK: Market header
@@ -418,10 +436,14 @@ struct PerpTradeView: View {
                     checkRow("TP/SL", isOn: $ticket.tpslEnabled)
                     checkRow("Post-Only", isOn: $ticket.postOnly)
                     checkRow("Reduce Only", isOn: $ticket.reduceOnly)
+                    if ticket.reduceOnly {
+                        Text("TP/SL can't go on a reduce-only order. Set it on the position instead.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
 
-            if ticket.tpslEnabled { tpslFields }
+            if ticket.effectiveTPSL { tpslFields }
 
             // Summary
             VStack(spacing: 8) {
@@ -591,6 +613,9 @@ struct PerpTradeView: View {
         if let reason = triggerProblem(side: side) {
             Haptics.warning(); ticketError = reason; return
         }
+        if !ticket.effectiveReduceOnly, let reason = leftoverTriggerProblem(side: side) {
+            Haptics.warning(); ticketError = reason; return
+        }
         ticketError = nil
         Haptics.commit()
         // Use the authenticated path when the socket is live, OR when the wallet has an enrolled key and the user wants
@@ -601,17 +626,17 @@ struct PerpTradeView: View {
 
     /// A take-profit must sit on the profit side of the entry and a stop-loss on the loss side for the chosen
     /// direction. A wrong-sided trigger is what the keeper rejects or fires instantly, which would leave the position
-    /// unprotected — so block it before placing (and before recording it as if it were live).
+    /// unprotected — so block it before placing (and before recording it as if it were live). Also refused (security
+    /// audit GT-7, GT-8): a price that isn't a number (it would silently be left off), zero or below one tick (sent as
+    /// `tp: 0`, a close that fires at once), off the market's tick, and a stop-loss at or beyond the liquidation price.
     private func triggerProblem(side: PositionSide) -> String? {
-        guard ticket.tpslEnabled, refPrice > 0 else { return nil }
-        let entry = NumberStyle.number(refPrice)
-        if let tp = tpValue {
-            let ok = side == .long ? tp > refPrice : tp < refPrice
-            if !ok { return "Take-profit must be \(side == .long ? "above" : "below") your entry (\(entry)) for a \(side == .long ? "long" : "short")." }
-        }
-        if let sl = slValue {
-            let ok = side == .long ? sl < refPrice : sl > refPrice
-            if !ok { return "Stop-loss must be \(side == .long ? "below" : "above") your entry (\(entry)) for a \(side == .long ? "long" : "short")." }
+        guard ticket.effectiveTPSL else { return nil }
+        for (kind, text) in [(PerplTriggerKind.takeProfit, ticket.takeProfitText), (.stopLoss, ticket.stopLossText)] {
+            guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            guard let price = text.perpDouble else { return "Enter the \(kind == .takeProfit ? "take-profit" : "stop-loss") as a number, or leave it empty." }
+            if let problem = PerplTriggerRules.problem(kind, price: price, side: side, reference: refPrice, liquidation: projectedLiquidation(side: side), priceDecimals: market.priceDecimals) {
+                return problem.message(market: market)
+            }
         }
         return nil
     }
@@ -620,18 +645,30 @@ struct PerpTradeView: View {
 
     private var bottomSection: some View {
         VStack(spacing: 14) {
+            protectionBanner
             segmentedTabs
             switch bottomTab {
             case .positions:
-                if let position { PositionCard(position: position, liveMark: mark, onClose: { closingPosition = position }, onAddMargin: { addingMargin = position }) }
+                if let position {
+                    PositionCard(position: position, liveMark: mark, triggers: triggerRows(for: market).filter { $0.positionLong == (position.side == .long) },
+                                 onClose: { closingPosition = position }, onAddMargin: { addingMargin = position }, onTriggers: { editingTriggers = position })
+                }
                 else { emptyRow("No open positions") }
+                orphanBanner
             case .orders:
                 let orders = model.orders.filter { $0.perpId == market.id }
                 let rows = triggerRows(for: market)
+                ordersFreshnessBanner(rows: rows)
+                orphanBanner
                 if orders.isEmpty, rows.isEmpty { emptyRow("No open orders") }
                 else {
                     ForEach(orders) { order in OrderCard(order: order, mark: mark, onCancel: { cancellingOrder = order }) }
-                    ForEach(rows) { TriggerCard(row: $0, mark: mark) }
+                    ForEach(rows) { row in
+                        TriggerCard(row: row, mark: mark) {
+                            guard let order = row.order else { return }
+                            cancellingTriggers = TriggerCancelRequest(orders: [order], title: "Cancel \(row.kind.label)", note: nil)
+                        }
+                    }
                 }
             case .assets:
                 let total = model.account.map { Amount.units($0.balance, decimals: 6) } ?? 0
@@ -668,6 +705,65 @@ struct PerpTradeView: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    /// Says when the TP/SL list can't be verified (security audit GT-3): the trading stream isn't live, so rows are
+    /// the last list Perpl sent or this device's own record, and triggers set elsewhere don't show.
+    @ViewBuilder private func ordersFreshnessBanner(rows: [TriggerRow]) -> some View {
+        if !perplTrading.ordersAreLive, perplTrading.isEnrolled || !rows.isEmpty {
+            Label("TP/SL can't be verified right now: Perpl trading is offline. Rows below may be out of date, and orders placed on other devices or the Perpl web app don't show.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.footnote).foregroundStyle(Color.attention)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color.attention.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
+    /// TP/SL left on this market with no position to close (security audit GT-2): left armed, they would fire on the
+    /// next position on that side. Offered for cancelling in one tap (the app cancels them itself for a key account
+    /// once it sees the position close; a passkey account's cancel needs Face ID, so it lands here).
+    @ViewBuilder private var orphanBanner: some View {
+        let orphans = orphanedTriggers
+        if !orphans.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("\(orphans.count) TP/SL on \(market.asset) \(orphans.count == 1 ? "has" : "have") no position to close. Left armed, \(orphans.count == 1 ? "it" : "they") would fire on your next position here.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote).foregroundStyle(Color.attention)
+                Button("Cancel \(orphans.count == 1 ? "It" : "Them")") {
+                    cancellingTriggers = TriggerCancelRequest(orders: orphans, title: "Leftover TP/SL", note: "There is no open position on \(market.asset) for these to close.")
+                }
+                .buttonStyle(.bordered).controlSize(.small).tint(.negative)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Color.attention.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
+    /// A fired or failed TP/SL, or a liquidation, reported by the trading stream (security audit GT-9) — shown here as
+    /// well as in notifications, until dismissed.
+    @ViewBuilder private var protectionBanner: some View {
+        if let notice = perplTrading.protectionNotice {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: notice.warning ? "exclamationmark.triangle.fill" : "bell.fill")
+                    .foregroundStyle(notice.warning ? Color.attention : Color.brand)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(notice.title).font(.subheadline.weight(.semibold))
+                    Text(notice.body).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+                Button { perplTrading.dismissProtectionNotice() } label: {
+                    Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss")
+            }
+            .padding(.leading, 12)
+            .background((notice.warning ? Color.attention : Color.brand).opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityElement(children: .contain)
         }
     }
 
@@ -767,6 +863,7 @@ struct PerpTradeView: View {
         // no triggers still falls through to the on-chain path when not live, so trading never depends on one-click.
         if let accountId = authedOrderAccount {
             AuthedOrderSheet(market: market, input: ticket.input(market: market, refPrice: refPrice), takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1)) {
+                if ticket.effectiveReduceOnly { model.noteUserClose(market.id) }
                 ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""; sizePercent = 0
                 Task { await model.load(env: env, address: session.address) }
             }
@@ -777,6 +874,7 @@ struct PerpTradeView: View {
 
     private var confirmSheet: some View {
         ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { env.perpl.orderPlan(ticket.input(market: market, refPrice: refPrice)) }, onDone: { ticket.sizeText = ""; sizePercent = 0; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
+            if ticket.effectiveReduceOnly { model.noteUserClose(market.id) }
             Activity.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }, intent: orderIntent) {
             DetailRow("Market", "\(market.asset)-PERP")
@@ -787,7 +885,7 @@ struct PerpTradeView: View {
             DetailRow("Margin", (notional / max(ticket.leverage, 1)).formatted(.currency(code: "USD")))
             // This path (perplTrading not ready) places a bare on-chain entry — it cannot attach TP/SL. Don't advertise
             // triggers the order won't carry; tell the user they need one-click trading for them.
-            if ticket.tpslEnabled, !ticket.takeProfitText.isEmpty || !ticket.stopLossText.isEmpty {
+            if ticket.effectiveTPSL, !ticket.takeProfitText.isEmpty || !ticket.stopLossText.isEmpty {
                 DetailRow("TP/SL", "Needs one-click trading — not placed", tint: .attention)
             }
         }
@@ -810,30 +908,54 @@ struct PerpTradeView: View {
 
     // MARK: TP/SL helpers
 
-    private var tpValue: Double? { ticket.tpslEnabled ? ticket.takeProfitText.perpDouble : nil }
-    private var slValue: Double? { ticket.tpslEnabled ? ticket.stopLossText.perpDouble : nil }
+    private var tpValue: Double? { ticket.effectiveTPSL ? ticket.takeProfitText.perpDouble : nil }
+    private var slValue: Double? { ticket.effectiveTPSL ? ticket.stopLossText.perpDouble : nil }
     /// The user is asking for at least one trigger — which only the authenticated (keeper-forwarded) path can carry.
     private var wantsTriggers: Bool { tpValue != nil || slValue != nil }
 
     /// The market's TP/SL to show: Perpl's authoritative open triggers (mt:23/24, source of truth), plus — only
     /// briefly after placement, or while the trading socket is offline — the app's local echo for a kind the
     /// authoritative feed hasn't reflected yet. Once the feed confirms a trigger, the echo for that kind drops out.
+    /// "Live" means the stream is signed in and has sent its snapshot (one-click on or not); otherwise every row says it
+    /// can't be verified (security audit GT-3).
     private func triggerRows(for market: PerpMarket) -> [TriggerRow] {
         let priceScale = pow(10.0, Double(market.priceDecimals))
         let sizeScale = pow(10.0, Double(market.lotDecimals))
+        let live = perplTrading.ordersAreLive
+        let positionSize = { (long: Bool) -> Double? in position.flatMap { ($0.side == .long) == long ? $0.size : nil } }
         let authoritative = perplTrading.openOrders
             .filter { $0.marketId == market.id && $0.isTrigger && $0.isReduceOnly }
             .map { o in
                 TriggerRow(id: "auth-\(o.oid)", symbol: market.asset, kind: o.isStopLoss ? .stopLoss : .takeProfit,
                            price: Double(o.triggerPriceRaw ?? 0) / priceScale, size: Double(o.sizeRaw) / sizeScale,
-                           positionLong: o.protectsLong, live: true)
+                           positionLong: o.protectsLong, source: live ? .live : .lastKnown, order: o, positionSize: positionSize(o.protectsLong))
             }
         let authKinds = Set(authoritative.map(\.kind))
-        let live = perplTrading.isReady
         let echo = model.triggers
             .filter { $0.perpId == market.id && !authKinds.contains($0.kind) && (!live || Date().timeIntervalSince($0.placedAt) < 10) }
-            .map { TriggerRow(id: "echo-\($0.id)", symbol: $0.symbol, kind: $0.kind, price: $0.price, size: $0.size, positionLong: $0.positionLong, live: false) }
+            .map { TriggerRow(id: "echo-\($0.id)", symbol: $0.symbol, kind: $0.kind, price: $0.price, size: $0.size, positionLong: $0.positionLong,
+                              source: live ? .pending : .unverified, order: nil, positionSize: positionSize($0.positionLong)) }
         return authoritative + echo
+    }
+
+    /// The live TP/SL closing `position`'s side on this market.
+    private func triggersProtecting(_ position: PerpPosition) -> [PerplOpenOrder] {
+        guard perplTrading.ordersAreLive else { return [] }
+        return perplTrading.openOrders.filter { $0.marketId == market.id && $0.isTrigger && $0.isReduceOnly && $0.protectsLong == (position.side == .long) }
+    }
+
+    /// This market's TP/SL with no position left to close (security audit GT-2).
+    private var orphanedTriggers: [PerplOpenOrder] {
+        perplTrading.orphanedTriggers(onChainPositions: model.positions, onChainOrders: model.orders).filter { $0.marketId == market.id }
+    }
+
+    /// Leftover TP/SL on this side of the market (security audit GT-2) would act on the position this order opens: a
+    /// stop-loss left from an earlier position can fire the moment it exists. They are cancelled first.
+    private func leftoverTriggerProblem(side: PositionSide) -> String? {
+        let leftovers = orphanedTriggers.filter { $0.protectsLong == (side == .long) }
+        guard !leftovers.isEmpty else { return nil }
+        let one = leftovers.count == 1
+        return "\(leftovers.count) take-profit/stop-loss order\(one ? "" : "s") from an earlier \(market.asset) \(side == .long ? "long" : "short") \(one ? "is" : "are") still armed on Perpl and would act on this new position. Cancel \(one ? "it" : "them") from Orders first."
     }
     private var sideColor: Color { ticket.side == .long ? .positive : .negative }
 
@@ -843,7 +965,13 @@ struct PerpTradeView: View {
     private var tpslStatus: (text: String, warning: Bool) {
         switch perplTrading.status {
         case .connected:
-            return ("Placed on Perpl as keeper-managed trigger orders linked to this position.", false)
+            // Sized to this order, and they stay that size (security audit GT-5): say so, rather than "linked to this
+            // position", and point at the position's own TP/SL for the whole of it.
+            let size = baseSize > 0 ? " (\(NumberStyle.number(baseSize)) \(market.asset))" : ""
+            if let position {
+                return ("Placed on Perpl as keeper triggers that close this order's size only\(size), not your whole \(NumberStyle.number(position.size)) \(market.asset) position. For all of it, use TP/SL on the position.", false)
+            }
+            return ("Placed on Perpl as keeper triggers that close this order's size\(size). The size is fixed: they don't grow if you add to the position later.", false)
         case .connecting, .enrolled:
             return ("Connecting to Perpl trading to place your take-profit and stop-loss.", false)
         case .needsForwarding:
@@ -930,6 +1058,18 @@ struct PerpTradeView: View {
     }
     private var liquidationPairText: String {
         "\(liquidationLong.map { NumberStyle.number($0) } ?? "—") / \(liquidationShort.map { NumberStyle.number($0) } ?? "—")"
+    }
+    /// The liquidation price the position will have after this order, to check a stop-loss against (security audit
+    /// GT-8): the order's own when it opens a position, the combined one when it adds to a position on the same side.
+    private func projectedLiquidation(side: PositionSide) -> Double? {
+        guard baseSize > 0, refPrice > 0 else { return nil }
+        let margin = notional / max(ticket.leverage, 1)
+        if let position, position.side == side, position.size > 0 {
+            let size = position.size + baseSize
+            let entry = (position.entry * position.size + refPrice * baseSize) / size
+            return PerplService.liquidationPrice(side: side, entry: entry, size: size, margin: position.margin + margin, premium: position.premium, maintenanceFraction: market.maintMarginFraction)
+        }
+        return PerplService.liquidationPrice(side: side, entry: refPrice, size: baseSize, margin: margin, premium: 0, maintenanceFraction: market.maintMarginFraction)
     }
 
     private var chartLevels: [ChartLevel] {
@@ -1683,8 +1823,11 @@ struct TradesTape: View {
 private struct PositionCard: View {
     let position: PerpPosition
     let liveMark: Double
+    /// The TP/SL closing this position's side, as the Orders list shows them.
+    var triggers: [TriggerRow] = []
     let onClose: () -> Void
     let onAddMargin: () -> Void
+    let onTriggers: () -> Void
 
     private var livePnl: Double {
         let dir = position.side == .long ? 1.0 : -1.0
@@ -1717,14 +1860,26 @@ private struct PositionCard: View {
                 stat("Liq.", position.liquidation.map { NumberStyle.number($0) } ?? "—")
                 stat("Notional", position.notional.formatted(.currency(code: "USD")))
             }
+            if !triggers.isEmpty {
+                Text(triggerSummary).font(.caption).foregroundStyle(.secondary)
+            }
             HStack(spacing: 8) {
                 Button("Add Margin", action: onAddMargin)
                     .buttonStyle(.bordered).controlSize(.small).tint(.brand)
+                Button("TP/SL", action: onTriggers)
+                    .buttonStyle(.bordered).controlSize(.small).tint(.brand)
+                    .accessibilityLabel("Take profit and stop loss")
                 Button("Close", action: onClose)
                     .buttonStyle(.bordered).controlSize(.small).tint(.negative)
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private var triggerSummary: String {
+        let parts = triggers.map { "\($0.kind == .takeProfit ? "TP" : "SL") \(NumberStyle.number($0.price))" }
+        let verified = triggers.allSatisfy { $0.source == .live }
+        return parts.joined(separator: " · ") + (verified ? "" : " · unverified")
     }
 
     private func stat(_ label: String, _ value: String) -> some View {
@@ -1783,23 +1938,56 @@ private struct OrderCard: View {
     }
 }
 
-/// A TP/SL row to display: either Perpl's authoritative open trigger (`live`) or the app's local echo pending
-/// confirmation from the feed.
-private struct TriggerRow: Identifiable {
+/// A TP/SL row to display: Perpl's open trigger from the trading stream (live, or the last list it sent before it
+/// went offline), or the app's own record of one it placed (just placed, or unverifiable while offline).
+struct TriggerRow: Identifiable {
+    enum Source: Equatable {
+        /// On Perpl's live list: authoritative, and cancellable from here.
+        case live
+        /// On the last list Perpl sent; the stream is offline, so it may have fired or been cancelled since.
+        case lastKnown
+        /// Just placed from this device; the stream hasn't shown it yet.
+        case pending
+        /// This device's record while the stream is offline: never confirmed against Perpl.
+        case unverified
+    }
     let id: String
     let symbol: String
     let kind: PlacedTrigger.Kind
     let price: Double
     let size: Double
     let positionLong: Bool
-    let live: Bool
+    let source: Source
+    /// The trigger on Perpl, for a row from its list.
+    let order: PerplOpenOrder?
+    /// The size of the open position on the side this trigger closes, if there is one.
+    let positionSize: Double?
+
+    var label: String {
+        switch source {
+        case .live: return "Keeper trigger"
+        case .lastKnown: return "Last seen on Perpl"
+        case .pending: return "Pending…"
+        case .unverified: return "Saved on this device · unverified"
+        }
+    }
+
+    /// How much of the position it closes, when that isn't all of it (security audit GT-5: a trigger's size is fixed
+    /// when it's placed and doesn't follow the position).
+    var coverage: String? {
+        guard let positionSize, positionSize > 0, size > 0 else { return nil }
+        let tolerance = max(positionSize, size) * 1e-6
+        if size < positionSize - tolerance { return "Closes \(NumberStyle.number(size)) of your \(NumberStyle.number(positionSize)) \(symbol)" }
+        if size > positionSize + tolerance { return "Larger than your \(NumberStyle.number(positionSize)) \(symbol) position" }
+        return nil
+    }
 }
 
-/// A take-profit / stop-loss (keeper-managed trigger). `live` rows come from Perpl's authoritative order feed; a
-/// non-live row is the app's own just-placed record, shown until the feed confirms it.
+/// A take-profit / stop-loss (keeper-managed trigger), labelled by where it comes from, with a Cancel for a live one.
 private struct TriggerCard: View {
     let row: TriggerRow
     let mark: Double
+    var onCancel: () -> Void = {}
 
     private var tint: Color { row.kind == .takeProfit ? .positive : .negative }
     private var distance: Double? { mark > 0 ? (row.price - mark) / mark * 100 : nil }
@@ -1812,7 +2000,12 @@ private struct TriggerCard: View {
                 Text(row.kind.label).font(.caption.weight(.bold)).foregroundStyle(tint)
                 Text(row.positionLong ? "on Long" : "on Short").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Text(row.live ? "Keeper trigger" : "Pending…").font(.caption2).foregroundStyle(.secondary)
+                if row.source == .live, row.order != nil {
+                    Button("Cancel", action: onCancel).buttonStyle(.bordered).controlSize(.small).tint(.negative)
+                        .accessibilityLabel("Cancel \(row.kind.label.lowercased()) at \(NumberStyle.number(row.price))")
+                } else {
+                    Text(row.label).font(.caption2).foregroundStyle(row.source == .live || row.source == .pending ? Color.secondary : Color.attention)
+                }
             }
             HStack(alignment: .top) {
                 MiniStat(label: "Trigger", value: NumberStyle.number(row.price), tint: tint)
@@ -1821,11 +2014,22 @@ private struct TriggerCard: View {
                 Spacer()
                 if let d = distance { MiniStat(label: "Distance", value: String(format: "%+.2f%%", d)) }
             }
+            if let coverage = row.coverage {
+                Text(coverage).font(.caption2).foregroundStyle(Color.attention)
+            }
         }
         .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tint.opacity(row.live ? 0.22 : 0.12), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tint.opacity(row.source == .live ? 0.22 : 0.12), lineWidth: 1))
     }
+}
+
+/// Which triggers a Cancel sheet is for.
+struct TriggerCancelRequest: Identifiable {
+    let id = UUID()
+    let orders: [PerplOpenOrder]
+    let title: String
+    let note: String?
 }
 
 /// Closes a position at market or with a resting reduce-only limit order (optionally post-only).
@@ -1833,6 +2037,8 @@ private struct ClosePositionSheet: View {
     let market: PerpMarket
     let position: PerpPosition
     let mark: Double
+    /// The live TP/SL closing this position's side, to say what happens to them (security audit GT-2).
+    var leftoverTriggers: [PerplOpenOrder] = []
     let onDone: () -> Void
 
     @Environment(Session.self) private var session
@@ -1878,6 +2084,15 @@ private struct ClosePositionSheet: View {
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         DetailRow("Order", "Market, reduce-only, 1% slippage")
+                    }
+                }
+                if !leftoverTriggers.isEmpty {
+                    Section("Take-profit / stop-loss") {
+                        let count = leftoverTriggers.count
+                        Text(session.isPasskeyAccount
+                             ? "This position has \(count) TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next \(position.side == .long ? "long" : "short") here)."
+                             : "This position has \(count) TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next \(position.side == .long ? "long" : "short") here. Check Orders afterwards.")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
                 if !run.events.isEmpty { Section("Progress") { TransactionProgress(events: run.events) } }
@@ -2091,8 +2306,9 @@ struct AuthedOrderSheet: View {
                     DetailRow("Size", "\(NumberStyle.number(input.size)) \(market.asset)")
                     DetailRow("Leverage", "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
                     DetailRow("Margin", summaryMargin.formatted(.currency(code: "USD")))
-                    if let takeProfit { DetailRow("Take profit", NumberStyle.number(takeProfit), tint: .positive) }
-                    if let stopLoss { DetailRow("Stop loss", NumberStyle.number(stopLoss), tint: .negative) }
+                    // Each closes this order's size, fixed when placed (security audit GT-5).
+                    if let takeProfit { DetailRow("Take profit", "\(NumberStyle.number(takeProfit)) · closes \(NumberStyle.number(input.size)) \(market.asset)", tint: .positive) }
+                    if let stopLoss { DetailRow("Stop loss", "\(NumberStyle.number(stopLoss)) · closes \(NumberStyle.number(input.size)) \(market.asset)", tint: .negative) }
                 } header: {
                     Text("Review Order · Perpl")
                 } footer: {
@@ -2159,22 +2375,19 @@ struct AuthedOrderSheet: View {
             guard result.entry else { phase = .failed(result.error ?? "Perpl rejected the order."); return }
 
             var placed: [PlacedTrigger] = []
-            if let tp = takeProfit, result.takeProfit == true {
+            // An unanswered trigger may be live too, so it is remembered as well (shown as unverified until Perpl's
+            // list says otherwise).
+            if let tp = takeProfit, result.takeProfit == true || result.takeProfitUnknown {
                 placed.append(PlacedTrigger(perpId: market.id, symbol: market.asset, kind: .takeProfit, price: tp, size: input.size, positionLong: input.side == .long))
             }
-            if let sl = stopLoss, result.stopLoss == true {
+            if let sl = stopLoss, result.stopLoss == true || result.stopLossUnknown {
                 placed.append(PlacedTrigger(perpId: market.id, symbol: market.asset, kind: .stopLoss, price: sl, size: input.size, positionLong: input.side == .long))
             }
             TriggerStore.record(placed, owner: session.address)
 
-            let tpRejected = takeProfit != nil && result.takeProfit != true
-            let slRejected = stopLoss != nil && result.stopLoss != true
-            if tpRejected || slRejected {
-                let which = tpRejected && slRejected ? "take-profit and stop-loss were" : tpRejected ? "take-profit was" : "stop-loss was"
-                phase = .doneWarning("Position opened, but the \(which) not accepted — set it again from the ticket.")
-            } else {
-                phase = .done
-            }
+            let warning = triggerWarning(tp: takeProfit == nil || result.takeProfit == true ? nil : result.takeProfitUnknown,
+                                         sl: stopLoss == nil || result.stopLoss == true ? nil : result.stopLossUnknown)
+            phase = warning.map { .doneWarning($0) } ?? .done
             // notify:false — this advanced path posts its own fills-gated notification just below, so a unified
             // notification here would double it.
             Activity.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address, notify: false)
@@ -2195,10 +2408,29 @@ struct AuthedOrderSheet: View {
         } catch let error as PerplTradeError where error.outcomeUnknown {
             // The entry frame went out but was never acknowledged: it may be live. Resending would place a second
             // order, so this sheet only closes (and reloads orders and positions) from here.
-            phase = .unknown("Perpl didn't confirm this order in time, so it may have been placed. Check Open Orders and Positions before placing it again.")
+            phase = .unknown("Order status unknown — Perpl didn't confirm this order, so it may have been placed. Check Open Orders and Positions before placing it again.")
         } catch {
             phase = .failed(describe(error))
         }
+    }
+
+    /// What to say about requested triggers that aren't known to be live: `false` refused (or never sent), `true`
+    /// sent but unanswered — it may be live, so it must not be placed again blindly (security audit GL-1). Refused
+    /// ones are set again from the position's TP/SL, not by opening more size (GT-1).
+    private func triggerWarning(tp: Bool?, sl: Bool?) -> String? {
+        let refused = [tp == false ? "take-profit" : nil, sl == false ? "stop-loss" : nil].compactMap { $0 }
+        let unknown = [tp == true ? "take-profit" : nil, sl == true ? "stop-loss" : nil].compactMap { $0 }
+        guard !refused.isEmpty || !unknown.isEmpty else { return nil }
+        var parts: [String] = []
+        if !refused.isEmpty {
+            let them = refused.count == 1 ? "it" : "them"
+            parts.append("\(input.kind == .market ? "Position opened" : "Order sent"), but Perpl didn't accept the \(refused.joined(separator: " and ")). Set \(them) with TP/SL on the position\(input.kind == .market ? "" : " once the order fills").")
+        }
+        if !unknown.isEmpty {
+            let them = unknown.count == 1 ? "it" : "them"
+            parts.append("Order status unknown for the \(unknown.joined(separator: " and ")) — Perpl didn't confirm \(them). Check Open Orders before placing \(them) again.")
+        }
+        return parts.joined(separator: " ")
     }
 }
 
@@ -2225,6 +2457,9 @@ struct OrderTicket {
     /// flag survives a mode switch, the effective value here is always false for a market order.
     var effectiveReduceOnly: Bool { kind == .limit && reduceOnly }
     var effectivePostOnly: Bool { kind == .limit && postOnly }
+    /// TP/SL only on an order that opens or adds (security audit GT-6): on a reduce-only order its triggers would close
+    /// the side the account doesn't hold. Also enforced in `PerplTrading`.
+    var effectiveTPSL: Bool { tpslEnabled && !effectiveReduceOnly }
 
     func baseSize(market: PerpMarket, price: Double) -> Double {
         let typed = sizeText.perpDouble ?? 0

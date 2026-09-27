@@ -1,14 +1,15 @@
 import DyorKit
 import Foundation
 
-/// A take-profit / stop-loss the app placed for the user. Perpl holds TP/SL as keeper-managed trigger orders and
-/// exposes no read-back API for them (the on-chain Exchange has no trigger primitive), so the app remembers what it
-/// placed and shows that — reconciled against the polled positions/orders so a fired or closed trigger doesn't linger.
-/// These are the user's OWN set triggers, not an authoritative snapshot from Perpl.
+/// A take-profit / stop-loss the app placed for the user, remembered on this device. Perpl holds TP/SL as keeper-managed
+/// trigger orders (the on-chain Exchange has no trigger primitive), and the trading socket's open-orders stream (mt:23/24)
+/// is the authority for them; this echo only fills in for a trigger the stream hasn't shown yet, and — while the stream
+/// isn't live — stands in as an UNVERIFIED record (it may have fired or been cancelled since). Never authoritative.
 struct PlacedTrigger: Codable, Identifiable, Hashable {
     enum Kind: String, Codable {
         case takeProfit, stopLoss
         var label: String { self == .takeProfit ? "Take Profit" : "Stop Loss" }
+        init(_ kind: PerplTriggerKind) { self = kind == .takeProfit ? .takeProfit : .stopLoss }
     }
 
     let id: UUID
@@ -49,24 +50,33 @@ enum TriggerStore {
         UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: key(owner))
     }
 
-    /// Record freshly-accepted triggers. A new trigger replaces a prior one of the SAME market AND kind (re-arming a
-    /// take-profit supersedes the old take-profit) but leaves the untouched sibling in place — so placing only a new
-    /// take-profit never wipes a stop-loss that is still live keeper-side.
+    /// Record freshly-accepted triggers. Nothing earlier is dropped: a new entry's take-profit does NOT replace an older
+    /// one on Perpl — both stay live, each sized to its own entry — so both echoes stay too (security audit GT-1).
     static func record(_ new: [PlacedTrigger], owner: Address?) {
         guard !new.isEmpty else { return }
-        var list = all(owner: owner)
-        for t in new { list.removeAll { $0.perpId == t.perpId && $0.kind == t.kind } }
-        list.append(contentsOf: new)
-        save(list, owner: owner)
+        // Bounded: the newest 200 are plenty to stand in for a market's triggers while the stream is offline.
+        save(Array((all(owner: owner) + new).suffix(200)), owner: owner)
+    }
+
+    /// Drop the echoes of one kind on one side of a market, once Perpl admitted the cancel of every live trigger they
+    /// could stand for (the position TP/SL sheet replaced or removed them).
+    static func remove(perpId: Int, kind: PlacedTrigger.Kind, positionLong: Bool, owner: Address?) {
+        let list = all(owner: owner)
+        let kept = list.filter { !($0.perpId == perpId && $0.kind == kind && $0.positionLong == positionLong) }
+        if kept.count != list.count { save(kept, owner: owner) }
     }
 
     /// Keep a trigger while its market still has an open position OR a resting entry order (or it is too fresh to have
-    /// settled yet); drop it otherwise. Returns — and persists — the survivors.
+    /// settled yet); drop it otherwise. Pruning needs `verified`: only while the trading stream is live can the app
+    /// tell a trigger is gone — offline, a leftover echo may be the only trace of a trigger still armed at Perpl, so
+    /// it is kept and shown as unverified (security audit GT-3). Returns — and persists — the survivors.
     @discardableResult
-    static func reconcile(owner: Address?, openPerpIds: Set<Int>) -> [PlacedTrigger] {
+    static func reconcile(owner: Address?, openPerpIds: Set<Int>, verified: Bool) -> [PlacedTrigger] {
         let now = Date()
-        let kept = all(owner: owner).filter { openPerpIds.contains($0.perpId) || now.timeIntervalSince($0.placedAt) < settleGrace }
-        save(kept, owner: owner)
+        let list = all(owner: owner)
+        guard verified else { return list }
+        let kept = list.filter { openPerpIds.contains($0.perpId) || now.timeIntervalSince($0.placedAt) < settleGrace }
+        if kept.count != list.count { save(kept, owner: owner) }
         return kept
     }
 }

@@ -77,6 +77,14 @@ final class PerpsModel {
     private(set) var lastFilledPerpId: Int?
     private var lastPositionSize: [Int: Double] = [:]
     private var fillPrimed = false
+    /// The positions at the last good read, and the markets that had a resting reduce-only (close) order then — to
+    /// tell a position that closed from one that is merely missing from a failed read.
+    private var lastPositions: [Int: PerpPosition] = [:]
+    private var restingCloseMarkets: Set<Int> = []
+    /// Markets the user closed, or sent a close for, from this app — and when.
+    private var userCloses: [Int: Date] = [:]
+    /// Whose positions the diff state above describes; a different account starts over.
+    private var diffOwner: Address?
 
     var unrealizedTotal: Double { positions.reduce(0) { $0 + $1.unrealized } }
     var equity: Double? { account.map { Amount.units($0.balance, decimals: 6) + unrealizedTotal } }
@@ -93,14 +101,27 @@ final class PerpsModel {
         }
     }
 
+    /// The user closed this market's position, or sent a close for it, from this app: its disappearance is expected.
+    func noteUserClose(_ perpId: Int) { userCloses[perpId] = Date() }
+
     func load(env: AppEnvironment, address: Address?) async {
         perpl = env.perpl
         loading = true
         defer { loading = false }
         async let ctx = env.perpl.context()
+        if address != diffOwner {
+            // Another account: its positions are not "new fills" or "closes" of the previous one's.
+            diffOwner = address
+            lastPositionSize = [:]
+            fillPrimed = false
+            lastPositions = [:]
+            restingCloseMarkets = []
+            userCloses = [:]
+        }
         do {
             let fetched = try await env.perpl.markets()
             markets = fetched
+            env.perplTrading.noteMarkets(fetched)
             error = nil
             if let address {
                 async let collateralTask = env.perpl.collateral(of: address)
@@ -110,18 +131,27 @@ final class PerpsModel {
                     async let p = env.perpl.positions(acct, markets: fetched)
                     async let o = env.perpl.openOrders(acct, markets: fetched)
                     // A failed read returns nil (keep the last good list); only diff for fills on a successful read.
-                    if let fresh = try? await p { detectFills(fresh); positions = fresh }
-                    orders = (try? await o) ?? orders
+                    if let fresh = try? await p {
+                        detectFills(fresh)
+                        detectCloses(fresh, stillOpen: Set(acct.positionPerpIds), trading: env.perplTrading, owner: address)
+                        positions = fresh
+                    }
+                    if let freshOrders = try? await o {
+                        orders = freshOrders
+                        restingCloseMarkets = Set(freshOrders.filter(\.reduceOnly).map(\.perpId))
+                    }
                     // Reconcile the app's recorded TP/SL: a trigger lives while its market has a position or a resting
-                    // entry, so a fired/closed trigger drops off instead of lingering.
+                    // entry, so a fired/closed trigger drops off instead of lingering — pruned only while Perpl's live
+                    // list can confirm it (offline, an echo may be the only trace of a trigger still armed).
                     let openPerpIds = Set(positions.map(\.perpId)).union(orders.map(\.perpId))
-                    triggers = TriggerStore.reconcile(owner: address, openPerpIds: openPerpIds)
+                    triggers = TriggerStore.reconcile(owner: address, openPerpIds: openPerpIds, verified: env.perplTrading.ordersAreLive)
                 } else {
                     positions = []
                     orders = []
-                    triggers = TriggerStore.reconcile(owner: address, openPerpIds: [])
+                    triggers = TriggerStore.reconcile(owner: address, openPerpIds: [], verified: env.perplTrading.ordersAreLive)
                     lastPositionSize = [:]
                     fillPrimed = false
+                    lastPositions = [:]
                 }
                 collateral = (try? await collateralTask) ?? collateral
             } else {
@@ -129,11 +159,42 @@ final class PerpsModel {
                 positions = []
                 orders = []
                 triggers = []
+                lastPositions = [:]
             }
         } catch {
             self.error = describe(error)
         }
         if let list = try? await ctx { context = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) }) }
+    }
+
+    /// A position that was open at the last good read and that the account no longer holds (security audit GT-9).
+    /// The trading stream reports a fired TP/SL or a liquidation precisely when it is live (`PerplTrading`); this is the
+    /// fallback for when it isn't — no one-click trading, or a dropped socket — and can only say the position closed,
+    /// not how. Quiet when the user closed it from here, or the stream already reported the ending. It also has
+    /// Perpl trading cancel the TP/SL that position leaves behind, in case the stream's own report was missed (GT-2).
+    private func detectCloses(_ fresh: [PerpPosition], stillOpen: Set<Int>, trading: PerplTrading, owner: Address) {
+        let freshIds = Set(fresh.map(\.perpId))
+        defer {
+            // A position the account still holds but this read missed stays known, so its close is still noticed later.
+            var next = Dictionary(fresh.map { ($0.perpId, $0) }, uniquingKeysWith: { first, _ in first })
+            for (perpId, old) in lastPositions where !freshIds.contains(perpId) && stillOpen.contains(perpId) { next[perpId] = old }
+            lastPositions = next
+        }
+        // Gone from the read AND from the account's own position bitmap: closed, not a sub-call that failed.
+        for (perpId, old) in lastPositions where !freshIds.contains(perpId) && !stillOpen.contains(perpId) {
+            trading.positionClosedOnChain(marketId: perpId, isLong: old.side == .long)
+            if let at = userCloses[perpId], Date().timeIntervalSince(at) < 600 { continue }
+            if trading.sawEnding(marketId: perpId) { continue }
+            let asset = markets.first { $0.id == perpId }?.asset ?? old.symbol
+            let side = old.side == .long ? "long" : "short"
+            let size = "\(NumberStyle.number(old.size)) \(asset)"
+            let record = restingCloseMarkets.contains(perpId)
+                ? ActivityRecord(kind: .perp, title: "Close order filled", subtitle: "Your \(asset)-PERP \(side) (\(size)) is closed.", hash: nil, section: "perps")
+                : ActivityRecord(kind: .perp, title: "\(asset)-PERP \(side) closed",
+                                 subtitle: "Your \(size) \(side) is no longer open, and it wasn't closed from this app. It may have hit a take-profit or stop-loss, been liquidated, or been closed on another device. Trade History shows how.",
+                                 hash: nil, section: "perps")
+            Activity.record(record, owner: owner)
+        }
     }
 
     /// Compares the fresh positions against the previous snapshot and fires a fill signal + local notification for
