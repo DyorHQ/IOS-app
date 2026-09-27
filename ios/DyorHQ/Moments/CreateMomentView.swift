@@ -95,6 +95,7 @@ struct CreateMomentView: View {
     var body: some View {
         NavigationStack {
             Form {
+                pendingPolicySection
                 mediaSection
                 Section("Moment") {
                     TextField("Name", text: $name)
@@ -140,6 +141,9 @@ struct CreateMomentView: View {
                         DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: input.creatorAllocBps))) FDV")
                         DetailRow("Your coins", "\(NumberStyle.basisPoints(input.creatorAllocBps)) · \(MomentsFormat.coins(MomentsConstants.supply * BigUInt(input.creatorAllocBps) / BigUInt(MomentsConstants.bps)))")
                         DetailRow("Window", "\(windowDays) \(windowDays == 1 ? "day" : "days")")
+                        if let pending = policy.pending {
+                            DetailRow("Policy change", pending.isApplicable(at: Date()) ? "can apply before this lands" : "queued", tint: Color.attention)
+                        }
                         DetailRow("Media", mediaHash == nil ? "link, hashed" : usesMirror ? "photo, fingerprinted · DyorHQ link, not IPFS" : (isVideo ? "video, fingerprinted · IPFS" : "photo, fingerprinted · IPFS"))
                     }
                 }
@@ -149,6 +153,52 @@ struct CreateMomentView: View {
     }
 
     // MARK: Sections
+
+    /// A policy change queued on the contract (security audit 2026-09-26, MO-4). Once it can be applied, anyone may
+    /// apply it at any moment, and a publish that lands after that takes the new terms, not the ones reviewed here.
+    @ViewBuilder private var pendingPolicySection: some View {
+        if let policy, let pending = policy.pending {
+            let applicable = pending.isApplicable(at: Date())
+            Section {
+                Label(applicable ? "New terms can take effect at any moment" : "New terms are queued", systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
+                Text(applicable
+                     ? "Anyone can apply the queued policy now. If it's applied before your publish confirms, your Moment gets the new terms below instead of the ones shown here."
+                     : "The queued policy can be applied from \(pending.applicableAt.formatted(date: .abbreviated, time: .shortened)). A publish that confirms after it's applied gets the new terms below instead of the ones shown here.")
+                    .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                ForEach(pending.changes(from: policy), id: \.self) { field in
+                    LabeledContent(Self.title(field), value: Self.change(field, from: policy, to: pending)).font(.footnote)
+                }
+            }
+        }
+    }
+
+    private static func title(_ field: PendingMomentPolicy.Field) -> String {
+        switch field {
+        case .threshold: return "Graduation reserve"
+        case .minPrice: return "Minimum price"
+        case .split: return "Split (you · DyorHQ · reserve)"
+        case .maxCreatorAlloc: return "Most you can keep"
+        case .royalty: return "NFT royalty"
+        case .expiryShare: return "Your share on expiry"
+        case .platform: return "Platform wallet"
+        case .treasury: return "Treasury wallet"
+        }
+    }
+
+    private static func change(_ field: PendingMomentPolicy.Field, from now: MomentPolicy, to next: PendingMomentPolicy) -> String {
+        func bps(_ value: Int) -> String { NumberStyle.basisPoints(value) }
+        switch field {
+        case .threshold: return "\(MomentsFormat.usdc(now.threshold)) → \(MomentsFormat.usdc(next.threshold))"
+        case .minPrice: return "\(MomentsFormat.usdc(now.minPrice)) → \(MomentsFormat.usdc(next.minPrice))"
+        case .split: return "\(bps(now.creatorBps)) · \(bps(now.platformBps)) · \(bps(now.reserveBps)) → \(bps(next.creatorBps)) · \(bps(next.platformBps)) · \(bps(next.reserveBps))"
+        case .maxCreatorAlloc: return "\(bps(now.maxCreatorAllocBps)) → \(bps(next.maxCreatorAllocBps))"
+        case .royalty: return "\(bps(now.royaltyBps)) → \(bps(next.royaltyBps))"
+        case .expiryShare: return "\(bps(now.expiryCreatorBps)) → \(bps(next.expiryCreatorBps))"
+        case .platform: return "\(now.platform.short) → \(next.platform.short)"
+        case .treasury: return "\(now.treasury.short) → \(next.treasury.short)"
+        }
+    }
 
     private var mediaSection: some View {
         Section {

@@ -197,6 +197,8 @@ public struct MomentPolicy: Sendable, Hashable {
     public let momentCount: Int
     public let publishingPaused: Bool
     public let externalBaseURI: String
+    /// A policy proposed and not applied yet, if any (`MomentsFactory.pendingPolicy`).
+    public var pending: PendingMomentPolicy?
 
     public init(threshold: BigUInt, minPrice: BigUInt, creatorBps: Int, platformBps: Int, reserveBps: Int, maxCreatorAllocBps: Int, expiryCreatorBps: Int, royaltyBps: Int, platform: Address, treasury: Address, momentCount: Int, publishingPaused: Bool, externalBaseURI: String) {
         self.threshold = threshold
@@ -213,6 +215,63 @@ public struct MomentPolicy: Sendable, Hashable {
         self.publishingPaused = publishingPaused
         self.externalBaseURI = externalBaseURI
     }
+}
+
+/// A policy governance proposed for Moments published from then on, not applied yet. Once `applicableAt` passes,
+/// anyone can apply it (`applyPolicy` is permissionless) at any moment — also between a creator's review and their
+/// publish landing — and a publish takes whatever policy is live when it executes, so the app warns while one is
+/// pending (security audit 2026-09-26, MO-4).
+public struct PendingMomentPolicy: Sendable, Hashable {
+    public let threshold: BigUInt
+    public let minPrice: BigUInt
+    public let creatorBps: Int
+    public let platformBps: Int
+    public let reserveBps: Int
+    public let maxCreatorAllocBps: Int
+    public let expiryCreatorBps: Int
+    public let royaltyBps: Int
+    public let platform: Address
+    public let treasury: Address
+    /// The earliest time it can be applied.
+    public let applicableAt: Date
+
+    public init(threshold: BigUInt, minPrice: BigUInt, creatorBps: Int, platformBps: Int, reserveBps: Int, maxCreatorAllocBps: Int, expiryCreatorBps: Int, royaltyBps: Int, platform: Address, treasury: Address, applicableAt: Date) {
+        self.threshold = threshold
+        self.minPrice = minPrice
+        self.creatorBps = creatorBps
+        self.platformBps = platformBps
+        self.reserveBps = reserveBps
+        self.maxCreatorAllocBps = maxCreatorAllocBps
+        self.expiryCreatorBps = expiryCreatorBps
+        self.royaltyBps = royaltyBps
+        self.platform = platform
+        self.treasury = treasury
+        self.applicableAt = applicableAt
+    }
+
+    /// The terms a pending policy changes.
+    public enum Field: String, Sendable, CaseIterable {
+        case threshold, minPrice, split, maxCreatorAlloc, royalty, expiryShare, platform, treasury
+    }
+
+    /// Which terms differ from `current`, in `Field` order; empty when the proposal repeats the live policy.
+    public func changes(from current: MomentPolicy) -> [Field] {
+        Field.allCases.filter { field in
+            switch field {
+            case .threshold: return threshold != current.threshold
+            case .minPrice: return minPrice != current.minPrice
+            case .split: return creatorBps != current.creatorBps || platformBps != current.platformBps || reserveBps != current.reserveBps
+            case .maxCreatorAlloc: return maxCreatorAllocBps != current.maxCreatorAllocBps
+            case .royalty: return royaltyBps != current.royaltyBps
+            case .expiryShare: return expiryCreatorBps != current.expiryCreatorBps
+            case .platform: return platform != current.platform
+            case .treasury: return treasury != current.treasury
+            }
+        }
+    }
+
+    /// Whether anyone can apply it at `now`: from then on, any publish may land under it.
+    public func isApplicable(at now: Date) -> Bool { now >= applicableAt }
 }
 
 /// `MomentTypes.Provenance`: what the NFT records about the moment itself.

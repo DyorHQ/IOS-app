@@ -112,6 +112,10 @@ struct MomentsView: View {
                 if policy.publishingPaused {
                     Label("Publishing is paused by governance; collecting continues.", systemImage: "pause.circle").font(.caption).foregroundStyle(Color.attention)
                 }
+                if policy.pending != nil {
+                    // MO-4: Publish a Moment shows what the queued policy would change.
+                    Label("New terms for new Moments are queued; Publish a Moment shows what changes.", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention)
+                }
             }
         }
     }
