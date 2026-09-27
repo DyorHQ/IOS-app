@@ -124,32 +124,47 @@ extension Mera {
             Intent(parts: [Part(kind: .perplOrder, order: order)], usd: usd)
         }
 
-        /// A Perpl order as its `execOrders` desc encodes it: the market, the side, the size and the leverage.
+        /// A Perpl order as its `execOrders` desc encodes it: the market, the side, the size, the leverage, the price
+        /// bound and how it rests (post-only, immediate-or-cancel).
         public struct OrderTerms: Sendable, Equatable {
             public let perpId: BigUInt
             /// `PerpOrderType.openLong` or `.openShort`.
             public let orderType: BigUInt
             public let lotLNS: BigUInt
             public let leverageHdths: BigUInt
+            /// The desc's price, in the market's price units: the most a long pays, the least a short sells at — for a
+            /// market order the mark moved by the slippage allowance.
+            public let price: BigUInt
+            public let postOnly: Bool
+            public let immediateOrCancel: Bool
 
-            public init(perpId: BigUInt, orderType: BigUInt, lotLNS: BigUInt, leverageHdths: BigUInt) {
+            public init(perpId: BigUInt, orderType: BigUInt, lotLNS: BigUInt, leverageHdths: BigUInt, price: BigUInt, postOnly: Bool, immediateOrCancel: Bool) {
                 self.perpId = perpId
                 self.orderType = orderType
                 self.lotLNS = lotLNS
                 self.leverageHdths = leverageHdths
+                self.price = price
+                self.postOnly = postOnly
+                self.immediateOrCancel = immediateOrCancel
             }
 
             /// The terms `PerplExchange.orderDesc` encodes for `order`.
             public init(_ order: OrderInput) {
                 let desc = PerplExchange.orderDesc(order, descId: 0)
-                self.init(perpId: desc[1].uint, orderType: desc[2].uint, lotLNS: desc[5].uint, leverageHdths: desc[11].uint)
+                self.init(perpId: desc[1].uint, orderType: desc[2].uint, lotLNS: desc[5].uint, leverageHdths: desc[11].uint,
+                          price: desc[4].uint, postOnly: desc[7].bool, immediateOrCancel: desc[9].bool)
             }
 
-            /// Whether a signed order stays within these: the same market and side, no higher leverage, and no more
-            /// than 2% over the size (an order sized in dollars is converted at the mark, which can move between the
-            /// sheet opening and the tap).
+            /// Whether a signed order stays within these: the same market, side and way of resting, no higher leverage,
+            /// no more than 2% over the size, and a price no more than 2% worse — above the one shown for a long, below
+            /// it for a short. The tolerances cover the mark moving between the sheet building the order and the tap (a
+            /// market order's price and a dollar-sized order's size both come from it); the per-action cap is priced
+            /// at the order shown, so a price well past it asks.
             func admits(_ signed: OrderTerms) -> Bool {
-                signed.perpId == perpId && signed.orderType == orderType && signed.leverageHdths <= leverageHdths && signed.lotLNS * 100 <= lotLNS * 102
+                guard signed.perpId == perpId, signed.orderType == orderType, signed.leverageHdths <= leverageHdths, signed.lotLNS * 100 <= lotLNS * 102,
+                      signed.postOnly == postOnly, signed.immediateOrCancel == immediateOrCancel else { return false }
+                if orderType == BigUInt(PerpOrderType.openLong.rawValue) { return signed.price * 100 <= price * 102 }
+                return signed.price * 100 >= price * 98
             }
         }
 

@@ -141,6 +141,7 @@ extension Mera.SigningPolicy {
         guard type == BigUInt(PerpOrderType.openLong.rawValue) || type == BigUInt(PerpOrderType.openShort.rawValue),
               d[3].uint == 0, d[6].uint == 0, !d[8].bool, d[10].uint == 0, d[12].uint == 0, d[13].uint == 0,
               d[14].uint == PerplExchange.maxNegPnlCollatBPS, d[4].uint > 0, d[5].uint > 0, d[11].uint > 0 else { return nil }
-        return Mera.Intent.OrderTerms(perpId: d[1].uint, orderType: type, lotLNS: d[5].uint, leverageHdths: d[11].uint)
+        return Mera.Intent.OrderTerms(perpId: d[1].uint, orderType: type, lotLNS: d[5].uint, leverageHdths: d[11].uint,
+                                      price: d[4].uint, postOnly: d[7].bool, immediateOrCancel: d[9].bool)
     }
 }

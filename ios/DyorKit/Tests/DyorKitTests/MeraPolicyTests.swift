@@ -92,8 +92,8 @@ final class MeraPolicyTests: XCTestCase {
     }
 
     /// The order `perplOrders` builds, as a sheet declares it.
-    private func perplIntent(_ type: Int = 0, lots: BigUInt = 10, leverage: BigUInt = 500, usd: Double? = 80) -> Intent {
-        .perplOrder(usd: usd, order: .init(perpId: 16, orderType: BigUInt(type), lotLNS: lots, leverageHdths: leverage))
+    private func perplIntent(_ type: Int = 0, lots: BigUInt = 10, leverage: BigUInt = 500, price: BigUInt = 100, usd: Double? = 80) -> Intent {
+        .perplOrder(usd: usd, order: .init(perpId: 16, orderType: BigUInt(type), lotLNS: lots, leverageHdths: leverage, price: price, postOnly: false, immediateOrCancel: true))
     }
 
     private var usdc: Address { Monad.usdc }
@@ -307,6 +307,10 @@ final class MeraPolicyTests: XCTestCase {
             ("a short declared as a long", perplOrders([1]), perplIntent(0), .amountOverDeclared),
             ("more than 2% over the size", perplOrders([0], change: (5, .uint(11))), perplIntent(), .amountOverDeclared),
             ("higher leverage than shown", perplOrders([0], change: (11, .uint(501))), perplIntent(), .amountOverDeclared),
+            ("a long more than 2% above the price shown", perplOrders([0], change: (4, .uint(103))), perplIntent(), .amountOverDeclared),
+            ("a short more than 2% below the price shown", perplOrders([1], change: (4, .uint(97))), perplIntent(1), .amountOverDeclared),
+            ("a resting order shown as immediate-or-cancel", perplOrders([0], change: (9, .bool(false))), perplIntent(), .amountOverDeclared),
+            ("a post-only order not shown as one", perplOrders([0], change: (7, .bool(true))), perplIntent(), .amountOverDeclared),
             ("an order with nothing declared", perplOrders([0]), Intent(parts: [.init(kind: .perplOrder)], usd: 10), .notAllowlisted),
         ]
         for (name, call, intent, reason) in asks {
@@ -314,6 +318,11 @@ final class MeraPolicyTests: XCTestCase {
         }
         // Within 2% of the declared size (an order sized in dollars, converted at a mark that moved) is still the order.
         XCTAssertEqual(review([perplOrders([0], change: (5, .uint(102)))], perplIntent(lots: 100)), .allowed)
+        // So is a price within 2% of the one shown, or better: lower for a long, higher for a short.
+        XCTAssertEqual(review([perplOrders([0], change: (4, .uint(102)))], perplIntent()), .allowed)
+        XCTAssertEqual(review([perplOrders([0], change: (4, .uint(50)))], perplIntent()), .allowed)
+        XCTAssertEqual(review([perplOrders([1], change: (4, .uint(98)))], perplIntent(1)), .allowed)
+        XCTAssertEqual(review([perplOrders([1], change: (4, .uint(150)))], perplIntent(1)), .allowed)
         // The terms a sheet declares are those the app's own builder encodes.
         let market = PerpMarket(id: 16, symbol: "BTC", name: "Bitcoin", priceDecimals: 1, lotDecimals: 5, basePricePNS: 0,
                                 mark: 100, last: 100, oracle: 100, markTimestamp: 0, longOI: 0, shortOI: 0,
