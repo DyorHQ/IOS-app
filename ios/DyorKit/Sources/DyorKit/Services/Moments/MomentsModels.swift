@@ -870,6 +870,16 @@ public enum MomentsMath {
         return reserve * Double(MomentsConstants.bps + reserveBps) / Double(reserveBps) * Double(MomentsConstants.bps) / Double(MomentsConstants.bps - creatorAllocBps)
     }
 
+    /// The highest collect price that is ever charged: the gross that completes the reserve, ceil(threshold · 10 000 /
+    /// reserveBps). The first collect at or above it graduates the Moment and is charged only this (`MomentCollect`
+    /// clamps it), so a higher listed price is never paid; the v2 factory refuses one (`PriceTooHigh`). Nil when
+    /// `reserveBps` is not positive.
+    public static func maxCollectPrice(threshold: BigUInt, reserveBps: Int) -> BigUInt? {
+        guard reserveBps > 0 else { return nil }
+        let r = BigUInt(reserveBps)
+        return (threshold * BigUInt(MomentsConstants.bps) + r - 1) / r
+    }
+
     /// Whole coins as a display number.
     public static func coins(_ wei: BigUInt) -> Double { Amount.units(wei, decimals: MomentsConstants.coinDecimals) }
     /// Whole USDC as a display number.

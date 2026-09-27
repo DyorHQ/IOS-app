@@ -34,8 +34,12 @@ function validate(form: Form, policy: Policy | null, mediaHash: Hex | null): Val
   const animationURI = form.animationURI.trim();
   if (animationURI && !/^(ipfs:\/\/|https:\/\/)\S+$/i.test(animationURI)) errors.animationURI = "Use an ipfs:// or https:// link.";
   const price = parseAmount(form.price, USDC.decimals);
+  // The gross that completes the reserve: the first collect at or above it graduates the Moment and is charged only
+  // that, so a higher listed price would never be paid (the v2 factory refuses it: PriceTooHigh).
+  const maxPrice = policy && policy.reserveBps > 0 ? (policy.threshold * BPS + BigInt(policy.reserveBps) - 1n) / BigInt(policy.reserveBps) : null;
   if (price === null) errors.price = "Enter a plain amount, like 1 or 0.10.";
   else if (policy && price < policy.minPrice) errors.price = `The minimum collect price is ${usd(policy.minPrice)}.`;
+  else if (maxPrice !== null && price > maxPrice) errors.price = `The maximum collect price is ${usd(maxPrice)}: the first collect at that price completes the reserve, so a higher price would never be charged.`;
   const allocPct = Number(form.allocPct || "0");
   const creatorAllocBps = Math.round(allocPct * 100);
   if (!Number.isFinite(allocPct) || allocPct < 0 || !/^\d*\.?\d{0,2}$/.test(form.allocPct.trim() || "0")) errors.allocPct = "Enter a percentage with up to two decimals.";

@@ -61,6 +61,10 @@ struct CreateMomentView: View {
     private var priceProblem: String? {
         guard let price, price > 0 else { return "Enter a collect price in USDC." }
         if let policy, price < policy.minPrice { return "The minimum price is \(MomentsFormat.usdc(policy.minPrice))." }
+        // Above the gross that completes the reserve the first collect is charged only that gross.
+        if let policy, let ceiling = MomentsMath.maxCollectPrice(threshold: policy.threshold, reserveBps: policy.reserveBps), price > ceiling {
+            return "The maximum price is \(MomentsFormat.usdc(ceiling)): the first collect at that price completes the reserve, so a higher price would never be charged."
+        }
         return nil
     }
     private var allocProblem: String? {
