@@ -8,7 +8,13 @@ enum KnownTokenStore {
     private static func key(_ owner: Address) -> String { "knownTokens.\(owner.hex)" }
 
     static func all(owner: Address?) -> [Token] {
-        guard let owner, let data = UserDefaults.standard.data(forKey: key(owner)) else { return [] }
+        guard let owner else { return [] }
+        migrateUnverified(owner)
+        return stored(owner)
+    }
+
+    private static func stored(_ owner: Address) -> [Token] {
+        guard let data = UserDefaults.standard.data(forKey: key(owner)) else { return [] }
         return (try? JSONDecoder().decode([Token].self, from: data)) ?? []
     }
 
@@ -29,8 +35,27 @@ enum KnownTokenStore {
     private static func unverifiedKey(_ owner: Address) -> String { "knownTokens.unverified.\(owner.hex)" }
 
     static func unverified(owner: Address?) -> Set<Address> {
-        guard let owner, let list = UserDefaults.standard.stringArray(forKey: unverifiedKey(owner)) else { return [] }
+        guard let owner else { return [] }
+        migrateUnverified(owner)
+        return storedUnverified(owner)
+    }
+
+    private static func storedUnverified(_ owner: Address) -> Set<Address> {
+        guard let list = UserDefaults.standard.stringArray(forKey: unverifiedKey(owner)) else { return [] }
         return Set(list.compactMap { Address($0) })
+    }
+
+    private static func migratedKey(_ owner: Address) -> String { "knownTokens.unverified.migrated.v1.\(owner.hex)" }
+
+    /// Once per wallet, before anything reads or changes its tokens: builds before the Unverified mark stored every
+    /// token found in the wallet's history as if chosen, and discovery never finds a stored token again, so everything
+    /// stored then is marked (`WalletTokenDiscovery.unverifiedAfterUpgrade`). A swap into one clears its mark.
+    private static func migrateUnverified(_ owner: Address) {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: migratedKey(owner)) else { return }
+        let marked = WalletTokenDiscovery.unverifiedAfterUpgrade(stored: stored(owner), alreadyUnverified: storedUnverified(owner))
+        setUnverified(marked, owner: owner)
+        defaults.set(true, forKey: migratedKey(owner))
     }
 
     static func isUnverified(_ token: Address, owner: Address?) -> Bool { unverified(owner: owner).contains(token) }
