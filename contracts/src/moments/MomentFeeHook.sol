@@ -25,8 +25,7 @@ import {IMomentFeeHook} from "./interfaces/IMomentsMarket.sol";
 ///         and the hook refuses to serve unregistered pools, so nobody can front-run graduation with a mispriced
 ///         pool or attach this hook to an arbitrary pair. The buyback module's own swaps are fee-exempt.
 ///
-///         v2 (NOT deployed — see DyorHQ/internal: ios-app/contracts/CHANGELOG-v2.md),
-///         MO-2: before the first swap of each block the hook
+///         Before the first swap of each block the hook
 ///         records the pool's price, so the buyback can refuse to add liquidity at a price someone moved within
 ///         the same block (the sandwich pattern). One storage slot per Moment; written once per block.
 contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {
@@ -51,7 +50,7 @@ contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {
     mapping(uint256 => uint256) public platformAccrued;
     mapping(uint256 => uint256) public buybackAccrued;
 
-    /// @dev v2 (MO-2): the pool price before the first swap of `blockNumber` (packed in one slot).
+    /// @dev The pool price before the first swap of `blockNumber` (packed in one slot).
     struct BlockOpen {
         uint160 sqrtPriceX96;
         uint64 blockNumber;
@@ -140,7 +139,7 @@ contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {
         if (momentId == 0) revert PoolNotRegistered();
         BlockOpen storage open = _blockOpen[momentId];
         if (open.blockNumber != block.number) {
-            // v2 (MO-2): first swap of this block — remember the price it starts from.
+            // First swap of this block — remember the price it starts from.
             (uint160 sqrtP,,,) = poolManager.getSlot0(poolId);
             open.sqrtPriceX96 = sqrtP;
             open.blockNumber = uint64(block.number);
@@ -232,7 +231,7 @@ contract MomentFeeHook is IHooks, IMomentFeeHook, ReentrancyGuard {
 
     // ------------------------------------------------------------------ views
 
-    /// @notice v2 (MO-2): the pool's sqrt price before the first swap of the CURRENT block, or its live price when
+    /// @notice The pool's sqrt price before the first swap of the CURRENT block, or its live price when
     ///         nothing has swapped in this block yet (then the two are the same thing).
     function blockOpenSqrtPrice(uint256 momentId) external view returns (uint160 sqrtPriceX96) {
         BlockOpen storage open = _blockOpen[momentId];

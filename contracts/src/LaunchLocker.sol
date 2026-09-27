@@ -15,11 +15,7 @@ import {Types, ILaunchpadFactory} from "./interfaces/ILaunchpad.sol";
 /// @notice Holds every graduated pool position and the supply left over at graduation, forever. There is no
 ///         unlock, no owner and no withdrawal: the contract can only add liquidity, never remove it.
 ///
-///         v2 (NOT deployed — see DyorHQ/internal: ios-app/contracts/CHANGELOG-v2.md),
-///         LP-3: `locked[]` is keyed by the LAUNCH token for
-///         every pair. v1 keyed it by currency0 unless currency0 was native, so a launch whose ERC-20 quote asset
-///         sorts below the token (e.g. AUSD, some USDC launches) was recorded under the QUOTE token's address —
-///         `locked(token)` read empty and each such graduation overwrote the previous one's entry.
+///         `locked[]` is keyed by the launch token for every pair, whichever way the pair sorts, and
 ///         `lockedLiquidity(token)` reads the live position straight from the PoolManager.
 contract LaunchLocker is IUnlockCallback {
     using CurrencyLibrary for Currency;
@@ -90,7 +86,7 @@ contract LaunchLocker is IUnlockCallback {
         }
     }
 
-    /// @dev v2 (LP-3): the launch token of a graduating pool, whichever way the pair sorts. A native quote is always
+    /// @dev The launch token of a graduating pool, whichever way the pair sorts. A native quote is always
     ///      currency0; for two ERC-20s, currency0 is the launch token exactly when the factory's launch record for it
     ///      exists and names currency1 as its quote asset.
     function _launchToken(PoolKey memory key) internal view returns (address) {
@@ -101,7 +97,7 @@ contract LaunchLocker is IUnlockCallback {
         return l.exists && l.pairToken == c1 ? c0 : c1;
     }
 
-    /// @notice v2 (LP-3): the liquidity of `token`'s locked position as the PoolManager itself reports it (0 if the
+    /// @notice The liquidity of `token`'s locked position as the PoolManager itself reports it (0 if the
     ///         token has no position here). Proof-of-lock that does not depend on this contract's own bookkeeping.
     function lockedLiquidity(address token) external view returns (uint128) {
         Locked storage l = locked[token];
