@@ -174,9 +174,17 @@ struct PositionTriggersSheet: View {
     private func apply(approval: MeraSession.StepUp? = nil) async {
         // App Lock covers this like an order: it cancels and places triggers with the Perpl API key.
         if approval == nil, settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm TP/SL")) { return }
-        guard let livePosition else { return }
+        // Re-read on the retry after Face ID too: the position can close, or the stream reconnect, while the prompt is
+        // open. Never left busy — the sheet couldn't be closed.
+        guard let livePosition else {
+            if phase == .working { phase = .failed("This position is no longer on Perpl's live list, so nothing was changed. Check Positions, then try again.") }
+            return
+        }
         let changes = self.changes
-        guard !changes.isEmpty else { return }
+        guard !changes.isEmpty else {
+            if phase == .working { phase = .failed("The TP/SL on Perpl changed meanwhile, so nothing was sent. Check them and try again.") }
+            return
+        }
         phase = .working
         do {
             let outcomes = try await perplTrading.changeTriggers(changes, market: market, position: livePosition, reference: mark, liquidation: position.liquidation, approval: approval)
@@ -188,13 +196,15 @@ struct PositionTriggersSheet: View {
                 lines.append(line(for: change, outcome: outcome, size: size))
                 let kind = PlacedTrigger.Kind(change.kind)
                 switch outcome {
-                case .placed:
+                case .placed, .placementUnknown:
                     if !change.replacing.isEmpty { TriggerStore.remove(perpId: market.id, kind: kind, positionLong: isLong, owner: session.address) }
+                    // One that went unanswered may be live too, so this device keeps a record of it as well — shown as
+                    // unverified until Perpl's list confirms or drops it (GT-3), as the order sheet does.
                     if let price = change.price {
                         TriggerStore.record([PlacedTrigger(perpId: market.id, symbol: market.asset, kind: kind, price: price, size: size, positionLong: isLong)], owner: session.address)
-                        summary.append("\(change.kind == .takeProfit ? "TP" : "SL") \(NumberStyle.number(price))")
+                        if outcome == .placed { summary.append("\(change.kind == .takeProfit ? "TP" : "SL") \(NumberStyle.number(price))") }
                     }
-                case .removed, .unprotected, .placementUnknown:
+                case .removed, .unprotected:
                     if !change.replacing.isEmpty { TriggerStore.remove(perpId: market.id, kind: kind, positionLong: isLong, owner: session.address) }
                     if outcome == .removed { summary.append("\(change.kind == .takeProfit ? "TP" : "SL") removed") }
                 case .unchanged, .partlyRemoved, .cancelUnknown, .cancelNotConfirmed:
