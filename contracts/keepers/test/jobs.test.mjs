@@ -355,6 +355,9 @@ test("LP-1: stuck Monday launch where only the v4 fallback works -> graduateFall
   const h = harness();
   await launchpadGraduationJob({ client, launchpads: [lp], ...h });
   assert.deepEqual(h.sender.sent[0].argv.slice(0, 4), ["send", lp.factory, "graduateFallback(address)", tok]);
+  // The fallback's own Monday retry must get as much gas as one transaction allows: with 25M a squat that ~29.9M
+  // realigns (1,100-1,200 dust ticks on the live factory) moved to Uniswap v4 and dropped the creator's venue.
+  assert.ok(h.sender.sent[0].argv.includes("29900000"), "just under Monad's 30M per-transaction cap");
 });
 
 // ---------------------------------------------------------------- sec2: robustness (2026-09-26 ops audit)
@@ -488,7 +491,7 @@ test("sec2: the legacy 0xad3d factory is read with its 16-field record and its M
   await launchpadGraduationJob({ client, launchpads: [legacy], ...h });
   assert.deepEqual(legacyShapes, [16]);
   assert.equal(h.sender.sent.length, 1, "a stuck legacy launch is retried on Monday");
-  assert.ok(h.sender.sent[0].argv.includes("25000000"), "with the Monday gas limit");
+  assert.ok(h.sender.sent[0].argv.includes("29900000"), "with the Monday gas limit");
   const sw = harness();
   await sweepsJob({ client, launchpads: [legacy], ...sw });
   assert.equal(sw.reporter.alerts.length, 0, "nothing to sweep on an all-Monday factory");
@@ -504,6 +507,55 @@ test("sec2 LP-1: a stuck Monday-only launch tells the on-call that the OWNER mus
   await launchpadGraduationJob({ client: mockClient({ reads }), launchpads: [lp], ...h });
   assert.equal(h.reporter.alerts[0].severity, "critical");
   assert.match(h.reporter.alerts[0].reason, /OWNER calls allowV4Fallback/);
+});
+
+// A v2 factory snapshots the Monday-only rule per launch and opens the v4 fallback to anyone after a day stuck. Reading
+// the live per-pair rule instead misjudged launches whose pair was flagged after they launched, and called every
+// stuck Monday-only launch "frozen until the OWNER calls allowV4Fallback", past the public valve too.
+test("sec2 LP-1 (v2): a pair flagged after the launch does not make that launch Monday-only", async () => {
+  const tok = a(0x7001);
+  const l = launch({ graduationVenue: 1, phase: 0 });
+  const reads = lp1Reads({ tok, l, completed: true, stuckSince: NOW - 3600n, pool: ZERO });
+  reads[`${lp.factory}:launchMondayOnly:${tok}`] = false; // the v2 snapshot
+  reads[`${lp.factory}:pairMondayOnly:${l.pairToken}`] = true; // flagged later
+  const h = harness();
+  await launchpadGraduationJob({ client: mockClient({ reads }), launchpads: [lp], ...h });
+  assert.equal(h.reporter.alerts[0].severity, "critical");
+  assert.doesNotMatch(h.reporter.alerts[0].reason, /Monday-only/);
+});
+
+test("sec2 LP-1 (v2): a stuck Monday-only launch names the public valve time, then the keeper takes the fallback", async () => {
+  const tok = a(0x7001);
+  const l = launch({ graduationVenue: 1, phase: 0 });
+  const stuckSince = NOW - 3600n;
+  const reads = lp1Reads({ tok, l, completed: true, stuckSince, pool: ZERO });
+  reads[`${lp.factory}:launchMondayOnly:${tok}`] = true;
+  reads[`${lp.factory}:MONDAY_ONLY_FALLBACK_DELAY:`] = DAY;
+  reads[`${lp.factory}:v4FallbackAllowed:${tok}`] = false;
+  const before = harness();
+  await launchpadGraduationJob({ client: mockClient({ reads }), launchpads: [lp], ...before });
+  assert.equal(before.sender.sent.length, 0);
+  assert.equal(before.reporter.alerts[0].severity, "critical");
+  assert.match(before.reporter.alerts[0].reason, new RegExp(`opens to anyone at ${stuckSince + DAY}.*OWNER calls allowV4Fallback`));
+  // a day later the fallback simulates: the keeper sends it
+  reads[`${lp.factory}:stuckSince:${tok}`] = NOW - DAY - 1n;
+  const after = harness();
+  await launchpadGraduationJob({ client: mockClient({ reads, sims: { [`${lp.factory}:graduateFallback:${tok}`.toLowerCase()]: null } }), launchpads: [lp], ...after });
+  assert.deepEqual(after.sender.sent[0].argv.slice(0, 4), ["send", lp.factory, "graduateFallback(address)", tok]);
+});
+
+test("sec2 LP-1 (v2): a blocking squat on a Monday-only launch is a warning naming the valve, not a page", async () => {
+  const tok = a(0x7001);
+  const l = launch({ graduationVenue: 1, phase: 0 });
+  const reads = denseSquatReads(tok, l, a(0x9001));
+  reads[`${lp.factory}:launchMondayOnly:${tok}`] = true;
+  reads[`${lp.factory}:MONDAY_ONLY_FALLBACK_DELAY:`] = DAY;
+  reads[`${lp.factory}:v4FallbackAllowed:${tok}`] = false;
+  const h = harness();
+  await launchpadGraduationJob({ client: mockClient({ reads }), launchpads: [lp], ...h });
+  assert.equal(h.reporter.alerts.length, 1);
+  assert.equal(h.reporter.alerts[0].severity, "warning");
+  assert.match(h.reporter.alerts[0].reason, /opens to anyone after 86400s stuck/);
 });
 
 // ---------------------------------------------------------------- sec2: governance watch

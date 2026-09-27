@@ -48,6 +48,9 @@ import {
 } from "./decide.mjs";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
+/** Gas for a Monday graduate / graduateFallback: just under Monad's 30M per-transaction cap. Monad bills the limit
+    (~3 MON at 102 gwei), which buys the realign every bit of gas one transaction can give it. */
+export const MONDAY_GAS = 29_900_000n;
 const DEFAULT_SIM_ACCOUNT = "0x000000000000000000000000000000000000dEaD";
 const DAY = 86_400n;
 
@@ -336,7 +339,7 @@ export async function sweepsJob({ client, launchpads, sender, reporter, minOther
 
 // ------------------------------------------------------------------------------------------------ LP-1
 
-async function assessSquat(client, { mondayFactory, fee, wmon, token, pairToken, curve, mondayOnly }) {
+async function assessSquat(client, { mondayFactory, fee, wmon, token, pairToken, curve, mondayOnly, valveDelay }) {
   const quote = pairToken === ZERO ? wmon : pairToken;
   const pool = await client.readContract({ address: mondayFactory, abi: mondayFactoryAbi, functionName: "getPool", args: [token, quote, fee] });
   if (pool === ZERO) return { pool, ...assessMondaySquat({ poolExists: false }) };
@@ -364,7 +367,23 @@ async function assessSquat(client, { mondayFactory, fee, wmon, token, pairToken,
       ticksToCross = undefined; // unreadable -> treated as blocking
     }
   }
-  return { pool, target, sqrtP, ticksToCross, ...assessMondaySquat({ poolExists: true, sqrtPriceX96: sqrtP, targetSqrtPriceX96: target, ticksToCross, mondayOnly }) };
+  return { pool, target, sqrtP, ticksToCross, ...assessMondaySquat({ poolExists: true, sqrtPriceX96: sqrtP, targetSqrtPriceX96: target, ticksToCross, mondayOnly, valveDelay }) };
+}
+
+/**
+ * Is this Monday launch bound to Monday (a Monday-only quote asset, aBIL), and when may anyone take its v4 fallback?
+ * A v2 factory snapshots the rule per launch (`launchMondayOnly`: a pair flagged after the launch does not bind it)
+ * and opens the fallback to anyone once the launch has been stuck for `MONDAY_ONLY_FALLBACK_DELAY` (`valveDelay`).
+ * The live (v1) factories have neither: the per-pair rule applies, and only the owner's allowV4Fallback opens it.
+ */
+async function mondayOnlyRule(client, lp, token, pairToken) {
+  const at = { address: lp.factory, abi: launchpadFactoryV2Abi };
+  const snapshot = await readOr(client, { ...at, functionName: "launchMondayOnly", args: [token] }, undefined);
+  if (snapshot === undefined) {
+    return { mondayOnly: await readOr(client, { address: lp.factory, abi: launchpadFactoryAbi, functionName: "pairMondayOnly", args: [pairToken] }, false), valveDelay: undefined };
+  }
+  if (!snapshot) return { mondayOnly: false, valveDelay: undefined };
+  return { mondayOnly: true, valveDelay: await readOr(client, { ...at, functionName: "MONDAY_ONLY_FALLBACK_DELAY" }, undefined) };
 }
 
 async function checkLaunch({ client, lp, token, monday, t, sender, reporter, simAccount, mondayGas, v4Gas, watchProgressBps }) {
@@ -377,8 +396,9 @@ async function checkLaunch({ client, lp, token, monday, t, sender, reporter, sim
   ]);
   const venue = Number(l.graduationVenue);
   const target = `${lp.label} ${token}`;
-  // A Monday-only quote asset (aBIL) has no permissionless v4 fallback on the live factories: say so, loudly.
-  const mondayOnly = venue === VENUE.Monday && !lp.legacyRecord && (await readOr(client, { address: lp.factory, abi: launchpadFactoryAbi, functionName: "pairMondayOnly", args: [l.pairToken] }, false));
+  // A Monday-only quote asset (aBIL) has no permissionless v4 fallback on the live factories (on v2 only after a day
+  // stuck): say so, loudly.
+  const { mondayOnly, valveDelay } = venue === VENUE.Monday && !lp.legacyRecord ? await mondayOnlyRule(client, lp, token, l.pairToken) : { mondayOnly: false, valveDelay: undefined };
   const fallbackAllowed = mondayOnly && (await readOr(client, { address: lp.factory, abi: launchpadFactoryAbi, functionName: "v4FallbackAllowed", args: [token] }, false));
   let squat;
   if (venue === VENUE.Monday && monday) {
@@ -388,7 +408,7 @@ async function checkLaunch({ client, lp, token, monday, t, sender, reporter, sim
       watch = raised * 10_000n >= l.graduationThreshold * watchProgressBps;
     }
     if (watch) {
-      squat = await assessSquat(client, { ...monday, token, pairToken: l.pairToken, curve: l.curve, mondayOnly: mondayOnly && !fallbackAllowed });
+      squat = await assessSquat(client, { ...monday, token, pairToken: l.pairToken, curve: l.curve, mondayOnly: mondayOnly && !fallbackAllowed, valveDelay });
       if (!completed && squat.level !== "none") {
         reporter.alert({ job: "launchpad-graduation", target, severity: squatSeverity(squat), reason: `Monday pool ${squat.pool} squatted (${squat.level}): ${squat.reason}; pool sqrtPriceX96 ${squat.sqrtP}, graduation target ${squat.target}` });
       }
@@ -399,12 +419,14 @@ async function checkLaunch({ client, lp, token, monday, t, sender, reporter, sim
   const simF = venue === VENUE.Monday && !simG.ok
     ? await simulate(client, { address: lp.factory, abi: launchpadFactoryAbi, functionName: "graduateFallback", args: [token], account: simAccount, gas: mondayGas })
     : { ok: false };
-  const d = decideStuckLaunch({ phase: Number(l.phase), venue, completed, rescued, stuckSince, now: t, simGraduate: simG.ok, simFallback: simF.ok, mondayOnly, v4FallbackAllowed: fallbackAllowed });
+  const d = decideStuckLaunch({ phase: Number(l.phase), venue, completed, rescued, stuckSince, now: t, simGraduate: simG.ok, simFallback: simF.ok, mondayOnly, v4FallbackAllowed: fallbackAllowed, valveDelay });
   if (d.action === "none") return;
   const extra = squat && squat.level !== "none" ? ` [Monday pool: ${squat.reason}]` : "";
   reporter.alert({ job: "launchpad-graduation", target, severity: d.severity, reason: `${d.reason}${d.rescueAt ? `; owner rescue possible from ${d.rescueAt}` : ""}${extra}` });
   // Monday graduation and the fallback keep a fixed, high gas limit on purpose: the realign swap must get as much gas
-  // as one transaction allows (and the v2 graduateFallback refuses less than ~22.1M).
+  // as one transaction allows. With less, a squat that more gas would realign moves to Uniswap v4 and the creator
+  // loses the venue (the live fallback gives its Monday retry 63/64 of the gas; the v2 one everything above its v4
+  // reserve, and refuses less than ~22.1M).
   if (d.action === "graduate") {
     reporter.action({ job: "launchpad-graduation", target, what: "graduate(token)" });
     const gas = venue === VENUE.Monday ? mondayGas : await gasFor(client, { address: lp.factory, abi: launchpadFactoryAbi, functionName: "graduate", args: [token], account: simAccount }, v4Gas);
@@ -419,7 +441,7 @@ async function checkLaunch({ client, lp, token, monday, t, sender, reporter, sim
  * Watches Monday-venue launches for squatted Monday pools BEFORE they complete (alert: pre-align or steer the
  * creator), and retries graduation of completed-but-stuck launches (plain graduate first, then the v4 fallback).
  */
-export async function launchpadGraduationJob({ client, launchpads, sender, reporter, simAccount = DEFAULT_SIM_ACCOUNT, mondayGas = 25_000_000n, v4Gas = 3_000_000n, watchProgressBps = 0n }) {
+export async function launchpadGraduationJob({ client, launchpads, sender, reporter, simAccount = DEFAULT_SIM_ACCOUNT, mondayGas = MONDAY_GAS, v4Gas = 3_000_000n, watchProgressBps = 0n }) {
   const t = await now(client);
   for (const lp of launchpads) {
     await guard(reporter, "launchpad-graduation", lp.label, async () => {

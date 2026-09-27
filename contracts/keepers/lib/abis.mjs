@@ -104,7 +104,13 @@ export const launchpadFactoryLegacyAbi = parseAbi([
 ]);
 
 // v2 only (NOT deployed): sealing the modules before the first launch. Absent on every live factory.
-export const launchpadFactoryV2Abi = parseAbi(["function modulesSealed() view returns (bool)", "event ModulesSealed()"]);
+// Also v2 only: the Monday-only rule snapshotted per launch, and the delay after which its v4 fallback is public.
+export const launchpadFactoryV2Abi = parseAbi([
+  "function modulesSealed() view returns (bool)",
+  "function launchMondayOnly(address token) view returns (bool)",
+  "function MONDAY_ONLY_FALLBACK_DELAY() view returns (uint256)",
+  "event ModulesSealed()",
+]);
 
 export const mondayFeeVaultAbi = parseAbi([
   "function owner() view returns (address)",

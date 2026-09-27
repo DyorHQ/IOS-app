@@ -202,3 +202,19 @@ test("sec2 LP-1: a stuck Monday-only launch names the owner action; once allowed
   assert.match(decideStuckLaunch({ ...base, mondayOnly: true }).reason, /OWNER calls allowV4Fallback/);
   assert.doesNotMatch(decideStuckLaunch({ ...base, mondayOnly: true, v4FallbackAllowed: true }).reason, /OWNER/);
 });
+
+test("sec2 LP-1 (v2): a Monday-only launch's freeze is bounded by the public valve", () => {
+  const base = { phase: LAUNCH_PHASE.NotGraduated, completed: true, rescued: false, stuckSince: NOW, venue: VENUE.Monday, simGraduate: false, simFallback: false, mondayOnly: true, valveDelay: DAY };
+  const early = decideStuckLaunch({ ...base, now: NOW + 3600n });
+  assert.equal(early.severity, "critical");
+  assert.match(early.reason, new RegExp(`opens to anyone at ${NOW + DAY}`));
+  const late = decideStuckLaunch({ ...base, now: NOW + DAY });
+  assert.equal(late.severity, "critical");
+  assert.match(late.reason, /past its public fallback time.*fallback fail/);
+  assert.equal(decideStuckLaunch({ ...base, now: NOW + DAY, simFallback: true }).action, "graduateFallback");
+  const T = 1n << 96n;
+  const squat = assessMondaySquat({ poolExists: true, sqrtPriceX96: 2n * T, targetSqrtPriceX96: T, ticksToCross: 1_500, mondayOnly: true, valveDelay: DAY });
+  assert.equal(squat.level, "blocking");
+  assert.equal(squatSeverity(squat), "warning", "a bounded freeze does not page before completion");
+  assert.match(squat.reason, /opens to anyone after 86400s stuck/);
+});
