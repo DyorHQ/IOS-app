@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {MomentTypes, IMomentsFactory} from "./interfaces/IMoments.sol";
 import {MomentCoin} from "./MomentCoin.sol";
 import {MomentNFT} from "./MomentNFT.sol";
@@ -9,8 +10,22 @@ import {MomentNFT} from "./MomentNFT.sol";
 ///         allocation, bundle rate, collect deadline, beneficiaries) are snapshotted into an immutable record at
 ///         publish — there is no function that can change a live Moment. Policy edits only affect Moments published
 ///         after a 48h timelock. The factory never holds USDC or coins; it has no money path at all.
+///
+///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), sec2:
+///         - MO-4: `publish` takes the `termsHash()` the creator's app showed and reverts `TermsChanged` if the policy
+///           (or the metadata base) changed in between, so applying a matured proposal in front of a publish can no
+///           longer change a creator's terms. A proposal lapses if nobody applies it within `POLICY_APPLY_WINDOW` of
+///           becoming applicable. A separate `guardian` key can cancel a proposal and pause publishing (a pause only
+///           it can lift), so a stolen governance key cannot push a policy through the timelock unnoticed.
+///         - MO-8: each Moment's NFT snapshots the external-link base at publish; changing it never touches existing
+///           NFTs, and its length is capped.
+///         - A listed price above the gross that completes the reserve is refused (it would never be charged).
 contract MomentsFactory is IMomentsFactory {
     uint256 public constant POLICY_DELAY = 48 hours;
+    /// @dev v2 (sec2, MO-4): a pending policy must be applied within this window after it becomes applicable.
+    uint256 public constant POLICY_APPLY_WINDOW = 7 days;
+    /// @dev v2 (sec2, MO-8): cap on the external-link base (a huge one would make every tokenURI unreadable).
+    uint256 public constant MAX_EXTERNAL_BASE_URI_LENGTH = 256;
     /// @dev Sanity floors for policy values (USDC units): a threshold below 1 USDC or a minimum price below one cent
     ///      would make the graduation math degenerate; real policies are orders of magnitude above these.
     uint256 public constant MIN_THRESHOLD = 1_000_000;
@@ -18,6 +33,11 @@ contract MomentsFactory is IMomentsFactory {
 
     address public governance;
     address public pendingGovernance;
+    /// @notice v2 (sec2, MO-4): a second key that can only cancel a pending policy and pause publishing. Set by
+    ///         governance while the modules are being wired; afterwards only the guardian itself can hand it on.
+    address public guardian;
+    /// @notice v2 (sec2, MO-4): the guardian's pause. Governance cannot lift it.
+    bool public guardianPaused;
 
     // Modules, wired exactly once. Every module reads its peers from here, so nothing can be re-pointed later.
     address public collect;
@@ -56,6 +76,8 @@ contract MomentsFactory is IMomentsFactory {
     event PolicyApplied(MomentTypes.Policy policy);
     event PolicyCancelled();
     event PublishingPaused(bool paused);
+    event GuardianSet(address indexed guardian);
+    event GuardianPaused(bool paused);
     event ExternalBaseURISet(string base);
     event Published(
         uint256 indexed momentId,
@@ -78,6 +100,12 @@ contract MomentsFactory is IMomentsFactory {
     error NoPendingPolicy();
     error TimelockNotElapsed();
     error Paused();
+    error NotGuardian();
+    error NotGovernanceOrGuardian();
+    error PolicyLapsed();
+    error TermsChanged();
+    error BaseURITooLong();
+    error PriceTooHigh();
     error PriceTooLow();
     error AllocTooHigh();
     error BadWindow();
@@ -110,6 +138,16 @@ contract MomentsFactory is IMomentsFactory {
         pendingGovernance = address(0);
     }
 
+    /// @notice v2 (sec2, MO-4): names the guardian. Governance can do this only while wiring (before `setModules`);
+    ///         after that only the current guardian can hand the role on (or renounce it with address(0)).
+    function setGuardian(address _guardian) external {
+        bool wiring = !modulesSet && msg.sender == governance;
+        bool handOn = guardian != address(0) && msg.sender == guardian;
+        if (!wiring && !handOn) revert NotGuardian();
+        guardian = _guardian;
+        emit GuardianSet(_guardian);
+    }
+
     /// @notice Wires the modules exactly once. After this nothing about the wiring can change.
     function setModules(address _collect, address _vesting, address _graduation, address _locker, address _feeHook, address _buyback)
         external
@@ -138,16 +176,21 @@ contract MomentsFactory is IMomentsFactory {
         emit PolicyProposed(next, pendingPolicyAt);
     }
 
+    /// @notice Anyone may apply a matured proposal. v2 (sec2, MO-4): only within `POLICY_APPLY_WINDOW` of it becoming
+    ///         applicable; a forgotten proposal lapses instead of staying applicable forever.
     function applyPolicy() external {
         if (pendingPolicyAt == 0) revert NoPendingPolicy();
         if (block.timestamp < pendingPolicyAt) revert TimelockNotElapsed();
+        if (block.timestamp > uint256(pendingPolicyAt) + POLICY_APPLY_WINDOW) revert PolicyLapsed();
         policy = pendingPolicy;
         delete pendingPolicy;
         pendingPolicyAt = 0;
         emit PolicyApplied(policy);
     }
 
-    function cancelPolicy() external onlyGovernance {
+    /// @notice Governance, or (v2, sec2) the guardian, cancels a pending proposal.
+    function cancelPolicy() external {
+        if (msg.sender != governance && msg.sender != guardian) revert NotGovernanceOrGuardian();
         delete pendingPolicy;
         pendingPolicyAt = 0;
         emit PolicyCancelled();
@@ -158,27 +201,48 @@ contract MomentsFactory is IMomentsFactory {
         emit PublishingPaused(paused);
     }
 
-    /// @notice Sets the metadata-only base for the NFTs' external links (e.g. https://dyorhq.fun/moments/).
+    /// @notice v2 (sec2, MO-4): the guardian's own pause switch; publishing stops while either pause is on.
+    function setGuardianPaused(bool paused) external {
+        if (msg.sender != guardian || guardian == address(0)) revert NotGuardian();
+        guardianPaused = paused;
+        emit GuardianPaused(paused);
+    }
+
+    /// @notice Sets the metadata-only base for the external links of Moments published from now on (e.g.
+    ///         https://dyorhq.fun/moments/). v2 (sec2, MO-8): existing NFTs keep the base they were published with.
     function setExternalBaseURI(string calldata base) external onlyGovernance {
+        if (bytes(base).length > MAX_EXTERNAL_BASE_URI_LENGTH) revert BaseURITooLong();
         externalBaseURI = base;
         emit ExternalBaseURISet(base);
     }
 
     // ------------------------------------------------------------------ publishing
 
+    /// @notice The terms a Moment published now would snapshot: the policy and the external-link base. v2 (sec2, MO-4):
+    ///         an app shows the creator `policy()` and passes this hash to `publish`.
+    function termsHash() public view returns (bytes32) {
+        return keccak256(abi.encode(policy, externalBaseURI));
+    }
+
     /// @notice Publishes a Moment: deploys its coin + NFT (CREATE2) and freezes its economics and deadline.
-    function publish(PublishParams calldata p) external returns (uint256 momentId, address coin, address nft) {
+    ///         v2 (sec2, MO-4): reverts `TermsChanged` unless `expectedTermsHash == termsHash()`, i.e. unless the terms
+    ///         are the ones the creator was shown.
+    function publish(PublishParams calldata p, bytes32 expectedTermsHash) external returns (uint256 momentId, address coin, address nft) {
         if (!modulesSet) revert ModulesNotSet();
-        if (publishingPaused) revert Paused();
+        if (publishingPaused || guardianPaused) revert Paused();
+        if (expectedTermsHash != termsHash()) revert TermsChanged();
         MomentTypes.Policy memory pol = policy;
         if (p.price < pol.minPrice) revert PriceTooLow();
+        // v2 (sec2): at or above this gross the first collect completes the reserve and is clamped to it, so a higher
+        // listed price would never be charged (a 1/1 listed at $5,000 would sell for the completion gross).
+        if (p.price > Math.ceilDiv(pol.threshold * MomentTypes.BPS, pol.reserveBps)) revert PriceTooHigh();
         if (p.creatorAllocBps > pol.maxCreatorAllocBps) revert AllocTooHigh();
         if (p.collectWindow < MomentTypes.MIN_COLLECT_WINDOW || p.collectWindow > MomentTypes.MAX_COLLECT_WINDOW) revert BadWindow();
 
         momentId = ++momentCount;
         bytes32 salt = keccak256(abi.encode(momentId, msg.sender, p.salt));
         coin = address(new MomentCoin{salt: salt}(momentId, p.name, p.symbol, vesting, graduation));
-        nft = address(new MomentNFT{salt: salt}(momentId, p.name, p.symbol, msg.sender, collect, graduation, pol.royaltyBps, p.provenance));
+        nft = address(new MomentNFT{salt: salt}(momentId, p.name, p.symbol, msg.sender, collect, graduation, pol.royaltyBps, p.provenance, externalBaseURI));
         (uint256 rateNum, uint256 rateDen) = bundleRate(pol.threshold, pol.reserveBps, p.creatorAllocBps);
         uint64 deadline = uint64(block.timestamp + p.collectWindow);
 

@@ -12,6 +12,7 @@ import {MomentTypes} from "../../../src/moments/interfaces/IMoments.sol";
 import {MomentCollect} from "../../../src/moments/MomentCollect.sol";
 import {MomentGraduation} from "../../../src/moments/MomentGraduation.sol";
 import {MomentVesting} from "../../../src/moments/MomentVesting.sol";
+import {MomentBuyback} from "../../../src/moments/MomentBuyback.sol";
 import {MomentCoin} from "../../../src/moments/MomentCoin.sol";
 import {MomentNFT} from "../../../src/moments/MomentNFT.sol";
 import {MaliciousCollector} from "../mocks/MaliciousCollector.sol";
@@ -231,9 +232,13 @@ contract AdversarialForkTest is MomentsForkBase {
             _buyExactIn(bob, key, true, 10_000_000);
             _sellExactIn(bob, key, true, coin.balanceOf(bob) - c0);
         }
+        // v2 (MO-2): the sandwich runs in a block of its own; its push (>2%) trips the block-open price guard, so the
+        // round refuses to run and the attacker is left with the fees of the round trip.
+        vm.roll(vm.getBlockNumber() + 1);
         uint256 carol0 = usdc.balanceOf(carol);
         _buyExactIn(carol, key, true, 2_000_000);
         vm.prank(carol);
+        vm.expectRevert(MomentBuyback.PriceMoved.selector);
         buyback.execute(id, 0);
         _sellExactIn(carol, key, true, coin.balanceOf(carol));
         assertLt(usdc.balanceOf(carol), carol0, "sandwiching the buyback loses money");

@@ -22,17 +22,18 @@ contract ExpiryTest is MomentsBase {
     }
 
     function test_window_bounds_are_enforced_at_publish() public {
+        bytes32 terms = factory.termsHash();
         vm.prank(creator);
         vm.expectRevert(MomentsFactory.BadWindow.selector);
-        factory.publish(_paramsWindow(PRICE, 0, MomentTypes.MIN_COLLECT_WINDOW - 1, 9));
+        factory.publish(_paramsWindow(PRICE, 0, MomentTypes.MIN_COLLECT_WINDOW - 1, 9), terms);
         vm.prank(creator);
         vm.expectRevert(MomentsFactory.BadWindow.selector);
-        factory.publish(_paramsWindow(PRICE, 0, MomentTypes.MAX_COLLECT_WINDOW + 1, 9));
+        factory.publish(_paramsWindow(PRICE, 0, MomentTypes.MAX_COLLECT_WINDOW + 1, 9), terms);
         vm.prank(creator);
-        (uint256 idMin,,) = factory.publish(_paramsWindow(PRICE, 0, MomentTypes.MIN_COLLECT_WINDOW, 9));
+        (uint256 idMin,,) = factory.publish(_paramsWindow(PRICE, 0, MomentTypes.MIN_COLLECT_WINDOW, 9), terms);
         assertEq(factory.getMoment(idMin).deadline, block.timestamp + 1 hours);
         vm.prank(creator);
-        (uint256 idMax,,) = factory.publish(_paramsWindow(PRICE, 0, MomentTypes.MAX_COLLECT_WINDOW, 10));
+        (uint256 idMax,,) = factory.publish(_paramsWindow(PRICE, 0, MomentTypes.MAX_COLLECT_WINDOW, 10), terms);
         assertEq(factory.getMoment(idMax).deadline, block.timestamp + 30 days);
         assertEq(MomentTypes.MAX_COLLECT_WINDOW, 30 days, "maximum collect window is 30 days");
     }

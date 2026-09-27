@@ -14,8 +14,9 @@ contract NFTMetadataTest is MomentsBase {
         p.name = name_;
         p.symbol = "WEIRD";
         p.provenance = MomentTypes.Provenance({mediaURI: 'ipfs://bafy"quoted', mediaHash: keccak256("x"), place: place, date: 1_779_900_000, animationURI: ""});
+        bytes32 terms = factory.termsHash();
         vm.prank(creator);
-        (uint256 i,, address n) = factory.publish(p);
+        (uint256 i,, address n) = factory.publish(p, terms);
         return (i, MomentNFT(n));
     }
 
@@ -54,8 +55,9 @@ contract NFTMetadataTest is MomentsBase {
     function test_marketplace_standards() public {
         MomentsFactory.PublishParams memory p = _params(PRICE, 0, 78);
         p.provenance.animationURI = "ipfs://bafy-video.mp4";
+        bytes32 terms = factory.termsHash();
         vm.prank(creator);
-        (uint256 id,, address n) = factory.publish(p);
+        (uint256 id,, address n) = factory.publish(p, terms);
         MomentNFT nft = MomentNFT(n);
         assertTrue(nft.supportsInterface(0x01ffc9a7), "ERC-165");
         assertTrue(nft.supportsInterface(0x80ac58cd), "ERC-721");
@@ -83,13 +85,17 @@ contract NFTMetadataTest is MomentsBase {
         assertEq(vm.parseJsonString(cjson, ".name"), "Sunrise over Labadi");
         assertEq(vm.parseJsonString(cjson, ".image"), "ipfs://bafy-labadi");
 
-        // external links appear once governance sets the base (metadata only)
+        // external links appear on Moments published once governance has set the base (metadata only). v2 (sec2,
+        // MO-8): each collection keeps the base it was published with, so this one stays without a link.
         vm.prank(gov);
         factory.setExternalBaseURI("https://dyorhq.fun/moments/");
-        json = _decode(nft.tokenURI(1));
-        assertEq(vm.parseJsonString(json, ".external_url"), string.concat("https://dyorhq.fun/moments/", vm.toString(id)));
-        cjson = _decode(nft.contractURI());
-        assertEq(vm.parseJsonString(cjson, ".external_link"), string.concat("https://dyorhq.fun/moments/", vm.toString(id)));
+        assertFalse(vm.keyExistsJson(_decode(nft.tokenURI(1)), ".external_url"), "an existing NFT is never rewritten");
+        (uint256 linkedId, MomentNFT linked) = _publishNamed("Linked", "Accra");
+        _collect(linkedId, alice, 1);
+        json = _decode(linked.tokenURI(1));
+        assertEq(vm.parseJsonString(json, ".external_url"), string.concat("https://dyorhq.fun/moments/", vm.toString(linkedId)));
+        cjson = _decode(linked.contractURI());
+        assertEq(vm.parseJsonString(cjson, ".external_link"), string.concat("https://dyorhq.fun/moments/", vm.toString(linkedId)));
 
         // closing fixes the edition: ERC-4906 batch refresh + ERC-7572 signal, rank gets max_value, edition size trait
         for (uint256 i = 0; i < 11; i++) _collect(id, bob, 1); // reserve 9.75

@@ -37,6 +37,9 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 ///           more in fees (1% hook + 0.5% LP, each way) than adding liquidity at a price ≤2% off can yield.
 ///         - the pairing top-up is sized against the USDC the locker holds for THIS Moment (per-Moment accounting
 ///           in MomentLocker), not the locker's whole shared USDC balance.
+///         - sec2: a push made in the PREVIOUS block passes the block-open guard, so the locker caps what one round
+///           adds at 2% of the position (`MomentLocker.MAX_INCREASE_BPS`); that is too little for a cross-block
+///           sandwich to recover its fees. Whatever a round does not add stays held for the Moment and is paired later.
 contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;

@@ -31,12 +31,20 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 ///           Moment may only spend what that Moment owns here (its dust, its folded LP fees, and whatever arrived
 ///           untracked just before the add — the reserve at seed, the buyback's top-up at increase), never another
 ///           Moment's idle USDC.
+///         - MO-2 (sec2): one `increase` grows the position by at most `MAX_INCREASE_BPS` of its liquidity; the rest
+///           stays held for the Moment and is added by later rounds. An add is priced at the live pool price, and
+///           someone who pushed that price in the previous block (the block-open guard cannot see it) takes the
+///           impermanent loss of whatever is added; capped at 2%, the add is too small for that to repay the 3%
+///           round-trip fees of the push, whatever the push size.
 contract MomentLocker is IMomentLocker, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
     using BalanceDeltaLibrary for BalanceDelta;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
+
+    /// @notice v2 (sec2, MO-2): the most one `increase` may add, in basis points of the position's liquidity.
+    uint256 public constant MAX_INCREASE_BPS = 200;
 
     IPoolManager public immutable poolManager;
     IMomentsFactory public immutable factory;
@@ -130,6 +138,11 @@ contract MomentLocker is IMomentLocker, IUnlockCallback {
             heldOf[momentId][key.currency0],
             heldOf[momentId][key.currency1]
         );
+        if (p.liquidity != 0) {
+            // v2 (sec2, MO-2): an increase (never the seed) adds at most MAX_INCREASE_BPS of the position.
+            uint256 cap = uint256(p.liquidity) * MAX_INCREASE_BPS / 10_000;
+            if (liquidity > cap) liquidity = uint128(cap);
+        }
         if (liquidity == 0) return (0, 0, 0);
         p.liquidity += liquidity; // effect before the position update
         (BalanceDelta delta,) = poolManager.modifyLiquidity(

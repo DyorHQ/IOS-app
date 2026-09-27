@@ -30,6 +30,11 @@ import {MockPermit2} from "../mocks/MockPermit2.sol";
 /// PoolManager, USDC, Permit2 and Universal Router, on a fresh fork. Relaunch.t.sol checks the same stack against
 /// the retired cohorts and the old wallets.
 ///   forge test --code-size-limit 100000000 --match-path test/moments/fork/LiveDeployment.t.sol -vv
+/// The live cohort runs the v1 factory, whose publish takes no terms hash (v2 adds it: sec2, MO-4).
+interface IMomentsFactoryV1Publish {
+    function publish(MomentsFactory.PublishParams calldata p) external returns (uint256 momentId, address coin, address nft);
+}
+
 contract LiveDeploymentTest is MomentsForkBase {
     using PoolIdLibrary for PoolKey;
 
@@ -67,6 +72,12 @@ contract LiveDeploymentTest is MomentsForkBase {
             usdc.approve(address(swapRouter), type(uint256).max);
             vm.stopPrank();
         }
+    }
+
+    function _publish(address who, uint256 price, uint16 allocBps, uint256 seed) internal override returns (uint256 id, MomentCoin coin, MomentNFT nft) {
+        vm.prank(who);
+        (uint256 i, address c, address n) = IMomentsFactoryV1Publish(address(factory)).publish(_params(price, allocBps, seed));
+        return (i, MomentCoin(c), MomentNFT(n));
     }
 
     function test_live_wiring_and_policy() public view {

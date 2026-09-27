@@ -71,8 +71,9 @@ abstract contract MomentsMarketBase is MomentsBase {
                 address(factory)
             );
             if ((address(usdc) < predicted) == usdcIs0) {
+                bytes32 terms = factory.termsHash();
                 vm.prank(who);
-                (uint256 i, address c, address n) = factory.publish(p);
+                (uint256 i, address c, address n) = factory.publish(p, terms);
                 require((address(usdc) < c) == usdcIs0, "ordering");
                 return (i, MomentCoin(c), MomentNFT(n));
             }
