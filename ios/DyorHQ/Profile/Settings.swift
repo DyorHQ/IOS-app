@@ -152,8 +152,8 @@ struct SecurityView: View {
     }
 }
 
-/// Notification preferences. Turning them on requests the system permission; local notifications then fire on swap
-/// and perp-order completion and when a price alert triggers.
+/// Notification preferences. Turning them on requests the system permission. Every notification is made on the
+/// device while DyorHQ runs — there is no push server — and the copy says so (security audit 2026-09-26, GL-4).
 struct NotificationsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(Session.self) private var session
@@ -166,7 +166,7 @@ struct NotificationsView: View {
                 Toggle("Enable Notifications", isOn: $settings.notificationsEnabled)
             } footer: {
                 if denied { Text("Notifications are turned off for DyorHQ in iOS Settings. Enable them there to receive alerts.").foregroundStyle(Color.attention) }
-                else { Text("Get notified when a swap or perp order completes, or when a price alert triggers.") }
+                else { Text("DyorHQ notices fills and price alerts only while it's open. iOS pauses the app in the background, so they can't reach your lock screen while DyorHQ is closed.") }
             }
             Section {
                 Toggle("Swaps & Fills", isOn: $settings.notifyFills)
@@ -181,7 +181,7 @@ struct NotificationsView: View {
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("Swaps, fills and price alerts. Everything is also kept in the in-app center.")
+                Text("Order fills are noticed while the Perps screen is open, and price alerts while DyorHQ is open. Don't rely on either to protect a position: set a stop-loss on it. Everything is also kept in the in-app center.")
             }
             .disabled(!settings.notificationsEnabled)
         }

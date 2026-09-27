@@ -58,7 +58,9 @@ enum PriceAlertStore {
 }
 
 /// Polls prices for the alerted tokens and fires a local notification when one crosses its target, then removes it.
-/// Runs while the app is alive (foreground or a background refresh); durable push would need a server + APNs.
+/// Runs only while the app runs: iOS suspends it soon after it leaves the foreground, and there is no background
+/// refresh or push server (that would need a server-side watcher + APNs). So an alert fires at the first check that
+/// finds its price crossed while the app is open, and a crossing that reverts while it is closed is never seen.
 @MainActor
 final class AlertWatcher {
     private var task: Task<Void, Never>?
@@ -113,8 +115,12 @@ struct PriceAlertsView: View {
             }
             Section {
                 if alerts.isEmpty {
-                    Text("No price alerts yet. Add one to get notified when a token hits your target.")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("No price alerts yet.").font(.subheadline.weight(.medium))
+                        Button("Add an Alert", systemImage: "plus") { Haptics.tap(); showCreate = true }
+                            .font(.subheadline).buttonStyle(.borderless)
+                    }
+                    .padding(.vertical, 2)
                 } else {
                     ForEach(alerts) { alert in
                         HStack(spacing: 12) {
@@ -139,6 +145,8 @@ struct PriceAlertsView: View {
                     Spacer()
                     Button { Haptics.tap(); showCreate = true } label: { Label("Add", systemImage: "plus") }.textCase(nil)
                 }
+            } footer: {
+                Text("DyorHQ checks alerts about once a minute, and only while it's open. iOS pauses the app in the background, so an alert can't reach your lock screen while DyorHQ is closed, and a price that crosses and comes back in the meantime isn't reported. To protect a perp position, set a stop-loss on it.")
             }
         }
         .navigationTitle("Price Alerts")
@@ -187,7 +195,7 @@ private struct CreateAlertView: View {
                         Text("USD").foregroundStyle(.secondary)
                     }
                 } footer: {
-                    Text("You'll get a notification the next time \(token.symbol) \(above ? "rises above" : "falls below") this price.")
+                    Text("DyorHQ notifies you when it finds \(token.symbol) \(above ? "above" : "below") this price. It checks about once a minute, only while the app is open.")
                 }
             }
             .navigationTitle("New Alert")

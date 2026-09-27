@@ -199,7 +199,8 @@ final class PerpsModel {
 
     /// Compares the fresh positions against the previous snapshot and fires a fill signal + local notification for
     /// any market whose position opened or grew. Skips the very first snapshot so an already-open position on launch
-    /// isn't reported as a new fill.
+    /// isn't reported as a new fill. Only this screen's poll reads positions, so a fill is noticed only while the Perps
+    /// screen is open (security audit 2026-09-26, GL-4: the copy says so).
     private func detectFills(_ fresh: [PerpPosition]) {
         let sizes = Dictionary(fresh.map { ($0.perpId, $0.size) }, uniquingKeysWith: +)
         defer { lastPositionSize = sizes; fillPrimed = true }

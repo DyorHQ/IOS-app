@@ -63,9 +63,9 @@ struct RootView: View {
             }
             env.perplTrading.refresh(account: session.account)
             NotificationHub.shared.bind(owner: session.address)
-            // Ask for notification permission once the user is signed in and can act (so swaps, fills and price
-            // alerts actually reach the lock screen). notificationsEnabled defaults on, but the Settings toggle only
-            // requests when flipped — so a user who never opened Settings was never prompted.
+            // Ask for notification permission once the user is signed in and can act (so the swaps, fills and price
+            // alerts the app notices while it runs can show). notificationsEnabled defaults on, but the Settings toggle
+            // only requests when flipped — so a user who never opened Settings was never prompted.
             if session.canSign, settings.notificationsEnabled { await Notifications.requestAuthorizationIfUndetermined() }
         }
         // Whenever the account's backend session opens — whoever signed in (the rebind above, the reconnect below,
