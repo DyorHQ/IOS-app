@@ -18,6 +18,8 @@ globalThis.fetch = async (input) => {
 test.after(() => { globalThis.fetch = realFetch; });
 
 const { default: worker } = await import("../dist/server/index.js");
+const limits = await tsImport("../worker/rate-limit.ts", import.meta.url);
+const csp = await tsImport("../worker/csp.ts", import.meta.url);
 const call = (pathname, init) => worker.fetch(new Request(`${ORIGIN}${pathname}`, init), env, ctx);
 
 const SECURITY_HEADERS = {
@@ -45,7 +47,8 @@ test("static files get the same headers and keep the immutable asset cache rule"
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) assert.ok(headers.toLowerCase().includes(`${name}: ${value.toLowerCase()}`), `_headers is missing ${name}`);
   assert.match(headers, /\/assets\/\*\n\s+Cache-Control: public, max-age=31536000, immutable/);
   const policy = headers.match(/Content-Security-Policy-Report-Only: (.*)/)?.[1] ?? "";
-  for (const directive of ["script-src 'self';", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'"]) assert.ok(policy.includes(directive), `static CSP is missing ${directive}`);
+  for (const directive of ["script-src 'self';", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "report-uri /api/csp-report", "report-to csp"]) assert.ok(policy.includes(directive), `static CSP is missing ${directive}`);
+  assert.match(headers, /Reporting-Endpoints: csp="\/api\/csp-report"/);
 });
 
 test("pages carry a report-only CSP: no third-party script, and a fresh nonce on every inline script", async () => {
@@ -54,7 +57,8 @@ test("pages carry a report-only CSP: no third-party script, and a fresh nonce on
   const nonce = policy.match(/'nonce-([^']+)'/)[1];
   const scriptSrc = policy.split("; ").find((d) => d.startsWith("script-src "));
   assert.equal(scriptSrc, `script-src 'self' 'nonce-${nonce}'`, "no host allowlist, no unsafe-inline, no unsafe-eval");
-  for (const directive of ["object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "frame-src 'none'", "form-action 'self'"]) assert.ok(policy.includes(directive), directive);
+  for (const directive of ["object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "frame-src 'none'", "form-action 'self'", "report-uri /api/csp-report", "report-to csp"]) assert.ok(policy.includes(directive), directive);
+  assert.equal(first.headers.get("reporting-endpoints"), `csp="${ORIGIN}/api/csp-report"`, "reports go to this origin");
   const connect = policy.split("; ").find((d) => d.startsWith("connect-src ")).split(" ");
   for (const source of ["'self'", "wss://mainstreet-ui.bushy-petal-0744.chatgpt.site", "https://rpc.monad.xyz", "https://rpc1.monad.xyz", "https://ws.kuru.io"]) assert.ok(connect.includes(source), `connect-src ${source}`);
 
@@ -149,7 +153,7 @@ test("the relay answers repeat reads from the edge cache: many viewers, one upst
 });
 
 test("one client's Perpl reads and socket opens are capped; other clients are not affected", async () => {
-  const { PERPL_REQUESTS_PER_MINUTE, PERPL_SOCKET_OPENS_PER_MINUTE } = await tsImport("../worker/rate-limit.ts", import.meta.url);
+  const { PERPL_REQUESTS_PER_MINUTE, PERPL_SOCKET_OPENS_PER_MINUTE } = limits;
   const from = (n, extra = {}) => ({ headers: { "cf-connecting-ip": `203.0.113.${n}`, "sec-fetch-site": "same-origin", ...extra } });
   let limitedAt = null;
   for (let i = 0; i <= PERPL_REQUESTS_PER_MINUTE && limitedAt === null; i++) if ((await call("/api/perpl/v1/pub/context", from(7))).status === 429) limitedAt = i;
@@ -169,6 +173,45 @@ test("one client's Perpl reads and socket opens are capped; other clients are no
   for (let i = 0; i <= PERPL_SOCKET_OPENS_PER_MINUTE && opensLimitedAt === null; i++) if ((await socket(9)).status === 429) opensLimitedAt = i;
   assert.equal(opensLimitedAt, PERPL_SOCKET_OPENS_PER_MINUTE);
   assert.equal((await socket(10)).status, 502, "another client still reaches the dial");
+});
+
+test("CSP reports are accepted, capped, and logged as directive and blocked origin only", async () => {
+  const warn = console.warn;
+  const logged = [];
+  console.warn = (...args) => { logged.push(args.join(" ")); };
+  try {
+    const legacy = await call("/api/csp-report", { method: "POST", headers: { "content-type": "application/csp-report" }, body: JSON.stringify({ "csp-report": { "document-uri": `${ORIGIN}/swap?in=0xsecret`, "violated-directive": "script-src-elem", "effective-directive": "script-src-elem", "blocked-uri": "https://evil.example/x.js?token=abc" } }) });
+    assert.equal(legacy.status, 204);
+    assertSecured(legacy);
+    const batch = [
+      { type: "csp-violation", url: `${ORIGIN}/`, body: { documentURL: `${ORIGIN}/?q=1`, effectiveDirective: "connect-src", blockedURL: "wss://relay.example/path/to" } },
+      { type: "deprecation", body: { id: "x" } },
+      { type: "csp-violation", body: { effectiveDirective: "script-src-elem", blockedURL: "inline" } },
+    ];
+    assert.equal((await call("/api/csp-report", { method: "POST", headers: { "content-type": "application/reports+json" }, body: JSON.stringify(batch) })).status, 204);
+    assert.equal((await call("/api/csp-report", { method: "POST", headers: { "content-type": "application/csp-report" }, body: "not json" })).status, 204, "the same answer whatever was sent");
+  } finally {
+    console.warn = warn;
+  }
+  const reports = logged.filter((line) => line.startsWith('{"csp"')).map((line) => JSON.parse(line));
+  assert.deepEqual(reports, [{ csp: "script-src-elem", blocked: "https://evil.example" }, { csp: "connect-src", blocked: "wss://relay.example" }, { csp: "script-src-elem", blocked: "inline" }]);
+  assert.ok(logged.every((line) => !/0xsecret|token=|x\.js|path\/to|q=1/.test(line)), "no path, query or document URL is logged");
+
+  assert.equal((await call("/api/csp-report")).status, 405);
+  assert.equal((await call("/api/csp-report", { method: "POST", headers: { "content-type": "text/plain" }, body: "{}" })).status, 415);
+  assert.equal((await call("/api/csp-report", { method: "POST", headers: { "content-type": "application/csp-report" }, body: "x".repeat(20_000) })).status, 413, "a body over 16 KB is not read");
+});
+
+test("the report parser keeps only a directive name and a blocked origin or keyword", () => {
+  assert.equal(csp.blockedSource("https://cdn.example:8443/a/b.js?x=1#y"), "https://cdn.example:8443");
+  assert.equal(csp.blockedSource("eval"), "eval");
+  assert.equal(csp.blockedSource("chrome-extension://abcdef/inject.js"), "chrome-extension");
+  assert.equal(csp.blockedSource("not a url"), "other");
+  assert.equal(csp.blockedSource(42), "unknown");
+  assert.deepEqual(csp.cspViolations("application/csp-report; charset=utf-8", JSON.stringify({ "csp-report": { "violated-directive": "img-src https:", "blocked-uri": "data" } })), [{ directive: "img-src", blocked: "data" }]);
+  assert.deepEqual(csp.cspViolations("application/csp-report", JSON.stringify({ "csp-report": { "effective-directive": "<script>", "blocked-uri": "https://x.example/" } })), [{ directive: "unknown", blocked: "https://x.example" }]);
+  assert.deepEqual(csp.cspViolations("application/json", JSON.stringify({ "csp-report": { "effective-directive": "img-src" } })), [], "another content type");
+  assert.equal(csp.cspViolations("application/reports+json", JSON.stringify(Array.from({ length: 50 }, () => ({ type: "csp-violation", body: { effectiveDirective: "img-src", blockedURL: "data" } })))).length, 20, "a batch is capped");
 });
 
 test("no third-party script is loaded into the wallet origin", () => {

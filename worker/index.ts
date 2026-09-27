@@ -4,7 +4,7 @@ import handler from "vinext/server/app-router-entry";
 import { RPC_URL } from "../app/lib/chain";
 import { LOGS_RPC } from "../app/lib/moments/config";
 import { KURU } from "../app/lib/swap/config";
-import { contentSecurityPolicy, newNonce, sourceOrigin } from "./csp";
+import { CSP_REPORT_GROUP, CSP_REPORT_PATH, contentSecurityPolicy, cspViolations, newNonce, sourceOrigin } from "./csp";
 import { createRelayGate } from "./perpl-relay";
 import { PERPL_REQUESTS_PER_MINUTE, PERPL_SOCKETS_PER_CLIENT, PERPL_SOCKET_OPENS_PER_MINUTE, clientKey, createSlotLimiter, createWindowLimiter } from "./rate-limit";
 
@@ -79,8 +79,8 @@ async function proxyPerplSocket(release: () => void): Promise<Response> {
 }
 
 /* Security headers on every response the Worker generates (static files get the same set from public/_headers).
-   The enforced CSP restricts framing only; the full policy (worker/csp.ts) ships report-only until a release shows
-   the app itself raises no reports. */
+   The enforced CSP restricts framing only; the full policy (worker/csp.ts) ships report-only, with its reports sent
+   to CSP_REPORT_PATH, until a release shows the app itself raises no reports. */
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "strict-origin-when-cross-origin",
@@ -93,14 +93,61 @@ const SECURITY_HEADERS: Record<string, string> = {
 /** Every origin the browser code connects to besides this one: the configured and log-scan Monad RPCs, Kuru Flow. */
 const CONNECT_SOURCES = [RPC_URL, "https://rpc1.monad.xyz", LOGS_RPC, KURU.api].map(sourceOrigin).filter((s): s is string => s !== null);
 
-function withSecurityHeaders(response: Response, policy: string): Response {
+function withSecurityHeaders(response: Response, policy: string, origin: string): Response {
   // A WebSocket handshake (101) cannot be rebuilt and serves no document.
   if (response.status === 101) return response;
   const secured = new Response(response.body, response);
-  for (const [name, value] of Object.entries({ ...SECURITY_HEADERS, "Content-Security-Policy-Report-Only": policy })) {
+  const reporting = { "Content-Security-Policy-Report-Only": policy, "Reporting-Endpoints": `${CSP_REPORT_GROUP}="${origin}${CSP_REPORT_PATH}"` };
+  for (const [name, value] of Object.entries({ ...SECURITY_HEADERS, ...reporting })) {
     if (!secured.headers.has(name)) secured.headers.set(name, value);
   }
   return secured;
+}
+
+const CSP_REPORT_TYPES = new Set(["application/csp-report", "application/reports+json"]);
+const CSP_REPORT_MAX_BYTES = 16_384;
+// A sample of the violations is logged, enough to see what the policy would block without flooding the log.
+const cspLogs = createWindowLimiter(30, 60_000);
+
+/** The request body, or null once it passes `max` bytes (reading stops there). */
+async function readCapped(request: Request, max: number): Promise<string | null> {
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+/** Browsers' CSP violation reports: only the directive and the blocked origin are logged (worker/csp.ts cspViolations),
+    never a full URL, and the answer is the same whatever was sent. */
+async function cspReport(request: Request): Promise<Response> {
+  if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
+  const type = request.headers.get("content-type");
+  if (!CSP_REPORT_TYPES.has((type ?? "").split(";")[0].trim().toLowerCase())) return new Response(null, { status: 415 });
+  if (Number(request.headers.get("content-length") ?? 0) > CSP_REPORT_MAX_BYTES) return new Response(null, { status: 413 });
+  const body = await readCapped(request, CSP_REPORT_MAX_BYTES);
+  if (body === null) return new Response(null, { status: 413 });
+  for (const violation of cspViolations(type, body)) {
+    if (!cspLogs("csp")) break;
+    console.warn(JSON.stringify({ csp: violation.directive, blocked: violation.blocked }));
+  }
+  return new Response(null, { status: 204 });
 }
 
 /** Page requests reach vinext with headers only the Worker sets, replacing any the client sent: the CSP carrying this
@@ -139,6 +186,7 @@ const app = {
       const client = clientKey(request);
       if (client !== null && !perplRequests(client)) return tooMany("Perpl requests");
     }
+    if (url.pathname === CSP_REPORT_PATH) return cspReport(request);
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
       return handleImageOptimization(request, {
@@ -156,8 +204,9 @@ const app = {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const policy = contentSecurityPolicy({ nonce: newNonce(), host: new URL(request.url).host, connect: CONNECT_SOURCES });
-    return withSecurityHeaders(await app.fetch(request, env, ctx, policy), policy);
+    const url = new URL(request.url);
+    const policy = contentSecurityPolicy({ nonce: newNonce(), host: url.host, connect: CONNECT_SOURCES });
+    return withSecurityHeaders(await app.fetch(request, env, ctx, policy), policy, url.origin);
   },
 };
 
