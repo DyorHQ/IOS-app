@@ -336,9 +336,11 @@ struct CreateMomentView: View {
     private func upload(_ item: PhotosPickerItem) async {
         uploading = true; imageError = nil
         defer { uploading = false; photoItem = nil }
-        // A new pick replaces the last one, pinned or not. `lastUploadedURI` goes first, so clearing the link below is
-        // not read as a manual edit.
+        // A new pick replaces the last one, pinned or not — its preview too, so a pick that then fails to read never
+        // leaves the old photo (or a video's play badge) standing in for media the form no longer has. `lastUploadedURI`
+        // goes first, so clearing the link below is not read as a manual edit.
         lastUploadedURI = ""; mediaURI = ""; animationURI = ""; mediaHash = nil; mediaMirror = ""; unpinned = nil; usesMirror = false
+        previewImage = nil; isVideo = false
         do {
             if !social.isSignedIn { await social.signIn(session: session) }
             guard social.isSignedIn else { imageError = "Connect DyorHQ Social to upload a photo, or paste a link instead."; return }
