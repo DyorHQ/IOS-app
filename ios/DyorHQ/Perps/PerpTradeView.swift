@@ -920,7 +920,10 @@ struct PerpTradeView: View {
             if ticket.effectiveTPSL, !ticket.takeProfitText.isEmpty || !ticket.stopLossText.isEmpty {
                 DetailRow("TP/SL", "Needs one-click trading — not placed", tint: .attention)
             }
-            if leftoversUnchecked {
+            if !ticket.effectiveReduceOnly, let leftover = leftoverTriggerProblem(side: ticket.side) {
+                // The stream came up after the plan was prepared: the check runs here too.
+                Text(leftover).font(.footnote).foregroundStyle(Color.attention)
+            } else if leftoversUnchecked {
                 Text("Take-profit and stop-loss left from an earlier \(market.asset) \(ticket.side == .long ? "long" : "short") can't be checked while Perpl trading is offline. If you had any, check Orders first: they would act on this position.")
                     .font(.footnote).foregroundStyle(Color.attention)
             }
