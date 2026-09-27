@@ -633,7 +633,7 @@ struct PerpTradeView: View {
 
     private func attemptOrder(_ side: PositionSide) {
         ticket.side = side
-        if let reason = ticket.problem(market: market, account: model.account, available: availableMargin) {
+        if let reason = ticket.problem(market: market, mark: mark, account: model.account, available: availableMargin) {
             Haptics.warning(); ticketError = reason; return
         }
         if let reason = triggerProblem(side: side) {
@@ -2208,7 +2208,13 @@ private struct ClosePositionSheet: View {
 
     private var isLimit: Bool { kind == .limit }
     private var limitPrice: Double? { limitText.perpDouble }
-    private var canConfirm: Bool { session.canSign && !run.isRunning && (!isLimit || (limitPrice ?? 0) > 0) }
+    /// A limit close far through the mark would fill at once (a decimal slip): refused, as on the order ticket. The
+    /// close trades the opposite side of the position.
+    private var limitProblem: String? {
+        guard isLimit, let limitPrice, limitPrice > 0 else { return nil }
+        return OrderTicket.throughMarkProblem(price: limitPrice, side: position.side == .long ? .short : .long, mark: mark, market: market)
+    }
+    private var canConfirm: Bool { session.canSign && !run.isRunning && (!isLimit || (limitPrice ?? 0) > 0) && limitProblem == nil }
 
     private var steps: [TransactionStep] {
         env.perpl.closePositionPlan(market: market, position: position, slippageBps: 100, kind: kind, limitPrice: limitPrice, postOnly: postOnly)
@@ -2237,6 +2243,7 @@ private struct ClosePositionSheet: View {
                         }
                         // The price this close signs, read back from the typed text (audit F4).
                         if let limitPrice, limitPrice > 0 { DetailRow("Limit at", NumberStyle.number(limitPrice)) }
+                        if let limitProblem { Text(limitProblem).font(.footnote).foregroundStyle(Color.attention) }
                         Toggle("Post only (maker)", isOn: $postOnly)
                         Text("Rests as a reduce-only limit at your price until it fills. It won't reduce your position until then.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -2662,16 +2669,30 @@ struct OrderTicket {
         return (raw * scale).rounded(.down) / scale
     }
 
-    func problem(market: PerpMarket, account: PerpAccount?, available: Double) -> String? {
-        let price = kind == .limit ? (priceText.perpDouble ?? market.mark) : market.mark
+    /// - mark: the live mark the order is measured against (the market's listed mark when the live one is unknown).
+    func problem(market: PerpMarket, mark: Double, account: PerpAccount?, available: Double) -> String? {
+        let ref = mark > 0 ? mark : market.mark
+        let price = kind == .limit ? (priceText.perpDouble ?? ref) : ref
         let size = baseSize(market: market, price: price)
         guard size > 0 else { return amountUnit == .usd ? "Enter an amount in AUSD." : "Enter a size in \(market.asset)." }
         if kind == .limit, (priceText.perpDouble ?? 0) <= 0 { return "Enter a limit price." }
+        if kind == .limit, let limit = priceText.perpDouble, let reason = Self.throughMarkProblem(price: limit, side: side, mark: mark, market: market) { return reason }
         if account == nil, !effectiveReduceOnly { return "Deposit AUSD to open a trading account first." }
         if account != nil, !effectiveReduceOnly {
             if size * price / max(leverage, 1) > available * 1.0001 { return "Not enough available margin." }
         }
         return nil
+    }
+
+    /// A limit more than 5% through the mark fills at once as a taker: most often a decimal slip (1000x, in any locale),
+    /// not a price anyone meant. Purely numeric; an unknown mark (0) blocks nothing. A buy (long) is refused above
+    /// mark x 1.05, a sell (short) below mark x 0.95.
+    static func throughMarkProblem(price: Double, side: PositionSide, mark: Double, market: PerpMarket) -> String? {
+        guard mark.isFinite, mark > 0, price.isFinite, price > 0 else { return nil }
+        let above = side == .long && price > mark * 1.05
+        let below = side == .short && price < mark * 0.95
+        guard above || below else { return nil }
+        return "Limit \(NumberStyle.number(price, maximumFractionDigits: market.priceDecimals)) is \(above ? "above" : "below") the mark (\(NumberStyle.number(mark))) and would fill at once. Check the price."
     }
 
     func input(market: PerpMarket, refPrice: Double) -> OrderInput {
