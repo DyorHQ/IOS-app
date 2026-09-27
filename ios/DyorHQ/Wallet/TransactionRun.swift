@@ -115,6 +115,17 @@ final class BackgroundTime {
     }
 }
 
+extension TransactionSender.FeePreview {
+    /// "Up to 0.061 MON", plus any steps that can only be priced once an earlier one lands (a swap after its approval).
+    var summary: String {
+        let symbol = NetworkFeeLimits.nativeSymbol(chainId: chainId)
+        let more = unestimated == 1 ? "1 more step" : "\(unestimated) more steps"
+        if unestimated == 0 { return "Up to \(NumberStyle.units(maxFee, decimals: 18)) \(symbol)" }
+        if maxFee == 0 { return "Priced as each step is signed" }
+        return "Up to \(NumberStyle.units(maxFee, decimals: 18)) \(symbol) + \(more)"
+    }
+}
+
 /// The standard confirm → progress → done sheet used by every write in the app. The step plan is built by an
 /// async closure (some builders read the chain or an actor-isolated service), so the sheet shows a brief
 /// "Preparing" state, then the confirm button, then live progress.
@@ -178,7 +189,7 @@ struct ConfirmationSheet<Details: View>: View {
                 }
                 if let fee, !run.isDone {
                     Section {
-                        DetailRow("Max network fee", Self.feeText(fee))
+                        DetailRow("Max network fee", fee.summary)
                     } footer: {
                         Text("The most the network can charge. Each transaction's fee is checked again before it's signed, and refused if it's unusually high.")
                     }
@@ -286,15 +297,6 @@ struct ConfirmationSheet<Details: View>: View {
         case Perpl.exchange: return "the Perpl Exchange"
         default: return spender.short
         }
-    }
-
-    /// "Up to 0.061 MON", plus any steps that can only be priced once an earlier one lands (a swap after its approval).
-    static func feeText(_ fee: TransactionSender.FeePreview) -> String {
-        let symbol = NetworkFeeLimits.nativeSymbol(chainId: fee.chainId)
-        let more = fee.unestimated == 1 ? "1 more step" : "\(fee.unestimated) more steps"
-        if fee.unestimated == 0 { return "Up to \(NumberStyle.units(fee.maxFee, decimals: 18)) \(symbol)" }
-        if fee.maxFee == 0 { return "Priced as each step is signed" }
-        return "Up to \(NumberStyle.units(fee.maxFee, decimals: 18)) \(symbol) + \(more)"
     }
 
     /// Changes whenever the badge could: the plan arrives, or the passkey session opens, ends or is replaced.

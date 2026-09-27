@@ -282,6 +282,8 @@ struct BridgeView: View {
                 Divider()
                 summaryRow("Minimum received", model.minReceivedText ?? "—")
                 summaryRow("Total fee", model.feeText ?? "—")
+                // The source chain's own network fee for the deposit, which the bridge's fee doesn't include (IOST-1).
+                if let fee = model.networkFee { summaryRow("Max network fee", fee.summary) }
                 summaryRow("Slippage", model.slippageText)
                 if let secs = quote.timeEstimate, secs > 0 { summaryRow("Estimated time", "≈ \(Int(secs))s") }
                 summaryRow("Route", "\(model.fromChain.name) → \(model.toChain.name)")

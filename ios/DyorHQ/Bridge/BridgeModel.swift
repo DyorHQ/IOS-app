@@ -28,6 +28,9 @@ final class BridgeModel {
     private var didLoadBalances = false
 
     private(set) var quote: AuroraQuote?
+    /// The most the deposit's network fee can come to on the source chain at today's fees, once the quote names the
+    /// deposit address (IOST-1). The deposit is signed there against a public RPC, within `NetworkFeeLimits`.
+    private(set) var networkFee: TransactionSender.FeePreview?
     private(set) var quoting = false
     private(set) var quoteError: String?
     private var quoteTask: Task<Void, Never>?
@@ -289,7 +292,7 @@ final class BridgeModel {
 
     func getQuote() async {
         guard let from = fromToken, let to = toToken, let owner = env.session.address, let amount = amountRaw else { return }
-        quoting = true; quoteError = nil; defer { quoting = false }
+        quoting = true; quoteError = nil
         await ensureBackendSession()
         do {
             quote = try await env.aurora.quote(
@@ -298,10 +301,27 @@ final class BridgeModel {
         } catch {
             quote = nil
             quoteError = humanize(describe(error))
+            quoting = false
+            return
         }
+        quoting = false
+        await loadNetworkFee()
     }
 
-    private func resetQuote() { quoteTask?.cancel(); quote = nil; quoteError = nil }
+    /// Prices the deposit the quote asks for on the source chain (`networkFee`), shown on the review card beside the
+    /// bridge's own fee.
+    private func loadNetworkFee() async {
+        networkFee = nil
+        guard let quote, let deposit = quote.depositAddress.flatMap(Address.init), let from = fromToken, let owner = env.session.address,
+              let amount = BigUInt(quote.amountIn), let request = try? Self.depositRequest(from, to: deposit, amount: amount) else { return }
+        let chain = fromChain
+        let fee = await env.sender(for: chain).feePreview([.call(request, label: "Deposit")], from: owner)
+        // A new quote or source meanwhile: this fee isn't for it.
+        guard self.quote?.depositAddress == quote.depositAddress, fromChain == chain else { return }
+        networkFee = fee
+    }
+
+    private func resetQuote() { quoteTask?.cancel(); quote = nil; quoteError = nil; networkFee = nil }
 
     /// Aurora returns some validation errors with raw smallest-unit amounts (e.g. "…try at least 150000"). Reformat
     /// any standalone large integer in an amount error into human units of the source token, so the user reads
