@@ -162,6 +162,8 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
   const needsCheck = fromLink && !linkChecked;
 
   const flip = () => { edited.current = true; setTokenIn(tokenOut); setTokenOut(tokenIn); setAmount(""); setChoice(null); reset(); };
+  // Typing an amount or tapping Max: the user's edit, so a link still being resolved no longer changes the pair.
+  const editAmount = (value: string) => { edited.current = true; setAmount(value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } };
   const pickToken = (t: TokenInfo) => {
     edited.current = true;
     if (picking === "in") { if (sameToken(t.address, tokenOut.address)) setTokenOut(tokenIn); setTokenIn(t); }
@@ -201,9 +203,9 @@ export default function Swap({ embedded = false, initialIn, initialOut }: { embe
             <div className="slip" role="group" aria-labelledby={`${ids}-slippage`}><span id={`${ids}-slippage`} style={{ marginRight: 0 }}>Slippage</span>{SLIPPAGES.map((s) => <button key={s} type="button" aria-pressed={slippageBps === s} onClick={() => setSlippage(s)}>{bpsToPct(s)}</button>)}</div>
           </div>
           <div className="swap-field">
-            <div className="lbl"><label htmlFor={`${ids}-pay`}>You pay</label>{balIn !== undefined && <button type="button" onClick={() => setAmount(exactDown(balIn, tokenIn.decimals, 8))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
+            <div className="lbl"><label htmlFor={`${ids}-pay`}>You pay</label>{balIn !== undefined && <button type="button" onClick={() => editAmount(exactDown(balIn, tokenIn.decimals, 8))}>Balance {fmtUnits(balIn, tokenIn.decimals, { compact: true })} · Max</button>}</div>
             <div className="rowin">
-              <input id={`${ids}-pay`} inputMode="decimal" placeholder="0" value={amount} onChange={(e) => { edited.current = true; setAmount(e.target.value); setChoice(null); if (tx.status !== "idle" && !busy) { reset(); setStep(null); } }} />
+              <input id={`${ids}-pay`} inputMode="decimal" placeholder="0" value={amount} onChange={(e) => editAmount(e.target.value)} />
               <button type="button" className="tokbtn" onClick={() => setPicking("in")}><TokenLogo src={tokenIn.logo} name={tokenIn.symbol} size="sm" />{tokenIn.symbol}<Icon name="chev-down" /></button>
             </div>
             <div className="sub" role="status">{insufficient ? <span className="impact-bad">Insufficient balance</span> : ""}</div>
