@@ -90,6 +90,7 @@ struct ProfileView: View {
                             .navigationBarTitleDisplayMode(.inline)
                     } label: { SettingsRow("Support", symbol: "questionmark.circle", tint: .accent) }
                     Link(destination: SupportLinks.terms) { SettingsRow("Terms of Use", symbol: "doc.text", tint: .accent) }
+                    Link(destination: SupportLinks.privacy) { SettingsRow("Privacy Policy", symbol: "hand.raised", tint: .accent) }
                 }
 
                 Section("Network") {
