@@ -203,8 +203,11 @@ final class MeraPolicyTests: XCTestCase {
             ("a Permit2 allowance for a stranger", [permit2(usdc, usdcIn, spender: stranger, expiration: unix + 60)], uni, .approval(.spender)),
             ("a Permit2 allowance outside a Uniswap swap", [permit2(usdc, usdcIn, expiration: unix + 60)], swapIntent(.monday, pay: usdc, usdcIn), .notAllowlisted),
             // MON.
-            ("more MON than declared", [call(Uniswap.universalRouter, monSwap, value: monIn + 1)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc), .valueOverDeclared),
-            ("MON with an ERC-20 input", [call(Uniswap.universalRouter, universalRouterSwap, value: 1)], uni, .valueOverDeclared),
+            // A Universal Router swap carries exactly its input in MON when MON pays it, and none otherwise (IOSK-10).
+            ("more MON than declared", [call(Uniswap.universalRouter, monSwap, value: monIn + 1)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc), .notAllowlisted),
+            ("MON with an ERC-20 input", [call(Uniswap.universalRouter, universalRouterSwap, value: 1)], uni, .notAllowlisted),
+            ("MON beyond what a v4 swap settles", [call(Uniswap.universalRouter, urSwap(Monad.native, monIn - 1, usdc), value: monIn)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc), .notAllowlisted),
+            ("less MON than a v4 swap settles", [call(Uniswap.universalRouter, monSwap, value: monIn - 1)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc), .notAllowlisted),
             ("unwrapping more than declared", [call(Monad.wmon, encode("withdraw(uint256)", [.uint(monIn + 1)]))], swapIntent(.wrap, pay: Monad.wmon, monIn), .amountOverDeclared),
             // Kuru Flow.
             ("Kuru output to another address", [call(Kuru.entrypoint, kuru(tokenIn: usdc, amountIn: usdcIn, tokenOut: Monad.native, minOut: kuruOut, recipient: stranger))], kuruIntent, .recipient),

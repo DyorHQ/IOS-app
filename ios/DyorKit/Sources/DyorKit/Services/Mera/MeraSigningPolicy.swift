@@ -449,7 +449,7 @@ extension Mera {
             switch part.kind {
             case .swap(.uniswap):
                 // Read in full (`MeraCalldata`): a payload that isn't exactly the swap the app builds asks (IOSK-10).
-                if call.to == Uniswap.universalRouter { return checkSwap(universalRouterSwap(call.data), part: part) }
+                if call.to == Uniswap.universalRouter { return checkSwap(universalRouterSwap(call.data, value: call.value), part: part) }
                 if call.to == Uniswap.swapRouter02 { return checkSwap(swapRouter02Swap(call.data, account: context.account, value: call.value), part: part) }
                 return .ask(.notAllowlisted)
             case .swap(.monday):

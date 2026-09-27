@@ -27,8 +27,10 @@ extension Mera.SigningPolicy {
 
     /// `execute(commands, inputs, deadline)` as `SwapCalldata.universalRouterV4` builds it: the single V4_SWAP command,
     /// whose actions are SWAP_EXACT_IN_SINGLE or SWAP_EXACT_IN with no hook data, then SETTLE_ALL of exactly the input
-    /// (paid by the caller) and TAKE_ALL of the output with the swap's own minimum (paid to the caller).
-    static func universalRouterSwap(_ data: Data) -> SwapTerms? {
+    /// (paid by the caller) and TAKE_ALL of the output with the swap's own minimum (paid to the caller). `value` is
+    /// exactly the input when MON pays it, and zero otherwise: MON sent beyond what SETTLE_ALL takes would stay in the
+    /// router, where anyone can sweep it.
+    static func universalRouterSwap(_ data: Data, value: BigUInt) -> SwapTerms? {
         typealias V4 = SwapCalldata.V4
         guard data.prefix(4) == Selector.universalRouterExecute,
               let args = strictDecode(data.dropFirst(4), "bytes,bytes[],uint256"),
@@ -52,7 +54,8 @@ extension Mera.SigningPolicy {
             return nil
         }
         guard let settle = strictDecode(params[1], "address,uint256"), settle[0].address == terms.tokenIn, settle[1].uint == terms.amountIn,
-              let take = strictDecode(params[2], "address,uint256"), take[0].address == terms.tokenOut, take[1].uint == terms.minOut else { return nil }
+              let take = strictDecode(params[2], "address,uint256"), take[0].address == terms.tokenOut, take[1].uint == terms.minOut,
+              value == (terms.tokenIn.isZero ? terms.amountIn : 0) else { return nil }
         return terms
     }
 
