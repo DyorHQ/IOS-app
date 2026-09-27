@@ -42,6 +42,18 @@ struct TokenLogo: View {
     }
 }
 
+/// Marks a token or NFT that reached the wallet without the user choosing it in DyorHQ: anyone can send any token
+/// or NFT to any wallet, so its name and symbol prove nothing (security audit 2026-09-26, IOST-12).
+struct UnverifiedBadge: View {
+    var body: some View {
+        Text("Unverified")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Color.attention)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(Color.attention.opacity(0.14), in: Capsule())
+    }
+}
+
 /// A circular profile avatar: the uploaded image when there is one, otherwise the wallet's initials on a neutral
 /// fill. Used in the Profile header and the DyorHQ Social screens.
 struct Avatar: View {

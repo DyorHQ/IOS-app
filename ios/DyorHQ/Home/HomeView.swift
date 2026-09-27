@@ -80,7 +80,8 @@ struct HomeView: View {
             .sheet(isPresented: $showSend) { SendSheet() }
             .sheet(isPresented: $showTransfer) { TransferSheet() }
             .sheet(isPresented: $showSearch) {
-                TokenPickerSheet(selected: .mon, balances: Dictionary(uniqueKeysWithValues: model.rows.map { ($0.token.address, $0.balance) }), universe: KnownTokenStore.universe(owner: session.address), tradableOnly: false) { token in
+                TokenPickerSheet(selected: .mon, balances: Dictionary(uniqueKeysWithValues: model.rows.map { ($0.token.address, $0.balance) }), universe: KnownTokenStore.universe(owner: session.address), tradableOnly: false,
+                                 unverified: KnownTokenStore.unverified(owner: session.address)) { token in
                     // Open the token's page; a token outside the priced list gets a bare row (price loads on the page).
                     searchTarget = model.rows.first { $0.token.address == token.address } ?? MarketRow(token: token, usd: nil, change24h: nil, balance: 0)
                 }
@@ -271,7 +272,7 @@ struct HomeView: View {
                 else {
                     VStack(spacing: 0) {
                         ForEach(Array(model.holdings.enumerated()), id: \.element.id) { index, row in
-                            NavigationLink(value: row) { HoldingRow(row: row) }.buttonStyle(.plain)
+                            NavigationLink(value: row) { HoldingRow(row: row, unverified: model.unverified.contains(row.id)) }.buttonStyle(.plain)
                             if index < model.holdings.count - 1 { Divider().padding(.leading, 44) }
                         }
                     }
@@ -435,12 +436,17 @@ private struct TokenListRow: View {
 /// A wallet holding row: logo, symbol + amount, value + 24h.
 private struct HoldingRow: View {
     let row: MarketRow
+    /// Found in the wallet's history, not chosen in the app (`KnownTokenStore.unverified`).
+    var unverified = false
 
     var body: some View {
         HStack(spacing: 12) {
             TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: 34)
             VStack(alignment: .leading, spacing: 1) {
-                Text(row.token.symbol).font(.subheadline.weight(.semibold))
+                HStack(spacing: 6) {
+                    Text(row.token.symbol).font(.subheadline.weight(.semibold))
+                    if unverified { UnverifiedBadge() }
+                }
                 AmountText(amount: row.balance, token: row.token, compact: true, font: .caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -553,6 +559,9 @@ final class HomeModel {
     private(set) var loading = false
     private(set) var error: String?
     private(set) var updatedAt: Date?
+    /// Tokens the wallet was sent rather than chose (`KnownTokenStore.unverified`): marked in holdings, and never
+    /// ranked in Top Tokens.
+    private(set) var unverified: Set<Address> = []
 
     var holdings: [MarketRow] { rows.filter { $0.balance > 0 }.sorted { ($0.value ?? 0) > ($1.value ?? 0) } }
 
@@ -587,7 +596,7 @@ final class HomeModel {
     /// Top-tokens list per tab. Popular keeps the curated order; the movers sort by 24h change; hot ranks by the
     /// strength of the move in either direction (a stand-in for volume, which the price service does not surface).
     func topTokens(_ tab: HomeTokenTab) -> [MarketRow] {
-        let priced = rows.filter { $0.usd != nil }
+        let priced = rows.filter { $0.usd != nil && !unverified.contains($0.id) }
         switch tab {
         case .popular: return priced
         case .hot: return priced.sorted { abs($0.change24h ?? 0) > abs($1.change24h ?? 0) }
@@ -606,8 +615,9 @@ final class HomeModel {
     }
 
     /// Finds ERC-20s the wallet holds on-chain that aren't in its universe yet (received outside the app, airdropped,
-    /// bridged), persists them to the shared token store, and reloads — so every held token appears in holdings and
-    /// the swap picker. Runs once per wallet; the persisted tokens then price and balance like any curated asset.
+    /// bridged), persists them to the shared token store as Unverified, and reloads — so every held token appears in
+    /// holdings, marked, while the swap picker lists it only when searched for (IOST-12). Runs once per wallet; the
+    /// persisted tokens then price and balance like any curated asset.
     func discoverHeldTokens(env: AppEnvironment, address: Address?) async {
         guard let address, discoveredFor != address else { return }
         discoveredFor = address
@@ -620,7 +630,7 @@ final class HomeModel {
             let enriched = token.logoURL == nil && logos[token.address] != nil
                 ? Token(address: token.address, symbol: token.symbol, name: token.name, decimals: token.decimals, logoURL: logos[token.address], isLaunchpad: token.isLaunchpad)
                 : token
-            KnownTokenStore.add(enriched, owner: address)
+            KnownTokenStore.addDiscovered(enriched, owner: address)
         }
         await load(env: env, address: address)
     }
@@ -631,6 +641,7 @@ final class HomeModel {
         // The curated list plus anything the wallet has acquired (swapped into, launched), so held tokens like an
         // RWA or a launched coin still show up with a balance and a price.
         let tokens = KnownTokenStore.universe(owner: address).filter { $0.symbol != "WMON" }
+        unverified = KnownTokenStore.unverified(owner: address)
         async let prices = env.prices.prices(for: tokens)
         async let balances = walletBalances(env: env, address: address, tokens: tokens)
         async let launches = env.launchpad.allLaunches(limit: 30)
@@ -698,6 +709,7 @@ struct TokenDetailView: View {
     let row: MarketRow
     @Environment(AppEnvironment.self) private var env
     @Environment(Router.self) private var router
+    @Environment(Session.self) private var session
     @State private var history: [PricePoint] = []
     @State private var loadingHistory = true
 
@@ -714,6 +726,13 @@ struct TokenDetailView: View {
                         .frame(height: 180)
                 }
                 .padding(.vertical, 6)
+            }
+            if KnownTokenStore.isUnverified(row.token.address, owner: session.address) {
+                Section {
+                    Label("Unverified token", systemImage: "exclamationmark.shield").font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
+                    Text("This token arrived in your wallet without you choosing it in DyorHQ. Anyone can send any token to any wallet, with any name — including a real token's. Check the contract below before you trade it, and never follow a link or site its name points to.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             if row.balance > 0 {
                 Section("Your Balance") {

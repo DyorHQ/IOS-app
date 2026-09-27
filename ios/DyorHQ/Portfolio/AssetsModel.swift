@@ -16,6 +16,8 @@ final class AssetsModel {
     }
 
     private(set) var tokens: [TokenAsset] = []
+    /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12).
+    private(set) var unverified: Set<Address> = []
     private(set) var nfts: [NFTAsset] = []
     /// Moments by their NFT contract, so a Moment edition opens its own page instead of a generic link.
     private(set) var momentsByNFT: [Address: MomentInfo] = [:]
@@ -42,7 +44,9 @@ final class AssetsModel {
 
         var universe = KnownTokenStore.universe(owner: address)
         let known = Set(universe.map(\.address))
-        universe += await env.walletDiscovery.heldTokens(wallet: address, known: known, wholeHistory: true)
+        let discovered = await env.walletDiscovery.heldTokens(wallet: address, known: known, wholeHistory: true)
+        universe += discovered
+        unverified = KnownTokenStore.unverified(owner: address).union(discovered.map(\.address))
         let balances = (try? await ERC20.balances(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
         let held = universe.filter { (balances[$0.address] ?? 0) > 0 }
         let prices = (try? await env.prices.prices(for: held)) ?? [:]
@@ -116,7 +120,7 @@ struct AssetsCard: View {
                             // Its cohort could not be read yet: still no swap, just the row.
                             tokenRow(asset, note: "Past cohort · trading closed")
                         } else {
-                            Button { router.openSwap(tokenIn: asset.token, tokenOut: asset.token.symbol == "USDC" ? .mon : .usdc); dismiss() } label: { tokenRow(asset) }
+                            Button { router.openSwap(tokenIn: asset.token, tokenOut: asset.token.symbol == "USDC" ? .mon : .usdc); dismiss() } label: { tokenRow(asset, unverified: model.unverified.contains(asset.token.address)) }
                                 .buttonStyle(.plain)
                         }
                         if index < shown.count - 1 { Divider().padding(.leading, 46) }
@@ -135,10 +139,15 @@ struct AssetsCard: View {
                             NavigationLink(value: PastMomentRoute(info: retired)) { nftTile(nft, caption: "Past cohort Moment") }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("\(nft.name), \(nft.collection)")
-                        } else {
-                            Button { open(nft) } label: { nftTile(nft, caption: model.momentsByNFT[nft.contract] != nil ? "Moment · OpenSea" : "OpenSea") }
+                        } else if model.momentsByNFT[nft.contract] != nil {
+                            Button { open(nft) } label: { nftTile(nft, caption: "Moment · OpenSea") }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("\(nft.name), \(nft.collection)")
+                        } else {
+                            // Any other collection was sent to the wallet, not chosen here: its name and art prove nothing.
+                            Button { open(nft) } label: { nftTile(nft, caption: "OpenSea", unverified: true) }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(nft.name), \(nft.collection), unverified")
                         }
                     }
                 }
@@ -148,12 +157,15 @@ struct AssetsCard: View {
         .cardBackground()
     }
 
-    private func nftTile(_ nft: NFTAsset, caption: String) -> some View {
+    private func nftTile(_ nft: NFTAsset, caption: String, unverified: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Color(.tertiarySystemFill)
                 .aspectRatio(1, contentMode: .fit)
                 .overlay {
-                    if let url = nft.imageURL {
+                    if let moment = model.momentsByNFT[nft.contract] ?? model.retiredByNFT[nft.contract] {
+                        // A Moment's art comes through the Moment's own checked sources, not the NFT's metadata.
+                        MomentArtwork(provenance: moment.provenance, symbol: moment.symbol, creator: moment.moment.creator)
+                    } else if let url = nft.imageURL {
                         RemoteImage(url: url, pointSize: 120) { loading in
                             if loading { ProgressView().controlSize(.small) } else { Image(systemName: "photo").foregroundStyle(.secondary) }
                         }
@@ -163,16 +175,22 @@ struct AssetsCard: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             Text(nft.name).font(.caption.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
-            Text(caption).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 4) {
+                if unverified { UnverifiedBadge() }
+                Text(caption).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
         }
         .contentShape(Rectangle())
     }
 
-    private func tokenRow(_ asset: AssetsModel.TokenAsset, note: String? = nil) -> some View {
+    private func tokenRow(_ asset: AssetsModel.TokenAsset, note: String? = nil, unverified: Bool = false) -> some View {
         HStack(spacing: 12) {
             TokenLogo(symbol: asset.token.symbol, url: asset.token.logoURL, size: 34)
             VStack(alignment: .leading, spacing: 2) {
-                Text(asset.token.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                HStack(spacing: 6) {
+                    Text(asset.token.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    if unverified { UnverifiedBadge() }
+                }
                 Text(note ?? asset.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
