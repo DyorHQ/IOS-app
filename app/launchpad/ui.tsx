@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useId, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { Icon } from "../ui/icons";
+import { announce, ensureAnnouncer } from "../ui/modal";
 import { TONES } from "../ui/data";
 import { DEPLOYED, explorerAddress, explorerTx } from "../lib/chain";
 import { priceNumber, type LaunchInfo } from "../lib/launchpad";
@@ -58,11 +59,19 @@ export function DeployNotice() {
 
 export function TxStatus({ tx, onDismiss }: { tx: TxState; onDismiss?: () => void }) {
   const [checking, setChecking] = useState(false);
-  // The live region stays mounted while idle (empty, out of the layout): a region that appears together with its first
-  // message is often not announced. Both branches render the same <div>, so React keeps the one node.
-  if (tx.status === "idle") return <div className="sr-only" role="status" />;
+  const region = useRef<HTMLDivElement>(null);
   const busy = tx.status === "signing" || tx.status === "pending";
   const text = tx.status === "signing" ? "Confirm in your wallet…" : tx.status === "pending" ? "Waiting for confirmation on Monad…" : tx.status === "success" ? "Confirmed." : tx.message;
+  // An outcome that settles while an overlay (the menu, a sheet, the token picker) has made this screen inert can't be
+  // heard from this region, so it is said through the page-level one instead (ui/modal.ts); never both.
+  const outcome = tx.status === "success" || tx.status === "error" || tx.status === "unconfirmed" ? `${tx.label}: ${text ?? ""}` : null;
+  useEffect(() => { ensureAnnouncer(); }, []);
+  useEffect(() => {
+    if (outcome && region.current?.closest("[inert]")) announce(outcome);
+  }, [outcome]);
+  // The live region stays mounted while idle (empty, out of the layout): a region that appears together with its first
+  // message is often not announced. Both branches render the same <div>, so React keeps the one node.
+  if (tx.status === "idle") return <div ref={region} className="sr-only" role="status" />;
   const hash = tx.hash;
   // "unconfirmed" is neither success nor failure: the transaction is out and may still land. Its receipt is read again
   // in the background (lib/use-tx.ts); "Check again" reads it now.
@@ -72,7 +81,7 @@ export function TxStatus({ tx, onDismiss }: { tx: TxState; onDismiss?: () => voi
     void checkTx(hash).finally(() => setChecking(false));
   };
   return (
-    <div className={`tx ${tx.status === "success" ? "ok" : tx.status === "error" ? "bad" : ""}`} role="status">
+    <div ref={region} className={`tx ${tx.status === "success" ? "ok" : tx.status === "error" ? "bad" : ""}`} role="status">
       {busy ? <span className="spinner" /> : <Icon name={tx.status === "success" ? "check" : tx.status === "unconfirmed" ? "clock" : "x"} />}
       <div><b>{tx.label}</b>{text}{hash && <><br /><a href={explorerTx(hash)} target="_blank" rel="noreferrer">View transaction <Icon name="arrow-ur" /></a></>}{tx.status === "unconfirmed" && hash && <button type="button" className="tx-check" disabled={checking} onClick={recheck}>{checking ? "Checking…" : "Check again"}</button>}</div>
       {onDismiss && !busy && <button type="button" className="tx-x" aria-label={tx.status === "unconfirmed" ? "I have checked the transaction" : "Dismiss"} onClick={() => onDismiss()}><Icon name="x" /></button>}

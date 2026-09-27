@@ -5,8 +5,9 @@ import { useEffect, type RefObject } from "react";
 /* Modal overlays: the app's sheets, menu and phone-width studio, and the swap token picker. They are drawn inside the
    device frame, so they can't be native <dialog>s in the top layer; this gives them the same behaviour. While one is
    open everything outside it is inert (Tab, a screen reader's virtual cursor and pointer clicks stay inside), focus
-   moves into it, and when it closes focus returns to where it was. Live regions are left alone, so a toast or a status
-   message outside the overlay is still announced. */
+   moves into it, and when it closes focus returns to where it was. A live region that is itself one of the inerted
+   siblings (the toast) is left alone and still announced. One nested inside inerted content (a screen's transaction
+   status) is silenced with it, so a status that settles there speaks through announce(), the page-level region. */
 
 const SKIP = new Set(["SCRIPT", "STYLE", "LINK", "META", "TEMPLATE", "NOSCRIPT"]);
 const isLiveRegion = (el: Element) => el.hasAttribute("aria-live") || ["status", "alert", "log"].includes(el.getAttribute("role") ?? "");
@@ -24,6 +25,36 @@ export function inertOutside(overlay: Element): () => void {
     }
   }
   return () => changed.forEach((el) => el.removeAttribute("inert"));
+}
+
+let announcer: HTMLElement | null = null;
+let pendingAnnouncement: ReturnType<typeof setTimeout> | null = null;
+
+/** The page-level polite live region: a direct child of <body>, so no overlay makes it inert. It is created empty, the
+    first time something may need it, because a region that appears together with its first message is often not
+    announced. */
+export function ensureAnnouncer(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  if (announcer?.isConnected) return announcer;
+  announcer = document.createElement("div");
+  announcer.setAttribute("role", "status");
+  announcer.setAttribute("aria-live", "polite");
+  announcer.setAttribute("class", "sr-only");
+  document.body.appendChild(announcer);
+  return announcer;
+}
+
+/** Says `text` through the page-level live region. The text is set a moment after the region is emptied, so the same
+    message twice is still announced; a newer message within that moment replaces an older one. */
+export function announce(text: string) {
+  const region = ensureAnnouncer();
+  if (!region) return;
+  if (pendingAnnouncement) clearTimeout(pendingAnnouncement);
+  region.textContent = "";
+  pendingAnnouncement = setTimeout(() => {
+    pendingAnnouncement = null;
+    region.textContent = text;
+  }, 100);
 }
 
 /** While `open`, `ref`'s element is modal: the rest of the page is inert and focus starts on `initialFocus()` (default:
