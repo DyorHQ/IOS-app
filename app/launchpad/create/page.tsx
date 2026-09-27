@@ -130,7 +130,22 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
   );
   const set = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
   const { errors, input } = validate(form, protocol.data, pair, account, balance.data ?? null);
-  const firstError = touched ? Object.values(errors)[0] : undefined;
+  // A field's error shows once the field has been left (or after a submit), marked aria-invalid and read with the field.
+  // Waiting for a submit alone showed nothing: Launch stays disabled while the form is invalid, so it never submits.
+  const [left, setLeft] = useState<Partial<Record<keyof Form, true>>>({});
+  const errorOf = (k: keyof Form) => (touched || left[k] ? errors[k] : undefined);
+  const wire = (k: keyof Form, help = false) => ({
+    onBlur: () => setLeft((s) => (s[k] ? s : { ...s, [k]: true })),
+    "aria-invalid": errorOf(k) ? true : undefined,
+    "aria-describedby": [help && `${ids}-${k}-help`, errorOf(k) && `${ids}-${k}-err`].filter(Boolean).join(" ") || undefined,
+  });
+  const errorText = (k: keyof Form) => { const e = errorOf(k); return e ? <span className="hint err" id={`${ids}-${k}-err`}>{e}</span> : null; };
+  // Why Launch is unavailable: the launchpad settings first, then (once the form has been touched) its first problem,
+  // in the order the form is filled.
+  const reason = !DEPLOYED ? null
+    : !protocol.data ? (protocol.error ? "Couldn't read the launchpad settings. Retrying…" : "Reading the launchpad settings…")
+    : !protocol.data.configEnabled ? "New launches are paused on the launchpad right now."
+    : touched || form !== EMPTY || Object.keys(left).length > 0 ? (Object.values(errors)[0] ?? null) : null;
   const creatorTaxBps = input?.creatorTaxBps ?? (Math.round(Number(form.creatorTax || "0") * 100) || 0);
   // The amount as read (a "," can be the decimal point), shown under the field so "1,000" can't silently mean 1.
   const devBuyRead = pair && form.devBuy.trim() ? parseAmount(form.devBuy, pair.decimals) : null;
@@ -145,7 +160,7 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
   // the connected one is called out; an Advanced field with an error opens the section.
   const creatorWallet = form.creatorWallet.trim() || account || "";
   const creatorIsOther = !!account && isAddress(creatorWallet) && getAddress(creatorWallet) !== getAddress(account);
-  const showAdvanced = advanced || (touched && !!(errors.creatorWallet || errors.creatorTax || errors.exemptions));
+  const showAdvanced = advanced || !!(errorOf("creatorWallet") || errorOf("creatorTax") || errorOf("exemptions"));
 
   const submit = async () => {
     setTouched(true);
@@ -167,18 +182,18 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
 
           <div className="logo-field">
             <TokenLogo src={form.logo.trim()} name={form.name || form.symbol} size="lg" />
-            <label className="field">Token image<input type="url" placeholder="https://… square PNG, JPG or SVG" value={form.logo} onChange={(e) => set({ logo: e.target.value })} /><span className="help">A hosted image link. It is stored on-chain with the token and shown everywhere the token appears.</span>{touched && errors.logo && <span className="hint err">{errors.logo}</span>}</label>
+            <label className="field">Token image<input type="url" placeholder="https://… square PNG, JPG or SVG" value={form.logo} onChange={(e) => set({ logo: e.target.value })} {...wire("logo", true)} /><span className="help" id={`${ids}-logo-help`}>A hosted image link. It is stored on-chain with the token and shown everywhere the token appears.</span>{errorText("logo")}</label>
           </div>
           <div className="field-row">
-            <label className="field">Name<input placeholder="Jensen's Jacket" maxLength={32} value={form.name} onChange={(e) => set({ name: e.target.value })} />{touched && errors.name && <span className="hint err">{errors.name}</span>}</label>
-            <label className="field">Ticker<div className="prefix"><span>$</span><input placeholder="JENSEN" maxLength={10} value={form.symbol} onChange={(e) => set({ symbol: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") })} /></div>{touched && errors.symbol && <span className="hint err">{errors.symbol}</span>}</label>
+            <label className="field">Name<input placeholder="Jensen's Jacket" maxLength={32} value={form.name} onChange={(e) => set({ name: e.target.value })} {...wire("name")} />{errorText("name")}</label>
+            <label className="field">Ticker<div className="prefix"><span>$</span><input placeholder="JENSEN" maxLength={10} value={form.symbol} onChange={(e) => set({ symbol: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") })} {...wire("symbol")} /></div>{errorText("symbol")}</label>
           </div>
-          <label className="field">Description<textarea placeholder="What is this token about? Keep it honest; it lives on-chain." maxLength={500} value={form.description} onChange={(e) => set({ description: e.target.value })} /><span className="help">{form.description.length}/500</span></label>
+          <label className="field">Description<textarea placeholder="What is this token about? Keep it honest; it lives on-chain." maxLength={500} value={form.description} onChange={(e) => set({ description: e.target.value })} {...wire("description", true)} /><span className="help" id={`${ids}-description-help`}>{form.description.length}/500</span>{errorText("description")}</label>
           <div className="field-row">
             <label className="field">X profile<input placeholder="@handle or link" value={form.twitter} onChange={(e) => set({ twitter: e.target.value })} /></label>
             <label className="field">Telegram<input placeholder="@group or link" value={form.telegram} onChange={(e) => set({ telegram: e.target.value })} /></label>
           </div>
-          <label className="field">Website (optional)<input type="url" placeholder="https://" value={form.website} onChange={(e) => set({ website: e.target.value })} />{touched && errors.website && <span className="hint err">{errors.website}</span>}</label>
+          <label className="field">Website (optional)<input type="url" placeholder="https://" value={form.website} onChange={(e) => set({ website: e.target.value })} {...wire("website")} />{errorText("website")}</label>
 
           <div className="field"><span id={`${ids}-pair`}>Paired asset</span>
             <div className="pair-pick" role="group" aria-labelledby={`${ids}-pair`}>
@@ -205,25 +220,25 @@ export default function Create({ embedded = false, onLaunched }: { embedded?: bo
           </div>
 
           <label className="field">Developer buy (optional)
-            <div className="prefix suffix"><input inputMode="decimal" placeholder="0" value={form.devBuy} onChange={(e) => set({ devBuy: e.target.value })} /><span className="unit">{pair?.symbol ?? "MON"}</span></div>
-            <span className="help">{devBuyRead !== null && pair ? `Read as ${fmtAmount(devBuyRead, pair.decimals, pair.symbol)}. ` : ""}Bought in the same transaction as the launch, before anyone else, with no snipe tax.{account && balance.data !== null && pair ? ` Balance: ${fmtAmount(balance.data ?? 0n, pair.decimals, pair.symbol)}.` : ""}</span>
-            {touched && errors.devBuy && <span className="hint err">{errors.devBuy}</span>}
+            <div className="prefix suffix"><input inputMode="decimal" placeholder="0" value={form.devBuy} onChange={(e) => set({ devBuy: e.target.value })} {...wire("devBuy", true)} /><span className="unit">{pair?.symbol ?? "MON"}</span></div>
+            <span className="help" id={`${ids}-devBuy-help`}>{devBuyRead !== null && pair ? `Read as ${fmtAmount(devBuyRead, pair.decimals, pair.symbol)}. ` : ""}Bought in the same transaction as the launch, before anyone else, with no snipe tax.{account && balance.data !== null && pair ? ` Balance: ${fmtAmount(balance.data ?? 0n, pair.decimals, pair.symbol)}.` : ""}</span>
+            {errorText("devBuy")}
           </label>
 
           <button type="button" className="disclosure" aria-expanded={showAdvanced} onClick={() => setAdvanced(!showAdvanced)}>Advanced options <Icon name="chev-down" /></button>
           {showAdvanced && (
             <div className="advanced">
               <div className="toggle-row"><div><b>Holder fee sharing</b><small>Route the creator share of every trade fee to token holders, pro rata, instead of one wallet. Cannot be changed later.</small></div><Switch checked={form.holderFeeSharing} onChange={(v) => set({ holderFeeSharing: v })} label="Holder fee sharing" /></div>
-              <label className="field">Creator wallet<input placeholder={account ?? "0x…"} value={form.creatorWallet} onChange={(e) => set({ creatorWallet: e.target.value })} /><span className="help">Receives creator fees and any creator tax, and is exempt from the snipe tax. Defaults to your connected wallet.</span>{touched && errors.creatorWallet && <span className="hint err">{errors.creatorWallet}</span>}</label>
-              <label className="field">Creator tax (%)<input inputMode="decimal" value={form.creatorTax} onChange={(e) => set({ creatorTax: e.target.value })} /><span className="help">An extra tax on every trade, paid to the creator wallet on top of the {protocol.data ? bpsToPct(protocol.data.curveFeeBps) : "—"} trade fee. Maximum {protocol.data ? bpsToPct(protocol.data.maxCreatorTaxBps) : "—"}.</span>{touched && errors.creatorTax && <span className="hint err">{errors.creatorTax}</span>}</label>
-              <label className="field">Snipe-tax exemptions<textarea placeholder="One address per line" value={form.exemptions} onChange={(e) => set({ exemptions: e.target.value })} /><span className="help">Wallets allowed to buy during the first {protocol.data ? seconds(protocol.data.snipeSchedule.length) : "seconds"} without the snipe tax. You and the creator wallet are always exempt. Up to {MAX_EXEMPTIONS}.</span>{touched && errors.exemptions && <span className="hint err">{errors.exemptions}</span>}</label>
+              <label className="field">Creator wallet<input placeholder={account ?? "0x…"} value={form.creatorWallet} onChange={(e) => set({ creatorWallet: e.target.value })} {...wire("creatorWallet", true)} /><span className="help" id={`${ids}-creatorWallet-help`}>Receives creator fees and any creator tax, and is exempt from the snipe tax. Defaults to your connected wallet.</span>{errorText("creatorWallet")}</label>
+              <label className="field">Creator tax (%)<input inputMode="decimal" value={form.creatorTax} onChange={(e) => set({ creatorTax: e.target.value })} {...wire("creatorTax", true)} /><span className="help" id={`${ids}-creatorTax-help`}>An extra tax on every trade, paid to the creator wallet on top of the {protocol.data ? bpsToPct(protocol.data.curveFeeBps) : "—"} trade fee. Maximum {protocol.data ? bpsToPct(protocol.data.maxCreatorTaxBps) : "—"}.</span>{errorText("creatorTax")}</label>
+              <label className="field">Snipe-tax exemptions<textarea placeholder="One address per line" value={form.exemptions} onChange={(e) => set({ exemptions: e.target.value })} {...wire("exemptions", true)} /><span className="help" id={`${ids}-exemptions-help`}>Wallets allowed to buy during the first {protocol.data ? seconds(protocol.data.snipeSchedule.length) : "seconds"} without the snipe tax. You and the creator wallet are always exempt. Up to {MAX_EXEMPTIONS}.</span>{errorText("exemptions")}</label>
             </div>
           )}
 
           {creatorIsOther && <div className="warnbox"><b>Creator fees go to another wallet.</b> {shortAddress(creatorWallet)} (not your connected wallet) receives the creator share of fees and any creator tax, and controls that role: it can hand it to another wallet. Set under Advanced options.</div>}
           {allowed.data === false && <div className="warnbox"><b>Whitelist only.</b> Launching is currently limited to whitelisted wallets and yours is not on the list.</div>}
           <TxStatus tx={tx} onDismiss={dismiss} />
-          {firstError && <p className="hint err" role="alert">{firstError}</p>}
+          {reason && <p className="hint">{reason}</p>}
           <ActionButton type="submit" ready={!!input && allowed.data !== false && !!protocol.data?.configEnabled} busy={busy} label={<>Launch for {fee}{estimate ? ` + ${fmtAmount(estimate.used, pair?.decimals ?? 18, pair?.symbol ?? "MON")}` : ""} <Icon name="arrow-ur" /></>} onClick={submit} />
           <p className="hint">You pay the launch fee plus your developer buy. Supply mints to the curve only: no team allocation, and nobody can withdraw the liquidity after graduation.</p>
         </form>

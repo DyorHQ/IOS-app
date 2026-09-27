@@ -84,8 +84,21 @@ export default function Create() {
   const mediaHash: Hex | null = file ? fileHash : form.mediaURI.trim() ? keccak256(stringToHex(form.mediaURI.trim())) : null;
   const set = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
   const { errors, input } = validate(form, policy.data, mediaHash, fileState);
-  const firstError = touched ? Object.values(errors)[0] : undefined;
+  // A field's error shows once the field has been left (or after a submit), marked aria-invalid and read with the field.
+  // Waiting for a submit alone showed nothing: Publish stays disabled while the form is invalid, so it never submits.
+  const [left, setLeft] = useState<Partial<Record<keyof Form, true>>>({});
+  const errorOf = (k: keyof Form) => (touched || left[k] ? errors[k] : undefined);
+  const wire = (k: keyof Form, help = false) => ({
+    onBlur: () => setLeft((s) => (s[k] ? s : { ...s, [k]: true })),
+    "aria-invalid": errorOf(k) ? true : undefined,
+    "aria-describedby": [help && `${ids}-${k}-help`, errorOf(k) && `${ids}-${k}-err`].filter(Boolean).join(" ") || undefined,
+  });
+  const errorText = (k: keyof Form) => { const e = errorOf(k); return e ? <span className="hint err" id={`${ids}-${k}-err`}>{e}</span> : null; };
   const p = policy.data;
+  // Why Publish is unavailable: the Moments settings first, then (once the form has been touched) its first problem.
+  const reason = !MOMENTS_DEPLOYED ? null
+    : !p ? (policy.error ? "Couldn't read the Moments settings. Retrying…" : "Reading the Moments settings…")
+    : touched || form !== EMPTY || file !== null || Object.keys(left).length > 0 ? (Object.values(errors)[0] ?? null) : null;
   const allocBps = input?.creatorAllocBps ?? (Math.round(Number(form.allocPct || "0") * 100) || 0);
   const creatorCoins = (SUPPLY * BigInt(Math.min(1000, Math.max(0, allocBps)))) / BPS;
   const price = parseAmount(form.price, USDC.decimals);
@@ -119,25 +132,25 @@ export default function Create() {
               </div>
             </div>
           </div>
-          <label className="field">Media link<input type="url" placeholder="ipfs://… or https://… (the hosted copy shown on the NFT)" value={form.mediaURI} onChange={(e) => set({ mediaURI: e.target.value })} /><span className="help">Stored on-chain as the NFT image. Content-addressed (IPFS) links are best; without a file above, the link itself is hashed.</span>{touched && errors.mediaURI && <span className="hint err">{errors.mediaURI}</span>}</label>
-          <label className="field">Video link (optional)<input type="url" placeholder="ipfs://… .mp4 — shown as the NFT animation" value={form.animationURI} onChange={(e) => set({ animationURI: e.target.value })} />{touched && errors.animationURI && <span className="hint err">{errors.animationURI}</span>}</label>
+          <label className="field">Media link<input type="url" placeholder="ipfs://… or https://… (the hosted copy shown on the NFT)" value={form.mediaURI} onChange={(e) => set({ mediaURI: e.target.value })} {...wire("mediaURI", true)} /><span className="help" id={`${ids}-mediaURI-help`}>Stored on-chain as the NFT image. Content-addressed (IPFS) links are best; without a file above, the link itself is hashed.</span>{errorText("mediaURI")}</label>
+          <label className="field">Video link (optional)<input type="url" placeholder="ipfs://… .mp4 — shown as the NFT animation" value={form.animationURI} onChange={(e) => set({ animationURI: e.target.value })} {...wire("animationURI")} />{errorText("animationURI")}</label>
           <div className="field-row">
-            <label className="field">Name<input placeholder="Sunrise over Labadi" maxLength={48} value={form.name} onChange={(e) => set({ name: e.target.value })} />{touched && errors.name && <span className="hint err">{errors.name}</span>}</label>
-            <label className="field">Coin ticker<div className="prefix"><span>$</span><input placeholder="LABADI" maxLength={10} value={form.symbol} onChange={(e) => set({ symbol: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") })} /></div>{touched && errors.symbol && <span className="hint err">{errors.symbol}</span>}</label>
+            <label className="field">Name<input placeholder="Sunrise over Labadi" maxLength={48} value={form.name} onChange={(e) => set({ name: e.target.value })} {...wire("name")} />{errorText("name")}</label>
+            <label className="field">Coin ticker<div className="prefix"><span>$</span><input placeholder="LABADI" maxLength={10} value={form.symbol} onChange={(e) => set({ symbol: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") })} {...wire("symbol")} /></div>{errorText("symbol")}</label>
           </div>
           <div className="field-row">
-            <label className="field">Place<input placeholder="Labadi Beach, Accra" maxLength={64} value={form.place} onChange={(e) => set({ place: e.target.value })} />{touched && errors.place && <span className="hint err">{errors.place}</span>}</label>
-            <label className="field">Date<input type="datetime-local" value={form.date} onChange={(e) => set({ date: e.target.value })} />{touched && errors.date && <span className="hint err">{errors.date}</span>}</label>
+            <label className="field">Place<input placeholder="Labadi Beach, Accra" maxLength={64} value={form.place} onChange={(e) => set({ place: e.target.value })} {...wire("place")} />{errorText("place")}</label>
+            <label className="field">Date<input type="datetime-local" value={form.date} onChange={(e) => set({ date: e.target.value })} {...wire("date")} />{errorText("date")}</label>
           </div>
           <div className="field-row">
-            <label className="field">Collect price (USDC)<div className="prefix suffix"><span>$</span><input inputMode="decimal" value={form.price} onChange={(e) => set({ price: e.target.value })} /><span className="unit">USDC</span></div><span className="help">Minimum {p ? usd(p.minPrice) : "—"}. {collectsToGraduate !== null ? `About ${collectsToGraduate} collects at this price reach the ${usd(p!.threshold)} reserve.` : ""}</span>{touched && errors.price && <span className="hint err">{errors.price}</span>}</label>
-            <label className="field">Your coin allocation (%)<input inputMode="decimal" value={form.allocPct} onChange={(e) => set({ allocPct: e.target.value })} /><span className="help">Up to {p ? bpsToPct(p.maxCreatorAllocBps) : "10%"} of the {fmtUnits(SUPPLY, 18, { compact: true })} coins; vests 20% at graduation, then 16% a month. Anything you leave deepens the pool.</span>{touched && errors.allocPct && <span className="hint err">{errors.allocPct}</span>}</label>
+            <label className="field">Collect price (USDC)<div className="prefix suffix"><span>$</span><input inputMode="decimal" value={form.price} onChange={(e) => set({ price: e.target.value })} {...wire("price", true)} /><span className="unit">USDC</span></div><span className="help" id={`${ids}-price-help`}>Minimum {p ? usd(p.minPrice) : "—"}. {collectsToGraduate !== null ? `About ${collectsToGraduate} collects at this price reach the ${usd(p!.threshold)} reserve.` : ""}</span>{errorText("price")}</label>
+            <label className="field">Your coin allocation (%)<input inputMode="decimal" value={form.allocPct} onChange={(e) => set({ allocPct: e.target.value })} {...wire("allocPct", true)} /><span className="help" id={`${ids}-allocPct-help`}>Up to {p ? bpsToPct(p.maxCreatorAllocBps) : "10%"} of the {fmtUnits(SUPPLY, 18, { compact: true })} coins; vests 20% at graduation, then 16% a month. Anything you leave deepens the pool.</span>{errorText("allocPct")}</label>
           </div>
-          <label className="field">Collect window (days)<input inputMode="decimal" value={form.windowDays} onChange={(e) => set({ windowDays: e.target.value })} /><span className="help">1 hour to 30 days. Collecting ends at graduation or when the window closes, whichever comes first. {now > 0 ? `Closes ${fmtDate(closesAt)}.` : ""}</span>{touched && errors.windowDays && <span className="hint err">{errors.windowDays}</span>}</label>
+          <label className="field">Collect window (days)<input inputMode="decimal" value={form.windowDays} onChange={(e) => set({ windowDays: e.target.value })} {...wire("windowDays", true)} /><span className="help" id={`${ids}-windowDays-help`}>1 hour to 30 days. Collecting ends at graduation or when the window closes, whichever comes first. {now > 0 ? `Closes ${fmtDate(closesAt)}.` : ""}</span>{errorText("windowDays")}</label>
 
           <div className="note"><b>What you are publishing</b><p>A numbered, transferable edition (ERC-721, marketplace-ready with a {p ? bpsToPct(p.royaltyBps) : "5%"} creator royalty) and a promise of coins that only exist if the reserve reaches {p ? usd(p.threshold) : "$10"}. You receive {p ? bpsToPct(p.creatorBps) : "20%"} of every collect in USDC, 0.2% of every trade after graduation, and the {p ? bpsToPct(p.royaltyBps) : "5%"} royalty on secondary sales of the editions. Nothing about a published Moment can be changed afterwards.</p></div>
           <TxStatus tx={tx} onDismiss={dismiss} />
-          {firstError && <p className="hint err" role="alert">{firstError}</p>}
+          {reason && <p className="hint">{reason}</p>}
           {p?.publishingPaused && <div className="warnbox"><b>Publishing is paused.</b> Governance has paused new Moments for now.</div>}
           <ActionButton requireLaunchpad={false} type="submit" ready={MOMENTS_DEPLOYED && !!input && !p?.publishingPaused} busy={busy} label={<>Publish <Icon name="arrow-ur" /></>} onClick={submit} />
           <p className="hint">Publishing costs gas only. The coin and the NFT contracts deploy in the same transaction; their addresses are fixed by your wallet, so nobody can front-run them.</p>

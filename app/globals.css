@@ -404,7 +404,7 @@ button.row:active{background:var(--inner)}
 .label,.field,.studio-sec .lbl{font-size:var(--type-label)}
 input::placeholder,textarea::placeholder{color:var(--faint);opacity:1}
 .field input,.field textarea,.select,.amount{box-shadow:inset 0 0 0 1px var(--control-border)}
-.field input[aria-invalid="true"]{box-shadow:inset 0 0 0 2px var(--down-text)}
+.field input[aria-invalid="true"],.field textarea[aria-invalid="true"]{box-shadow:inset 0 0 0 2px var(--down-text)}
 .switch{width:46px;height:32px;box-shadow:inset 0 0 0 1px var(--control-border)}.switch::after{top:5px;background:var(--text)}.switch[aria-checked="true"]::after{background:var(--on-accent)}
 .btn:hover:not(:disabled){filter:brightness(.94)}.btn:focus-visible{outline:2px solid var(--accent-ink);outline-offset:4px}
 .btn[aria-busy="true"]{cursor:wait}.btn:disabled{opacity:1;background:var(--inner2);color:var(--muted);box-shadow:none}

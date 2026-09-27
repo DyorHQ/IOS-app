@@ -232,7 +232,7 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
     <>
       <SheetHead title="Send" onClose={onClose} />
       <label className="field">Asset<select className="select" value={row?.address ?? token} onChange={(e) => setToken(e.target.value)}>{owned.map((r) => <option key={r.address} value={r.address}>{r.symbol} · {fmtUnits(r.balance, r.decimals, { compact: true })}</option>)}{owned.length === 0 && <option value="">{markets.balancesReady ? "No balances" : markets.balancesError ? "Couldn't read balances" : "Reading balances…"}</option>}</select></label>
-      <label className="field">To address<input placeholder="0x…" value={to} onChange={(e) => setTo(e.target.value)} />{recipient && check?.block && <span className="hint err">{check.block}</span>}{code.error && <span className="help">Couldn&apos;t check whether this address is a contract.</span>}</label>
+      <label className="field">To address<input placeholder="0x…" value={to} onChange={(e) => setTo(e.target.value)} aria-invalid={recipient && check?.block ? true : undefined} aria-describedby={recipient && check?.block ? "send-to-err" : undefined} />{recipient && check?.block && <span className="hint err" id="send-to-err">{check.block}</span>}{code.error && <span className="help">Couldn&apos;t check whether this address is a contract.</span>}</label>
       {check?.warn && (
         <div className="warnbox">
           {check.warn}
@@ -242,7 +242,9 @@ function SendSheet({ onClose, toast }: { onClose: () => void; toast: (t: ReactNo
       <label className="field">Amount<input inputMode="decimal" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />{row && <span className="help">{markets.balancesReady ? `Balance ${fmtUnits(row.balance, row.decimals)} ${row.symbol}` : markets.balancesError ? "Couldn't read your balance" : "Reading balance…"}</span>}</label>
       <TxStatus tx={tx} onDismiss={dismiss} />
       {wallet.onMonad && reason && <p className="hint">{reason}</p>}
-      <button type="button" className="btn primary big" disabled={!valid || busy || !wallet.onMonad} onClick={send}>{wallet.onMonad ? `Send ${row?.symbol ?? ""}` : "Switch to Monad first"}</button>
+      {/* On another network the button switches the wallet to Monad (as ActionButton does elsewhere), never a dead end. */}
+      {wallet.onMonad ? <button type="button" className="btn primary big" disabled={!valid || busy} onClick={send}>{`Send ${row?.symbol ?? ""}`}</button>
+        : <button type="button" className="btn primary big" onClick={() => wallet.switchToMonad().catch(() => undefined)}>Switch to Monad</button>}
     </>
   );
 }
