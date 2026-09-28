@@ -1,0 +1,125 @@
+import XCTest
+@testable import DyorKit
+
+/// The app's links into the DyorHQ docs (`DocsLinks`) go only to pages GitBook has published, at their canonical paths:
+/// GitBook's paths differ from the docs repository's file paths, and a page that redirects or isn't published yet
+/// (resources/faq, resources/past-cohorts-and-retired-launchpads, resources/security-and-responsible-disclosure) is never
+/// linked. With DYOR_LIVE_DOCS=1, every link is asked for a 200 without following a redirect.
+final class DocsLinksTests: XCTestCase {
+    /// Every page published on 2026-09-28, each answering 200 at this exact URL.
+    static let published: [String] = [
+        "https://dyorhq.gitbook.io/docs",
+        "https://dyorhq.gitbook.io/docs/getting-started/quickstart",
+        "https://dyorhq.gitbook.io/docs/getting-started/create-your-account",
+        "https://dyorhq.gitbook.io/docs/getting-started/fund-your-wallet",
+        "https://dyorhq.gitbook.io/docs/getting-started/supported-network-and-assets",
+        "https://dyorhq.gitbook.io/docs/platform/app-tour",
+        "https://dyorhq.gitbook.io/docs/platform/self-custody-and-security",
+        "https://dyorhq.gitbook.io/docs/platform/integrations-and-fees",
+        "https://dyorhq.gitbook.io/docs/spot-trading/swap",
+        "https://dyorhq.gitbook.io/docs/spot-trading/slippage-and-price-impact",
+        "https://dyorhq.gitbook.io/docs/spot-trading/adding-tokens",
+        "https://dyorhq.gitbook.io/docs/perpetuals/overview",
+        "https://dyorhq.gitbook.io/docs/perpetuals/deposit-and-withdraw",
+        "https://dyorhq.gitbook.io/docs/perpetuals/one-click-trading",
+        "https://dyorhq.gitbook.io/docs/perpetuals/placing-orders",
+        "https://dyorhq.gitbook.io/docs/perpetuals/managing-positions",
+        "https://dyorhq.gitbook.io/docs/launchpad/overview",
+        "https://dyorhq.gitbook.io/docs/launchpad/launch-a-coin",
+        "https://dyorhq.gitbook.io/docs/launchpad/trading-on-the-curve",
+        "https://dyorhq.gitbook.io/docs/launchpad/graduation",
+        "https://dyorhq.gitbook.io/docs/launchpad/fees-and-rewards",
+        "https://dyorhq.gitbook.io/docs/launchpad/my-launchpad",
+        "https://dyorhq.gitbook.io/docs/moments/overview",
+        "https://dyorhq.gitbook.io/docs/moments/publish-a-moment",
+        "https://dyorhq.gitbook.io/docs/moments/collect-a-moment",
+        "https://dyorhq.gitbook.io/docs/moments/graduation-and-vesting",
+        "https://dyorhq.gitbook.io/docs/moments/earnings-and-fees",
+        "https://dyorhq.gitbook.io/docs/moments/my-moments",
+        "https://dyorhq.gitbook.io/docs/wallet-and-account/home-and-portfolio",
+        "https://dyorhq.gitbook.io/docs/wallet-and-account/send-receive-transfer",
+        "https://dyorhq.gitbook.io/docs/wallet-and-account/bridge",
+        "https://dyorhq.gitbook.io/docs/wallet-and-account/notifications-and-price-alerts",
+        "https://dyorhq.gitbook.io/docs/wallet-and-account/profile-and-settings",
+        "https://dyorhq.gitbook.io/docs/wallet-and-account/dyorhq-social",
+        "https://dyorhq.gitbook.io/docs/wallet-and-account/export-sign-out-delete",
+        "https://dyorhq.gitbook.io/docs/resources/contracts-and-addresses",
+        "https://dyorhq.gitbook.io/docs/resources/risk-disclosures",
+        "https://dyorhq.gitbook.io/docs/resources/glossary",
+        "https://dyorhq.gitbook.io/docs/resources/official-links",
+    ]
+
+    /// Written in the docs but not published yet: never linked.
+    static let unpublished = ["resources/faq", "resources/past-cohorts-and-retired-launchpads", "resources/security-and-responsible-disclosure"]
+
+    func testEveryLinkIsAPublishedDocsPage() {
+        XCTAssertEqual(Self.published.count, 39)
+        XCTAssertEqual(Set(Self.published).count, Self.published.count, "no page twice")
+        for page in DocsLinks.allCases {
+            let url = page.url.absoluteString
+            XCTAssertTrue(url.hasPrefix("https://dyorhq.gitbook.io/docs"), url)
+            XCTAssertTrue(Self.published.contains(url), "\(page): \(url) is not a published page")
+            XCTAssertFalse(url.hasSuffix("/"), "\(url): GitBook redirects a trailing slash")
+            XCTAssertNil(page.url.query, url)
+            XCTAssertNil(page.url.fragment, url)
+            XCTAssertFalse(Self.unpublished.contains { url.hasSuffix($0) }, url)
+            XCTAssertFalse(page.topic.isEmpty, url)
+        }
+        XCTAssertEqual(Set(DocsLinks.allCases.map(\.url)).count, DocsLinks.allCases.count, "one case per page")
+        XCTAssertEqual(DocsLinks.base, "https://dyorhq.gitbook.io/docs")
+    }
+
+    /// The table itself: each case and the page it opens.
+    func testTheTableIsPinned() {
+        let expected: [(DocsLinks, String)] = [
+            (.home, "https://dyorhq.gitbook.io/docs"),
+            (.quickstart, "https://dyorhq.gitbook.io/docs/getting-started/quickstart"),
+            (.selfCustodyAndSecurity, "https://dyorhq.gitbook.io/docs/platform/self-custody-and-security"),
+            (.slippageAndPriceImpact, "https://dyorhq.gitbook.io/docs/spot-trading/slippage-and-price-impact"),
+            (.perpetualsOverview, "https://dyorhq.gitbook.io/docs/perpetuals/overview"),
+            (.oneClickTrading, "https://dyorhq.gitbook.io/docs/perpetuals/one-click-trading"),
+            (.launchACoin, "https://dyorhq.gitbook.io/docs/launchpad/launch-a-coin"),
+            (.launchpadGraduation, "https://dyorhq.gitbook.io/docs/launchpad/graduation"),
+            (.launchpadFeesAndRewards, "https://dyorhq.gitbook.io/docs/launchpad/fees-and-rewards"),
+            (.publishAMoment, "https://dyorhq.gitbook.io/docs/moments/publish-a-moment"),
+            (.collectAMoment, "https://dyorhq.gitbook.io/docs/moments/collect-a-moment"),
+            (.momentsGraduationAndVesting, "https://dyorhq.gitbook.io/docs/moments/graduation-and-vesting"),
+            (.momentsEarningsAndFees, "https://dyorhq.gitbook.io/docs/moments/earnings-and-fees"),
+            (.bridge, "https://dyorhq.gitbook.io/docs/wallet-and-account/bridge"),
+            (.notificationsAndPriceAlerts, "https://dyorhq.gitbook.io/docs/wallet-and-account/notifications-and-price-alerts"),
+            (.exportSignOutDelete, "https://dyorhq.gitbook.io/docs/wallet-and-account/export-sign-out-delete"),
+            (.contractsAndAddresses, "https://dyorhq.gitbook.io/docs/resources/contracts-and-addresses"),
+            (.riskDisclosures, "https://dyorhq.gitbook.io/docs/resources/risk-disclosures"),
+        ]
+        XCTAssertEqual(DocsLinks.allCases, expected.map(\.0))
+        for (page, url) in expected { XCTAssertEqual(page.url.absoluteString, url, "\(page)") }
+    }
+
+    // MARK: Live
+
+    /// Every link answers 200 itself: no redirect is followed (a moved page answers 3xx here), so a link to a path GitBook
+    /// only redirects from fails. Off by default: set DYOR_LIVE_DOCS=1.
+    func testEveryLinkAnswers200WithoutARedirect() async throws {
+        guard ProcessInfo.processInfo.environment["DYOR_LIVE_DOCS"] == "1" else { throw XCTSkip("set DYOR_LIVE_DOCS=1") }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        let session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        for page in DocsLinks.allCases {
+            var request = URLRequest(url: page.url)
+            request.httpMethod = "GET"
+            let (_, response) = try await session.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode
+            XCTAssertEqual(status, 200, "\(page.url.absoluteString) answered \(status.map(String.init) ?? "no HTTP status")"
+                           + ((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Location").map { " → \($0)" } ?? ""))
+        }
+    }
+}
+
+/// Refuses every redirect, so the redirect response itself comes back.
+private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
