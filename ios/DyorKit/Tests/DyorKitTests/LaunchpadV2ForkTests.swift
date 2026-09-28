@@ -40,7 +40,7 @@ final class LaunchpadV2ForkTests: V2ForkCase {
     private func completeCurve(_ fork: ForkLaunchpad, _ launch: Launch, _ wallet: ForkWallet) async throws {
         let rest = launch.graduationThreshold > launch.realQuoteReserve ? launch.graduationThreshold - launch.realQuoteReserve : 0
         let quoteIn = rest * 11 / 10 + Self.mon // fees and tax on top; the curve refunds what it doesn't take
-        try await run(await fork.service.buyPlan(launch: launch, quoteIn: quoteIn, minTokensOut: 0, recipient: wallet.address), wallet)
+        try await run(try await fork.service.buyPlan(launch: launch, quoteIn: quoteIn, minTokensOut: 0, recipient: wallet.address), wallet)
     }
 
     // MARK: Reads
@@ -113,7 +113,7 @@ final class LaunchpadV2ForkTests: V2ForkCase {
             // Buy against the quote's floor.
             let buyQuote = try await fork.service.quoteBuy(curve: launch.curve, quoteIn: c.buy, recipient: wallet.address)
             let floor = buyQuote.tokensOut * 99 / 100
-            try await run(await fork.service.buyPlan(launch: launch, quoteIn: c.buy, minTokensOut: floor, recipient: wallet.address), wallet)
+            try await run(try await fork.service.buyPlan(launch: launch, quoteIn: c.buy, minTokensOut: floor, recipient: wallet.address), wallet)
             let bought = try await balance(launch.token, wallet.address) - launched
             XCTAssertGreaterThanOrEqual(bought, floor, c.symbol)
 
@@ -165,10 +165,10 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         let open = try await info(fork, wallet.address)
         let mon = try XCTUnwrap(open.pairs.first { $0.pair.isNative })
         // What a build that skipped the gate would send: the sync plan, with the terms the screen showed.
-        func raw(_ symbol: String, economics: Data? = nil) async -> [TransactionStep] {
+        func raw(_ symbol: String, economics: Data? = nil) async throws -> [TransactionStep] {
             var bound = input(symbol)
             bound.expectedEconomics = economics ?? mon.economicsHash ?? Data()
-            return await fork.service.launchPlan(bound, launchFee: open.launchFee, from: wallet.address)
+            return try await fork.service.launchPlan(bound, launchFee: open.launchFee, from: wallet.address)
         }
 
         try await sendAs(fork.owner, to: factory, "setWhitelistEnabled(bool)", [.bool(true)])
@@ -180,14 +180,14 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         } catch {
             XCTAssertEqual(error as? LaunchpadError, .launchBlocked(.notAllowed))
         }
-        let notWhitelisted = await refusal(await raw("GATE"), wallet)
+        let notWhitelisted = await refusal(try await raw("GATE"), wallet)
         XCTAssertEqual(notWhitelisted, sentence("NotWhitelisted"))
         try await sendAs(fork.owner, to: factory, "setWhitelistEnabled(bool)", [.bool(false)])
 
         try await sendAs(fork.owner, to: factory, "setLaunchConfigEnabled(uint256,bool)", [.uint(0), .bool(false)])
         let closed = try await info(fork, wallet.address)
         XCTAssertEqual(closed.launchBlocker, .configDisabled)
-        let disabled = await refusal(await raw("SHUT"), wallet)
+        let disabled = await refusal(try await raw("SHUT"), wallet)
         XCTAssertEqual(disabled, sentence("LaunchConfigDisabled"))
         try await sendAs(fork.owner, to: factory, "setLaunchConfigEnabled(uint256,bool)", [.uint(0), .bool(true)])
 
@@ -202,7 +202,7 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         } catch {
             XCTAssertEqual(error as? LaunchpadError, .termsChanged)
         }
-        let mismatch = await refusal(await raw("STALE"), wallet)
+        let mismatch = await refusal(try await raw("STALE"), wallet)
         XCTAssertEqual(mismatch, sentence("LaunchEconomicsMismatch"))
         XCTAssertEqual(mismatch, LaunchpadError.termsChanged.errorDescription)
         XCTAssertEqual(wallet.signatures, 0, "nothing was signed")
@@ -279,7 +279,7 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         var v4 = input("RWA4", pair: Token.abil.address, sharing: false)
         let abilTerms = try await info(fork, wallet.address)
         v4.expectedEconomics = try XCTUnwrap(abilTerms.pairs.first { $0.pair.address == Token.abil.address }?.economicsHash)
-        let venue = await refusal(await fork.service.launchPlan(v4, launchFee: abilTerms.launchFee, from: wallet.address), wallet)
+        let venue = await refusal(try await fork.service.launchPlan(v4, launchFee: abilTerms.launchFee, from: wallet.address), wallet)
         XCTAssertEqual(venue, sentence("PairRequiresMonday"))
 
         // A MON launch on Monday Trade whose graduation fails: the Monday executor is broken on the fork only.

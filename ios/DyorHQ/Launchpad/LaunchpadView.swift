@@ -352,7 +352,8 @@ final class LaunchpadModel {
     }
 }
 
-/// One coin: price and progress, the curve's trades as candles, and the buy/sell ticket.
+/// One coin: price and progress, the curve's trades as candles, and the buy/sell ticket — sell only for a coin on a
+/// retired launchpad (`Launch.isRetiredLaunchpad`, owner decision 2026-09-28).
 struct LaunchDetailView: View {
     let launch: Launch
     @Environment(AppEnvironment.self) private var env
@@ -374,7 +375,15 @@ struct LaunchDetailView: View {
     @State private var showCreatorClaim = false
     @State private var showGraduate = false
 
+    init(launch: Launch) {
+        self.launch = launch
+        // A retired launchpad's curve takes sells only: the ticket never starts on (or offers) Buy.
+        _side = State(initialValue: launch.isRetiredLaunchpad ? .sell : .buy)
+    }
+
     private var isCreator: Bool { session.address != nil && session.address == launch.deployer }
+    /// Buying on the curve is open: never on a retired launchpad, whose holders can only sell.
+    private var buysOpen: Bool { !launch.isRetiredLaunchpad }
 
     /// The coin's price and market cap in USD, when the pair asset has a known dollar price.
     private var priceUSD: Double? { pairUSD.map { LaunchpadService.priceNumber(launch) * $0 } }
@@ -544,11 +553,16 @@ struct LaunchDetailView: View {
 
     private var ticketSection: some View {
         Section {
-            Picker("Side", selection: $side) {
-                Text("Buy").tag(TradeSide.buy)
-                Text("Sell").tag(TradeSide.sell)
+            if buysOpen {
+                Picker("Side", selection: $side) {
+                    Text("Buy").tag(TradeSide.buy)
+                    Text("Sell").tag(TradeSide.sell)
+                }
+                .pickerStyle(.segmented)
+            } else {
+                Label(RetiredLaunchpad.notice, systemImage: "arrow.up.right.circle")
+                    .font(.subheadline).foregroundStyle(.secondary)
             }
-            .pickerStyle(.segmented)
             AmountField(title: "0", text: $amountText, token: side == .buy ? pairToken : token) {
                 guard let account else { return }
                 // A native-MON buy keeps the network fee back (as Swap, Send and Bridge Max do), or the buy cannot pay gas.
@@ -570,7 +584,7 @@ struct LaunchDetailView: View {
                           isDisabled: rawAmount == 0 || !session.canSign || (side == .buy ? buyQuote == nil : sellQuote == nil) || shortfall != nil) { showConfirm = true }
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         } header: {
-            Text("Trade on the Curve")
+            Text(buysOpen ? "Trade on the Curve" : "Sell on the Curve")
         } footer: {
             if !session.canSign { Text("Sign in to trade.") }
             else if let shortfall { Text(shortfall).foregroundStyle(Color.attention) }
@@ -593,8 +607,13 @@ struct LaunchDetailView: View {
 
     private var graduatedSection: some View {
         Section {
-            Button("Swap \(launch.symbol) on \(launch.graduationVenue.title)", systemImage: "arrow.left.arrow.right") {
-                router.openSwap(tokenIn: pairToken.isNative ? Token.mon : pairToken, tokenOut: token)
+            if launch.isSellOnly {
+                // Not graduated yet on a retired launchpad: no pool to trade in, and nobody may buy it.
+                Label(RetiredLaunchpad.notice, systemImage: "lock").font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                Button("Swap \(launch.symbol) on \(launch.graduationVenue.title)", systemImage: "arrow.left.arrow.right") {
+                    router.openSwap(tokenIn: pairToken.isNative ? Token.mon : pairToken, tokenOut: token)
+                }
             }
             if launch.phase == .graduated {
                 // The v4 pool key carries fee 0 (the hook levies the launch's poolFeeBps); a Monday Trade pool uses
@@ -686,8 +705,8 @@ struct LaunchDetailView: View {
 
     @ViewBuilder private var confirmation: some View {
         if let address = session.address {
-            if side == .buy, let q = buyQuote {
-                ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
+            if side == .buy, buysOpen, let q = buyQuote {
+                ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { try await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
                     Activity.record(ActivityRecord(kind: .buy, title: "Bought \(launch.symbol)", subtitle: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }, intent: .launchpadBuy(token: launch.token, pay: .init(token: launch.pairToken, amount: rawAmount), usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 })) {
                     DetailRow("You pay", "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
@@ -752,6 +771,7 @@ struct LaunchDetailView: View {
         try? await Task.sleep(for: .milliseconds(300))
         if Task.isCancelled { return }
         if side == .buy {
+            guard buysOpen else { return }
             let fresh = try? await env.launchpad.quoteBuy(curve: launch.curve, quoteIn: rawAmount, recipient: session.address ?? .zero)
             if !Task.isCancelled { buyQuote = fresh }
         } else {

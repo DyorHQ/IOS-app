@@ -488,8 +488,11 @@ public actor LaunchpadService {
         return nil
     }
 
-    /// Approve the pair asset for the curve when it is an ERC-20, then `buy`. Native MON rides on `value`.
-    public func buyPlan(launch: Launch, quoteIn: BigUInt, minTokensOut: BigUInt, recipient: Address) -> [TransactionStep] {
+    /// Approve the pair asset for the curve when it is an ERC-20, then `buy`. Native MON rides on `value`. Refused for a
+    /// launch on a retired launchpad, whatever its phase (`LaunchpadError.retiredLaunchpad`): those curves take sells
+    /// only (owner decision 2026-09-28), so nothing is built, not even the approval.
+    public func buyPlan(launch: Launch, quoteIn: BigUInt, minTokensOut: BigUInt, recipient: Address) throws -> [TransactionStep] {
+        guard !launch.isRetiredLaunchpad else { throw LaunchpadError.retiredLaunchpad }
         var steps: [TransactionStep] = []
         if !launch.pair.isNative {
             steps.append(.approve(token: launch.pairToken, spender: launch.curve, amount: quoteIn, label: "Approve \(launch.pair.symbol)"))
@@ -499,7 +502,7 @@ public actor LaunchpadService {
         return steps
     }
 
-    /// Approve the token for the curve, then `sell`.
+    /// Approve the token for the curve, then `sell`. Open on every stack: a retired launchpad's holders can always sell.
     public func sellPlan(launch: Launch, tokensIn: BigUInt, minQuoteOut: BigUInt, recipient: Address) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Curve.sell, [.uint(tokensIn), .uint(minQuoteOut), .address(recipient)])
         return [
@@ -510,8 +513,10 @@ public actor LaunchpadService {
 
     /// `launchToken` on the factory, or `launchAndBuy` on the router when `initialBuy` is set (approving the
     /// pair asset for the router first when it is an ERC-20). `launchFee` is paid in MON on top of a native
-    /// developer buy. `from` receives the developer buy.
-    public func launchPlan(_ input: LaunchInput, launchFee: BigUInt, from: Address) -> [TransactionStep] {
+    /// developer buy. `from` receives the developer buy. A developer buy is a curve buy, so it is refused when the stack
+    /// is a retired one (`LaunchpadError.retiredLaunchpad`), whatever the build is pointed at.
+    public func launchPlan(_ input: LaunchInput, launchFee: BigUInt, from: Address) throws -> [TransactionStep] {
+        if input.initialBuy > 0, LaunchpadAddresses.isRetired(addresses.factory) { throw LaunchpadError.retiredLaunchpad }
         let params = LaunchpadABI.tokenParams(input)
         let exemptions: ABIValue = .array(input.exemptions.map { .address($0) })
         let label = "Launch $\(input.symbol)"
@@ -539,6 +544,7 @@ public actor LaunchpadService {
     /// refused before anything is signed. Without it the hash is read now, which binds nothing the screen showed.
     public func launchPlan(_ input: LaunchInput, from: Address, expectedLaunchFee: BigUInt? = nil, expectedEconomics: Data? = nil) async throws -> [TransactionStep] {
         guard addresses.isDeployed else { throw LaunchpadError.notDeployed }
+        if input.initialBuy > 0, LaunchpadAddresses.isRetired(addresses.factory) { throw LaunchpadError.retiredLaunchpad }
         async let fee = multicall.readAll([LaunchpadABI.call(addresses.factory, LaunchpadABI.Factory.launchFee, returns: "uint256")])
         async let economics = previewLaunchEconomics(configId: input.configId, pairToken: input.pairToken)
         async let blocker = launchBlocker(account: from, configId: input.configId)
@@ -548,7 +554,7 @@ public actor LaunchpadService {
         filled.expectedEconomics = try Self.boundEconomics(shown: expectedEconomics, current: try await economics)
         let launchFee = try await fee[0][0].uint
         if let expectedLaunchFee, launchFee != expectedLaunchFee { throw LaunchpadError.launchFeeChanged(launchFee) }
-        return launchPlan(filled, launchFee: launchFee, from: from)
+        return try launchPlan(filled, launchFee: launchFee, from: from)
     }
 
     /// The terms hash a launch carries: the one shown when there is one, refused when the factory's current one differs.

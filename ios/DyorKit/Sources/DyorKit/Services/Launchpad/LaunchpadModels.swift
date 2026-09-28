@@ -87,9 +87,9 @@ public struct LaunchpadAddresses: Sendable, Hashable {
         generation: .v2
     )
 
-    /// Retired launchpads, newest first. Nothing new launches there (whitelist on, config 0 off), but their curves
-    /// keep trading and their launches, claims and trades stay part of a wallet's history, so every per-launch read
-    /// and write goes to the launch's own stack.
+    /// Retired launchpads, newest first. Nothing new launches there (whitelist on, config 0 off), and their curves take
+    /// sells only (`RetiredLaunchpad`, owner decision 2026-09-28); their launches, claims and trades stay part of a
+    /// wallet's history, so every per-launch read and write goes to the launch's own stack.
     public static let retiredStacks: [LaunchpadAddresses] = [
         // The 2026-09-23 relaunch with the rotated treasury and fee wallets, retired by the v2 release
         // (`143.json` until the v2 record is promoted, then `143-retired-0x6B1C.json`). Same source as 0x10F3.
@@ -432,8 +432,13 @@ public struct Launch: Identifiable, Hashable, Sendable {
         self.generation = generation ?? LaunchpadAddresses.retiredStack(for: factory)?.generation ?? LaunchpadAddresses.monadMainnet.generation
     }
 
-    /// The launch was made on a retired launchpad (it still trades; nothing new launches there).
-    public var isRetiredLaunchpad: Bool { LaunchpadAddresses.retiredStack(for: factory) != nil }
+    /// The launch was made on a retired launchpad: nothing new launches there, and its curve takes sells only
+    /// (`LaunchpadService.buyPlan` refuses a buy on it).
+    public var isRetiredLaunchpad: Bool { LaunchpadAddresses.isRetired(factory) }
+
+    /// Still on a retired launchpad's side of graduation — on its curve, between the curve and a pool, or in refund mode:
+    /// holders can sell, nobody can buy (`RetiredLaunchpad`). A retired coin that graduated into a pool trades both ways.
+    public var isSellOnly: Bool { isRetiredLaunchpad && phase != .graduated }
 
     /// A stuck Monday graduation that DyorHQ's keepers finish, on every stack with a `graduateFallback` (v1 and v2): they
     /// retry Monday Trade with about 29.9M gas and take the Uniswap v4 fallback when it still fails. The app never sends
@@ -784,6 +789,8 @@ public enum LaunchpadError: Error, LocalizedError, Equatable {
     case launchBlocked(LaunchBlocker)
     /// `graduateFallback` is never sent from the app, on any stack: DyorHQ's keepers send it with the gas it needs.
     case graduateFallbackByKeepers
+    /// A buy on a retired launchpad's curve (or a developer buy through a retired router): those curves take sells only.
+    case retiredLaunchpad
 
     public var errorDescription: String? {
         switch self {
@@ -791,6 +798,7 @@ public enum LaunchpadError: Error, LocalizedError, Equatable {
         case .launchFeeChanged(let fee): return "The launch fee changed to \(NumberStyle.units(fee, decimals: 18)) MON since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new fee."
         case .termsChanged: return "The launch terms changed since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new terms."
         case .launchBlocked(let blocker): return "\(blocker.message) Nothing was sent."
+        case .retiredLaunchpad: return "\(RetiredLaunchpad.notice) Nothing was sent."
         case .graduateFallbackByKeepers: return "DyorHQ's keepers will finish this graduation: they retry it with the gas it needs and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool. Nothing was sent."
         case .unexpectedResponse(let what): return "The launchpad returned something the app could not read (\(what))."
         }

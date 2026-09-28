@@ -93,18 +93,18 @@ final class LaunchpadTests: XCTestCase {
 
     // MARK: - Write calldata parity (byte-for-byte vs viem)
 
-    func testLaunchPlanCalldataMatchesViem() async {
+    func testLaunchPlanCalldataMatchesViem() async throws {
         let service = makeService()
 
         // launchToken: no developer buy, native pair -> one call to the factory carrying the launch fee.
-        let plain = await service.launchPlan(sampleInput(pairToken: .zero, initialBuy: 0, minTokensOut: 0), launchFee: launchFee, from: recipient)
+        let plain = try await service.launchPlan(sampleInput(pairToken: .zero, initialBuy: 0, minTokensOut: 0), launchFee: launchFee, from: recipient)
         XCTAssertEqual(plain.count, 1)
         XCTAssertEqual(plain[0].request?.to, factory)
         XCTAssertEqual(plain[0].request?.data.hexString, cd("launchToken"))
         XCTAssertEqual(plain[0].request?.value, launchFee)
 
         // launchAndBuy with an ERC-20 pair: approve the pair for the router, then call the router (fee only as value).
-        let usdcBuy = await service.launchPlan(sampleInput(pairToken: usdc, initialBuy: initialBuy, minTokensOut: devMinOut), launchFee: launchFee, from: recipient)
+        let usdcBuy = try await service.launchPlan(sampleInput(pairToken: usdc, initialBuy: initialBuy, minTokensOut: devMinOut), launchFee: launchFee, from: recipient)
         XCTAssertEqual(usdcBuy.count, 2)
         XCTAssertEqual(usdcBuy[0].kind, .approve(token: usdc, spender: router, amount: initialBuy))
         XCTAssertEqual(usdcBuy[1].request?.to, router)
@@ -113,18 +113,18 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(try! ERC20.approveCalldata(spender: router, amount: initialBuy).hexString, cd("approvePairForRouter"))
 
         // launchAndBuy with a native pair: no approval, value = fee + developer buy.
-        let nativeBuy = await service.launchPlan(sampleInput(pairToken: .zero, initialBuy: initialBuy, minTokensOut: devMinOut), launchFee: launchFee, from: recipient)
+        let nativeBuy = try await service.launchPlan(sampleInput(pairToken: .zero, initialBuy: initialBuy, minTokensOut: devMinOut), launchFee: launchFee, from: recipient)
         XCTAssertEqual(nativeBuy.count, 1)
         XCTAssertEqual(nativeBuy[0].request?.to, router)
         XCTAssertEqual(nativeBuy[0].request?.data.hexString, cd("launchAndBuyNative"))
         XCTAssertEqual(nativeBuy[0].request?.value, launchFee + initialBuy)
     }
 
-    func testBuyPlanCalldataMatchesViem() async {
+    func testBuyPlanCalldataMatchesViem() async throws {
         let service = makeService()
 
         // Native pair: a single buy carrying the quote as value, no approval.
-        let native = await service.buyPlan(launch: makeLaunch(pairToken: .zero, pair: monPair), quoteIn: buyQuoteIn, minTokensOut: buyMinOut, recipient: recipient)
+        let native = try await service.buyPlan(launch: makeLaunch(pairToken: .zero, pair: monPair), quoteIn: buyQuoteIn, minTokensOut: buyMinOut, recipient: recipient)
         XCTAssertEqual(native.count, 1)
         XCTAssertEqual(native[0].kind, .call)
         XCTAssertEqual(native[0].request?.to, curve)
@@ -132,7 +132,7 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(native[0].request?.value, buyQuoteIn)
 
         // ERC-20 pair: approve the pair for the curve first, then buy with zero value.
-        let erc20 = await service.buyPlan(launch: makeLaunch(pairToken: usdc, pair: usdcPair), quoteIn: buyQuoteIn, minTokensOut: buyMinOut, recipient: recipient)
+        let erc20 = try await service.buyPlan(launch: makeLaunch(pairToken: usdc, pair: usdcPair), quoteIn: buyQuoteIn, minTokensOut: buyMinOut, recipient: recipient)
         XCTAssertEqual(erc20.count, 2)
         XCTAssertEqual(erc20[0].kind, .approve(token: usdc, spender: curve, amount: buyQuoteIn))
         XCTAssertEqual(erc20[1].request?.data.hexString, cd("buy"))
