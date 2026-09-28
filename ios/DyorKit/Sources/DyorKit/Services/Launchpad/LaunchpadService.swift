@@ -35,9 +35,16 @@ public actor LaunchpadService {
 
     public var isDeployed: Bool { addresses.isDeployed }
 
-    /// The live stack followed by every retired one (skipping a retired stack the build is configured to as live).
+    /// The live stack followed by every retired one (skipping a retired stack the build is configured to as live). A
+    /// live stack that is not deployed yet (v2 pending) is left out, so the list is the retired stacks alone and
+    /// nothing is ever read from address 0.
     public var stacks: [LaunchpadAddresses] {
-        [addresses] + LaunchpadAddresses.retiredStacks.filter { $0.factory != addresses.factory }
+        (addresses.isDeployed ? [addresses] : []) + retiredStacks
+    }
+
+    /// Every retired stack, newest first; they keep serving their launches whether or not the live one is deployed.
+    public var retiredStacks: [LaunchpadAddresses] {
+        LaunchpadAddresses.retiredStacks.filter { $0.factory != addresses.factory }
     }
 
     /// The stack whose factory is `factory`: the live one (also for `.zero`), a retired one, or — for a factory the
@@ -160,11 +167,11 @@ public actor LaunchpadService {
 
     /// The newest `limit` launches of the live factory followed by those of each retired factory (newest stack
     /// first), so the whole list stays newest first. A factory that fails to answer is left out rather than failing
-    /// the others; the live factory's error is only thrown when no retired launch came back either.
+    /// the others; the live factory's error is only thrown when no retired launch came back either. While the live
+    /// stack is not deployed (v2 pending) the list is the retired stacks' launches alone.
     public func allLaunches(limit: Int = 48) async throws -> [Launch] {
-        guard addresses.isDeployed else { return [] }
-        let retiredStacks = Array(stacks.dropFirst())
-        async let live = launches(limit: limit, factory: addresses.factory)
+        let retiredStacks = self.retiredStacks
+        async let live: [Launch] = addresses.isDeployed ? launches(limit: limit, factory: addresses.factory) : []
         let retired = await withTaskGroup(of: (Int, [Launch]).self) { group in
             for (i, stack) in retiredStacks.enumerated() {
                 group.addTask { (i, (try? await self.launches(limit: limit, factory: stack.factory)) ?? []) }
@@ -182,10 +189,10 @@ public actor LaunchpadService {
     }
 
     /// One launch with its curve state, or nil when `token` was not launched on `factory` (the live factory when
-    /// nil) or nothing is deployed. Every read goes to that factory's own stack.
+    /// nil) or that stack is not deployed. Every read goes to that factory's own stack.
     public func launch(token: Address, factory: Address? = nil) async throws -> LaunchDetail? {
-        guard addresses.isDeployed else { return nil }
         let stack = stack(for: factory ?? addresses.factory)
+        guard stack.isDeployed else { return nil }
         let factory = stack.factory
         typealias F = LaunchpadABI.Factory
         typealias C = LaunchpadABI.Curve
@@ -500,7 +507,7 @@ public actor LaunchpadService {
     /// by pair asset rather than by coin.
     public func escrowBalances(account: Address, pairTokens: [Address], escrow: Address? = nil) async throws -> EscrowBalances {
         let escrow = escrow ?? addresses.escrow
-        guard addresses.isDeployed, !escrow.isZero else { return EscrowBalances(native: 0, tokens: [:]) }
+        guard !escrow.isZero else { return EscrowBalances(native: 0, tokens: [:]) }
         let tokens = Array(Set(pairTokens.filter { !$0.isZero }))
         var calls: [ContractCall] = [LaunchpadABI.call(escrow, LaunchpadABI.Escrow.balanceOf, [.address(account)], returns: "uint256")]
         for token in tokens { calls.append(LaunchpadABI.call(escrow, LaunchpadABI.Escrow.balanceOfToken, [.address(account), .address(token)], returns: "uint256")) }

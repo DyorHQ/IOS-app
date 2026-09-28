@@ -1,9 +1,9 @@
 import BigInt
 import Foundation
 
-/// Where the launchpad lives on chain. `monadMainnet` is the audited deployment the app ships with; a build can
-/// point at another one (a fork rehearsal) through Secrets.xcconfig. Any address may be `Address.zero`, and
-/// `isDeployed` is what every read checks first.
+/// Where the launchpad lives on chain. `monadMainnet` is the audited v2 deployment the app ships with (pending until
+/// the owner deploys it); a Debug build can point at another one (a fork rehearsal) through Secrets.xcconfig. Any
+/// address may be `Address.zero`, and `isDeployed` is what every read checks first.
 public struct LaunchpadAddresses: Sendable, Hashable {
     public var factory: Address
     public var router: Address
@@ -16,8 +16,11 @@ public struct LaunchpadAddresses: Sendable, Hashable {
     public var legacyRecord: Bool
     /// The fee-sharing contract has `queuedRewards` (audit fix H-1); on the pre-audit stacks the call reverts.
     public var hasQueuedRewards: Bool
+    /// The contract source the stack runs: every retired stack is v1, `monadMainnet` is v2.
+    public var generation: ContractGeneration
 
-    public init(factory: Address = .zero, router: Address = .zero, escrow: Address = .zero, holderFeeSharing: Address = .zero, hook: Address = .zero, poolManager: Address = .zero, legacyRecord: Bool = false, hasQueuedRewards: Bool = true) {
+    public init(factory: Address = .zero, router: Address = .zero, escrow: Address = .zero, holderFeeSharing: Address = .zero, hook: Address = .zero, poolManager: Address = .zero, legacyRecord: Bool = false, hasQueuedRewards: Bool = true,
+                generation: ContractGeneration = .v1) {
         self.factory = factory
         self.router = router
         self.escrow = escrow
@@ -26,6 +29,7 @@ public struct LaunchpadAddresses: Sendable, Hashable {
         self.poolManager = poolManager
         self.legacyRecord = legacyRecord
         self.hasQueuedRewards = hasQueuedRewards
+        self.generation = generation
     }
 
     public var isDeployed: Bool { !factory.isZero }
@@ -36,22 +40,37 @@ public struct LaunchpadAddresses: Sendable, Hashable {
 
     public static let none = LaunchpadAddresses()
 
-    /// The launchpad on Monad mainnet (chain 143): the 2026-09-23 relaunch with the rotated treasury and fee wallets
-    /// (the earlier factories 0x10F3…, 0x2F02… and 0xad3d… are retired, see `retiredStacks`). Mirrors
-    /// `contracts/deployments/143.json`, and `LaunchpadDeploymentTests` fails whenever the two drift apart.
+    // PENDING v2 deploy: the only place the v2 launchpad addresses live. AppConfig, the swap routes and every stack list
+    // derive from this constant, so wiring v2 is one reviewed edit here. Until then every module is zero: `isDeployed`
+    // is false, Launch says "not live yet", no call goes to address 0, and the retired stacks keep working.
+    /// The launchpad v2 on Monad mainnet (chain 143), NOT DEPLOYED YET. To wire it after the owner's deploy and Sourcify
+    /// verification: the five modules from the promoted `contracts/deployments/143.json`, keeping `generation: .v2`.
+    /// `LaunchpadDeploymentTests` and `V2WiringTests` accept only all-zero or fully wired, fail a wired table that
+    /// differs from the record, and fail a release built while it is pending (`DYORHQ_RELEASE_GATE=1`).
     public static let monadMainnet = LaunchpadAddresses(
-        factory: Address(literal: "0x6B1C8769a8d6745955aC35b91FF1F37AB76859dB"),
-        router: Address(literal: "0x454822dc56072696ab7cf8Bac357FFd3315477Fc"),
-        escrow: Address(literal: "0x5EDA8765934fE22fa63d671465eF914Cd196968e"),
-        holderFeeSharing: Address(literal: "0xc618bB26bBc3C84c30519F31e32eE52EA2BFac52"),
-        hook: Address(literal: "0xf2b849B3FC4a2b19B39DA3F707Fc32b801eea0Cc"),
-        poolManager: Uniswap.poolManager
+        factory: .zero, // PENDING
+        router: .zero, // PENDING
+        escrow: .zero, // PENDING
+        holderFeeSharing: .zero, // PENDING
+        hook: .zero, // PENDING
+        poolManager: Uniswap.poolManager,
+        generation: .v2
     )
 
     /// Retired launchpads, newest first. Nothing new launches there (whitelist on, config 0 off), but their curves
     /// keep trading and their launches, claims and trades stay part of a wallet's history, so every per-launch read
     /// and write goes to the launch's own stack.
     public static let retiredStacks: [LaunchpadAddresses] = [
+        // The 2026-09-23 relaunch with the rotated treasury and fee wallets, retired by the v2 release
+        // (`143.json` until the v2 record is promoted, then `143-retired-0x6B1C.json`).
+        LaunchpadAddresses(
+            factory: Address(literal: "0x6B1C8769a8d6745955aC35b91FF1F37AB76859dB"),
+            router: Address(literal: "0x454822dc56072696ab7cf8Bac357FFd3315477Fc"),
+            escrow: Address(literal: "0x5EDA8765934fE22fa63d671465eF914Cd196968e"),
+            holderFeeSharing: Address(literal: "0xc618bB26bBc3C84c30519F31e32eE52EA2BFac52"),
+            hook: Address(literal: "0xf2b849B3FC4a2b19B39DA3F707Fc32b801eea0Cc"),
+            poolManager: Uniswap.poolManager
+        ),
         // The 2026-09-16 audit-fix redeploy, retired by the 2026-09-23 relaunch (`143-retired-0x10F3.json`).
         LaunchpadAddresses(
             factory: Address(literal: "0x10F34A174d9C393a90aFf94BDED7E1Db185446D7"),

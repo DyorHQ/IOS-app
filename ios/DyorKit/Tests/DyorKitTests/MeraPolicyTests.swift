@@ -567,11 +567,15 @@ final class MeraPolicyTests: XCTestCase {
             if legacy { fields.remove(at: 10) }
             return .tuple(fields)
         }
-        let stacks = [LaunchpadAddresses.monadMainnet] + LaunchpadAddresses.retiredStacks
+        // The v2 stack (a fixture while the mainnet table is pending), then the four retired ones: 0x6B1C, 0x10F3, 0x2F02
+        // and the legacy 0xad3d.
+        let stacks = [V2Fixture.launchpad] + LaunchpadAddresses.retiredStacks
+        XCTAssertEqual(stacks.count, 5)
         struct Failed: Error {}
         let found = LaunchpadService.knownCurve(stacks: stacks, records: [
             .failure(Failed()),
             .success([record(curve: .zero, exists: false, legacy: false)]),
+            .success([record(curve: stranger, exists: false, legacy: false)]),
             .success([record(curve: stranger, exists: false, legacy: false)]),
             .success([record(curve: curve, exists: true, legacy: true)]),
         ])

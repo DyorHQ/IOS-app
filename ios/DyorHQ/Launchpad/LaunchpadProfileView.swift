@@ -448,7 +448,8 @@ final class LaunchpadProfileModel {
     }
 
     func load(env: AppEnvironment, address: Address?) async {
-        guard let address, env.config.launchpad.isDeployed else { positions = []; created = []; escrows = []; activity = []; return }
+        // The retired stacks keep serving the wallet's coins and fees while the live (v2) stack is pending.
+        guard let address else { positions = []; created = []; escrows = []; activity = []; return }
         loading = true
         defer { loading = false }
 
@@ -492,7 +493,7 @@ final class LaunchpadProfileModel {
             for (i, stack) in stacks {
                 group.addTask {
                     let balances = (try? await env.launchpad.escrowBalances(account: address, pairTokens: pairs[stack.escrow] ?? [], escrow: stack.escrow)) ?? EscrowBalances(native: 0, tokens: [:])
-                    return (i, EscrowHolding(escrow: stack.escrow, retired: i > 0, balances: balances))
+                    return (i, EscrowHolding(escrow: stack.escrow, retired: LaunchpadAddresses.retiredStack(for: stack.factory) != nil, balances: balances))
                 }
             }
             var out: [(Int, EscrowHolding)] = []

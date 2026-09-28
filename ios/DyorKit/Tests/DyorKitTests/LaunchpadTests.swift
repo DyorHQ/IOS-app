@@ -458,8 +458,10 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(sweep[0].request?.to, retired.hook)
         XCTAssertEqual(sweep[0].request?.data.hexString, cd("sweepPoolFees"))
 
-        // The pre-audit stacks have no `graduateFallback`: no plan, and the screen offers none.
-        for stack in LaunchpadAddresses.retiredStacks.dropFirst() {
+        // The pre-audit stacks (0x2F02, 0xad3d) have no `graduateFallback`: no plan, and the screen offers none.
+        let preAuditStacks = LaunchpadAddresses.retiredStacks.filter { !$0.hasQueuedRewards }
+        XCTAssertEqual(preAuditStacks.count, 2)
+        for stack in preAuditStacks {
             let preAudit = launch(on: stack.factory)
             XCTAssertFalse(preAudit.hasGraduateFallback)
             let none = await service.graduateFallbackPlan(launch: preAudit)

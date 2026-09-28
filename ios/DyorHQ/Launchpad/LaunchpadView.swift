@@ -22,23 +22,15 @@ struct LaunchpadView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            Group {
-                if !env.config.launchpad.isDeployed {
-                    ContentUnavailableView {
-                        Label("Launchpad Not Live Yet", systemImage: "flame")
-                    } description: {
-                        Text("Launches appear here once the DyorHQ launchpad contracts are deployed on Monad.")
-                    }
-                } else {
-                    board
-                }
-            }
+            // While the live (v2) launchpad is not deployed the board still lists the retired launchpads' coins, which
+            // keep trading and paying out; only new launches wait.
+            board
             .navigationTitle("Launch")
             .navigationDestination(for: Launch.self) { launch in LaunchDetailView(launch: launch) }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Haptics.tap(); showProfile = true } label: { Label("My Launchpad", systemImage: "person.crop.circle") }
-                        .disabled(!env.config.launchpad.isDeployed || session.address == nil)
+                        .disabled(session.address == nil)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Haptics.tap(); showCreate = true } label: { Label("New Launch", systemImage: "plus.circle.fill") }
@@ -48,7 +40,7 @@ struct LaunchpadView: View {
             .searchable(text: $query, prompt: "Search coins")
             .refreshable { await model.load(env: env) }
             .task { await model.poll(env: env) }
-            .overlay { if model.launches.isEmpty, model.loading, env.config.launchpad.isDeployed { ProgressView().controlSize(.large) } }
+            .overlay { if model.launches.isEmpty, model.loading { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showCreate) { CreateLaunchView(protocolInfo: model.protocolInfo) { Task { await model.load(env: env) } } }
             .sheet(isPresented: $showProfile) { LaunchpadProfileView() }
             .onChange(of: router.pendingLaunch) { _, launch in
@@ -63,6 +55,10 @@ struct LaunchpadView: View {
     private var board: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
+                if !env.config.launchpad.isDeployed {
+                    Label("New launches open once the new DyorHQ launchpad contracts are live on Monad. Coins already launched keep trading here.", systemImage: "clock")
+                        .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 if graduated.isEmpty, climbing.isEmpty, !model.loading {
                     emptyState
                 } else {
@@ -132,10 +128,13 @@ struct LaunchpadView: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "flame").font(.largeTitle).foregroundStyle(Color.brand)
-            Text("No Launches Yet").font(.headline)
-            Text("Be the first to launch a coin on DyorHQ.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Button { Haptics.tap(); showCreate = true } label: { Text("Launch a Coin").fontWeight(.semibold) }
-                .buttonStyle(.borderedProminent).controlSize(.large).disabled(!session.canSign)
+            Text(env.config.launchpad.isDeployed ? "No Launches Yet" : "Launchpad Not Live Yet").font(.headline)
+            Text(env.config.launchpad.isDeployed ? "Be the first to launch a coin on DyorHQ." : "Launches appear here once the DyorHQ launchpad contracts are live on Monad.")
+                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if env.config.launchpad.isDeployed {
+                Button { Haptics.tap(); showCreate = true } label: { Text("Launch a Coin").fontWeight(.semibold) }
+                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(!session.canSign)
+            }
         }
         .frame(maxWidth: .infinity).padding(.top, 60)
     }
@@ -337,7 +336,7 @@ final class LaunchpadModel {
     }
 
     func load(env: AppEnvironment) async {
-        guard env.config.launchpad.isDeployed else { return }
+        // Runs while the live stack is pending too: the retired stacks' launches still list (and `protocolInfo` is nil).
         loading = true
         defer { loading = false }
         do {

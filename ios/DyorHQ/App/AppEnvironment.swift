@@ -62,15 +62,17 @@ final class AppEnvironment {
                                authorize: { try await backend.sessionHeaders() })
         bridgeTracker = BridgeTracker(aurora: aurora, balances: MultiChainBalances(), monad: EVMChain.monad(rpc: config.rpcURL))
         prices = PriceService(rpc: rpc)
-        // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools and those of
-        // the retired factories with the current record (the legacy 0xad3d… launches all graduate on Monday Trade).
+        // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools (once v2 is
+        // deployed) and those of the retired factories with the current record (the legacy 0xad3d… launches all
+        // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0.
         let retiredFactories = LaunchpadAddresses.retiredStacks.filter { !$0.legacyRecord && $0.factory != config.launchpad.factory }.map(\.factory)
-        swap = SwapEngine(rpc: rpc, launchpadFactories: config.launchpad.isDeployed ? [config.launchpad.factory] + retiredFactories : [], moments: config.moments)
+        swap = SwapEngine(rpc: rpc, launchpadFactories: (config.launchpad.isDeployed ? [config.launchpad.factory] : []) + retiredFactories, moments: config.moments)
         perpl = PerplService(rpc: rpc)
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
         moments = MomentsService(rpc: rpc, addresses: config.moments)
         retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc] in RetiredMoments(rpc: rpc, addresses: $0) }
-        // Every Moment's name in publish order, for share links by name (dyorhq.fun/moments/<name>).
+        // Every Moment's name in publish order, for share links by name (dyorhq.fun/moments/<name>): cohorts 1–3 up to
+        // their pinned counts, then v2 once it is wired.
         momentDirectory = MomentDirectory(rpc: rpc)
         news = NewsService()
         // History reads want the larger log-chunk RPC (rpc1), like the launchpad does. A local fork keeps its own
