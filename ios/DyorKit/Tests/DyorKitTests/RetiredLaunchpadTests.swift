@@ -132,7 +132,9 @@ final class RetiredLaunchpadTests: XCTestCase {
 
     /// A build pointed at a retired stack (a misconfigured Debug override, say) plans no developer buy through its
     /// router: the sync plan and the app's async plan refuse it, the latter before any read. A launch without one is not
-    /// a buy (the retired factory refuses it on chain anyway: its whitelist is on). v2's developer buy still plans.
+    /// a buy, so it still plans here; no build is pointed at a retired stack (a Release build takes only
+    /// `LaunchpadAddresses.monadMainnet`), and 0x6B1C would not refuse it on chain (owner decision 2026-09-28: its whitelist
+    /// stays off). v2's developer buy still plans.
     func testADeveloperBuyThroughARetiredRouterIsRefused() async throws {
         for stack in retired {
             let service = service(stack)

@@ -87,9 +87,11 @@ public struct LaunchpadAddresses: Sendable, Hashable {
         generation: .v2
     )
 
-    /// Retired launchpads, newest first. Nothing new launches there (whitelist on, config 0 off), and their curves take
-    /// sells only (`RetiredLaunchpad`, owner decision 2026-09-28); their launches, claims and trades stay part of a
-    /// wallet's history, so every per-launch read and write goes to the launch's own stack.
+    /// Retired launchpads, newest first. The app launches nothing there, and their curves take sells only
+    /// (`RetiredLaunchpad`, owner decision 2026-09-28); their launches, claims and trades stay part of a wallet's
+    /// history, so every per-launch read and write goes to the launch's own stack. On chain 0x10F3, 0x2F02 and 0xad3d are
+    /// closed to launches (whitelist on, config 0 off); 0x6B1C is not (retired in the app only, owner decision
+    /// 2026-09-28), so builds before 16 can still launch there.
     public static let retiredStacks: [LaunchpadAddresses] = [
         // The 2026-09-23 relaunch with the rotated treasury and fee wallets, retired by the v2 release
         // (`143.json` until the v2 record is promoted, then `143-retired-0x6B1C.json`). Same source as 0x10F3.
@@ -454,7 +456,7 @@ public struct Launch: Identifiable, Hashable, Sendable {
         self.generation = generation ?? LaunchpadAddresses.retiredStack(for: factory)?.generation ?? LaunchpadAddresses.monadMainnet.generation
     }
 
-    /// The launch was made on a retired launchpad: nothing new launches there, and its curve takes sells only
+    /// The launch was made on a retired launchpad: the app launches nothing there, and its curve takes sells only
     /// (`LaunchpadService.buyPlan` refuses a buy on it).
     public var isRetiredLaunchpad: Bool { LaunchpadAddresses.isRetired(factory) }
 
