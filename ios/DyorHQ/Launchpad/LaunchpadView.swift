@@ -604,9 +604,18 @@ struct LaunchDetailView: View {
                 // The v4 pool key carries fee 0 (the hook levies the launch's poolFeeBps); a Monday Trade pool uses
                 // the graduation executor's fixed 1% tier (MondayGraduationExecutor.FEE).
                 LabeledContent("Pool fee", value: NumberStyle.basisPoints(launch.graduationVenue == .monday ? 100 : launch.poolFeeBps))
+                if launch.graduationVenue == .uniswapV4, let detail, detail.hookFeesAwaitingSweep > 0 {
+                    LabeledContent("Waiting for a sweep") {
+                        Text("\(NumberStyle.units(detail.hookFeesAwaitingSweep, decimals: launch.pair.decimals)) \(launch.pair.symbol)").monospacedDigit()
+                    }
+                }
             }
             if isStuck, let detail {
                 LabeledContent("Stuck since", value: Date(timeIntervalSince1970: TimeInterval(detail.stuckSince)).formatted(date: .abbreviated, time: .shortened))
+                if launch.keepersTakeGraduateFallback, let opens = detail.v4FallbackOpensAt {
+                    LabeledContent("Uniswap v4 fallback", value: detail.isV4FallbackOpen(at: Int(Date().timeIntervalSince1970))
+                                   ? "Open" : "Opens \(Date(timeIntervalSince1970: TimeInterval(opens)).formatted(date: .abbreviated, time: .shortened))")
+                }
                 Button("Retry Graduation", systemImage: "arrow.clockwise") { showGraduate = true }.disabled(!session.canSign)
                 if offersFallback {
                     Button("Graduate on Uniswap v4 Instead", systemImage: "arrow.triangle.branch") { showFallback = true }.disabled(!session.canSign)
@@ -618,23 +627,41 @@ struct LaunchDetailView: View {
             if launch.phase == .graduated {
                 // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes (GP-6).
                 Text(launch.graduationVenue == .monday
-                     ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's swap fees are harvested to a DyorHQ fees wallet; they aren't paid to holders or the creator."
-                     : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. Fees wait in the hook until they're swept.")
+                     ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's 1% swap fee is harvested to a DyorHQ fees wallet; it isn't paid to holders or the creator, and there is no creator tax on the pool."
+                     : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. \(v4FeeTiming)")
             } else if isStuck {
-                Text(offersFallback
-                     ? "The last graduation attempt failed. Anyone can retry it; if Monday Trade keeps rejecting it, the launch can graduate into a locked Uniswap v4 pool right away instead."
-                     : "The last graduation attempt failed. Anyone can retry it; you only pay the gas.")
+                Text(stuckFooter)
             } else {
                 Text("This launch is between phases. Trading resumes when migration completes.")
             }
         }
     }
 
+    /// When the hook pays what a v4 swap earned: a v2 hook pays the holders' part in the swap itself (released to them a
+    /// block later) and keeps only the creator's and DyorHQ's parts for a sweep; an older hook keeps everything.
+    private var v4FeeTiming: String {
+        launch.generation.hasV2Getters
+            ? "Holders are paid as trades happen; only the creator's and DyorHQ's parts wait in the hook until they're swept."
+            : "Fees wait in the hook until they're swept."
+    }
+
     /// A completed curve whose migration reverted (the factory records `stuckSince`): the audit's rescue paths apply.
     private var isStuck: Bool { launch.phase != .graduated && (detail?.stuckSince ?? 0) > 0 }
 
-    /// A stuck Monday graduation can fall back to Uniswap v4, where the launch's factory has `graduateFallback`.
-    private var offersFallback: Bool { launch.graduationVenue == .monday && launch.generation.hasGraduateFallback }
+    /// A stuck Monday graduation the app can move to Uniswap v4 itself: v1 stacks only (`Launch.appSendsGraduateFallback`).
+    /// v2's fallback needs more gas than the app sends; DyorHQ's keepers take it.
+    private var offersFallback: Bool { launch.appSendsGraduateFallback }
+
+    private var stuckFooter: String {
+        if offersFallback {
+            return "The last graduation attempt failed. Anyone can retry it; if Monday Trade keeps rejecting it, the launch can graduate into a locked Uniswap v4 pool right away instead."
+        }
+        guard launch.keepersTakeGraduateFallback else { return "The last graduation attempt failed. Anyone can retry it; you only pay the gas." }
+        // v2: the fallback needs ~22M gas, more than the app sends, so the keepers finish it (owner decision).
+        let waits = detail?.fallbackRule?.waits ?? false
+        return "The last graduation attempt failed. Anyone can retry it on Monday Trade; you only pay the gas. DyorHQ's keepers retry it with about 29.9M gas and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool"
+            + (waits ? " once it has been stuck for a day (a \(launch.pair.symbol) coin stays on Monday Trade until then)." : ".")
+    }
 
     private func holdingsSection(_ account: LaunchAccountView) -> some View {
         Section("Your Holdings") {
@@ -859,7 +886,7 @@ struct CreateLaunchView: View {
                     Text("Pairing")
                 } footer: {
                     if let info = protocolInfo, let pi = pairInfo {
-                        Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol).\(pairMondayOnly ? " \(pi.symbol) coins graduate on Monday Trade." : "") Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                        Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol).\(pairMondayOnly ? " A \(pi.symbol) coin graduates on Monday Trade; if it stays stuck for a day, anyone can move it to a locked Uniswap v4 pool." : "") Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
                     }
                 }
                 Section {

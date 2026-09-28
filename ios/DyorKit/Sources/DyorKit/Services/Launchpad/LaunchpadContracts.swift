@@ -36,6 +36,13 @@ enum LaunchpadABI {
         /// Audit fix H-3: retries the creator's venue, then graduates a stuck Monday launch on Uniswap v4.
         static let graduateFallback = "graduateFallback(address)"
         static let v4FallbackAllowed = "v4FallbackAllowed(address)"
+        /// v2: whether the launch's pair was Monday-only when it launched, the snapshot the fallback's one-day rule reads
+        /// (never today's `pairMondayOnly`).
+        static let launchMondayOnly = "launchMondayOnly(address)"
+        /// v2: the least gas `graduateFallback` gives its Monday retry (20,000,000), on top of the v4 reserve.
+        static let mondayRetryGas = "MONDAY_RETRY_GAS()"
+        /// v2: how long a Monday-only launch must have been stuck before anyone may take the v4 fallback (86,400 s).
+        static let mondayOnlyFallbackDelay = "MONDAY_ONLY_FALLBACK_DELAY()"
     }
 
     enum Router {
@@ -89,6 +96,9 @@ enum LaunchpadABI {
     enum Hook {
         static let pendingFees = "pendingFees(bytes32,address)"
         static let pendingCreatorTax = "pendingCreatorTax(bytes32,address)"
+        /// v2: the protocol's cut of fees whose holders' cut was forwarded to fee sharing in the swap that earned them;
+        /// `pendingFees` stays 0 for that currency, and `sweepPoolFees` pays this out.
+        static let pendingProtocolFees = "pendingProtocolFees(bytes32,address)"
         static let sweepPoolFees = "sweepPoolFees(bytes32,address)"
     }
 
@@ -109,11 +119,14 @@ enum LaunchpadABI {
         static let sell = "CurveSell(address,address,uint256,uint256,uint256,uint256)"
         static let launched = "TokenLaunched(address,address,address,address,uint256,uint256)"
         static let graduated = "PoolGraduated(address,bytes32,uint128)"
+        /// v2 MemeHook: the holders' cut of a quote-asset fee, handed to fee sharing inside the swap.
+        static let holderFeesForwarded = "HolderFeesForwarded(bytes32,address,uint256)"
 
         static let buyTopic = ABI.eventTopic(buy)
         static let sellTopic = ABI.eventTopic(sell)
         static let launchedTopic = ABI.eventTopic(launched)
         static let graduatedTopic = ABI.eventTopic(graduated)
+        static let holderFeesForwardedTopic = ABI.eventTopic(holderFeesForwarded)
     }
 
     struct CurveFill {

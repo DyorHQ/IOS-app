@@ -61,9 +61,9 @@ final class LaunchpadTests: XCTestCase {
     private var sellTokensIn: BigUInt { e18(500) }
     private var sellMinOut: BigUInt { e6(480) }
 
-    private func makeService(deployed: Bool = true) -> LaunchpadService {
+    private func makeService(deployed: Bool = true, generation: LaunchpadAddresses.Generation = .v1) -> LaunchpadService {
         let addresses = deployed
-            ? LaunchpadAddresses(factory: factory, router: router, escrow: escrow, holderFeeSharing: sharing, hook: hook, poolManager: poolManager)
+            ? LaunchpadAddresses(factory: factory, router: router, escrow: escrow, holderFeeSharing: sharing, hook: hook, poolManager: poolManager, generation: generation)
             : .none
         return LaunchpadService(rpc: RPCClient(url: Monad.defaultRPC), addresses: addresses)
     }
@@ -422,10 +422,11 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertFalse(SwapCalldata.graduatedOnV4(synthetic))
     }
 
-    /// Every per-launch plan goes to the launch's own stack; `.zero` and the live factory mean the live stack.
+    /// Every per-launch plan goes to the launch's own stack; `.zero` and the live factory mean the live (v2) stack.
     func testPlansTargetTheLaunchStack() async throws {
-        let service = makeService()
+        let service = makeService(generation: .v2)
         let retired = try XCTUnwrap(LaunchpadAddresses.retiredStacks.first)
+        let auditFix = try XCTUnwrap(LaunchpadAddresses.retiredStack(for: Address(literal: "0x10F34A174d9C393a90aFf94BDED7E1Db185446D7")))
         let legacy = try XCTUnwrap(LaunchpadAddresses.retiredStacks.last)
         func launch(on factory: Address) -> Launch {
             let l = makeLaunch(pairToken: usdc, pair: usdcPair, poolId: poolId)
@@ -436,34 +437,49 @@ final class LaunchpadTests: XCTestCase {
                           completed: false, rescued: false, launchedAt: 0, supply: 0, marketCap: 0, progressBps: 0, factory: factory)
         }
 
+        // v2: no in-app fallback (it needs ~22M gas, over the app's 15M cap); DyorHQ's keepers take it.
         for live in [launch(on: .zero), launch(on: factory)] {
             XCTAssertFalse(live.isRetiredLaunchpad)
             let rewards = await service.claimRewardsPlan(launch: live)
             XCTAssertEqual(rewards[0].request?.to, sharing)
             let fallback = await service.graduateFallbackPlan(launch: live)
-            XCTAssertEqual(fallback.first?.request?.to, factory)
+            XCTAssertTrue(fallback.isEmpty)
+            let graduate = await service.graduatePlan(launch: live)
+            XCTAssertEqual(graduate.map { $0.request?.to }, [factory], "Retry Graduation stays: plain graduate, gas estimated")
+        }
+        XCTAssertFalse(launch(on: factory).appSendsGraduateFallback)
+        XCTAssertTrue(launch(on: .zero).keepersTakeGraduateFallback)
+
+        // v1 (0x6B1C, 0x10F3): the app's own fallback, on the launch's factory.
+        for stack in [retired, auditFix] {
+            XCTAssertEqual(stack.generation, .v1)
+            let v1 = launch(on: stack.factory)
+            XCTAssertTrue(v1.appSendsGraduateFallback)
+            XCTAssertFalse(v1.keepersTakeGraduateFallback)
+            let fallback = await service.graduateFallbackPlan(launch: v1)
+            XCTAssertEqual(fallback.map { $0.request?.to }, [stack.factory])
+            XCTAssertEqual(fallback.first?.request?.data, LaunchpadABI.calldata(LaunchpadABI.Factory.graduateFallback, [.address(v1.token)]))
         }
 
         let old = launch(on: retired.factory)
         XCTAssertTrue(old.isRetiredLaunchpad)
-        XCTAssertTrue(old.generation.hasGraduateFallback)
         let rewards = await service.claimRewardsPlan(launch: old, view: LaunchAccountView(tokenBalance: 0, pairBalance: 0, allowance: 0, snipeTaxBps: 0, pendingRewards: 1, escrowBalance: 1))
         XCTAssertEqual(rewards.map { $0.request?.to }, [retired.holderFeeSharing, retired.escrow])
         XCTAssertEqual(rewards[1].request?.data.hexString, cd("claimEscrowToken"))
         let graduate = await service.graduatePlan(launch: old)
         XCTAssertEqual(graduate[0].request?.to, retired.factory)
-        let fallback = await service.graduateFallbackPlan(launch: old)
-        XCTAssertEqual(fallback.first?.request?.to, retired.factory)
         let sweep = await service.sweepPoolFeesPlan(launch: old)
         XCTAssertEqual(sweep[0].request?.to, retired.hook)
         XCTAssertEqual(sweep[0].request?.data.hexString, cd("sweepPoolFees"))
 
         // The pre-audit stacks (0x2F02, 0xad3d) have no `graduateFallback`: no plan, and the screen offers none.
         let preAuditStacks = LaunchpadAddresses.retiredStacks.filter { $0.generation < .v1 }
-        XCTAssertEqual(preAuditStacks.count, 2)
+        XCTAssertEqual(preAuditStacks.map(\.generation), [.preAudit, .legacy])
         for stack in preAuditStacks {
             let preAudit = launch(on: stack.factory)
             XCTAssertFalse(preAudit.generation.hasGraduateFallback)
+            XCTAssertFalse(preAudit.appSendsGraduateFallback)
+            XCTAssertFalse(preAudit.keepersTakeGraduateFallback)
             let none = await service.graduateFallbackPlan(launch: preAudit)
             XCTAssertTrue(none.isEmpty)
         }

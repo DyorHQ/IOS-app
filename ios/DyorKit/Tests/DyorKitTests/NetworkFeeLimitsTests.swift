@@ -111,6 +111,17 @@ final class NetworkFeeLimitsTests: XCTestCase {
         await assertRefused("unusually high fee", chainId: 8453)
     }
 
+    /// The Monad caps stay 15,000,000 gas and 5 MON (owner decision: no exception for graduation). The v2 launchpad's
+    /// `graduateFallback` reverts below 22,062,500 gas, so a prepared one is refused before any wallet signs; the keepers
+    /// send it instead.
+    func testCapsArePinnedAndAV2GraduateFallbackIsRefused() async {
+        XCTAssertEqual(NetworkFeeLimits.monad.maxGasLimit, 15_000_000)
+        XCTAssertEqual(NetworkFeeLimits.monad.maxNetworkFee, 5 * mon)
+        XCTAssertEqual(NetworkFeeLimits.violation(gasLimit: 22_100_000, maxFeePerGas: 102 * gwei, maxPriorityFeePerGas: 2 * gwei, baseFee: 100 * gwei, chainId: Monad.chainId), .gasLimit)
+        chain.estimate = hex(22_100_000) // what a node estimates for v2's graduateFallback (× 1.2 on top)
+        await assertRefused("unusually high fee")
+    }
+
     func testViolations() {
         let v = { (gas: BigUInt, fee: BigUInt, tip: BigUInt, base: BigUInt?, chain: Int) in
             NetworkFeeLimits.violation(gasLimit: gas, maxFeePerGas: fee, maxPriorityFeePerGas: tip, baseFee: base, chainId: chain)

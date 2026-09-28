@@ -219,12 +219,38 @@ public actor LaunchpadService {
             calls.append(LaunchpadABI.call(stack.hook, LaunchpadABI.Hook.pendingFees, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
             calls.append(LaunchpadABI.call(stack.hook, LaunchpadABI.Hook.pendingCreatorTax, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
         }
+        // v2 hooks keep DyorHQ's cut apart once the holders' cut is forwarded in the swap. A v1 hook has no such getter:
+        // the call reverts and would fail the whole read.
+        let readsProtocolFees = readsHook && stack.generation.hasV2Getters
+        if readsProtocolFees {
+            calls.append(LaunchpadABI.call(stack.hook, LaunchpadABI.Hook.pendingProtocolFees, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
+        }
         // The pre-audit sharing contracts have no `queuedRewards`; the call reverts and would fail the whole read.
         let readsQueue = info.holderFeeSharing && !stack.holderFeeSharing.isZero && stack.generation.hasQueuedRewards
         if readsQueue {
             calls.append(LaunchpadABI.call(stack.holderFeeSharing, LaunchpadABI.Sharing.queuedRewards, [.address(token)], returns: "uint256,uint256"))
         }
+        // v2, a Monday launch whose curve completed but that hasn't graduated (stuck): its fallback rule, from the
+        // launch-time Monday-only snapshot, the owner's allowance and the delay (the first and last exist on v2 only).
+        let readsFallback = stack.generation.hasV2Getters && record.graduationVenue == .monday && record.phase == .bonding && info.completed && !info.rescued
+        if readsFallback {
+            calls += [
+                LaunchpadABI.call(factory, F.launchMondayOnly, [.address(token)], returns: "bool"),
+                LaunchpadABI.call(factory, F.v4FallbackAllowed, [.address(token)], returns: "bool"),
+                LaunchpadABI.call(factory, F.mondayOnlyFallbackDelay, returns: "uint256"),
+            ]
+        }
         let r = try await multicall.readAll(calls)
+        var index = 9
+        func next() -> [ABIValue] {
+            defer { index += 1 }
+            return r[index]
+        }
+        let pendingFees = readsHook ? next()[0].uint : 0
+        let pendingTax = readsHook ? next()[0].uint : 0
+        let protocolFees = readsProtocolFees ? next()[0].uint : 0
+        let queued = readsQueue ? next()[0].uint : 0
+        let rule = readsFallback ? GraduationFallbackRule(mondayOnly: next()[0].bool, allowed: next()[0].bool, delay: LaunchpadABI.int(next()[0])) : nil
         return LaunchDetail(
             launch: info,
             feeBps: LaunchpadABI.int(r[0][0]),
@@ -237,9 +263,11 @@ public actor LaunchpadService {
             swept: r[6][0].bool,
             stuckSince: LaunchpadABI.int(r[7][0]),
             poolKey: graduated ? LaunchpadABI.poolKey(r[8][0]) : nil,
-            hookPendingFees: readsHook ? r[9][0].uint : 0,
-            hookPendingTax: readsHook ? r[10][0].uint : 0,
-            queuedRewards: readsQueue ? r[readsHook ? 11 : 9][0].uint : 0
+            hookPendingFees: pendingFees,
+            hookPendingTax: pendingTax,
+            queuedRewards: queued,
+            hookPendingProtocolFees: protocolFees,
+            fallbackRule: rule
         )
     }
 
@@ -535,18 +563,21 @@ public actor LaunchpadService {
     }
 
     /// `LaunchpadFactory.graduate(token)` on the launch's own factory: retries a stuck migration. Anyone may call it.
+    /// Its gas is estimated like any other step (and held to the app's network-fee cap): on v2 plain `graduate` has no
+    /// gas floor and can only graduate on the creator's venue or revert, so the estimate never decides the venue.
     public func graduatePlan(launch: Launch) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduate, [.address(launch.token)])
         return [.call(TransactionRequest(to: stack(for: launch).factory, data: data), label: "Graduate")]
     }
 
-    /// `LaunchpadFactory.graduateFallback(token)`, the audit's rescue for a stuck Monday graduation: it retries the
-    /// creator's venue first and, only if Monday still fails, graduates on Uniswap v4 right away (no rescue delay).
-    /// Anyone may call it; a Monday-only quote asset needs the owner's `allowV4Fallback` first. Empty for a launch
-    /// whose factory predates it (the pre-audit retired stacks).
+    /// `LaunchpadFactory.graduateFallback(token)`, the audit's rescue for a stuck Monday graduation on a v1 stack: it
+    /// retries the creator's venue first and, only if Monday still fails, graduates on Uniswap v4 right away (no rescue
+    /// delay). Anyone may call it; a Monday-only quote asset needs the owner's `allowV4Fallback` first. Empty for a
+    /// launch whose factory predates it (the pre-audit retired stacks) and for a v2 launch: v2's fallback reverts below
+    /// 22,062,500 gas, over the app's 15M network-fee cap, so DyorHQ's keepers send it with about 29.9M (owner decision).
     public func graduateFallbackPlan(launch: Launch) -> [TransactionStep] {
         let stack = stack(for: launch)
-        guard stack.generation.hasGraduateFallback else { return [] }
+        guard stack.generation.appSendsGraduateFallback else { return [] }
         let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduateFallback, [.address(launch.token)])
         return [.call(TransactionRequest(to: stack.factory, data: data), label: "Graduate on Uniswap v4")]
     }

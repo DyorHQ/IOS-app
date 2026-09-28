@@ -357,6 +357,14 @@ public struct Launch: Identifiable, Hashable, Sendable {
     /// The launch was made on a retired launchpad (it still trades; nothing new launches there).
     public var isRetiredLaunchpad: Bool { LaunchpadAddresses.retiredStack(for: factory) != nil }
 
+    /// A stuck Monday graduation the app itself may move to Uniswap v4 (`LaunchpadService.graduateFallbackPlan`): only
+    /// on a v1 stack. The pre-audit stacks have no fallback, and v2's needs more gas than the app ever sends.
+    public var appSendsGraduateFallback: Bool { graduationVenue == .monday && generation.appSendsGraduateFallback }
+
+    /// A stuck Monday graduation that DyorHQ's keepers finish: they retry Monday Trade with about 29.9M gas and take
+    /// the Uniswap v4 fallback when it still fails (v2).
+    public var keepersTakeGraduateFallback: Bool { graduationVenue == .monday && generation.hasGraduateFallback && !generation.appSendsGraduateFallback }
+
     /// Quote raised towards graduation, capped at the threshold (what the token page shows as "Raised").
     public var raised: BigUInt { realQuoteReserve > graduationThreshold ? graduationThreshold : realQuoteReserve }
 
@@ -384,11 +392,17 @@ public struct LaunchDetail: Identifiable, Hashable, Sendable {
     public let poolKey: PoolKey?
     public let hookPendingFees: BigUInt
     public let hookPendingTax: BigUInt
+    /// v2 only: DyorHQ's cut of pool fees whose holders' cut the hook already forwarded in the swap
+    /// (`MemeHook.pendingProtocolFees`); on a v2 fee-sharing pool `hookPendingFees` stays 0 for the pair asset.
+    public let hookPendingProtocolFees: BigUInt
     /// Holder rewards the sharing contract has received but not yet distributed: since the audit fix for flash
     /// reward-sniping, a reward is released to the balances standing at the first touch of a LATER block.
     public let queuedRewards: BigUInt
+    /// v2, a Monday launch whose curve completed but that hasn't graduated: when its Uniswap v4 fallback opens.
+    public let fallbackRule: GraduationFallbackRule?
 
-    public init(launch: Launch, feeBps: Int, snipeSchedule: [Int], quoteReserve: BigUInt, tokenReserve: BigUInt, sellableTokens: BigUInt, phantomQuote: BigUInt, reservedTokens: BigUInt, swept: Bool, stuckSince: Int, poolKey: PoolKey?, hookPendingFees: BigUInt, hookPendingTax: BigUInt, queuedRewards: BigUInt = 0) {
+    public init(launch: Launch, feeBps: Int, snipeSchedule: [Int], quoteReserve: BigUInt, tokenReserve: BigUInt, sellableTokens: BigUInt, phantomQuote: BigUInt, reservedTokens: BigUInt, swept: Bool, stuckSince: Int, poolKey: PoolKey?, hookPendingFees: BigUInt, hookPendingTax: BigUInt, queuedRewards: BigUInt = 0,
+                hookPendingProtocolFees: BigUInt = 0, fallbackRule: GraduationFallbackRule? = nil) {
         self.launch = launch
         self.feeBps = feeBps
         self.snipeSchedule = snipeSchedule
@@ -403,7 +417,24 @@ public struct LaunchDetail: Identifiable, Hashable, Sendable {
         self.hookPendingFees = hookPendingFees
         self.hookPendingTax = hookPendingTax
         self.queuedRewards = queuedRewards
+        self.hookPendingProtocolFees = hookPendingProtocolFees
+        self.fallbackRule = fallbackRule
     }
+
+    /// What the hook holds for this pool in the pair asset until someone calls `sweepPoolFees`: the creator's and
+    /// DyorHQ's parts of the pool fee and the creator tax, plus (v2) DyorHQ's part of fees whose holders' part was
+    /// already paid out as the trade happened.
+    public var hookFeesAwaitingSweep: BigUInt { hookPendingFees + hookPendingTax + hookPendingProtocolFees }
+
+    /// When anyone (DyorHQ's keepers included) may move this stuck launch to a locked Uniswap v4 pool, in unix seconds;
+    /// nil when it isn't stuck or no v2 rule applies.
+    public var v4FallbackOpensAt: Int? {
+        guard let fallbackRule, stuckSince > 0 else { return nil }
+        return fallbackRule.opensAt(stuckSince: stuckSince)
+    }
+
+    /// The Uniswap v4 fallback is open at `now` (the factory's `block.timestamp >= stuckSince + delay`).
+    public func isV4FallbackOpen(at now: Int) -> Bool { v4FallbackOpensAt.map { now >= $0 } ?? false }
 
     /// Seconds of snipe tax left at `now`, clamped to the schedule so a chain clock ahead of the device never
     /// shows a longer window.
@@ -417,6 +448,27 @@ public struct LaunchDetail: Identifiable, Hashable, Sendable {
         let index = max(0, min(snipeSchedule.count - 1, now - launch.launchedAt))
         return snipeSchedule[index]
     }
+}
+
+/// The v2 factory's rule for a stuck Monday launch's Uniswap v4 fallback (`graduateFallback`): open as soon as it is
+/// stuck, unless its pair was Monday-only when it launched (aBIL; the `launchMondayOnly` snapshot, never today's
+/// `pairMondayOnly`) and the owner hasn't allowed it (`v4FallbackAllowed`), in which case it opens `delay` seconds
+/// (`MONDAY_ONLY_FALLBACK_DELAY`, one day) after it got stuck.
+public struct GraduationFallbackRule: Hashable, Sendable {
+    public let mondayOnly: Bool
+    public let allowed: Bool
+    public let delay: Int
+
+    public init(mondayOnly: Bool, allowed: Bool, delay: Int) {
+        self.mondayOnly = mondayOnly
+        self.allowed = allowed
+        self.delay = delay
+    }
+
+    /// Whether the rule makes it wait at all.
+    public var waits: Bool { mondayOnly && !allowed }
+
+    public func opensAt(stuckSince: Int) -> Int { waits ? stuckSince + delay : stuckSince }
 }
 
 /// A wallet's claimable fee-escrow balances, by pair asset. `native` is MON; `tokens` maps each ERC-20 pair asset
