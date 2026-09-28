@@ -29,11 +29,14 @@ public struct RetiredMomentPosition: Sendable, Hashable, Identifiable {
     public let creatorProceeds: BigUInt
     /// Pool fees still to withdraw (non-zero only for the creator).
     public let creatorFees: BigUInt
+    /// When the position was read (unix seconds): a Moment past its deadline has missed graduation from then on.
+    public let asOf: Int
 
-    public init(row: MomentPortfolioRow, creatorProceeds: BigUInt, creatorFees: BigUInt) {
+    public init(row: MomentPortfolioRow, creatorProceeds: BigUInt, creatorFees: BigUInt, asOf: Int = Int(Date().timeIntervalSince1970)) {
         self.row = row
         self.creatorProceeds = creatorProceeds
         self.creatorFees = creatorFees
+        self.asOf = asOf
     }
 
     public var info: MomentInfo { row.moment }
@@ -44,11 +47,12 @@ public struct RetiredMomentPosition: Sendable, Hashable, Identifiable {
     /// Creator USDC waiting: collect proceeds plus pool fees.
     public var creatorWithdrawable: BigUInt { creatorProceeds + creatorFees }
     /// Something to claim or hold: coins claimable or still vesting, creator withdrawals, editions or coins in the
-    /// wallet, or coins promised by a Moment that has not ended. An expired Moment's promise never vests, so on its
-    /// own it does not count.
+    /// wallet, or coins promised by a Moment that may still graduate. The promise of a Moment that missed graduation
+    /// (expired, or collecting past its deadline, which nothing in the app expires on a retired cohort) never vests,
+    /// so on its own it does not count.
     public var isOpen: Bool {
         if claimable > 0 || creatorWithdrawable > 0 || row.nftBalance > 0 || row.coinBalance > 0 { return true }
-        return info.state != .expired && row.entitlement > row.claimed
+        return !info.missedGraduation(at: asOf) && row.entitlement > row.claimed
     }
 }
 
@@ -123,8 +127,8 @@ public struct RetiredMoments: Sendable {
 
     /// Pure half of `positions`. The portfolio rows are matched to their Moments by (factory, id); a Moment the
     /// account only created (no allocation, nothing collected or held) has no row, so its creator proceeds and pool
-    /// fees get one here.
-    static func positions(rows: [MomentPortfolioRow], moments: [MomentInfo], account: Address) -> [RetiredMomentPosition] {
+    /// fees get one here. `now` decides which Moments have missed graduation (`RetiredMomentPosition.isOpen`).
+    static func positions(rows: [MomentPortfolioRow], moments: [MomentInfo], account: Address, now: Int = Int(Date().timeIntervalSince1970)) -> [RetiredMomentPosition] {
         let rowsByKey = Dictionary(rows.map { ($0.moment.key, $0) }, uniquingKeysWith: { first, _ in first })
         var out: [RetiredMomentPosition] = []
         for info in moments {
@@ -134,7 +138,7 @@ public struct RetiredMoments: Sendable {
             let row = rowsByKey[info.key]
                 ?? (proceeds + fees > 0 ? MomentPortfolioRow(moment: info, entitlement: 0, claimed: 0, claimableCollector: 0, claimableCreator: 0, nftBalance: 0, coinBalance: 0, isCreator: true) : nil)
             guard let row else { continue }
-            let position = RetiredMomentPosition(row: row, creatorProceeds: proceeds, creatorFees: fees)
+            let position = RetiredMomentPosition(row: row, creatorProceeds: proceeds, creatorFees: fees, asOf: now)
             if position.isOpen { out.append(position) }
         }
         return out

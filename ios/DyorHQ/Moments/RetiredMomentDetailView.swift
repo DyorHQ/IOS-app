@@ -116,7 +116,13 @@ struct RetiredMomentDetailView: View {
             Text("Your Position")
         } footer: {
             if !info.graduated {
-                Text(info.state == .expired ? "It expired before graduating, so its coins never vest. Your editions stay yours." : "Coins vest only once a Moment graduates; collecting is closed in the app.")
+                if info.state == .expired {
+                    Text("It expired before graduating, so its coins never vest. Your editions stay yours.")
+                } else if info.missedGraduation(at: now) {
+                    Text("Its collecting window ended before it graduated, so its coins never vest. Your editions stay yours.")
+                } else {
+                    Text("Coins vest only once a Moment graduates; collecting is closed in the app.")
+                }
             }
         }
     }

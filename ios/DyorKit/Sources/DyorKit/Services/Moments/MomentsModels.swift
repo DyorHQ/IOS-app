@@ -619,6 +619,12 @@ public struct MomentInfo: Sendable, Hashable, Identifiable {
         default: return false
         }
     }
+    /// Whether its coins can never vest: it expired, or it is still collecting past its deadline (collects are refused
+    /// from then on, so it cannot reach its threshold, and only `expire` is left). A stuck graduation is not: a retry may
+    /// still land it.
+    public func missedGraduation(at now: Int) -> Bool {
+        !graduated && (ledger.state == .expired || (ledger.state == .collecting && now >= moment.deadline))
+    }
     /// Whether a permissionless graduation retry makes sense.
     public var isRetriable: Bool { ledger.state == .graduationPending }
     /// USDC still needed in the reserve to graduate (0 once reached).

@@ -192,6 +192,27 @@ final class MomentsRetiredTests: XCTestCase {
         XCTAssertEqual(positions[1].creatorWithdrawable, 0)
     }
 
+    /// A retired Moment still collecting past its deadline (cohort 3's "Nature" once its window closes, until someone
+    /// expires it outside the app) has missed graduation: a promise of coins alone no longer keeps it open, while
+    /// editions and creator proceeds still do.
+    func testAMomentPastItsDeadlineHasMissedGraduation() {
+        let wallet = Address(literal: "0x1C4d85cF39eD9343F1cdc34ea890394Aa63D7Bd8")
+        let collecting = info(id: 1, factory: cohort3.factory) // deadline 2_000
+        XCTAssertFalse(collecting.missedGraduation(at: 1_999))
+        XCTAssertTrue(collecting.missedGraduation(at: 2_000))
+        XCTAssertTrue(info(id: 1, factory: cohort3.factory, state: .expired).missedGraduation(at: 1_000))
+        XCTAssertFalse(info(id: 1, factory: cohort3.factory, state: .graduationPending).missedGraduation(at: 9_999), "a stuck graduation may still be retried")
+        XCTAssertFalse(info(id: 1, factory: cohort3.factory, state: .graduated, graduated: true).missedGraduation(at: 9_999))
+
+        let promise = MomentPortfolioRow(moment: collecting, entitlement: 50, claimed: 0, claimableCollector: 0, claimableCreator: 0, nftBalance: 0, coinBalance: 0, isCreator: false)
+        XCTAssertEqual(RetiredMoments.positions(rows: [promise], moments: [collecting], account: wallet, now: 1_999).map(\.key), [collecting.key])
+        XCTAssertEqual(RetiredMoments.positions(rows: [promise], moments: [collecting], account: wallet, now: 2_000).map(\.key), [])
+        let edition = MomentPortfolioRow(moment: collecting, entitlement: 50, claimed: 0, claimableCollector: 0, claimableCreator: 0, nftBalance: 1, coinBalance: 0, isCreator: false)
+        XCTAssertEqual(RetiredMoments.positions(rows: [edition], moments: [collecting], account: wallet, now: 2_000).map(\.key), [collecting.key], "editions stay theirs")
+        let created = info(id: 1, factory: cohort3.factory, creator: wallet, creatorClaimable: 20_000)
+        XCTAssertEqual(RetiredMoments.positions(rows: [], moments: [created], account: wallet, now: 2_000).first?.creatorProceeds, 20_000)
+    }
+
     // MARK: Live (read-only; DYOR_LIVE_MOMENTS=1)
 
     /// The retired cohorts read from Monad mainnet through the claim-only client, at their pinned final counts; every
