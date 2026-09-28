@@ -82,7 +82,7 @@ public struct MomentLink: Hashable, Identifiable, Sendable, CustomStringConverti
         /// shift a later cohort's names. Publishing is paused on chain on cohorts 1 and 2 but not on cohort 3 (owner
         /// decision 2026-09-28: the old stacks are retired in the app only), where builds before 16 can still publish.
         /// The release gate proves every pin on chain before an archive ships
-        /// (`scripts/dev/check-launchpad-addresses.py --release`, also `--chain` by hand), paused or not:
+        /// (`scripts/dev/check-launchpad-addresses.py --release`, also `--chain` by hand): cohorts 1 and 2 paused,
         /// `momentCount()` equal to the pin, and every coin in `MomentsAddresses.retiredMainnetCoins`. Cohort 3's is 1
         /// ("Nature", read at block 108,778,342): a Moment published there later makes the gate refuse until this pin
         /// and the coin table include it, and a raised pin puts its name ahead of every c4 Moment's (`MomentSlug`).

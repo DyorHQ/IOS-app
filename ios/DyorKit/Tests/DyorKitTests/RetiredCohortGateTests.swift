@@ -8,9 +8,9 @@ import XCTest
 /// the pins (`MomentLink.Cohort.finalMomentCount`) and the coin table (`MomentsAddresses.retiredMainnetCoins`) from the
 /// Swift sources and, with `--release` (every archive path) or `--chain` (by hand), requires on chain: `momentCount()`
 /// equal to the pin, and every Moment's coin in the table, keyed to its (factory, id). A Moment published past a pin
-/// would otherwise get no name link (and its name would go to a later Moment) and its coin would be tradable. Publishing
-/// need not be paused: cohort 3 stays open on chain (owner decision 2026-09-28, retired in the app only), which the gate
-/// reports as a note while its count still equals its pin.
+/// would otherwise get no name link (and its name would go to a later Moment) and its coin would be tradable. Cohort 3
+/// alone need not be paused: it stays open on chain (owner decision 2026-09-28, retired in the app only), which the gate
+/// reports as a note while its count still equals its pin. Cohorts 1 and 2 must stay paused.
 ///
 /// Here the script runs against canned eth_call answers built from the compiled constants (its `--chain-fixture` mode,
 /// which it refuses together with `--release`): the chain as it is passes, so the script reads the sources the way the
@@ -121,6 +121,18 @@ final class RetiredCohortGateTests: XCTestCase {
         XCTAssertTrue(output.contains("; publishing open on c3\n"), output)
         XCTAssertFalse(output.contains("cohort c1"), output)
         XCTAssertFalse(output.contains("check failed"), output)
+    }
+
+    /// The owner's decision leaves only cohort 3 open. Cohorts 1 and 2 pay the retired wallets (the leaked treasury among
+    /// them), so either one open on chain refuses, and no note calls it the owner's decision.
+    func testAnUnpausedCohortOtherThanCohortThreeRefuses() throws {
+        for cohort in [MomentLink.Cohort.c1, .c2] {
+            let (status, output) = try check(replacing(cohort) { $0.paused = false })
+            XCTAssertEqual(status, 1, output)
+            XCTAssertTrue(output.contains("Moments cohort \(cohort) (\(cohort.factory.hex)): publishing is not paused on chain"), output)
+            XCTAssertFalse(output.contains("Moments cohort \(cohort) (\(cohort.factory.hex)): publishing is open on chain"), output)
+            XCTAssertFalse(output.contains("publishing open on \(cohort)"), output)
+        }
     }
 
     /// A Moment published on the open cohort 3 after its pin: the pin and the coin table must both grow before a release.

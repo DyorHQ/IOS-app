@@ -105,7 +105,8 @@ Both fail while either table is pending. The second one also proves the retired 
 (read-only calls to a public Monad RPC): each factory's `momentCount()` equals its pin
 (`MomentLink.Cohort.finalMomentCount`), and its coins are exactly its entries in `MomentsAddresses.retiredMainnetCoins`.
 Cohort 3's publishing is not paused on chain (owner decision 2026-09-28: the old stacks are retired in the app only),
-which the check reports as a note; a Moment published there after its pin makes it refuse.
+which the check reports as a note; a Moment published there after its pin makes it refuse. Cohorts 1 and 2 must stay
+paused (their policy pays the retired wallets): either one open refuses.
 It runs in every archive: the DyorHQ target's install-only build phase (so Product › Archive in Xcode is gated too),
 `ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud) and `scripts/testflight.sh`, each refusing the archive.
 `python3 ../scripts/dev/check-launchpad-addresses.py --chain` runs the same chain checks without refusing the pending

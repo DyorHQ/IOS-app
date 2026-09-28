@@ -8,8 +8,8 @@
 # Before that, the v2 wiring gate: an archive is refused while DyorKit's v2 launchpad or Moments addresses are still
 # PENDING (scripts/dev/check-launchpad-addresses.py --release), so no build ships with Launch and Publish "not live yet",
 # and while a retired Moments cohort is not final on chain (momentCount equal to its pin, every coin in the retired-coin
-# table: read-only calls to a public Monad RPC). The DyorHQ target's install-only build phase runs the same check first;
-# this is the second layer.
+# table, cohorts 1 and 2 paused: read-only calls to a public Monad RPC). The DyorHQ target's install-only build phase
+# runs the same check first; this is the second layer.
 set -euo pipefail
 set +x # never trace: the scanner holds secret values in variables
 [[ ${CI_XCODEBUILD_ACTION:-} == archive ]] || exit 0

@@ -17,10 +17,10 @@ Moments each has, and MomentsAddresses.retiredMainnetCoins every coin they minte
 (each cohort's coins are ids 1…pin). `--chain` and `--release` also prove them on Monad with read-only eth_calls to a
 keyless public RPC (never a transaction): each factory's momentCount() equals the pin, and its Moments' coins are
 exactly its retiredMainnetCoins entries; a cohort that grew past its pin refuses, naming the new coins, and so does an
-unreachable RPC. A retired cohort need not be paused on chain: cohort 3 stays open (owner decision 2026-09-28: the old
-stacks are retired in the app only, and builds before 16 can still publish there), so its publishingPaused() is read
-and reported as a note, and its count is proven again by every release. `--chain` runs the same checks by hand;
-`--release` includes them.
+unreachable RPC. Cohort 3 alone need not be paused on chain: it stays open (owner decision 2026-09-28: the old stacks
+are retired in the app only, and builds before 16 can still publish there), so its publishingPaused() is read and
+reported as a note, and its count is proven again by every release. Cohorts 1 and 2 must stay paused (their policy
+pays the retired wallets): an open one refuses. `--chain` runs the same checks by hand; `--release` includes them.
 
 `--chain-fixture FILE` is for DyorKit's RetiredCohortGateTests only: the retired-cohort checks alone, against canned
 eth_call answers instead of the chain. It is refused together with `--release`.
@@ -84,6 +84,9 @@ RETIRED_MOMENTS_FACTORIES = {
     "0xc12b6b6948185cef75f861c5327702c30cb8a581",
     "0x64698c7702d85f87f43a6dff7d495cdd2327c020",
 }
+# The retired Moments factories that may stay open on chain (owner decision 2026-09-28): cohort 3 only. Every other one
+# must be paused, as the keepers' OPEN_ON_CHAIN_MOMENTS also says.
+OPEN_ON_CHAIN_MOMENTS = {PRE_V2_MOMENTS}
 # Payout wallets retired in the 2026-09-23 relaunch. App code must never target them.
 OLD_WALLETS = {
     "0x5282cc04f2f17cc296c5aefa2576c4c0327cf045": "leaked treasury",
@@ -215,8 +218,9 @@ def words(answer, count, what):
     return [int.from_bytes(data[32 * i:32 * (i + 1)], "big") for i in range(count)]
 
 def check_retired_on_chain(cohorts, coins, call):
-    """Each retired factory: momentCount() == its pin, and its coins exactly its table entries. Returns the cohorts whose
-    publishing is still open on chain, which is reported, not refused (see the docstring)."""
+    """Each retired factory: momentCount() == its pin, its coins exactly its table entries, and publishing paused unless
+    it is in OPEN_ON_CHAIN_MOMENTS. Returns the open cohorts of that set, which are reported, not refused (see the
+    docstring)."""
     open_cohorts = []
     for c, factory, pin in cohorts:
         where = f"Moments cohort {c} ({factory})"
@@ -234,10 +238,13 @@ def check_retired_on_chain(cohorts, coins, call):
         except Exception as e:  # noqa: BLE001 — unreadable is not proven final
             problems.append(f"{where} could not be read on chain ({type(e).__name__}: {str(e)[:160]}); it must be proven final before a release")
             continue
-        if paused != 1:
+        if paused != 1 and factory.lower() in OPEN_ON_CHAIN_MOMENTS:
             open_cohorts.append(c)
             notes.append(f"{where}: publishing is open on chain (retired in the app only, owner decision 2026-09-28); "
                          f"momentCount() is {count}, pinned {pin}")
+        elif paused != 1:
+            problems.append(f"{where}: publishing is not paused on chain; a retired cohort other than cohort 3 must be paused "
+                            "(setPublishingPaused(true)) before a release: its policy pays the retired wallets")
         if count != pin:
             problems.append(f"{where}: momentCount() is {count} on chain but MomentLink.Cohort.{c}.finalMomentCount pins {pin}: "
                             "a Moment was published there after the pin. Pin the new count and add every new coin to "
