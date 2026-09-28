@@ -26,9 +26,9 @@ public struct MomentLink: Hashable, Identifiable, Sendable, CustomStringConverti
     /// never change: a new cohort goes at the end. `rawValue` is the path segment each factory put in its NFTs'
     /// `external_url` (read on chain 2026-09-28: cohort 1 `…/moments/c1/`, cohort 2 `…/moments/c2/`, cohort 3 the bare
     /// `…/moments/`; v2 is deployed with `…/moments/c4/`, `MomentsAddresses.expectedExternalBaseURI`). c1–c3 are the
-    /// retired cohorts; c4 is the v2 factory, `MomentsAddresses.monadMainnet`, the only live one. While v2 is not
-    /// deployed its factory is zero and c4 is left out of parsing, links and the directory. `MomentLinkTests` pins the
-    /// table to `MomentsAddresses`.
+    /// retired cohorts; c4 is the v2 factory, `MomentsAddresses.monadMainnet`, the only live one (in a Debug fork
+    /// rehearsal, the rehearsal's). While v2 is not deployed its factory is zero and c4 is left out of parsing, links and
+    /// the directory. `MomentLinkTests` pins the table to `MomentsAddresses`.
     public enum Cohort: String, CaseIterable, Sendable {
         case c1 = "c1", c2 = "c2", c3 = "", c4 = "c4"
 
@@ -37,10 +37,37 @@ public struct MomentLink: Hashable, Identifiable, Sendable, CustomStringConverti
             case .c1: return Address(literal: "0x64698c7702d85F87f43a6dFF7D495CDD2327C020")
             case .c2: return Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581")
             case .c3: return Address(literal: "0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26")
-            // Never a second literal: the v2 factory lives only in MomentsAddresses.monadMainnet.
-            case .c4: return MomentsAddresses.monadMainnet.factory
+            // Never a second literal: the v2 factory lives only in MomentsAddresses.monadMainnet. A Debug build pointed
+            // at a fork rehearsal's v2 deployment names that one instead (`rehearse(liveFactory:)`).
+            case .c4:
+                #if DEBUG
+                return Self.rehearsalFactory ?? MomentsAddresses.monadMainnet.factory
+                #else
+                return MomentsAddresses.monadMainnet.factory
+                #endif
             }
         }
+
+        #if DEBUG
+        /// A fork rehearsal, in Debug builds only (none of this exists in a Release build). AppConfig's Debug-only
+        /// MOMENTS_* override points the app at a v2 Moments deployment on a local fork, and c4 must name that factory too,
+        /// or the rehearsal's own Moments get no link: `…/moments/c4/<id>` parses to nothing, Share has no link and no
+        /// name reaches them. `AppEnvironment` calls this once at launch, before any link is read; nil (or the zero
+        /// address) puts c4 back on `MomentsAddresses.monadMainnet`. c1–c3 never move.
+        public static func rehearse(liveFactory: Address?) {
+            rehearsalLock.lock()
+            defer { rehearsalLock.unlock() }
+            rehearsal = liveFactory.flatMap { $0.isZero ? nil : $0 }
+        }
+
+        private static let rehearsalLock = NSLock()
+        nonisolated(unsafe) private static var rehearsal: Address?
+        private static var rehearsalFactory: Address? {
+            rehearsalLock.lock()
+            defer { rehearsalLock.unlock() }
+            return rehearsal
+        }
+        #endif
 
         public var isRetired: Bool { self != .c4 }
 

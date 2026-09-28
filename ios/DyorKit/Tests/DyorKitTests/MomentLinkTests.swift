@@ -301,4 +301,40 @@ final class MomentDirectoryTests: XCTestCase {
         let getMoment = ABI.selector(MomentsABI.Factory.getMoment).hexString
         XCTAssertEqual(calls.filter { $0.selector == getMoment }.count, Self.pinned.count, "each pinned Moment read once, none past a pin")
     }
+
+    /// A Debug fork rehearsal (AppConfig's MOMENTS_* override) moves c4, and only c4, to the rehearsal's factory: its
+    /// Moments' `…/moments/c4/<id>` links parse, Share has a link, and the directory names them after every retired
+    /// Moment (a c4 "Nature" is `nature-2`). Cleared, c4 is `MomentsAddresses.monadMainnet`'s again.
+    func testAForkRehearsalMovesOnlyC4() async throws {
+        let rehearsal = V2Fixture.moments.factory
+        MomentLink.Cohort.rehearse(liveFactory: rehearsal)
+        defer { MomentLink.Cohort.rehearse(liveFactory: nil) }
+        XCTAssertEqual(MomentLink.Cohort.c4.factory, rehearsal)
+        XCTAssertEqual(MomentLink.Cohort.wired, MomentLink.Cohort.allCases)
+        XCTAssertEqual(MomentLink.Cohort(factory: rehearsal), .c4)
+        XCTAssertEqual(URL(string: "https://dyorhq.fun/moments/c4/2").flatMap(MomentLink.init(url:))?.target, .key(MomentKey(factory: rehearsal, id: 2)))
+        XCTAssertEqual(MomentLink(key: MomentKey(factory: rehearsal, id: 2))?.url.absoluteString, "https://dyorhq.fun/moments/c4/2")
+        XCTAssertEqual([MomentLink.Cohort.c1, .c2, .c3].map(\.factory), MomentsAddresses.retiredMainnet.reversed().map(\.factory), "c1–c3 never move")
+        XCTAssertEqual(URL(string: "https://dyorhq.fun/moments/1").flatMap(MomentLink.init(url:))?.target, .key(MomentKey(factory: MomentLink.Cohort.c3.factory, id: 1)))
+
+        let stacks = MomentsAddresses.retiredMainnet.map { cohort -> FakeMomentsStack in
+            FakeMomentsStack(addresses: cohort, policy: V2Fixture.policy(termsHash: nil), factoryBase: "", nftBase: "", names: Self.pinned.filter { $0.0.factory == cohort.factory }.map(\.2))
+        } + [FakeMomentsStack(addresses: V2Fixture.moments, policy: V2Fixture.policy(), factoryBase: MomentsAddresses.expectedExternalBaseURI,
+                              nftBase: MomentsAddresses.expectedExternalBaseURI, names: ["Nature", "Fork sunrise"])]
+        MomentsChainStub.install { to, data in
+            for stack in stacks { if let answer = stack.answer(to, data) { return answer } }
+            return nil
+        }
+        let directory = MomentDirectory(rpc: MomentsChainStub.rpc())
+        let nature = try await directory.key(for: "nature")
+        XCTAssertEqual(nature, MomentKey(factory: MomentLink.Cohort.c3.factory, id: 1))
+        let second = try await directory.key(for: "nature-2")
+        XCTAssertEqual(second, MomentKey(factory: rehearsal, id: 1))
+        let sunrise = try await directory.link(for: MomentKey(factory: rehearsal, id: 2))
+        XCTAssertEqual(sunrise?.url.absoluteString, "https://dyorhq.fun/moments/fork-sunrise")
+
+        MomentLink.Cohort.rehearse(liveFactory: nil)
+        XCTAssertEqual(MomentLink.Cohort.c4.factory, MomentsAddresses.monadMainnet.factory)
+        XCTAssertEqual(MomentLink.Cohort.c4.isWired, MomentsAddresses.monadMainnet.isDeployed)
+    }
 }

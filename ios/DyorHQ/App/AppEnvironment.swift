@@ -73,6 +73,11 @@ final class AppEnvironment {
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
         moments = MomentsService(rpc: rpc, addresses: config.moments)
         retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc] in RetiredMoments(rpc: rpc, addresses: $0) }
+        #if DEBUG
+        // A fork rehearsal (Secrets.xcconfig MOMENTS_*, Debug only): v2 links (c4) and names follow the Moments this build
+        // shows. Without the override this is nil, and c4 stays MomentsAddresses.monadMainnet.
+        MomentLink.Cohort.rehearse(liveFactory: config.moments.factory == MomentsAddresses.monadMainnet.factory ? nil : config.moments.factory)
+        #endif
         // Every Moment's name in publish order, for share links by name (dyorhq.fun/moments/<name>): cohorts 1–3 up to
         // their pinned counts, then v2 once it is wired.
         momentDirectory = MomentDirectory(rpc: rpc)
