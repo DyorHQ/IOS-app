@@ -178,11 +178,13 @@ if [ -n "$STRAY" ]; then
   say "ALLOW_SCRIPT_OVERRIDES=1: the Deploy scripts read $STRAY from this environment"
 fi
 
+RPC_SHOWN=$(rpc_word)
+[ "$RPC_SHOWN" = "$RPC" ] || RPC_SHOWN="a custom one (not printed: it may carry a key)"
 SIGN=()
 if [ "${DRY_RUN:-0}" = 1 ]; then
   MODE=dry
 elif [ "${FORK:-0}" = 1 ]; then
-  case "$RPC" in http://127.0.0.1:* | http://localhost:*) ;; *) die "FORK=1 needs RPC=http://127.0.0.1:<port> (a local anvil fork), got $RPC" ;; esac
+  case "$RPC" in http://127.0.0.1:* | http://localhost:*) ;; *) die "FORK=1 needs RPC=http://127.0.0.1:<port> (a local anvil fork), got $RPC_SHOWN" ;; esac
   MODE=fork
   SIGN=(--unlocked)
 elif [ "${LEDGER:-0}" = 1 ] && [ -z "${ACCOUNT:-}" ]; then
@@ -194,11 +196,14 @@ elif [ -n "${ACCOUNT:-}" ] && [ "${LEDGER:-0}" != 1 ]; then
 else
   die "choose exactly one signer: LEDGER=1 or ACCOUNT=<keystore name> (or DRY_RUN=1 / FORK=1)"
 fi
-RPC_SHOWN=$(rpc_word)
-[ "$RPC_SHOWN" = "$RPC" ] || RPC_SHOWN="a custom one (not printed: it may carry a key)"
 say "mode: $MODE   signer: $GOV   rpc: $RPC_SHOWN"
 
-CHAIN=$($CAST chain-id --rpc-url "$RPC") || die "cannot reach the RPC"
+# cast's error names the URL it could not reach, so a custom RPC's error is not shown.
+if [ "$RPC_SHOWN" = "$RPC" ]; then
+  CHAIN=$($CAST chain-id --rpc-url "$RPC") || die "cannot reach the RPC"
+else
+  CHAIN=$($CAST chain-id --rpc-url "$RPC" 2>/dev/null) || die "cannot reach the RPC (cast's error is not shown: it names the URL)"
+fi
 [ "$CHAIN" = 143 ] || die "the RPC is chain $CHAIN, not Monad mainnet (143)"
 if [ "$MODE" != fork ]; then
   REF=$($CAST chain-id --rpc-url "$REFERENCE_RPC") || die "cannot reach $REFERENCE_RPC"
