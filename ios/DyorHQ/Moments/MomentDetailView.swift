@@ -188,7 +188,10 @@ struct MomentDetailView: View {
         } header: {
             Text("Collect")
         } footer: {
-            Text("Paid in USDC: \(NumberStyle.basisPoints(m.reserveBps)) reserve, \(NumberStyle.basisPoints(m.creatorBps)) creator, \(NumberStyle.basisPoints(m.platformBps)) DyorHQ. Your NFT appears on OpenSea as soon as it settles.")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Paid in USDC: \(NumberStyle.basisPoints(m.reserveBps)) reserve, \(NumberStyle.basisPoints(m.creatorBps)) creator, \(NumberStyle.basisPoints(m.platformBps)) DyorHQ. Your NFT appears on OpenSea as soon as it settles.")
+                LearnMoreLink(.collectAMoment)
+            }
         }
     }
 
@@ -254,7 +257,11 @@ struct MomentDetailView: View {
         } header: {
             Text("Your Position")
         } footer: {
-            if !info.graduated, info.state != .expired { Text("Coins are minted to you as they vest once the Moment graduates.") }
+            // Where a collector's coins vest and are claimed.
+            VStack(alignment: .leading, spacing: 4) {
+                if !info.graduated, info.state != .expired { Text("Coins are minted to you as they vest once the Moment graduates.") }
+                LearnMoreLink(.momentsGraduationAndVesting)
+            }
         }
     }
 
@@ -277,7 +284,10 @@ struct MomentDetailView: View {
         } header: {
             Text("You Created This")
         } footer: {
-            Text("\(NumberStyle.basisPoints(m.creatorBps)) of every collect, plus \(NumberStyle.basisPoints(MomentsConstants.hookCreatorShareBps)) of the pool's 1% fee after graduation, accrue here for you.")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(NumberStyle.basisPoints(m.creatorBps)) of every collect, plus \(NumberStyle.basisPoints(MomentsConstants.hookCreatorShareBps)) of the pool's 1% fee after graduation, accrue here for you.")
+                LearnMoreLink(.momentsEarningsAndFees)
+            }
         }
     }
 

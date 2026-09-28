@@ -342,6 +342,7 @@ struct CreateMomentView: View {
                     Text("Loading the current policy…")
                 }
                 if let block = policy?.publishBlock { Text(block.message).foregroundStyle(Color.attention) }
+                LearnMoreLink(.publishAMoment)
             }
         }
     }
