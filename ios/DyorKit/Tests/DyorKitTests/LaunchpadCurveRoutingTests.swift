@@ -365,7 +365,7 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         let assets = try String(contentsOf: app.appendingPathComponent("Portfolio/AssetsModel.swift"), encoding: .utf8)
         XCTAssertTrue(assets.contains("async let curveTask = try? env.launchpad.curveHoldings(held)"))
         let checked = try XCTUnwrap(assets.range(of: "if let found = await curveTask { curve = found }"))
-        let listed = try XCTUnwrap(assets.range(of: "tokens = held.map {"))
+        let listed = try XCTUnwrap(assets.range(of: "tokens = ranked\n"))
         XCTAssertLessThan(checked.lowerBound, listed.lowerBound, "known before the token list shows")
         let curveRow = try XCTUnwrap(assets.range(of: "} else if route.isOnCurve {"))
         let swapRow = try XCTUnwrap(assets.range(of: "Button { router.openSwap(tokenIn: asset.token,"))

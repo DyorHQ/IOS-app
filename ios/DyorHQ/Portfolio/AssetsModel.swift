@@ -7,13 +7,8 @@ import SwiftUI
 @Observable
 @MainActor
 final class AssetsModel {
-    struct TokenAsset: Identifiable, Hashable {
-        let token: Token
-        let balance: BigUInt
-        let usd: Double?
-        var id: Address { token.address }
-        var value: Double? { usd.map { Amount.units(balance, decimals: token.decimals) * $0 } }
-    }
+    /// A held token, valued (`HeldToken`): the Send sheet lists the same ones, in the same order (`WalletTokens`).
+    typealias TokenAsset = HeldToken
 
     private(set) var tokens: [TokenAsset] = []
     /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12).
@@ -49,23 +44,20 @@ final class AssetsModel {
         async let momentsTask = env.moments.moments(limit: 200)
         async let retiredTask = PastMomentsModel.allMoments(env: env)
 
-        var universe = KnownTokenStore.universe(owner: address)
-        let known = Set(universe.map(\.address))
-        let discovered = await env.walletDiscovery.heldTokens(wallet: address, known: known, wholeHistory: true)
-        universe += discovered
-        unverified = KnownTokenStore.unverified(owner: address).union(discovered.map(\.address))
-        let balances = (try? await ERC20.balances(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
-        let held = universe.filter { (balances[$0.address] ?? 0) > 0 }
+        // The token part is the Send sheet's too (`WalletTokens`). Balances that couldn't be read list nothing, as before.
+        let read = try? await WalletTokens.read(env: env, address: address)
+        unverified = read?.unverified ?? KnownTokenStore.unverified(owner: address)
+        let held = read?.tokens ?? []
         async let curveTask = try? env.launchpad.curveHoldings(held)
-        let prices = (try? await env.prices.prices(for: held)) ?? [:]
+        var ranked: [TokenAsset] = []
+        if let read { ranked = await WalletTokens.ranked(read, env: env) }
         // Known before the token list shows, so a retired Moment coin or a coin on a curve is never offered a swap in between.
         for info in await retiredTask {
             retiredByCoin[info.moment.coin] = info
             retiredByNFT[info.moment.nft] = info
         }
         if let found = await curveTask { curve = found }
-        tokens = held.map { TokenAsset(token: $0, balance: balances[$0.address] ?? 0, usd: prices[$0.address]?.usd) }
-            .sorted { ($0.value ?? 0, Amount.units($0.balance, decimals: $0.token.decimals)) > ($1.value ?? 0, Amount.units($1.balance, decimals: $1.token.decimals)) }
+        tokens = ranked
 
         let moments = (try? await momentsTask) ?? []
         momentsByNFT = Dictionary(moments.map { ($0.moment.nft, $0) }, uniquingKeysWith: { first, _ in first })
