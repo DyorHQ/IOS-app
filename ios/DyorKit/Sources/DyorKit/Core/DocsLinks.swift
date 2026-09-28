@@ -23,6 +23,7 @@ public enum DocsLinks: String, CaseIterable, Sendable {
     case bridge = "wallet-and-account/bridge"
     case notificationsAndPriceAlerts = "wallet-and-account/notifications-and-price-alerts"
     case exportSignOutDelete = "wallet-and-account/export-sign-out-delete"
+    case contractsAndAddresses = "resources/contracts-and-addresses"
     case riskDisclosures = "resources/risk-disclosures"
 
     /// Where the docs live. The home is this URL itself, with no trailing slash.
@@ -52,6 +53,7 @@ public enum DocsLinks: String, CaseIterable, Sendable {
         case .bridge: return "bridging"
         case .notificationsAndPriceAlerts: return "notifications and price alerts"
         case .exportSignOutDelete: return "exporting, signing out and deleting"
+        case .contractsAndAddresses: return "contracts and addresses"
         case .riskDisclosures: return "the risks"
         }
     }

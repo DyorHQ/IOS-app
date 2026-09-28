@@ -88,6 +88,7 @@ final class DocsLinksTests: XCTestCase {
             (.bridge, "https://dyorhq.gitbook.io/docs/wallet-and-account/bridge"),
             (.notificationsAndPriceAlerts, "https://dyorhq.gitbook.io/docs/wallet-and-account/notifications-and-price-alerts"),
             (.exportSignOutDelete, "https://dyorhq.gitbook.io/docs/wallet-and-account/export-sign-out-delete"),
+            (.contractsAndAddresses, "https://dyorhq.gitbook.io/docs/resources/contracts-and-addresses"),
             (.riskDisclosures, "https://dyorhq.gitbook.io/docs/resources/risk-disclosures"),
         ]
         XCTAssertEqual(DocsLinks.allCases, expected.map(\.0))
@@ -115,7 +116,6 @@ final class DocsLinksTests: XCTestCase {
         let getHelp = try XCTUnwrap(help.range(of: "group(\"Get Help\")"))
         XCTAssertLessThan(learn.lowerBound, getHelp.lowerBound, "Learn comes first")
         // Each row whole, in order: its title and description with the page it opens, so no two rows can trade links.
-        // No Contracts & Addresses row: the published page doesn't list the contracts this build calls yet.
         let rows = help[learn.upperBound..<getHelp.lowerBound].split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { $0.hasPrefix("HelpRow(") }
@@ -123,6 +123,7 @@ final class DocsLinksTests: XCTestCase {
             #"HelpRow(symbol: "book", title: "Help Center", detail: "Guides to every part of DyorHQ") { openURL(SupportLinks.helpCenter) }"#,
             #"HelpRow(symbol: "flag", title: "Getting Started", detail: "From sign-in to your first trade") { openURL(DocsLinks.quickstart.url) }"#,
             #"HelpRow(symbol: "exclamationmark.triangle", title: "Risk Disclosures", detail: "Read these before you trade") { openURL(DocsLinks.riskDisclosures.url) }"#,
+            #"HelpRow(symbol: "checkmark.seal", title: "Contracts & Addresses", detail: "Verify every contract DyorHQ uses") { openURL(DocsLinks.contractsAndAddresses.url) }"#,
         ])
         let profile = try Self.appSource("Profile/ProfileView.swift")
         XCTAssertTrue(profile.contains("Link(destination: SupportLinks.helpCenter) { SettingsRow(\"Help Center\""))
@@ -224,7 +225,7 @@ final class DocsLinksTests: XCTestCase {
         let perps = try Self.appSource("Perps/PerpsView.swift")
         XCTAssertTrue(perps.contains("Text(problem ?? \"Your first deposit opens your Perpl account. Minimum 10 AUSD."))
 
-        let linked = Set(placements.map(\.page)).union(["home", "quickstart", "riskDisclosures"])
+        let linked = Set(placements.map(\.page)).union(["home", "quickstart", "riskDisclosures", "contractsAndAddresses"])
         XCTAssertEqual(linked, Set(DocsLinks.allCases.map { "\($0)" }), "one case per page the app opens, plus the home")
         let component = try Self.appSource("Design/Components.swift")
         XCTAssertTrue(component.contains("Link(\"Learn more\", destination: page.url)"))
@@ -248,6 +249,30 @@ final class DocsLinksTests: XCTestCase {
             XCTAssertEqual(status, 200, "\(page.url.absoluteString) answered \(status.map(String.init) ?? "no HTTP status")"
                            + ((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Location").map { " → \($0)" } ?? ""))
         }
+    }
+
+    /// Get Help's "Verify every contract DyorHQ uses" row opens Contracts & Addresses, so the published page must name
+    /// every contract this build calls: the v2 launchpad's five modules and the v2 Moments' seven. Off by default: set
+    /// DYOR_LIVE_DOCS=1 (the release checklist does).
+    func testTheContractsPageListsThisBuildsContracts() async throws {
+        guard ProcessInfo.processInfo.environment["DYOR_LIVE_DOCS"] == "1" else { throw XCTSkip("set DYOR_LIVE_DOCS=1") }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        let session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let (data, response) = try await session.data(from: DocsLinks.contractsAndAddresses.url)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let page = String(decoding: data, as: UTF8.self).lowercased()
+        let l = LaunchpadAddresses.monadMainnet
+        let m = MomentsAddresses.monadMainnet
+        let called: [(String, Address)] = [
+            ("launchpad factory", l.factory), ("launch router", l.router), ("fee escrow", l.escrow), ("holder fee sharing", l.holderFeeSharing),
+            ("launchpad hook", l.hook), ("Moments factory", m.factory), ("Moments collect", m.collect), ("Moments vesting", m.vesting),
+            ("Moments graduation", m.graduation), ("Moments locker", m.locker), ("Moments hook", m.hook), ("Moments buyback", m.buyback),
+        ]
+        XCTAssertFalse(called.contains { $0.1.isZero }, "a v2 table is pending")
+        let missing = called.filter { !page.contains($0.1.hex.lowercased()) }.map { "\($0.0) \($0.1.hex)" }
+        XCTAssertEqual(missing, [], "\(DocsLinks.contractsAndAddresses.url.absoluteString) does not list: \(missing.joined(separator: ", "))")
     }
 }
 

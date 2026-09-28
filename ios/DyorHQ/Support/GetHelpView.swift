@@ -30,8 +30,8 @@ enum SupportLinks {
 }
 
 /// Get Help: the docs to learn from, how to reach support and where the community lives, in the grouped-rows shape of
-/// the reference app (Help Center, Getting Started, Risk Disclosures; Contact Support, Report a Bug; X). Opened from
-/// the side menu as a full-screen page.
+/// the reference app (Help Center, Getting Started, Risk Disclosures, Contracts & Addresses; Contact Support, Report a
+/// Bug; X). Opened from the side menu as a full-screen page.
 struct GetHelpView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -57,12 +57,13 @@ struct GetHelpContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            // The docs, opened in Safari like the Terms and Privacy links. No Contracts & Addresses row: the published
-            // page doesn't list the contracts this build calls yet, and a row that says "verify" must match them.
+            // The docs, opened in Safari like the Terms and Privacy links. Contracts & Addresses lists the v2 contracts
+            // this build calls (`LaunchpadAddresses.monadMainnet`, `MomentsAddresses.monadMainnet`) and the retired ones.
             group("Learn") {
                 HelpRow(symbol: "book", title: "Help Center", detail: "Guides to every part of DyorHQ") { openURL(SupportLinks.helpCenter) }
                 HelpRow(symbol: "flag", title: "Getting Started", detail: "From sign-in to your first trade") { openURL(DocsLinks.quickstart.url) }
                 HelpRow(symbol: "exclamationmark.triangle", title: "Risk Disclosures", detail: "Read these before you trade") { openURL(DocsLinks.riskDisclosures.url) }
+                HelpRow(symbol: "checkmark.seal", title: "Contracts & Addresses", detail: "Verify every contract DyorHQ uses") { openURL(DocsLinks.contractsAndAddresses.url) }
             }
             group("Get Help") {
                 HelpRow(symbol: "envelope", title: "Contact Support", detail: SupportLinks.supportEmail) { mail(subject: "DyorHQ support") }
