@@ -84,6 +84,29 @@ The DyorHQ workflow archives `ios/DyorHQ.xcodeproj` on every push to `main`. Tha
 - After changing a package requirement in `project.yml` or `DyorKit/Package.swift`, run `scripts/pin-packages.sh`
   and commit `Package.resolved`; the cloud build fails with an out-of-date resolved file until the pins match.
 
+## Contract addresses and the release gate
+
+The live launchpad and Moments addresses are baked into DyorKit, each stack in one constant:
+`LaunchpadAddresses.monadMainnet` and `MomentsAddresses.monadMainnet`. Until the v2 contracts are deployed both are
+all zero under a `// PENDING` marker: Launch and Publish say "not live yet", and the retired stacks and Moments cohorts
+keep serving their coins, claims and links. Wiring v2 is one reviewed change: fill in both constants from the promoted
+`contracts/deployments/143.json` and `moments-143.json` (with `deployBlock` added to the Moments record by hand), and
+commit the records and the Swift together; `V2WiringTests` accepts only all-zero or fully wired tables that match the
+records.
+
+A build with a pending table must not ship, so before a release:
+
+```bash
+(cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter V2WiringTests)
+python3 ../scripts/dev/check-launchpad-addresses.py --release
+```
+
+Both fail while either table is pending. The second one also runs in `ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud
+archives) and `scripts/testflight.sh`, and refuses the archive.
+
+A Debug build can point at a v2 deployment on a local fork: `MONAD_RPC_URL` plus the `LAUNCHPAD_*` and `MOMENTS_*` keys
+in `Secrets.xcconfig` (see the example file). Release builds never read them.
+
 ## Design rules
 
 - Apple's system: SF Pro through text styles (Dynamic Type), SF Symbols, system semantic colors, `List`, `Form`,
@@ -101,4 +124,4 @@ The DyorHQ workflow archives `ios/DyorHQ.xcodeproj` on every push to `main`. Tha
   Google credentials configured in the Privy dashboard.
 - The passkey host `accounts.dyorhq.fun` (the constant `Mera.relyingParty`) serving the AASA file for `fun.dyorhq.app`,
   and Associated Domains enabled on that App ID.
-- Launchpad contract addresses after deployment (`LAUNCHPAD_FACTORY` and friends).
+- The v2 launchpad and Moments addresses after deployment, wired into DyorKit (see the release gate above).

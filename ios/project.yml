@@ -87,11 +87,24 @@ targets:
         # (accounts.dyorhq.fun), not a build setting. Privy passkeys are off whenever Mera is on: they'd share the rpId.
         PasskeysEnabled: "$(PASSKEYS_ENABLED)"
         PerplBuilderID: "$(PERPL_BUILDER_ID)"
-        LaunchpadFactory: "$(LAUNCHPAD_FACTORY)"
-        LaunchRouter: "$(LAUNCH_ROUTER)"
-        FeeEscrow: "$(FEE_ESCROW)"
-        HolderFeeSharing: "$(HOLDER_FEE_SHARING)"
-        MemeHook: "$(MEME_HOOK)"
+        # Debug-only contract overrides for a fork rehearsal of the v2 deploy (LAUNCHPAD_* and MOMENTS_* in the xcconfig).
+        # Empty in Release by the DYOR_DEBUG_* settings below, and ignored by Release code anyway: shipped builds use the
+        # v2 addresses baked into DyorKit.
+        LaunchpadFactory: "$(DYOR_DEBUG_LAUNCHPAD_FACTORY)"
+        LaunchRouter: "$(DYOR_DEBUG_LAUNCH_ROUTER)"
+        FeeEscrow: "$(DYOR_DEBUG_FEE_ESCROW)"
+        HolderFeeSharing: "$(DYOR_DEBUG_HOLDER_FEE_SHARING)"
+        MemeHook: "$(DYOR_DEBUG_MEME_HOOK)"
+        MomentsFactory: "$(DYOR_DEBUG_MOMENTS_FACTORY)"
+        MomentsCollect: "$(DYOR_DEBUG_MOMENTS_COLLECT)"
+        MomentsVesting: "$(DYOR_DEBUG_MOMENTS_VESTING)"
+        MomentsGraduation: "$(DYOR_DEBUG_MOMENTS_GRADUATION)"
+        MomentsLocker: "$(DYOR_DEBUG_MOMENTS_LOCKER)"
+        MomentsHook: "$(DYOR_DEBUG_MOMENTS_HOOK)"
+        MomentsBuyback: "$(DYOR_DEBUG_MOMENTS_BUYBACK)"
+        MomentsPlatform: "$(DYOR_DEBUG_MOMENTS_PLATFORM)"
+        MomentsTreasury: "$(DYOR_DEBUG_MOMENTS_TREASURY)"
+        MomentsDeployBlock: "$(DYOR_DEBUG_MOMENTS_DEPLOY_BLOCK)"
         # The Aurora API key is NOT here: it lives server-side in the aurora-proxy Edge Function (Supabase secret
         # AURORA_API_KEY). The fee recipient is a public NEAR account name.
         AuroraFeeRecipient: "$(AURORA_FEE_RECIPIENT)"
@@ -124,11 +137,42 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: ""
       configs:
         # MONAD_RPC_URL (Secrets.xcconfig) reaches Info.plist in Debug only — a Release/TestFlight/App Store build
-        # can never bake a provider URL, keyed or not.
+        # can never bake a provider URL, keyed or not. The contract overrides likewise: a shipped build can't be pointed at
+        # other contracts.
         Debug:
           DYOR_DEBUG_RPC_OVERRIDE: "$(MONAD_RPC_URL)"
+          DYOR_DEBUG_LAUNCHPAD_FACTORY: "$(LAUNCHPAD_FACTORY)"
+          DYOR_DEBUG_LAUNCH_ROUTER: "$(LAUNCH_ROUTER)"
+          DYOR_DEBUG_FEE_ESCROW: "$(FEE_ESCROW)"
+          DYOR_DEBUG_HOLDER_FEE_SHARING: "$(HOLDER_FEE_SHARING)"
+          DYOR_DEBUG_MEME_HOOK: "$(MEME_HOOK)"
+          DYOR_DEBUG_MOMENTS_FACTORY: "$(MOMENTS_FACTORY)"
+          DYOR_DEBUG_MOMENTS_COLLECT: "$(MOMENTS_COLLECT)"
+          DYOR_DEBUG_MOMENTS_VESTING: "$(MOMENTS_VESTING)"
+          DYOR_DEBUG_MOMENTS_GRADUATION: "$(MOMENTS_GRADUATION)"
+          DYOR_DEBUG_MOMENTS_LOCKER: "$(MOMENTS_LOCKER)"
+          DYOR_DEBUG_MOMENTS_HOOK: "$(MOMENTS_HOOK)"
+          DYOR_DEBUG_MOMENTS_BUYBACK: "$(MOMENTS_BUYBACK)"
+          DYOR_DEBUG_MOMENTS_PLATFORM: "$(MOMENTS_PLATFORM)"
+          DYOR_DEBUG_MOMENTS_TREASURY: "$(MOMENTS_TREASURY)"
+          DYOR_DEBUG_MOMENTS_DEPLOY_BLOCK: "$(MOMENTS_DEPLOY_BLOCK)"
         Release:
           DYOR_DEBUG_RPC_OVERRIDE: ""
+          DYOR_DEBUG_LAUNCHPAD_FACTORY: ""
+          DYOR_DEBUG_LAUNCH_ROUTER: ""
+          DYOR_DEBUG_FEE_ESCROW: ""
+          DYOR_DEBUG_HOLDER_FEE_SHARING: ""
+          DYOR_DEBUG_MEME_HOOK: ""
+          DYOR_DEBUG_MOMENTS_FACTORY: ""
+          DYOR_DEBUG_MOMENTS_COLLECT: ""
+          DYOR_DEBUG_MOMENTS_VESTING: ""
+          DYOR_DEBUG_MOMENTS_GRADUATION: ""
+          DYOR_DEBUG_MOMENTS_LOCKER: ""
+          DYOR_DEBUG_MOMENTS_HOOK: ""
+          DYOR_DEBUG_MOMENTS_BUYBACK: ""
+          DYOR_DEBUG_MOMENTS_PLATFORM: ""
+          DYOR_DEBUG_MOMENTS_TREASURY: ""
+          DYOR_DEBUG_MOMENTS_DEPLOY_BLOCK: ""
     preBuildScripts: []
     # Share the DyorHQ scheme (archive builds Release) for the Xcode Cloud workflow, as Apple's setup guide asks. XcodeGen
     # writes no scheme unless asked; locally Xcode auto-creates one, which is why `-scheme DyorHQ` works there.

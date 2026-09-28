@@ -38,6 +38,14 @@ for key in AURORA_API_KEY MONAD_RPC_URL; do
     echo "warning: $key is set in the workflow environment but no build uses it; remove it there." >&2
   fi
 done
+# The contract overrides point a Debug build at a fork rehearsal. A Release build never reads them, and this script
+# never writes them; the shipped addresses are the ones baked into DyorKit.
+for key in LAUNCHPAD_FACTORY LAUNCH_ROUTER FEE_ESCROW HOLDER_FEE_SHARING MEME_HOOK MOMENTS_FACTORY MOMENTS_COLLECT MOMENTS_VESTING \
+           MOMENTS_GRADUATION MOMENTS_LOCKER MOMENTS_HOOK MOMENTS_BUYBACK MOMENTS_PLATFORM MOMENTS_TREASURY MOMENTS_DEPLOY_BLOCK; do
+  if [[ -n ${(P)key:-} ]]; then
+    echo "warning: $key is set in the workflow environment; only a Debug build on a fork reads it, and this build ignores it. Remove it there." >&2
+  fi
+done
 
 # Secrets.xcconfig from the environment. A local checkout keeps its own file. Values are never echoed.
 SECRETS=DyorHQ/Config/Secrets.xcconfig
