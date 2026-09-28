@@ -50,9 +50,10 @@
 #   3. Moments: simulate, confirm, broadcast
 #   4. the follow-ups: the Safe accepts both handovers in one batch, Sourcify, then the records are promoted and the
 #      app and keepers wired in one change.
-# A broadcast that stops midway is finished with forge's --resume, never by running this script again (it reads no
-# arguments, so a rerun deploys a whole new stack): it then prints the exact commands, with this run's values. Once the
-# launchpad stack has landed, any exit before the Moments broadcast prints the ONLY=moments run that follows it.
+# A broadcast that stops midway (an error, or Ctrl-C) is finished with forge's --resume, never by running this script
+# again (it reads no arguments, so a rerun deploys a whole new stack): it then prints the exact commands, with this run's
+# values. Once the launchpad stack has landed, any exit before the Moments broadcast prints the ONLY=moments run that
+# follows it.
 set -euo pipefail
 umask 077
 # forge/cast honour FOUNDRY_* (compiler config), ETH_* (sender, keystore, rpc), CAST_* and DAPP_*: none may leak in.
@@ -87,12 +88,17 @@ cleanup() {
   rm -rf "$SNAP"
 }
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+# Ctrl-C reaches forge and this script together. While forge broadcasts, the signal is held until forge returns, so the
+# commands that finish its broadcast are still printed; at any other time it stops the run (and cleanup still runs).
+IN_FLIGHT=
+INTERRUPTED=0
+on_signal() { if [ -n "$IN_FLIGHT" ]; then INTERRUPTED=$1; else exit "$1"; fi; }
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 
 say() { printf '%s\n' "$*"; }
 bold() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
-die() { printf '\n\033[31m!! %s\033[0m\n' "$*" >&2; exit 1; }
+die() { printf '\n\033[31m!! %s\033[0m\n' "$1" >&2; exit "${2:-1}"; } # <message> [exit code]
 confirm() { [ "${YES:-0}" = 1 ] && return 0; local a; read -r -p "$1 [y/N] " a || a=; [ "$a" = y ] || [ "$a" = Y ] || die "stopped: nothing further was sent"; }
 lc() { printf '%s' "$1" | tr 'A-F' 'a-f'; }
 need() { [ -n "${!1:-}" ] || die "$1 must be set (see the header of this script)"; }
@@ -421,10 +427,17 @@ run_script() { # <label> <target> <names checked in step 0> <env...> -- simulate
   [[ "$start" =~ ^[0-9]+$ ]] || die "$label: GOV's nonce reads $start; nothing was sent"
   BEGUN=$target
   bold "$label: broadcast"
+  IN_FLIGHT=1
   if ! env "$@" "$FORGE" script "$target" --rpc-url "$RPC" --code-size-limit 200000 --sender "$GOV" --broadcast --slow --non-interactive "${SIGN[@]}"; then
     resume_help "$label" "$target" "$start" "$planned" "$@"
+    IN_FLIGHT=
+    [ "$INTERRUPTED" = 0 ] || die "$label: interrupted, and the broadcast did not complete. Do NOT start over: finish it as shown above." "$INTERRUPTED"
     die "$label: the broadcast did not complete. Do NOT start over: finish it as shown above."
   fi
+  IN_FLIGHT=
+  [ "$target" != "$LAUNCHPAD_TARGET" ] || LAUNCHPAD_DONE=1
+  # A signal held while forge finished the broadcast: it is complete, and the run stops here.
+  [ "$INTERRUPTED" = 0 ] || die "$label: the broadcast completed, then the run was interrupted" "$INTERRUPTED"
 }
 
 # ---------------------------------------------------------------- 2. launchpad
@@ -432,7 +445,6 @@ if [ "${ONLY:-}" != moments ]; then
   run_script "2. launchpad" "$LAUNCHPAD_TARGET" "$LAUNCHPAD_PASSES" \
     PROTOCOL_FEE_RECIPIENT="$TREASURY" FEES="$FEES" OWNER="$OWNER" LAUNCH_FEE_WEI="$LAUNCH_FEE_WEI" \
     MON_USD_E8="$MON_USD_E8" ABIL_USD_E8="$ABIL_USD_E8"
-  [ "$MODE" = dry ] || LAUNCHPAD_DONE=1
 fi
 
 # ---------------------------------------------------------------- 3. Moments
