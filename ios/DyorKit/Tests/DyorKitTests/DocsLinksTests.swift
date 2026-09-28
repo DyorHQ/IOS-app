@@ -114,13 +114,16 @@ final class DocsLinksTests: XCTestCase {
         let learn = try XCTUnwrap(help.range(of: "group(\"Learn\")"), "Get Help has a Learn group")
         let getHelp = try XCTUnwrap(help.range(of: "group(\"Get Help\")"))
         XCTAssertLessThan(learn.lowerBound, getHelp.lowerBound, "Learn comes first")
-        let rows = String(help[learn.upperBound..<getHelp.lowerBound])
-        for (title, link) in [("Help Center", "SupportLinks.helpCenter"), ("Getting Started", "DocsLinks.quickstart.url"),
-                              ("Risk Disclosures", "DocsLinks.riskDisclosures.url")] {
-            XCTAssertTrue(rows.contains("title: \"\(title)\"") && rows.contains("openURL(\(link))"), title)
-        }
-        // The published Contracts & Addresses page doesn't list the contracts this build calls yet: no row opens it.
-        XCTAssertFalse(rows.contains("Contracts"))
+        // Each row whole, in order: its title and description with the page it opens, so no two rows can trade links.
+        // No Contracts & Addresses row: the published page doesn't list the contracts this build calls yet.
+        let rows = help[learn.upperBound..<getHelp.lowerBound].split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("HelpRow(") }
+        XCTAssertEqual(rows, [
+            #"HelpRow(symbol: "book", title: "Help Center", detail: "Guides to every part of DyorHQ") { openURL(SupportLinks.helpCenter) }"#,
+            #"HelpRow(symbol: "flag", title: "Getting Started", detail: "From sign-in to your first trade") { openURL(DocsLinks.quickstart.url) }"#,
+            #"HelpRow(symbol: "exclamationmark.triangle", title: "Risk Disclosures", detail: "Read these before you trade") { openURL(DocsLinks.riskDisclosures.url) }"#,
+        ])
         let profile = try Self.appSource("Profile/ProfileView.swift")
         XCTAssertTrue(profile.contains("Link(destination: SupportLinks.helpCenter) { SettingsRow(\"Help Center\""))
         let helpCenter = try XCTUnwrap(profile.range(of: "SettingsRow(\"Help Center\""))
@@ -128,49 +131,92 @@ final class DocsLinksTests: XCTestCase {
         XCTAssertLessThan(helpCenter.lowerBound, terms.lowerBound)
     }
 
-    /// Each "Learn more" sits on the screen that explains its topic (under a section footer or a line of help text), and
-    /// the table holds only pages the app opens: those, plus Get Help's Learn rows. No screen writes a docs URL itself.
+    /// One "Learn more" in the app: the page, the file, the top-level view it sits in, and a phrase of the explanation it
+    /// follows (in the lines just above it, after any earlier link in the file).
+    struct Placement: Equatable, CustomStringConvertible {
+        let page: String
+        let file: String
+        let view: String
+        let follows: String
+
+        init(_ page: String, _ file: String, _ view: String, follows: String) {
+            self.page = page; self.file = file; self.view = view; self.follows = follows
+        }
+
+        var description: String { "\(page) in \(file) › \(view), after \"\(follows)\"" }
+    }
+
+    /// Each "Learn more" sits on the screen that explains its topic, under that explanation (a section footer or a line of
+    /// help text), once: every link is matched to its page, file, view and explanation, and counted. The table holds only
+    /// pages the app opens: those, plus Get Help's Learn rows. No screen writes a docs URL itself.
     func testEachLearnMoreLinkIsOnTheScreenThatExplainsIt() throws {
-        let placements: Set<String> = [
-            "oneClickTrading Profile/Settings.swift",               // Perpl Trading: the trading key's footer
-            "depositAndWithdraw Perps/PerpsView.swift",             // the first deposit, which opens the Perpl account
-            "slippageAndPriceImpact Swap/SwapView.swift",           // the slippage sheet's explanation
-            "launchACoin Launchpad/LaunchpadView.swift",            // Launch a Coin: the pairing footer
-            "launchpadGraduation Launchpad/LaunchpadView.swift",    // the coin page's gauge, or its graduation section
-            "launchpadFeesAndRewards Launchpad/LaunchpadView.swift", // the coin page's creator fees
-            "publishAMoment Moments/CreateMomentView.swift",        // Publish a Moment: the economics footer
-            "collectAMoment Moments/MomentDetailView.swift",        // the collect section
-            "momentsGraduationAndVesting Moments/MomentDetailView.swift", // Your Position: vesting and claims
-            "momentsEarningsAndFees Moments/MomentDetailView.swift", // You Created This: the creator's earnings
-            "bridge Bridge/BridgeView.swift",                       // under "Powered by Aurora Intents"
-            "exportSignOutDelete Wallet/WalletExportView.swift",    // Export Wallet: the key warning
-            "exportSignOutDelete Profile/AccountDeletion.swift",    // Delete Account: what is deleted
-            "notificationsAndPriceAlerts Profile/Settings.swift",   // Notifications: what reaches you, and when
-            "selfCustodyAndSecurity Onboarding/OnboardingView.swift", // sign-in: "DyorHQ never holds your keys"
+        let placements: [Placement] = [
+            // Perpl Trading: the trading key's footer.
+            .init("oneClickTrading", "Profile/Settings.swift", "PerplTradingView", follows: "Your trading key is generated on this device"),
+            // Notifications: what reaches you, and when.
+            .init("notificationsAndPriceAlerts", "Profile/Settings.swift", "NotificationsView", follows: "DyorHQ notices fills and price alerts only while it's open"),
+            // Create Account: the first deposit, which opens the Perpl account.
+            .init("depositAndWithdraw", "Perps/PerpsView.swift", "CollateralSheet", follows: "Your first deposit opens your Perpl account"),
+            // The slippage sheet's explanation.
+            .init("slippageAndPriceImpact", "Swap/SwapView.swift", "SlippageSheet", follows: "How far the price may move before your swap settles"),
+            // Launch a Coin: the pairing footer.
+            .init("launchACoin", "Launchpad/LaunchpadView.swift", "CreateLaunchView", follows: "Launch fee"),
+            // The coin page: its creator fees, its gauge while the curve trades, its graduation section once it doesn't.
+            .init("launchpadFeesAndRewards", "Launchpad/LaunchpadView.swift", "LaunchDetailView", follows: "they accrue in the fee escrow"),
+            .init("launchpadGraduation", "Launchpad/LaunchpadView.swift", "LaunchDetailView", follows: "Graduates at"),
+            .init("launchpadGraduation", "Launchpad/LaunchpadView.swift", "LaunchDetailView", follows: "The curve is full."),
+            // Publish a Moment: the economics footer.
+            .init("publishAMoment", "Moments/CreateMomentView.swift", "CreateMomentView", follows: "Collecting ends at graduation"),
+            // A Moment: the collect section, Your Position (vesting and claims), You Created This (the creator's earnings).
+            .init("collectAMoment", "Moments/MomentDetailView.swift", "MomentDetailView", follows: "Paid in USDC"),
+            .init("momentsGraduationAndVesting", "Moments/MomentDetailView.swift", "MomentDetailView", follows: "Coins are minted to you as they vest"),
+            .init("momentsEarningsAndFees", "Moments/MomentDetailView.swift", "MomentDetailView", follows: "accrue here for you"),
+            // Bridge: under "Powered by Aurora Intents".
+            .init("bridge", "Bridge/BridgeView.swift", "BridgeView", follows: "Powered by Aurora Intents"),
+            // Export Wallet: the key warning. Delete Account: what is deleted.
+            .init("exportSignOutDelete", "Wallet/WalletExportView.swift", "WalletExportView", follows: "Treat it like the keys to a safe"),
+            .init("exportSignOutDelete", "Profile/AccountDeletion.swift", "DeleteAccountView", follows: "stay on the Monad blockchain"),
+            // Sign-in: "DyorHQ never holds your keys".
+            .init("selfCustodyAndSecurity", "Onboarding/OnboardingView.swift", "SignInView", follows: "DyorHQ never holds your keys or your funds."),
         ]
         var app = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { app.deleteLastPathComponent() }
         app.appendPathComponent("DyorHQ")
         guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let files = try XCTUnwrap(FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)).compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
-        let pattern = try NSRegularExpression(pattern: #"LearnMoreLink\(\.(\w+)\)"#)
-        var found = Set<String>()
-        var graduation = 0
+        let link = try NSRegularExpression(pattern: #"LearnMoreLink\(\.(\w+)\)"#)
+        // A top-level type starts at column 0; one indented deeper is nested inside it.
+        let declaration = try NSRegularExpression(pattern: #"^(?:@\w+ )*(?:(?:private|fileprivate|public|final) )*(?:struct|class|enum|extension|actor) (\w+)"#,
+                                                  options: .anchorsMatchLines)
+        var unmatched = placements
+        var found = 0
         for file in files {
             let text = try String(contentsOf: file, encoding: .utf8)
             let relative = String(file.path.dropFirst(app.path.count + 1))
             XCTAssertFalse(text.contains("https://dyorhq.gitbook.io"), "\(relative): docs links come from DocsLinks")
-            for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                let name = String(text[Range(match.range(at: 1), in: text)!])
-                XCTAssertNotNil(DocsLinks.allCases.first { "\($0)" == name }, name)
-                found.insert("\(name) \(relative)")
-                if name == "launchpadGraduation" { graduation += 1 }
+            let whole = NSRange(text.startIndex..., in: text)
+            let views = declaration.matches(in: text, range: whole).map { (start: $0.range.location, name: (text as NSString).substring(with: $0.range(at: 1))) }
+            var previousEnd = 0
+            for match in link.matches(in: text, range: whole) {
+                found += 1
+                let page = (text as NSString).substring(with: match.range(at: 1))
+                XCTAssertNotNil(DocsLinks.allCases.first { "\($0)" == page }, page)
+                let view = views.last { $0.start < match.range.location }
+                // The explanation: the dozen lines above the link, within its view and after the file's previous link.
+                let from = max(view?.start ?? 0, previousEnd)
+                let window = (text as NSString).substring(with: NSRange(location: from, length: match.range.location - from))
+                    .split(separator: "\n", omittingEmptySubsequences: false).suffix(12).joined(separator: "\n")
+                previousEnd = match.range.location + match.range.length
+                let here = unmatched.firstIndex { $0.page == page && $0.file == relative && $0.view == view?.name && window.contains($0.follows) }
+                if let here { unmatched.remove(at: here) } else {
+                    XCTFail("LearnMoreLink(.\(page)) in \(relative) › \(view?.name ?? "?") is not a placement, or doesn't follow its explanation")
+                }
             }
         }
-        XCTAssertEqual(found, placements)
+        XCTAssertEqual(found, placements.count, "one link per placement")
+        XCTAssertTrue(unmatched.isEmpty, "missing: \(unmatched)")
         // The coin page shows one of its two graduation links: under the gauge while the curve trades, or under the
         // graduation section once it doesn't.
-        XCTAssertEqual(graduation, 2)
         let launchpad = try Self.appSource("Launchpad/LaunchpadView.swift")
         XCTAssertTrue(launchpad.contains("if launch.phase == .bonding, launch.curveSellsOpen { LearnMoreLink(.launchpadGraduation) }"))
         XCTAssertTrue(launchpad.contains("if launch.curveSellsOpen { ticketSection } else { graduatedSection }"))
@@ -178,7 +224,7 @@ final class DocsLinksTests: XCTestCase {
         let perps = try Self.appSource("Perps/PerpsView.swift")
         XCTAssertTrue(perps.contains("Text(problem ?? \"Your first deposit opens your Perpl account. Minimum 10 AUSD."))
 
-        let linked = Set(placements.map { String($0.split(separator: " ")[0]) }).union(["home", "quickstart", "riskDisclosures"])
+        let linked = Set(placements.map(\.page)).union(["home", "quickstart", "riskDisclosures"])
         XCTAssertEqual(linked, Set(DocsLinks.allCases.map { "\($0)" }), "one case per page the app opens, plus the home")
         let component = try Self.appSource("Design/Components.swift")
         XCTAssertTrue(component.contains("Link(\"Learn more\", destination: page.url)"))
