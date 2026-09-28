@@ -406,8 +406,11 @@ final class SwapModel {
     private(set) var quoting = false
     private(set) var error: String?
     /// When no venue routes the pair: the side still on a launchpad's bonding curve and where it trades instead
-    /// (`LaunchpadService.curveRoute(among:)`), for the key `resultKey` answers. Nil when no side is on a curve.
+    /// (`LaunchpadService.curveRoute(among:)`), for the key `curveKey` answers. Nil when no side is on a curve.
     private(set) var curve: CurveCoinRoute?
+    /// The `quoteKey` that `curve` answers. The curve check runs after that key's quotes are on screen, never holding
+    /// back the "no venue" answer, so for a moment `curve` may still answer an earlier key (kept out of sight).
+    private(set) var curveKey: String?
     private(set) var checkingCurve = false
 
     var amountIn: BigUInt { Amount.parse(amountText, decimals: tokenIn.decimals) ?? 0 }
@@ -420,7 +423,7 @@ final class SwapModel {
     /// `error`, when it answers what is on screen now.
     var currentError: String? { resultKey == quoteKey ? error : nil }
     /// `curve`, when it answers what is on screen now.
-    var currentCurve: CurveCoinRoute? { resultKey == quoteKey ? curve : nil }
+    var currentCurve: CurveCoinRoute? { resultKey == quoteKey && curveKey == quoteKey ? curve : nil }
     var selectedQuote: VenueQuote? {
         guard let result = currentResult, amountIn > 0 else { return nil }
         return result.quotes.first { $0.venue == selectedVenue } ?? result.quotes.first
@@ -521,6 +524,7 @@ final class SwapModel {
         let fresh = await env.launchpad.curveRoute(among: [tokenOut, tokenIn])
         guard key == quoteKey, resultKey == key else { return }
         curve = fresh
+        curveKey = key
     }
 
     /// Debounced by the caller's `.task(id:)`: the task is cancelled and restarted on every keystroke.
@@ -545,16 +549,23 @@ final class SwapModel {
                                       exactApprovals: exactApprovals)
             let outcome = await env.swap.quotes(for: request)
             if Task.isCancelled { return }
-            // No venue routes the pair: a side still on a launchpad's curve, which no venue routes, trades on its Launch
-            // page instead (`curveSection`), so the state isn't a dead end.
-            let onCurve = outcome.quotes.isEmpty ? await env.launchpad.curveRoute(among: [request.tokenOut, request.tokenIn]) : nil
-            if Task.isCancelled { return }
             result = outcome
             resultKey = key
-            curve = onCurve
             error = outcome.quotes.isEmpty ? (outcome.errors.values.first ?? "No venue can route this pair right now.") : nil
             if !userPickedVenue || selectedVenue == nil || !outcome.quotes.contains(where: { $0.venue == selectedVenue }) { selectedVenue = outcome.quotes.first?.venue }
             quoting = false
+            if outcome.quotes.isEmpty {
+                // No venue routes the pair, and that answer is already on screen. A side still on a launchpad's curve,
+                // which no venue routes, trades on its Launch page instead (`curveSection`), so the state isn't a dead
+                // end. Checked only now, after the answer shows, so a slow check (it has no venue timeout) never holds
+                // it back; kept only while it still answers what is on screen, as `recheckCurve` does.
+                let onCurve = await env.launchpad.curveRoute(among: [request.tokenOut, request.tokenIn])
+                if Task.isCancelled { return }
+                if key == quoteKey, resultKey == key { curve = onCurve; curveKey = key }
+            } else {
+                curve = nil
+                curveKey = key
+            }
             try? await Task.sleep(for: .seconds(15))
         }
     }

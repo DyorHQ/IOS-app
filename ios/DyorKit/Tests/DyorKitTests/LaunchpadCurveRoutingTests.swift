@@ -330,7 +330,18 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         XCTAssertFalse(launchHoldings.contains("openSwap"))
 
         let swap = try String(contentsOf: app.appendingPathComponent("Swap/SwapView.swift"), encoding: .utf8)
-        XCTAssertTrue(swap.contains("let onCurve = outcome.quotes.isEmpty ? await env.launchpad.curveRoute(among: [request.tokenOut, request.tokenIn]) : nil"))
+        // The "no venue" answer shows as soon as the venues answer; the curve check follows it and never holds it back,
+        // and its answer is kept only while it answers what is on screen.
+        let quoteLoop = try XCTUnwrap(swap.range(of: "func quote(env: AppEnvironment, account: Address?"))
+        let loopEnd = try XCTUnwrap(swap.range(of: "struct SlippageSheet", range: quoteLoop.upperBound..<swap.endIndex))
+        let loop = String(swap[quoteLoop.upperBound..<loopEnd.lowerBound])
+        let published = try XCTUnwrap(loop.range(of: "resultKey = key\n"))
+        let errorShown = try XCTUnwrap(loop.range(of: "error = outcome.quotes.isEmpty ?"))
+        let curveChecked = try XCTUnwrap(loop.range(of: "let onCurve = await env.launchpad.curveRoute(among: [request.tokenOut, request.tokenIn])"))
+        XCTAssertLessThan(published.lowerBound, curveChecked.lowerBound, "the venues' answer is shown before the curve check")
+        XCTAssertLessThan(errorShown.lowerBound, curveChecked.lowerBound, "\"No venue\" is shown before the curve check")
+        XCTAssertTrue(loop.contains("if key == quoteKey, resultKey == key { curve = onCurve; curveKey = key }"))
+        XCTAssertTrue(swap.contains("var currentCurve: CurveCoinRoute? { resultKey == quoteKey && curveKey == quoteKey ? curve : nil }"))
         let section = try XCTUnwrap(swap.range(of: "@ViewBuilder private var curveSection: some View {"))
         let quotes = try XCTUnwrap(swap.range(of: "@ViewBuilder private var quotesSection: some View {"))
         let curveSection = String(swap[section.upperBound..<quotes.lowerBound])
