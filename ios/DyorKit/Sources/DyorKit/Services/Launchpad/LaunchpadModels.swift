@@ -438,6 +438,7 @@ public struct Launch: Identifiable, Hashable, Sendable {
 
     /// Still on a retired launchpad's side of graduation — on its curve, between the curve and a pool, or in refund mode:
     /// holders can sell, nobody can buy (`RetiredLaunchpad`). A retired coin that graduated into a pool trades both ways.
+    /// The sell goes into the curve, whenever it takes one (`curveSellsOpen`: not while a stuck graduation waits).
     public var isSellOnly: Bool { isRetiredLaunchpad && phase != .graduated }
 
     /// A stuck Monday graduation that DyorHQ's keepers finish, on every stack with a `graduateFallback` (v1 and v2): they
@@ -454,6 +455,21 @@ public struct Launch: Identifiable, Hashable, Sendable {
 
     /// Sells are open in refund mode (fee-free, at the curve price).
     public var isRefunding: Bool { phase == .refund || rescued }
+
+    /// Holders can sell into the curve now: while it trades, and in refund mode (fee-free, at the curve price). Not while
+    /// a completed curve waits to graduate (`sell` reverts `CurveNotTrading`), while it migrates, or once it graduated.
+    public var curveSellsOpen: Bool { isTrading || phase == .refund }
+
+    /// Anyone can buy on the curve now: while it trades, and never on a retired launchpad (sell-only, `RetiredLaunchpad`).
+    public var curveBuysOpen: Bool { isTrading && !isRetiredLaunchpad }
+
+    /// The curve completed, but the coin neither graduated nor was rescued: its automatic graduation failed (the factory
+    /// records `stuckSince`) and waits for a retry, anyone's plain `graduate` or DyorHQ's keepers. The record still says
+    /// NotGraduated (`.bonding`), yet nothing trades: the curve refuses sells and there is no pool yet.
+    public var awaitsGraduation: Bool { phase == .bonding && completed && !rescued }
+
+    /// The coin page's status line: "Graduation pending" for a completed curve waiting to graduate, else the phase.
+    public var statusTitle: String { awaitsGraduation ? "Graduation pending" : phase.title }
 }
 
 /// Everything the token page needs beyond the list row.

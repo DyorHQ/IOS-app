@@ -353,8 +353,9 @@ final class LaunchpadModel {
     }
 }
 
-/// One coin: price and progress, the curve's trades as candles, and the buy/sell ticket — sell only for a coin on a
-/// retired launchpad (`Launch.isRetiredLaunchpad`, owner decision 2026-09-28).
+/// One coin: price and progress, the curve's trades as candles, and the buy/sell ticket while the curve takes trades —
+/// sell only for a coin on a retired launchpad (`Launch.isRetiredLaunchpad`, owner decision 2026-09-28) and in refund
+/// mode. A completed curve waiting to graduate (stuck), a migrating launch and a graduated one get the graduation section.
 struct LaunchDetailView: View {
     let launch: Launch
     @Environment(AppEnvironment.self) private var env
@@ -378,13 +379,13 @@ struct LaunchDetailView: View {
 
     init(launch: Launch) {
         self.launch = launch
-        // A retired launchpad's curve takes sells only: the ticket never starts on (or offers) Buy.
-        _side = State(initialValue: launch.isRetiredLaunchpad ? .sell : .buy)
+        // A retired launchpad's curve, and one in refund mode, takes sells only: the ticket never starts on (or offers) Buy.
+        _side = State(initialValue: launch.curveBuysOpen ? .buy : .sell)
     }
 
     private var isCreator: Bool { session.address != nil && session.address == launch.deployer }
-    /// Buying on the curve is open: never on a retired launchpad, whose holders can only sell.
-    private var buysOpen: Bool { !launch.isRetiredLaunchpad }
+    /// Buying on the curve is open: while it trades, and never on a retired launchpad, whose holders can only sell.
+    private var buysOpen: Bool { launch.curveBuysOpen }
 
     /// The coin's price and market cap in USD, when the pair asset has a known dollar price.
     private var priceUSD: Double? { pairUSD.map { LaunchpadService.priceNumber(launch) * $0 } }
@@ -403,7 +404,9 @@ struct LaunchDetailView: View {
             headerSection
             statsSection
             chartSection
-            if launch.phase == .bonding { ticketSection } else { graduatedSection }
+            // The ticket only while the curve takes a sell: a completed curve still waiting to graduate (a stuck launch's
+            // record says NotGraduated) refuses them, and gets the graduation section with Retry Graduation instead.
+            if launch.curveSellsOpen { ticketSection } else { graduatedSection }
             if let account, account.tokenBalance > 0 || account.pendingRewards > 0 { holdingsSection(account) }
             feesSection
             if !trades.isEmpty { tradesSection }
@@ -473,7 +476,7 @@ struct LaunchDetailView: View {
                     TokenLogo(symbol: launch.symbol, url: URL(string: launch.logo), size: 48)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(launch.name).font(.title3.weight(.semibold))
-                        Text(launch.isRetiredLaunchpad ? "\(launch.phase.title) · Retired launchpad" : launch.phase.title).font(.subheadline).foregroundStyle(.secondary)
+                        Text(launch.isRetiredLaunchpad ? "\(launch.statusTitle) · Retired launchpad" : launch.statusTitle).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
                 HStack(alignment: .firstTextBaseline) {
@@ -561,7 +564,7 @@ struct LaunchDetailView: View {
                 }
                 .pickerStyle(.segmented)
             } else {
-                Label(RetiredLaunchpad.notice, systemImage: "arrow.up.right.circle")
+                Label(launch.isRetiredLaunchpad ? RetiredLaunchpad.notice : "Refund mode: sell back into the curve at its price, with no fees.", systemImage: "arrow.up.right.circle")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
             AmountField(title: "0", text: $amountText, token: side == .buy ? pairToken : token) {
@@ -608,15 +611,12 @@ struct LaunchDetailView: View {
 
     private var graduatedSection: some View {
         Section {
-            if launch.isSellOnly {
-                // Not graduated yet on a retired launchpad: no pool to trade in, and nobody may buy it.
-                Label(RetiredLaunchpad.notice, systemImage: "lock").font(.subheadline).foregroundStyle(.secondary)
-            } else {
+            // Only a graduated coin has a pool to swap in (a retired launchpad's too, both ways). Stuck or migrating, nothing
+            // trades yet: no Swap, and no "you can sell" either.
+            if launch.phase == .graduated {
                 Button("Swap \(launch.symbol) on \(launch.graduationVenue.title)", systemImage: "arrow.left.arrow.right") {
                     router.openSwap(tokenIn: pairToken.isNative ? Token.mon : pairToken, tokenOut: token)
                 }
-            }
-            if launch.phase == .graduated {
                 // The v4 pool key carries fee 0 (the hook levies the launch's poolFeeBps); a Monday Trade pool uses
                 // the graduation executor's fixed 1% tier (MondayGraduationExecutor.FEE).
                 LabeledContent("Pool fee", value: NumberStyle.basisPoints(launch.graduationVenue == .monday ? 100 : launch.poolFeeBps))
@@ -635,7 +635,7 @@ struct LaunchDetailView: View {
                 Button("Retry Graduation", systemImage: "arrow.clockwise") { showGraduate = true }.disabled(!session.canSign)
             }
         } header: {
-            Text(launch.phase == .graduated ? "Graduated" : launch.phase.title)
+            Text(launch.phase == .graduated ? "Graduated" : launch.awaitsGraduation ? "Graduation Pending" : launch.phase.title)
         } footer: {
             if launch.phase == .graduated {
                 // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes (GP-6).
@@ -644,6 +644,8 @@ struct LaunchDetailView: View {
                      : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. \(v4FeeTiming)")
             } else if isStuck {
                 Text(stuckFooter)
+            } else if launch.awaitsGraduation {
+                Text("The curve is full. It graduates next, into a locked \(launch.graduationVenue.title) pool, and then trades on the Swap screen.")
             } else {
                 Text("This launch is between phases. Trading resumes when migration completes.")
             }
@@ -658,8 +660,10 @@ struct LaunchDetailView: View {
             : "Fees wait in the hook until they're swept."
     }
 
-    /// A completed curve whose migration reverted (the factory records `stuckSince`): the audit's rescue paths apply.
-    private var isStuck: Bool { launch.phase != .graduated && (detail?.stuckSince ?? 0) > 0 }
+    /// A completed curve whose migration reverted (the factory records `stuckSince`): the audit's rescue paths apply. Only
+    /// while it still waits to graduate: a rescued launch keeps its `stuckSince`, but `graduate` reverts
+    /// `WrongGraduationPhase` there.
+    private var isStuck: Bool { launch.awaitsGraduation && (detail?.stuckSince ?? 0) > 0 }
 
     /// The app never offers the Uniswap v4 fallback (`graduateFallback`), on any stack: DyorHQ's keepers send it with the
     /// gas it needs (owner decision 2026-09-28). Only the plain Retry Graduation is offered here.
@@ -768,7 +772,7 @@ struct LaunchDetailView: View {
         // task when the amount changes, and a cancelled task's answer is discarded.
         buyQuote = nil
         sellQuote = nil
-        guard rawAmount > 0, launch.phase == .bonding else { return }
+        guard rawAmount > 0, launch.curveSellsOpen else { return }
         try? await Task.sleep(for: .milliseconds(300))
         if Task.isCancelled { return }
         if side == .buy {

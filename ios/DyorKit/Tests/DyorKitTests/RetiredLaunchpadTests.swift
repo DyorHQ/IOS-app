@@ -4,7 +4,8 @@ import XCTest
 
 /// Coins on a retired launchpad's curve are sell-only (owner decision 2026-09-28): on each of the four retired stacks a
 /// curve buy is refused at the plan, whatever the pair or phase, and so is a developer buy through a retired router,
-/// while a sell on the same curve still plans. The live (v2) stack's buys are unaffected.
+/// while a sell on the same curve still plans. The live (v2) stack's buys are unaffected. The coin page trades on the
+/// curve only while it takes a sell (refund mode included).
 final class RetiredLaunchpadTests: XCTestCase {
     private let token = Address(literal: "0x00000000000000000000000000000000000d1100")
     private let curve = Address(literal: "0x00000000000000000000000000000000000d11c0")
@@ -28,12 +29,19 @@ final class RetiredLaunchpadTests: XCTestCase {
         LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: addresses, logsRPC: MomentsChainStub.rpc())
     }
 
-    private func launch(on factory: Address, pair: PairInfo = .mon, phase: LaunchPhase = .bonding) -> Launch {
+    private func launch(on factory: Address, pair: PairInfo = .mon, phase: LaunchPhase = .bonding, completed: Bool = false, rescued: Bool = false) -> Launch {
         Launch(token: token, curve: curve, deployer: recipient, creatorFeeRecipient: recipient, pairToken: pair.address, graduationThreshold: 1_000, creatorTaxBps: 0,
                poolFeeBps: 100, tickSpacing: 60, holderFeeSharing: true, graduationVenue: .uniswapV4, phase: phase, sweptQuote: 0, sweptTokens: 0, sweptAt: 0,
                poolId: Data(count: 32), name: "Old", symbol: "OLD", logo: "", description: "", socials: .none, pair: pair, price: 0, realQuoteReserve: 0,
-               completed: false, rescued: false, launchedAt: 0, supply: 0, marketCap: 0, progressBps: 0, factory: factory)
+               completed: completed, rescued: rescued, launchedAt: 0, supply: 0, marketCap: 0, progressBps: 0, factory: factory)
     }
+
+    /// A launch's states as the chain leaves them: climbing, completed with its graduation stuck (the record still says
+    /// NotGraduated), swept mid-migration, graduated, and rescued into refund mode.
+    private static let states: [(name: String, phase: LaunchPhase, completed: Bool, rescued: Bool)] = [
+        ("climbing", .bonding, false, false), ("stuck", .bonding, true, false), ("migrating", .migrating, true, false),
+        ("graduated", .graduated, true, false), ("refund", .refund, true, true),
+    ]
 
     private func sellOnlyInput(initialBuy: BigUInt) -> LaunchInput {
         LaunchInput(name: "Old", symbol: "OLD", pairToken: .zero, initialBuy: initialBuy, minTokensOut: 1, expectedEconomics: Data(repeating: 0xab, count: 32))
@@ -146,5 +154,40 @@ final class RetiredLaunchpadTests: XCTestCase {
         let live = try await service().launchPlan(sellOnlyInput(initialBuy: quoteIn), launchFee: 5, from: recipient)
         XCTAssertEqual(live.map { $0.request?.to }, [V2Fixture.launchpad.router])
         XCTAssertEqual(live[0].request?.value, 5 + quoteIn)
+    }
+
+    // MARK: The coin page
+
+    /// The curve ticket shows while the curve takes a sell: climbing, or in refund mode (fee-free, and on every stack
+    /// without Buy). A completed curve still waiting to graduate refuses sells (`CurveNotTrading`): it is "Graduation
+    /// pending", with Retry Graduation and the keepers' note, as is nothing mid-migration or graduated. Buying is open only
+    /// on a climbing curve of the live stack.
+    func testTheCoinPageTradesOnTheCurveOnlyWhileItTakesSells() {
+        for factory in [V2Fixture.launchpad.factory] + retired.map(\.factory) {
+            let isRetired = LaunchpadAddresses.isRetired(factory)
+            for state in Self.states {
+                let coin = launch(on: factory, phase: state.phase, completed: state.completed, rescued: state.rescued)
+                let label = "\(factory.short) \(state.name)"
+                XCTAssertEqual(coin.curveSellsOpen, ["climbing", "refund"].contains(state.name), label)
+                XCTAssertEqual(coin.curveBuysOpen, state.name == "climbing" && !isRetired, label)
+                XCTAssertEqual(coin.awaitsGraduation, state.name == "stuck", label)
+                XCTAssertEqual(coin.statusTitle, state.name == "stuck" ? "Graduation pending" : state.phase.title, label)
+                // Sell-only (no buy) on a retired launchpad until it graduates; graduated, it trades both ways on Swap.
+                XCTAssertEqual(coin.isSellOnly, isRetired && state.phase != .graduated, label)
+            }
+        }
+    }
+
+    /// The sources wire those answers in: the coin page picks its ticket by `curveSellsOpen` and offers Retry Graduation
+    /// only while the launch awaits it.
+    func testTheScreensFollowTheCurveState() throws {
+        var app = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
+        app.appendPathComponent("DyorHQ")
+        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
+        let launchpad = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadView.swift"), encoding: .utf8)
+        XCTAssertTrue(launchpad.contains("if launch.curveSellsOpen { ticketSection } else { graduatedSection }"))
+        XCTAssertTrue(launchpad.contains("private var isStuck: Bool { launch.awaitsGraduation && (detail?.stuckSince ?? 0) > 0 }"))
+        XCTAssertFalse(launchpad.contains("if launch.phase == .bonding { ticketSection }"))
     }
 }

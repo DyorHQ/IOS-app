@@ -292,6 +292,10 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         XCTAssertEqual(stuck.launch.phase, .bonding)
         XCTAssertTrue(stuck.launch.completed)
         XCTAssertGreaterThan(stuck.stuckSince, 0)
+        // The coin page shows it as pending graduation (Retry Graduation, the keepers' note), not a curve ticket.
+        XCTAssertTrue(stuck.launch.awaitsGraduation)
+        XCTAssertFalse(stuck.launch.curveSellsOpen)
+        XCTAssertFalse(stuck.launch.curveBuysOpen)
         XCTAssertEqual(stuck.fallbackRule, GraduationFallbackRule(mondayOnly: false, allowed: false, delay: 86_400))
         XCTAssertEqual(stuck.v4FallbackOpensAt, stuck.stuckSince, "not Monday-only: open as soon as it is stuck")
         XCTAssertTrue(stuck.launch.keepersTakeGraduateFallback)
