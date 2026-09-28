@@ -4,9 +4,9 @@ import DyorKit
 import PhotosUI
 import SwiftUI
 
-/// The launchpad: a discovery board of coins — graduated pools and coins still climbing their bonding curve — as an
-/// image-forward two-column grid, plus the flow to launch a new one. Modeled on the Ponsfamily launchpad, rebuilt in
-/// DyorHQ's serif / monochrome system with the Monad-purple accent.
+/// The launchpad: a discovery board of coins — graduated pools, coins still climbing their bonding curve, and coins in
+/// refund mode or migrating — as an image-forward two-column grid, plus the flow to launch a new one. Modeled on the
+/// Ponsfamily launchpad, rebuilt in DyorHQ's serif / monochrome system with the Monad-purple accent.
 struct LaunchpadView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
@@ -61,11 +61,17 @@ struct LaunchpadView: View {
                     Label("New launches open soon. Coins from the retired launchpads can be sold here, but not bought; graduated ones trade on Swap.", systemImage: "clock")
                         .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                if graduated.isEmpty, climbing.isEmpty, !model.loading {
+                if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, !model.loading {
                     emptyState
                 } else {
                     if !graduated.isEmpty { section(title: "Graduated", count: graduated.count, subtitle: "Cleared the graduation threshold", coins: graduated) }
                     exploreSection
+                    // Every phase has its section (`LaunchPhase.boardSection`): a holder sent here for a coin whose own
+                    // launch couldn't be read (`CurveRoute.launchTab`) finds it, one in refund mode above all.
+                    if !refundAndMigrating.isEmpty {
+                        section(title: "Refund & Migrating", count: refundAndMigrating.count,
+                                subtitle: "In refund mode, holders sell back into the curve; a migrating coin trades once it graduates", coins: refundAndMigrating)
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -148,16 +154,22 @@ struct LaunchpadView: View {
     }
 
     private var graduated: [Launch] {
-        matching.filter { $0.phase == .graduated }.sorted { $0.launchedAt > $1.launchedAt }
+        matching.filter { $0.phase.boardSection == .graduated }.sorted { $0.launchedAt > $1.launchedAt }
     }
 
     private var climbing: [Launch] {
-        let live = matching.filter { $0.phase == .bonding }
+        let live = matching.filter { $0.phase.boardSection == .climbing }
         switch sort {
         case .newest: return live.sorted { $0.launchedAt > $1.launchedAt }
         case .marketCap: return live.sorted { $0.marketCap > $1.marketCap }
         case .progress: return live.sorted { $0.progressBps > $1.progressBps }
         }
+    }
+
+    /// Coins in refund mode (holders sell back into the curve, the retired launchpads' too) or migrating (nothing trades
+    /// until they graduate), newest first.
+    private var refundAndMigrating: [Launch] {
+        matching.filter { $0.phase.boardSection == .refundAndMigrating }.sorted { $0.launchedAt > $1.launchedAt }
     }
 }
 
@@ -231,6 +243,12 @@ struct LaunchCard: View {
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(.ultraThinMaterial, in: Capsule())
                 .foregroundStyle(Color.positive)
+        } else if launch.phase.boardSection == .refundAndMigrating {
+            Text(launch.phase.title)
+                .font(.caption2.weight(.bold))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .foregroundStyle(.secondary)
         } else if launch.progressBps >= 8000 {
             Text("\(launch.progressBps / 100)%")
                 .font(.caption2.weight(.bold))

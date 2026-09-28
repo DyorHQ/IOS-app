@@ -166,6 +166,28 @@ public enum LaunchPhase: Int, Sendable, Hashable, CaseIterable {
     }
 
     init(raw: BigUInt) { self = LaunchPhase(rawValue: Int(clamping: raw)) ?? .bonding }
+
+    /// The Launch tab's section that lists a coin in this phase (and finds it by search). Every phase has one, so a screen
+    /// that sends a holder to the Launch tab for a coin (`CurveRoute.launchTab`) never sends them to a board that leaves
+    /// it out: a coin in refund mode, whose holders sell it back into the curve, least of all.
+    public var boardSection: LaunchBoardSection {
+        switch self {
+        case .graduated: return .graduated
+        case .bonding: return .climbing
+        case .migrating, .refund: return .refundAndMigrating
+        }
+    }
+}
+
+/// The Launch tab board's sections (`LaunchPhase.boardSection`).
+public enum LaunchBoardSection: Sendable, Hashable, CaseIterable {
+    /// Graduated into a pool: trades on Swap.
+    case graduated
+    /// On the curve: climbing, or full and waiting to graduate.
+    case climbing
+    /// Off the curve's trading side without a pool: in refund mode (holders sell back into the curve) or migrating
+    /// (nothing trades until it graduates).
+    case refundAndMigrating
 }
 
 /// `Types.GraduationVenue` in the contracts: where a completed curve graduates. The creator chooses at launch;

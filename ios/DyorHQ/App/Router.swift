@@ -116,7 +116,8 @@ final class Router {
     }
 
     /// Opens the Launch tab's board: where a coin still on a launchpad's curve is listed when its own launch couldn't be
-    /// read (`CurveRoute.launchTab`), so the screen that found it isn't a dead end.
+    /// read (`CurveRoute.launchTab`), in its phase's section (`LaunchPhase.boardSection`: refund mode and migrating
+    /// included), so the screen that found it isn't a dead end.
     func openLaunchTab() {
         tab = .launch
     }

@@ -260,21 +260,38 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         let partial = await service.curveRoute(for: coin)
         XCTAssertEqual(partial, .unchecked)
 
-        // The records answer, the launch's own reads don't: the Launch tab, on the live launchpad and on a retired one.
+        // The records answer, the launch's own reads don't: the Launch tab, on the live launchpad and on a retired one, in
+        // every state before graduation, with the phase its record gives (which section lists it:
+        // `testTheLaunchTabListsEveryCoinItSendsThere`).
         for stack in CurveCoinChain.factories {
-            let chain = CurveCoinChain(stack: stack, phase: .bonding, launchReads: false)
-            MomentsChainStub.install(chain.answer)
-            let retired = LaunchpadAddresses.isRetired(stack.factory)
-            let found = try await service.curveHoldings([token(chain)])
-            XCTAssertEqual(found.coins, [chain.coin], stack.factory.short)
-            XCTAssertEqual(found.launches, [:], stack.factory.short)
-            let route = found.route(chain.coin)
-            XCTAssertEqual(route, .launchTab(retired: retired), stack.factory.short)
-            XCTAssertTrue(route.isOnCurve, "\(stack.factory.short): still never Swap")
-            XCTAssertNil(route.launch)
-            XCTAssertEqual(route.notice, retired ? LaunchpadCurve.retiredLaunchUnread : LaunchpadCurve.launchUnread, stack.factory.short)
-            XCTAssertEqual(route.actionTitle("OLD"), "Find OLD on the Launch tab", stack.factory.short)
-            XCTAssertEqual(route.rowNote, retired ? "Sell it from its page on the Launch tab" : "Trade it from its page on the Launch tab", stack.factory.short)
+            for state in Self.onCurve {
+                let chain = CurveCoinChain(stack: stack, phase: state.phase, completed: state.completed, rescued: state.rescued, launchReads: false)
+                let label = "\(stack.factory.short) \(state.name)"
+                MomentsChainStub.install(chain.answer)
+                let retired = LaunchpadAddresses.isRetired(stack.factory)
+                let found = try await service.curveHoldings([token(chain)])
+                XCTAssertEqual(found.coins, [chain.coin], label)
+                XCTAssertEqual(found.phases, [chain.coin: state.phase], label)
+                XCTAssertEqual(found.launches, [:], label)
+                let route = found.route(chain.coin)
+                XCTAssertEqual(route, .launchTab(retired: retired, phase: state.phase), label)
+                XCTAssertTrue(route.isOnCurve, "\(label): still never Swap")
+                XCTAssertNil(route.launch, label)
+                XCTAssertEqual(route.actionTitle("OLD"), "Find OLD on the Launch tab", label)
+                switch state.phase {
+                case .refund:
+                    XCTAssertEqual(route.notice, LaunchpadCurve.refundLaunchUnread, label)
+                    XCTAssertEqual(route.rowNote, "Sell it back from its page on the Launch tab", label)
+                case .migrating:
+                    XCTAssertEqual(route.notice, LaunchpadCurve.migratingLaunchUnread, label)
+                    XCTAssertEqual(route.rowNote, "Migrating · Launch tab", label)
+                default:
+                    XCTAssertEqual(route.notice, retired ? LaunchpadCurve.retiredLaunchUnread : LaunchpadCurve.launchUnread, label)
+                    XCTAssertEqual(route.rowNote, retired ? "Sell it from its page on the Launch tab" : "Trade it from its page on the Launch tab", label)
+                }
+                let single = await service.curveRoute(for: token(chain))
+                XCTAssertEqual(single, route, label)
+            }
         }
 
         // Only MON and the app's own tokens: nothing is read, and they open Swap.
@@ -286,6 +303,50 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         let pair = await service.curveRoute(among: [.usdc, .mon])
         XCTAssertNil(pair)
         XCTAssertTrue(MomentsChainStub.calls().isEmpty)
+    }
+
+    // MARK: The Launch tab
+
+    /// A coin sent to the Launch tab because its own launch couldn't be read is listed there, whatever its phase: a coin
+    /// in refund mode, whose holders need the curve's refund sell, or migrating, on the live launchpad or a retired one,
+    /// is never sent to a board that leaves it out. Every phase has a board section (`LaunchPhase.boardSection`), and the
+    /// board's source lists each section from the searched list and shows it.
+    func testTheLaunchTabListsEveryCoinItSendsThere() async throws {
+        let service = service()
+        for stack in CurveCoinChain.factories {
+            for state in Self.onCurve where state.phase != .bonding {
+                let chain = CurveCoinChain(stack: stack, phase: state.phase, completed: state.completed, rescued: state.rescued, launchReads: false)
+                let label = "\(stack.factory.short) \(state.name)"
+                MomentsChainStub.install(chain.answer)
+                let route = try await service.curveHoldings([token(chain)]).route(chain.coin)
+                guard case .launchTab(_, let phase) = route else { XCTFail("\(label): \(route)"); continue }
+                XCTAssertEqual(phase, state.phase, label)
+                XCTAssertEqual(phase.boardSection, .refundAndMigrating, "\(label): the board lists it")
+            }
+        }
+        XCTAssertEqual(LaunchPhase.bonding.boardSection, .climbing)
+        XCTAssertEqual(LaunchPhase.graduated.boardSection, .graduated)
+        XCTAssertEqual(Set(LaunchPhase.allCases.map(\.boardSection)), Set(LaunchBoardSection.allCases), "every section lists some phase")
+        for notice in [LaunchpadCurve.refundLaunchUnread, LaunchpadCurve.migratingLaunchUnread] {
+            XCTAssertTrue(notice.contains("Launch tab"))
+            XCTAssertTrue(notice.contains("Refund & Migrating"), "names the section that lists it")
+        }
+
+        var app = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
+        app.appendPathComponent("DyorHQ")
+        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
+        let source = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadView.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "struct LaunchpadView: View {"))
+        let end = try XCTUnwrap(source.range(of: "enum LaunchSort", range: start.upperBound..<source.endIndex))
+        let board = String(source[start.upperBound..<end.lowerBound])
+        for section in LaunchBoardSection.allCases {
+            XCTAssertEqual(board.components(separatedBy: "matching.filter { $0.phase.boardSection == .\(section) }").count - 1, 1, "\(section): listed once, searched too")
+        }
+        XCTAssertFalse(board.contains("matching.filter { $0.phase =="), "no section picks its phases by hand")
+        XCTAssertTrue(board.contains("if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, !model.loading {"))
+        XCTAssertTrue(board.contains("if !refundAndMigrating.isEmpty {\n                        section(title: \"Refund & Migrating\", count: refundAndMigrating.count,"))
+        XCTAssertTrue(board.contains("coins: refundAndMigrating)"))
     }
 
     // MARK: The screens
