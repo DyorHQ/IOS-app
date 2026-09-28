@@ -77,7 +77,8 @@ public actor SwapEngine {
 
     // MARK: Past-cohort Moment coins
 
-    /// The retired Moments cohorts' pool hooks: a route through one pays the retired platform wallet.
+    /// The retired Moments cohorts' pool hooks. The app trades no past cohort's pool (on cohorts 1 and 2 a route through
+    /// one also pays the retired platform wallet).
     static let retiredHooks = Set(MomentsAddresses.retiredMainnet.map(\.hook))
 
     /// Whether `token` may be traded in the app at all: false for a retired cohort's Moment coin, on every venue.

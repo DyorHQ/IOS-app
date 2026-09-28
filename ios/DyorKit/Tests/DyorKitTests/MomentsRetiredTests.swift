@@ -6,16 +6,30 @@ import XCTest
 /// chain), (factory, id) keys that keep equal Moment ids of different cohorts apart, and the claim-only write surface —
 /// a retired Moment can only ever produce a vesting claim or a creator withdrawal against its own cohort's contracts.
 final class MomentsRetiredTests: XCTestCase {
-    private let cohort2 = MomentsAddresses.retiredMainnet[0]
-    private let cohort1 = MomentsAddresses.retiredMainnet[1]
+    private let cohort3 = MomentsAddresses.retiredMainnet[0]
+    private let cohort2 = MomentsAddresses.retiredMainnet[1]
+    private let cohort1 = MomentsAddresses.retiredMainnet[2]
+    /// The live (v2) cohort. Pending (all zero) until the owner deploys; `V2Fixture.moments` stands in where a test needs
+    /// a deployed one.
     private let live = MomentsAddresses.monadMainnet
     private let retiredPlatform = Address(literal: "0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48")
     private let retiredTreasury = Address(literal: "0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045")
+    private let feesWallet = Address(literal: "0x15ED3bb488231213b141A2f78b62358D52235Cd7")
+    private let treasury = Address(literal: "0x5aDbDc19831D0f9dbdfBbA6ee3d618DbB9CEA371")
 
-    // MARK: Table (moments-143-cohort2.json / moments-143-cohort1.json)
+    // MARK: Table (moments-143.json, cohort 3 until the v2 record is promoted; moments-143-cohort2.json; moments-143-cohort1.json)
 
     func testRetiredTableIsPinned() {
-        XCTAssertEqual(MomentsAddresses.retiredMainnet.count, 2)
+        XCTAssertEqual(MomentsAddresses.retiredMainnet.count, 3)
+
+        XCTAssertEqual(cohort3.factory, Address(literal: "0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26"))
+        XCTAssertEqual(cohort3.collect, Address(literal: "0xb53897A4C6280480c267351518D184C2E6591D30"))
+        XCTAssertEqual(cohort3.vesting, Address(literal: "0x05584910ab57d65723eB878D295b3353a4cbb021"))
+        XCTAssertEqual(cohort3.graduation, Address(literal: "0xA2231E39ce7AE4f7d5e56Beae2dD3a8a59F3b9aA"))
+        XCTAssertEqual(cohort3.locker, Address(literal: "0x37C5A2c15d99701CF698B146cdCD1853825Ef455"))
+        XCTAssertEqual(cohort3.hook, Address(literal: "0xD5BFff467FDAe04664357e75bF059986c41260CC"))
+        XCTAssertEqual(cohort3.buyback, Address(literal: "0x3B574312Bb4e1D36C9a1Ba698bf77BbD223ca913"))
+        XCTAssertEqual(cohort3.deployBlock, 107_311_600)
 
         XCTAssertEqual(cohort2.factory, Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581"))
         XCTAssertEqual(cohort2.collect, Address(literal: "0x8f65ea0236b5fa6351a45Bd48244c3525Fb92493"))
@@ -37,41 +51,56 @@ final class MomentsRetiredTests: XCTestCase {
 
         for cohort in MomentsAddresses.retiredMainnet {
             XCTAssertTrue(cohort.isDeployed)
-            // Both snapshotted the retired beneficiaries; the shared infrastructure is the live one's.
-            XCTAssertEqual(cohort.platform, retiredPlatform)
-            XCTAssertEqual(cohort.treasury, retiredTreasury)
+            // Every retired cohort runs the v1 source: no v2 getter is ever sent to one.
+            XCTAssertEqual(cohort.generation, .v1)
+            // The shared infrastructure is the live one's.
             XCTAssertEqual(cohort.usdc, live.usdc)
             XCTAssertEqual(cohort.permit2, live.permit2)
             XCTAssertEqual(cohort.poolManager, live.poolManager)
-            // Older than the live cohort, and never the live cohort itself.
-            XCTAssertLessThan(cohort.deployBlock, live.deployBlock)
             XCTAssertNotEqual(cohort.factory, live.factory)
             XCTAssertEqual(MomentsAddresses.retired(factory: cohort.factory), cohort)
         }
-        // Newest first; the live cohort does not pay the retired wallets and is not retired.
+        // Beneficiaries, per cohort: 1 and 2 snapshotted the retired wallets, 3 the current ones, and each says why it
+        // is retired.
+        for cohort in [cohort1, cohort2] {
+            XCTAssertEqual(cohort.platform, retiredPlatform)
+            XCTAssertEqual(cohort.treasury, retiredTreasury)
+            XCTAssertEqual(cohort.retirement, .retiredWallets)
+        }
+        XCTAssertEqual(cohort3.platform, feesWallet)
+        XCTAssertEqual(cohort3.treasury, treasury)
+        XCTAssertEqual(cohort3.retirement, .replaced)
+        // Newest first, by deployment block (independent of the pending v2 table); the live cohort is not retired.
+        XCTAssertGreaterThan(cohort3.deployBlock, cohort2.deployBlock)
         XCTAssertGreaterThan(cohort2.deployBlock, cohort1.deployBlock)
-        XCTAssertNil(MomentsAddresses.retired(factory: live.factory))
-        XCTAssertNotEqual(live.platform, retiredPlatform)
-        XCTAssertNotEqual(live.treasury, retiredTreasury)
-        // No contract is shared between cohorts.
-        let contracts = ([live] + MomentsAddresses.retiredMainnet).flatMap { [$0.factory, $0.collect, $0.vesting, $0.graduation, $0.locker, $0.hook, $0.buyback] }
+        XCTAssertEqual(live.generation, .v2)
+        XCTAssertNil(live.retirement)
+        if live.isDeployed { XCTAssertNil(MomentsAddresses.retired(factory: live.factory)) }
+        XCTAssertNil(MomentsAddresses.retired(factory: .zero), "the pending v2 table is never a retired cohort")
+        XCTAssertNil(MomentsAddresses.retired(factory: V2Fixture.moments.factory))
+        // No contract is shared between cohorts (the v2 fixture stands in for the pending table).
+        let contracts = ([V2Fixture.moments] + MomentsAddresses.retiredMainnet).flatMap { [$0.factory, $0.collect, $0.vesting, $0.graduation, $0.locker, $0.hook, $0.buyback] }
         XCTAssertEqual(Set(contracts).count, contracts.count)
+        XCTAssertFalse(contracts.contains(.zero))
     }
 
     /// The retired coins, pinned (read on chain with getMoment / momentIdByCoin): the app refuses to trade these even
     /// when their cohort cannot be read.
     func testRetiredCoinsArePinned() {
         let coins = MomentsAddresses.retiredMainnetCoins
-        XCTAssertEqual(coins.count, 5)
+        XCTAssertEqual(coins.count, 6)
+        XCTAssertEqual(coins[Address(literal: "0x43682FA268A98a87C946d0b933203a8834b391BF")], MomentKey(factory: cohort3.factory, id: 1), "Nature")
         XCTAssertEqual(coins[Address(literal: "0xC18941ca9fBaa613841c3d31a7Dd1D262a47a2E5")], MomentKey(factory: cohort2.factory, id: 1))
         XCTAssertEqual(coins[Address(literal: "0x01D2c48E3cd38804a643E391421289933ed3D4a7")], MomentKey(factory: cohort2.factory, id: 2))
         XCTAssertEqual(coins[Address(literal: "0xDc1bC41b7C197DE19f17C7832bec3Bb748D92297")], MomentKey(factory: cohort1.factory, id: 1))
         XCTAssertEqual(coins[Address(literal: "0xd6c17E083b53fa1c46b71120D6959303Ae4B8e1F")], MomentKey(factory: cohort1.factory, id: 2))
         XCTAssertEqual(coins[Address(literal: "0x8D2AEc229b5A4Fd4D4aB1725c92B6B7f53fBc50f")], MomentKey(factory: cohort1.factory, id: 3))
-        // Every Moment of both cohorts (2 and 3 — publishing is paused on both), each exactly once.
-        XCTAssertEqual(Set(coins.values), Set([1, 2].map { MomentKey(factory: cohort2.factory, id: $0) } + [1, 2, 3].map { MomentKey(factory: cohort1.factory, id: $0) }))
+        // Every Moment of the three cohorts (each at its pinned final count), each exactly once.
+        XCTAssertEqual(Set(coins.values), Set([MomentKey(factory: cohort3.factory, id: 1)] + [1, 2].map { MomentKey(factory: cohort2.factory, id: $0) }
+                                              + [1, 2, 3].map { MomentKey(factory: cohort1.factory, id: $0) }))
+        XCTAssertEqual(MomentLink.Cohort.allCases.compactMap(\.finalMomentCount).reduce(0, +), coins.count, "one coin per pinned Moment")
         for coin in coins.keys { XCTAssertTrue(MomentsAddresses.isRetiredCoin(coin)) }
-        for token in [live.usdc, Monad.wmon, Address.zero, live.factory] { XCTAssertFalse(MomentsAddresses.isRetiredCoin(token)) }
+        for token in [live.usdc, Monad.wmon, Address.zero, V2Fixture.moments.factory] { XCTAssertFalse(MomentsAddresses.isRetiredCoin(token)) }
     }
 
     // MARK: (factory, id) keys
@@ -93,6 +122,7 @@ final class MomentsRetiredTests: XCTestCase {
     }
 
     func testEqualIdsOnDifferentCohortsNeverCollide() {
+        let live = V2Fixture.moments
         let a = info(id: 1, factory: live.factory)
         let b = info(id: 1, factory: cohort2.factory)
         let c = info(id: 1, factory: cohort1.factory)
@@ -126,7 +156,7 @@ final class MomentsRetiredTests: XCTestCase {
 
     /// The live service refuses another cohort's Moment before reading anything: its id names a different Moment there.
     func testLiveServiceRefusesAnotherCohortsMoment() async throws {
-        let service = MomentsService(rpc: RPCClient(url: URL(string: "http://127.0.0.1:1")!), addresses: live)
+        let service = MomentsService(rpc: RPCClient(url: URL(string: "http://127.0.0.1:1")!), addresses: V2Fixture.moments)
         let retired = info(id: 1, factory: cohort1.factory)
         do {
             _ = try await service.accountView(retired, account: Address(literal: "0x1C4d85cF39eD9343F1cdc34ea890394Aa63D7Bd8"))
@@ -164,32 +194,35 @@ final class MomentsRetiredTests: XCTestCase {
 
     // MARK: Live (read-only; DYOR_LIVE_MOMENTS=1)
 
-    /// The retired cohorts read from Monad mainnet through the claim-only client: publishing is paused, so the Moment
-    /// counts are final; every Moment carries its own factory and the retired beneficiaries.
+    /// The retired cohorts read from Monad mainnet through the claim-only client, at their pinned final counts; every
+    /// Moment carries its own factory and its cohort's beneficiaries (the retired wallets on 1 and 2, the current ones
+    /// on 3).
     func testLiveRetiredCohortsReadThroughTheirOwnContracts() async throws {
         guard ProcessInfo.processInfo.environment["DYOR_LIVE_MOMENTS"] == "1" else { throw XCTSkip("set DYOR_LIVE_MOMENTS=1") }
         let rpc = RPCClient(url: URL(string: "https://rpc1.monad.xyz")!)
         var keys: Set<MomentKey> = []
-        for (cohort, count) in zip(MomentsAddresses.retiredMainnet, [2, 3]) {
+        XCTAssertEqual(MomentLink.Cohort.allCases.compactMap(\.finalMomentCount), [3, 2, 1])
+        for (cohort, count) in zip(MomentsAddresses.retiredMainnet, [1, 2, 3]) {
             let client = RetiredMoments(rpc: rpc, addresses: cohort)
             let moments: [MomentInfo]
             do { moments = try await client.moments() } catch { throw XCTSkip("Monad RPC unreachable: \(error)") }
             XCTAssertEqual(moments.count, count)
             for info in moments {
                 XCTAssertEqual(info.moment.factory, cohort.factory)
-                XCTAssertEqual(info.moment.platform, retiredPlatform)
-                XCTAssertEqual(info.moment.treasury, retiredTreasury)
+                XCTAssertEqual(info.moment.platform, cohort.platform)
+                XCTAssertEqual(info.moment.treasury, cohort.treasury)
                 keys.insert(info.key)
             }
             // The pinned coin table is exact for this cohort.
             XCTAssertEqual(Dictionary(uniqueKeysWithValues: moments.map { ($0.moment.coin, $0.key) }), MomentsAddresses.retiredMainnetCoins.filter { $0.value.factory == cohort.factory })
             if cohort == cohort1 { XCTAssertTrue(moments.first { $0.id == 2 }?.graduated ?? false, "cohort-1 #2 graduated") }
-            // The creator of cohort 2's and cohort 1's first Moments: a history scan from the cohort's deployment block.
-            let history = await client.history(account: Address(literal: "0x6115cAF237026B45B037191B20056d1e4AfAfFa3"))
+            // The creator of each cohort's first Moment: a history scan from the cohort's deployment block.
+            let creator = cohort == cohort3 ? Address(literal: "0x90f3e7c3B4E32494b06814Fd2F4556671F5F4C47") : Address(literal: "0x6115cAF237026B45B037191B20056d1e4AfAfFa3")
+            let history = await client.history(account: creator)
             XCTAssertTrue(history.publishes.allSatisfy { $0.factory == cohort.factory && $0.block >= cohort.deployBlock })
             XCTAssertFalse(history.publishes.isEmpty)
         }
-        XCTAssertEqual(keys.count, 5)
+        XCTAssertEqual(keys.count, 6)
     }
 
     // MARK: Claim-only plans
@@ -205,11 +238,12 @@ final class MomentsRetiredTests: XCTestCase {
         let forbidden = [MomentsABI.Collect.collect, MomentsABI.Collect.collectWithPermit2, MomentsABI.Collect.expire, MomentsABI.Collect.withdrawPlatform,
                          MomentsABI.Collect.withdrawTreasury, MomentsABI.Hook.withdrawPlatform, MomentsABI.Graduation.graduate, MomentsABI.Buyback.execute,
                          MomentsABI.Vesting.claimAll, MomentsABI.Factory.publish].map { ABI.selector($0) }
+        let live = V2Fixture.moments
         let liveContracts: Set<Address> = [live.factory, live.collect, live.vesting, live.graduation, live.locker, live.hook, live.buyback]
 
         for (index, cohort) in MomentsAddresses.retiredMainnet.enumerated() {
             let service = RetiredMoments(rpc: RPCClient(url: URL(string: "http://127.0.0.1:1")!), addresses: cohort)
-            let other = MomentsAddresses.retiredMainnet[1 - index]
+            let others = MomentsAddresses.retiredMainnet.enumerated().filter { $0.offset != index }.map(\.element)
             for id in [BigUInt(1), 2, 3] {
                 for action in RetiredMomentAction.allCases {
                     let steps = service.plan(action, momentId: id, symbol: "M")
@@ -227,7 +261,7 @@ final class MomentsRetiredTests: XCTestCase {
                     XCTAssertEqual(request.data, selector + id.word, "\(action)")
                     XCTAssertFalse(forbidden.contains(request.data.prefix(4)), "\(action)")
                     XCTAssertFalse(liveContracts.contains(request.to))
-                    XCTAssertFalse([other.vesting, other.collect, other.hook].contains(request.to))
+                    XCTAssertFalse(others.flatMap { [$0.vesting, $0.collect, $0.hook] }.contains(request.to))
                     XCTAssertFalse([cohort.platform, cohort.treasury, cohort.buyback, cohort.graduation, cohort.factory, cohort.usdc].contains(request.to))
                 }
             }

@@ -13,10 +13,19 @@ import Foundation
         Uniswap, Monday Trade and Perpl order payload read in full (`MeraCalldata`) — one it can't read in full asks.
      3. The dollar caps (`SpendingCaps`): $100 per action, $250 per session; an unpriced action asks.
 
+   Moments, exactly: prompt-free are a USDC `approve` of the live (v2) collect contract for no more than the declared
+   amount plus `collect(uint256,uint256)` on it; `claim` / `claimAll` on the v2 or a retired cohort's vesting; and
+   `withdrawCreator` on the v2 or a retired cohort's collect or hook (each pays the caller, the creator only). While v2
+   is not deployed its addresses are zero, so collecting asks and nothing matches address 0. Publishing (v2 `publish`,
+   0xa270dccc) always asks: its sheet declares `AlwaysAsk.launch` and no `Intent.Kind` admits the selector. Nothing else
+   on Moments is on the list — `collectWithPermit2`, `expire`, graduation, buybacks, platform / treasury withdrawals,
+   policy and guardian calls — and neither is the launchpad's `graduate` / `graduateFallback`.
+
    Some things no Face ID makes acceptable, so they are refused outright, prompt-free or approved (`refusal`): on Monad,
    a network fee out of bounds (the RPC sets it and the caps don't count it: more than 5 MON, a gas limit over 15M, or a
    tip above the max fee), and a declared swap or launchpad trade whose calldata pays someone else or trades another
-   token.
+   token. The v2 launchpad's `graduateFallback` needs at least 22,062,500 gas, so it is refused on the fee bound even
+   after Face ID: the keepers send it.
 
    Pure and synchronous: the app supplies what only the chain can answer (`Context.verifiedCurves`) and the session's
    caps. The only messages a session signs on its own are DyorHQ's wallet-auth sign-in for this account; the gas-drip
@@ -310,9 +319,11 @@ extension Mera {
 
         /// The contracts the app is configured with that no sheet can change.
         public struct Contracts: Sendable, Equatable {
-            /// The live Moments cohort: the only one that collects.
+            /// The live Moments cohort (v2): the only one that collects. All zero while v2 is pending, and then nothing
+            /// collects prompt-free.
             public var moments: MomentsAddresses
-            /// Every cohort whose claims and creator withdrawals pay the caller: the live one, then the retired ones.
+            /// Every deployed cohort whose claims and creator withdrawals pay the caller: the live one, then the retired
+            /// ones newest first (cohorts 3, 2, 1).
             public var momentsCohorts: [MomentsAddresses]
 
             public init(moments: MomentsAddresses, retiredMoments: [MomentsAddresses] = MomentsAddresses.retiredMainnet) {

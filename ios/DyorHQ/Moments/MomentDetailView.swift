@@ -307,6 +307,10 @@ struct MomentDetailView: View {
             LabeledContent("Position", value: "Full range · locked forever")
             LabeledContent("Fees accrued", value: "creator \(MomentsFormat.usdc(pool.creatorFees)) · DyorHQ \(MomentsFormat.usdc(pool.platformFees)) · buyback \(MomentsFormat.usdc(pool.buybackFees))")
             LabeledContent("Buyback budget", value: MomentsFormat.usdc(pool.buybackBudget))
+            // v2: each round adds at most 0.5% of the position as liquidity; the rest waits in the locker for later rounds.
+            if let held = pool.heldForLaterRounds, held > 0 {
+                LabeledContent("Held for later buyback rounds", value: MomentsFormat.usdc(held))
+            }
             if pool.buybackReady(at: now) {
                 Button("Run Buyback", systemImage: "arrow.triangle.2.circlepath") { Haptics.tap(); action = .buyback }.disabled(!session.canSign)
             } else if pool.lastBuyback > 0 {
@@ -461,6 +465,10 @@ struct MomentDetailView: View {
                 DetailRow("Budget", MomentsFormat.usdc(info.pool?.buybackBudget ?? 0))
                 DetailRow("Spends", "half on coins, half paired as liquidity")
                 DetailRow("Impact cap", "1%")
+                if info.pool?.heldForLaterRounds != nil {
+                    // v2's guards: a round runs at most hourly, and not when the price moved over 2% within the block.
+                    DetailRow("Price check", "refused if the price moved over 2% this block")
+                }
             }
         }
     }

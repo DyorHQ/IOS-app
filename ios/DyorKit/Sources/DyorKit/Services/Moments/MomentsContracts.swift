@@ -33,7 +33,14 @@ enum MomentsABI {
         static let externalBaseURI = "externalBaseURI()"
         static let getMoment = "getMoment(uint256)"
         static let momentIdByCoin = "momentIdByCoin(address)"
-        static let publish = "publish(\(publishParams))"
+        /// v2: `publish(PublishParams, bytes32 expectedTermsHash)`, refused (`TermsChanged`) unless the hash equals
+        /// `termsHash()`. It replaced v1's `publish(PublishParams)`, which no cohort the app serves still takes.
+        static let publish = "publish(\(publishParams),bytes32)"
+        // v2 only (never sent to a v1 factory: it has none of these).
+        static let termsHash = "termsHash()"
+        static let guardian = "guardian()"
+        static let guardianPaused = "guardianPaused()"
+        static let policyApplyWindow = "POLICY_APPLY_WINDOW()"
     }
 
     enum Collect {
@@ -69,6 +76,12 @@ enum MomentsABI {
 
     enum Locker {
         static let liquidityOf = "liquidityOf(uint256)"
+        // v2 only.
+        /// USDC (or coins) the locker holds for one Moment, spendable by its later buyback rounds.
+        static let available = "available(uint256,address)"
+        static let heldOf = "heldOf(uint256,address)"
+        /// The most one `increase` adds, in bps of the position's liquidity (50).
+        static let maxIncreaseBps = "MAX_INCREASE_BPS()"
     }
 
     enum Hook {
@@ -77,6 +90,8 @@ enum MomentsABI {
         static let buybackAccrued = "buybackAccrued(uint256)"
         static let withdrawCreator = "withdrawCreator(uint256)"
         static let withdrawPlatform = "withdrawPlatform(uint256)"
+        /// v2 only: the pool price before the block's first swap, which a buyback round is checked against.
+        static let blockOpenSqrtPrice = "blockOpenSqrtPrice(uint256)"
     }
 
     enum Buyback {
@@ -85,6 +100,8 @@ enum MomentsABI {
         static let minInterval = "MIN_INTERVAL()"
         static let minAmount = "MIN_AMOUNT()"
         static let execute = "execute(uint256,uint256)"
+        /// v2 only: how far from the block-open price a round may run (200 bps), else `PriceMoved`.
+        static let maxOpenDeviationBps = "MAX_OPEN_DEVIATION_BPS()"
     }
 
     enum NFT {
@@ -94,6 +111,8 @@ enum MomentsABI {
         static let balanceOf = "balanceOf(address)"
         static let ownerOf = "ownerOf(uint256)"
         static let tokensOfOwner = "tokensOfOwner(address,uint256,uint256)"
+        /// v2 only: the link base the NFT was published with. A v1 NFT reads its factory's base live instead.
+        static let externalBaseURI = "externalBaseURI()"
     }
 
     enum Coin {
@@ -231,6 +250,22 @@ enum MomentsABI {
             .uint(input.collectWindow),
             .bytes(salt),
         ])
+    }
+
+    /// `MomentTypes.Policy` as a tuple, in its declared order.
+    static func policyTuple(_ p: MomentPolicy) -> ABIValue {
+        .tuple([.uint(p.threshold), .uint(p.minPrice), .uint(p.creatorBps), .uint(p.platformBps), .uint(p.reserveBps), .uint(p.maxCreatorAllocBps),
+                .uint(p.expiryCreatorBps), .uint(p.royaltyBps), .address(p.platform), .address(p.treasury)])
+    }
+
+    /// v2 `MomentsFactory.termsHash()` computed locally: keccak256(abi.encode(policy, base)). Pinned in `MomentsTests`
+    /// against `cast abi-encode | cast keccak`.
+    static func termsHash(policy: MomentPolicy, base: String) -> Data {
+        do {
+            return Keccak.hash256(try ABI.encode([policyTuple(policy), .string(base)], "(\(policyFlat)),string"))
+        } catch {
+            preconditionFailure("Moments terms failed to encode: \(error)")
+        }
     }
 
     /// The `PermitTransferFrom` tuple for `collectWithPermit2`.

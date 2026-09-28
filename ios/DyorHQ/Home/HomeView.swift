@@ -777,7 +777,7 @@ struct TokenDetailView: View {
                         router.openSwap(tokenIn: row.token.symbol == "USDC" ? Token.mon : Token.usdc, tokenOut: row.token)
                     }
                 } else {
-                    // A retired cohort's Moment coin: its pool pays the retired platform wallet, so no swap is offered.
+                    // A retired cohort's Moment coin: past cohorts are claim-only, so no swap is offered.
                     Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
                 }
                 if let url = row.token.isNative ? nil : Monad.explorerToken(row.token.address) {

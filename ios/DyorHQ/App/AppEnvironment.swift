@@ -14,9 +14,12 @@ final class AppEnvironment {
     let swap: SwapEngine
     let perpl: PerplService
     let launchpad: LaunchpadService
+    /// The live Moments cohort (v2). Not deployed while its addresses are pending: then the board says "not live yet"
+    /// and the retired cohorts below still serve their holders.
     let moments: MomentsService
-    /// The retired Moments cohorts (2, then 1), one service each, CLAIM-ONLY: holders claim vested coins and creators
-    /// withdraw their own proceeds and pool fees; nothing else is reachable. They never feed the Moments board, the
+    /// The retired Moments cohorts (3, 2, then 1), one service each, CLAIM-ONLY: holders claim vested coins and creators
+    /// withdraw their own proceeds and pool fees; nothing else is reachable. Cohorts 1 and 2 paid the retired wallets;
+    /// cohort 3 pays the current ones and is retired because v2 replaced it. They never feed the Moments board, the
     /// feeds, publishing or swap routing — those stay on `moments`.
     let retiredMoments: [RetiredMoments]
     /// Moment names → share-link slugs, across every cohort (`MomentLink`, `MomentSlug`).
@@ -89,8 +92,9 @@ final class AppEnvironment {
         // own history scans on rpc1, which answer a whole history in one call.
         venueTokens = VenueTokensService(logsRPC: RPCClient(url: URL(string: "https://rpc3.monad.xyz")!), multicall: multicall)
         session = Session(config: config, backend: social)
-        // A passkey session's scope check trusts only the configured Moments cohorts, and signs a launchpad trade only
-        // against the curve a known factory recorded on-chain (MERA-PLAN §3).
+        // A passkey session's scope check trusts only the configured Moments cohorts — v2 (collects, once deployed), then
+        // cohorts 3, 2 and 1 (claims and creator withdrawals) — and signs a launchpad trade only against the curve a
+        // known factory recorded on-chain (MERA-PLAN §3).
         session.mera.contracts = Mera.SigningPolicy.Contracts(moments: config.moments)
         session.mera.curveVerifier = { [launchpad] token in await launchpad.knownCurve(token: token) }
         perplTrading = PerplTrading(mera: session.mera)

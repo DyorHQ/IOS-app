@@ -86,8 +86,9 @@ public enum SwapError: Error, LocalizedError, Equatable {
     case differentWallet
     case malformedRoute
     case amountTooLarge
-    /// A retired Moments cohort's coin (or its pool's hook) is on the trade: its pool pays the retired platform
-    /// wallet, so no venue quotes, routes or builds it (see `SwapEngine.tradingClosed`).
+    /// A retired Moments cohort's coin (or its pool's hook) is on the trade: past cohorts are claim-only in the app (and
+    /// cohorts 1 and 2's pools pay the retired platform wallet), so no venue quotes, routes or builds it (see
+    /// `SwapEngine.tradingClosed`).
     case tradingClosed(Address)
     /// A venue's own message, already readable.
     case venue(String)

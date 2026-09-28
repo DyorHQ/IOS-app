@@ -19,8 +19,11 @@ struct AppConfig: Sendable {
     /// live yet, so the UI hides passkey options until then rather than offering a flow that can't complete.
     let enablePasskeys: Bool
     let perplBuilderID: Int
+    /// The live launchpad: the v2 stack baked into DyorKit (`LaunchpadAddresses.monadMainnet`, pending until the owner
+    /// deploys it). The retired stacks come from DyorKit whatever this is.
     let launchpad: LaunchpadAddresses
-    /// Moments (v1.1) is live on Monad mainnet; the addresses are the verified deployment, baked into DyorKit.
+    /// The live Moments cohort: v2, baked into DyorKit (`MomentsAddresses.monadMainnet`, pending until the owner deploys
+    /// it). The retired cohorts 1–3 are claim-only and come from DyorKit whatever this is.
     let moments: MomentsAddresses
     /// DyorHQ's Supabase backend (social, alerts, launch index). The publishable key is safe to
     /// embed — row-level security protects the data — so these have working defaults.

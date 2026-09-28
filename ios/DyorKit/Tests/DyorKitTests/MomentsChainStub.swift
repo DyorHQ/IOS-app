@@ -1,0 +1,171 @@
+import BigInt
+import Foundation
+@testable import DyorKit
+
+/// Contract reads answered from memory, with every sub-call recorded. A Multicall3 `aggregate3` is split into its
+/// sub-calls and each is answered by the installed `answer(to, calldata)` (nil reverts that sub-call, as a missing getter
+/// does on chain); a plain `eth_call` is answered the same way. `batches()` lists what each request asked, as
+/// (target, selector) pairs, so a test can check which contract was asked for what, and in which aggregate.
+final class MomentsChainStub: URLProtocol {
+    typealias Answer = @Sendable (_ to: Address, _ data: Data) -> Data?
+
+    static let rpcURL = URL(string: "https://rpc.moments-stub.invalid")!
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var answer: Answer = { _, _ in nil }
+    nonisolated(unsafe) private static var asked: [[Call]] = []
+
+    struct Call: Hashable, CustomStringConvertible {
+        let to: Address
+        let selector: String
+        var description: String { "\(to.short) \(selector)" }
+    }
+
+    static func install(_ answer: @escaping Answer) {
+        lock.lock(); defer { lock.unlock() }
+        self.answer = answer
+        asked = []
+    }
+
+    /// One entry per `eth_call`: the sub-calls of an aggregate, or the single call.
+    static func batches() -> [[Call]] {
+        lock.lock(); defer { lock.unlock() }
+        return asked
+    }
+
+    static func calls() -> [Call] { batches().flatMap { $0 } }
+
+    static func rpc() -> RPCClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MomentsChainStub.self]
+        return RPCClient(url: rpcURL, session: URLSession(configuration: configuration))
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        let decoded = (try? JSONDecoder().decode(JSON.self, from: Self.body(request))) ?? .null
+        let replies = (decoded.array ?? [decoded]).map(Self.reply)
+        let body = (try? JSONEncoder().encode(decoded.array == nil ? replies[0] : .array(replies))) ?? Data()
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    private static func reply(_ call: JSON) -> JSON {
+        let id = call["id"]
+        func result(_ data: Data) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": .string(data.hexString)]) }
+        let reverted: JSON = .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(3), "message": .string("execution reverted"), "data": .string("0x")])])
+        guard call["method"].string == "eth_call", let tx = call["params"].array?.first,
+              let to = tx["to"].string.flatMap(Address.init), let data = tx["data"].string.flatMap({ Data(hex: $0) }) else { return reverted }
+        lock.lock(); let answer = self.answer; lock.unlock()
+        if to == Multicall.address, let inner = try? ABI.decode(data.dropFirst(4), "(address,bool,bytes)[]")[0].elements {
+            var batch: [Call] = []
+            var out: [ABIValue] = []
+            for item in inner {
+                let target = item[0].address, calldata = item[2].bytes
+                batch.append(Call(to: target, selector: calldata.prefix(4).hexString))
+                let returned = answer(target, calldata)
+                out.append(.tuple([.bool(returned != nil), .bytes(returned ?? Data())]))
+            }
+            record(batch)
+            return result((try? ABI.encode([.array(out)], "(bool,bytes)[]")) ?? Data())
+        }
+        record([Call(to: to, selector: data.prefix(4).hexString)])
+        return answer(to, data).map(result) ?? reverted
+    }
+
+    private static func record(_ batch: [Call]) {
+        lock.lock(); defer { lock.unlock() }
+        asked.append(batch)
+    }
+
+    private static func body(_ request: URLRequest) -> Data {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open(); defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let n = stream.read(&buffer, maxLength: buffer.count)
+            if n <= 0 { break }
+            data.append(buffer, count: n)
+        }
+        return data
+    }
+}
+
+/// One Moments stack's getters, answered from fixed values: its factory (policy, counts, Moment #1…), its collect,
+/// vesting and graduation, and each Moment's coin and NFT. v2-only getters are answered only when `addresses` is v2,
+/// so a v1 stack asked for one reverts exactly as the deployed v1 contracts do.
+struct FakeMomentsStack: Sendable {
+    var addresses: MomentsAddresses
+    var policy: MomentPolicy
+    /// The factory's current `externalBaseURI()`.
+    var factoryBase: String
+    /// What each v2 NFT answers for its own `externalBaseURI()` (the base it was published with).
+    var nftBase: String
+    var names: [String] = ["Nature"]
+    var momentCount: Int?
+
+    func coin(_ id: Int) -> Address { Address(data: addresses.factory.data.prefix(16) + Data([0xc0, 0x1a, 0, UInt8(id)]))! }
+    func nft(_ id: Int) -> Address { Address(data: addresses.factory.data.prefix(16) + Data([0x0f, 0x7f, 0, UInt8(id)]))! }
+
+    func answer(_ to: Address, _ data: Data) -> Data? {
+        let selector = data.prefix(4)
+        let args = data.dropFirst(4)
+        func is_(_ signature: String) -> Bool { selector == ABI.selector(signature) }
+        func encode(_ values: [ABIValue], _ types: String) -> Data { try! ABI.encode(values, types) }
+        let v2 = addresses.generation >= .v2
+        let count = momentCount ?? names.count
+        let id = args.count >= 32 ? Int(BigUInt(args.prefix(32))) : 0
+        let p = policy
+        let policyWords: [ABIValue] = [.uint(p.threshold), .uint(p.minPrice), .uint(p.creatorBps), .uint(p.platformBps), .uint(p.reserveBps), .uint(p.maxCreatorAllocBps),
+                                       .uint(p.expiryCreatorBps), .uint(p.royaltyBps), .address(p.platform), .address(p.treasury)]
+        switch to {
+        case addresses.factory:
+            if is_(MomentsABI.Factory.policy) { return encode(policyWords, MomentsABI.policyFlat) }
+            if is_(MomentsABI.Factory.pendingPolicy) { return encode(policyWords, MomentsABI.policyFlat) }
+            if is_(MomentsABI.Factory.pendingPolicyAt) { return encode([.uint(0)], "uint64") }
+            if is_(MomentsABI.Factory.momentCount) { return encode([.uint(count)], "uint256") }
+            if is_(MomentsABI.Factory.publishingPaused) { return encode([.bool(p.publishingPaused)], "bool") }
+            if is_(MomentsABI.Factory.externalBaseURI) { return encode([.string(factoryBase)], "string") }
+            if is_(MomentsABI.Factory.getMoment), id >= 1, id <= count {
+                return encode([.tuple([.address(Address(literal: "0x90f3e7c3B4E32494b06814Fd2F4556671F5F4C47")), .address(p.platform), .address(p.treasury), .address(coin(id)), .address(nft(id)),
+                                       .uint(100_000), .uint(p.threshold), .uint(1), .uint(1), .uint(2_000), .uint(500), .uint(7_500), .uint(1_000), .uint(7_000), .uint(500),
+                                       .uint(1_790_570_817), .uint(1_790_657_217)])], MomentsABI.momentTuple)
+            }
+            if v2, is_(MomentsABI.Factory.termsHash) { return encode([.bytes(p.termsHash ?? Data(count: 32))], "bytes32") }
+            if v2, is_(MomentsABI.Factory.guardian) { return encode([.address(p.guardian ?? .zero)], "address") }
+            if v2, is_(MomentsABI.Factory.guardianPaused) { return encode([.bool(p.guardianPaused)], "bool") }
+            return nil
+        case addresses.collect:
+            if is_(MomentsABI.Collect.ledger) { return encode([.tuple(Array(repeating: .uint(0), count: 10))], MomentsABI.ledgerTuple) }
+            if is_(MomentsABI.Collect.supplyCheck) { return encode(Array(repeating: .uint(0), count: 5), "uint256,uint256,uint256,uint256,uint256") }
+            return nil
+        case addresses.vesting:
+            return is_(MomentsABI.Vesting.totalEntitlement) ? encode([.uint(0)], "uint256") : nil
+        case addresses.graduation:
+            return is_(MomentsABI.Graduation.isGraduated) ? encode([.bool(false)], "bool") : nil
+        default:
+            for i in 1...max(1, names.count) {
+                if to == coin(i) {
+                    if is_(MomentsABI.Coin.name) { return encode([.string(names[i - 1])], "string") }
+                    if is_(MomentsABI.Coin.symbol) { return encode([.string("M\(i)")], "string") }
+                    if is_(MomentsABI.Coin.totalSupply) { return encode([.uint(0)], "uint256") }
+                }
+                if to == nft(i) {
+                    if is_(MomentsABI.NFT.totalMinted) { return encode([.uint(1)], "uint256") }
+                    if is_(MomentsABI.NFT.closed) { return encode([.bool(false)], "bool") }
+                    if is_(MomentsABI.NFT.provenance) {
+                        return encode([.tuple([.string("ipfs://x"), .bytes(Data(count: 32)), .string("Accra"), .uint(0), .string("")])], MomentsABI.provenanceTuple)
+                    }
+                    if v2, is_(MomentsABI.NFT.externalBaseURI) { return encode([.string(nftBase)], "string") }
+                }
+            }
+            return nil
+        }
+    }
+}

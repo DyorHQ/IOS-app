@@ -1,11 +1,14 @@
 import BigInt
 import Foundation
 
-/* Retired Moments cohorts (`MomentsAddresses.retiredMainnet`), CLAIM-ONLY. Every Moment in them snapshotted the
-   retired beneficiaries at publish (platform 0xf4D4…, treasury 0x5282… whose key leaked), so collecting, expiring,
-   retrying a graduation, running a buyback, platform / treasury withdrawals and trading on a retired pool are all out
-   of reach from here: each of them either pays those wallets or feeds a pool whose hook does. What stays is what the
-   holders and creators are owed — vested coins, and the creator's own proceeds and pool fees. */
+/* Retired Moments cohorts (`MomentsAddresses.retiredMainnet`), CLAIM-ONLY. Cohorts 1 and 2 snapshotted the retired
+   beneficiaries at publish (platform 0xf4D4…, treasury 0x5282… whose key leaked); cohort 3 pays the current fees wallet
+   0x15ED… and treasury 0x5aDb…, and is retired because the v2 contracts replaced it (`MomentsAddresses.retirement`).
+   Either way collecting, expiring, retrying a graduation, running a buyback, platform / treasury withdrawals and trading
+   on a retired pool are all out of reach from here: on cohorts 1 and 2 each of them either pays the retired wallets or
+   feeds a pool whose hook does, and the app serves no past cohort beyond what its people are owed. What stays is
+   exactly that — vested coins, and the creator's own proceeds and pool fees. The service below is v1 (`generation`),
+   so it never sends a v2-only getter to a retired cohort. */
 
 /// The only writes a retired cohort allows.
 public enum RetiredMomentAction: String, Sendable, Hashable, CaseIterable, Identifiable {
@@ -63,6 +66,8 @@ public struct RetiredMoments: Sendable {
     }
 
     public var factory: Address { addresses.factory }
+    /// Why the cohort is retired (what its pages say).
+    public var retirement: MomentsRetirement { addresses.retirement ?? .replaced }
 
     // MARK: Reads
 
