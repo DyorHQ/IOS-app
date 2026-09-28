@@ -563,6 +563,7 @@ test("sec2 LP-1 (v2): a blocking squat on a Monday-only launch is a warning nami
 const expected = { owner: a(0x0a), treasury: a(0x0b), feesRecipient: a(0x0c), momentsGovernance: a(0x0a), externalBaseURI: "https://dyorhq.fun/moments/" };
 const govPad = {
   label: "launchpad (live)",
+  live: true,
   factory: a(0xfa),
   hook: a(0x4a),
   graduationExecutor: a(0x61),
@@ -684,6 +685,19 @@ test("sec2 governance: an unfrozen factory warns once a day, not on every run", 
   const sealed = harness();
   await governanceJob({ client: mockClient({ reads: govReads({ [`${govPad.factory}:launchCount:`]: 0n, [`${govPad.factory}:modulesSealed:`]: true }) }), launchpads: [govPad], cohorts: [], expected, ...sealed });
   assert.equal(sealed.reporter.alerts.length, 0, "a v2 factory sealed at deploy is fine");
+});
+
+// Once the v2 records are promoted, 0x6B1C is a retired record: no launch, modules not sealed, and left open on chain by
+// the owner decision (2026-09-28). The watch reports it and does not advise closing it; a live factory still warns.
+test("sec2 governance: a retired launchpad left unfrozen on chain is reported, not alerted", async () => {
+  const retiredPad = { ...govPad, label: "launchpad 0x6B1C (retired)", live: false };
+  const h = harness();
+  await governanceJob({ client: mockClient({ reads: govReads({ [`${govPad.factory}:launchCount:`]: 0n }) }), launchpads: [retiredPad], cohorts: [], expected, ...h });
+  assert.deepEqual(h.reporter.alerts.filter((x) => x.severity !== "info"), []);
+  assert.equal(h.reporter.alerts.length, 1);
+  assert.equal(h.reporter.alerts[0].target, "launchpad 0x6B1C (retired)");
+  assert.match(h.reporter.alerts[0].reason, /modules not sealed: retired in the app only/);
+  assert.doesNotMatch(h.reporter.alerts[0].reason, /Close the factory/);
 });
 
 test("sec2 governance: every governance event in the lookback is critical", async () => {

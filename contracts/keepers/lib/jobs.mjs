@@ -526,7 +526,8 @@ function throttled(state, key, t, fn) {
  * `expected` = { owner, treasury, feesRecipient, momentsGovernance, externalBaseURI } from the live records. The previous
  * stacks keep their own owner key and are not paused on chain (owner decision 2026-09-28: retired in the app only), so a
  * retired stack's owner/governance is checked against its own record, and a retired cohort that is open by that decision
- * (`openOnChain`, deployments.mjs) is reported, not alerted; treasury and fee recipients are the live ones everywhere.
+ * (`openOnChain`, deployments.mjs) or a retired launchpad left unfrozen (0x6B1C) is reported, not alerted; treasury and
+ * fee recipients are the live ones everywhere.
  */
 export async function governanceJob({ client, launchpads, cohorts, reporter, state, expected, logsLookback = 0n, logsChunk = 100n }) {
   const t = await now(client);
@@ -555,10 +556,13 @@ export async function governanceJob({ client, launchpads, cohorts, reporter, sta
       if (!eqAddr(pendingOwner, ZERO)) critical(lp.label, `an ownership transfer to ${pendingOwner} is pending`);
       if (!eqAddr(recipient, expected.treasury)) critical(lp.label, `protocolFeeRecipient() is ${recipient}, expected ${expected.treasury}`);
       const sealed = await readOr(client, { address: lp.factory, abi: launchpadFactoryV2Abi, functionName: "modulesSealed" }, false);
-      if (count === 0n && !sealed) {
+      if (count === 0n && !sealed && lp.live) {
         throttled(state, `gov:${lp.factory.toLowerCase()}:unfrozen`, t, () =>
           reporter.alert({ job, target: lp.label, severity: "warning", reason: "no launch yet and modules not sealed: the owner key can still replace any module, and the first launch freezes whatever is set. Close the factory or freeze it with a canary launch (owner runbook)" }),
         );
+      } else if (count === 0n && !sealed) {
+        // Left open on chain by the same decision; a module swap there is still critical (the checks above, the event scan).
+        reporter.alert({ job, target: lp.label, severity: "info", reason: "no launch yet and modules not sealed: retired in the app only and left open on chain (owner decision 2026-09-28)" });
       }
       if (lp.feeVault && !eqAddr(lp.feeVault, ZERO)) {
         const v = (functionName) => client.readContract({ address: lp.feeVault, abi: mondayFeeVaultAbi, functionName });
