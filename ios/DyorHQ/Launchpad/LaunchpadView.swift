@@ -461,11 +461,14 @@ struct LaunchDetailView: View {
         } header: {
             Text("Creator Fees")
         } footer: {
-            Text((launch.holderFeeSharing
-                ? "This coin routes its creator fees to holders — each holder claims their pro-rata share (see Your Holdings, or My Launchpad)."
-                : "The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset.")
-                // A Monday Trade pool has no hook: its 1% fee is harvested to DyorHQ, with no creator tax or share in it.
-                + (launch.graduationVenue == .monday ? " These come from curve trades only: once it graduates on Monday Trade, the pool's 1% fee goes to DyorHQ." : ""))
+            VStack(alignment: .leading, spacing: 4) {
+                Text((launch.holderFeeSharing
+                    ? "This coin routes its creator fees to holders — each holder claims their pro-rata share (see Your Holdings, or My Launchpad)."
+                    : "The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset.")
+                    // A Monday Trade pool has no hook: its 1% fee is harvested to DyorHQ, with no creator tax or share in it.
+                    + (launch.graduationVenue == .monday ? " These come from curve trades only: once it graduates on Monday Trade, the pool's 1% fee goes to DyorHQ." : ""))
+                LearnMoreLink(.launchpadFeesAndRewards)
+            }
         }
     }
 
@@ -504,6 +507,10 @@ struct LaunchDetailView: View {
                 }
             }
             .padding(.vertical, 4)
+        } footer: {
+            // Graduation is explained by the gauge while the curve trades, and by the graduation section once it doesn't:
+            // the link follows the explanation on screen, so there is one either way.
+            if launch.phase == .bonding, launch.curveSellsOpen { LearnMoreLink(.launchpadGraduation) }
         }
     }
 
@@ -637,17 +644,20 @@ struct LaunchDetailView: View {
         } header: {
             Text(launch.phase == .graduated ? "Graduated" : launch.awaitsGraduation ? "Graduation Pending" : launch.phase.title)
         } footer: {
-            if launch.phase == .graduated {
-                // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes (GP-6).
-                Text(launch.graduationVenue == .monday
-                     ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's 1% swap fee is harvested to a DyorHQ fees wallet; it isn't paid to holders or the creator, and there is no creator tax on the pool."
-                     : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. \(v4FeeTiming)")
-            } else if isStuck {
-                Text(stuckFooter)
-            } else if launch.awaitsGraduation {
-                Text("The curve is full. It graduates next, into a locked \(launch.graduationVenue.title) pool, and then trades on the Swap screen.")
-            } else {
-                Text("This launch is between phases. Trading resumes when migration completes.")
+            VStack(alignment: .leading, spacing: 4) {
+                if launch.phase == .graduated {
+                    // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes (GP-6).
+                    Text(launch.graduationVenue == .monday
+                         ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's 1% swap fee is harvested to a DyorHQ fees wallet; it isn't paid to holders or the creator, and there is no creator tax on the pool."
+                         : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. \(v4FeeTiming)")
+                } else if isStuck {
+                    Text(stuckFooter)
+                } else if launch.awaitsGraduation {
+                    Text("The curve is full. It graduates next, into a locked \(launch.graduationVenue.title) pool, and then trades on the Swap screen.")
+                } else {
+                    Text("This launch is between phases. Trading resumes when migration completes.")
+                }
+                LearnMoreLink(.launchpadGraduation)
             }
         }
     }
@@ -910,7 +920,10 @@ struct CreateLaunchView: View {
                     Text("Pairing")
                 } footer: {
                     if let info = protocolInfo, let pi = pairInfo {
-                        Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol).\(pairMondayOnly ? " A \(pi.symbol) coin graduates on Monday Trade; if it stays stuck for a day, anyone can move it to a locked Uniswap v4 pool." : "") Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol).\(pairMondayOnly ? " A \(pi.symbol) coin graduates on Monday Trade; if it stays stuck for a day, anyone can move it to a locked Uniswap v4 pool." : "") Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                            LearnMoreLink(.launchACoin)
+                        }
                     }
                 }
                 Section {
