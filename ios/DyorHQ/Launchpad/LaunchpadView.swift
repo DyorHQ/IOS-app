@@ -456,9 +456,11 @@ struct LaunchDetailView: View {
         } header: {
             Text("Creator Fees")
         } footer: {
-            Text(launch.holderFeeSharing
+            Text((launch.holderFeeSharing
                 ? "This coin routes its creator fees to holders — each holder claims their pro-rata share (see Your Holdings, or My Launchpad)."
                 : "The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset.")
+                // A Monday Trade pool has no hook: its 1% fee is harvested to DyorHQ, with no creator tax or share in it.
+                + (launch.graduationVenue == .monday ? " These come from curve trades only: once it graduates on Monday Trade, the pool's 1% fee goes to DyorHQ." : ""))
         }
     }
 
@@ -1013,8 +1015,18 @@ struct CreateLaunchView: View {
                 Label("Advanced", systemImage: "slider.horizontal.3")
             }
         } footer: {
-            Text("Creator tax is charged on curve trades and paid to you. Fee sharing splits pool fees with holders after graduation.")
+            Text(feeFooter)
         }
+    }
+
+    /// Where the creator tax and the creator's share of trading fees come from on the chosen venue: the curve and a
+    /// Uniswap v4 pool's hook both pay them (to holders instead with fee sharing); a Monday Trade pool has no hook, and its
+    /// 1% fee is harvested to DyorHQ (MondayFeeVault).
+    private var feeFooter: String {
+        let recipients = "You receive it with your share of the trading fees; with fee sharing on, holders receive both instead."
+        return effectiveVenue == .monday
+            ? "Creator tax is charged on curve trades only. \(recipients) After graduation the Monday Trade pool's 1% fee goes to DyorHQ: there is no creator tax or fee share in the pool."
+            : "Creator tax is charged on curve trades and, after graduation, on Uniswap v4 pool swaps. \(recipients)"
     }
 
     private var pairGraduation: BigUInt {
