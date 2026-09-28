@@ -256,8 +256,15 @@ public struct ProtocolInfo: Hashable, Sendable {
     public let protocolFeeShareBps: Int
     public let launchCount: Int
     public let pairs: [PairEconomics]
+    /// v2: `modulesSealed()`. Nil on an older factory, which has no such getter (its first launch sealed them).
+    public let modulesSealed: Bool?
+    /// v2: the factory's modules that aren't this build's (`LaunchpadModules.mismatches`); empty when every one is.
+    public let moduleMismatches: [String]
+    /// `canLaunch(account)` for the wallet the screen was loaded for; nil when none was.
+    public let accountCanLaunch: Bool?
 
-    public init(launchFee: BigUInt, configId: BigUInt, supply: BigUInt, curveFeeBps: Int, poolFeeBps: Int, snipeSchedule: [Int], configEnabled: Bool, maxCreatorTaxBps: Int, whitelistEnabled: Bool, protocolFeeShareBps: Int, launchCount: Int, pairs: [PairEconomics]) {
+    public init(launchFee: BigUInt, configId: BigUInt, supply: BigUInt, curveFeeBps: Int, poolFeeBps: Int, snipeSchedule: [Int], configEnabled: Bool, maxCreatorTaxBps: Int, whitelistEnabled: Bool, protocolFeeShareBps: Int, launchCount: Int, pairs: [PairEconomics],
+                modulesSealed: Bool? = nil, moduleMismatches: [String] = [], accountCanLaunch: Bool? = nil) {
         self.launchFee = launchFee
         self.configId = configId
         self.supply = supply
@@ -270,10 +277,82 @@ public struct ProtocolInfo: Hashable, Sendable {
         self.protocolFeeShareBps = protocolFeeShareBps
         self.launchCount = launchCount
         self.pairs = pairs
+        self.modulesSealed = modulesSealed
+        self.moduleMismatches = moduleMismatches
+        self.accountCanLaunch = accountCanLaunch
     }
 
     /// The snipe-tax window in seconds: one schedule entry per second after launch.
     public var snipeWindowSeconds: Int { snipeSchedule.count }
+
+    /// Why Launch is off for the wallet the screen was loaded for, or nil when a launch can go ahead.
+    public var launchBlocker: LaunchBlocker? {
+        LaunchBlocker.check(modulesSealed: modulesSealed, moduleMismatches: moduleMismatches, configEnabled: configEnabled, whitelistEnabled: whitelistEnabled, accountCanLaunch: accountCanLaunch)
+    }
+}
+
+/// Why the factory would refuse a launch right now. The create screen checks it before Review, and the launch plan
+/// again from a fresh read, so nothing is signed for a launch that would revert: not even the approval a USDC, AUSD or
+/// aBIL developer buy sends first, which costs a network fee of its own.
+public enum LaunchBlocker: Hashable, Sendable {
+    /// v2: the factory's modules can still be swapped (`modulesSealed() == false`); the deploy seals them.
+    case modulesNotSealed
+    /// v2: these modules aren't the ones this build sends to and reads from.
+    case modulesChanged([String])
+    /// Launch template 0 is switched off (`setLaunchConfigEnabled(0, false)`) or missing: `LaunchConfigDisabled`.
+    case configDisabled
+    /// The whitelist is on and the wallet isn't on it (`canLaunch`): `NotWhitelisted`.
+    case notAllowed
+
+    public var message: String {
+        switch self {
+        case .modulesNotSealed: return "The launchpad's contracts aren't locked yet, so launching stays off for now."
+        case .modulesChanged: return "The launchpad's contracts aren't the ones this version of DyorHQ was built for, so launching is off. Update the app."
+        case .configDisabled: return "New launches are paused right now."
+        case .notAllowed: return "Launching is limited to approved wallets right now, and this wallet isn't one."
+        }
+    }
+
+    /// The first reason, in the order that matters most: an unsealed or unexpected wiring before the owner's switches.
+    public static func check(modulesSealed: Bool?, moduleMismatches: [String], configEnabled: Bool, whitelistEnabled: Bool, accountCanLaunch: Bool?) -> LaunchBlocker? {
+        if modulesSealed == false { return .modulesNotSealed }
+        if !moduleMismatches.isEmpty { return .modulesChanged(moduleMismatches) }
+        if !configEnabled { return .configDisabled }
+        if whitelistEnabled, accountCanLaunch != true { return .notAllowed }
+        return nil
+    }
+}
+
+/// A v2 factory's module wiring as read on chain (its getters), for the check before Launch.
+public struct LaunchpadModules: Hashable, Sendable {
+    public let hook: Address
+    public let router: Address
+    public let escrow: Address
+    public let holderFeeSharing: Address
+    public let locker: Address
+    public let graduationExecutor: Address
+    public let mondayExecutor: Address
+    public let launchDeployer: Address
+
+    public init(hook: Address, router: Address, escrow: Address, holderFeeSharing: Address, locker: Address, graduationExecutor: Address, mondayExecutor: Address, launchDeployer: Address) {
+        self.hook = hook
+        self.router = router
+        self.escrow = escrow
+        self.holderFeeSharing = holderFeeSharing
+        self.locker = locker
+        self.graduationExecutor = graduationExecutor
+        self.mondayExecutor = mondayExecutor
+        self.launchDeployer = launchDeployer
+    }
+
+    /// The modules that differ from `baked` (the four this build sends to or reads from: hook, router, escrow and
+    /// fee sharing) or, for the rest (locker, both graduation executors, deployer), that are unset. Empty when the
+    /// factory is wired the way the app expects.
+    public func mismatches(_ baked: LaunchpadAddresses) -> [String] {
+        let compared = [("hook", hook, baked.hook), ("router", router, baked.router), ("escrow", escrow, baked.escrow), ("holderFeeSharing", holderFeeSharing, baked.holderFeeSharing)]
+        let set = [("locker", locker), ("graduationExecutor", graduationExecutor), ("mondayExecutor", mondayExecutor), ("launchDeployer", launchDeployer)]
+        return compared.filter { $0.1 != $0.2 || $0.1.isZero }.map(\.0) + set.filter { $0.1.isZero }.map(\.0)
+    }
 }
 
 /// One launch as the explore list shows it: the factory record plus the token metadata and live curve state.
@@ -704,12 +783,15 @@ public enum LaunchpadError: Error, LocalizedError, Equatable {
     /// The factory's launch terms (supply, fees, graduation, snipe tax, creator-tax cap) are no longer the ones the
     /// screen showed, or the screen had none to bind to.
     case termsChanged
+    /// The factory would refuse the launch now (read when the plan was built).
+    case launchBlocked(LaunchBlocker)
 
     public var errorDescription: String? {
         switch self {
         case .notDeployed: return "The launchpad contracts are not deployed yet."
         case .launchFeeChanged(let fee): return "The launch fee changed to \(NumberStyle.units(fee, decimals: 18)) MON since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new fee."
         case .termsChanged: return "The launch terms changed since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new terms."
+        case .launchBlocked(let blocker): return "\(blocker.message) Nothing was sent."
         case .unexpectedResponse(let what): return "The launchpad returned something the app could not read (\(what))."
         }
     }

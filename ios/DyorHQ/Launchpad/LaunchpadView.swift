@@ -38,10 +38,11 @@ struct LaunchpadView: View {
                 }
             }
             .searchable(text: $query, prompt: "Search coins")
-            .refreshable { await model.load(env: env) }
-            .task { await model.poll(env: env) }
+            .refreshable { await model.load(env: env, account: session.address) }
+            // Restarts with the wallet: whether it may launch is part of what the create screen is given.
+            .task(id: session.address) { await model.poll(env: env, account: session.address) }
             .overlay { if model.launches.isEmpty, model.loading { ProgressView().controlSize(.large) } }
-            .sheet(isPresented: $showCreate) { CreateLaunchView(protocolInfo: model.protocolInfo) { Task { await model.load(env: env) } } }
+            .sheet(isPresented: $showCreate) { CreateLaunchView(protocolInfo: model.protocolInfo) { Task { await model.load(env: env, account: session.address) } } }
             .sheet(isPresented: $showProfile) { LaunchpadProfileView() }
             .onChange(of: router.pendingLaunch) { _, launch in
                 guard let launch else { return }
@@ -328,19 +329,20 @@ final class LaunchpadModel {
     private(set) var loading = false
     private(set) var error: String?
 
-    func poll(env: AppEnvironment) async {
+    func poll(env: AppEnvironment, account: Address?) async {
         while !Task.isCancelled {
-            await load(env: env)
+            await load(env: env, account: account)
             try? await Task.sleep(for: .seconds(20))
         }
     }
 
-    func load(env: AppEnvironment) async {
+    /// `account` is the signed-in wallet: whether it may launch (`canLaunch`) comes with the factory's terms.
+    func load(env: AppEnvironment, account: Address?) async {
         // Runs while the live stack is pending too: the retired stacks' launches still list (and `protocolInfo` is nil).
         loading = true
         defer { loading = false }
         do {
-            async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets)
+            async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets, account: account)
             launches = try await env.launchpad.allLaunches(limit: 60)
             protocolInfo = try? await info
             error = nil
@@ -845,6 +847,13 @@ struct CreateLaunchView: View {
 
     private var symbolValid: Bool { symbol.count >= 2 && symbol.count <= 10 && symbol.allSatisfy { $0.isLetter || $0.isNumber } }
     private var valid: Bool { name.trimmingCharacters(in: .whitespaces).count >= 2 && symbolValid }
+    /// Why the factory would refuse this launch (v2's unsealed or unexpected modules, template 0 switched off, or a
+    /// whitelist this wallet isn't on): Review stays off, so nothing, not even a developer buy's approval, is signed.
+    /// The launch plan checks again from a fresh read.
+    private var blocker: String? {
+        guard let protocolInfo else { return "The launchpad's terms couldn't be read. Close this screen and try again." }
+        return protocolInfo.launchBlocker?.message
+    }
     private var pairInfo: PairInfo? { protocolInfo?.pairs.first { $0.pair.address == pair }?.pair }
     private var initialBuy: BigUInt { Amount.parse(initialBuyText, decimals: pairInfo?.decimals ?? 18) ?? 0 }
     /// aBIL (and any `pairMondayOnly` pair) can only graduate on Monday Trade; the factory reverts `PairRequiresMonday`
@@ -856,6 +865,11 @@ struct CreateLaunchView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let blocker {
+                    Section {
+                        Label(blocker, systemImage: "exclamationmark.triangle").font(.subheadline).foregroundStyle(Color.attention)
+                    }
+                }
                 imageSection
                 previewSection
 
@@ -903,7 +917,7 @@ struct CreateLaunchView: View {
             .keyboardDoneButton()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Review") { Haptics.tap(); showConfirm = true }.fontWeight(.semibold).disabled(!valid) }
+                ToolbarItem(placement: .confirmationAction) { Button("Review") { Haptics.tap(); showConfirm = true }.fontWeight(.semibold).disabled(!valid || blocker != nil) }
             }
             .sheet(isPresented: $showConfirm) {
                 if let address = session.address, let info = protocolInfo {

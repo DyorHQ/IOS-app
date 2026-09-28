@@ -107,6 +107,102 @@ final class LaunchpadV2Tests: XCTestCase {
         XCTAssertFalse(detail(nil).isV4FallbackOpen(at: stuckSince + 1_000_000))
     }
 
+    // MARK: Launch gate
+
+    private func info(sealed: Bool? = true, mismatches: [String] = [], configEnabled: Bool = true, whitelist: Bool = false, canLaunch: Bool? = true) -> ProtocolInfo {
+        ProtocolInfo(launchFee: 5, configId: 0, supply: 1, curveFeeBps: 100, poolFeeBps: 100, snipeSchedule: [], configEnabled: configEnabled, maxCreatorTaxBps: 1_000,
+                     whitelistEnabled: whitelist, protocolFeeShareBps: 5_000, launchCount: 0, pairs: [], modulesSealed: sealed, moduleMismatches: mismatches, accountCanLaunch: canLaunch)
+    }
+
+    /// Launch is offered only on sealed, expected modules, with template 0 on and the wallet allowed; the most serious
+    /// reason is named first.
+    func testLaunchGate() {
+        XCTAssertNil(info().launchBlocker)
+        XCTAssertNil(info(sealed: nil).launchBlocker, "an older factory has no modulesSealed getter")
+        XCTAssertEqual(info(sealed: false).launchBlocker, .modulesNotSealed)
+        XCTAssertEqual(info(mismatches: ["hook"]).launchBlocker, .modulesChanged(["hook"]))
+        XCTAssertEqual(info(configEnabled: false).launchBlocker, .configDisabled)
+        XCTAssertEqual(info(whitelist: true, canLaunch: false).launchBlocker, .notAllowed)
+        XCTAssertEqual(info(whitelist: true, canLaunch: nil).launchBlocker, .notAllowed, "no wallet to check against an on whitelist")
+        XCTAssertNil(info(whitelist: true, canLaunch: true).launchBlocker, "a whitelisted wallet")
+        XCTAssertNil(info(canLaunch: nil).launchBlocker, "no whitelist: any wallet")
+        XCTAssertEqual(info(sealed: false, mismatches: ["router"], configEnabled: false, whitelist: true, canLaunch: false).launchBlocker, .modulesNotSealed)
+        XCTAssertEqual(info(mismatches: ["router"], configEnabled: false, whitelist: true, canLaunch: false).launchBlocker, .modulesChanged(["router"]))
+        XCTAssertEqual(info(configEnabled: false, whitelist: true, canLaunch: false).launchBlocker, .configDisabled)
+        XCTAssertEqual(LaunchpadError.launchBlocked(.notAllowed).localizedDescription, "\(LaunchBlocker.notAllowed.message) Nothing was sent.")
+    }
+
+    func testModuleMismatches() {
+        let baked = V2Fixture.launchpad
+        let x = Address(literal: "0x00000000000000000000000000000000000000e1")
+        func modules(hook: Address? = nil, router: Address? = nil, locker: Address = x, monday: Address = x) -> LaunchpadModules {
+            LaunchpadModules(hook: hook ?? baked.hook, router: router ?? baked.router, escrow: baked.escrow, holderFeeSharing: baked.holderFeeSharing,
+                             locker: locker, graduationExecutor: x, mondayExecutor: monday, launchDeployer: x)
+        }
+        XCTAssertEqual(modules().mismatches(baked), [])
+        XCTAssertEqual(modules(hook: x).mismatches(baked), ["hook"])
+        XCTAssertEqual(modules(router: .zero, locker: .zero).mismatches(baked), ["router", "locker"])
+        XCTAssertEqual(modules(monday: .zero).mismatches(baked), ["mondayExecutor"], "a Monday launch would revert GraduationVenueUnavailable")
+        XCTAssertEqual(modules().mismatches(LaunchpadAddresses.retiredStacks[0]), ["hook", "router", "escrow", "holderFeeSharing"])
+    }
+
+    /// `protocolInfo` reads the sealed flag, the module getters and `canLaunch(account)` on v2, in the terms' multicall;
+    /// a v1 factory is never asked for `modulesSealed`.
+    func testProtocolInfoReadsTheWiringOnV2Only() async throws {
+        let account = Address(literal: "0x000000000000000000000000000000000000b0b0")
+        var factory = FakeFactory(stack: V2Fixture.launchpad)
+        MomentsChainStub.install(factory.answer)
+        let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: V2Fixture.launchpad, logsRPC: MomentsChainStub.rpc())
+        let open = try await service.protocolInfo(account: account)
+        XCTAssertEqual(open?.modulesSealed, true)
+        XCTAssertEqual(open?.moduleMismatches, [])
+        XCTAssertEqual(open?.accountCanLaunch, true)
+        XCTAssertNil(open?.launchBlocker)
+        XCTAssertEqual(asked(LaunchpadABI.Factory.modulesSealed), [V2Fixture.launchpad.factory])
+        XCTAssertEqual(MomentsChainStub.batches().first?.count, 6 + 9 + 1, "one multicall: the terms, the wiring and canLaunch")
+        let fresh = try await service.launchBlocker(account: account)
+        XCTAssertNil(fresh)
+
+        factory.sealed = false
+        MomentsChainStub.install(factory.answer)
+        let unsealed = try await service.protocolInfo(account: account)
+        XCTAssertEqual(unsealed?.launchBlocker, .modulesNotSealed)
+
+        factory.sealed = true
+        factory.hook = Address(literal: "0x00000000000000000000000000000000000bad00")
+        MomentsChainStub.install(factory.answer)
+        let swapped = try await service.protocolInfo(account: account)
+        XCTAssertEqual(swapped?.launchBlocker, .modulesChanged(["hook"]))
+
+        factory.hook = V2Fixture.launchpad.hook
+        factory.whitelist = true
+        factory.configEnabled = false
+        MomentsChainStub.install(factory.answer)
+        let closed = try await service.protocolInfo(account: account)
+        XCTAssertEqual(closed?.launchBlocker, .configDisabled)
+        factory.configEnabled = true
+        MomentsChainStub.install(factory.answer)
+        let whitelisted = try await service.protocolInfo(account: account)
+        XCTAssertEqual(whitelisted?.launchBlocker, .notAllowed)
+        // The plan reads the gate again and refuses before building a step.
+        do {
+            _ = try await service.launchPlan(LaunchInput(name: "Gate", symbol: "GATE", pairToken: Monad.usdc, initialBuy: 1_000_000), from: account)
+            XCTFail("a launch the factory would refuse must not be planned")
+        } catch {
+            XCTAssertEqual(error as? LaunchpadError, .launchBlocked(.notAllowed))
+        }
+
+        // A v1 live stack (a fork rehearsal of an older factory) is read as before.
+        let v1 = FakeFactory(stack: auditFix)
+        MomentsChainStub.install(v1.answer)
+        let old = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: auditFix, logsRPC: MomentsChainStub.rpc())
+        let info = try await old.protocolInfo()
+        XCTAssertNil(info?.modulesSealed)
+        XCTAssertNil(info?.accountCanLaunch)
+        XCTAssertNil(info?.launchBlocker)
+        XCTAssertTrue(asked(LaunchpadABI.Factory.modulesSealed).isEmpty)
+    }
+
     // MARK: ABI
 
     /// The v2 selectors and event topics, against `cast sig` / `cast keccak`.
@@ -121,9 +217,21 @@ final class LaunchpadV2Tests: XCTestCase {
             (LaunchpadABI.Factory.graduateFallback, "0xcd229645"),
             (LaunchpadABI.Factory.getLaunchedToken, "0x3cf28b5a"),
             (LaunchpadABI.Hook.pendingProtocolFees, "0x91389945"),
+            (LaunchpadABI.Factory.modulesSealed, "0x99571f57"),
+            (LaunchpadABI.Factory.hook, "0x7f5a7c7b"),
+            (LaunchpadABI.Factory.router, "0xf887ea40"),
+            (LaunchpadABI.Factory.escrow, "0xe2fdcc17"),
+            (LaunchpadABI.Factory.holderFeeSharing, "0x3f81cafc"),
+            (LaunchpadABI.Factory.locker, "0xd7b96d4e"),
+            (LaunchpadABI.Factory.graduationExecutor, "0xcc6d7a39"),
+            (LaunchpadABI.Factory.mondayExecutor, "0xfb7e5784"),
+            (LaunchpadABI.Factory.launchDeployer, "0x858f5964"),
+            (LaunchpadABI.Factory.canLaunch, "0x58373f04"),
+            (LaunchpadABI.Factory.whitelistEnabled, "0x51fb012d"),
         ]
         for (signature, selector) in selectors { XCTAssertEqual(ABI.selector(signature).hexString, selector, signature) }
         XCTAssertEqual(LaunchpadABI.Events.holderFeesForwardedTopic.hexString, "0x83e97fbae38483aadb29f84486122b2fa6c5e0300247bd7f0a502aa88842b08e")
+        XCTAssertEqual(LaunchpadABI.Events.modulesSealedTopic.hexString, "0xa536e8c5a57e6fcf06ee00114e790378eee2f39e1396321d50b51aa283994b95")
     }
 }
 
@@ -189,5 +297,49 @@ struct OneLaunchChain: Sendable {
         default:
             return nil
         }
+    }
+}
+
+/// A factory's terms and wiring answered from memory: template 0, MON's economics, the whitelist and, on v2, the sealed
+/// flag and module getters (a v1 factory has no such getters, and reverts).
+struct FakeFactory: Sendable {
+    let stack: LaunchpadAddresses
+    var sealed = true
+    var hook: Address
+    var whitelist = false
+    var configEnabled = true
+
+    init(stack: LaunchpadAddresses) {
+        self.stack = stack
+        hook = stack.hook
+    }
+
+    func answer(_ to: Address, _ data: Data) -> Data? {
+        guard to == stack.factory else { return nil }
+        let selector = data.prefix(4)
+        func is_(_ signature: String) -> Bool { selector == ABI.selector(signature) }
+        func encode(_ values: [ABIValue], _ types: String) -> Data { try! ABI.encode(values, types) }
+        typealias F = LaunchpadABI.Factory
+        let v2 = stack.generation.hasV2Getters
+        let module = Address(literal: "0x00000000000000000000000000000000000c4e00")
+        if is_(F.launchFee) { return encode([.uint(5)], "uint256") }
+        if is_(F.launchConfigCount) { return encode([.uint(1)], "uint256") }
+        if is_(F.maxCreatorTaxBps) { return encode([.uint(1_000)], "uint16") }
+        if is_(F.whitelistEnabled) { return encode([.bool(whitelist)], "bool") }
+        if is_(F.getLaunchFeePolicy) { return encode([.tuple([.address(module), .uint(5_000)])], "(address,uint16)") }
+        if is_(F.launchCount) { return encode([.uint(0)], "uint256") }
+        if is_(F.canLaunch) { return encode([.bool(!whitelist)], "bool") }
+        if is_(F.getLaunchConfig) {
+            return encode([.tuple([.uint(1_000_000), .uint(100), .uint(100), .int(60), .array([.uint(5_000)]), .bool(configEnabled)])], LaunchpadABI.launchConfigTuple)
+        }
+        if is_(F.pairTokenEconomics) { return encode([.uint(1), .uint(2), .uint(18), .bool(true)], "uint256,uint256,uint8,bool") }
+        if is_(F.pairMondayOnly) { return encode([.bool(false)], "bool") }
+        if is_(F.previewLaunchEconomics) { return encode([.bytes(Data(repeating: 0xec, count: 32))], "bytes32") }
+        guard v2 else { return nil }
+        if is_(F.modulesSealed) { return encode([.bool(sealed)], "bool") }
+        let modules: [(String, Address)] = [(F.hook, hook), (F.router, stack.router), (F.escrow, stack.escrow), (F.holderFeeSharing, stack.holderFeeSharing),
+                                            (F.locker, module), (F.graduationExecutor, module), (F.mondayExecutor, module), (F.launchDeployer, module)]
+        for (signature, address) in modules where is_(signature) { return encode([.address(address)], "address") }
+        return nil
     }
 }

@@ -91,11 +91,14 @@ public actor LaunchpadService {
     // MARK: - Reads
 
     /// Factory policy, launch template 0 and the economics of native MON plus `extraPairTokens` (the ERC-20
-    /// pairs the owner approved). Nil until the contracts are deployed.
-    public func protocolInfo(extraPairTokens: [Address] = []) async throws -> ProtocolInfo? {
+    /// pairs the owner approved), and what decides whether Launch is offered (`ProtocolInfo.launchBlocker`): on v2 the
+    /// sealed flag and the module wiring, and `canLaunch(account)` when an account is given. Nil until the contracts
+    /// are deployed.
+    public func protocolInfo(extraPairTokens: [Address] = [], account: Address? = nil) async throws -> ProtocolInfo? {
         guard addresses.isDeployed else { return nil }
         let factory = addresses.factory
         typealias F = LaunchpadABI.Factory
+        let checksModules = addresses.generation.hasV2Getters
         let policy = try await multicall.readAll([
             LaunchpadABI.call(factory, F.launchFee, returns: "uint256"),
             LaunchpadABI.call(factory, F.launchConfigCount, returns: "uint256"),
@@ -103,7 +106,14 @@ public actor LaunchpadService {
             LaunchpadABI.call(factory, F.whitelistEnabled, returns: "bool"),
             LaunchpadABI.call(factory, F.getLaunchFeePolicy, returns: "(address,uint16)"),
             LaunchpadABI.call(factory, F.launchCount, returns: "uint256"),
-        ])
+        ] + (checksModules ? moduleCalls(factory) : []) + (account.map { [LaunchpadABI.call(factory, F.canLaunch, [.address($0)], returns: "bool")] } ?? []))
+        var index = 6
+        func next() -> [ABIValue] {
+            defer { index += 1 }
+            return policy[index]
+        }
+        let wiring = checksModules ? Self.wiring(sealed: next(), modules: (0..<8).map { _ in next() }) : nil
+        let accountCanLaunch = account == nil ? nil : next()[0].bool
         let configId: BigUInt = 0
         let hasConfig = policy[1][0].uint > 0
         let pairTokens = [Address.zero] + extraPairTokens
@@ -141,8 +151,44 @@ public actor LaunchpadService {
             whitelistEnabled: policy[3][0].bool,
             protocolFeeShareBps: LaunchpadABI.int(policy[4][0][1]),
             launchCount: LaunchpadABI.int(policy[5][0]),
-            pairs: pairEconomics
+            pairs: pairEconomics,
+            modulesSealed: wiring?.sealed,
+            moduleMismatches: wiring?.modules.mismatches(addresses) ?? [],
+            accountCanLaunch: accountCanLaunch
         )
+    }
+
+    /// `modulesSealed()` and the eight module getters, in `wiring(sealed:modules:)`'s order. v2 only.
+    private func moduleCalls(_ factory: Address) -> [ContractCall] {
+        typealias F = LaunchpadABI.Factory
+        return [LaunchpadABI.call(factory, F.modulesSealed, returns: "bool")]
+            + [F.hook, F.router, F.escrow, F.holderFeeSharing, F.locker, F.graduationExecutor, F.mondayExecutor, F.launchDeployer].map { LaunchpadABI.call(factory, $0, returns: "address") }
+    }
+
+    private static func wiring(sealed: [ABIValue], modules m: [[ABIValue]]) -> (sealed: Bool, modules: LaunchpadModules) {
+        (sealed[0].bool, LaunchpadModules(hook: m[0][0].address, router: m[1][0].address, escrow: m[2][0].address, holderFeeSharing: m[3][0].address,
+                                          locker: m[4][0].address, graduationExecutor: m[5][0].address, mondayExecutor: m[6][0].address, launchDeployer: m[7][0].address))
+    }
+
+    /// Whether the factory would refuse `account`'s launch with template `configId` right now (`LaunchBlocker`), read
+    /// fresh: v2's sealed flag and module wiring, the template's switch and the whitelist.
+    public func launchBlocker(account: Address, configId: BigUInt = 0) async throws -> LaunchBlocker? {
+        guard addresses.isDeployed else { throw LaunchpadError.notDeployed }
+        let factory = addresses.factory
+        typealias F = LaunchpadABI.Factory
+        let checksModules = addresses.generation.hasV2Getters
+        // Tolerant read: a template id past the end reverts, which means "no such template".
+        let r = try await multicall.read([
+            LaunchpadABI.call(factory, F.whitelistEnabled, returns: "bool"),
+            LaunchpadABI.call(factory, F.canLaunch, [.address(account)], returns: "bool"),
+            LaunchpadABI.call(factory, F.getLaunchConfig, [.uint(configId)], returns: LaunchpadABI.launchConfigTuple),
+        ] + (checksModules ? moduleCalls(factory) : []))
+        func value(_ i: Int) throws -> [ABIValue] { try r[i].get() }
+        let config = try? value(2)
+        let wiring = checksModules ? Self.wiring(sealed: try value(3), modules: try (4..<12).map(value)) : nil
+        return LaunchBlocker.check(modulesSealed: wiring?.sealed, moduleMismatches: wiring?.modules.mismatches(addresses) ?? [],
+                                   configEnabled: config.map { LaunchpadABI.LaunchConfig($0[0]).enabled } ?? false,
+                                   whitelistEnabled: try value(0)[0].bool, accountCanLaunch: try value(1)[0].bool)
     }
 
     /// The newest `limit` launches, newest first. Empty until the contracts are deployed.
@@ -495,6 +541,9 @@ public actor LaunchpadService {
         guard addresses.isDeployed else { throw LaunchpadError.notDeployed }
         async let fee = multicall.readAll([LaunchpadABI.call(addresses.factory, LaunchpadABI.Factory.launchFee, returns: "uint256")])
         async let economics = previewLaunchEconomics(configId: input.configId, pairToken: input.pairToken)
+        async let blocker = launchBlocker(account: from, configId: input.configId)
+        // Refused before any step is built: a developer buy's approval would otherwise be signed (and paid for) first.
+        if let blocker = try await blocker { throw LaunchpadError.launchBlocked(blocker) }
         var filled = input
         filled.expectedEconomics = try Self.boundEconomics(shown: expectedEconomics, current: try await economics)
         let launchFee = try await fee[0][0].uint

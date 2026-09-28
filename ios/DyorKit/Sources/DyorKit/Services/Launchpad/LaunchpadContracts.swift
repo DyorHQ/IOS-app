@@ -43,6 +43,17 @@ enum LaunchpadABI {
         static let mondayRetryGas = "MONDAY_RETRY_GAS()"
         /// v2: how long a Monday-only launch must have been stuck before anyone may take the v4 fallback (86,400 s).
         static let mondayOnlyFallbackDelay = "MONDAY_ONLY_FALLBACK_DELAY()"
+        /// v2: true once no module can change again (`sealModules`, the deploy's last wiring step, or the first launch).
+        static let modulesSealed = "modulesSealed()"
+        // The module getters, compared with this build's addresses before Launch is offered (v2).
+        static let hook = "hook()"
+        static let router = "router()"
+        static let escrow = "escrow()"
+        static let holderFeeSharing = "holderFeeSharing()"
+        static let locker = "locker()"
+        static let graduationExecutor = "graduationExecutor()"
+        static let mondayExecutor = "mondayExecutor()"
+        static let launchDeployer = "launchDeployer()"
     }
 
     enum Router {
@@ -121,12 +132,15 @@ enum LaunchpadABI {
         static let graduated = "PoolGraduated(address,bytes32,uint128)"
         /// v2 MemeHook: the holders' cut of a quote-asset fee, handed to fee sharing inside the swap.
         static let holderFeesForwarded = "HolderFeesForwarded(bytes32,address,uint256)"
+        /// v2 factory: the modules are frozen for good.
+        static let modulesSealed = "ModulesSealed()"
 
         static let buyTopic = ABI.eventTopic(buy)
         static let sellTopic = ABI.eventTopic(sell)
         static let launchedTopic = ABI.eventTopic(launched)
         static let graduatedTopic = ABI.eventTopic(graduated)
         static let holderFeesForwardedTopic = ABI.eventTopic(holderFeesForwarded)
+        static let modulesSealedTopic = ABI.eventTopic(modulesSealed)
     }
 
     struct CurveFill {
