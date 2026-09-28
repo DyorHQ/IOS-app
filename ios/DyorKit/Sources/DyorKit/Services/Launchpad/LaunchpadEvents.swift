@@ -108,9 +108,9 @@ public extension LaunchpadService {
     /// launches, curve trades and graduations, newest first, at most `limit` rows. Trades are matched against
     /// `launches` (the explore list) so only curves these factories created count; when nil, the newest 60 launches
     /// of every stack are read first. Launch and graduation events come from the live and the retired factories
-    /// (whose curves still trade and graduate). Empty until the contracts are deployed.
+    /// (whose curves still trade and graduate); while the live stack is pending (v2), from the retired ones alone.
     func activity(limit: Int = 50, lookbackBlocks: UInt64 = 9_000, launches known: [Launch]? = nil) async throws -> [ActivityItem] {
-        guard addresses.isDeployed, limit > 0 else { return [] }
+        guard limit > 0, !stacks.isEmpty else { return [] }
         let launches: [Launch]
         if let known { launches = known } else { launches = try await allLaunches(limit: 60) }
         let curves = Dictionary(launches.map { ($0.curve, $0.token) }, uniquingKeysWith: { first, _ in first })

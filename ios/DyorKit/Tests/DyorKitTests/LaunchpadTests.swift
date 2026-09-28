@@ -710,8 +710,7 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertNil(one)
         let canLaunch = try await service.canLaunch(account: recipient)
         XCTAssertFalse(canLaunch)
-        let activity = try await service.activity()
-        XCTAssertEqual(activity, [])
+        // The retired stacks' board, feed and history keep working meanwhile (LaunchpadPendingTests).
 
         // The calldata-building reads that need the factory throw rather than build a bad transaction.
         do {

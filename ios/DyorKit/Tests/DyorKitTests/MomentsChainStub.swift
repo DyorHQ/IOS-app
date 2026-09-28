@@ -6,13 +6,21 @@ import Foundation
 /// sub-calls and each is answered by the installed `answer(to, calldata)` (nil reverts that sub-call, as a missing getter
 /// does on chain); a plain `eth_call` is answered the same way. `batches()` lists what each request asked, as
 /// (target, selector) pairs, so a test can check which contract was asked for what, and in which aggregate.
+/// `eth_getLogs` is answered from the installed `logs` (filtered by address, topics and range, like a node), every
+/// filter is recorded (`logQueries()`), `eth_getBlockByNumber` reports `head`, and `eth_getTransactionReceipt` the
+/// installed `receipts`.
 final class MomentsChainStub: URLProtocol {
     typealias Answer = @Sendable (_ to: Address, _ data: Data) -> Data?
 
     static let rpcURL = URL(string: "https://rpc.moments-stub.invalid")!
+    /// The chain head `eth_getBlockByNumber` reports.
+    static let head = BlockHeader(number: 1_000, timestamp: 1_790_000_000)
     private static let lock = NSLock()
     nonisolated(unsafe) private static var answer: Answer = { _, _ in nil }
     nonisolated(unsafe) private static var asked: [[Call]] = []
+    nonisolated(unsafe) private static var chainLogs: [Log] = []
+    nonisolated(unsafe) private static var receipts: [Data: [Log]] = [:]
+    nonisolated(unsafe) private static var filters: [LogQuery] = []
 
     struct Call: Hashable, CustomStringConvertible {
         let to: Address
@@ -20,10 +28,25 @@ final class MomentsChainStub: URLProtocol {
         var description: String { "\(to.short) \(selector)" }
     }
 
-    static func install(_ answer: @escaping Answer) {
+    /// One `eth_getLogs` filter as a test sees it: the address (nil for any) and the topics (nil for any).
+    struct LogQuery: Hashable {
+        let address: Address?
+        let topics: [Data?]
+    }
+
+    static func install(_ answer: @escaping Answer, logs: [Log] = [], receipts: [Data: [Log]] = [:]) {
         lock.lock(); defer { lock.unlock() }
         self.answer = answer
         asked = []
+        chainLogs = logs
+        self.receipts = receipts
+        filters = []
+    }
+
+    /// Every `eth_getLogs` filter asked, in order.
+    static func logQueries() -> [LogQuery] {
+        lock.lock(); defer { lock.unlock() }
+        return filters
     }
 
     /// One entry per `eth_call`: the sub-calls of an aggregate, or the single call.
@@ -57,7 +80,29 @@ final class MomentsChainStub: URLProtocol {
     private static func reply(_ call: JSON) -> JSON {
         let id = call["id"]
         func result(_ data: Data) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": .string(data.hexString)]) }
+        func json(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
         let reverted: JSON = .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(3), "message": .string("execution reverted"), "data": .string("0x")])])
+        switch call["method"].string {
+        case "eth_getBlockByNumber":
+            return json(.object(["number": .string(BigUInt(head.number).hexQuantity), "timestamp": .string(BigUInt(head.timestamp).hexQuantity)]))
+        case "eth_getLogs":
+            let filter = call["params"][0]
+            let query = LogQuery(address: filter["address"].string.flatMap(Address.init),
+                                 topics: (filter["topics"].array ?? []).map { $0.string.flatMap { Data(hex: $0) } })
+            let from = filter["fromBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? 0
+            let to = filter["toBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? head.number
+            lock.lock(); filters.append(query); let logs = chainLogs; lock.unlock()
+            let matching = logs.filter { log in
+                (query.address == nil || query.address == log.address) && (from...to).contains(log.blockNumber)
+                    && query.topics.enumerated().allSatisfy { i, topic in topic == nil || (log.topics.indices.contains(i) && log.topics[i] == topic) }
+            }
+            return json(.array(matching.map(Self.json)))
+        case "eth_getTransactionReceipt":
+            lock.lock(); let receipt = call["params"][0].string.flatMap { Data(hex: $0) }.flatMap { receipts[$0] }; lock.unlock()
+            return json(receipt.map { .object(["status": .string("0x1"), "logs": .array($0.map(Self.json))]) } ?? .null)
+        default:
+            break
+        }
         guard call["method"].string == "eth_call", let tx = call["params"].array?.first,
               let to = tx["to"].string.flatMap(Address.init), let data = tx["data"].string.flatMap({ Data(hex: $0) }) else { return reverted }
         lock.lock(); let answer = self.answer; lock.unlock()
@@ -75,6 +120,12 @@ final class MomentsChainStub: URLProtocol {
         }
         record([Call(to: to, selector: data.prefix(4).hexString)])
         return answer(to, data).map(result) ?? reverted
+    }
+
+    private static func json(_ log: Log) -> JSON {
+        .object(["address": .string(log.address.hex), "topics": .array(log.topics.map { .string($0.hexString) }), "data": .string(log.data.hexString),
+                 "blockNumber": .string(BigUInt(log.blockNumber).hexQuantity), "transactionHash": .string(log.transactionHash.hexString),
+                 "logIndex": .string(BigUInt(log.logIndex).hexQuantity)])
     }
 
     private static func record(_ batch: [Call]) {

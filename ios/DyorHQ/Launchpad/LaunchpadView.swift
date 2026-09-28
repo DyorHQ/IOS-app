@@ -56,7 +56,7 @@ struct LaunchpadView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 if !env.config.launchpad.isDeployed {
-                    Label("New launches open once the new DyorHQ launchpad contracts are live on Monad. Coins already launched keep trading here.", systemImage: "clock")
+                    Label("New launches open soon. Coins already launched keep trading here.", systemImage: "clock")
                         .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 if graduated.isEmpty, climbing.isEmpty, !model.loading {
@@ -128,8 +128,8 @@ struct LaunchpadView: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "flame").font(.largeTitle).foregroundStyle(Color.brand)
-            Text(env.config.launchpad.isDeployed ? "No Launches Yet" : "Launchpad Not Live Yet").font(.headline)
-            Text(env.config.launchpad.isDeployed ? "Be the first to launch a coin on DyorHQ." : "Launches appear here once the DyorHQ launchpad contracts are live on Monad.")
+            Text(env.config.launchpad.isDeployed ? "No Launches Yet" : "New Launches Open Soon").font(.headline)
+            Text(env.config.launchpad.isDeployed ? "Be the first to launch a coin on DyorHQ." : "Launches appear here once the new DyorHQ launchpad contracts are live on Monad.")
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if env.config.launchpad.isDeployed {
                 Button { Haptics.tap(); showCreate = true } label: { Text("Launch a Coin").fontWeight(.semibold) }

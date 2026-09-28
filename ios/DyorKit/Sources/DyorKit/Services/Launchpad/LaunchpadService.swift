@@ -303,11 +303,12 @@ public actor LaunchpadService {
         return try ABI.decode(raw, "bool")[0].bool
     }
 
-    /// The token a launch transaction created, read from its `TokenLaunched` event. Nil while pending or when
-    /// the transaction emitted no launch.
+    /// The token a launch transaction created, read from the live factory's `TokenLaunched` event. Nil while pending,
+    /// when the transaction emitted no launch, or while the live stack is not deployed: an event from any other
+    /// emitter (a lookalike in the same transaction) is never taken for the launch.
     public func launchResult(transaction hash: Data) async throws -> LaunchResult? {
-        guard let logs = try await rpc.transactionLogs(hash) else { return nil }
-        for log in logs where log.topics.first == LaunchpadABI.Events.launchedTopic && (addresses.factory.isZero || log.address == addresses.factory) {
+        guard addresses.isDeployed, let logs = try await rpc.transactionLogs(hash) else { return nil }
+        for log in logs where log.topics.first == LaunchpadABI.Events.launchedTopic && log.address == addresses.factory {
             if let event = LaunchpadABI.launched(log) { return LaunchResult(token: event.token, curve: event.curve, deployer: event.deployer) }
         }
         return nil

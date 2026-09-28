@@ -86,9 +86,9 @@ extension LaunchpadABI.Events {
 public extension LaunchpadService {
     /// The wallet's curve fills and fee claims over the last `lookbackBlocks` blocks, newest first. Fills are
     /// matched to `curves` (curve → token) so only these factories' launches count; claims are read from the escrow
-    /// and fee-sharing contracts of the live stack and of every retired one.
+    /// and fee-sharing contracts of the live stack (once deployed) and of every retired one.
     func walletHistory(wallet: Address, lookbackBlocks: UInt64, curves: Set<Address>) async -> LaunchpadWalletHistory {
-        guard addresses.isDeployed, let anchor = try? await logsRPC.block(.latest) else { return .empty }
+        guard !stacks.isEmpty, let anchor = try? await logsRPC.block(.latest) else { return .empty }
         let from = anchor.number > lookbackBlocks ? anchor.number - lookbackBlocks : 0
         let word = wallet.data.leftPadded(to: 32)
         let escrows = Self.unique(stacks.map(\.escrow))
