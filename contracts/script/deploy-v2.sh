@@ -322,7 +322,9 @@ if [ "${ONLY:-}" != launchpad ]; then
 fi
 
 # ---------------------------------------------------------------- the live records were not touched
+# Only the tracked records: every run rewrites its git-ignored dryrun-*.json (each simulation) and pending-*.json.
 for f in "$SNAP"/deployments/*.json; do
+  case "$(basename "$f")" in dryrun-* | pending-*) continue ;; esac
   cmp -s "$f" "deployments/$(basename "$f")" || die "deployments/$(basename "$f") changed during the run: restore it from git before anything reads it"
 done
 
