@@ -10,9 +10,10 @@
 #   GOV=0x… OWNER=<Safe> GOVERNANCE=<Safe> TREASURY=0x… FEES=0x… GUARDIAN=0x… LAUNCH_FEE_WEI=… THRESHOLD_USDC=… \
 #     EXTERNAL_BASE_URI=https://dyorhq.fun/moments/c4/ ACCOUNT=<keystore> script/deploy-v2.sh
 #
-#   GOV            the signer (a fresh single-use keystore or a hardware wallet); owner of the new stacks unless:
-#   OWNER          launchpad owner to hand over to (a Safe; it must call acceptOwnership())             [default GOV]
-#   GOVERNANCE     Moments governance to hand over to (a Safe; it must call acceptGovernance())         [default GOV]
+#   GOV            the signer (a fresh single-use keystore or a hardware wallet), which hands the new stacks to:
+#   OWNER          launchpad owner to hand over to (a Safe; it must call acceptOwnership())              [required]
+#   GOVERNANCE     Moments governance to hand over to (a Safe; it must call acceptGovernance())          [required]
+#                  (DRY_RUN/FORK default both to GOV; a live run refuses GOV unless NO_HANDOVER=1)
 #   TREASURY       launchpad protocol fees + Moments treasury (expiry share)                             [required]
 #   FEES           Monday LP fees (launchpad) + Moments platform share                                   [required]
 #   GUARDIAN       Moments guardian: can cancel a pending policy and pause publishing (a different key)  [required]
@@ -31,15 +32,17 @@
 #   YES=1          no confirmation prompts
 #   MIN_BALANCE_MON  the MON GOV must hold [default 15]
 #   ALLOW_SCRIPT_OVERRIDES=1   let the Deploy scripts read their other knobs from this environment (see step 0)
+#   NO_HANDOVER=1  a live run whose OWNER / GOVERNANCE is GOV itself (the stacks stay with GOV): on purpose only
 #
 # Steps, stopping at the first failure:
 #   0. pre-flight. It refuses: a contracts/.env (forge and cast load it); a raw key or ALLOW_RAW_KEY_143 in the
 #      environment; any other variable the Deploy scripts read (POOL_MANAGER, USDC, MIN_PRICE_USDC, …: the names come
 #      from their sources) set in this environment, unless ALLOW_SCRIPT_OVERRIDES=1; an EXTERNAL_BASE_URI other than
-#      https://dyorhq.fun/moments/c4/; roles that are not distinct; an OWNER or GOVERNANCE other than GOV that is not a
-#      Safe (code, a threshold of at least 2, and none of GOV, GUARDIAN, TREASURY or FEES among its owners); an RPC that
-#      is not chain 143; a full run (ONLY unset) signed by LEDGER/ACCOUNT from a GOV whose nonce is not 0; a balance
-#      under MIN_BALANCE_MON.
+#      https://dyorhq.fun/moments/c4/; an OWNER or GOVERNANCE set but empty, or on a LEDGER/ACCOUNT run unset or GOV
+#      (unless NO_HANDOVER=1); roles that are not distinct; an OWNER or GOVERNANCE other than GOV that is not a Safe
+#      (code, a threshold of at least 2, and none of GOV, GUARDIAN, TREASURY or FEES among its owners); an RPC that is
+#      not chain 143; a full run (ONLY unset) signed by LEDGER/ACCOUNT from a GOV whose nonce is not 0; a balance under
+#      MIN_BALANCE_MON.
 #   1. live MON/aBIL prices from two sources (script/relaunch/prices.py)
 #   2. launchpad: simulate, confirm, broadcast (the modules are sealed in the same run)
 #   3. Moments: simulate, confirm, broadcast
@@ -153,6 +156,35 @@ done
 [ -z "${ALLOW_RAW_KEY_143+set}" ] || die "ALLOW_RAW_KEY_143 is set: unset it. This script never signs with a raw key, so the scripts' raw-key refusal stays on (SEC-1)."
 for v in GOV TREASURY FEES GUARDIAN LAUNCH_FEE_WEI THRESHOLD_USDC EXTERNAL_BASE_URI; do need "$v"; done
 case "${ONLY:-}" in "" | launchpad | moments) ;; *) die "ONLY must be launchpad or moments (unset: both), got: $ONLY" ;; esac
+RPC_SHOWN=$(rpc_word)
+[ "$RPC_SHOWN" = "$RPC" ] || RPC_SHOWN="a custom one (not printed: it may carry a key)"
+SIGN=()
+if [ "${DRY_RUN:-0}" = 1 ]; then
+  MODE=dry
+elif [ "${FORK:-0}" = 1 ]; then
+  case "$RPC" in http://127.0.0.1:* | http://localhost:*) ;; *) die "FORK=1 needs RPC=http://127.0.0.1:<port> (a local anvil fork), got $RPC_SHOWN" ;; esac
+  MODE=fork
+  SIGN=(--unlocked)
+elif [ "${LEDGER:-0}" = 1 ] && [ -z "${ACCOUNT:-}" ]; then
+  MODE=ledger
+  SIGN=(--ledger)
+elif [ -n "${ACCOUNT:-}" ] && [ "${LEDGER:-0}" != 1 ]; then
+  MODE=account
+  SIGN=(--account "$ACCOUNT")
+else
+  die "choose exactly one signer: LEDGER=1 or ACCOUNT=<keystore name> (or DRY_RUN=1 / FORK=1)"
+fi
+say "mode: $MODE   signer: $GOV   rpc: $RPC_SHOWN"
+# An empty OWNER or GOVERNANCE (OWNER=$SAFE in a shell where SAFE is not set) is a mistake, never a request for GOV. A
+# live run names both and hands the stacks to the owner's Safe, not to GOV (a single-use deployer, retired after the
+# deploy), unless NO_HANDOVER=1.
+for v in OWNER GOVERNANCE; do
+  [ -z "${!v+set}" ] || [ -n "${!v}" ] || die "$v is set but empty ($v=\$SAFE in a shell where SAFE is not set?): set it to the owner's Safe"
+  if [ "$MODE" = ledger ] || [ "$MODE" = account ]; then
+    need "$v"
+    [ "$(lc "${!v}")" != "$(lc "$GOV")" ] || [ "${NO_HANDOVER:-0}" = 1 ] || die "$v is GOV: a live run hands the stacks to the owner's Safe, never leaves them with the single-use deployer (NO_HANDOVER=1 does, on purpose only)"
+  fi
+done
 OWNER=${OWNER:-$GOV}
 GOVERNANCE=${GOVERNANCE:-$GOV}
 for v in GOV OWNER GOVERNANCE TREASURY FEES GUARDIAN; do isaddr "${!v}" "$v"; done
@@ -177,26 +209,6 @@ if [ -n "$STRAY" ]; then
   [ "${ALLOW_SCRIPT_OVERRIDES:-0}" = 1 ] || die "set in this environment, and read by the Deploy scripts in place of their defaults: $STRAY. Unset them (use a clean shell), or set ALLOW_SCRIPT_OVERRIDES=1 if every one is intended."
   say "ALLOW_SCRIPT_OVERRIDES=1: the Deploy scripts read $STRAY from this environment"
 fi
-
-RPC_SHOWN=$(rpc_word)
-[ "$RPC_SHOWN" = "$RPC" ] || RPC_SHOWN="a custom one (not printed: it may carry a key)"
-SIGN=()
-if [ "${DRY_RUN:-0}" = 1 ]; then
-  MODE=dry
-elif [ "${FORK:-0}" = 1 ]; then
-  case "$RPC" in http://127.0.0.1:* | http://localhost:*) ;; *) die "FORK=1 needs RPC=http://127.0.0.1:<port> (a local anvil fork), got $RPC_SHOWN" ;; esac
-  MODE=fork
-  SIGN=(--unlocked)
-elif [ "${LEDGER:-0}" = 1 ] && [ -z "${ACCOUNT:-}" ]; then
-  MODE=ledger
-  SIGN=(--ledger)
-elif [ -n "${ACCOUNT:-}" ] && [ "${LEDGER:-0}" != 1 ]; then
-  MODE=account
-  SIGN=(--account "$ACCOUNT")
-else
-  die "choose exactly one signer: LEDGER=1 or ACCOUNT=<keystore name> (or DRY_RUN=1 / FORK=1)"
-fi
-say "mode: $MODE   signer: $GOV   rpc: $RPC_SHOWN"
 
 # cast's error names the URL it could not reach, so a custom RPC's error is not shown.
 if [ "$RPC_SHOWN" = "$RPC" ]; then
@@ -286,6 +298,7 @@ resume_help() { # <label> <target> <nonce when the broadcast began> <env...>
     local signer="LEDGER=1" rpc_env=
     [ "$MODE" = ledger ] || signer="ACCOUNT=$(printf '%q' "$ACCOUNT")"
     [ "$RPC" = "$DEFAULT_RPC" ] || rpc_env=" RPC=$(rpc_word)"
+    [ "${NO_HANDOVER:-0}" != 1 ] || rpc_env="$rpc_env NO_HANDOVER=1"
     say ""
     say "Only then, the Moments stack (ONLY=moments; add MIN_BALANCE_MON=8 if GOV now holds under $MIN_BALANCE_MON MON, the"
     say "Moments stack costs about 3):"
