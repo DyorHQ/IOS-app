@@ -154,7 +154,7 @@ public actor LaunchpadService {
     /// Launches recorded by a specific factory — the live one or a retired one whose history still counts.
     public func launches(limit: Int = 48, factory: Address) async throws -> [Launch] {
         guard !factory.isZero, limit > 0 else { return [] }
-        let legacy = stack(for: factory).legacyRecord
+        let legacy = stack(for: factory).generation.legacyRecord
         let total = LaunchpadABI.int(try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.launchCount, returns: "uint256")])[0][0])
         guard total > 0 else { return [] }
         let offset = max(0, total - limit)
@@ -196,8 +196,9 @@ public actor LaunchpadService {
         let factory = stack.factory
         typealias F = LaunchpadABI.Factory
         typealias C = LaunchpadABI.Curve
-        let tuple = try await multicall.readAll([LaunchpadABI.call(factory, F.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: stack.legacyRecord))])[0][0]
-        let record = LaunchpadABI.LaunchRecord(tuple, legacy: stack.legacyRecord)
+        let legacy = stack.generation.legacyRecord
+        let tuple = try await multicall.readAll([LaunchpadABI.call(factory, F.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy))])[0][0]
+        let record = LaunchpadABI.LaunchRecord(tuple, legacy: legacy)
         guard record.exists, let info = try await hydrate([record], factory: factory).first else { return nil }
         let curve = record.curve
         // Like the web app, "graduated" here includes refund mode: the pool key is reported for both.
@@ -219,7 +220,7 @@ public actor LaunchpadService {
             calls.append(LaunchpadABI.call(stack.hook, LaunchpadABI.Hook.pendingCreatorTax, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
         }
         // The pre-audit sharing contracts have no `queuedRewards`; the call reverts and would fail the whole read.
-        let readsQueue = info.holderFeeSharing && !stack.holderFeeSharing.isZero && stack.hasQueuedRewards
+        let readsQueue = info.holderFeeSharing && !stack.holderFeeSharing.isZero && stack.generation.hasQueuedRewards
         if readsQueue {
             calls.append(LaunchpadABI.call(stack.holderFeeSharing, LaunchpadABI.Sharing.queuedRewards, [.address(token)], returns: "uint256,uint256"))
         }
@@ -336,6 +337,7 @@ public actor LaunchpadService {
             ]
         }
         let stride = 9
+        let generation = stack(for: factory).generation
         let results = try await multicall.readAll(calls)
         let livePrices = await poolPrices(for: records)
         return records.enumerated().map { i, r in
@@ -360,7 +362,8 @@ public actor LaunchpadService {
                 supply: supply,
                 marketCap: LaunchpadMath.marketCap(price: price, supply: supply),
                 progressBps: LaunchpadMath.progressBps(phase: r.phase, realQuoteReserve: realQuoteReserve, sweptQuote: r.sweptQuote, threshold: r.graduationThreshold),
-                factory: factory
+                factory: factory,
+                generation: generation
             )
         }
     }
@@ -395,7 +398,7 @@ public actor LaunchpadService {
     public func knownCurve(token: Address) async -> Address? {
         let stacks = stacks.filter(\.isDeployed)
         guard !token.isZero, !stacks.isEmpty else { return nil }
-        let calls = stacks.map { LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.legacyRecord)) }
+        let calls = stacks.map { LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.generation.legacyRecord)) }
         guard let results = try? await multicall.read(calls) else { return nil }
         return Self.knownCurve(stacks: stacks, records: results)
     }
@@ -404,7 +407,7 @@ public actor LaunchpadService {
     static func knownCurve(stacks: [LaunchpadAddresses], records: [Result<[ABIValue], Error>]) -> Address? {
         for (stack, result) in zip(stacks, records) {
             guard case .success(let values) = result, let tuple = values.first else { continue }
-            let record = LaunchpadABI.LaunchRecord(tuple, legacy: stack.legacyRecord)
+            let record = LaunchpadABI.LaunchRecord(tuple, legacy: stack.generation.legacyRecord)
             if record.exists, !record.curve.isZero { return record.curve }
         }
         return nil
@@ -542,7 +545,7 @@ public actor LaunchpadService {
     /// whose factory predates it (the pre-audit retired stacks).
     public func graduateFallbackPlan(launch: Launch) -> [TransactionStep] {
         let stack = stack(for: launch)
-        guard stack.hasGraduateFallback else { return [] }
+        guard stack.generation.hasGraduateFallback else { return [] }
         let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduateFallback, [.address(launch.token)])
         return [.call(TransactionRequest(to: stack.factory, data: data), label: "Graduate on Uniswap v4")]
     }

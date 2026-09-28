@@ -68,8 +68,7 @@ final class AppEnvironment {
         // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools (once v2 is
         // deployed) and those of the retired factories with the current record (the legacy 0xad3d… launches all
         // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0.
-        let retiredFactories = LaunchpadAddresses.retiredStacks.filter { !$0.legacyRecord && $0.factory != config.launchpad.factory }.map(\.factory)
-        swap = SwapEngine(rpc: rpc, launchpadFactories: (config.launchpad.isDeployed ? [config.launchpad.factory] : []) + retiredFactories, moments: config.moments)
+        swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments)
         perpl = PerplService(rpc: rpc)
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
         moments = MomentsService(rpc: rpc, addresses: config.moments)

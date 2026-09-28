@@ -446,7 +446,7 @@ final class LaunchpadTests: XCTestCase {
 
         let old = launch(on: retired.factory)
         XCTAssertTrue(old.isRetiredLaunchpad)
-        XCTAssertTrue(old.hasGraduateFallback)
+        XCTAssertTrue(old.generation.hasGraduateFallback)
         let rewards = await service.claimRewardsPlan(launch: old, view: LaunchAccountView(tokenBalance: 0, pairBalance: 0, allowance: 0, snipeTaxBps: 0, pendingRewards: 1, escrowBalance: 1))
         XCTAssertEqual(rewards.map { $0.request?.to }, [retired.holderFeeSharing, retired.escrow])
         XCTAssertEqual(rewards[1].request?.data.hexString, cd("claimEscrowToken"))
@@ -459,11 +459,11 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(sweep[0].request?.data.hexString, cd("sweepPoolFees"))
 
         // The pre-audit stacks (0x2F02, 0xad3d) have no `graduateFallback`: no plan, and the screen offers none.
-        let preAuditStacks = LaunchpadAddresses.retiredStacks.filter { !$0.hasQueuedRewards }
+        let preAuditStacks = LaunchpadAddresses.retiredStacks.filter { $0.generation < .v1 }
         XCTAssertEqual(preAuditStacks.count, 2)
         for stack in preAuditStacks {
             let preAudit = launch(on: stack.factory)
-            XCTAssertFalse(preAudit.hasGraduateFallback)
+            XCTAssertFalse(preAudit.generation.hasGraduateFallback)
             let none = await service.graduateFallbackPlan(launch: preAudit)
             XCTAssertTrue(none.isEmpty)
         }

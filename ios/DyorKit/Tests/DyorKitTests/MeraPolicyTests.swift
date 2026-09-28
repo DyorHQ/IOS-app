@@ -670,6 +670,6 @@ final class MeraPolicyTests: XCTestCase {
             .success([record(curve: curve, exists: true, legacy: true)]),
         ])
         XCTAssertEqual(found, curve, "the first stack that recorded the launch, legacy layout included")
-        XCTAssertNil(LaunchpadService.knownCurve(stacks: stacks, records: stacks.map { .success([record(curve: curve, exists: false, legacy: $0.legacyRecord)]) }))
+        XCTAssertNil(LaunchpadService.knownCurve(stacks: stacks, records: stacks.map { .success([record(curve: curve, exists: false, legacy: $0.generation.legacyRecord)]) }))
     }
 }

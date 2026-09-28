@@ -12,31 +12,62 @@ public struct LaunchpadAddresses: Sendable, Hashable {
     public var hook: Address
     /// Uniswap v4 PoolManager (`Uniswap.poolManager` on Monad). Graduated launches are priced from its storage.
     public var poolManager: Address
-    /// The factory returns the first deployment's 16-field `getLaunchedToken` record (no `graduationVenue`).
-    public var legacyRecord: Bool
-    /// The fee-sharing contract has `queuedRewards` (audit fix H-1); on the pre-audit stacks the call reverts.
-    public var hasQueuedRewards: Bool
-    /// The contract source the stack runs: every retired stack is v1, `monadMainnet` is v2.
-    public var generation: ContractGeneration
+    /// The contract source the stack runs: its record layout, which getters it answers and which graduation paths the
+    /// app sends (`Generation`). The retired stacks are `.legacy` … `.v1`, `monadMainnet` is `.v2`.
+    public var generation: Generation
 
-    public init(factory: Address = .zero, router: Address = .zero, escrow: Address = .zero, holderFeeSharing: Address = .zero, hook: Address = .zero, poolManager: Address = .zero, legacyRecord: Bool = false, hasQueuedRewards: Bool = true,
-                generation: ContractGeneration = .v1) {
+    public init(factory: Address = .zero, router: Address = .zero, escrow: Address = .zero, holderFeeSharing: Address = .zero, hook: Address = .zero, poolManager: Address = .zero,
+                generation: Generation = .v1) {
         self.factory = factory
         self.router = router
         self.escrow = escrow
         self.holderFeeSharing = holderFeeSharing
         self.hook = hook
         self.poolManager = poolManager
-        self.legacyRecord = legacyRecord
-        self.hasQueuedRewards = hasQueuedRewards
         self.generation = generation
     }
 
-    public var isDeployed: Bool { !factory.isZero }
+    /// The launchpad's contract generations, oldest first. A getter a generation lacks reverts, and in a Multicall3
+    /// `readAll` one reverted sub-call fails the whole read, so every optional read and plan asks the stack's generation.
+    public enum Generation: Int, Sendable, Hashable, Comparable, CaseIterable, CustomStringConvertible {
+        /// 0xad3d…, the first deployment: the 16-field `getLaunchedToken` record (no `graduationVenue`); every launch
+        /// graduates on Monday Trade.
+        case legacy
+        /// 0x2F02…, 2026-09-12: the 17-field record, but neither `queuedRewards` nor `graduateFallback` (audit fixes H-1, H-3).
+        case preAudit
+        /// 0x10F3… and 0x6B1C…, the audit-fix source (`3fc1f47`): `queuedRewards`, and a `graduateFallback` the app sends.
+        case v1
+        /// The audited v2 release: sealed modules, the per-launch `launchMondayOnly` snapshot, the hook's
+        /// `pendingProtocolFees`, and a `graduateFallback` that needs at least 22,062,500 gas.
+        case v2
 
-    /// The factory has `graduateFallback` (audit fix H-3). It shipped together with `queuedRewards`, so the
-    /// pre-audit stacks have neither.
-    public var hasGraduateFallback: Bool { hasQueuedRewards }
+        public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+        public var description: String {
+            switch self {
+            case .legacy: return "legacy"
+            case .preAudit: return "pre-audit"
+            case .v1: return "v1"
+            case .v2: return "v2"
+            }
+        }
+
+        /// The factory returns the 16-field record.
+        public var legacyRecord: Bool { self == .legacy }
+        /// The fee-sharing contract has `queuedRewards` (audit fix H-1).
+        public var hasQueuedRewards: Bool { self >= .v1 }
+        /// The factory has `graduateFallback` (audit fix H-3).
+        public var hasGraduateFallback: Bool { self >= .v1 }
+        /// The app may send `graduateFallback` itself: v1 only. v2's reverts `InsufficientGasForGraduation` below
+        /// `MONDAY_RETRY_GAS + GRADUATION_GAS × 33/32` (22,062,500) gas, over the app's 15M network-fee cap
+        /// (`NetworkFeeLimits.monad`), so DyorHQ's keepers send it, with about 29.9M.
+        public var appSendsGraduateFallback: Bool { self == .v1 }
+        /// The v2-only getters: `modulesSealed`, `launchMondayOnly`, `MONDAY_ONLY_FALLBACK_DELAY` and `MONDAY_RETRY_GAS` on
+        /// the factory, `pendingProtocolFees` on the hook.
+        public var hasV2Getters: Bool { self >= .v2 }
+    }
+
+    public var isDeployed: Bool { !factory.isZero }
 
     public static let none = LaunchpadAddresses()
 
@@ -62,14 +93,15 @@ public struct LaunchpadAddresses: Sendable, Hashable {
     /// and write goes to the launch's own stack.
     public static let retiredStacks: [LaunchpadAddresses] = [
         // The 2026-09-23 relaunch with the rotated treasury and fee wallets, retired by the v2 release
-        // (`143.json` until the v2 record is promoted, then `143-retired-0x6B1C.json`).
+        // (`143.json` until the v2 record is promoted, then `143-retired-0x6B1C.json`). Same source as 0x10F3.
         LaunchpadAddresses(
             factory: Address(literal: "0x6B1C8769a8d6745955aC35b91FF1F37AB76859dB"),
             router: Address(literal: "0x454822dc56072696ab7cf8Bac357FFd3315477Fc"),
             escrow: Address(literal: "0x5EDA8765934fE22fa63d671465eF914Cd196968e"),
             holderFeeSharing: Address(literal: "0xc618bB26bBc3C84c30519F31e32eE52EA2BFac52"),
             hook: Address(literal: "0xf2b849B3FC4a2b19B39DA3F707Fc32b801eea0Cc"),
-            poolManager: Uniswap.poolManager
+            poolManager: Uniswap.poolManager,
+            generation: .v1
         ),
         // The 2026-09-16 audit-fix redeploy, retired by the 2026-09-23 relaunch (`143-retired-0x10F3.json`).
         LaunchpadAddresses(
@@ -78,7 +110,8 @@ public struct LaunchpadAddresses: Sendable, Hashable {
             escrow: Address(literal: "0xbc70ba9D66F761FFb7647D6B52C8Cf65a49E47fc"),
             holderFeeSharing: Address(literal: "0x70F8f64c6A4A76A507e322BCef19E6E37abe4eF6"),
             hook: Address(literal: "0x51A240c13164BcDF3FC11053FddEaC626A4160cc"),
-            poolManager: Uniswap.poolManager
+            poolManager: Uniswap.poolManager,
+            generation: .v1
         ),
         // The pre-audit 2026-09-12 deployment: no `queuedRewards`, no `graduateFallback`.
         LaunchpadAddresses(
@@ -88,7 +121,7 @@ public struct LaunchpadAddresses: Sendable, Hashable {
             holderFeeSharing: Address(literal: "0x1413CB051f78a4605cD150d4E97B1B06f81e2Bdf"),
             hook: Address(literal: "0x22957b1d794A7Ca37D054acB5e993e026826E0Cc"),
             poolManager: Uniswap.poolManager,
-            hasQueuedRewards: false
+            generation: .preAudit
         ),
         // The first deployment: the 16-field record, and every one of its launches graduates on Monday Trade.
         LaunchpadAddresses(
@@ -98,8 +131,7 @@ public struct LaunchpadAddresses: Sendable, Hashable {
             holderFeeSharing: Address(literal: "0x0C7a1F7625696bAbF9a7309ed3c4A9086eFEE8dd"),
             hook: Address(literal: "0xB0c2Fa59aA9f30BC0907bcD785bFf068fEb0E0Cc"),
             poolManager: Uniswap.poolManager,
-            legacyRecord: true,
-            hasQueuedRewards: false
+            generation: .legacy
         ),
     ]
 
@@ -108,6 +140,13 @@ public struct LaunchpadAddresses: Sendable, Hashable {
     /// The retired stack whose factory is `factory`, or nil when it is not a retired one.
     public static func retiredStack(for factory: Address) -> LaunchpadAddresses? {
         retiredStacks.first { $0.factory == factory }
+    }
+
+    /// The factories whose graduated pools are Uniswap v4 swap routes (`SwapEngine`): the live one once it is deployed,
+    /// then every retired one with the 17-field record (the legacy 0xad3d… launches all graduate on Monday Trade). A
+    /// pending live stack adds nothing, so the retired routes stay while v2 is pending and nothing is read from address 0.
+    public static func swapRouteFactories(live: LaunchpadAddresses) -> [Address] {
+        (live.isDeployed ? [live.factory] : []) + retiredStacks.filter { !$0.generation.legacyRecord && $0.factory != live.factory }.map(\.factory)
     }
 }
 
@@ -275,8 +314,12 @@ public struct Launch: Identifiable, Hashable, Sendable {
     public let progressBps: Int
     /// The factory that recorded the launch: the live one or a retired one. `.zero` means the live one.
     public let factory: Address
+    /// The contract generation of that factory's stack: set from the stack when read, else the retired stack's, else
+    /// the live table's (`.v2`).
+    public let generation: LaunchpadAddresses.Generation
 
-    public init(token: Address, curve: Address, deployer: Address, creatorFeeRecipient: Address, pairToken: Address, graduationThreshold: BigUInt, creatorTaxBps: Int, poolFeeBps: Int, tickSpacing: Int, holderFeeSharing: Bool, graduationVenue: GraduationVenue, phase: LaunchPhase, sweptQuote: BigUInt, sweptTokens: BigUInt, sweptAt: Int, poolId: Data, name: String, symbol: String, logo: String, description: String, socials: Socials, pair: PairInfo, price: BigUInt, realQuoteReserve: BigUInt, completed: Bool, rescued: Bool, launchedAt: Int, supply: BigUInt, marketCap: BigUInt, progressBps: Int, factory: Address = .zero) {
+    public init(token: Address, curve: Address, deployer: Address, creatorFeeRecipient: Address, pairToken: Address, graduationThreshold: BigUInt, creatorTaxBps: Int, poolFeeBps: Int, tickSpacing: Int, holderFeeSharing: Bool, graduationVenue: GraduationVenue, phase: LaunchPhase, sweptQuote: BigUInt, sweptTokens: BigUInt, sweptAt: Int, poolId: Data, name: String, symbol: String, logo: String, description: String, socials: Socials, pair: PairInfo, price: BigUInt, realQuoteReserve: BigUInt, completed: Bool, rescued: Bool, launchedAt: Int, supply: BigUInt, marketCap: BigUInt, progressBps: Int, factory: Address = .zero,
+                generation: LaunchpadAddresses.Generation? = nil) {
         self.token = token
         self.curve = curve
         self.deployer = deployer
@@ -308,13 +351,11 @@ public struct Launch: Identifiable, Hashable, Sendable {
         self.marketCap = marketCap
         self.progressBps = progressBps
         self.factory = factory
+        self.generation = generation ?? LaunchpadAddresses.retiredStack(for: factory)?.generation ?? LaunchpadAddresses.monadMainnet.generation
     }
 
     /// The launch was made on a retired launchpad (it still trades; nothing new launches there).
     public var isRetiredLaunchpad: Bool { LaunchpadAddresses.retiredStack(for: factory) != nil }
-
-    /// Its factory has `graduateFallback` (the pre-audit retired stacks do not).
-    public var hasGraduateFallback: Bool { LaunchpadAddresses.retiredStack(for: factory)?.hasGraduateFallback ?? true }
 
     /// Quote raised towards graduation, capped at the threshold (what the token page shows as "Raised").
     public var raised: BigUInt { realQuoteReserve > graduationThreshold ? graduationThreshold : realQuoteReserve }

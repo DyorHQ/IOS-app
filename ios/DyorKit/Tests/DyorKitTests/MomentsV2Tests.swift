@@ -131,7 +131,7 @@ final class MomentsV2Tests: XCTestCase {
     func testEveryRetiredCohortIsV1AndTheLiveOneV2() {
         XCTAssertEqual(MomentsAddresses.retiredMainnet.map(\.generation), [.v1, .v1, .v1])
         XCTAssertEqual(MomentsAddresses.monadMainnet.generation, .v2)
-        XCTAssertEqual(LaunchpadAddresses.retiredStacks.map(\.generation), [.v1, .v1, .v1, .v1])
+        XCTAssertEqual(LaunchpadAddresses.retiredStacks.map(\.generation), [.v1, .v1, .preAudit, .legacy])
         XCTAssertEqual(LaunchpadAddresses.monadMainnet.generation, .v2)
     }
 

@@ -634,7 +634,7 @@ struct LaunchDetailView: View {
     private var isStuck: Bool { launch.phase != .graduated && (detail?.stuckSince ?? 0) > 0 }
 
     /// A stuck Monday graduation can fall back to Uniswap v4, where the launch's factory has `graduateFallback`.
-    private var offersFallback: Bool { launch.graduationVenue == .monday && launch.hasGraduateFallback }
+    private var offersFallback: Bool { launch.graduationVenue == .monday && launch.generation.hasGraduateFallback }
 
     private func holdingsSection(_ account: LaunchAccountView) -> some View {
         Section("Your Holdings") {
