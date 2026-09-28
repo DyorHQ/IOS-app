@@ -95,6 +95,38 @@ final class DocsLinksTests: XCTestCase {
         for (page, url) in expected { XCTAssertEqual(page.url.absoluteString, url, "\(page)") }
     }
 
+    // MARK: The app
+
+    /// The app's sources (ios/DyorHQ), or a skip when this checkout has only the package.
+    static func appSource(_ path: String) throws -> String {
+        var app = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
+        app.appendPathComponent("DyorHQ")
+        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
+        return try String(contentsOf: app.appendingPathComponent(path), encoding: .utf8)
+    }
+
+    /// The Help Center is the docs home: Get Help leads with the Learn rows, and Profile's settings list it next to the
+    /// Terms of Use and the Privacy Policy. The old dyorhq.fun/support page is gone.
+    func testGetHelpAndProfileOpenTheDocs() throws {
+        let help = try Self.appSource("Support/GetHelpView.swift")
+        XCTAssertTrue(help.contains("static let helpCenter = DocsLinks.home.url"))
+        XCTAssertFalse(help.contains("dyorhq.fun/support"))
+        let learn = try XCTUnwrap(help.range(of: "group(\"Learn\")"), "Get Help has a Learn group")
+        let getHelp = try XCTUnwrap(help.range(of: "group(\"Get Help\")"))
+        XCTAssertLessThan(learn.lowerBound, getHelp.lowerBound, "Learn comes first")
+        let rows = String(help[learn.upperBound..<getHelp.lowerBound])
+        for (title, link) in [("Help Center", "SupportLinks.helpCenter"), ("Getting Started", "DocsLinks.quickstart.url"),
+                              ("Risk Disclosures", "DocsLinks.riskDisclosures.url"), ("Contracts & Addresses", "DocsLinks.contractsAndAddresses.url")] {
+            XCTAssertTrue(rows.contains("title: \"\(title)\"") && rows.contains("openURL(\(link))"), title)
+        }
+        let profile = try Self.appSource("Profile/ProfileView.swift")
+        XCTAssertTrue(profile.contains("Link(destination: SupportLinks.helpCenter) { SettingsRow(\"Help Center\""))
+        let helpCenter = try XCTUnwrap(profile.range(of: "SettingsRow(\"Help Center\""))
+        let terms = try XCTUnwrap(profile.range(of: "SettingsRow(\"Terms of Use\""))
+        XCTAssertLessThan(helpCenter.lowerBound, terms.lowerBound)
+    }
+
     // MARK: Live
 
     /// Every link answers 200 itself: no redirect is followed (a moved page answers 3xx here), so a link to a path GitBook

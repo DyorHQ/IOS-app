@@ -1,12 +1,15 @@
+import DyorKit
 import SwiftUI
 import UIKit
 
-/// DyorHQ's brand line and the places to reach it: the site, the X profile and the support inbox.
+/// DyorHQ's brand line and the places to reach it: the site, the Help Center (the docs), the X profile and the support
+/// inbox.
 enum SupportLinks {
     static let name = "DyorHQ"
     static let tagline = "The RWA HQ for social trading"
     static let site = URL(string: "https://dyorhq.fun")!
-    static let helpCenter = URL(string: "https://dyorhq.fun/support")!
+    /// The docs home (dyorhq.gitbook.io/docs).
+    static let helpCenter = DocsLinks.home.url
     static let terms = URL(string: "https://dyorhq.fun/terms")!
     static let privacy = URL(string: "https://dyorhq.fun/privacy")!
     static let supportEmail = "team@dyorhq.fun"
@@ -26,8 +29,9 @@ enum SupportLinks {
     }
 }
 
-/// Get Help: how to reach support and where the community lives, in the grouped-rows shape of the reference app
-/// (Help Center, Contact Support, Report a Bug; X). Opened from the side menu as a full-screen page.
+/// Get Help: the docs to learn from, how to reach support and where the community lives, in the grouped-rows shape of
+/// the reference app (Help Center, Getting Started, Risk Disclosures, Contracts & Addresses; Contact Support, Report a
+/// Bug; X). Opened from the side menu as a full-screen page.
 struct GetHelpView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -53,6 +57,13 @@ struct GetHelpContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
+            // The docs, opened in Safari like the Terms and Privacy links.
+            group("Learn") {
+                HelpRow(symbol: "book", title: "Help Center", detail: "Guides to every part of DyorHQ") { openURL(SupportLinks.helpCenter) }
+                HelpRow(symbol: "flag", title: "Getting Started", detail: "From sign-in to your first trade") { openURL(DocsLinks.quickstart.url) }
+                HelpRow(symbol: "exclamationmark.triangle", title: "Risk Disclosures", detail: "Read these before you trade") { openURL(DocsLinks.riskDisclosures.url) }
+                HelpRow(symbol: "checkmark.seal", title: "Contracts & Addresses", detail: "Verify every contract DyorHQ uses") { openURL(DocsLinks.contractsAndAddresses.url) }
+            }
             group("Get Help") {
                 HelpRow(symbol: "envelope", title: "Contact Support", detail: SupportLinks.supportEmail) { mail(subject: "DyorHQ support") }
                 HelpRow(symbol: "ladybug", title: "Report a Bug", detail: "Tell us what went wrong") { mail(subject: "DyorHQ bug report", body: "What happened:\n\nWhat I expected:\n\nSteps to reproduce:\n") }
