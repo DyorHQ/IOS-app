@@ -154,7 +154,8 @@ public struct MomentsAddresses: Sendable, Hashable {
 
     /// Every coin the retired cohorts minted, by (factory, id) — read on chain (`getMoment` / `momentIdByCoin`).
     /// Publishing is paused on each and the counts are pinned (`MomentLink.Cohort.finalMomentCount`), so the set is final
-    /// and needs no read: a coin here is never offered a trade in the app, even when its cohort cannot be read (the app trades no past cohort's coin; cohorts 1 and 2's pools also pay
+    /// and needs no read (the release gate checks it against the chain, `check-launchpad-addresses.py --release`): a coin
+    /// here is never offered a trade in the app, even when its cohort cannot be read (the app trades no past cohort's coin; cohorts 1 and 2's pools also pay
     /// the retired platform wallet).
     public static let retiredMainnetCoins: [Address: MomentKey] = [
         // Cohort 3 ("Nature", still collecting when the cohort was retired)

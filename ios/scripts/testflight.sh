@@ -17,9 +17,10 @@ cd "$(dirname "$0")/.."
 TEAM=$(sed -n 's/^DEVELOPMENT_TEAM *= *//p' DyorHQ/Config/Secrets.xcconfig | tr -d ' ')
 if [[ -z "$TEAM" ]]; then echo "DEVELOPMENT_TEAM is not set in DyorHQ/Config/Secrets.xcconfig" >&2; exit 1; fi
 if grep -q "127.0.0.1" DyorHQ/Config/Secrets.xcconfig; then echo "Secrets.xcconfig points at a local fork; restore the mainnet RPC first" >&2; exit 1; fi
-# The v2 wiring gate, as in ci_scripts/ci_post_xcodebuild.sh: nothing ships while DyorKit's v2 addresses are PENDING.
+# The v2 wiring gate, as in ci_scripts/ci_post_xcodebuild.sh: nothing ships while DyorKit's v2 addresses are PENDING or
+# a retired Moments cohort is not final on chain (the archive's own build phase checks again).
 # Run the Swift half too before a release: (cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter V2WiringTests).
-python3 ../scripts/dev/check-launchpad-addresses.py --release || { echo "The v2 contract addresses are not wired; nothing was built." >&2; exit 1; }
+python3 ../scripts/dev/check-launchpad-addresses.py --release || { echo "The release gate failed (above); nothing was built." >&2; exit 1; }
 
 # Bump the build number so every upload is unique — App Store Connect rejects a duplicate CFBundleVersion, which is
 # the most common first-timer failure. Pin an exact number with BUILD=<n>; keep the current one with NO_BUMP=1.

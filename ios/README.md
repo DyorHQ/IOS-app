@@ -101,8 +101,13 @@ A build with a pending table must not ship, so before a release:
 python3 ../scripts/dev/check-launchpad-addresses.py --release
 ```
 
-Both fail while either table is pending. The second one also runs in `ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud
-archives) and `scripts/testflight.sh`, and refuses the archive.
+Both fail while either table is pending. The second one also proves the retired Moments cohorts final on chain
+(read-only calls to a public Monad RPC): each factory's publishing is paused, its `momentCount()` equals its pin
+(`MomentLink.Cohort.finalMomentCount`), and its coins are exactly its entries in `MomentsAddresses.retiredMainnetCoins`.
+It runs in every archive: the DyorHQ target's install-only build phase (so Product › Archive in Xcode is gated too),
+`ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud) and `scripts/testflight.sh`, each refusing the archive. Once cohort
+3's publishing pause is mined, `python3 ../scripts/dev/check-launchpad-addresses.py --chain` runs the same chain
+checks without refusing the pending tables, so the pins can be confirmed before v2 is wired.
 
 A Debug build can point at a v2 deployment on a local fork: `MONAD_RPC_URL` plus the `LAUNCHPAD_*` and `MOMENTS_*` keys
 in `Secrets.xcconfig` (see the example file). Release builds never read them.

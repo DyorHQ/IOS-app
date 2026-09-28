@@ -173,7 +173,26 @@ targets:
           DYOR_DEBUG_MOMENTS_PLATFORM: ""
           DYOR_DEBUG_MOMENTS_TREASURY: ""
           DYOR_DEBUG_MOMENTS_DEPLOY_BLOCK: ""
-    preBuildScripts: []
+    preBuildScripts:
+      # The v2 release gate on EVERY archive, however it is made (Product › Archive in Xcode included, not only Xcode
+      # Cloud's ci_post_xcodebuild.sh and scripts/testflight.sh, which keep their own check as a second layer):
+      # check-launchpad-addresses.py --release refuses while DyorKit's v2 addresses are PENDING or a retired Moments
+      # cohort is not final on chain (read-only calls to a public Monad RPC). Install (archive) builds only, whatever
+      # the configuration. User script sandboxing stays on: the files it reads under ios/ are declared below (the rest
+      # of the repo is outside the sandbox's SRCROOT denial). Never showEnvVars: the build settings hold
+      # Secrets.xcconfig's values.
+      - name: v2 Release Gate
+        runOnlyWhenInstalling: true
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+        shell: /bin/sh
+        inputFiles:
+          - $(SRCROOT)/DyorKit/Sources/DyorKit/Services/Launchpad/LaunchpadModels.swift
+          - $(SRCROOT)/DyorKit/Sources/DyorKit/Services/Moments/MomentsModels.swift
+          - $(SRCROOT)/DyorKit/Sources/DyorKit/Services/Moments/MomentLink.swift
+          - $(SRCROOT)/DyorHQ/Config/Secrets.xcconfig
+        script: |
+          exec python3 "$SRCROOT/../scripts/dev/check-launchpad-addresses.py" --release
     # Share the DyorHQ scheme (archive builds Release) for the Xcode Cloud workflow, as Apple's setup guide asks. XcodeGen
     # writes no scheme unless asked; locally Xcode auto-creates one, which is why `-scheme DyorHQ` works there.
     scheme: {}

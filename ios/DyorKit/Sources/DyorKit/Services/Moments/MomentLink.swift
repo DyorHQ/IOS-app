@@ -79,9 +79,12 @@ public struct MomentLink: Hashable, Identifiable, Sendable, CustomStringConverti
 
         /// A retired cohort's final Moment count. Publishing is paused on each, but only this pin makes the counts
         /// final from the app's point of view: the directory never reads a retired cohort's `momentCount`, so a
-        /// Moment published there later could never shift a later cohort's names. Cohort 3's must be the count read
-        /// once its publishing pause is mined: 1 ("Nature") at block 108,747,575, before the pause; re-check it then.
-        /// Nil for c4, which is counted live.
+        /// Moment published there later could never shift a later cohort's names. The release gate proves every pin
+        /// on chain before an archive ships (`scripts/dev/check-launchpad-addresses.py --release`, also `--chain` by
+        /// hand): publishing paused, `momentCount()` equal to the pin, and every coin in
+        /// `MomentsAddresses.retiredMainnetCoins`. Cohort 3's is 1 ("Nature", read at block 108,778,342 while its pause
+        /// was still pending): a Moment published there before the pause is mined makes the gate refuse until this pin
+        /// and the coin table include it. Nil for c4, which is counted live.
         public var finalMomentCount: Int? {
             switch self {
             case .c1: return 3

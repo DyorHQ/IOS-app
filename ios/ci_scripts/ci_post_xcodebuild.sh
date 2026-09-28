@@ -6,7 +6,10 @@
 # Checked anywhere in the .xcarchive and the App Store export: every non-public Secrets.xcconfig value, keyed
 # RPC-provider URLs and private-key patterns (scripts/dev/secret-scan.sh, which prints names only, never values).
 # Before that, the v2 wiring gate: an archive is refused while DyorKit's v2 launchpad or Moments addresses are still
-# PENDING (scripts/dev/check-launchpad-addresses.py --release), so no build ships with Launch and Publish "not live yet".
+# PENDING (scripts/dev/check-launchpad-addresses.py --release), so no build ships with Launch and Publish "not live yet",
+# and while a retired Moments cohort is not final on chain (publishing paused, momentCount equal to its pin, every coin
+# in the retired-coin table: read-only calls to a public Monad RPC). The DyorHQ target's install-only build phase runs
+# the same check first; this is the second layer.
 set -euo pipefail
 set +x # never trace: the scanner holds secret values in variables
 [[ ${CI_XCODEBUILD_ACTION:-} == archive ]] || exit 0
@@ -18,7 +21,7 @@ if [[ ! -f $WIRING ]] || ! command -v python3 >/dev/null; then
   exit 1
 fi
 if ! python3 "$WIRING" --release >&2; then
-  echo "error: REFUSING TO SHIP — the v2 contract addresses are not wired or do not match contracts/deployments (above)." >&2
+  echo "error: REFUSING TO SHIP — the v2 contract addresses or the retired Moments cohorts failed the release gate (above)." >&2
   exit 1
 fi
 

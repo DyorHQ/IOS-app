@@ -12,8 +12,10 @@ import XCTest
 /// - (b) `testReleaseHasV2Wired` is skipped unless `DYORHQ_RELEASE_GATE=1`, and then fails loudly unless both stacks and
 ///   the c4 link cohort are wired and the link base is the c4 one. The release checklist runs
 ///   `DYORHQ_RELEASE_GATE=1 swift test --filter V2WiringTests`.
-/// - (c) The archive gate (`ios/ci_scripts/ci_post_xcodebuild.sh`, and `ios/scripts/testflight.sh`) runs
-///   `scripts/dev/check-launchpad-addresses.py --release`, which refuses to ship while either block is PENDING.
+/// - (c) The archive gate runs `scripts/dev/check-launchpad-addresses.py --release` on every archive path: the DyorHQ
+///   target's install-only build phase (`ios/project.yml`, so an archive from Xcode is gated too),
+///   `ios/ci_scripts/ci_post_xcodebuild.sh` and `ios/scripts/testflight.sh`. It refuses to ship while either block is
+///   PENDING, or while a retired Moments cohort is not final on chain (`RetiredCohortGateTests`).
 ///
 /// An always-failing test was rejected: it would keep DyorKit red until the deploy and teach everyone to ignore a red
 /// run. A runtime guard alone was rejected too: the app would ship a silent "not live yet" build.
