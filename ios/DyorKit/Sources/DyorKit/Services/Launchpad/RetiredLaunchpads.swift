@@ -54,9 +54,11 @@ public enum RetiredLaunchpad {
 
     /// The coins among `tokens` still on a retired launchpad's side of graduation, from every retired factory's
     /// `getLaunchedToken` record (each in its own layout) in one Multicall3 read: the launchpads' curve check
-    /// (`LaunchpadCurve.curveRecords`) over the retired stacks alone, since only their curves refuse buys. A factory
-    /// answers an unknown token with an empty record, so a failed read, or any factory's answer missing, throws: then no
-    /// coin can be ruled out.
+    /// (`LaunchpadCurve.curveRecords`, whose pure half `curveRecords(queries:results:)` decides) over the retired stacks
+    /// alone, since only their curves refuse buys. A coin is sell-only when a retired factory's record of it exists and
+    /// it has no pool yet (bonding, migrating or refund mode); a graduated one trades both ways. A factory answers an
+    /// unknown token with an empty record, so a failed read, or any factory's answer missing, throws: then no coin can be
+    /// ruled out.
     static func sellOnlyCoins(_ tokens: [Address], multicall: Multicall) async throws -> Set<Address> {
         Set(try await LaunchpadCurve.curveRecords(tokens, stacks: LaunchpadAddresses.retiredStacks, multicall: multicall).keys)
     }
@@ -88,17 +90,6 @@ public enum RetiredLaunchpad {
             }
         }
         return .known(out)
-    }
-
-    /// Pure half of `sellOnlyCoins`: a coin is sell-only when a retired factory's record of it exists and it has no pool
-    /// yet (bonding, migrating or refund mode). A graduated one trades both ways.
-    static func sellOnlyCoins(queries: [(token: Address, legacy: Bool)], results: [Result<[ABIValue], Error>]) throws -> Set<Address> {
-        guard results.count == queries.count else { throw LaunchpadError.unexpectedResponse("retired launchpad records") }
-        var out = Set<Address>()
-        for (query, result) in zip(queries, results) {
-            if try LaunchpadCurve.record(result, legacy: query.legacy).isOnCurve { out.insert(query.token) }
-        }
-        return out
     }
 }
 

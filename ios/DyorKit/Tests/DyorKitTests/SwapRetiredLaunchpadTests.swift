@@ -149,24 +149,65 @@ final class SwapRetiredLaunchpadTests: XCTestCase {
         XCTAssertTrue(SwapEngine.mayBeLaunchCoin(unknown))
     }
 
-    /// The record check itself, per layout: a record that exists and has no pool is sell-only, a graduated or missing one
-    /// is not, and a missing answer throws.
+    /// The record check Swap's buy refusal runs (`RetiredLaunchpad.sellOnlyCoins`, through the launchpads' curve check
+    /// `LaunchpadCurve.curveRecords(queries:results:)`), per layout: a record that exists and has no pool is on the curve,
+    /// a graduated or missing one is not, and a failed answer, or an answer missing or extra, throws.
     func testSellOnlyRecords() throws {
         let coin = Address(literal: "0x00000000000000000000000000000000000c0100")
+        struct Down: Error {}
         for stack in LaunchpadAddresses.retiredStacks {
-            let legacy = stack.generation.legacyRecord
-            func record(_ phase: LaunchPhase, exists: Bool = true) -> Result<[ABIValue], Error> {
-                .success([RetiredCoinChain.record(token: coin, curve: coin, phase: phase, venue: legacy ? .monday : .uniswapV4, exists: exists, legacy: legacy)])
-            }
+            let label = stack.factory.short
             for phase in LaunchPhase.allCases {
-                let found = try RetiredLaunchpad.sellOnlyCoins(queries: [(coin, legacy)], results: [record(phase)])
-                XCTAssertEqual(found, phase == .graduated ? [] : [coin], "\(stack.factory.short) \(phase.title)")
+                let found = try LaunchpadCurve.curveRecords(queries: [(coin, stack)], results: [Self.record(coin, on: stack, phase)])
+                XCTAssertEqual(Set(found.keys), phase == .graduated ? [] : [coin], "\(label) \(phase.title)")
+                if let hit = found[coin] {
+                    XCTAssertEqual(hit.stack, stack, "\(label) \(phase.title)")
+                    XCTAssertEqual(hit.record.phase, phase, "\(label) \(phase.title): read in the stack's own layout")
+                }
             }
-            XCTAssertEqual(try RetiredLaunchpad.sellOnlyCoins(queries: [(coin, legacy)], results: [record(.bonding, exists: false)]), [])
-            struct Down: Error {}
-            XCTAssertThrowsError(try RetiredLaunchpad.sellOnlyCoins(queries: [(coin, legacy)], results: [.failure(Down())]))
-            XCTAssertThrowsError(try RetiredLaunchpad.sellOnlyCoins(queries: [(coin, legacy)], results: []))
+            XCTAssertTrue(try LaunchpadCurve.curveRecords(queries: [(coin, stack)], results: [Self.record(coin, on: stack, .bonding, exists: false)]).isEmpty, label)
+            XCTAssertThrowsError(try LaunchpadCurve.curveRecords(queries: [(coin, stack)], results: [.failure(Down())]), label)
+            XCTAssertThrowsError(try LaunchpadCurve.curveRecords(queries: [(coin, stack)], results: []), label)
+            XCTAssertThrowsError(try LaunchpadCurve.curveRecords(queries: [(coin, stack)], results: [Self.record(coin, on: stack, .bonding), Self.record(coin, on: stack, .bonding)]), label)
         }
+    }
+
+    /// The same check over several stacks, as `sellOnlyCoins` asks every retired factory for each coin: a coin is kept
+    /// once, with the first stack that has it on its curve (a graduated record ahead of it is passed over), a coin no
+    /// stack has on its curve is left out, and one factory's answer missing throws for all of them.
+    func testSellOnlyRecordsAcrossTheRetiredStacks() throws {
+        let coin = Address(literal: "0x00000000000000000000000000000000000c0100")
+        let other = Address(literal: "0x00000000000000000000000000000000000c0200")
+        let stacks = LaunchpadAddresses.retiredStacks
+        XCTAssertGreaterThanOrEqual(stacks.count, 4)
+        struct Down: Error {}
+        // Coin-major, as the aggregate asks: `coin` graduated on the first stack, in refund mode on the second, on the
+        // third's curve too, unknown to the fourth; `other` unknown to all of them.
+        let queries = [coin, other].flatMap { token in stacks.map { (token: token, stack: $0) } }
+        let coinRecords = [Self.record(coin, on: stacks[0], .graduated), Self.record(coin, on: stacks[1], .refund), Self.record(coin, on: stacks[2], .bonding),
+                           Self.record(coin, on: stacks[3], .bonding, exists: false)] + stacks.dropFirst(4).map { Self.record(coin, on: $0, .bonding, exists: false) }
+        let otherRecords = stacks.map { Self.record(other, on: $0, .bonding, exists: false) }
+        let found = try LaunchpadCurve.curveRecords(queries: queries, results: coinRecords + otherRecords)
+        XCTAssertEqual(Set(found.keys), [coin], "each coin once; the unknown one left out")
+        XCTAssertEqual(found[coin]?.stack, stacks[1], "the first stack that has it on its curve")
+        XCTAssertEqual(found[coin]?.record.phase, .refund)
+
+        // The same coin asked twice of one stack (a list holding it twice): kept once.
+        let twice = try LaunchpadCurve.curveRecords(queries: [(coin, stacks[2]), (coin, stacks[2])], results: [Self.record(coin, on: stacks[2], .bonding), Self.record(coin, on: stacks[2], .migrating)])
+        XCTAssertEqual(Set(twice.keys), [coin])
+        XCTAssertEqual(twice[coin]?.record.phase, .bonding, "the first answer")
+
+        // One factory's answer failing, after another already had the coin on its curve: no coin can be ruled in or out.
+        var failing = coinRecords + otherRecords
+        failing[stacks.count + 1] = .failure(Down())
+        XCTAssertThrowsError(try LaunchpadCurve.curveRecords(queries: queries, results: failing))
+        XCTAssertThrowsError(try LaunchpadCurve.curveRecords(queries: queries, results: Array((coinRecords + otherRecords).dropLast())))
+    }
+
+    /// `token`'s `getLaunchedToken` answer from `stack`'s factory, in that stack's record layout.
+    private static func record(_ token: Address, on stack: LaunchpadAddresses, _ phase: LaunchPhase, exists: Bool = true) -> Result<[ABIValue], Error> {
+        let legacy = stack.generation.legacyRecord
+        return .success([RetiredCoinChain.record(token: token, curve: token, phase: phase, venue: legacy ? .monday : .uniswapV4, exists: exists, legacy: legacy)])
     }
 }
 
