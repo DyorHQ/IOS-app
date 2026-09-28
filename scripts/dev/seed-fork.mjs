@@ -1,11 +1,14 @@
 // Seeds a LOCAL anvil fork (anvil --fork-url https://rpc.monad.xyz) with launches so the UI can be exercised.
-// Usage: node scripts/dev/seed-fork.mjs contracts/deployments/143.json   (after deploying to the fork; local RPC only)
+// Usage: node scripts/dev/seed-fork.mjs <record.json> [port]   (after deploying to the fork, e.g. the v2 launchpad's
+//   contracts/deployments/pending-143.json; the RPC is always 127.0.0.1, on `port`, default 8545)
 import { createPublicClient, createWalletClient, http, parseEther, parseEventLogs, formatEther, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { readFileSync } from "node:fs";
 
-const RPC = "http://127.0.0.1:8545";
-if (!RPC.includes("127.0.0.1")) throw new Error("seed script is for the local fork only");
+const port = process.argv[3] ?? "8545";
+if (!/^[0-9]{2,5}$/.test(port)) throw new Error("the port must be a number");
+const RPC = `http://127.0.0.1:${port}`; // the local fork only, never a public RPC
+if (!process.argv[2]) throw new Error("usage: node scripts/dev/seed-fork.mjs <record.json> [port]");
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");

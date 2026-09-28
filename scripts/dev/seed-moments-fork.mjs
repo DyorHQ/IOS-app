@@ -1,17 +1,23 @@
-// Seeds a LOCAL anvil fork of Monad mainnet (anvil --fork-url https://rpc.monad.xyz --chain-id 143) with Moments so
-// the UI can be exercised: the v1.1 contracts already exist in the forked state. Anvil throwaway keys only.
-// Usage: node scripts/dev/seed-moments-fork.mjs   (local RPC only)
+// Seeds a LOCAL anvil fork of Monad mainnet (anvil --fork-url https://rpc3.monad.xyz --chain-id 143) with Moments so
+// the UI can be exercised, on a v2 Moments deployment made on that fork (script/deploy-v2.sh FORK=1 writes its record to
+// contracts/deployments/pending-moments-143.json). Anvil throwaway keys only; the RPC is always 127.0.0.1.
+// Usage: node scripts/dev/seed-moments-fork.mjs [record.json] [port]
+//   record: the v2 Moments deployment record (default contracts/deployments/pending-moments-143.json)
+//   port:   the fork's local port (default 8545)
+// v2 `publish(params, expectedTermsHash)` carries the factory's current `termsHash()`, read right before each publish.
 import { createPublicClient, createWalletClient, encodeAbiParameters, http, keccak256, parseEventLogs, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const RPC = "http://127.0.0.1:8545";
-if (!RPC.includes("127.0.0.1")) throw new Error("seed script is for the local fork only");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const port = process.argv[3] ?? "8545";
+if (!/^[0-9]{2,5}$/.test(port)) throw new Error("the port must be a number");
+const RPC = `http://127.0.0.1:${port}`; // the local fork only, never a public RPC
 const abi = (name) => JSON.parse(readFileSync(`${root}/contracts/out/${name}.sol/${name}.json`, "utf8")).abi;
-const dep = JSON.parse(readFileSync(`${root}/contracts/deployments/moments-143.json`, "utf8"));
+const dep = JSON.parse(readFileSync(process.argv[2] ?? `${root}/contracts/deployments/pending-moments-143.json`, "utf8"));
+if (await createPublicClient({ transport: http(RPC) }).getChainId() !== 143) throw new Error("not a Monad (143) fork");
 const chain = { id: 143, name: "Monad fork", nativeCurrency: { name: "Monad", symbol: "MON", decimals: 18 }, rpcUrls: { default: { http: [RPC] } } };
 const pub = createPublicClient({ chain, transport: http(RPC) });
 // Anvil's default accounts carry EIP-7702 delegation code on Monad mainnet (their keys are public), which makes
@@ -62,7 +68,9 @@ async function publish(wallet, o) {
     collectWindow: o.window ?? 30 * 86400,
     salt: rnd(),
   };
-  const receipt = await send(wallet, { ...factory, functionName: "publish", args: [params] });
+  // The terms the publish is bound to: read now, as the app reads them with the policy it shows.
+  const terms = await pub.readContract({ ...factory, functionName: "termsHash" });
+  const receipt = await send(wallet, { ...factory, functionName: "publish", args: [params, terms] });
   const [ev] = parseEventLogs({ abi: factory.abi, eventName: "Published", logs: receipt.logs });
   console.log(`published #${ev.args.momentId} ${o.symbol} coin=${ev.args.coin} nft=${ev.args.nft}`);
   return ev.args;
@@ -82,7 +90,7 @@ for (const w of wallets) {
   console.log(`${w.account.address} funded (USDC slot ${slot})`);
 }
 
-// 1. A Moment that graduates: 14 x $1 across two collectors (the 14th is the clamped terminal collect).
+// 1. 14 x $1 across two collectors (under a $10-threshold policy the 14th is the clamped terminal collect and it graduates).
 const a = await publish(wallets[0], { name: "Sunrise over Labadi", symbol: "LABADI", place: "Labadi Beach, Accra", date: 1_779_900_000, media: "https://picsum.photos/seed/labadi/960/720", price: 1_000_000n });
 await collectN(wallets[1], a.momentId, 7, 1_000_000n);
 await collectN(wallets[2], a.momentId, 7, 1_000_000n);
