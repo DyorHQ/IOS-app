@@ -27,6 +27,14 @@ final class AssetsModel {
     private(set) var retiredByCoin: [Address: MomentInfo] = [:]
     /// Retired-cohort Moments by their NFT contract, so a past-cohort edition opens its claim-only page.
     private(set) var retiredByNFT: [Address: MomentInfo] = [:]
+    /// Held coins still on a retired launchpad's curve (`LaunchpadService.retiredCurveHoldings`): Swap can't trade them
+    /// (it refuses to buy them, and no venue routes a bonding curve), so their row opens the coin's Launch page, where the
+    /// curve sell is, as Home's token page does. Known before the token list shows, so such a coin never gets a Swap row;
+    /// a failed check keeps the coins already known.
+    private(set) var sellOnly: Set<Address> = []
+    /// Those coins' launches on their retired launchpads (`LaunchpadService.retiredLaunch(token:)`), for the row to open. A
+    /// coin whose launch couldn't be read has none: its row points to the Launch tab and opens nothing.
+    private(set) var retiredLaunches: [Address: Launch] = [:]
     private(set) var loading = false
     private(set) var loadedFor: Address?
 
@@ -49,11 +57,16 @@ final class AssetsModel {
         unverified = KnownTokenStore.unverified(owner: address).union(discovered.map(\.address))
         let balances = (try? await ERC20.balances(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
         let held = universe.filter { (balances[$0.address] ?? 0) > 0 }
+        async let sellOnlyTask = try? env.launchpad.retiredCurveHoldings(held)
         let prices = (try? await env.prices.prices(for: held)) ?? [:]
         // Known before the token list shows, so a retired coin is never offered a swap in between.
         for info in await retiredTask {
             retiredByCoin[info.moment.coin] = info
             retiredByNFT[info.moment.nft] = info
+        }
+        if let found = await sellOnlyTask {
+            sellOnly = found.coins
+            retiredLaunches = found.launches
         }
         tokens = held.map { TokenAsset(token: $0, balance: balances[$0.address] ?? 0, usd: prices[$0.address]?.usd) }
             .sorted { ($0.value ?? 0, Amount.units($0.balance, decimals: $0.token.decimals)) > ($1.value ?? 0, Amount.units($1.balance, decimals: $1.token.decimals)) }
@@ -119,6 +132,18 @@ struct AssetsCard: View {
                         } else if MomentsAddresses.isRetiredCoin(asset.token.address) {
                             // Its cohort could not be read yet: still no swap, just the row.
                             tokenRow(asset, note: "Past cohort · trading closed")
+                        } else if model.sellOnly.contains(asset.token.address) {
+                            // Never Swap: no venue routes a coin still on a retired launchpad's curve (and the engine
+                            // refuses to buy it). It sells on its curve, from its Launch page, where Home sends it too.
+                            if let launch = model.retiredLaunches[asset.token.address] {
+                                Button { router.openLaunch(launch); dismiss() } label: {
+                                    tokenRow(asset, note: launch.curveSellsOpen ? "Sell on its Launch page" : "Graduation pending · Launch page",
+                                             unverified: model.unverified.contains(asset.token.address))
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                tokenRow(asset, note: "Sell it from its page on the Launch tab", unverified: model.unverified.contains(asset.token.address))
+                            }
                         } else {
                             Button { router.openSwap(tokenIn: asset.token, tokenOut: asset.token.symbol == "USDC" ? .mon : .usdc); dismiss() } label: { tokenRow(asset, unverified: model.unverified.contains(asset.token.address)) }
                                 .buttonStyle(.plain)

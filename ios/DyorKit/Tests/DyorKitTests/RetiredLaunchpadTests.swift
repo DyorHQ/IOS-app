@@ -5,8 +5,8 @@ import XCTest
 /// Coins on a retired launchpad's curve are sell-only (owner decision 2026-09-28): on each of the four retired stacks a
 /// curve buy is refused at the plan, whatever the pair or phase, and so is a developer buy through a retired router,
 /// while a sell on the same curve still plans. The live (v2) stack's buys are unaffected. The coin page trades on the
-/// curve only while it takes a sell (refund mode included), and Home's token page finds a sell-only coin's launch so it
-/// can send the holder there: no Swap venue routes a bonding curve.
+/// curve only while it takes a sell (refund mode included), and Home's token page and the Portfolio's holdings find a
+/// sell-only coin's launch so they can send the holder there: no Swap venue routes a bonding curve.
 final class RetiredLaunchpadTests: XCTestCase {
     private let token = Address(literal: "0x00000000000000000000000000000000000d1100")
     private let curve = Address(literal: "0x00000000000000000000000000000000000d11c0")
@@ -180,7 +180,8 @@ final class RetiredLaunchpadTests: XCTestCase {
     }
 
     /// The sources wire those answers in: the coin page picks its ticket by `curveSellsOpen` and offers Retry Graduation
-    /// only while the launch awaits it; Home's token page sends a sell-only coin to its Launch page, never to Swap.
+    /// only while the launch awaits it; Home's token page and the Portfolio's holdings send a sell-only coin to its Launch
+    /// page, never to Swap.
     func testTheScreensFollowTheCurveState() throws {
         var app = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
@@ -194,6 +195,23 @@ final class RetiredLaunchpadTests: XCTestCase {
         XCTAssertTrue(home.contains("env.launchpad.retiredLaunch(token: row.token.address)"))
         XCTAssertTrue(home.contains("router.openLaunch(retiredLaunch)"))
         XCTAssertFalse(home.contains("router.openSwap(tokenIn: row.token,"), "no Swap that sells the page's coin: none routes a curve")
+
+        // The Portfolio's holdings: the check lands before the list shows, and a sell-only coin's row opens its Launch
+        // page (or, unread, opens nothing); only the other coins reach Swap.
+        let assets = try String(contentsOf: app.appendingPathComponent("Portfolio/AssetsModel.swift"), encoding: .utf8)
+        XCTAssertTrue(assets.contains("async let sellOnlyTask = try? env.launchpad.retiredCurveHoldings(held)"))
+        let checked = try XCTUnwrap(assets.range(of: "if let found = await sellOnlyTask {"))
+        let listed = try XCTUnwrap(assets.range(of: "tokens = held.map {"))
+        XCTAssertLessThan(checked.lowerBound, listed.lowerBound, "known before the token list shows")
+        let sellOnlyRow = try XCTUnwrap(assets.range(of: "} else if model.sellOnly.contains(asset.token.address) {"))
+        let swapRow = try XCTUnwrap(assets.range(of: "Button { router.openSwap(tokenIn: asset.token,"))
+        XCTAssertLessThan(sellOnlyRow.lowerBound, swapRow.lowerBound, "a sell-only coin is caught before the Swap row")
+        let branch = String(assets[sellOnlyRow.upperBound..<swapRow.lowerBound])
+        XCTAssertTrue(branch.contains("if let launch = model.retiredLaunches[asset.token.address] {"))
+        XCTAssertTrue(branch.contains("Button { router.openLaunch(launch); dismiss() }"))
+        XCTAssertTrue(branch.contains("tokenRow(asset, note: \"Sell it from its page on the Launch tab\""))
+        XCTAssertFalse(branch.contains("openSwap"))
+        XCTAssertEqual(assets.components(separatedBy: "router.openSwap(").count - 1, 1, "one Swap row, for the other coins")
     }
 
     // MARK: Home's token page
@@ -235,6 +253,91 @@ final class RetiredLaunchpadTests: XCTestCase {
         // Unread, the page still says where to sell it.
         XCTAssertEqual(RetiredLaunchpad.tokenPageNotice(nil), RetiredLaunchpad.sellOnLaunchPage)
         XCTAssertEqual(RetiredLaunchpad.sellOnLaunchPage, "This coin's launchpad is retired: you can sell it on its Launch page, but not buy.")
+    }
+
+    // MARK: The Portfolio's holdings
+
+    /// The Portfolio lists every coin the wallet holds, and tapping one opened Swap, which can't trade a coin still on a
+    /// retired curve. Among the holdings, such a coin is found on each retired stack, before graduation in every state,
+    /// from one aggregate asking the four factories for each coin once (MON and the app's own tokens are never asked),
+    /// with the launch its row opens. A graduated coin isn't: it trades on Swap.
+    func testThePortfolioFindsASellOnlyHoldingsLaunch() async throws {
+        let service = service()
+        let other = Token(address: token, symbol: "NEW", name: "New coin", decimals: 18)
+        for stack in retired {
+            for state in Self.states {
+                let chain = RetiredLaunchChain(base: RetiredCoinChain(stack: stack, phase: state.phase), completed: state.completed, rescued: state.rescued)
+                MomentsChainStub.install(chain.answer)
+                let label = "\(stack.factory.short) \(state.name)"
+                let coin = Token(address: chain.base.coin, symbol: "OLD", name: "Old coin", decimals: 18, isLaunchpad: true)
+                let found = try await service.retiredCurveHoldings([.mon, .usdc, coin, other, .wmon, coin])
+                XCTAssertEqual(MomentsChainStub.batches().first?.map(\.to), LaunchpadAddresses.retiredFactories + LaunchpadAddresses.retiredFactories,
+                               "\(label): the coin and the other token, each asked of every retired factory, in one read")
+                if state.phase == .graduated {
+                    XCTAssertEqual(found, RetiredCurveHoldings(coins: [], launches: [:]), label)
+                    XCTAssertEqual(MomentsChainStub.batches().count, 1, "\(label): no launch is read")
+                    continue
+                }
+                XCTAssertEqual(found.coins, [chain.base.coin], label)
+                let launch = try XCTUnwrap(found.launches[chain.base.coin], label)
+                XCTAssertEqual(Array(found.launches.keys), [chain.base.coin], label)
+                XCTAssertEqual(launch.token, chain.base.coin, label)
+                XCTAssertEqual(launch.curve, chain.base.curve, label)
+                XCTAssertEqual(launch.factory, stack.factory, label)
+                XCTAssertTrue(launch.isSellOnly, label)
+                XCTAssertEqual(launch.curveSellsOpen, ["climbing", "refund"].contains(state.name), label)
+            }
+        }
+
+        // Only MON and the app's own tokens: nothing is read.
+        MomentsChainStub.install { _, _ in nil }
+        let none = try await service.retiredCurveHoldings(Token.core + [.mon])
+        XCTAssertEqual(none, RetiredCurveHoldings(coins: [], launches: [:]))
+        XCTAssertTrue(MomentsChainStub.calls().isEmpty)
+        // The check fails (every read reverts): it throws, and the screen keeps what it knew.
+        do {
+            let unchecked = try await service.retiredCurveHoldings([other])
+            XCTFail("a failed check returned \(unchecked)")
+        } catch {}
+    }
+
+    /// A coin still on its curve when the holdings were checked, graduated by the time its launch is read: an ordinary
+    /// pool token again, left out so its row opens Swap. A coin whose launch can't be read stays sell-only, with no launch.
+    func testAHoldingThatGraduatesOrCantBeReadMeanwhile() async throws {
+        let service = service()
+        for stack in retired {
+            let climbing = RetiredLaunchChain(base: RetiredCoinChain(stack: stack, phase: .bonding), completed: false, rescued: false)
+            let graduated = RetiredLaunchChain(base: RetiredCoinChain(stack: stack, phase: .graduated), completed: true, rescued: false)
+            let coin = Token(address: climbing.base.coin, symbol: "OLD", name: "Old coin", decimals: 18, isLaunchpad: true)
+            let records = RecordCount()
+            let recordSelector = ABI.selector(LaunchpadABI.Factory.getLaunchedToken)
+            // The holdings' aggregate (one record per retired factory) sees the curve; every read after it, the pool.
+            MomentsChainStub.install { to, data in
+                if data.prefix(4) == recordSelector { return (records.next() < LaunchpadAddresses.retiredFactories.count ? climbing : graduated).answer(to, data) }
+                return graduated.answer(to, data)
+            }
+            let found = try await service.retiredCurveHoldings([coin])
+            XCTAssertEqual(found, RetiredCurveHoldings(coins: [], launches: [:]), stack.factory.short)
+
+            // The launch's own reads fail (only the records answer): still sell-only, never Swap; the row opens nothing.
+            MomentsChainStub.install { to, data in data.prefix(4) == recordSelector ? climbing.answer(to, data) : nil }
+            let unread = try await service.retiredCurveHoldings([coin])
+            XCTAssertEqual(unread.coins, [climbing.base.coin], stack.factory.short)
+            XCTAssertEqual(unread.launches, [:], stack.factory.short)
+        }
+    }
+}
+
+/// Counts calls across the stub's threads.
+private final class RecordCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    /// The number of calls before this one.
+    func next() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        defer { count += 1 }
+        return count
     }
 }
 
