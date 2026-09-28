@@ -53,7 +53,7 @@ targets:
         CFBundleDisplayName: DyorHQ
         CFBundleName: DyorHQ
         CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "15"
+        CFBundleVersion: "16"
         UILaunchScreen:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
