@@ -88,7 +88,6 @@ final class DocsLinksTests: XCTestCase {
             (.bridge, "https://dyorhq.gitbook.io/docs/wallet-and-account/bridge"),
             (.notificationsAndPriceAlerts, "https://dyorhq.gitbook.io/docs/wallet-and-account/notifications-and-price-alerts"),
             (.exportSignOutDelete, "https://dyorhq.gitbook.io/docs/wallet-and-account/export-sign-out-delete"),
-            (.contractsAndAddresses, "https://dyorhq.gitbook.io/docs/resources/contracts-and-addresses"),
             (.riskDisclosures, "https://dyorhq.gitbook.io/docs/resources/risk-disclosures"),
         ]
         XCTAssertEqual(DocsLinks.allCases, expected.map(\.0))
@@ -117,9 +116,11 @@ final class DocsLinksTests: XCTestCase {
         XCTAssertLessThan(learn.lowerBound, getHelp.lowerBound, "Learn comes first")
         let rows = String(help[learn.upperBound..<getHelp.lowerBound])
         for (title, link) in [("Help Center", "SupportLinks.helpCenter"), ("Getting Started", "DocsLinks.quickstart.url"),
-                              ("Risk Disclosures", "DocsLinks.riskDisclosures.url"), ("Contracts & Addresses", "DocsLinks.contractsAndAddresses.url")] {
+                              ("Risk Disclosures", "DocsLinks.riskDisclosures.url")] {
             XCTAssertTrue(rows.contains("title: \"\(title)\"") && rows.contains("openURL(\(link))"), title)
         }
+        // The published Contracts & Addresses page doesn't list the contracts this build calls yet: no row opens it.
+        XCTAssertFalse(rows.contains("Contracts"))
         let profile = try Self.appSource("Profile/ProfileView.swift")
         XCTAssertTrue(profile.contains("Link(destination: SupportLinks.helpCenter) { SettingsRow(\"Help Center\""))
         let helpCenter = try XCTUnwrap(profile.range(of: "SettingsRow(\"Help Center\""))
@@ -174,7 +175,7 @@ final class DocsLinksTests: XCTestCase {
         XCTAssertTrue(launchpad.contains("if launch.phase == .bonding, launch.curveSellsOpen { LearnMoreLink(.launchpadGraduation) }"))
         XCTAssertTrue(launchpad.contains("if launch.curveSellsOpen { ticketSection } else { graduatedSection }"))
 
-        let linked = Set(placements.map { String($0.split(separator: " ")[0]) }).union(["home", "quickstart", "riskDisclosures", "contractsAndAddresses"])
+        let linked = Set(placements.map { String($0.split(separator: " ")[0]) }).union(["home", "quickstart", "riskDisclosures"])
         XCTAssertEqual(linked, Set(DocsLinks.allCases.map { "\($0)" }), "one case per page the app opens, plus the home")
         let component = try Self.appSource("Design/Components.swift")
         XCTAssertTrue(component.contains("Link(\"Learn more\", destination: page.url)"))
