@@ -1,9 +1,9 @@
 import BigInt
 import Foundation
 
-/// Where the launchpad lives on chain. `monadMainnet` is the audited v2 deployment the app ships with (pending until
-/// the owner deploys it); a Debug build can point at another one (a fork rehearsal) through Secrets.xcconfig. Any
-/// address may be `Address.zero`, and `isDeployed` is what every read checks first.
+/// Where the launchpad lives on chain. `monadMainnet` is the audited v2 deployment the app ships with; a Debug build can
+/// point at another one (a fork rehearsal) through Secrets.xcconfig. Any address may be `Address.zero`, and
+/// `isDeployed` is what every read checks first.
 public struct LaunchpadAddresses: Sendable, Hashable {
     public var factory: Address
     public var router: Address
@@ -70,19 +70,18 @@ public struct LaunchpadAddresses: Sendable, Hashable {
 
     public static let none = LaunchpadAddresses()
 
-    // PENDING v2 deploy: the only place the v2 launchpad addresses live. AppConfig, the swap routes and every stack list
-    // derive from this constant, so wiring v2 is one reviewed edit here. Until then every module is zero: `isDeployed`
-    // is false, Launch says "not live yet", no call goes to address 0, and the retired stacks keep working.
-    /// The launchpad v2 on Monad mainnet (chain 143), NOT DEPLOYED YET. To wire it after the owner's deploy and Sourcify
-    /// verification: the five modules from the promoted `contracts/deployments/143.json`, keeping `generation: .v2`.
-    /// `LaunchpadDeploymentTests` and `V2WiringTests` accept only all-zero or fully wired, fail a wired table that
-    /// differs from the record, and fail a release built while it is pending (`DYORHQ_RELEASE_GATE=1`).
+    // The only place the v2 launchpad addresses live. AppConfig, the swap routes and every stack list derive from this
+    // constant.
+    /// The launchpad v2 on Monad mainnet (chain 143), deployed 2026-09-28 at block 108,859,147, owned by the Owner Safe
+    /// 0x6D2A… and Sourcify-verified: the five modules from `contracts/deployments/143.json`. `LaunchpadDeploymentTests`
+    /// and `V2WiringTests` accept only all-zero or fully wired, fail a wired table that differs from the record, and fail
+    /// a release built while it is pending (`DYORHQ_RELEASE_GATE=1`).
     public static let monadMainnet = LaunchpadAddresses(
-        factory: .zero, // PENDING
-        router: .zero, // PENDING
-        escrow: .zero, // PENDING
-        holderFeeSharing: .zero, // PENDING
-        hook: .zero, // PENDING
+        factory: Address(literal: "0x3B1f5f562f5F61B980aBfDDbebD6cdF9a73b0b5b"),
+        router: Address(literal: "0x2a66b7106adac1BcD85679ba8E23dFc9aD4D8637"),
+        escrow: Address(literal: "0x690eaa0b66C3738887007a0D99ED90b5f5af86F1"),
+        holderFeeSharing: Address(literal: "0x5358a136a50eE4F961B532064dc641E8F4Fa5656"),
+        hook: Address(literal: "0xb845b4Dd429684b67eeEa9D484F5e903B28360CC"),
         poolManager: Uniswap.poolManager,
         generation: .v2
     )
@@ -94,7 +93,7 @@ public struct LaunchpadAddresses: Sendable, Hashable {
     /// 2026-09-28), so builds before 16 can still launch there.
     public static let retiredStacks: [LaunchpadAddresses] = [
         // The 2026-09-23 relaunch with the rotated treasury and fee wallets, retired by the v2 release
-        // (`143.json` until the v2 record is promoted, then `143-retired-0x6B1C.json`). Same source as 0x10F3.
+        // (`143-retired-0x6B1C.json`). Same source as 0x10F3.
         LaunchpadAddresses(
             factory: Address(literal: "0x6B1C8769a8d6745955aC35b91FF1F37AB76859dB"),
             router: Address(literal: "0x454822dc56072696ab7cf8Bac357FFd3315477Fc"),

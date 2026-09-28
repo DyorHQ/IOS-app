@@ -108,8 +108,8 @@ final class MomentsV2Tests: XCTestCase {
                 XCTAssertEqual(error as? MomentsService.MomentsError, .termsNotReviewed)
             }
         }
-        // Nothing publishes on a v1 cohort or on the pending v2 table.
-        for addresses in [MomentsAddresses.retiredMainnet[0], MomentsAddresses.monadMainnet] {
+        // Nothing publishes on a v1 cohort or on a pending v2 table.
+        for addresses in [MomentsAddresses.retiredMainnet[0], MomentsAddresses(generation: .v2)] {
             let other = MomentsService(rpc: RPCClient(url: URL(string: "http://127.0.0.1:1")!), addresses: addresses)
             do {
                 _ = try await other.publishPlan(input, termsHash: V2Fixture.termsHash)
@@ -118,6 +118,10 @@ final class MomentsV2Tests: XCTestCase {
                 XCTAssertEqual(error as? MomentsService.MomentsError, .notDeployed)
             }
         }
+        // The shipped v2 table publishes on its own factory.
+        let live = MomentsService(rpc: RPCClient(url: URL(string: "http://127.0.0.1:1")!), addresses: .monadMainnet)
+        let steps = try? await live.publishPlan(input, termsHash: V2Fixture.termsHash)
+        XCTAssertEqual(steps?.first?.request?.to, MomentsAddresses.monadMainnet.factory)
     }
 
     // MARK: Generations (stubbed chain)

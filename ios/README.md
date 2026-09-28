@@ -87,12 +87,13 @@ The DyorHQ workflow archives `ios/DyorHQ.xcodeproj` on every push to `main`. Tha
 ## Contract addresses and the release gate
 
 The live launchpad and Moments addresses are baked into DyorKit, each stack in one constant:
-`LaunchpadAddresses.monadMainnet` and `MomentsAddresses.monadMainnet`. Until the v2 contracts are deployed both are
-all zero under a `// PENDING` marker: Launch and Publish say "not live yet", and the retired stacks and Moments cohorts
-keep serving their coins, claims and links. Wiring v2 is one reviewed change: fill in both constants from the promoted
-`contracts/deployments/143.json` and `moments-143.json` (with `deployBlock` added to the Moments record by hand), and
-commit the records and the Swift together; `V2WiringTests` accepts only all-zero or fully wired tables that match the
-records.
+`LaunchpadAddresses.monadMainnet` and `MomentsAddresses.monadMainnet`, the v2 contracts deployed on 2026-09-28
+(`contracts/deployments/143.json` and `moments-143.json`; the stacks they replaced are `143-retired-0x6B1C.json` and
+`moments-143-cohort3.json`). A future stack is wired the same way, in one reviewed change: promote its records (with
+`deployBlock`, the factory's creation block, added by hand), fill in the constant from them, and commit the records and
+the Swift together. `V2WiringTests` accepts only all-zero tables (a `// PENDING` marker: Launch and Publish say "not
+live yet", and the retired stacks and Moments cohorts keep serving their coins, claims and links) or fully wired tables
+that match the records.
 
 A build with a pending table must not ship, so before a release:
 

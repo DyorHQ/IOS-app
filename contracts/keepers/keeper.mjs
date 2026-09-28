@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// DyorHQ keepers for the LIVE (immutable, v1) Launchpad and Moments contracts on Monad. Dry run by default: reads
+// DyorHQ keepers for the deployed (immutable) Launchpad and Moments contracts on Monad. Dry run by default: reads
 // chain state, simulates each permissionless call and prints the exact `cast send` it would run. `--send` executes
 // them through Foundry `cast` with a keystore / Foundry account / Ledger — never a raw private key.
 //
@@ -16,8 +16,9 @@ import { redact, rpcLabel } from "./lib/redact.mjs";
 import { momentsGraduationJob, buybacksJob, sweepsJob, launchpadGraduationJob, governanceJob } from "./lib/jobs.mjs";
 
 const JOBS = ["moments-graduation", "buybacks", "sweeps", "launchpad-graduation", "governance"];
-// The metadata base the live Moments cohort was set to at the 2026-09-23 relaunch.
-const LIVE_EXTERNAL_BASE_URI = "https://dyorhq.fun/moments/";
+// The metadata base the live Moments cohort (v2, cohort 4) was deployed with: part of its terms hash, and what the app
+// reads as cohort c4 in a Moment's link.
+const LIVE_EXTERNAL_BASE_URI = "https://dyorhq.fun/moments/c4/";
 
 const { values: o, positionals } = parseArgs({
   allowPositionals: true,

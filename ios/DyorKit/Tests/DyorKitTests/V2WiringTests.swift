@@ -103,8 +103,15 @@ final class V2WiringTests: XCTestCase {
             XCTAssertEqual(try address(live, key), value, "moments-143.json \(key)")
         }
         XCTAssertEqual((live["deployBlock"] as? NSNumber)?.uint64Value, m.deployBlock, "moments-143.json deployBlock (add it by hand from the receipt)")
-        // …and cohort 3's record kept as a retired one.
-        XCTAssertEqual(try address(try record("moments-143-cohort3.json"), "factory"), Self.cohort3Factory)
+        // …and cohort 3's record kept as a retired one, equal to the retired table's cohort 3.
+        let cohort3 = try record("moments-143-cohort3.json")
+        let table = try XCTUnwrap(MomentsAddresses.retired(factory: Self.cohort3Factory))
+        XCTAssertEqual(table.retirement, .replaced)
+        for (key, value) in [("factory", table.factory), ("collect", table.collect), ("vesting", table.vesting), ("graduation", table.graduation), ("locker", table.locker),
+                             ("hook", table.hook), ("buyback", table.buyback), ("platform", table.platform), ("treasury", table.treasury)] {
+            XCTAssertEqual(try address(cohort3, key), value, "moments-143-cohort3.json \(key)")
+        }
+        XCTAssertEqual((cohort3["deployBlock"] as? NSNumber)?.uint64Value, table.deployBlock, "moments-143-cohort3.json deployBlock")
     }
 
     private func assertLaunchpadWired(_ l: LaunchpadAddresses) throws {

@@ -337,4 +337,34 @@ final class MomentDirectoryTests: XCTestCase {
         XCTAssertEqual(MomentLink.Cohort.c4.factory, MomentsAddresses.monadMainnet.factory)
         XCTAssertEqual(MomentLink.Cohort.c4.isWired, MomentsAddresses.monadMainnet.isDeployed)
     }
+
+    /// Build 16's c4 is the v2 factory deployed on 2026-09-28 (0x95eb…): `…/moments/c4/<id>` opens its Moments, every
+    /// existing name keeps its Moment, and a c4 Moment named like an older one gets the next free name.
+    func testTheShippedC4IsTheV2FactoryAndExistingNamesKeepTheirLinks() async throws {
+        let v2 = Address(literal: "0x95eb7F5A88B10D9dF32aC54F48C767927fa80840")
+        XCTAssertEqual(MomentsAddresses.monadMainnet.factory, v2)
+        XCTAssertEqual(MomentLink.Cohort.c4.factory, v2)
+        XCTAssertEqual(MomentLink.Cohort(factory: v2), .c4)
+        XCTAssertEqual(MomentLink.Cohort.wired, MomentLink.Cohort.allCases)
+        XCTAssertEqual(URL(string: "https://dyorhq.fun/moments/c4/1").flatMap(MomentLink.init(url:))?.target, .key(MomentKey(factory: v2, id: 1)))
+        XCTAssertEqual(MomentLink(key: MomentKey(factory: v2, id: 1))?.url.absoluteString, "https://dyorhq.fun/moments/c4/1")
+
+        let stacks = MomentsAddresses.retiredMainnet.map { cohort -> FakeMomentsStack in
+            FakeMomentsStack(addresses: cohort, policy: V2Fixture.policy(termsHash: nil), factoryBase: "", nftBase: "", names: Self.pinned.filter { $0.0.factory == cohort.factory }.map(\.2))
+        } + [FakeMomentsStack(addresses: .monadMainnet, policy: V2Fixture.policy(), factoryBase: MomentsAddresses.expectedExternalBaseURI,
+                              nftBase: MomentsAddresses.expectedExternalBaseURI, names: ["Nature", "Bitcoin Diva"])]
+        MomentsChainStub.install { to, data in
+            for stack in stacks { if let answer = stack.answer(to, data) { return answer } }
+            return nil
+        }
+        let directory = MomentDirectory(rpc: MomentsChainStub.rpc())
+        for (cohort, id, _, slug) in Self.pinned {
+            let key = try await directory.key(for: slug)
+            XCTAssertEqual(key, MomentKey(factory: cohort.factory, id: BigUInt(id)), slug)
+        }
+        let nature = try await directory.key(for: "nature-2")
+        XCTAssertEqual(nature, MomentKey(factory: v2, id: 1))
+        let diva = try await directory.link(for: MomentKey(factory: v2, id: 2))
+        XCTAssertEqual(diva?.url.absoluteString, "https://dyorhq.fun/moments/bitcoin-diva-2")
+    }
 }

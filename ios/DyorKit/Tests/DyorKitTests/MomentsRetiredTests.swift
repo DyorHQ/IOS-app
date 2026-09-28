@@ -17,7 +17,7 @@ final class MomentsRetiredTests: XCTestCase {
     private let feesWallet = Address(literal: "0x15ED3bb488231213b141A2f78b62358D52235Cd7")
     private let treasury = Address(literal: "0x5aDbDc19831D0f9dbdfBbA6ee3d618DbB9CEA371")
 
-    // MARK: Table (moments-143.json, cohort 3 until the v2 record is promoted; moments-143-cohort2.json; moments-143-cohort1.json)
+    // MARK: Table (moments-143-cohort3.json, moments-143-cohort2.json, moments-143-cohort1.json)
 
     func testRetiredTableIsPinned() {
         XCTAssertEqual(MomentsAddresses.retiredMainnet.count, 3)

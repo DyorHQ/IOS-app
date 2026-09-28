@@ -5,7 +5,7 @@ import Foundation
    The clean-room contract set lives in `contracts/src/moments`; these models are the app-facing shape of what
    the contracts expose, ported from the web app's `app/lib/moments/reads.ts` so both clients agree to the wei. */
 
-/// Where the Moments contracts live: the v2 set (`monadMainnet`, pending its deployment) and the retired v1 cohorts
+/// Where the Moments contracts live: the v2 set (`monadMainnet`, cohort 4) and the retired v1 cohorts
 /// (`retiredMainnet`); `isDeployed` is what every read checks.
 public struct MomentsAddresses: Sendable, Hashable {
     public var factory: Address
@@ -58,29 +58,28 @@ public struct MomentsAddresses: Sendable, Hashable {
     /// the app refuses to publish on a factory whose `externalBaseURI()` is anything else (`MomentPolicy.canPublish`).
     public static let expectedExternalBaseURI = "https://\(MomentLink.host)/moments/\(MomentLink.Cohort.c4.rawValue)/"
 
-    // PENDING v2 deploy: the only place the v2 Moments addresses live. Everything that serves the live cohort derives from
-    // this constant (AppConfig, `MomentLink.Cohort.c4`, the passkey signing policy, swap routing), so wiring v2 is one
-    // reviewed edit here. Until then every address is zero: `isDeployed` is false, Publish says "not live yet", no call
-    // goes to address 0, and the retired cohorts keep working.
-    /// Moments v2 on Monad mainnet (chain 143), NOT DEPLOYED YET. To wire it after the owner's deploy and Sourcify
-    /// verification: every module from the promoted `contracts/deployments/moments-143.json`, platform and treasury from
-    /// its policy, and `deployBlock` from the factory's creation receipt (the deploy script does not write it). Keep
-    /// `generation: .v2`. `V2WiringTests` accepts only all-zero or fully wired, and fails a wired table that differs from
-    /// the record or a release built while it is pending (`DYORHQ_RELEASE_GATE=1`).
+    // The only place the v2 Moments addresses live. Everything that serves the live cohort derives from this constant
+    // (AppConfig, `MomentLink.Cohort.c4`, the passkey signing policy, swap routing).
+    /// Moments v2 on Monad mainnet (chain 143), cohort 4: deployed 2026-09-28 with governance the Owner Safe 0x6D2A…,
+    /// guardian 0x686C… and the link base `expectedExternalBaseURI`, Sourcify-verified. Every module from
+    /// `contracts/deployments/moments-143.json`, platform and treasury from its policy, and `deployBlock` from the
+    /// factory's creation receipt (added to the record by hand: the deploy script does not write it). `V2WiringTests`
+    /// accepts only all-zero or fully wired, and fails a wired table that differs from the record or a release built
+    /// while it is pending (`DYORHQ_RELEASE_GATE=1`).
     public static let monadMainnet = MomentsAddresses(
-        factory: .zero, // PENDING
-        collect: .zero, // PENDING
-        vesting: .zero, // PENDING
-        graduation: .zero, // PENDING
-        locker: .zero, // PENDING
-        hook: .zero, // PENDING
-        buyback: .zero, // PENDING
+        factory: Address(literal: "0x95eb7F5A88B10D9dF32aC54F48C767927fa80840"),
+        collect: Address(literal: "0xe6beb4A10827a2e50B155B7386b1369d504186Cc"),
+        vesting: Address(literal: "0x6Eb483C1E1Be2b6700AD590ddE326B597a13649A"),
+        graduation: Address(literal: "0x736dD4c4A09Ef41C508bb2175001eA038A3D5152"),
+        locker: Address(literal: "0xe86557E2B44c119B05948c918C9Eb0c1cE5331a0"),
+        hook: Address(literal: "0xDa7042CF42B26Be4d6816C9eeB1B0bee8e3Fe0cc"),
+        buyback: Address(literal: "0xFAf9Ad081d43F6A1b949DB81A2d7145F19845613"),
         usdc: Address(literal: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"),
         permit2: Address(literal: "0x000000000022D473030F116dDEE9F6B43aC78BA3"),
         poolManager: Address(literal: "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e"),
-        platform: .zero, // PENDING
-        treasury: .zero, // PENDING
-        deployBlock: 0, // PENDING
+        platform: Address(literal: "0x15ED3bb488231213b141A2f78b62358D52235Cd7"),
+        treasury: Address(literal: "0x5aDbDc19831D0f9dbdfBbA6ee3d618DbB9CEA371"),
+        deployBlock: 108_859_966,
         generation: .v2
     )
 
@@ -91,8 +90,8 @@ public struct MomentsAddresses: Sendable, Hashable {
     /// retired beneficiaries (platform 0xf4D4…, treasury 0x5282… whose key leaked); cohort 3 pays the current fees wallet
     /// 0x15ED… and treasury 0x5aDb…, and is retired because the v2 contracts replaced it (`retirement` says which).
     /// Moment ids restart at 1 on every factory, so anything about a retired Moment is keyed by `MomentKey` (factory,
-    /// id). Mirrors `moments-143.json` (cohort 3, `moments-143-cohort3.json` once the v2 record is promoted),
-    /// `moments-143-cohort2.json` and `moments-143-cohort1.json` (factory getters checked on chain);
+    /// id). Mirrors `moments-143-cohort3.json`, `moments-143-cohort2.json` and `moments-143-cohort1.json` (factory
+    /// getters checked on chain);
     /// `MomentsRetiredTests` pins the table.
     public static let retiredMainnet: [MomentsAddresses] = [
         // Cohort 3 (2026-09-23, the $2,000-FDV policy, the rotated wallets): 1 Moment, "Nature". Retired for v2.
