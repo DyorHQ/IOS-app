@@ -253,14 +253,15 @@ struct CollateralSheet: View {
                 } header: {
                     Text(isCreating ? "Open your Perpl account" : (kind == .deposit ? "Deposit AUSD" : "Withdraw AUSD"))
                 } footer: {
-                    if let problem { Text(problem) }
-                    else if isCreating {
-                        // The Perps screen's first run: opening the account is where someone new to Perps starts.
+                    if isCreating {
+                        // The Perps screen's first run: opening the account is where someone new to Perps starts. A problem
+                        // with the amount takes the explanation's place, and the link stays while it's typed.
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Your first deposit opens your Perpl account. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.")
-                            LearnMoreLink(.perpetualsOverview)
+                            Text(problem ?? "Your first deposit opens your Perpl account. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.")
+                            LearnMoreLink(.depositAndWithdraw)
                         }
                     }
+                    else if let problem { Text(problem) }
                     else { Text("\(kind == .deposit ? "In wallet" : "Available"): \(NumberStyle.units(limit, decimals: 6)) AUSD") }
                 }
             }

@@ -76,7 +76,7 @@ final class DocsLinksTests: XCTestCase {
             (.quickstart, "https://dyorhq.gitbook.io/docs/getting-started/quickstart"),
             (.selfCustodyAndSecurity, "https://dyorhq.gitbook.io/docs/platform/self-custody-and-security"),
             (.slippageAndPriceImpact, "https://dyorhq.gitbook.io/docs/spot-trading/slippage-and-price-impact"),
-            (.perpetualsOverview, "https://dyorhq.gitbook.io/docs/perpetuals/overview"),
+            (.depositAndWithdraw, "https://dyorhq.gitbook.io/docs/perpetuals/deposit-and-withdraw"),
             (.oneClickTrading, "https://dyorhq.gitbook.io/docs/perpetuals/one-click-trading"),
             (.launchACoin, "https://dyorhq.gitbook.io/docs/launchpad/launch-a-coin"),
             (.launchpadGraduation, "https://dyorhq.gitbook.io/docs/launchpad/graduation"),
@@ -133,7 +133,7 @@ final class DocsLinksTests: XCTestCase {
     func testEachLearnMoreLinkIsOnTheScreenThatExplainsIt() throws {
         let placements: Set<String> = [
             "oneClickTrading Profile/Settings.swift",               // Perpl Trading: the trading key's footer
-            "perpetualsOverview Perps/PerpsView.swift",             // the first deposit, which opens the Perpl account
+            "depositAndWithdraw Perps/PerpsView.swift",             // the first deposit, which opens the Perpl account
             "slippageAndPriceImpact Swap/SwapView.swift",           // the slippage sheet's explanation
             "launchACoin Launchpad/LaunchpadView.swift",            // Launch a Coin: the pairing footer
             "launchpadGraduation Launchpad/LaunchpadView.swift",    // the coin page's gauge, or its graduation section
@@ -174,6 +174,9 @@ final class DocsLinksTests: XCTestCase {
         let launchpad = try Self.appSource("Launchpad/LaunchpadView.swift")
         XCTAssertTrue(launchpad.contains("if launch.phase == .bonding, launch.curveSellsOpen { LearnMoreLink(.launchpadGraduation) }"))
         XCTAssertTrue(launchpad.contains("if launch.curveSellsOpen { ticketSection } else { graduatedSection }"))
+        // The first deposit's link stays while an amount under the minimum is typed: the problem takes the text's place.
+        let perps = try Self.appSource("Perps/PerpsView.swift")
+        XCTAssertTrue(perps.contains("Text(problem ?? \"Your first deposit opens your Perpl account. Minimum 10 AUSD."))
 
         let linked = Set(placements.map { String($0.split(separator: " ")[0]) }).union(["home", "quickstart", "riskDisclosures"])
         XCTAssertEqual(linked, Set(DocsLinks.allCases.map { "\($0)" }), "one case per page the app opens, plus the home")
