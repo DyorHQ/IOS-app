@@ -32,8 +32,8 @@ import Foundation
    (`RetiredCurves`), and a curve `buy` whose curve couldn't be looked up is refused as unverified.
 
    Pure and synchronous: the app supplies what only the chain can answer (`Context.verifiedCurves`, `RetiredCurves`) and
-   the session's caps. The only messages a session signs on its own are DyorHQ's wallet-auth sign-in for this account; the gas-drip
-   template joins that list if a drip is ever built (this build sponsors no gas, MERA-PLAN §4). */
+   the session's caps. The only messages a session signs on its own are DyorHQ's wallet-auth sign-in for this account;
+   the gas-drip template joins that list if a drip is ever built (this build sponsors no gas, MERA-PLAN §4). */
 extension Mera {
     // MARK: Intent
 

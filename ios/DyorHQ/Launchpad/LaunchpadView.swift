@@ -22,8 +22,9 @@ struct LaunchpadView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            // While the live (v2) launchpad is not deployed the board still lists the retired launchpads' coins, which
-            // keep trading and paying out; only new launches wait.
+            // While the live (v2) launchpad is not deployed the board still lists the retired launchpads' coins: their
+            // holders can sell them and claim what they earned, graduated ones trade on Swap, and nobody buys one still
+            // on its curve (sell-only, owner decision 2026-09-28). Only new launches wait.
             board
             .navigationTitle("Launch")
             .navigationDestination(for: Launch.self) { launch in LaunchDetailView(launch: launch) }
@@ -57,7 +58,7 @@ struct LaunchpadView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 if !env.config.launchpad.isDeployed {
-                    Label("New launches open soon. Coins already launched keep trading here.", systemImage: "clock")
+                    Label("New launches open soon. Coins from the retired launchpads can be sold here, but not bought; graduated ones trade on Swap.", systemImage: "clock")
                         .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 if graduated.isEmpty, climbing.isEmpty, !model.loading {

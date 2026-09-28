@@ -5,8 +5,8 @@ import XCTest
 
 /// The passkey (Mera) session's scope on the exact plans the app builds against a real v2 Moments deployment on a LOCAL
 /// anvil fork of Monad (`V2ForkCase` says how to run it), with the contracts table the app builds from its configured
-/// cohort (`Contracts(moments:)`). The v2 launchpad's `graduateFallback`, refused on the network-fee bound, is checked on
-/// a real stuck launch in `LaunchpadV2ForkTests.testAStuckMondayLaunchOnARealV2Factory`.
+/// cohort (`Contracts(moments:)`). The launchpad's `graduateFallback`, which a passkey account refuses on any stack (v2's on
+/// the network-fee bound first), is checked on a real stuck launch in `LaunchpadV2ForkTests.testAStuckMondayLaunchOnARealV2Factory`.
 final class MeraV2ForkTests: V2ForkCase {
     typealias Policy = Mera.SigningPolicy
 
