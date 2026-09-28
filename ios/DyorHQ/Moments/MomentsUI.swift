@@ -30,14 +30,19 @@ struct MomentArtwork: View {
     private func load() async {
         let sources = self.sources
         guard !sources.isEmpty else { return }
-        // The cache is keyed by everything the sources depend on, not the pointer alone: `mediaURI` is not unique, so
-        // another Moment reusing this CID with its own hash and mirror must never fill this Moment's entry.
-        let key = [provenance.mediaURI, creator?.hex ?? "", provenance.mediaHash.map { String(format: "%02x", $0) }.joined()].joined(separator: "|")
+        let key = Self.cacheKey(provenance: provenance, creator: creator)
         if let cached = MomentMediaLoader.shared.cached(key) { image = cached; failed = false; return }
         image = nil; failed = false
         let loaded = await MomentMediaLoader.shared.load(key: key, sources: sources)
         guard !Task.isCancelled else { return }
         if let loaded { image = loaded } else { failed = true }
+    }
+
+    /// The media cache's key for a Moment's image: everything the sources depend on, not the pointer alone. `mediaURI`
+    /// is not unique, so another Moment reusing this CID with its own hash and mirror must never fill this Moment's
+    /// entry. The Share button uses it to offer the artwork already on screen as the share preview.
+    static func cacheKey(provenance: MomentProvenance, creator: Address?) -> String {
+        [provenance.mediaURI, creator?.hex ?? "", provenance.mediaHash.map { String(format: "%02x", $0) }.joined()].joined(separator: "|")
     }
 
     private var placeholder: some View {

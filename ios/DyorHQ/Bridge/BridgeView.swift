@@ -20,7 +20,10 @@ struct BridgeView: View {
 
     init(env: AppEnvironment) { _model = State(initialValue: BridgeModel(env: env)) }
 
-    var body: some View {
+    // A Moment link waits while this review is on screen (RootView's link gate).
+    var body: some View { reviewContent.holdsMomentLinks() }
+
+    @ViewBuilder private var reviewContent: some View {
         NavigationStack {
             Group {
                 #if DEBUG && targetEnvironment(simulator)

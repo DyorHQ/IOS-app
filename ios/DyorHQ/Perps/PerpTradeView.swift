@@ -2229,7 +2229,10 @@ private struct ClosePositionSheet: View {
         env.perpl.closePositionPlan(market: market, position: position, slippageBps: 100, kind: kind, limitPrice: limitPrice, postOnly: postOnly)
     }
 
-    var body: some View {
+    // A Moment link waits while this review is on screen (RootView's link gate).
+    var body: some View { reviewContent.holdsMomentLinks() }
+
+    @ViewBuilder private var reviewContent: some View {
         NavigationStack {
             List {
                 Section {
@@ -2356,7 +2359,10 @@ private struct AddMarginSheet: View {
         PerplService.liquidationPrice(side: position.side, entry: position.entry, size: position.size, margin: projMargin, premium: position.premium, maintenanceFraction: market.maintMarginFraction)
     }
 
-    var body: some View {
+    // A Moment link waits while this review is on screen (RootView's link gate).
+    var body: some View { reviewContent.holdsMomentLinks() }
+
+    @ViewBuilder private var reviewContent: some View {
         NavigationStack {
             List {
                 Section {
@@ -2488,7 +2494,10 @@ struct AuthedOrderSheet: View {
         return session.mera.assessOrder(usd: Mera.SpendingCaps.notionalUSD(of: input))
     }
 
-    var body: some View {
+    // A Moment link waits while this review is on screen (RootView's link gate).
+    var body: some View { reviewContent.holdsMomentLinks() }
+
+    @ViewBuilder private var reviewContent: some View {
         NavigationStack {
             List {
                 Section {

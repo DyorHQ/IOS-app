@@ -19,6 +19,8 @@ final class AppEnvironment {
     /// withdraw their own proceeds and pool fees; nothing else is reachable. They never feed the Moments board, the
     /// feeds, publishing or swap routing — those stay on `moments`.
     let retiredMoments: [RetiredMoments]
+    /// Moment names → share-link slugs, across every cohort (`MomentLink`, `MomentSlug`).
+    let momentDirectory: MomentDirectory
     let news: NewsService
     let activity: TokenActivityService
     let swapHistory: SwapHistoryService
@@ -68,6 +70,8 @@ final class AppEnvironment {
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
         moments = MomentsService(rpc: rpc, addresses: config.moments)
         retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc] in RetiredMoments(rpc: rpc, addresses: $0) }
+        // Every Moment's name in publish order, for share links by name (dyorhq.fun/moments/<name>).
+        momentDirectory = MomentDirectory(rpc: rpc)
         news = NewsService()
         // History reads want the larger log-chunk RPC (rpc1), like the launchpad does. A local fork keeps its own
         // logs, so a development build pointed at 127.0.0.1 scans the fork instead.

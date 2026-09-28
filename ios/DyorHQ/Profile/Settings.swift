@@ -234,6 +234,7 @@ struct PerplTradingView: View {
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
+    @Environment(Router.self) private var router
     @State private var busy = false
     @State private var error: String?
     @State private var confirmRemoveKey = false
@@ -354,9 +355,11 @@ struct PerplTradingView: View {
         try await trading.enableForwarding(env: env, wallet: wallet)
     }
 
+    /// Connecting signs, and enabling one-click trading is an on-chain send without a review sheet: a Moment link waits
+    /// until it ends, so it never closes Profile under it (RootView's link gate).
     private func run(_ work: @escaping () async throws -> Void) {
         busy = true; error = nil
-        Task { do { try await work() } catch { self.error = describe(error) }; busy = false }
+        Task { do { try await router.holdingLinks(work) } catch { self.error = describe(error) }; busy = false }
     }
 }
 

@@ -62,12 +62,8 @@ struct MomentDetailView: View {
         .navigationTitle(info.symbol)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                ShareLink(item: OpenSea.collection(contract: m.nft), subject: Text(info.name),
-                          message: Text("\(info.name) — a Moment on Monad, kept forever. Collect it on DyorHQ, \(SupportLinks.tagline).")) {
-                    Image(systemName: "square.and.arrow.up")
-                }
-            }
+            // The Moment's own link (m.dyorhq.fun), which opens this page in the app; OpenSea stays a row in About.
+            ToolbarItem(placement: .topBarTrailing) { MomentShareButton(info: info) }
         }
         .refreshable { await load() }
         .task { await clock.run() }

@@ -194,6 +194,7 @@ struct DeleteAccountView: View {
     @Environment(SocialSession.self) private var social
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
+    @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
     @State private var acknowledged = false
     @State private var confirmation = ""
@@ -347,17 +348,20 @@ struct DeleteAccountView: View {
            !(await BiometricGate.authenticate(reason: "Delete your DyorHQ account")) { return }
         deleting = true
         error = nil
-        do {
-            if isPasskey, let address = session.address {
-                try await AccountDeletion.deletePasskeyAccount(shown: address, session: session, social: social, env: env)
-            } else {
-                try await AccountDeletion.run(session: session, social: social, env: env)
+        // A Moment link waits until the deletion ends: delivering one closes Profile, and this screen with it.
+        await router.holdingLinks {
+            do {
+                if isPasskey, let address = session.address {
+                    try await AccountDeletion.deletePasskeyAccount(shown: address, session: session, social: social, env: env)
+                } else {
+                    try await AccountDeletion.run(session: session, social: social, env: env)
+                }
+                dismiss()
+            } catch where isUserCancellation(error) {
+                // The passkey prompt was closed: nothing was deleted, and the form stays as it was.
+            } catch {
+                self.error = describe(error)
             }
-            dismiss()
-        } catch where isUserCancellation(error) {
-            // The passkey prompt was closed: nothing was deleted, and the form stays as it was.
-        } catch {
-            self.error = describe(error)
         }
         deleting = false
     }

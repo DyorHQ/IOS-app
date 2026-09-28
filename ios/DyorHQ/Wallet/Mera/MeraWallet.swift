@@ -228,8 +228,9 @@ final class MeraSession {
     @ObservationIgnored private var expiry: Task<Void, Never>?
     /// The step-up approval waiting to be spent, and the session its ceremony opened.
     @ObservationIgnored private var pendingStepUp: (id: UUID, session: Mera.SigningSession)?
-    /// Approved actions still signing or sending (`beginAction`): a plan's later steps, a Perpl bracket's frames.
-    @ObservationIgnored private var runningActions = 0
+    /// Approved actions still signing or sending (`beginAction`): a plan's later steps, a Perpl bracket's frames — for
+    /// every account type, not only passkeys. Observable, so a Moment link waits until none is running (RootView).
+    private(set) var runningActions = 0
     /// The app is in the background (`endWhenIdle` until `enteredForeground`).
     @ObservationIgnored private var inBackground = false
     /// The app left the foreground while an action ran: the session ends when the last one finishes (GL-1).

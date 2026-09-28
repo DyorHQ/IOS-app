@@ -53,7 +53,7 @@ targets:
         CFBundleDisplayName: DyorHQ
         CFBundleName: DyorHQ
         CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "14"
+        CFBundleVersion: "15"
         UILaunchScreen:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
@@ -103,13 +103,15 @@ targets:
       # Associated Domains: passkeys (Mera) bind to the rpId accounts.dyorhq.fun (Mera.relyingParty in DyorKit, which a
       # DyorKit test keeps equal to this line). That host serves only
       # https://accounts.dyorhq.fun/.well-known/apple-app-site-association (GitHub Pages, repo DyorHQ/accounts-domain).
-      # Never add ?mode=developer — it never associates in a distribution build. Device builds also need Associated
-      # Domains on the App ID. Don't install a device build until
-      # https://app-site-association.cdn-apple.com/a/v1/accounts.dyorhq.fun serves the file: iOS caches a failed fetch
+      # Moment links (MomentLink.host in DyorKit, pinned by the same test) are universal links on dyorhq.fun/moments/*:
+      # the website serves https://dyorhq.fun/.well-known/apple-app-site-association with applinks only. Applinks never
+      # go on the passkey host, and webcredentials never on dyorhq.fun. Never add ?mode=developer — it never associates
+      # in a distribution build. Device builds also need Associated Domains on the App ID. Don't install a device build
+      # until https://app-site-association.cdn-apple.com/a/v1/<host> serves each host's file: iOS caches a failed fetch
       # until the build number changes.
       properties:
         com.apple.developer.applesignin: [Default]
-        com.apple.developer.associated-domains: ["webcredentials:accounts.dyorhq.fun"]
+        com.apple.developer.associated-domains: ["webcredentials:accounts.dyorhq.fun", "applinks:dyorhq.fun"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fun.dyorhq.app
