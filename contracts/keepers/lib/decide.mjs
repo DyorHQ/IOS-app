@@ -244,7 +244,7 @@ export function decideStuckLaunch({ phase, venue, completed, rescued, stuckSince
     if (!mondayOnly || v4FallbackAllowed) {
       reason = failing;
     } else if (valveDelay === undefined) {
-      // live (v1) factory: no public valve
+      // v1 factory: no public valve
       reason = "Monday-only pair: holders are frozen (curve closed, no pool) until the OWNER calls allowV4Fallback(token), or pre-aligns the Monday pool (README, LP-1 manual procedure); rescue needs the owner too";
     } else {
       const valveAt = stuckSince + valveDelay;

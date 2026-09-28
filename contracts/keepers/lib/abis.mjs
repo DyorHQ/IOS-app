@@ -1,7 +1,7 @@
-// Minimal ABIs of the LIVE (deployed, v1) contracts — only the functions and events the keepers use. They are
-// written out by hand on purpose: the keepers must match the deployed bytecode, not the v2 source in contracts/src
-// (which adds functions the live contracts do not have). Every signature below was checked against the source at
-// git commit 3fc1f47 (the deployed state).
+// Minimal ABIs of the deployed contracts — only the functions and events the keepers use. They are written out by hand
+// on purpose: the keepers must match the deployed bytecode of every stack they cover. The base ABIs are the v1 contracts
+// (the retired stacks; every signature checked against the source at git commit 3fc1f47, their deployed state); the v2
+// source (the live stacks since 2026-09-28) only adds functions, which are in the *V2Abi exports.
 import { parseAbi } from "viem";
 
 export const momentsFactoryAbi = parseAbi([
@@ -20,8 +20,13 @@ export const momentsFactoryAbi = parseAbi([
   "function getMoment(uint256 momentId) view returns ((address creator, address platform, address treasury, address coin, address nft, uint256 price, uint256 threshold, uint256 rateNum, uint256 rateDen, uint16 creatorBps, uint16 platformBps, uint16 reserveBps, uint16 creatorAllocBps, uint16 expiryCreatorBps, uint16 royaltyBps, uint64 publishedAt, uint64 deadline))",
 ]);
 
-// v2 only (NOT deployed): the guardian's events. Absent on every live cohort.
-export const momentsFactoryV2Abi = parseAbi(["event GuardianSet(address indexed guardian)", "event GuardianPaused(bool paused)"]);
+// v2 only (cohort 4, 2026-09-28): the guardian, its own pause and their events. Absent on cohorts 1-3.
+export const momentsFactoryV2Abi = parseAbi([
+  "function guardian() view returns (address)",
+  "function guardianPaused() view returns (bool)",
+  "event GuardianSet(address indexed guardian)",
+  "event GuardianPaused(bool paused)",
+]);
 
 // Cohort 0 ("v1") predates `royaltyBps`; its Moment struct has one field fewer. Used as a fallback decoder.
 export const momentsFactoryV1Abi = parseAbi([
@@ -46,8 +51,8 @@ export const momentGraduationAbi = parseAbi([
 
 export const momentFeeHookAbi = parseAbi(["function buybackAccrued(uint256 momentId) view returns (uint256)"]);
 
-// v2 only (NOT deployed): the locker attributes its balances per Moment and adds at most MAX_INCREASE_BPS per round,
-// so a Moment's remainder waits here between rounds. Reverts on every live (v1) locker.
+// v2 only: the locker attributes its balances per Moment and adds at most MAX_INCREASE_BPS per round, so a Moment's
+// remainder waits here between rounds. Reverts on every v1 locker.
 export const momentLockerV2Abi = parseAbi(["function heldOf(uint256 momentId, address currency) view returns (uint256)"]);
 
 // Permissionless: MomentBuyback.execute(id, minCoinOut). At most once per MIN_INTERVAL per Moment.
@@ -103,7 +108,7 @@ export const launchpadFactoryLegacyAbi = parseAbi([
   "function getLaunchedToken(address token) view returns ((address token, address curve, address deployer, address creatorFeeRecipient, address pairToken, uint256 graduationThreshold, uint16 creatorTaxBps, uint16 poolFeeBps, int24 tickSpacing, bool holderFeeSharing, uint8 phase, uint256 sweptQuote, uint256 sweptTokens, uint256 sweptAt, bytes32 poolId, bool exists))",
 ]);
 
-// v2 only (NOT deployed): sealing the modules before the first launch. Absent on every live factory.
+// v2 only: sealing the modules before the first launch. Absent on every v1 factory.
 // Also v2 only: the Monday-only rule snapshotted per launch, and the delay after which its v4 fallback is public.
 export const launchpadFactoryV2Abi = parseAbi([
   "function modulesSealed() view returns (bool)",
@@ -153,8 +158,8 @@ export const memeHookAbi = parseAbi([
   "function sweepPoolFees(bytes32 poolId, address currency)",
 ]);
 
-// v2 only (NOT deployed, LP-2): the protocol's cut of holder-sharing pools waits here, not in pendingFees. Reverts
-// on every live hook, where the keeper treats it as 0.
+// v2 only (LP-2): the protocol's cut of holder-sharing pools waits here, not in pendingFees. Reverts on every v1 hook,
+// where the keeper treats it as 0.
 export const memeHookV2Abi = parseAbi(["function pendingProtocolFees(bytes32 poolId, address currency) view returns (uint256)"]);
 
 export const erc20Abi = parseAbi(["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"]);

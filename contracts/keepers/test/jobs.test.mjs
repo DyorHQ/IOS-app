@@ -701,6 +701,31 @@ test("sec2 governance: a retired launchpad left unfrozen on chain is reported, n
   assert.doesNotMatch(h.reporter.alerts[0].reason, /Close the factory/);
 });
 
+// A v2 cohort's record names its guardian: only the guardian can hand the role on (or renounce it) and lift its own
+// pause, so a different guardian() is critical and its pause, which stops publishing, is a warning.
+test("sec2 governance: a v2 cohort is held to its record's guardian, and the guardian's pause is reported", async () => {
+  const guardian = a(0x9d);
+  const v2Cohort = { ...govCohort, guardian };
+  const reads = (over = {}) => govReads({ [`${govCohort.factory}:guardian:`]: guardian, [`${govCohort.factory}:guardianPaused:`]: false, ...over });
+  const run = async (over) => {
+    const h = harness();
+    await governanceJob({ client: mockClient({ reads: reads(over) }), launchpads: [], cohorts: [v2Cohort], expected, ...h });
+    return h.reporter.alerts.map((x) => `${x.severity} ${x.reason}`);
+  };
+  assert.deepEqual(await run(), []);
+  assert.deepEqual(await run({ [`${govCohort.factory}:guardian:`]: a(0xbad) }), [
+    `critical guardian() is ${a(0xbad)}, the record says ${guardian}: the guardian role was handed on or renounced`,
+  ]);
+  assert.deepEqual(await run({ [`${govCohort.factory}:guardian:`]: ZERO }), [
+    `critical guardian() is ${ZERO}, the record says ${guardian}: the guardian role was handed on or renounced`,
+  ]);
+  assert.deepEqual(await run({ [`${govCohort.factory}:guardianPaused:`]: true }), ["warning the guardian paused publishing (guardianPaused): only the guardian can lift it"]);
+  // A cohort whose record names no guardian (v1) is never asked: those getters revert there.
+  const h = harness();
+  await governanceJob({ client: mockClient({ reads: govReads() }), launchpads: [], cohorts: [govCohort], expected, ...h });
+  assert.deepEqual(h.reporter.alerts, []);
+});
+
 test("sec2 governance: every governance event in the lookback is critical", async () => {
   const client = mockClient({
     reads: govReads(),
