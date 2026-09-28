@@ -373,7 +373,6 @@ struct LaunchDetailView: View {
     @State private var showClaim = false
     @State private var showCreatorClaim = false
     @State private var showGraduate = false
-    @State private var showFallback = false
 
     private var isCreator: Bool { session.address != nil && session.address == launch.deployer }
 
@@ -410,13 +409,6 @@ struct LaunchDetailView: View {
             ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Graduate", build: { env.launchpad.graduatePlan(launch: launch) }, onDone: { Task { await load() } },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "\(launch.symbol) graduated", subtitle: launch.graduationVenue.title, hash: hash, section: "launch"), owner: session.address) }) {
                 DetailRow("Venue", launch.graduationVenue.title)
-                DetailRow("Who pays", "You (gas only)")
-            }
-        }
-        .sheet(isPresented: $showFallback) {
-            ConfirmationSheet(title: "Graduate on Uniswap v4", confirmTitle: "Graduate", build: { env.launchpad.graduateFallbackPlan(launch: launch) }, onDone: { Task { await load() } },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "\(launch.symbol) graduated on Uniswap v4", subtitle: "Uniswap v4 (fallback)", hash: hash, section: "launch"), owner: session.address) }) {
-                DetailRow("Venue", "Uniswap v4 (fallback)")
                 DetailRow("Who pays", "You (gas only)")
             }
         }
@@ -621,9 +613,6 @@ struct LaunchDetailView: View {
                                    ? "Open" : "Opens \(Date(timeIntervalSince1970: TimeInterval(opens)).formatted(date: .abbreviated, time: .shortened))")
                 }
                 Button("Retry Graduation", systemImage: "arrow.clockwise") { showGraduate = true }.disabled(!session.canSign)
-                if offersFallback {
-                    Button("Graduate on Uniswap v4 Instead", systemImage: "arrow.triangle.branch") { showFallback = true }.disabled(!session.canSign)
-                }
             }
         } header: {
             Text(launch.phase == .graduated ? "Graduated" : launch.phase.title)
@@ -652,18 +641,12 @@ struct LaunchDetailView: View {
     /// A completed curve whose migration reverted (the factory records `stuckSince`): the audit's rescue paths apply.
     private var isStuck: Bool { launch.phase != .graduated && (detail?.stuckSince ?? 0) > 0 }
 
-    /// A stuck Monday graduation the app can move to Uniswap v4 itself: v1 stacks only (`Launch.appSendsGraduateFallback`).
-    /// v2's fallback needs more gas than the app sends; DyorHQ's keepers take it.
-    private var offersFallback: Bool { launch.appSendsGraduateFallback }
-
+    /// The app never offers the Uniswap v4 fallback (`graduateFallback`), on any stack: DyorHQ's keepers send it with the
+    /// gas it needs (owner decision 2026-09-28). Only the plain Retry Graduation is offered here.
     private var stuckFooter: String {
-        if offersFallback {
-            return "The last graduation attempt failed. Anyone can retry it; if Monday Trade keeps rejecting it, the launch can graduate into a locked Uniswap v4 pool right away instead."
-        }
         guard launch.keepersTakeGraduateFallback else { return "The last graduation attempt failed. Anyone can retry it; you only pay the gas." }
-        // v2: the fallback needs ~22M gas, more than the app sends, so the keepers finish it (owner decision).
         let waits = detail?.fallbackRule?.waits ?? false
-        return "The last graduation attempt failed. Anyone can retry it on Monday Trade; you only pay the gas. DyorHQ's keepers retry it with about 29.9M gas and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool"
+        return "The last graduation attempt failed. Anyone can retry it on Monday Trade; you only pay the gas. DyorHQ's keepers will finish the graduation: they retry it with about 29.9M gas and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool"
             + (waits ? " once it has been stuck for a day (a \(launch.pair.symbol) coin stays on Monday Trade until then)." : ".")
     }
 

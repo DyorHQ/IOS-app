@@ -611,7 +611,8 @@ public actor LaunchpadService {
         return steps
     }
 
-    /// `LaunchpadFactory.graduate(token)` on the launch's own factory: retries a stuck migration. Anyone may call it.
+    /// `LaunchpadFactory.graduate(token)` on the launch's own factory: retries a stuck migration. Anyone may call it, on
+    /// any stack, retired ones included.
     /// Its gas is estimated like any other step (and held to the app's network-fee cap): on v2 plain `graduate` has no
     /// gas floor and can only graduate on the creator's venue or revert, so the estimate never decides the venue.
     public func graduatePlan(launch: Launch) -> [TransactionStep] {
@@ -619,16 +620,13 @@ public actor LaunchpadService {
         return [.call(TransactionRequest(to: stack(for: launch).factory, data: data), label: "Graduate")]
     }
 
-    /// `LaunchpadFactory.graduateFallback(token)`, the audit's rescue for a stuck Monday graduation on a v1 stack: it
-    /// retries the creator's venue first and, only if Monday still fails, graduates on Uniswap v4 right away (no rescue
-    /// delay). Anyone may call it; a Monday-only quote asset needs the owner's `allowV4Fallback` first. Empty for a
-    /// launch whose factory predates it (the pre-audit retired stacks) and for a v2 launch: v2's fallback reverts below
-    /// 22,062,500 gas, over the app's 15M network-fee cap, so DyorHQ's keepers send it with about 29.9M (owner decision).
-    public func graduateFallbackPlan(launch: Launch) -> [TransactionStep] {
-        let stack = stack(for: launch)
-        guard stack.generation.appSendsGraduateFallback else { return [] }
-        let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduateFallback, [.address(launch.token)])
-        return [.call(TransactionRequest(to: stack.factory, data: data), label: "Graduate on Uniswap v4")]
+    /// `LaunchpadFactory.graduateFallback(token)` — retry the creator's venue, then graduate a stuck Monday launch on
+    /// Uniswap v4 — is never sent from the app, on any stack (owner decision 2026-09-28): DyorHQ's keepers send it with
+    /// the gas it needs (v2's reverts below 22,062,500 gas, over the app's 15M network-fee cap; the keepers give it about
+    /// 29.9M). Always refused with `LaunchpadError.graduateFallbackByKeepers`, so nothing is built for any launch; Retry
+    /// Graduation (`graduatePlan`) stays.
+    public func graduateFallbackPlan(launch: Launch) throws -> [TransactionStep] {
+        throw LaunchpadError.graduateFallbackByKeepers
     }
 
     /// `MemeHook.sweepPoolFees(poolId, currency)` on the launch's own hook: pays out the fees the hook collected for

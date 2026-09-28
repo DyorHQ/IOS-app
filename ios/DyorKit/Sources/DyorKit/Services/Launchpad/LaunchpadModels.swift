@@ -35,7 +35,7 @@ public struct LaunchpadAddresses: Sendable, Hashable {
         case legacy
         /// 0x2F02…, 2026-09-12: the 17-field record, but neither `queuedRewards` nor `graduateFallback` (audit fixes H-1, H-3).
         case preAudit
-        /// 0x10F3… and 0x6B1C…, the audit-fix source (`3fc1f47`): `queuedRewards`, and a `graduateFallback` the app sends.
+        /// 0x10F3… and 0x6B1C…, the audit-fix source (`3fc1f47`): `queuedRewards` and `graduateFallback`.
         case v1
         /// The audited v2 release: sealed modules, the per-launch `launchMondayOnly` snapshot, the hook's
         /// `pendingProtocolFees`, and a `graduateFallback` that needs at least 22,062,500 gas.
@@ -56,12 +56,11 @@ public struct LaunchpadAddresses: Sendable, Hashable {
         public var legacyRecord: Bool { self == .legacy }
         /// The fee-sharing contract has `queuedRewards` (audit fix H-1).
         public var hasQueuedRewards: Bool { self >= .v1 }
-        /// The factory has `graduateFallback` (audit fix H-3).
-        public var hasGraduateFallback: Bool { self >= .v1 }
-        /// The app may send `graduateFallback` itself: v1 only. v2's reverts `InsufficientGasForGraduation` below
+        /// The factory has `graduateFallback` (audit fix H-3). The app never sends it, on any generation (owner decision
+        /// 2026-09-28): DyorHQ's keepers do, with the gas it needs — v2's reverts `InsufficientGasForGraduation` below
         /// `MONDAY_RETRY_GAS + GRADUATION_GAS × 33/32` (22,062,500) gas, over the app's 15M network-fee cap
-        /// (`NetworkFeeLimits.monad`), so DyorHQ's keepers send it, with about 29.9M.
-        public var appSendsGraduateFallback: Bool { self == .v1 }
+        /// (`NetworkFeeLimits.monad`), and the keepers send it with about 29.9M.
+        public var hasGraduateFallback: Bool { self >= .v1 }
         /// The v2-only getters: `modulesSealed`, `launchMondayOnly`, `MONDAY_ONLY_FALLBACK_DELAY` and `MONDAY_RETRY_GAS` on
         /// the factory, `pendingProtocolFees` on the hook.
         public var hasV2Getters: Bool { self >= .v2 }
@@ -436,13 +435,11 @@ public struct Launch: Identifiable, Hashable, Sendable {
     /// The launch was made on a retired launchpad (it still trades; nothing new launches there).
     public var isRetiredLaunchpad: Bool { LaunchpadAddresses.retiredStack(for: factory) != nil }
 
-    /// A stuck Monday graduation the app itself may move to Uniswap v4 (`LaunchpadService.graduateFallbackPlan`): only
-    /// on a v1 stack. The pre-audit stacks have no fallback, and v2's needs more gas than the app ever sends.
-    public var appSendsGraduateFallback: Bool { graduationVenue == .monday && generation.appSendsGraduateFallback }
-
-    /// A stuck Monday graduation that DyorHQ's keepers finish: they retry Monday Trade with about 29.9M gas and take
-    /// the Uniswap v4 fallback when it still fails (v2).
-    public var keepersTakeGraduateFallback: Bool { graduationVenue == .monday && generation.hasGraduateFallback && !generation.appSendsGraduateFallback }
+    /// A stuck Monday graduation that DyorHQ's keepers finish, on every stack with a `graduateFallback` (v1 and v2): they
+    /// retry Monday Trade with about 29.9M gas and take the Uniswap v4 fallback when it still fails. The app never sends
+    /// the fallback itself (`LaunchpadService.graduateFallbackPlan` refuses it); anyone may still retry the plain
+    /// graduation. The pre-audit stacks have no fallback at all.
+    public var keepersTakeGraduateFallback: Bool { graduationVenue == .monday && generation.hasGraduateFallback }
 
     /// Quote raised towards graduation, capped at the threshold (what the token page shows as "Raised").
     public var raised: BigUInt { realQuoteReserve > graduationThreshold ? graduationThreshold : realQuoteReserve }
@@ -785,6 +782,8 @@ public enum LaunchpadError: Error, LocalizedError, Equatable {
     case termsChanged
     /// The factory would refuse the launch now (read when the plan was built).
     case launchBlocked(LaunchBlocker)
+    /// `graduateFallback` is never sent from the app, on any stack: DyorHQ's keepers send it with the gas it needs.
+    case graduateFallbackByKeepers
 
     public var errorDescription: String? {
         switch self {
@@ -792,6 +791,7 @@ public enum LaunchpadError: Error, LocalizedError, Equatable {
         case .launchFeeChanged(let fee): return "The launch fee changed to \(NumberStyle.units(fee, decimals: 18)) MON since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new fee."
         case .termsChanged: return "The launch terms changed since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new terms."
         case .launchBlocked(let blocker): return "\(blocker.message) Nothing was sent."
+        case .graduateFallbackByKeepers: return "DyorHQ's keepers will finish this graduation: they retry it with the gas it needs and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool. Nothing was sent."
         case .unexpectedResponse(let what): return "The launchpad returned something the app could not read (\(what))."
         }
     }

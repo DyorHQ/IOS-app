@@ -52,7 +52,7 @@ final class LaunchpadV2Tests: XCTestCase {
         XCTAssertTrue(asked(LaunchpadABI.Factory.mondayOnlyFallbackDelay).isEmpty)
         XCTAssertNil(stuck.fallbackRule)
         XCTAssertNil(stuck.v4FallbackOpensAt)
-        XCTAssertTrue(stuck.launch.appSendsGraduateFallback, "v1: the app's own fallback")
+        XCTAssertTrue(stuck.launch.keepersTakeGraduateFallback, "v1: the keepers' fallback too, never the app's")
     }
 
     // MARK: Fallback rule
@@ -64,7 +64,6 @@ final class LaunchpadV2Tests: XCTestCase {
         XCTAssertEqual(d.fallbackRule, GraduationFallbackRule(mondayOnly: true, allowed: false, delay: 86_400))
         XCTAssertEqual(d.v4FallbackOpensAt, stuckSince + 86_400)
         XCTAssertTrue(d.launch.keepersTakeGraduateFallback)
-        XCTAssertFalse(d.launch.appSendsGraduateFallback)
 
         // Still climbing (curve not complete): nothing to fall back from, nothing read.
         let climbing = try await detail(OneLaunchChain(stack: V2Fixture.launchpad, venue: .monday, phase: .bonding))

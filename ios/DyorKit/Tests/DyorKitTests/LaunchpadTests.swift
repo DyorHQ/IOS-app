@@ -442,23 +442,19 @@ final class LaunchpadTests: XCTestCase {
             XCTAssertFalse(live.isRetiredLaunchpad)
             let rewards = await service.claimRewardsPlan(launch: live)
             XCTAssertEqual(rewards[0].request?.to, sharing)
-            let fallback = await service.graduateFallbackPlan(launch: live)
-            XCTAssertTrue(fallback.isEmpty)
             let graduate = await service.graduatePlan(launch: live)
             XCTAssertEqual(graduate.map { $0.request?.to }, [factory], "Retry Graduation stays: plain graduate, gas estimated")
         }
-        XCTAssertFalse(launch(on: factory).appSendsGraduateFallback)
         XCTAssertTrue(launch(on: .zero).keepersTakeGraduateFallback)
 
-        // v1 (0x6B1C, 0x10F3): the app's own fallback, on the launch's factory.
+        // v1 (0x6B1C, 0x10F3): the keepers take the fallback there too; the app only retries the plain graduation.
         for stack in [retired, auditFix] {
             XCTAssertEqual(stack.generation, .v1)
             let v1 = launch(on: stack.factory)
-            XCTAssertTrue(v1.appSendsGraduateFallback)
-            XCTAssertFalse(v1.keepersTakeGraduateFallback)
-            let fallback = await service.graduateFallbackPlan(launch: v1)
-            XCTAssertEqual(fallback.map { $0.request?.to }, [stack.factory])
-            XCTAssertEqual(fallback.first?.request?.data, LaunchpadABI.calldata(LaunchpadABI.Factory.graduateFallback, [.address(v1.token)]))
+            XCTAssertTrue(v1.keepersTakeGraduateFallback)
+            let graduate = await service.graduatePlan(launch: v1)
+            XCTAssertEqual(graduate.map { $0.request?.to }, [stack.factory])
+            XCTAssertEqual(graduate.first?.request?.data, LaunchpadABI.calldata(LaunchpadABI.Factory.graduate, [.address(v1.token)]))
         }
 
         let old = launch(on: retired.factory)
@@ -472,16 +468,13 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(sweep[0].request?.to, retired.hook)
         XCTAssertEqual(sweep[0].request?.data.hexString, cd("sweepPoolFees"))
 
-        // The pre-audit stacks (0x2F02, 0xad3d) have no `graduateFallback`: no plan, and the screen offers none.
+        // The pre-audit stacks (0x2F02, 0xad3d) have no `graduateFallback` at all: nothing for the keepers to take either.
         let preAuditStacks = LaunchpadAddresses.retiredStacks.filter { $0.generation < .v1 }
         XCTAssertEqual(preAuditStacks.map(\.generation), [.preAudit, .legacy])
         for stack in preAuditStacks {
             let preAudit = launch(on: stack.factory)
             XCTAssertFalse(preAudit.generation.hasGraduateFallback)
-            XCTAssertFalse(preAudit.appSendsGraduateFallback)
             XCTAssertFalse(preAudit.keepersTakeGraduateFallback)
-            let none = await service.graduateFallbackPlan(launch: preAudit)
-            XCTAssertTrue(none.isEmpty)
         }
         let legacyEscrow = await service.claimEscrowPlan(launch: launch(on: legacy.factory))
         XCTAssertEqual(legacyEscrow[0].request?.to, legacy.escrow)

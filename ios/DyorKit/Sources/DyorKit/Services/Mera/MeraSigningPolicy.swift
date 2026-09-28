@@ -23,9 +23,9 @@ import Foundation
 
    Some things no Face ID makes acceptable, so they are refused outright, prompt-free or approved (`refusal`): on Monad,
    a network fee out of bounds (the RPC sets it and the caps don't count it: more than 5 MON, a gas limit over 15M, or a
-   tip above the max fee), and a declared swap or launchpad trade whose calldata pays someone else or trades another
-   token. The v2 launchpad's `graduateFallback` needs at least 22,062,500 gas, so it is refused on the fee bound even
-   after Face ID: the keepers send it.
+   tip above the max fee), a declared swap or launchpad trade whose calldata pays someone else or trades another token,
+   and the launchpad's `graduateFallback` on any stack: DyorHQ's keepers send it with the gas it needs (v2's needs at
+   least 22,062,500, so it fails the fee bound first), and the app never does (owner decision 2026-09-28).
 
    Pure and synchronous: the app supplies what only the chain can answer (`Context.verifiedCurves`) and the session's
    caps. The only messages a session signs on its own are DyorHQ's wallet-auth sign-in for this account; the gas-drip
@@ -235,6 +235,8 @@ extension Mera {
             /// A Kuru Flow swap whose fee tuple takes basis points (`KuruFlowSwap.takesNoFee`).
             case fee
             case networkFee
+            /// The launchpad's `graduateFallback`, on any stack: only DyorHQ's keepers send it.
+            case graduateFallback
             case unpriced, overActionCap, overSessionCap
 
             /// The "<reason>" in "Face ID required: <reason>".
@@ -258,6 +260,7 @@ extension Mera {
                 case .minimumOut: return "a minimum received below 99% of the quote"
                 case .fee: return "a swap that pays a fee to someone else"
                 case .networkFee: return "an unusually high network fee"
+                case .graduateFallback: return "a graduation fallback, which only DyorHQ’s keepers send"
                 case .unpriced: return "this can’t be priced"
                 case .overActionCap: return "over the $\(Int(SpendingCaps.perActionUSD)) limit per action"
                 case .overSessionCap: return "over this session’s $\(Int(SpendingCaps.perSessionUSD)) limit"
@@ -399,8 +402,10 @@ extension Mera {
         ///   trade the sheet declared doing so. DyorHQ never builds either.
         /// - `.fee`: a Kuru Flow swap whose fee tuple takes basis points. The quote client blocks one too (IOST-7).
         /// - `.differentToken`: a Kuru Flow swap the sheet declared, trading tokens other than the ones shown.
+        /// - `.graduateFallback`: the launchpad's `graduateFallback`, to any contract. The app never sends it, on any stack.
         public static func refusal(_ call: Call, intent: Intent, account: Address) -> Reason? {
             if call.chainId == Monad.chainId, !feeWithinLimits(call) { return .networkFee }
+            if call.data.prefix(4) == Selector.graduateFallback { return .graduateFallback }
             if call.to == Kuru.entrypoint, let swap = KuruFlowSwap(calldata: call.data) {
                 if (swap.recipient ?? account) != account { return .recipient }
                 if !swap.takesNoFee { return .fee }
@@ -597,6 +602,7 @@ extension Mera {
             static let wmonWithdraw = ABI.selector("withdraw(uint256)")
             static let curveBuy = ABI.selector(LaunchpadABI.Curve.buy)
             static let curveSell = ABI.selector(LaunchpadABI.Curve.sell)
+            static let graduateFallback = ABI.selector(LaunchpadABI.Factory.graduateFallback)
             static let momentsCollect = ABI.selector(MomentsABI.Collect.collect)
             static let vestingClaim = ABI.selector(MomentsABI.Vesting.claim)
             static let vestingClaimAll = ABI.selector(MomentsABI.Vesting.claimAll)

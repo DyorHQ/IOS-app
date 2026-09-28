@@ -82,8 +82,7 @@ final class LaunchpadDeploymentTests: XCTestCase {
         XCTAssertEqual(G.allCases, [.legacy, .preAudit, .v1, .v2])
         XCTAssertEqual(G.allCases.map(\.legacyRecord), [true, false, false, false])
         XCTAssertEqual(G.allCases.map(\.hasQueuedRewards), [false, false, true, true])
-        XCTAssertEqual(G.allCases.map(\.hasGraduateFallback), [false, false, true, true])
-        XCTAssertEqual(G.allCases.map(\.appSendsGraduateFallback), [false, false, true, false], "v2's fallback needs 22M gas: the keepers send it")
+        XCTAssertEqual(G.allCases.map(\.hasGraduateFallback), [false, false, true, true], "the keepers send it where it exists; the app never does")
         XCTAssertEqual(G.allCases.map(\.hasV2Getters), [false, false, false, true])
         XCTAssertEqual(LaunchpadAddresses().generation, .v1, "an unknown factory is read as v1: no v2-only getter is sent to it")
     }

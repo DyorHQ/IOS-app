@@ -295,8 +295,12 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         XCTAssertEqual(stuck.fallbackRule, GraduationFallbackRule(mondayOnly: false, allowed: false, delay: 86_400))
         XCTAssertEqual(stuck.v4FallbackOpensAt, stuck.stuckSince, "not Monday-only: open as soon as it is stuck")
         XCTAssertTrue(stuck.launch.keepersTakeGraduateFallback)
-        let plan = await fork.service.graduateFallbackPlan(launch: stuck.launch)
-        XCTAssertTrue(plan.isEmpty, "the app never sends v2's graduateFallback")
+        do {
+            _ = try await fork.service.graduateFallbackPlan(launch: stuck.launch)
+            XCTFail("the app never plans graduateFallback")
+        } catch {
+            XCTAssertEqual(error as? LaunchpadError, .graduateFallbackByKeepers)
+        }
 
         // A fallback built by hand anyway.
         let data = LaunchpadABI.calldata(F.graduateFallback, [.address(monday.token)])
