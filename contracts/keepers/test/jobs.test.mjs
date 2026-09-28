@@ -10,7 +10,7 @@ import { momentsGraduationJob, buybacksJob, sweepsJob, launchpadGraduationJob, g
 import { makeSender } from "../lib/send.mjs";
 import { makeReporter } from "../lib/report.mjs";
 import { mondayTargetSqrtPriceX96, tickAtSqrtPrice } from "../lib/decide.mjs";
-import { launchpads, momentsCohorts, pinMismatches, LIVE_FACTORIES } from "../lib/deployments.mjs";
+import { launchpads, momentsCohorts, pinMismatches, LIVE_FACTORIES, OPEN_ON_CHAIN_MOMENTS } from "../lib/deployments.mjs";
 
 const NOW = 1_790_000_000n;
 const DAY = 86_400n;
@@ -629,6 +629,47 @@ test("sec2 governance: a swapped executor, a repointed fee, an unpaused retired 
   assert.match(reasons, /warning a policy proposal is pending/);
 });
 
+// Owner decision 2026-09-28: the previous stacks are retired in the app only. They keep their owner key and cohort 3
+// stays open on chain, so once the v2 records are promoted (new owner: the Safe) the watch holds each retired stack to
+// its own record, and cohort 3's open publishing is a note, not a page.
+test("sec2 governance: a retired stack is held to its own record's owner, and cohort 3 open on chain is only reported", async () => {
+  const oldKey = a(0x0d);
+  const livePad = { ...govPad, live: true };
+  const retiredPad = { ...govPad, label: "launchpad 0x6B1C (retired)", factory: a(0xfb), feeVault: a(0x69), owner: oldKey, live: false };
+  const retiredCohort = { ...oldCohort, governance: oldKey };
+  const openCohort = { label: "cohort3 (retired)", factory: a(0xf3), live: false, openOnChain: true, governance: oldKey };
+  const retiredReads = (owner) =>
+    Object.fromEntries(
+      Object.entries(govReads())
+        .filter(([k]) => k.startsWith(`${govPad.factory}:`) || k.startsWith(`${govPad.feeVault}:`))
+        .map(([k, v]) => [k.replace(govPad.factory, retiredPad.factory).replace(govPad.feeVault, retiredPad.feeVault), k.endsWith(":owner:") ? owner : v]),
+    );
+  const reads = (owner) =>
+    govReads({
+      ...retiredReads(owner),
+      [`${oldCohort.factory}:governance:`]: oldKey,
+      [`${openCohort.factory}:governance:`]: oldKey,
+      [`${openCohort.factory}:pendingGovernance:`]: ZERO,
+      [`${openCohort.factory}:pendingPolicyAt:`]: 0n,
+      [`${openCohort.factory}:publishingPaused:`]: false,
+    });
+  const run = async (owner) => {
+    const h = harness();
+    await governanceJob({ client: mockClient({ reads: reads(owner) }), launchpads: [livePad, retiredPad], cohorts: [govCohort, retiredCohort, openCohort], expected, ...h });
+    return h.reporter.alerts;
+  };
+  const asRecorded = await run(oldKey);
+  assert.deepEqual(asRecorded.filter((x) => x.severity !== "info"), [], "the old key on the retired stacks is what their records say");
+  assert.equal(asRecorded.length, 1);
+  assert.equal(asRecorded[0].target, "cohort3 (retired)");
+  assert.match(asRecorded[0].reason, /publishing is open on chain: retired in the app only/);
+  const moved = (await run(a(0xbad))).filter((x) => x.severity === "critical").map((x) => `${x.target}: ${x.reason}`);
+  assert.deepEqual(moved, [
+    `launchpad 0x6B1C (retired): owner() is ${a(0xbad)}, expected ${oldKey}`,
+    `launchpad 0x6B1C (retired) fee vault: owner() is ${a(0xbad)}, expected ${oldKey}`,
+  ]);
+});
+
 // The live factory 0x6B1C has no launch, so the owner key can still swap every module (2026-09-26 ops audit, medium).
 test("sec2 governance: an unfrozen factory warns once a day, not on every run", async () => {
   const client = mockClient({ reads: govReads({ [`${govPad.factory}:launchCount:`]: 0n }) });
@@ -744,6 +785,8 @@ test("sec2: the records cover every launchpad with launches, and the live factor
   assert.equal(pads.find((p) => p.factory.startsWith("0xad3d")).legacyRecord, true);
   assert.deepEqual(pinMismatches({ cohorts: momentsCohorts(), pads }), []);
   assert.equal(pads[0].factory, LIVE_FACTORIES.launchpad);
+  // Cohort 3 is the only cohort left open on chain once retired (owner decision 2026-09-28).
+  assert.deepEqual(momentsCohorts().filter((c) => c.openOnChain).map((c) => c.factory), [...OPEN_ON_CHAIN_MOMENTS]);
   const moved = withRecords(
     (d) => {
       const f = join(d, "143.json");

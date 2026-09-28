@@ -523,7 +523,10 @@ function throttled(state, key, t, fn) {
  * with no launch, repoint fees, and propose Moments policies. This job compares every factory's and vault's roles and
  * modules with the deployment records (critical on any drift), flags a launchpad whose modules are not frozen yet,
  * pending ownership/governance transfers and policy proposals, and, with `logsLookback`, every governance event.
- * `expected` = { owner, treasury, feesRecipient, momentsGovernance, externalBaseURI } from the live records.
+ * `expected` = { owner, treasury, feesRecipient, momentsGovernance, externalBaseURI } from the live records. The previous
+ * stacks keep their own owner key and are not paused on chain (owner decision 2026-09-28: retired in the app only), so a
+ * retired stack's owner/governance is checked against its own record, and a retired cohort that is open by that decision
+ * (`openOnChain`, deployments.mjs) is reported, not alerted; treasury and fee recipients are the live ones everywhere.
  */
 export async function governanceJob({ client, launchpads, cohorts, reporter, state, expected, logsLookback = 0n, logsChunk = 100n }) {
   const t = await now(client);
@@ -547,7 +550,8 @@ export async function governanceJob({ client, launchpads, cohorts, reporter, sta
         if (lp[key] && !eqAddr(onChain, lp[key])) critical(lp.label, `module ${fn}() is ${onChain}, the record says ${lp[key]}: a module was swapped`);
       }
       const [owner, pendingOwner, recipient, count] = await Promise.all([read("owner"), read("pendingOwner"), read("protocolFeeRecipient"), read("launchCount")]);
-      if (!eqAddr(owner, expected.owner)) critical(lp.label, `owner() is ${owner}, expected ${expected.owner}`);
+      const wantOwner = lp.live ? expected.owner : lp.owner ?? expected.owner;
+      if (!eqAddr(owner, wantOwner)) critical(lp.label, `owner() is ${owner}, expected ${wantOwner}`);
       if (!eqAddr(pendingOwner, ZERO)) critical(lp.label, `an ownership transfer to ${pendingOwner} is pending`);
       if (!eqAddr(recipient, expected.treasury)) critical(lp.label, `protocolFeeRecipient() is ${recipient}, expected ${expected.treasury}`);
       const sealed = await readOr(client, { address: lp.factory, abi: launchpadFactoryV2Abi, functionName: "modulesSealed" }, false);
@@ -560,7 +564,7 @@ export async function governanceJob({ client, launchpads, cohorts, reporter, sta
         const v = (functionName) => client.readContract({ address: lp.feeVault, abi: mondayFeeVaultAbi, functionName });
         const [vOwner, vPending, vRecipient] = await Promise.all([v("owner"), v("pendingOwner"), v("lpFeeRecipient")]);
         const target = `${lp.label} fee vault`;
-        if (!eqAddr(vOwner, expected.owner)) critical(target, `owner() is ${vOwner}, expected ${expected.owner}`);
+        if (!eqAddr(vOwner, wantOwner)) critical(target, `owner() is ${vOwner}, expected ${wantOwner}`);
         if (!eqAddr(vPending, ZERO)) critical(target, `an ownership transfer to ${vPending} is pending`);
         if (!eqAddr(vRecipient, expected.feesRecipient)) critical(target, `lpFeeRecipient() is ${vRecipient}, expected ${expected.feesRecipient}`);
       }
@@ -570,12 +574,16 @@ export async function governanceJob({ client, launchpads, cohorts, reporter, sta
     await guard(reporter, job, c.label, async () => {
       const read = (functionName) => client.readContract({ address: c.factory, abi: momentsFactoryAbi, functionName });
       const [gov, pendingGov, pendingAt, paused] = await Promise.all([read("governance"), read("pendingGovernance"), read("pendingPolicyAt"), read("publishingPaused")]);
-      if (!eqAddr(gov, expected.momentsGovernance)) critical(c.label, `governance() is ${gov}, expected ${expected.momentsGovernance}`);
+      const wantGov = c.live ? expected.momentsGovernance : c.governance ?? expected.momentsGovernance;
+      if (!eqAddr(gov, wantGov)) critical(c.label, `governance() is ${gov}, expected ${wantGov}`);
       if (!eqAddr(pendingGov, ZERO)) critical(c.label, `a governance transfer to ${pendingGov} is pending`);
       if (BigInt(pendingAt) !== 0n) {
         reporter.alert({ job, target: c.label, severity: BigInt(pendingAt) <= t ? "critical" : "warning", reason: `a policy proposal is pending, applicable from ${pendingAt}: check it is intended, or cancel it` });
       }
-      if (!c.live && !paused) critical(c.label, "a retired cohort is publishing again (its policy pays retired wallets)");
+      if (!c.live && !paused) {
+        if (c.openOnChain) reporter.alert({ job, target: c.label, severity: "info", reason: "publishing is open on chain: retired in the app only (owner decision 2026-09-28)" });
+        else critical(c.label, "a retired cohort is publishing again (its policy pays retired wallets)");
+      }
       if (c.live && expected.externalBaseURI !== undefined) {
         const base = await read("externalBaseURI");
         if (base !== expected.externalBaseURI) critical(c.label, `externalBaseURI() is "${base}", expected "${expected.externalBaseURI}"`);

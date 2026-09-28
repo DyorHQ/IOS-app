@@ -20,6 +20,11 @@ export const LIVE_FACTORIES = Object.freeze({
   moments: "0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26",
 });
 
+/** Moments factories left open on chain once retired (owner decision 2026-09-28: the previous stacks are retired in the
+    app only, and builds before 16 can still publish there): cohort 3, the live cohort until the v2 records are promoted.
+    The governance watch reports their open publishing instead of alerting. */
+export const OPEN_ON_CHAIN_MOMENTS = Object.freeze(["0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26"]);
+
 // [file, label, required]
 const MOMENTS_FILES = [
   ["moments-143.json", "cohort3 (live)", true],
@@ -67,7 +72,8 @@ export function momentsCohorts(dir = DEPLOYMENTS) {
     const k = d.collect.toLowerCase();
     if (seen.has(k)) continue;
     seen.add(k);
-    out.push({ label, file, live: required, ...d });
+    const openOnChain = OPEN_ON_CHAIN_MOMENTS.some((f) => f.toLowerCase() === d.factory.toLowerCase());
+    out.push({ label, file, live: required, openOnChain, ...d });
   }
   return out;
 }
