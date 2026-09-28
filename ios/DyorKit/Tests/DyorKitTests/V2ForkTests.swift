@@ -268,6 +268,18 @@ final class V2ForkTests: V2ForkCase {
         let soon = await refusal(await fork.service.buybackPlan(momentId: id, minCoinOut: 0), keeper)
         XCTAssertEqual(soon, sentence("TooSoon"))
         XCTAssertEqual(keeper.signatures, signed)
+
+        // "Held for later buyback rounds" is this Moment's own locker balance (`heldOf`). USDC sent to the locker
+        // directly is untracked: `available` counts it for every Moment, and the next add on any Moment takes it.
+        let locker = { (signature: String) in MomentsABI.call(fork.addresses.locker, signature, [.uint(id), .address(Monad.usdc)], returns: "uint256") }
+        let held = try await Multicall(rpc: rpc).readAll([locker(MomentsABI.Locker.heldOf), locker(MomentsABI.Locker.available)])
+        XCTAssertEqual(bought.heldForLaterRounds, held[0][0].uint)
+        let stray = 25 * Self.usdcUnit
+        try await fund(Monad.usdc, stray, to: fork.addresses.locker)
+        let strayRead = try await fork.service.info(id: id)
+        XCTAssertEqual(strayRead?.pool?.heldForLaterRounds, held[0][0].uint, "USDC sent to the locker is not this Moment's")
+        let available = try await Multicall(rpc: rpc).readAll([locker(MomentsABI.Locker.available)])
+        XCTAssertEqual(available[0][0].uint, held[1][0].uint + stray, "available() counts it")
     }
 
     /// A Moment that misses its window: expiring is refused before the deadline (`NotExpirable`), anyone's expire

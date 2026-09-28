@@ -198,6 +198,45 @@ final class MomentsV2Tests: XCTestCase {
         XCTAssertEqual(now.publishBlock, .unexpectedLinkBase)
     }
 
+    /// A graduated v2 Moment's "Held for later buyback rounds" is its own locker balance, `heldOf(id, USDC)`. The
+    /// locker's `available` adds its untracked USDC (anything sent to it directly), which every Moment shares and the
+    /// next add on any Moment takes: shown as each Moment's own, it would overstate every page.
+    func testHeldForLaterRoundsIsTheMomentsOwnLockerBalance() async throws {
+        let v2 = V2Fixture.moments
+        let stack = FakeMomentsStack(addresses: v2, policy: V2Fixture.policy(), factoryBase: MomentsAddresses.expectedExternalBaseURI,
+                                     nftBase: MomentsAddresses.expectedExternalBaseURI)
+        let held = BigUInt(7_250_000)
+        let untracked = BigUInt(500_000_000)
+        let key: [ABIValue] = [.address(v2.usdc), .address(stack.coin(1)), .uint(5_000), .int(60), .address(v2.hook)]
+        let record = try ABI.encode([.tuple([.tuple(key), .uint(BigUInt(1) << 96), .uint(1_000), .uint(771_000_000), .uint(1), .uint(0), .uint(0), .uint(1_790_600_000)])],
+                                    MomentsABI.recordTuple)
+        MomentsChainStub.install { to, data in
+            func is_(_ signature: String) -> Bool { data.prefix(4) == ABI.selector(signature) }
+            switch to {
+            case v2.graduation:
+                if is_(MomentsABI.Graduation.isGraduated) { return BigUInt(1).word }
+                if is_(MomentsABI.Graduation.record) { return record }
+            case v2.locker:
+                if is_(MomentsABI.Locker.liquidityOf) { return BigUInt(1_000).word }
+                if is_(MomentsABI.Locker.heldOf) { return held.word }
+                if is_(MomentsABI.Locker.available) { return (held + untracked).word }
+            case v2.hook, v2.buyback:
+                return BigUInt(0).word
+            case v2.poolManager:
+                return nil // no live price: the pool falls back to its opening price
+            default:
+                break
+            }
+            return stack.answer(to, data)
+        }
+        let read = try await MomentsService(rpc: MomentsChainStub.rpc(), addresses: v2).info(id: 1)
+        let pool = try XCTUnwrap(read?.pool, "a graduated Moment has its pool read")
+        XCTAssertEqual(pool.heldForLaterRounds, held)
+        let calls = MomentsChainStub.calls()
+        XCTAssertTrue(calls.contains(MomentsChainStub.Call(to: v2.locker, selector: ABI.selector(MomentsABI.Locker.heldOf).hexString)))
+        XCTAssertFalse(calls.contains { $0.selector == ABI.selector(MomentsABI.Locker.available).hexString }, "available() mixes in the locker's shared untracked USDC")
+    }
+
     // MARK: Pending proposals (v2 lapse)
 
     func testAV2ProposalLapsesAfterTheApplyWindow() async throws {

@@ -530,8 +530,10 @@ public struct MomentPool: Sendable, Hashable {
     public let lastBuyback: Int
     public let buybackInterval: Int
     public let buybackMin: BigUInt
-    /// v2: USDC the locker holds for this Moment (`available(id, USDC)`). A buyback round adds at most 0.5% of the
-    /// position, so the rest waits here for later rounds. Nil on v1, whose locker has no per-Moment balance.
+    /// v2: USDC the locker holds for this Moment (`heldOf(id, USDC)`). A buyback round adds at most 0.5% of the
+    /// position, so the rest waits here for later rounds. Not `available(id, USDC)`: that adds the locker's untracked
+    /// USDC, which every Moment shares and the next add on any Moment takes. Nil on v1, whose locker has no per-Moment
+    /// balance.
     public let heldForLaterRounds: BigUInt?
 
     public init(key: PoolKey, poolId: Data, usdcIs0: Bool, sqrtPriceX96: BigUInt, openingSqrtPriceX96: BigUInt, liquidity: BigUInt, seedLiquidity: BigUInt, reserveSeed: BigUInt, poolCoins: BigUInt, graduatedAt: Int, usdcPerCoin: Double, creatorFees: BigUInt, platformFees: BigUInt, buybackFees: BigUInt, buybackCarry: BigUInt, lastBuyback: Int, buybackInterval: Int, buybackMin: BigUInt, heldForLaterRounds: BigUInt? = nil) {

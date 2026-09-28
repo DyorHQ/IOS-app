@@ -441,7 +441,7 @@ public actor MomentsService {
                 MomentsABI.call(addresses.buyback, MomentsABI.Buyback.carry, [.uint(id)], returns: "uint256"),
                 MomentsABI.call(addresses.buyback, MomentsABI.Buyback.lastRun, [.uint(id)], returns: "uint64"),
             ]
-            if v2 { calls.append(MomentsABI.call(addresses.locker, MomentsABI.Locker.available, [.uint(id), .address(addresses.usdc)], returns: "uint256")) }
+            if v2 { calls.append(MomentsABI.call(addresses.locker, MomentsABI.Locker.heldOf, [.uint(id), .address(addresses.usdc)], returns: "uint256")) }
         }
         let results = try await multicall.readAll(calls)
         let interval = MomentsABI.int(results[0][0])

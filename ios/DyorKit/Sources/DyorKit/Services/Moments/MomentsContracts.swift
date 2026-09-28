@@ -77,8 +77,10 @@ enum MomentsABI {
     enum Locker {
         static let liquidityOf = "liquidityOf(uint256)"
         // v2 only.
-        /// USDC (or coins) the locker holds for one Moment, spendable by its later buyback rounds.
+        /// What the next add on one Moment could spend: its own balance plus the locker's untracked balance, which
+        /// every Moment shares (the next add on any Moment takes it). Not a per-Moment balance: see `heldOf`.
         static let available = "available(uint256,address)"
+        /// USDC (or coins) the locker holds for one Moment, spendable by its later buyback rounds.
         static let heldOf = "heldOf(uint256,address)"
         /// The most one `increase` adds, in bps of the position's liquidity (50).
         static let maxIncreaseBps = "MAX_INCREASE_BPS()"
