@@ -740,6 +740,9 @@ struct TokenDetailView: View {
     @State private var loadingHistory = true
     /// A coin still on a retired launchpad's curve (`SwapEngine.buyRefusal`): its holders can sell it, nobody can buy it.
     @State private var sellOnly = false
+    /// That coin's launch on its retired launchpad: it sells on its curve, from the Launch page, since no Swap venue routes
+    /// a bonding curve. Nil until read, or when the read failed.
+    @State private var retiredLaunch: Launch?
 
     var body: some View {
         List {
@@ -778,9 +781,14 @@ struct TokenDetailView: View {
                     // A retired cohort's Moment coin: past cohorts are claim-only, so no swap is offered.
                     Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
                 } else if sellOnly {
-                    // Swap opens on the sell side: the engine refuses any quote that buys this coin.
-                    Button("Sell \(row.token.symbol)", systemImage: "arrow.left.arrow.right") {
-                        router.openSwap(tokenIn: row.token, tokenOut: Token.usdc)
+                    // Never Swap: no venue routes a coin still on its curve (and the engine refuses to buy it). The curve
+                    // sell is on the coin's Launch page.
+                    if let retiredLaunch {
+                        Button(retiredLaunch.curveSellsOpen ? "Sell \(row.token.symbol) on its Launch page" : "Open \(row.token.symbol)'s Launch page", systemImage: "arrow.up.right.circle") {
+                            router.openLaunch(retiredLaunch)
+                        }
+                    } else {
+                        Label("Sell it from its page on the Launch tab", systemImage: "arrow.up.right.circle").foregroundStyle(.secondary)
                     }
                 } else {
                     Button("Swap \(row.token.symbol)", systemImage: "arrow.left.arrow.right") {
@@ -791,7 +799,7 @@ struct TokenDetailView: View {
                     Link(destination: url) { Label("View on Monadscan", systemImage: "safari") }
                 }
             } footer: {
-                if sellOnly, SwapEngine.isTradable(row.token) { Text(RetiredLaunchpad.notice) }
+                if sellOnly, SwapEngine.isTradable(row.token), let notice = RetiredLaunchpad.tokenPageNotice(retiredLaunch) { Text(notice) }
             }
         }
         .listStyle(.insetGrouped)
@@ -802,7 +810,17 @@ struct TokenDetailView: View {
             loadingHistory = false
         }
         .task(id: row.token.address) {
-            sellOnly = await env.swap.buyRefusal(row.token) == .retiredLaunchpad(row.token.address)
+            guard await env.swap.buyRefusal(row.token) == .retiredLaunchpad(row.token.address) else {
+                sellOnly = false
+                retiredLaunch = nil
+                return
+            }
+            sellOnly = true
+            let launch = try? await env.launchpad.retiredLaunch(token: row.token.address)
+            if Task.isCancelled { return }
+            retiredLaunch = launch
+            // Graduated since the check: an ordinary pool token again, which Swap routes both ways.
+            if let launch, !launch.isSellOnly { sellOnly = false }
         }
     }
 }

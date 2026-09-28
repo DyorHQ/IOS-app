@@ -7,7 +7,8 @@ import Foundation
    router's `launchAndBuy`, and no swap that buys it. Each layer refuses on its own:
 
      - the plan builders (`LaunchpadService.buyPlan`, `launchPlan`): nothing is built, not even the approval;
-     - the coin page offers Sell only, and Home's token page opens Swap on the sell side;
+     - the coin page offers Sell only (in refund mode too), and Home's token page sends a holder to that page, where the
+       curve sell is: no Swap venue routes a bonding curve (`LaunchpadService.retiredLaunch(token:)`);
      - Swap (`SwapEngine.buyRefusal`): no venue is asked to quote buying such a coin, read on-chain from every retired
        factory's record; a read that fails refuses too. Selling one is never checked;
      - a passkey account (`Mera.SigningPolicy.refusal`): a curve `buy` into a curve a retired factory recorded
@@ -31,6 +32,22 @@ public extension LaunchpadAddresses {
 public enum RetiredLaunchpad {
     /// What every screen says where a buy of such a coin is refused.
     public static let notice = "This coin's launchpad is retired: you can sell, but not buy."
+
+    /// Home's token page, for a sell-only coin: it sells on its curve, from its Launch page, never through Swap.
+    public static let sellOnLaunchPage = "This coin's launchpad is retired: you can sell it on its Launch page, but not buy."
+
+    /// Home's token page, for a sell-only coin whose completed curve waits to graduate (or is migrating): nothing trades
+    /// until it graduates, and then it trades both ways on Swap.
+    public static let graduationPending = "This coin's launchpad is retired and its graduation is pending: it can't be traded until it graduates."
+
+    /// What Home's token page says under a coin Swap refuses to buy, from its launch on the retired launchpad (`launch` nil
+    /// when it couldn't be read): where to sell it, or, while its curve takes no sells, that it waits for its graduation.
+    /// Nil once it graduated: it trades both ways on Swap.
+    public static func tokenPageNotice(_ launch: Launch?) -> String? {
+        guard let launch else { return sellOnLaunchPage }
+        guard launch.isSellOnly else { return nil }
+        return launch.curveSellsOpen ? sellOnLaunchPage : graduationPending
+    }
 
     // MARK: Coins bought (Swap)
 

@@ -480,12 +480,32 @@ public actor LaunchpadService {
 
     /// Pure half of `knownCurve`: the first stack whose `getLaunchedToken` record exists and names a curve.
     static func knownCurve(stacks: [LaunchpadAddresses], records: [Result<[ABIValue], Error>]) -> Address? {
+        firstRecord(stacks: stacks, records: records)?.record.curve
+    }
+
+    /// The first of `stacks` whose `getLaunchedToken` answer (`records`, one per stack, in order) exists and names a
+    /// curve; a stack that failed to answer is skipped.
+    static func firstRecord(stacks: [LaunchpadAddresses], records: [Result<[ABIValue], Error>]) -> (stack: LaunchpadAddresses, record: LaunchpadABI.LaunchRecord)? {
         for (stack, result) in zip(stacks, records) {
             guard case .success(let values) = result, let tuple = values.first else { continue }
             let record = LaunchpadABI.LaunchRecord(tuple, legacy: stack.generation.legacyRecord)
-            if record.exists, !record.curve.isZero { return record.curve }
+            if record.exists, !record.curve.isZero { return (stack, record) }
         }
         return nil
+    }
+
+    /// The launch of `token` on a retired launchpad, from the first retired factory that recorded it, so a screen that
+    /// knows only the coin (Home's token page) can open its Launch page: a sell-only coin still on its curve sells there,
+    /// since no Swap venue routes a bonding curve. Every retired factory's record in one Multicall3 read, then the
+    /// launch's own reads. Nil when no retired factory that answered launched it; throws when the reads fail.
+    public func retiredLaunch(token: Address) async throws -> Launch? {
+        let stacks = LaunchpadAddresses.retiredStacks
+        guard !token.isZero, !stacks.isEmpty else { return nil }
+        let records = try await multicall.read(stacks.map {
+            LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.generation.legacyRecord))
+        })
+        guard let found = Self.firstRecord(stacks: stacks, records: records) else { return nil }
+        return try await hydrate([found.record], factory: found.stack.factory).first
     }
 
     /// Approve the pair asset for the curve when it is an ERC-20, then `buy`. Native MON rides on `value`. Refused for a

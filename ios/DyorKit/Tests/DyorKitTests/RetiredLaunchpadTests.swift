@@ -5,7 +5,8 @@ import XCTest
 /// Coins on a retired launchpad's curve are sell-only (owner decision 2026-09-28): on each of the four retired stacks a
 /// curve buy is refused at the plan, whatever the pair or phase, and so is a developer buy through a retired router,
 /// while a sell on the same curve still plans. The live (v2) stack's buys are unaffected. The coin page trades on the
-/// curve only while it takes a sell (refund mode included).
+/// curve only while it takes a sell (refund mode included), and Home's token page finds a sell-only coin's launch so it
+/// can send the holder there: no Swap venue routes a bonding curve.
 final class RetiredLaunchpadTests: XCTestCase {
     private let token = Address(literal: "0x00000000000000000000000000000000000d1100")
     private let curve = Address(literal: "0x00000000000000000000000000000000000d11c0")
@@ -179,7 +180,7 @@ final class RetiredLaunchpadTests: XCTestCase {
     }
 
     /// The sources wire those answers in: the coin page picks its ticket by `curveSellsOpen` and offers Retry Graduation
-    /// only while the launch awaits it.
+    /// only while the launch awaits it; Home's token page sends a sell-only coin to its Launch page, never to Swap.
     func testTheScreensFollowTheCurveState() throws {
         var app = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
@@ -189,5 +190,79 @@ final class RetiredLaunchpadTests: XCTestCase {
         XCTAssertTrue(launchpad.contains("if launch.curveSellsOpen { ticketSection } else { graduatedSection }"))
         XCTAssertTrue(launchpad.contains("private var isStuck: Bool { launch.awaitsGraduation && (detail?.stuckSince ?? 0) > 0 }"))
         XCTAssertFalse(launchpad.contains("if launch.phase == .bonding { ticketSection }"))
+        let home = try String(contentsOf: app.appendingPathComponent("Home/HomeView.swift"), encoding: .utf8)
+        XCTAssertTrue(home.contains("env.launchpad.retiredLaunch(token: row.token.address)"))
+        XCTAssertTrue(home.contains("router.openLaunch(retiredLaunch)"))
+        XCTAssertFalse(home.contains("router.openSwap(tokenIn: row.token,"), "no Swap that sells the page's coin: none routes a curve")
+    }
+
+    // MARK: Home's token page
+
+    /// Home knows only the coin: its launch is found on whichever retired stack recorded it (one aggregate over the four
+    /// factories, then that launch's own reads), in every phase, and says what the page shows. A coin no retired
+    /// factory launched has none.
+    func testHomeFindsASellOnlyCoinsLaunch() async throws {
+        let service = service()
+        for stack in retired {
+            for state in Self.states {
+                let chain = RetiredLaunchChain(base: RetiredCoinChain(stack: stack, phase: state.phase), completed: state.completed, rescued: state.rescued)
+                MomentsChainStub.install(chain.answer)
+                let label = "\(stack.factory.short) \(state.name)"
+                let found = try await service.retiredLaunch(token: chain.base.coin)
+                let launch = try XCTUnwrap(found, label)
+                XCTAssertEqual(launch.token, chain.base.coin, label)
+                XCTAssertEqual(launch.curve, chain.base.curve, label)
+                XCTAssertEqual(launch.factory, stack.factory, label)
+                XCTAssertEqual(launch.generation, stack.generation, label)
+                XCTAssertEqual(launch.phase, state.phase, label)
+                XCTAssertEqual(launch.symbol, "OLD", label)
+                XCTAssertEqual(launch.curveSellsOpen, ["climbing", "refund"].contains(state.name), label)
+                XCTAssertEqual(MomentsChainStub.batches().first?.map(\.to), LaunchpadAddresses.retiredFactories, "\(label): every retired factory, in one read")
+
+                let notice = RetiredLaunchpad.tokenPageNotice(launch)
+                switch state.name {
+                case "climbing", "refund": XCTAssertEqual(notice, RetiredLaunchpad.sellOnLaunchPage, label)
+                case "graduated": XCTAssertNil(notice, "\(label): trades both ways on Swap")
+                default: XCTAssertEqual(notice, RetiredLaunchpad.graduationPending, label)
+                }
+            }
+        }
+        // A coin no retired factory launched: only the records are read.
+        MomentsChainStub.install(RetiredCoinChain(stack: retired[0], phase: .bonding).answer)
+        let stranger = try await service.retiredLaunch(token: token)
+        XCTAssertNil(stranger)
+        XCTAssertEqual(MomentsChainStub.batches().map { $0.map(\.to) }, [LaunchpadAddresses.retiredFactories])
+        // Unread, the page still says where to sell it.
+        XCTAssertEqual(RetiredLaunchpad.tokenPageNotice(nil), RetiredLaunchpad.sellOnLaunchPage)
+        XCTAssertEqual(RetiredLaunchpad.sellOnLaunchPage, "This coin's launchpad is retired: you can sell it on its Launch page, but not buy.")
+    }
+}
+
+/// `RetiredCoinChain` plus the reads a launch is built from: the coin's name, symbol, token info and supply, and the
+/// curve's price, reserve, launch time and its `completed` / `rescued` flags.
+private struct RetiredLaunchChain: Sendable {
+    let base: RetiredCoinChain
+    let completed: Bool
+    let rescued: Bool
+
+    func answer(_ to: Address, _ data: Data) -> Data? {
+        let selector = data.prefix(4)
+        func is_(_ signature: String) -> Bool { selector == ABI.selector(signature) }
+        func encode(_ values: [ABIValue], _ types: String) -> Data { try! ABI.encode(values, types) }
+        typealias T = LaunchpadABI.Token
+        typealias C = LaunchpadABI.Curve
+        if to == base.coin {
+            if is_(T.name) { return encode([.string("Old coin")], "string") }
+            if is_(T.symbol) { return encode([.string("OLD")], "string") }
+            if is_(T.totalSupply) { return encode([.uint(BigUInt(10).power(27))], "uint256") }
+            if is_(T.getTokenInfo) { return encode([.address(base.coin), .string(""), .string(""), .tuple(Array(repeating: .string(""), count: 5))], "address,string,string,\(LaunchpadABI.socialsTuple)") }
+        }
+        if to == base.curve {
+            if is_(C.price) || is_(C.realQuoteReserve) { return encode([.uint(1_000)], "uint256") }
+            if is_(C.completed) { return encode([.bool(completed)], "bool") }
+            if is_(C.rescued) { return encode([.bool(rescued)], "bool") }
+            if is_(C.launchedAt) { return encode([.uint(1_789_000_000)], "uint64") }
+        }
+        return base.answer(to, data)
     }
 }
