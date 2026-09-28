@@ -18,8 +18,8 @@
 #   GUARDIAN       Moments guardian: can cancel a pending policy and pause publishing (a different key)  [required]
 #   LAUNCH_FEE_WEI launch fee in wei (the live stack charges 5 MON = 5000000000000000000)                  [required]
 #   THRESHOLD_USDC Moments graduation threshold in USDC units (cohort 3: 771428571)                        [required]
-#   EXTERNAL_BASE_URI  the new Moments' link base, https://dyorhq.fun/moments/c<N>/: v2 is …/c4/, which build 16
-#                  requires (the bare …/moments/ is cohort 3's, …/c1/ and …/c2/ cohorts 1 and 2's)       [required]
+#   EXTERNAL_BASE_URI  the new Moments' link base: exactly https://dyorhq.fun/moments/c4/, the only one build 16
+#                  publishes under (the bare …/moments/ is cohort 3's, …/c1/ and …/c2/ cohorts 1 and 2's) [required]
 #   LEDGER=1 | ACCOUNT=<keystore name>   how to sign (exactly one)
 #   DRY_RUN=1      pre-flight, live prices and both simulations; sends nothing (no signer needed)
 #   FORK=1         rehearsal on a local anvil fork (RPC=http://127.0.0.1:<port>, started with --auto-impersonate and
@@ -35,11 +35,11 @@
 # Steps, stopping at the first failure:
 #   0. pre-flight. It refuses: a contracts/.env (forge and cast load it); a raw key or ALLOW_RAW_KEY_143 in the
 #      environment; any other variable the Deploy scripts read (POOL_MANAGER, USDC, MIN_PRICE_USDC, …: the names come
-#      from their sources) set in this environment, unless ALLOW_SCRIPT_OVERRIDES=1; an EXTERNAL_BASE_URI that is not
-#      https://dyorhq.fun/moments/c<N>/, or is cohort 1's or 2's; roles that are not distinct; an OWNER or GOVERNANCE
-#      other than GOV that is not a Safe (code, a threshold of at least 2, and none of GOV, GUARDIAN, TREASURY or FEES
-#      among its owners); an RPC that is not chain 143; a full run (ONLY unset) signed by LEDGER/ACCOUNT from a GOV
-#      whose nonce is not 0; a balance under MIN_BALANCE_MON.
+#      from their sources) set in this environment, unless ALLOW_SCRIPT_OVERRIDES=1; an EXTERNAL_BASE_URI other than
+#      https://dyorhq.fun/moments/c4/; roles that are not distinct; an OWNER or GOVERNANCE other than GOV that is not a
+#      Safe (code, a threshold of at least 2, and none of GOV, GUARDIAN, TREASURY or FEES among its owners); an RPC that
+#      is not chain 143; a full run (ONLY unset) signed by LEDGER/ACCOUNT from a GOV whose nonce is not 0; a balance
+#      under MIN_BALANCE_MON.
 #   1. live MON/aBIL prices from two sources (script/relaunch/prices.py)
 #   2. launchpad: simulate, confirm, broadcast (the modules are sealed in the same run)
 #   3. Moments: simulate, confirm, broadcast
@@ -159,9 +159,9 @@ for v in GOV OWNER GOVERNANCE TREASURY FEES GUARDIAN; do isaddr "${!v}" "$v"; do
 [[ "$LAUNCH_FEE_WEI" =~ ^[0-9]+$ && "$THRESHOLD_USDC" =~ ^[0-9]+$ ]] || die "LAUNCH_FEE_WEI and THRESHOLD_USDC must be integers"
 # A Moment NFT's link is this base plus its id, and the app reads the cohort from the c<N>/ segment: every factory
 # needs its own. It cannot be changed without governance, and a v2 Moment published under the wrong base keeps it.
-base_re='^https://dyorhq\.fun/moments/c[0-9]+/$'
-[[ "$EXTERNAL_BASE_URI" =~ $base_re ]] || die "EXTERNAL_BASE_URI must read https://dyorhq.fun/moments/c<N>/ (v2: https://dyorhq.fun/moments/c4/), got: $EXTERNAL_BASE_URI"
-case "$EXTERNAL_BASE_URI" in */c1/ | */c2/) die "EXTERNAL_BASE_URI $EXTERNAL_BASE_URI is an earlier cohort's link base (v2: https://dyorhq.fun/moments/c4/)" ;; esac
+# Build 16 publishes on v2 only under …/c4/ (MomentsAddresses.expectedExternalBaseURI): any other base blocks it.
+V2_EXTERNAL_BASE_URI=https://dyorhq.fun/moments/c4/
+[ "$EXTERNAL_BASE_URI" = "$V2_EXTERNAL_BASE_URI" ] || die "EXTERNAL_BASE_URI must be exactly $V2_EXTERNAL_BASE_URI, the only link base build 16 publishes under, got: $EXTERNAL_BASE_URI"
 roles=$(printf '%s\n' "$(lc "$GOV")" "$(lc "$TREASURY")" "$(lc "$FEES")" "$(lc "$GUARDIAN")")
 [ "$(printf '%s\n' "$roles" | sort -u | wc -l | tr -d ' ')" = 4 ] || die "GOV, TREASURY, FEES and GUARDIAN must be four different addresses"
 for r in "$OWNER" "$GOVERNANCE"; do
