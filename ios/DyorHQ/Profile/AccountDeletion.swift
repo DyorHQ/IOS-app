@@ -230,7 +230,10 @@ struct DeleteAccountView: View {
                 } header: {
                     Text("What is deleted")
                 } footer: {
-                    Text("Transactions, tokens and Moments you created stay on the Monad blockchain — nothing can remove them — and images you published for coins or Moments stay online because those tokens point to them.")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Transactions, tokens and Moments you created stay on the Monad blockchain — nothing can remove them — and images you published for coins or Moments stay online because those tokens point to them.")
+                        LearnMoreLink(.exportSignOutDelete)
+                    }
                 }
 
                 if method == .apple {

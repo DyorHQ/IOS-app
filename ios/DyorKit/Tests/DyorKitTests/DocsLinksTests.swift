@@ -127,6 +127,59 @@ final class DocsLinksTests: XCTestCase {
         XCTAssertLessThan(helpCenter.lowerBound, terms.lowerBound)
     }
 
+    /// Each "Learn more" sits on the screen that explains its topic (under a section footer or a line of help text), and
+    /// the table holds only pages the app opens: those, plus Get Help's Learn rows. No screen writes a docs URL itself.
+    func testEachLearnMoreLinkIsOnTheScreenThatExplainsIt() throws {
+        let placements: Set<String> = [
+            "oneClickTrading Profile/Settings.swift",               // Perpl Trading: the trading key's footer
+            "perpetualsOverview Perps/PerpsView.swift",             // the first deposit, which opens the Perpl account
+            "slippageAndPriceImpact Swap/SwapView.swift",           // the slippage sheet's explanation
+            "launchACoin Launchpad/LaunchpadView.swift",            // Launch a Coin: the pairing footer
+            "launchpadGraduation Launchpad/LaunchpadView.swift",    // the coin page's gauge, or its graduation section
+            "launchpadFeesAndRewards Launchpad/LaunchpadView.swift", // the coin page's creator fees
+            "publishAMoment Moments/CreateMomentView.swift",        // Publish a Moment: the economics footer
+            "collectAMoment Moments/MomentDetailView.swift",        // the collect section
+            "momentsGraduationAndVesting Moments/MomentDetailView.swift", // Your Position: vesting and claims
+            "momentsEarningsAndFees Moments/MomentDetailView.swift", // You Created This: the creator's earnings
+            "bridge Bridge/BridgeView.swift",                       // under "Powered by Aurora Intents"
+            "exportSignOutDelete Wallet/WalletExportView.swift",    // Export Wallet: the key warning
+            "exportSignOutDelete Profile/AccountDeletion.swift",    // Delete Account: what is deleted
+            "notificationsAndPriceAlerts Profile/Settings.swift",   // Notifications: what reaches you, and when
+            "selfCustodyAndSecurity Onboarding/OnboardingView.swift", // sign-in: "DyorHQ never holds your keys"
+        ]
+        var app = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { app.deleteLastPathComponent() }
+        app.appendPathComponent("DyorHQ")
+        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)).compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        let pattern = try NSRegularExpression(pattern: #"LearnMoreLink\(\.(\w+)\)"#)
+        var found = Set<String>()
+        var graduation = 0
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let relative = String(file.path.dropFirst(app.path.count + 1))
+            XCTAssertFalse(text.contains("https://dyorhq.gitbook.io"), "\(relative): docs links come from DocsLinks")
+            for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                let name = String(text[Range(match.range(at: 1), in: text)!])
+                XCTAssertNotNil(DocsLinks.allCases.first { "\($0)" == name }, name)
+                found.insert("\(name) \(relative)")
+                if name == "launchpadGraduation" { graduation += 1 }
+            }
+        }
+        XCTAssertEqual(found, placements)
+        // The coin page shows one of its two graduation links: under the gauge while the curve trades, or under the
+        // graduation section once it doesn't.
+        XCTAssertEqual(graduation, 2)
+        let launchpad = try Self.appSource("Launchpad/LaunchpadView.swift")
+        XCTAssertTrue(launchpad.contains("if launch.phase == .bonding, launch.curveSellsOpen { LearnMoreLink(.launchpadGraduation) }"))
+        XCTAssertTrue(launchpad.contains("if launch.curveSellsOpen { ticketSection } else { graduatedSection }"))
+
+        let linked = Set(placements.map { String($0.split(separator: " ")[0]) }).union(["home", "quickstart", "riskDisclosures", "contractsAndAddresses"])
+        XCTAssertEqual(linked, Set(DocsLinks.allCases.map { "\($0)" }), "one case per page the app opens, plus the home")
+        let component = try Self.appSource("Design/Components.swift")
+        XCTAssertTrue(component.contains("Link(\"Learn more\", destination: page.url)"))
+    }
+
     // MARK: Live
 
     /// Every link answers 200 itself: no redirect is followed (a moved page answers 3xx here), so a link to a path GitBook

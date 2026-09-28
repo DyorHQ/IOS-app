@@ -139,9 +139,13 @@ struct BridgeView: View {
                 .disabled(!primaryEnabled)
                 .padding(.top, 2)
 
-                Text("Powered by Aurora Intents · cross-chain settlement handled for you.")
-                    .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity)
-                    .padding(.top, 2)
+                VStack(spacing: 4) {
+                    Text("Powered by Aurora Intents · cross-chain settlement handled for you.")
+                        .foregroundStyle(.secondary)
+                    LearnMoreLink(.bridge)
+                }
+                .font(.caption2).frame(maxWidth: .infinity)
+                .padding(.top, 2)
             }
             .padding()
         }

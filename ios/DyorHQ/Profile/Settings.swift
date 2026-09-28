@@ -165,8 +165,11 @@ struct NotificationsView: View {
             Section {
                 Toggle("Enable Notifications", isOn: $settings.notificationsEnabled)
             } footer: {
-                if denied { Text("Notifications are turned off for DyorHQ in iOS Settings. Enable them there to receive alerts.").foregroundStyle(Color.attention) }
-                else { Text("DyorHQ notices fills and price alerts only while it's open. iOS pauses the app in the background, so they can't reach your lock screen while DyorHQ is closed.") }
+                VStack(alignment: .leading, spacing: 4) {
+                    if denied { Text("Notifications are turned off for DyorHQ in iOS Settings. Enable them there to receive alerts.").foregroundStyle(Color.attention) }
+                    else { Text("DyorHQ notices fills and price alerts only while it's open. iOS pauses the app in the background, so they can't reach your lock screen while DyorHQ is closed.") }
+                    LearnMoreLink(.notificationsAndPriceAlerts)
+                }
             }
             Section {
                 Toggle("Swaps & Fills", isOn: $settings.notifyFills)
