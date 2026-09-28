@@ -6,14 +6,15 @@ import XCTest
 
 /// The release gate's proof that the retired Moments cohorts are final. `scripts/dev/check-launchpad-addresses.py` reads
 /// the pins (`MomentLink.Cohort.finalMomentCount`) and the coin table (`MomentsAddresses.retiredMainnetCoins`) from the
-/// Swift sources and, with `--release` (every archive path) or `--chain` (by hand, once cohort 3's pause is mined),
-/// requires on chain: publishing paused, `momentCount()` equal to the pin, and every Moment's coin in the table, keyed to
-/// its (factory, id). A Moment published past a pin would otherwise get no name link (and its name would go to a later
-/// Moment) and its coin would be tradable.
+/// Swift sources and, with `--release` (every archive path) or `--chain` (by hand), requires on chain: `momentCount()`
+/// equal to the pin, and every Moment's coin in the table, keyed to its (factory, id). A Moment published past a pin
+/// would otherwise get no name link (and its name would go to a later Moment) and its coin would be tradable. Publishing
+/// need not be paused: cohort 3 stays open on chain (owner decision 2026-09-28, retired in the app only), which the gate
+/// reports as a note while its count still equals its pin.
 ///
 /// Here the script runs against canned eth_call answers built from the compiled constants (its `--chain-fixture` mode,
-/// which it refuses together with `--release`): the pinned state passes, so the script reads the sources the way the app
-/// compiles them, and each way a cohort can drift from its pin refuses.
+/// which it refuses together with `--release`): the chain as it is passes, so the script reads the sources the way the
+/// app compiles them, and each way a cohort can drift from its pin refuses.
 final class RetiredCohortGateTests: XCTestCase {
     /// One retired factory as the chain reports it: `coins[i]` is Moment #(i + 1)'s coin.
     struct ChainCohort {
@@ -24,11 +25,20 @@ final class RetiredCohortGateTests: XCTestCase {
         var unreadable: Set<String> = []
     }
 
-    /// The chain exactly as the pins say.
+    /// The chain exactly as the pins say, publishing paused on each.
     static func pinned() -> [ChainCohort] {
         MomentLink.Cohort.allCases.filter(\.isRetired).map { cohort in
             let coins = MomentsAddresses.retiredMainnetCoins.filter { $0.value.factory == cohort.factory }.sorted { $0.value.id < $1.value.id }.map(\.key)
             return ChainCohort(cohort: cohort, coins: coins)
+        }
+    }
+
+    /// The chain as it is (2026-09-28): the pinned counts, cohorts 1 and 2 paused, cohort 3 open.
+    static func current() -> [ChainCohort] {
+        pinned().map { c in
+            var c = c
+            c.paused = c.cohort != .c3
+            return c
         }
     }
 
@@ -84,7 +94,7 @@ final class RetiredCohortGateTests: XCTestCase {
     }
 
     private func replacing(_ cohort: MomentLink.Cohort, _ change: (inout ChainCohort) -> Void) -> [ChainCohort] {
-        Self.pinned().map { c in
+        Self.current().map { c in
             var c = c
             if c.cohort == cohort { change(&c) }
             return c
@@ -98,18 +108,22 @@ final class RetiredCohortGateTests: XCTestCase {
         XCTAssertEqual(status, 0, output)
         // The pins it read from the sources are the compiled ones.
         let pins = MomentLink.Cohort.allCases.compactMap { c in c.finalMomentCount.map { "\(c) \($0)" } }.joined(separator: ", ")
-        XCTAssertTrue(output.contains("OK: retired Moments cohorts final at fixture block 108778342 (\(pins))"), output)
+        XCTAssertTrue(output.contains("OK: retired Moments cohorts at their pins at fixture block 108778342 (\(pins))\n"), output)
+        XCTAssertFalse(output.contains("note:"), output)
     }
 
-    /// Cohort 3 before the owner's pause is mined (its state on 2026-09-28): the archive is refused.
-    func testAnUnpausedRetiredCohortRefuses() throws {
-        let (status, output) = try check(replacing(.c3) { $0.paused = false })
-        XCTAssertEqual(status, 1, output)
-        XCTAssertTrue(output.contains("Moments cohort c3 (\(MomentLink.Cohort.c3.factory.hex)): publishing is not paused on chain"), output)
+    /// Cohort 3 as the owner left it (2026-09-28): publishing open on chain, its count at its pin. The archive passes, and
+    /// the open cohort is named in a note, not a problem.
+    func testAnUnpausedRetiredCohortAtItsPinPasses() throws {
+        let (status, output) = try check(Self.current())
+        XCTAssertEqual(status, 0, output)
+        XCTAssertTrue(output.contains("note: Moments cohort c3 (\(MomentLink.Cohort.c3.factory.hex)): publishing is open on chain"), output)
+        XCTAssertTrue(output.contains("; publishing open on c3\n"), output)
         XCTAssertFalse(output.contains("cohort c1"), output)
+        XCTAssertFalse(output.contains("check failed"), output)
     }
 
-    /// A Moment published on cohort 3 before its pause: the pin and the coin table must both grow before a release.
+    /// A Moment published on the open cohort 3 after its pin: the pin and the coin table must both grow before a release.
     func testAMomentPastThePinRefuses() throws {
         let late = Address(literal: "0x00000000000000000000000000000000000c0102")
         let (status, output) = try check(replacing(.c3) { $0.coins.append(late) })

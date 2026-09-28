@@ -15,9 +15,12 @@ ios/ci_scripts/ci_post_xcodebuild.sh, ios/scripts/testflight.sh): it refuses whi
 The retired Moments cohorts (MomentLink.Cohort c1–c3) are final only by their pins: `finalMomentCount` names how many
 Moments each has, and MomentsAddresses.retiredMainnetCoins every coin they minted. Every run checks the two tables agree
 (each cohort's coins are ids 1…pin). `--chain` and `--release` also prove them on Monad with read-only eth_calls to a
-keyless public RPC (never a transaction): each factory's publishing is paused, its momentCount() equals the pin, and its
-Moments' coins are exactly its retiredMainnetCoins entries. An unreachable RPC refuses too. Run `--chain` once cohort
-3's pause is mined, before wiring v2; `--release` includes it.
+keyless public RPC (never a transaction): each factory's momentCount() equals the pin, and its Moments' coins are
+exactly its retiredMainnetCoins entries; a cohort that grew past its pin refuses, naming the new coins, and so does an
+unreachable RPC. A retired cohort need not be paused on chain: cohort 3 stays open (owner decision 2026-09-28: the old
+stacks are retired in the app only, and builds before 16 can still publish there), so its publishingPaused() is read
+and reported as a note, and its count is proven again by every release. `--chain` runs the same checks by hand;
+`--release` includes them.
 
 `--chain-fixture FILE` is for DyorKit's RetiredCohortGateTests only: the retired-cohort checks alone, against canned
 eth_call answers instead of the chain. It is refused together with `--release`.
@@ -67,7 +70,8 @@ MOMENTS_KEYS = {  # record key → (xcconfig key, Swift field)
 # The live factories while v2 is pending: the records are promoted only together with the Swift wiring.
 PRE_V2_LAUNCHPAD = "0x6b1c8769a8d6745955ac35b91ff1f37ab76859db"
 PRE_V2_MOMENTS = "0x0fd4ac52bbf387dbb3156805769bfc0c260f7e26"
-# Retired launchpad factories (closed to new launches; the app still serves their existing launches).
+# Retired launchpad factories (the app launches nothing there and still serves their existing launches; 0x6B1C stays
+# open on chain, owner decision 2026-09-28).
 RETIRED_FACTORIES = {
     PRE_V2_LAUNCHPAD,
     "0x10f34a174d9c393a90aff94bded7e1db185446d7",
@@ -86,6 +90,7 @@ OLD_WALLETS = {
     "0xf4d4baf60e5fcaf6a092b2d6b5509af9f01cfb48": "old fees wallet",
 }
 problems = []
+notes = []  # informational, never a refusal
 
 def swift_block(path):
     """The body of `static let monadMainnet = …(` up to its closing parenthesis."""
@@ -210,7 +215,9 @@ def words(answer, count, what):
     return [int.from_bytes(data[32 * i:32 * (i + 1)], "big") for i in range(count)]
 
 def check_retired_on_chain(cohorts, coins, call):
-    """Each retired factory: publishing paused, momentCount() == its pin, and its coins exactly its table entries."""
+    """Each retired factory: momentCount() == its pin, and its coins exactly its table entries. Returns the cohorts whose
+    publishing is still open on chain, which is reported, not refused (see the docstring)."""
+    open_cohorts = []
     for c, factory, pin in cohorts:
         where = f"Moments cohort {c} ({factory})"
         try:
@@ -228,10 +235,14 @@ def check_retired_on_chain(cohorts, coins, call):
             problems.append(f"{where} could not be read on chain ({type(e).__name__}: {str(e)[:160]}); it must be proven final before a release")
             continue
         if paused != 1:
-            problems.append(f"{where}: publishing is not paused on chain; a retired cohort must be paused (setPublishingPaused(true)) before a release")
+            open_cohorts.append(c)
+            notes.append(f"{where}: publishing is open on chain (retired in the app only, owner decision 2026-09-28); "
+                         f"momentCount() is {count}, pinned {pin}")
         if count != pin:
             problems.append(f"{where}: momentCount() is {count} on chain but MomentLink.Cohort.{c}.finalMomentCount pins {pin}: "
-                            "pin the count read after the pause and add every new coin to MomentsAddresses.retiredMainnetCoins")
+                            "a Moment was published there after the pin. Pin the new count and add every new coin to "
+                            "MomentsAddresses.retiredMainnetCoins (a new name in a retired cohort comes before every later "
+                            "cohort's in MomentSlug's order, so check that no later Moment's link changes)")
         table = {coin: i for coin, (f, i) in coins.items() if f == factory}
         for coin, i in sorted(on_chain.items(), key=lambda kv: kv[1]):
             if table.get(coin) != i:
@@ -239,8 +250,11 @@ def check_retired_on_chain(cohorts, coins, call):
         for coin, i in sorted(table.items(), key=lambda kv: kv[1]):
             if on_chain.get(coin) != i:
                 problems.append(f"{where}: MomentsAddresses.retiredMainnetCoins names {coin} as #{i}, which the chain does not")
+    return open_cohorts
 
 def report(ok_line):
+    for note in notes:
+        print(f"note: {note}")
     if problems:
         print("Launchpad / Moments check failed:\n  " + "\n  ".join(problems))
         sys.exit(1)
@@ -250,8 +264,9 @@ if FIXTURE:
     # Tests only: the retired-cohort checks alone, against canned answers (never with --release; see the docstring).
     cohorts, coins = retired_tables()
     block, call = fixture_reader(FIXTURE)
-    check_retired_on_chain(cohorts, coins, call)
-    report(f"OK: retired Moments cohorts final at fixture block {block} ({', '.join(f'{c} {pin}' for c, _, pin in cohorts)})")
+    open_cohorts = check_retired_on_chain(cohorts, coins, call)
+    report(f"OK: retired Moments cohorts at their pins at fixture block {block} ({', '.join(f'{c} {pin}' for c, _, pin in cohorts)})"
+           + (f"; publishing open on {', '.join(open_cohorts)}" if open_cohorts else ""))
     sys.exit(0)
 
 # DyorKit's launchpad constant
@@ -302,13 +317,14 @@ if RELEASE:
 # The retired Moments cohorts: the pins and the coin table always; the chain with --chain / --release.
 retired_cohorts, retired_coins = retired_tables()
 chain_block = None
+open_cohorts = []
 if CHAIN:
     try:
         chain_block, call = chain_reader()
     except Exception as e:  # noqa: BLE001
         problems.append(f"no public Monad RPC answered ({str(e)[:200]}), so the retired Moments cohorts cannot be proven final; refusing")
     else:
-        check_retired_on_chain(retired_cohorts, retired_coins, call)
+        open_cohorts = check_retired_on_chain(retired_cohorts, retired_coins, call)
 
 # Local overrides, when present. An xcconfig/env that sets the keys must set them to the current deployment
 # (or point at a fork on purpose — then this script is expected to complain).
@@ -357,9 +373,13 @@ for name in (".env", ".env.local"):
 active = [k for k in list(KEYS.values()) + list(MOMENTS_KEYS.values()) if k[0] in xc]
 summary = ", ".join(f"{name} {st}" for name, st in (("launchpad v2", launchpad_state), ("Moments v2", moments_state)))
 pins = ", ".join(f"{c} {pin}" for c, _, pin in retired_cohorts)
+if chain_block is None:
+    retired = f"; retired Moments pins {pins} (not checked on chain: --chain)"
+else:
+    opened = f"; publishing open on {', '.join(open_cohorts)}" if open_cohorts else ", publishing paused"
+    retired = f"; retired Moments cohorts at their pins on chain at block {chain_block} ({pins}{opened})"
 report(f"OK: DyorKit ({summary})"
        + (", Secrets.xcconfig" if active else ", Secrets.xcconfig (no override)")
        + "".join(f", {name}" for name in envs)
        + f"; live records: factory {record['factory']}, Moments factory {moments_record['factory']}"
-       + (f"; retired Moments cohorts final on chain at block {chain_block} ({pins}, publishing paused)" if chain_block is not None
-          else f"; retired Moments pins {pins} (not checked on chain: --chain)"))
+       + retired)

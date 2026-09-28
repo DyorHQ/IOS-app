@@ -84,8 +84,9 @@ public struct MomentsAddresses: Sendable, Hashable {
         generation: .v2
     )
 
-    /// Retired Moments cohorts on Monad mainnet, newest first — CLAIM-ONLY. Publishing is paused on each (cohort 3's
-    /// pause is the owner's step before the v2 deploy), and the app never collects, expires, retries, buys back or trades there: holders claim their vesting and creators withdraw
+    /// Retired Moments cohorts on Monad mainnet, newest first — CLAIM-ONLY. Publishing is paused on chain on cohorts 1
+    /// and 2; cohort 3 stays open there (owner decision 2026-09-28: retired in the app only). The app never publishes,
+    /// collects, expires, retries, buys back or trades on any of them: holders claim their vesting and creators withdraw
     /// their own proceeds and pool fees, through `RetiredMoments` and nothing else. Cohorts 1 and 2 snapshotted the
     /// retired beneficiaries (platform 0xf4D4…, treasury 0x5282… whose key leaked); cohort 3 pays the current fees wallet
     /// 0x15ED… and treasury 0x5aDb…, and is retired because the v2 contracts replaced it (`retirement` says which).
@@ -153,8 +154,8 @@ public struct MomentsAddresses: Sendable, Hashable {
     }
 
     /// Every coin the retired cohorts minted, by (factory, id) — read on chain (`getMoment` / `momentIdByCoin`).
-    /// Publishing is paused on each and the counts are pinned (`MomentLink.Cohort.finalMomentCount`), so the set is final
-    /// and needs no read (the release gate checks it against the chain, `check-launchpad-addresses.py --release`): a coin
+    /// The counts are pinned (`MomentLink.Cohort.finalMomentCount`), so the set is final for the app and needs no read
+    /// (cohort 3 is not paused on chain; the release gate checks the set against it, `check-launchpad-addresses.py --release`): a coin
     /// here is never offered a trade in the app, even when its cohort cannot be read (the app trades no past cohort's coin; cohorts 1 and 2's pools also pay
     /// the retired platform wallet).
     public static let retiredMainnetCoins: [Address: MomentKey] = [

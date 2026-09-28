@@ -75,7 +75,8 @@ public struct RetiredMoments: Sendable {
 
     // MARK: Reads
 
-    /// Every Moment of the cohort, newest first (publishing is paused, so the list is final).
+    /// Every Moment of the cohort, newest first, read from the chain: on cohort 3, whose publishing is not paused (owner
+    /// decision 2026-09-28), that includes any Moment published after its pin.
     public func moments() async throws -> [MomentInfo] {
         try await service.moments(limit: 200)
     }

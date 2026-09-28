@@ -77,14 +77,16 @@ public struct MomentLink: Hashable, Identifiable, Sendable, CustomStringConverti
         /// The cohorts whose factory is known, in publish order.
         public static var wired: [Cohort] { allCases.filter(\.isWired) }
 
-        /// A retired cohort's final Moment count. Publishing is paused on each, but only this pin makes the counts
-        /// final from the app's point of view: the directory never reads a retired cohort's `momentCount`, so a
-        /// Moment published there later could never shift a later cohort's names. The release gate proves every pin
-        /// on chain before an archive ships (`scripts/dev/check-launchpad-addresses.py --release`, also `--chain` by
-        /// hand): publishing paused, `momentCount()` equal to the pin, and every coin in
-        /// `MomentsAddresses.retiredMainnetCoins`. Cohort 3's is 1 ("Nature", read at block 108,778,342 while its pause
-        /// was still pending): a Moment published there before the pause is mined makes the gate refuse until this pin
-        /// and the coin table include it. Nil for c4, which is counted live.
+        /// A retired cohort's final Moment count. Only this pin makes the counts final from the app's point of view:
+        /// the directory never reads a retired cohort's `momentCount`, so a Moment published there later could never
+        /// shift a later cohort's names. Publishing is paused on chain on cohorts 1 and 2 but not on cohort 3 (owner
+        /// decision 2026-09-28: the old stacks are retired in the app only), where builds before 16 can still publish.
+        /// The release gate proves every pin on chain before an archive ships
+        /// (`scripts/dev/check-launchpad-addresses.py --release`, also `--chain` by hand), paused or not:
+        /// `momentCount()` equal to the pin, and every coin in `MomentsAddresses.retiredMainnetCoins`. Cohort 3's is 1
+        /// ("Nature", read at block 108,778,342): a Moment published there later makes the gate refuse until this pin
+        /// and the coin table include it, and a raised pin puts its name ahead of every c4 Moment's (`MomentSlug`).
+        /// Nil for c4, which is counted live.
         public var finalMomentCount: Int? {
             switch self {
             case .c1: return 3
