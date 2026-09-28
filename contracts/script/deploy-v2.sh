@@ -41,16 +41,18 @@
 #      https://dyorhq.fun/moments/c4/; an OWNER or GOVERNANCE set but empty, or on a LEDGER/ACCOUNT run unset or GOV
 #      (unless NO_HANDOVER=1); roles that are not distinct; an OWNER or GOVERNANCE other than GOV that is not a Safe
 #      (code, a threshold of at least 2, and none of GOV, GUARDIAN, TREASURY or FEES among its owners); an RPC that is
-#      not chain 143; a full run (ONLY unset) signed by LEDGER/ACCOUNT from a GOV whose nonce is not 0; an ONLY=moments
-#      LEDGER/ACCOUNT run from a GOV whose nonce is not 0 while the launchpad in deployments/pending-143.json is not
-#      finished; a balance under MIN_BALANCE_MON.
+#      not chain 143; a full run (ONLY unset) signed by LEDGER/ACCOUNT from a GOV whose nonce is not 0 (printing the
+#      ONLY=moments run when the launchpad in deployments/pending-143.json has finished); an ONLY=moments LEDGER/ACCOUNT
+#      run from a GOV whose nonce is not 0 while that launchpad has not finished, or once the Moments factory in
+#      deployments/pending-moments-143.json has code; a balance under MIN_BALANCE_MON.
 #   1. live MON/aBIL prices from two sources (script/relaunch/prices.py)
 #   2. launchpad: simulate, confirm, broadcast (the modules are sealed in the same run)
 #   3. Moments: simulate, confirm, broadcast
 #   4. the follow-ups: the Safe accepts both handovers in one batch, Sourcify, then the records are promoted and the
 #      app and keepers wired in one change.
 # A broadcast that stops midway is finished with forge's --resume, never by running this script again (it reads no
-# arguments, so a rerun deploys a whole new stack): it then prints the exact commands, with this run's values.
+# arguments, so a rerun deploys a whole new stack): it then prints the exact commands, with this run's values. Once the
+# launchpad stack has landed, any exit before the Moments broadcast prints the ONLY=moments run that follows it.
 set -euo pipefail
 umask 077
 # forge/cast honour FOUNDRY_* (compiler config), ETH_* (sender, keystore, rpc), CAST_* and DAPP_*: none may leak in.
@@ -70,6 +72,9 @@ SNAP=$(mktemp -d)
 cp -R deployments "$SNAP/deployments"
 for d in broadcast cache; do if [ -d "$d" ]; then cp -R "$d" "$SNAP/$d"; fi; done
 cleanup() {
+  # The launchpad stack landed and the Moments broadcast never began (its simulation failed, its prompt was declined, the
+  # run was stopped): the one way on is ONLY=moments, whatever made this run exit.
+  if [ "${LAUNCHPAD_DONE:-}" = 1 ] && [ "${BEGUN:-}" != "$MOMENTS_TARGET" ] && [ -z "${ONLY:-}" ]; then moments_next || true; fi
   # FORK rehearsals leave nothing behind (records, broadcast logs, script caches); a real run keeps its
   # pending-*.json records and broadcast logs.
   if [ "${FORK:-0}" = 1 ]; then
@@ -164,6 +169,38 @@ launchpad_finished() { # <factory>
 # broadcast/Deploy.s.sol/143/); nothing when it cannot be read.
 planned_txs() { python3 -c 'import glob, json; logs = sorted(glob.glob("broadcast/Deploy.s.sol/143/dry-run/run-[0-9]*.json")); print(len(json.load(open(logs[-1]))["transactions"]))' 2>/dev/null || true; }
 
+# Whether the Moments stack of an earlier run is on chain: its record names a factory with code. Unreadable refuses.
+moments_sent() {
+  local f code
+  f=$(record_factory deployments/pending-moments-143.json 2>/dev/null) || return 1
+  [ -n "$f" ] || return 1
+  code=$($CAST code "$f" --rpc-url "$RPC" 2>/dev/null) || die "cannot read the code at $f (deployments/pending-moments-143.json)"
+  [ -n "$code" ] && [ "$code" != 0x ]
+}
+
+# The ONLY=moments run that follows this run's launchpad stack, value for value.
+only_moments_command() {
+  local signer="LEDGER=1" extra=
+  case "$MODE" in account) signer="ACCOUNT=$(printf '%q' "$ACCOUNT")" ;; fork) signer="FORK=1" ;; esac
+  [ "$RPC" = "$DEFAULT_RPC" ] || extra=" RPC=$(rpc_word)"
+  [ "${NO_HANDOVER:-0}" != 1 ] || extra="$extra NO_HANDOVER=1"
+  say "  cd $(printf '%q' "$CONTRACTS") && ONLY=moments $signer GOV=$GOV OWNER=$OWNER GOVERNANCE=$GOVERNANCE \\"
+  say "    TREASURY=$TREASURY FEES=$FEES GUARDIAN=$GUARDIAN LAUNCH_FEE_WEI=$LAUNCH_FEE_WEI THRESHOLD_USDC=$THRESHOLD_USDC \\"
+  say "    EXTERNAL_BASE_URI=$(printf '%q' "$EXTERNAL_BASE_URI")$extra script/deploy-v2.sh"
+}
+
+# Printed on exit once the launchpad stack has landed and the Moments broadcast never began (see cleanup).
+moments_next() {
+  bold "The launchpad stack is on chain; the Moments stack was not sent"
+  say "Do NOT run the full command again: it would deploy a second launchpad (a LEDGER/ACCOUNT run refuses GOV's nonce"
+  say "now). Send nothing else from GOV $GOV."
+  say "Deploy the Moments stack alone, in a clean shell (add MIN_BALANCE_MON=8 if GOV now holds under $MIN_BALANCE_MON MON; the"
+  say "Moments stack costs about 3):"
+  only_moments_command
+  if [ -n "$STRAY" ]; then say "(this run also read $STRAY from the environment: set each again, to the same value)"; fi
+  if [ "$(rpc_word)" != "$RPC" ]; then say "(set RPC to the RPC this run used: it is not printed, since it may carry a key)"; fi
+}
+
 # ---------------------------------------------------------------- 0. pre-flight
 bold "0. pre-flight"
 # forge and cast load contracts/.env into their own environment, past every check below. Its existence is tested,
@@ -242,22 +279,35 @@ if [ "$MODE" != fork ]; then
   REF=$($CAST chain-id --rpc-url "$REFERENCE_RPC") || die "cannot reach $REFERENCE_RPC"
   [ "$REF" = 143 ] || die "$REFERENCE_RPC is chain $REF"
 fi
-# A single-use deployer starts at nonce 0. Anything else means an earlier run, and a partial one is finished with
-# --resume (step 2/3 prints how), never by deploying the stacks again. One stack (ONLY=) may follow a finished one.
+# A single-use deployer starts at nonce 0. Anything else means an earlier run, which is picked up where it stopped and
+# never deployed again: a stopped broadcast is finished with --resume (step 2/3 prints how), and the Moments stack
+# follows a finished launchpad with ONLY=moments. Moments sent while the launchpad is half done would move GOV's nonce,
+# and the launchpad's --resume could then never finish it.
 NONCE=$($CAST nonce "$GOV" --rpc-url "$RPC") || die "cannot read GOV's nonce"
 [[ "$NONCE" =~ ^[0-9]+$ ]] || die "GOV's nonce reads $NONCE"
-if [ "$NONCE" != 0 ] && [ -z "${ONLY:-}" ]; then
-  case "$MODE" in
-    ledger | account) die "GOV $GOV has nonce $NONCE: a full run needs a fresh, single-use deployer at nonce 0. If a run of this script stopped midway, finish it with the --resume command it printed (then ONLY=moments if the launchpad stack was the one that stopped); otherwise deploy from a new keystore." ;;
-    *) say "note: GOV's nonce is $NONCE; a live full run refuses anything but 0" ;;
-  esac
-fi
-# Moments alone after the launchpad (ONLY=moments, as step 2 prints it) only once the launchpad stack has finished:
-# Moments sent while it is half done would move GOV's nonce, and the launchpad's --resume could then never finish it.
-if [ "${ONLY:-}" = moments ] && [ "$NONCE" != 0 ]; then
+if [ "$NONCE" != 0 ] && [ "${ONLY:-}" != launchpad ]; then
   LP_BEFORE=$(record_factory deployments/pending-143.json 2>/dev/null) || LP_BEFORE=
-  if [ -n "$LP_BEFORE" ] && launchpad_finished "$LP_BEFORE"; then
-    say "the launchpad stack in deployments/pending-143.json has finished: $LP_BEFORE"
+  if moments_sent; then
+    sent="GOV has nonce $NONCE, and the Moments stack in deployments/pending-moments-143.json is on chain: if its broadcast stopped midway, finish it with the --resume command it printed; if it finished, go on with step 4. No stack is deployed twice."
+    case "$MODE" in ledger | account) die "$sent" ;; *) say "note: $sent" ;; esac
+  elif [ -n "$LP_BEFORE" ] && launchpad_finished "$LP_BEFORE"; then
+    if [ -n "${ONLY:-}" ]; then
+      say "the launchpad stack in deployments/pending-143.json has finished: $LP_BEFORE"
+    else
+      case "$MODE" in
+        ledger | account)
+          bold "GOV has nonce $NONCE, and the launchpad stack in deployments/pending-143.json has finished: $LP_BEFORE"
+          say "Deploy the Moments stack alone, in a clean shell (add MIN_BALANCE_MON=8 if GOV holds under $MIN_BALANCE_MON MON):"
+          only_moments_command
+          die "a full run would deploy a second launchpad: run the ONLY=moments command above" ;;
+        *) say "note: GOV's nonce is $NONCE; a live full run refuses anything but 0" ;;
+      esac
+    fi
+  elif [ -z "${ONLY:-}" ]; then
+    case "$MODE" in
+      ledger | account) die "GOV $GOV has nonce $NONCE: a full run needs a fresh, single-use deployer at nonce 0. If a broadcast of this script stopped midway, finish it with the --resume command it printed (then ONLY=moments, once the launchpad has finished); otherwise deploy from a new keystore." ;;
+      *) say "note: GOV's nonce is $NONCE; a live full run refuses anything but 0" ;;
+    esac
   else
     if [ -z "$LP_BEFORE" ]; then
       unfinished="GOV has nonce $NONCE, and there is no deployments/pending-143.json to show that its launchpad stack finished"
@@ -350,16 +400,10 @@ resume_help() { # <label> <target> <nonce when the broadcast began> <transaction
     fi
   fi
   if [ "$target" = "$LAUNCHPAD_TARGET" ] && [ -z "${ONLY:-}" ]; then
-    local signer="LEDGER=1" rpc_env=
-    [ "$MODE" = ledger ] || signer="ACCOUNT=$(printf '%q' "$ACCOUNT")"
-    [ "$RPC" = "$DEFAULT_RPC" ] || rpc_env=" RPC=$(rpc_word)"
-    [ "${NO_HANDOVER:-0}" != 1 ] || rpc_env="$rpc_env NO_HANDOVER=1"
     say ""
     say "Only then, the Moments stack (ONLY=moments, which refuses while the launchpad has not finished; add MIN_BALANCE_MON=8"
     say "if GOV now holds under $MIN_BALANCE_MON MON, the Moments stack costs about 3):"
-    say "  cd $(printf '%q' "$CONTRACTS") && ONLY=moments $signer GOV=$GOV OWNER=$OWNER GOVERNANCE=$GOVERNANCE \\"
-    say "    TREASURY=$TREASURY FEES=$FEES GUARDIAN=$GUARDIAN LAUNCH_FEE_WEI=$LAUNCH_FEE_WEI THRESHOLD_USDC=$THRESHOLD_USDC \\"
-    say "    EXTERNAL_BASE_URI=$(printf '%q' "$EXTERNAL_BASE_URI")$rpc_env script/deploy-v2.sh"
+    only_moments_command
   fi
   if [ "$(rpc_word)" != "$RPC" ]; then say "(set RPC to the RPC this run used: it is not printed, since it may carry a key)"; fi
 }
@@ -375,6 +419,7 @@ run_script() { # <label> <target> <names checked in step 0> <env...> -- simulate
   confirm "$label: broadcast these transactions as $GOV?"
   start=$($CAST nonce "$GOV" --rpc-url "$RPC") || die "$label: cannot read GOV's nonce; nothing was sent"
   [[ "$start" =~ ^[0-9]+$ ]] || die "$label: GOV's nonce reads $start; nothing was sent"
+  BEGUN=$target
   bold "$label: broadcast"
   if ! env "$@" "$FORGE" script "$target" --rpc-url "$RPC" --code-size-limit 200000 --sender "$GOV" --broadcast --slow --non-interactive "${SIGN[@]}"; then
     resume_help "$label" "$target" "$start" "$planned" "$@"
@@ -387,6 +432,7 @@ if [ "${ONLY:-}" != moments ]; then
   run_script "2. launchpad" "$LAUNCHPAD_TARGET" "$LAUNCHPAD_PASSES" \
     PROTOCOL_FEE_RECIPIENT="$TREASURY" FEES="$FEES" OWNER="$OWNER" LAUNCH_FEE_WEI="$LAUNCH_FEE_WEI" \
     MON_USD_E8="$MON_USD_E8" ABIL_USD_E8="$ABIL_USD_E8"
+  [ "$MODE" = dry ] || LAUNCHPAD_DONE=1
 fi
 
 # ---------------------------------------------------------------- 3. Moments
