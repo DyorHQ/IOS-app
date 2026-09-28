@@ -231,6 +231,22 @@ struct InlineError: View {
     }
 }
 
+/// "Learn more": one page of the DyorHQ docs (`DocsLinks`), opened in Safari like the Terms and Privacy links. It goes
+/// only under an explanation the screen already gives (a section footer or a line of help text), once per explanation,
+/// in the surrounding text style.
+struct LearnMoreLink: View {
+    let page: DocsLinks
+
+    init(_ page: DocsLinks) { self.page = page }
+
+    var body: some View {
+        Link("Learn more", destination: page.url)
+            .foregroundStyle(.tint)
+            .accessibilityLabel("Learn more about \(page.topic)")
+            .accessibilityHint("Opens the DyorHQ docs in Safari.")
+    }
+}
+
 /// Full-width primary action at the bottom of a screen.
 struct PrimaryButton: View {
     let title: String

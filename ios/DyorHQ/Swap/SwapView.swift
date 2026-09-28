@@ -529,6 +529,8 @@ struct SlippageSheet: View {
                     Text("How far the price may move before your swap settles. Beyond this, it cancels instead of filling worse.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                } footer: {
+                    LearnMoreLink(.slippageAndPriceImpact)
                 }
                 Section("Tolerance") {
                     ForEach(presets, id: \.self) { bps in

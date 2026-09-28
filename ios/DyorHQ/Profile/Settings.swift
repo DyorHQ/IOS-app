@@ -251,10 +251,13 @@ struct PerplTradingView: View {
                     LabeledContent("One-click trading") { checkmark(trading.isForwarding) }
                 }
             } footer: {
-                if session.account?.method == .meraPasskey {
-                    Text("Your trading key comes from your passkey and exists only while your session is unlocked; this device stores just its token. On another iPhone, connect once more.")
-                } else {
-                    Text("Your trading key is generated on this device and authorized once by your wallet.")
+                VStack(alignment: .leading, spacing: 4) {
+                    if session.account?.method == .meraPasskey {
+                        Text("Your trading key comes from your passkey and exists only while your session is unlocked; this device stores just its token. On another iPhone, connect once more.")
+                    } else {
+                        Text("Your trading key is generated on this device and authorized once by your wallet.")
+                    }
+                    LearnMoreLink(.oneClickTrading)
                 }
             }
 
