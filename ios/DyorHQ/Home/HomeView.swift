@@ -738,6 +738,8 @@ struct TokenDetailView: View {
     @Environment(Session.self) private var session
     @State private var history: [PricePoint] = []
     @State private var loadingHistory = true
+    /// A coin still on a retired launchpad's curve (`SwapEngine.buyRefusal`): its holders can sell it, nobody can buy it.
+    @State private var sellOnly = false
 
     var body: some View {
         List {
@@ -772,17 +774,24 @@ struct TokenDetailView: View {
                 LabeledContent("Decimals", value: String(row.token.decimals))
             }
             Section {
-                if SwapEngine.isTradable(row.token) {
+                if !SwapEngine.isTradable(row.token) {
+                    // A retired cohort's Moment coin: past cohorts are claim-only, so no swap is offered.
+                    Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
+                } else if sellOnly {
+                    // Swap opens on the sell side: the engine refuses any quote that buys this coin.
+                    Button("Sell \(row.token.symbol)", systemImage: "arrow.left.arrow.right") {
+                        router.openSwap(tokenIn: row.token, tokenOut: Token.usdc)
+                    }
+                } else {
                     Button("Swap \(row.token.symbol)", systemImage: "arrow.left.arrow.right") {
                         router.openSwap(tokenIn: row.token.symbol == "USDC" ? Token.mon : Token.usdc, tokenOut: row.token)
                     }
-                } else {
-                    // A retired cohort's Moment coin: past cohorts are claim-only, so no swap is offered.
-                    Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
                 }
                 if let url = row.token.isNative ? nil : Monad.explorerToken(row.token.address) {
                     Link(destination: url) { Label("View on Monadscan", systemImage: "safari") }
                 }
+            } footer: {
+                if sellOnly, SwapEngine.isTradable(row.token) { Text(RetiredLaunchpad.notice) }
             }
         }
         .listStyle(.insetGrouped)
@@ -791,6 +800,9 @@ struct TokenDetailView: View {
         .task {
             history = (try? await env.prices.history(for: row.token, points: 48)) ?? []
             loadingHistory = false
+        }
+        .task(id: row.token.address) {
+            sellOnly = await env.swap.buyRefusal(row.token) == .retiredLaunchpad(row.token.address)
         }
     }
 }

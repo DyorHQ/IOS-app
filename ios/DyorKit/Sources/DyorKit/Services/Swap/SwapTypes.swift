@@ -90,6 +90,10 @@ public enum SwapError: Error, LocalizedError, Equatable {
     /// cohorts 1 and 2's pools pay the retired platform wallet), so no venue quotes, routes or builds it (see
     /// `SwapEngine.tradingClosed`).
     case tradingClosed(Address)
+    /// Buying a coin still on a retired launchpad's bonding curve: those coins are sell-only (`SwapEngine.buyRefusal`).
+    case retiredLaunchpad(Address)
+    /// Whether the coin bought is on a retired launchpad's curve couldn't be read, so no venue was asked.
+    case launchpadUnchecked
     /// A venue's own message, already readable.
     case venue(String)
 
@@ -102,6 +106,8 @@ public enum SwapError: Error, LocalizedError, Equatable {
         case .tradingClosed(let address):
             let what = MomentsAddresses.isRetiredCoin(address) ? "coin" : "pool"
             return "Past cohort · trading closed. \(address.short) is a retired Moment \(what), so DyorHQ never trades it."
+        case .retiredLaunchpad: return RetiredLaunchpad.notice
+        case .launchpadUnchecked: return "DyorHQ couldn't check this coin's launchpad just now, so buying it isn't offered. Try again in a moment."
         case .venue(let message): return message
         }
     }
