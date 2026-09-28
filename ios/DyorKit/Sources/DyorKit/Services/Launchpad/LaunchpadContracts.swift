@@ -27,6 +27,8 @@ enum LaunchpadABI {
         static let pairMondayOnly = "pairMondayOnly(address)"
         static let getLaunches = "getLaunches(uint256,uint256)"
         static let getLaunchedToken = "getLaunchedToken(address)"
+        /// The launch token a curve belongs to (address 0 for a curve the factory never deployed), on every generation.
+        static let curveToToken = "curveToToken(address)"
         static let stuckSince = "stuckSince(address)"
         static let poolKeyOf = "poolKeyOf(address)"
         static let previewLaunchEconomics = "previewLaunchEconomics(uint256,address)"

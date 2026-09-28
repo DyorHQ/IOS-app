@@ -101,6 +101,9 @@ final class AppEnvironment {
         // known factory recorded on-chain (MERA-PLAN §3).
         session.mera.contracts = Mera.SigningPolicy.Contracts(moments: config.moments)
         session.mera.curveVerifier = { [launchpad] token in await launchpad.knownCurve(token: token) }
+        // Retired launchpads are sell-only (owner decision 2026-09-28): the wallet refuses a buy into a curve a retired
+        // factory recorded, whatever the sheet declared or a Face ID approved.
+        session.mera.retiredCurveLookup = { [launchpad] curves in await launchpad.retiredCurves(among: curves) }
         perplTrading = PerplTrading(mera: session.mera)
         // The chain's word on which positions are open, which the automatic TP/SL clean-up needs besides the stream's.
         // A position the account's bitmap holds but the read left out (a failed sub-read, a market not listed) throws:

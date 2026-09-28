@@ -222,6 +222,9 @@ final class MeraSession {
     /// Reads, on-chain, the curve a known launchpad factory recorded for a launch token (`LaunchpadService.knownCurve`).
     /// Without it no launchpad trade is prompt-free.
     @ObservationIgnored var curveVerifier: (@Sendable (Address) async -> Address?)?
+    /// Reads, on-chain, which of a plan's curves a retired launchpad recorded (`LaunchpadService.retiredCurves`), so a buy
+    /// on one is refused (`Mera.SigningPolicy.refusal`). Without it every curve buy is refused as unverified.
+    @ObservationIgnored var retiredCurveLookup: (@Sendable (Set<Address>) async -> Mera.SigningPolicy.RetiredCurves)?
 
     /// The open session. Private: its keys never leave these types.
     private var live: Mera.SigningSession?
@@ -369,7 +372,8 @@ final class MeraSession {
 
     /// Signs one transaction of `action` (a lone transaction with no declared intent when nil, which always asks).
     /// First, whatever the session, what no approval makes acceptable is refused before any prompt
-    /// (`Mera.SigningPolicy.refusal`: an out-of-bounds network fee, an output paid to someone else, another token).
+    /// (`Mera.SigningPolicy.refusal`: an out-of-bounds network fee, an output paid to someone else, another token,
+    /// `graduateFallback`, a buy on a retired launchpad — its curves looked up on-chain first, `retiredCurves(for:)`).
     /// Then prompt-free only while a session is live and either a step-up already approved this action in it, or the
     /// wallet's own check passes and the action's dollar value fits the caps (charged once per action). Otherwise one
     /// forced pinned ceremony approves the action and opens a new session, and the transaction is signed there.
@@ -378,8 +382,10 @@ final class MeraSession {
         if isStub { try Mera.Stub.require(.transaction(chainId: transaction.chainId)) } // before any prompt
         #endif
         let action = action ?? Action()
-        if let account = address, let reason = Mera.SigningPolicy.refusal(.init(transaction), intent: action.intent, account: account) {
-            throw Failure.refused(reason)
+        if let account = address {
+            let call = Mera.SigningPolicy.Call(transaction)
+            let retired = await retiredCurves(for: [call])
+            if let reason = Mera.SigningPolicy.refusal(call, intent: action.intent, account: account, retiredCurves: retired) { throw Failure.refused(reason) }
         }
         if let session = liveSession() {
             if action.approvedIn === session { return try session.sign(transaction) }
@@ -433,9 +439,10 @@ final class MeraSession {
     /// expired session reads as locked here but is ended by its timer or the next signature.
     func assess(_ steps: [TransactionStep], intent: Mera.Intent, chainId: Int = Monad.chainId) async -> Assessment {
         if let account = address {
-            for step in steps {
-                guard let call = Mera.SigningPolicy.Call(step: step, from: account, chainId: chainId) else { continue }
-                if let reason = Mera.SigningPolicy.refusal(call, intent: intent, account: account) { return .refused(reason.summary) }
+            let calls = steps.compactMap { Mera.SigningPolicy.Call(step: $0, from: account, chainId: chainId) }
+            let retired = await retiredCurves(for: calls)
+            for call in calls {
+                if let reason = Mera.SigningPolicy.refusal(call, intent: intent, account: account, retiredCurves: retired) { return .refused(reason.summary) }
             }
         }
         guard let session = openSession else { return .faceID(Mera.SigningPolicy.Reason.locked.summary) }
@@ -641,6 +648,16 @@ final class MeraSession {
         guard let verdict = try? session.charge(usd: action.intent.usd) else { return .ask(.locked) }
         if verdict == .allowed { action.chargedIn = session }
         return Mera.SigningPolicy.verdict(verdict)
+    }
+
+    /// What `Mera.SigningPolicy.refusal` needs to refuse a buy on a retired launchpad: which of `calls`' curves a retired
+    /// factory recorded, read on-chain. Nothing is read for calls that pay into no curve; with no lookup wired, or a read
+    /// that fails, no curve can be ruled out (`.unknown`), so a curve buy is refused.
+    private func retiredCurves(for calls: [Mera.SigningPolicy.Call]) async -> Mera.SigningPolicy.RetiredCurves {
+        let candidates = Mera.SigningPolicy.curveCandidates(calls)
+        guard !candidates.isEmpty else { return .none }
+        guard let lookup = retiredCurveLookup else { return .unknown }
+        return await lookup(candidates)
     }
 
     /// What the scope check needs from outside the calldata: this session's account and end, the configured contracts,

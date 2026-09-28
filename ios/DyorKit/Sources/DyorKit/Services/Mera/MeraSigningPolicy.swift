@@ -24,11 +24,15 @@ import Foundation
    Some things no Face ID makes acceptable, so they are refused outright, prompt-free or approved (`refusal`): on Monad,
    a network fee out of bounds (the RPC sets it and the caps don't count it: more than 5 MON, a gas limit over 15M, or a
    tip above the max fee), a declared swap or launchpad trade whose calldata pays someone else or trades another token,
-   and the launchpad's `graduateFallback` on any stack: DyorHQ's keepers send it with the gas it needs (v2's needs at
-   least 22,062,500, so it fails the fee bound first), and the app never does (owner decision 2026-09-28).
+   the launchpad's `graduateFallback` on any stack: DyorHQ's keepers send it with the gas it needs (v2's needs at
+   least 22,062,500, so it fails the fee bound first), and the app never does; and a buy on a retired launchpad, whose
+   curves take sells only (`RetiredLaunchpad`): a curve `buy` into a curve a retired factory recorded, an approval
+   paying anything but the coin itself into one, and `launchAndBuy` on (or an approval to) a retired router. Both are
+   owner decisions of 2026-09-28. Which curves a retired factory recorded is read on-chain before the check
+   (`RetiredCurves`), and a curve `buy` whose curve couldn't be looked up is refused as unverified.
 
-   Pure and synchronous: the app supplies what only the chain can answer (`Context.verifiedCurves`) and the session's
-   caps. The only messages a session signs on its own are DyorHQ's wallet-auth sign-in for this account; the gas-drip
+   Pure and synchronous: the app supplies what only the chain can answer (`Context.verifiedCurves`, `RetiredCurves`) and
+   the session's caps. The only messages a session signs on its own are DyorHQ's wallet-auth sign-in for this account; the gas-drip
    template joins that list if a drip is ever built (this build sponsors no gas, MERA-PLAN §4). */
 extension Mera {
     // MARK: Intent
@@ -237,6 +241,8 @@ extension Mera {
             case networkFee
             /// The launchpad's `graduateFallback`, on any stack: only DyorHQ's keepers send it.
             case graduateFallback
+            /// A buy on a retired launchpad, whose curves take sells only.
+            case retiredLaunchpad
             case unpriced, overActionCap, overSessionCap
 
             /// The "<reason>" in "Face ID required: <reason>".
@@ -261,6 +267,7 @@ extension Mera {
                 case .fee: return "a swap that pays a fee to someone else"
                 case .networkFee: return "an unusually high network fee"
                 case .graduateFallback: return "a graduation fallback, which only DyorHQ’s keepers send"
+                case .retiredLaunchpad: return "a buy on a retired launchpad, which only takes sells"
                 case .unpriced: return "this can’t be priced"
                 case .overActionCap: return "over the $\(Int(SpendingCaps.perActionUSD)) limit per action"
                 case .overSessionCap: return "over this session’s $\(Int(SpendingCaps.perSessionUSD)) limit"
@@ -337,6 +344,19 @@ extension Mera {
             public static let monadMainnet = Contracts(moments: .monadMainnet)
         }
 
+        /// The launchpad curves a plan pays into that a retired factory recorded, read on-chain before `refusal` runs
+        /// (`RetiredLaunchpad.curves`, from `curveCandidates`): the curve a `buy` goes to and the spender of an approval.
+        public enum RetiredCurves: Sendable, Equatable {
+            /// Each candidate a retired factory recorded as a launch's curve → that launch's coin. Empty when none is, or
+            /// when there was nothing to look up.
+            case known([Address: Address])
+            /// The lookup failed: no curve can be ruled out, so a curve `buy` is refused as unverified.
+            case unknown
+
+            /// Nothing to look up: no call pays into a curve.
+            public static let none = RetiredCurves.known([:])
+        }
+
         /// Everything the check needs besides the call and the intent.
         public struct Context: Sendable {
             public var account: Address
@@ -403,9 +423,13 @@ extension Mera {
         /// - `.fee`: a Kuru Flow swap whose fee tuple takes basis points. The quote client blocks one too (IOST-7).
         /// - `.differentToken`: a Kuru Flow swap the sheet declared, trading tokens other than the ones shown.
         /// - `.graduateFallback`: the launchpad's `graduateFallback`, to any contract. The app never sends it, on any stack.
-        public static func refusal(_ call: Call, intent: Intent, account: Address) -> Reason? {
+        /// - `.retiredLaunchpad`: a buy on a retired launchpad (`retiredLaunchpadRefusal`), whatever the sheet declared;
+        ///   `.unverifiedCurve` for a curve `buy` whose curve couldn't be looked up (`retiredCurves` is `.unknown`).
+        ///   `retiredCurves` is what the chain says about the curves `curveCandidates` names for this call.
+        public static func refusal(_ call: Call, intent: Intent, account: Address, retiredCurves: RetiredCurves = .none) -> Reason? {
             if call.chainId == Monad.chainId, !feeWithinLimits(call) { return .networkFee }
             if call.data.prefix(4) == Selector.graduateFallback { return .graduateFallback }
+            if let reason = retiredLaunchpadRefusal(call, retiredCurves: retiredCurves) { return reason }
             if call.to == Kuru.entrypoint, let swap = KuruFlowSwap(calldata: call.data) {
                 if (swap.recipient ?? account) != account { return .recipient }
                 if !swap.takesNoFee { return .fee }
@@ -419,6 +443,47 @@ extension Mera {
             }
             return nil
         }
+
+        /// A buy on a retired launchpad, whose curves take sells only (owner decision 2026-09-28), or nil:
+        ///
+        /// - `launchAndBuy` on a retired stack's router, or an approval naming one as spender (a developer buy);
+        /// - a curve `buy` into a curve a retired factory recorded, or — when that couldn't be looked up — any curve `buy`,
+        ///   as unverified;
+        /// - an approval that pays anything but the coin itself into such a curve: only a buy spends it. Approving the coin
+        ///   for its own curve is a sell's first step, and stays open.
+        static func retiredLaunchpadRefusal(_ call: Call, retiredCurves: RetiredCurves) -> Reason? {
+            guard call.data.count >= 4 else { return nil }
+            let selector = call.data.prefix(4)
+            let args = ABIWords(call.data.dropFirst(4))
+            let routers = LaunchpadAddresses.retiredRouters
+            if selector == Selector.launchAndBuy, routers.contains(call.to) { return .retiredLaunchpad }
+            if selector == Selector.curveBuy {
+                switch retiredCurves {
+                case .unknown: return .unverifiedCurve
+                case .known(let curves): if curves[call.to] != nil { return .retiredLaunchpad }
+                }
+            }
+            if selector == Selector.approve, let spender = args.address(0) {
+                if routers.contains(spender) { return .retiredLaunchpad }
+                if case .known(let curves) = retiredCurves, let coin = curves[spender], call.to != coin { return .retiredLaunchpad }
+            }
+            return nil
+        }
+
+        /// What must be looked up on-chain before `refusal` (`RetiredCurves`): the target of every curve `buy` and the
+        /// spender of every ERC-20 approval, leaving out the swap routers, Permit2 and Perpl, which are no curve.
+        public static func curveCandidates(_ calls: [Call]) -> Set<Address> {
+            var out = Set<Address>()
+            for call in calls where call.data.count >= 4 {
+                let selector = call.data.prefix(4)
+                if selector == Selector.curveBuy { out.insert(call.to) }
+                if selector == Selector.approve, let spender = ABIWords(call.data.dropFirst(4)).address(0), !notCurves.contains(spender) { out.insert(spender) }
+            }
+            return out
+        }
+
+        /// Spenders the app approves that are no launchpad curve.
+        static let notCurves: Set<Address> = [Uniswap.permit2, Uniswap.swapRouter02, Uniswap.universalRouter, MondayTrade.swapRouter, Kuru.entrypoint, Perpl.exchange]
 
         /// The fee comes from the RPC (`eth_estimateGas`, the base fee, `eth_maxPriorityFeePerGas`), so a buggy or hostile
         /// node could otherwise have a transaction commit the whole balance to gas. It must stay within Monad's
@@ -603,6 +668,7 @@ extension Mera {
             static let curveBuy = ABI.selector(LaunchpadABI.Curve.buy)
             static let curveSell = ABI.selector(LaunchpadABI.Curve.sell)
             static let graduateFallback = ABI.selector(LaunchpadABI.Factory.graduateFallback)
+            static let launchAndBuy = ABI.selector(LaunchpadABI.Router.launchAndBuy)
             static let momentsCollect = ABI.selector(MomentsABI.Collect.collect)
             static let vestingClaim = ABI.selector(MomentsABI.Vesting.claim)
             static let vestingClaimAll = ABI.selector(MomentsABI.Vesting.claimAll)
