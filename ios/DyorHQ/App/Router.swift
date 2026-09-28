@@ -115,6 +115,12 @@ final class Router {
         tab = .launch
     }
 
+    /// Opens the Launch tab's board: where a coin still on a launchpad's curve is listed when its own launch couldn't be
+    /// read (`CurveRoute.launchTab`), so the screen that found it isn't a dead end.
+    func openLaunchTab() {
+        tab = .launch
+    }
+
     func openMoment(_ moment: MomentInfo) {
         pendingMoment = moment
         tab = .moments

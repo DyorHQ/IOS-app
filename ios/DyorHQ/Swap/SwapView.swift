@@ -25,6 +25,7 @@ struct SwapView: View {
                 flipRow
                 receiveSection
                 actionSection
+                curveSection
                 quotesSection
                 activitySection
             }
@@ -215,6 +216,26 @@ struct SwapView: View {
         }
     }
 
+    /// Swap's "no venue" state when a side is still on a launchpad's bonding curve (the live launchpad's or a retired
+    /// one's): no venue routes a curve, so rather than a dead end it says where the coin trades and opens its Launch page
+    /// (the Launch tab when its launch couldn't be read), or, when the check failed, offers to check again.
+    @ViewBuilder private var curveSection: some View {
+        if model.amountIn > 0, let curve = model.currentCurve, let notice = curve.route.notice {
+            Section {
+                Label(notice, systemImage: "arrow.up.right.circle").font(.subheadline).foregroundStyle(.secondary)
+                if let title = curve.route.actionTitle(curve.token.symbol) {
+                    Button(title, systemImage: "arrow.up.right.circle") {
+                        if let launch = curve.route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
+                    }
+                } else {
+                    Button("Check Again", systemImage: "arrow.clockwise") { Task { await model.recheckCurve(env: env) } }
+                        .disabled(model.checkingCurve)
+                    Button("Open the Launch Tab", systemImage: "flame") { router.openLaunchTab() }
+                }
+            }
+        }
+    }
+
     @ViewBuilder private var quotesSection: some View {
         if let result = model.currentResult, model.amountIn > 0 {
             Section {
@@ -384,6 +405,10 @@ final class SwapModel {
     private(set) var resultKey: String?
     private(set) var quoting = false
     private(set) var error: String?
+    /// When no venue routes the pair: the side still on a launchpad's bonding curve and where it trades instead
+    /// (`LaunchpadService.curveRoute(among:)`), for the key `resultKey` answers. Nil when no side is on a curve.
+    private(set) var curve: CurveCoinRoute?
+    private(set) var checkingCurve = false
 
     var amountIn: BigUInt { Amount.parse(amountText, decimals: tokenIn.decimals) ?? 0 }
     var quoteKey: String { "\(tokenIn.address.hex)-\(tokenOut.address.hex)-\(amountIn)-\(slippageBps)" }
@@ -394,6 +419,8 @@ final class SwapModel {
     var currentResult: QuoteResult? { resultKey == quoteKey ? result : nil }
     /// `error`, when it answers what is on screen now.
     var currentError: String? { resultKey == quoteKey ? error : nil }
+    /// `curve`, when it answers what is on screen now.
+    var currentCurve: CurveCoinRoute? { resultKey == quoteKey ? curve : nil }
     var selectedQuote: VenueQuote? {
         guard let result = currentResult, amountIn > 0 else { return nil }
         return result.quotes.first { $0.venue == selectedVenue } ?? result.quotes.first
@@ -433,6 +460,7 @@ final class SwapModel {
         // Re-picking the same token changes nothing: its quotes stay (the running refresh keeps its key).
         guard (tokenIn, tokenOut) != before else { return }
         result = nil
+        curve = nil
         userPickedVenue = false
     }
 
@@ -442,6 +470,7 @@ final class SwapModel {
         swap(&tokenIn, &tokenOut)
         if let carried { amountText = Amount.exact(Amount.roundedDown(carried.amountOut, decimals: tokenIn.decimals), decimals: tokenIn.decimals) }
         result = nil
+        curve = nil
         userPickedVenue = false
     }
 
@@ -483,6 +512,17 @@ final class SwapModel {
         prices = (try? await priceTask) ?? prices
     }
 
+    /// Checks the pair's sides again after the curve check failed (`CurveRoute.unchecked`), for what is on screen now.
+    func recheckCurve(env: AppEnvironment) async {
+        guard currentCurve != nil, !checkingCurve else { return }
+        let key = quoteKey
+        checkingCurve = true
+        defer { checkingCurve = false }
+        let fresh = await env.launchpad.curveRoute(among: [tokenOut, tokenIn])
+        guard key == quoteKey, resultKey == key else { return }
+        curve = fresh
+    }
+
     /// Debounced by the caller's `.task(id:)`: the task is cancelled and restarted on every keystroke.
     /// `exactApprovals`: every account's plans approve exactly the input (`SwapRequest.exactApprovals`) — an ERC-20
     /// into Uniswap v4 costs one approval more per swap, and no unlimited Permit2 allowance is left standing (IOST-14).
@@ -491,6 +531,7 @@ final class SwapModel {
             result = nil
             resultKey = nil
             error = nil
+            curve = nil
             // A fetch cancelled mid-flight (the amount cleared, or Done after a swap) returns without resetting it.
             quoting = false
             return
@@ -504,8 +545,13 @@ final class SwapModel {
                                       exactApprovals: exactApprovals)
             let outcome = await env.swap.quotes(for: request)
             if Task.isCancelled { return }
+            // No venue routes the pair: a side still on a launchpad's curve, which no venue routes, trades on its Launch
+            // page instead (`curveSection`), so the state isn't a dead end.
+            let onCurve = outcome.quotes.isEmpty ? await env.launchpad.curveRoute(among: [request.tokenOut, request.tokenIn]) : nil
+            if Task.isCancelled { return }
             result = outcome
             resultKey = key
+            curve = onCurve
             error = outcome.quotes.isEmpty ? (outcome.errors.values.first ?? "No venue can route this pair right now.") : nil
             if !userPickedVenue || selectedVenue == nil || !outcome.quotes.contains(where: { $0.venue == selectedVenue }) { selectedVenue = outcome.quotes.first?.venue }
             quoting = false

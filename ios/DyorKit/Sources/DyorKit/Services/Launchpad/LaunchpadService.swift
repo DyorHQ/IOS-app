@@ -392,7 +392,7 @@ public actor LaunchpadService {
 
     /// Token metadata and live curve state for a page of records from `factory`, in one multicall (plus one
     /// PoolManager read for graduated launches, and one metadata read for pair assets not seen before).
-    private func hydrate(_ records: [LaunchpadABI.LaunchRecord], factory: Address) async throws -> [Launch] {
+    func hydrate(_ records: [LaunchpadABI.LaunchRecord], factory: Address) async throws -> [Launch] {
         guard !records.isEmpty else { return [] }
         typealias T = LaunchpadABI.Token
         typealias C = LaunchpadABI.Curve
@@ -492,20 +492,6 @@ public actor LaunchpadService {
             if record.exists, !record.curve.isZero { return (stack, record) }
         }
         return nil
-    }
-
-    /// The launch of `token` on a retired launchpad, from the first retired factory that recorded it, so a screen that
-    /// knows only the coin (Home's token page) can open its Launch page: a sell-only coin still on its curve sells there,
-    /// since no Swap venue routes a bonding curve. Every retired factory's record in one Multicall3 read, then the
-    /// launch's own reads. Nil when no retired factory that answered launched it; throws when the reads fail.
-    public func retiredLaunch(token: Address) async throws -> Launch? {
-        let stacks = LaunchpadAddresses.retiredStacks
-        guard !token.isZero, !stacks.isEmpty else { return nil }
-        let records = try await multicall.read(stacks.map {
-            LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.generation.legacyRecord))
-        })
-        guard let found = Self.firstRecord(stacks: stacks, records: records) else { return nil }
-        return try await hydrate([found.record], factory: found.stack.factory).first
     }
 
     /// Approve the pair asset for the curve when it is an ERC-20, then `buy`. Native MON rides on `value`. Refused for a

@@ -27,14 +27,13 @@ final class AssetsModel {
     private(set) var retiredByCoin: [Address: MomentInfo] = [:]
     /// Retired-cohort Moments by their NFT contract, so a past-cohort edition opens its claim-only page.
     private(set) var retiredByNFT: [Address: MomentInfo] = [:]
-    /// Held coins still on a retired launchpad's curve (`LaunchpadService.retiredCurveHoldings`): Swap can't trade them
-    /// (it refuses to buy them, and no venue routes a bonding curve), so their row opens the coin's Launch page, where the
-    /// curve sell is, as Home's token page does. Known before the token list shows, so such a coin never gets a Swap row;
-    /// a failed check keeps the coins already known.
-    private(set) var sellOnly: Set<Address> = []
-    /// Those coins' launches on their retired launchpads (`LaunchpadService.retiredLaunch(token:)`), for the row to open. A
-    /// coin whose launch couldn't be read has none: its row points to the Launch tab and opens nothing.
-    private(set) var retiredLaunches: [Address: Launch] = [:]
+    /// Held coins still on a launchpad's bonding curve, the live launchpad's or a retired one's, with their launches
+    /// (`LaunchpadService.curveHoldings`): no Swap venue routes a curve, so such a coin's row opens its Launch page, where
+    /// its curve trades (Buy and Sell on the live launchpad, Sell only on a retired one), as Home's token page does. A
+    /// coin whose launch couldn't be read opens the Launch tab. Known before the token list shows, so such a coin never
+    /// gets a Swap row; a failed check keeps the coins already known, and the rest open Swap, whose "no venue" state
+    /// checks again and points to the Launch page.
+    private(set) var curve: CurveHoldings = .none
     private(set) var loading = false
     private(set) var loadedFor: Address?
 
@@ -57,17 +56,14 @@ final class AssetsModel {
         unverified = KnownTokenStore.unverified(owner: address).union(discovered.map(\.address))
         let balances = (try? await ERC20.balances(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
         let held = universe.filter { (balances[$0.address] ?? 0) > 0 }
-        async let sellOnlyTask = try? env.launchpad.retiredCurveHoldings(held)
+        async let curveTask = try? env.launchpad.curveHoldings(held)
         let prices = (try? await env.prices.prices(for: held)) ?? [:]
-        // Known before the token list shows, so a retired coin is never offered a swap in between.
+        // Known before the token list shows, so a retired Moment coin or a coin on a curve is never offered a swap in between.
         for info in await retiredTask {
             retiredByCoin[info.moment.coin] = info
             retiredByNFT[info.moment.nft] = info
         }
-        if let found = await sellOnlyTask {
-            sellOnly = found.coins
-            retiredLaunches = found.launches
-        }
+        if let found = await curveTask { curve = found }
         tokens = held.map { TokenAsset(token: $0, balance: balances[$0.address] ?? 0, usd: prices[$0.address]?.usd) }
             .sorted { ($0.value ?? 0, Amount.units($0.balance, decimals: $0.token.decimals)) > ($1.value ?? 0, Amount.units($1.balance, decimals: $1.token.decimals)) }
 
@@ -125,6 +121,7 @@ struct AssetsCard: View {
                 let shown = showAllTokens ? model.tokens : Array(model.tokens.prefix(6))
                 VStack(spacing: 0) {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, asset in
+                        let route = model.curve.route(asset.token.address)
                         if let retired = model.retiredByCoin[asset.token.address] {
                             // A retired cohort's coin is never offered a swap: it opens its claim-only page.
                             NavigationLink(value: PastMomentRoute(info: retired)) { tokenRow(asset) }
@@ -132,18 +129,16 @@ struct AssetsCard: View {
                         } else if MomentsAddresses.isRetiredCoin(asset.token.address) {
                             // Its cohort could not be read yet: still no swap, just the row.
                             tokenRow(asset, note: "Past cohort · trading closed")
-                        } else if model.sellOnly.contains(asset.token.address) {
-                            // Never Swap: no venue routes a coin still on a retired launchpad's curve (and the engine
-                            // refuses to buy it). It sells on its curve, from its Launch page, where Home sends it too.
-                            if let launch = model.retiredLaunches[asset.token.address] {
-                                Button { router.openLaunch(launch); dismiss() } label: {
-                                    tokenRow(asset, note: launch.curveSellsOpen ? "Sell on its Launch page" : "Graduation pending · Launch page",
-                                             unverified: model.unverified.contains(asset.token.address))
-                                }
-                                .buttonStyle(.plain)
-                            } else {
-                                tokenRow(asset, note: "Sell it from its page on the Launch tab", unverified: model.unverified.contains(asset.token.address))
+                        } else if route.isOnCurve {
+                            // Never Swap: no venue routes a coin still on a launchpad's curve, live or retired. It trades
+                            // on its curve, from its Launch page, where Home sends it too; unread, the Launch tab lists it.
+                            Button {
+                                if let launch = route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
+                                dismiss()
+                            } label: {
+                                tokenRow(asset, note: route.rowNote, unverified: model.unverified.contains(asset.token.address))
                             }
+                            .buttonStyle(.plain)
                         } else {
                             Button { router.openSwap(tokenIn: asset.token, tokenOut: asset.token.symbol == "USDC" ? .mon : .usdc); dismiss() } label: { tokenRow(asset, unverified: model.unverified.contains(asset.token.address)) }
                                 .buttonStyle(.plain)

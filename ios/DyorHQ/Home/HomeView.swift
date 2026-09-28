@@ -293,6 +293,8 @@ struct HomeView: View {
                 else {
                     VStack(spacing: 0) {
                         ForEach(Array(model.launchHoldings.enumerated()), id: \.element.id) { index, holding in
+                            // Every launch holding opens its own Launch page, never Swap: a coin still on a curve (the
+                            // live launchpad's or a retired one's) trades there, and a graduated one's page leads to Swap.
                             Button { router.openLaunch(holding.launch) } label: { LaunchHoldingRow(holding: holding) }
                                 .buttonStyle(.plain)
                             if index < model.launchHoldings.count - 1 { Divider().padding(.leading, 44) }
@@ -738,11 +740,11 @@ struct TokenDetailView: View {
     @Environment(Session.self) private var session
     @State private var history: [PricePoint] = []
     @State private var loadingHistory = true
-    /// A coin still on a retired launchpad's curve (`SwapEngine.buyRefusal`): its holders can sell it, nobody can buy it.
-    @State private var sellOnly = false
-    /// That coin's launch on its retired launchpad: it sells on its curve, from the Launch page, since no Swap venue routes
-    /// a bonding curve. Nil until read, or when the read failed.
-    @State private var retiredLaunch: Launch?
+    /// Where the coin trades (`LaunchpadService.curveRoute(for:)`): Swap, or, while it is still on a launchpad's bonding
+    /// curve (the live launchpad's or a retired one's), its Launch page, since no Swap venue routes a curve. Nil until
+    /// read; `.unchecked` when the check failed, which keeps Swap and offers to check again.
+    @State private var curveRoute: CurveRoute?
+    @State private var checkingCurve = false
 
     var body: some View {
         List {
@@ -780,26 +782,28 @@ struct TokenDetailView: View {
                 if !SwapEngine.isTradable(row.token) {
                     // A retired cohort's Moment coin: past cohorts are claim-only, so no swap is offered.
                     Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
-                } else if sellOnly {
-                    // Never Swap: no venue routes a coin still on its curve (and the engine refuses to buy it). The curve
-                    // sell is on the coin's Launch page.
-                    if let retiredLaunch {
-                        Button(retiredLaunch.curveSellsOpen ? "Sell \(row.token.symbol) on its Launch page" : "Open \(row.token.symbol)'s Launch page", systemImage: "arrow.up.right.circle") {
-                            router.openLaunch(retiredLaunch)
-                        }
-                    } else {
-                        Label("Sell it from its page on the Launch tab", systemImage: "arrow.up.right.circle").foregroundStyle(.secondary)
+                } else if let route = curveRoute, route.isOnCurve, let title = route.actionTitle(row.token.symbol) {
+                    // Never Swap: no venue routes a coin still on a launchpad's curve, live or retired. Its curve trades
+                    // on its Launch page (Buy and Sell on the live launchpad, Sell only on a retired one); unread, the
+                    // Launch tab lists it.
+                    Button(title, systemImage: "arrow.up.right.circle") {
+                        if let launch = route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
                     }
                 } else {
                     Button("Swap \(row.token.symbol)", systemImage: "arrow.left.arrow.right") {
                         router.openSwap(tokenIn: row.token.symbol == "USDC" ? Token.mon : Token.usdc, tokenOut: row.token)
+                    }
+                    if curveRoute == .unchecked {
+                        // The check failed: Swap stays, and so does the way to find out where the coin trades.
+                        Button("Check Again", systemImage: "arrow.clockwise") { Task { await checkCurve() } }
+                            .disabled(checkingCurve)
                     }
                 }
                 if let url = row.token.isNative ? nil : Monad.explorerToken(row.token.address) {
                     Link(destination: url) { Label("View on Monadscan", systemImage: "safari") }
                 }
             } footer: {
-                if sellOnly, SwapEngine.isTradable(row.token), let notice = RetiredLaunchpad.tokenPageNotice(retiredLaunch) { Text(notice) }
+                if SwapEngine.isTradable(row.token), let notice = curveRoute?.notice { Text(notice) }
             }
         }
         .listStyle(.insetGrouped)
@@ -809,19 +813,17 @@ struct TokenDetailView: View {
             history = (try? await env.prices.history(for: row.token, points: 48)) ?? []
             loadingHistory = false
         }
-        .task(id: row.token.address) {
-            guard await env.swap.buyRefusal(row.token) == .retiredLaunchpad(row.token.address) else {
-                sellOnly = false
-                retiredLaunch = nil
-                return
-            }
-            sellOnly = true
-            let launch = try? await env.launchpad.retiredLaunch(token: row.token.address)
-            if Task.isCancelled { return }
-            retiredLaunch = launch
-            // Graduated since the check: an ordinary pool token again, which Swap routes both ways.
-            if let launch, !launch.isSellOnly { sellOnly = false }
-        }
+        .task(id: row.token.address) { await checkCurve() }
+    }
+
+    /// Asks whether the coin is still on a launchpad's curve, and where it trades (one read of every known factory's
+    /// record, then its launch). A graduated coin, or one no known launchpad launched, trades on Swap.
+    private func checkCurve() async {
+        checkingCurve = true
+        defer { checkingCurve = false }
+        let route = await env.launchpad.curveRoute(for: row.token)
+        if Task.isCancelled { return }
+        curveRoute = route
     }
 }
 
