@@ -41,8 +41,9 @@
 #      https://dyorhq.fun/moments/c4/; an OWNER or GOVERNANCE set but empty, or on a LEDGER/ACCOUNT run unset or GOV
 #      (unless NO_HANDOVER=1); roles that are not distinct; an OWNER or GOVERNANCE other than GOV that is not a Safe
 #      (code, a threshold of at least 2, and none of GOV, GUARDIAN, TREASURY or FEES among its owners); an RPC that is
-#      not chain 143; a full run (ONLY unset) signed by LEDGER/ACCOUNT from a GOV whose nonce is not 0; a balance under
-#      MIN_BALANCE_MON.
+#      not chain 143; a full run (ONLY unset) signed by LEDGER/ACCOUNT from a GOV whose nonce is not 0; an ONLY=moments
+#      LEDGER/ACCOUNT run from a GOV whose nonce is not 0 while the launchpad in deployments/pending-143.json is not
+#      finished; a balance under MIN_BALANCE_MON.
 #   1. live MON/aBIL prices from two sources (script/relaunch/prices.py)
 #   2. launchpad: simulate, confirm, broadcast (the modules are sealed in the same run)
 #   3. Moments: simulate, confirm, broadcast
@@ -143,6 +144,26 @@ check_safe() { # <role> <address>
   say "$role $safe: a Safe, threshold $threshold of $count owners (none of them GOV, GUARDIAN, TREASURY or FEES)"
 }
 
+# A record's factory (nothing when the file is missing).
+record_factory() { if [ -f "$1" ]; then python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["factory"])' "$1"; fi; }
+
+# Whether a launchpad stack has finished. --slow sends each transaction once the one before it is mined, so the last
+# one proves the rest: sealModules(), then transferOwnership(OWNER) (a handover the Safe has accepted since counts too).
+# The factory having code proves only the first.
+read_chain() { $CAST call "$1" "$2" --rpc-url "$RPC" 2>/dev/null; }
+launchpad_finished() { # <factory>
+  local owner pending
+  [ "$(read_chain "$1" 'modulesSealed()(bool)')" = true ] || return 1
+  owner=$(read_chain "$1" 'owner()(address)') || return 1
+  [ "$(lc "$owner")" != "$(lc "$OWNER")" ] || return 0
+  pending=$(read_chain "$1" 'pendingOwner()(address)') || return 1
+  [ "$(lc "$owner")" = "$(lc "$GOV")" ] && [ "$(lc "$pending")" = "$(lc "$OWNER")" ]
+}
+
+# How many transactions the simulation just planned, from forge's newest dry-run log (both Deploy scripts log to
+# broadcast/Deploy.s.sol/143/); nothing when it cannot be read.
+planned_txs() { python3 -c 'import glob, json; logs = sorted(glob.glob("broadcast/Deploy.s.sol/143/dry-run/run-[0-9]*.json")); print(len(json.load(open(logs[-1]))["transactions"]))' 2>/dev/null || true; }
+
 # ---------------------------------------------------------------- 0. pre-flight
 bold "0. pre-flight"
 # forge and cast load contracts/.env into their own environment, past every check below. Its existence is tested,
@@ -231,6 +252,24 @@ if [ "$NONCE" != 0 ] && [ -z "${ONLY:-}" ]; then
     *) say "note: GOV's nonce is $NONCE; a live full run refuses anything but 0" ;;
   esac
 fi
+# Moments alone after the launchpad (ONLY=moments, as step 2 prints it) only once the launchpad stack has finished:
+# Moments sent while it is half done would move GOV's nonce, and the launchpad's --resume could then never finish it.
+if [ "${ONLY:-}" = moments ] && [ "$NONCE" != 0 ]; then
+  LP_BEFORE=$(record_factory deployments/pending-143.json 2>/dev/null) || LP_BEFORE=
+  if [ -n "$LP_BEFORE" ] && launchpad_finished "$LP_BEFORE"; then
+    say "the launchpad stack in deployments/pending-143.json has finished: $LP_BEFORE"
+  else
+    if [ -z "$LP_BEFORE" ]; then
+      unfinished="GOV has nonce $NONCE, and there is no deployments/pending-143.json to show that its launchpad stack finished"
+    else
+      unfinished="GOV has nonce $NONCE, and the launchpad in deployments/pending-143.json ($LP_BEFORE) has not finished (it must read modulesSealed() true, then pendingOwner() or owner() OWNER)"
+    fi
+    case "$MODE" in
+      ledger | account) die "$unfinished. Finish the launchpad first with the --resume command step 2 printed: Moments sent now would move GOV's nonce, and that --resume could never finish it." ;;
+      *) say "note: $unfinished; a live ONLY=moments run refuses this" ;;
+    esac
+  fi
+fi
 BAL=$($CAST balance "$GOV" --rpc-url "$RPC" --ether | cut -d. -f1)
 [ "$BAL" -ge "$MIN_BALANCE_MON" ] || [ "$MODE" = dry ] || die "$GOV holds $BAL MON; the two deployments need about $MIN_BALANCE_MON"
 say "chain 143 · $GOV holds ~$BAL MON · nonce $NONCE"
@@ -264,10 +303,10 @@ fi
 # its log in broadcast/, without simulating again, and needs GOV's nonce where the run left it. The env is this run's,
 # value for value, and the command is the one that stopped plus --resume, through script/mainnet.sh. A broadcast that
 # sent nothing has no log of its own, and a Moments --resume would then replay the launchpad's finished log (same
-# broadcast/Deploy.s.sol/143/ path) and report success, so the nonce and the factory's code decide.
-resume_help() { # <label> <target> <nonce when the broadcast began> <env...>
-  local label=$1 target=$2 start=$3 a line now record factory sign= again="the same command"
-  shift 3
+# broadcast/Deploy.s.sol/143/ path) and report success, so the nonce and the stack's last transaction decide.
+resume_help() { # <label> <target> <nonce when the broadcast began> <transactions planned> <env...>
+  local label=$1 target=$2 start=$3 planned=$4 a line now record factory sign= again="the same command" chain
+  shift 4
   bold "$label stopped midway: finish it, do not start over"
   if [ "$MODE" = fork ]; then
     say "A fork rehearsal cannot be resumed (broadcast/ is restored on exit): restart anvil and rehearse again."
@@ -292,16 +331,32 @@ resume_help() { # <label> <target> <nonce when the broadcast began> <env...>
   say "    script/mainnet.sh forge script $target --rpc-url $(rpc_word) --code-size-limit 200000 \\"
   say "    --sender $GOV --broadcast --slow --non-interactive$sign --resume"
   if [ -n "$STRAY" ]; then say "(this run also read $STRAY from the environment: keep each set to the same value)"; fi
-  say "It has finished when GOV's nonce has moved past $start and the factory has code:"
-  say "  cast code $factory --rpc-url $(rpc_word)    # anything but 0x"
+  chain="--rpc-url $(rpc_word)"
+  say "It has finished only when all of these read so (the factory having code proves only its first transaction):"
+  if [ -n "$planned" ]; then say "  cast nonce $GOV $chain    # $((start + planned)): $planned transactions from $start"; fi
+  if [ "$target" = "$LAUNCHPAD_TARGET" ]; then
+    say "  cast call $factory 'modulesSealed()(bool)' $chain    # true"
+    if [ "$(lc "$OWNER")" != "$(lc "$GOV")" ]; then
+      say "  cast call $factory 'pendingOwner()(address)' $chain    # $OWNER"
+    else
+      say "  cast call $factory 'owner()(address)' $chain    # $GOV"
+    fi
+  else
+    say "  cast call $factory 'modulesSet()(bool)' $chain    # true"
+    if [ "$(lc "$GOVERNANCE")" != "$(lc "$GOV")" ]; then
+      say "  cast call $factory 'pendingGovernance()(address)' $chain    # $GOVERNANCE"
+    else
+      say "  cast call $factory 'governance()(address)' $chain    # $GOV"
+    fi
+  fi
   if [ "$target" = "$LAUNCHPAD_TARGET" ] && [ -z "${ONLY:-}" ]; then
     local signer="LEDGER=1" rpc_env=
     [ "$MODE" = ledger ] || signer="ACCOUNT=$(printf '%q' "$ACCOUNT")"
     [ "$RPC" = "$DEFAULT_RPC" ] || rpc_env=" RPC=$(rpc_word)"
     [ "${NO_HANDOVER:-0}" != 1 ] || rpc_env="$rpc_env NO_HANDOVER=1"
     say ""
-    say "Only then, the Moments stack (ONLY=moments; add MIN_BALANCE_MON=8 if GOV now holds under $MIN_BALANCE_MON MON, the"
-    say "Moments stack costs about 3):"
+    say "Only then, the Moments stack (ONLY=moments, which refuses while the launchpad has not finished; add MIN_BALANCE_MON=8"
+    say "if GOV now holds under $MIN_BALANCE_MON MON, the Moments stack costs about 3):"
     say "  cd $(printf '%q' "$CONTRACTS") && ONLY=moments $signer GOV=$GOV OWNER=$OWNER GOVERNANCE=$GOVERNANCE \\"
     say "    TREASURY=$TREASURY FEES=$FEES GUARDIAN=$GUARDIAN LAUNCH_FEE_WEI=$LAUNCH_FEE_WEI THRESHOLD_USDC=$THRESHOLD_USDC \\"
     say "    EXTERNAL_BASE_URI=$(printf '%q' "$EXTERNAL_BASE_URI")$rpc_env script/deploy-v2.sh"
@@ -310,17 +365,19 @@ resume_help() { # <label> <target> <nonce when the broadcast began> <env...>
 }
 
 run_script() { # <label> <target> <names checked in step 0> <env...> -- simulate, confirm, broadcast
-  local label=$1 target=$2 passes=$3 start
+  local label=$1 target=$2 passes=$3 start planned
   shift 3
   [ "$(env_names "$@")" = "$passes" ] || die "$label: passes $(env_names "$@"), but step 0 checked $passes"
   bold "$label: simulation"
   env "$@" "$FORGE" script "$target" --rpc-url "$RPC" --code-size-limit 200000 --sender "$GOV" || die "$label: the simulation failed; nothing was sent"
   [ "$MODE" = dry ] && return 0
+  planned=$(planned_txs)
   confirm "$label: broadcast these transactions as $GOV?"
   start=$($CAST nonce "$GOV" --rpc-url "$RPC") || die "$label: cannot read GOV's nonce; nothing was sent"
+  [[ "$start" =~ ^[0-9]+$ ]] || die "$label: GOV's nonce reads $start; nothing was sent"
   bold "$label: broadcast"
   if ! env "$@" "$FORGE" script "$target" --rpc-url "$RPC" --code-size-limit 200000 --sender "$GOV" --broadcast --slow --non-interactive "${SIGN[@]}"; then
-    resume_help "$label" "$target" "$start" "$@"
+    resume_help "$label" "$target" "$start" "$planned" "$@"
     die "$label: the broadcast did not complete. Do NOT start over: finish it as shown above."
   fi
 }
@@ -357,7 +414,6 @@ if [ "$MODE" = dry ]; then
   exit 0
 fi
 # The records this run (or, after ONLY=, the other stack's run) wrote; a missing one is left out below.
-record_factory() { if [ -f "$1" ]; then python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["factory"])' "$1"; fi; }
 LP=$(record_factory deployments/pending-143.json) || die "deployments/pending-143.json has no factory"
 MF=$(record_factory deployments/pending-moments-143.json) || die "deployments/pending-moments-143.json has no factory"
 if [ "$MODE" = fork ]; then
