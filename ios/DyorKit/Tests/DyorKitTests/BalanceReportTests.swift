@@ -87,7 +87,7 @@ final class BalanceReportTests: XCTestCase {
         XCTAssertTrue(source.contains("let report = await ERC20.balanceReport(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)"))
         XCTAssertTrue(source.contains("if report.balances.isEmpty, !report.unread.isEmpty || !report.failed.isEmpty { throw BalancesUnread() }"))
         XCTAssertTrue(source.contains("let balancesComplete = report.unread.isEmpty && report.failed.isDisjoint(with: mustRead)"))
-        XCTAssertTrue(source.contains("complete: scan.complete && balancesComplete)"))
+        XCTAssertTrue(source.contains("complete: (scan?.complete ?? true) && balancesComplete)"))
         XCTAssertFalse(source.contains("ERC20.balances(of: universe"), "never one read over every token")
     }
 }

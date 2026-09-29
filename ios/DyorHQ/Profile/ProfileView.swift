@@ -295,9 +295,13 @@ struct SendSheet: View {
     @State private var assets: AssetList = .loading
     /// Retry bumps it, to read the list again.
     @State private var attempt = 0
-    /// The wallet and attempt the list was last read for. Coming back from the token list shows the form again, which
-    /// restarts its tasks: the list read for this key stands, with the pick made from it.
+    /// The list the form shows: the wallet and attempt it was read for, marked while the wallet's history is still read.
+    /// Available and Max are read again for each (`balanceReadKey`).
     @State private var assetsKey: String?
+    /// The read of the list for a wallet and attempt (`readAssets`), on a task of its own: coming back from the token
+    /// list shows the form again, which restarts its tasks, and the read goes on, or stands, rather than starting over.
+    /// Cancelled when the sheet closes.
+    @State private var assetsRead: (id: String, task: Task<Void, Never>)?
     /// The symbol of a pick a new read no longer held: it was cleared, with the amount, and the user picks again.
     @State private var droppedChoice: String?
     @State private var recipient = ""
@@ -407,7 +411,7 @@ struct SendSheet: View {
                     .disabled(!valid)
                 }
             }
-            .task(id: assetsReadKey) { await loadAssets(assetsReadKey) }
+            .task(id: assetsReadKey) { loadAssets(assetsReadKey) }
             .task(id: balanceReadKey) {
                 // Available and Max are always the chosen token's, read fresh: never another token's balance. Read again
                 // for each new read of the list (Retry), which also sets the balance it read; coming back from the token
@@ -450,6 +454,7 @@ struct SendSheet: View {
                 }
             }
         }
+        .onDisappear { assetsRead?.task.cancel() }
     }
 
     /// The token to send, as a row that opens the list of everything the wallet holds; while the list is read, a
@@ -466,22 +471,33 @@ struct SendSheet: View {
                 InlineError(message: "Your balances couldn't be read. Check your connection and try again.")
                 Button("Retry", systemImage: "arrow.clockwise") { attempt += 1 }
             }
-        case .loaded(let held, let complete, _, _) where held.isEmpty:
-            if complete {
+        case .loaded(let held, let complete, _, _, let readingHistory) where held.isEmpty:
+            if readingHistory {
+                // Nothing among MON, the curated tokens and the stored ones: the history may hold more.
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Reading your wallet…").foregroundStyle(.secondary)
+                }
+            } else if complete {
                 Text("This wallet holds no tokens on Monad, so there's nothing to send.").foregroundStyle(.secondary)
             } else {
                 readNotice("No tokens found, but part of your wallet couldn't be read, so some may be missing.")
             }
-        case .loaded(let held, let complete, let pricesFailed, let unpriced):
+        case .loaded(let held, let complete, let pricesFailed, let unpriced, let readingHistory):
             NavigationLink {
-                SendAssetPicker(assets: held, selected: choice?.id) { choice = $0; droppedChoice = nil }
+                SendAssetPicker(assets: held, selected: choice?.id, readingHistory: readingHistory) { choice = $0; droppedChoice = nil }
             } label: {
                 if let choice { SendAssetRow(asset: choice) } else { Text("Choose a token") }
             }
             if let droppedChoice, choice == nil {
                 Text("Your wallet no longer holds the \(droppedChoice) you picked. Choose a token.").font(.footnote).foregroundStyle(Color.attention)
             }
-            if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed, unpriced: unpriced) { readNotice(gap) }
+            if readingHistory {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Reading your wallet's history. Tokens found there will be added.").font(.footnote).foregroundStyle(.secondary)
+                }
+            } else if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed, unpriced: unpriced) { readNotice(gap) }
         }
     }
 
@@ -507,11 +523,22 @@ struct SendSheet: View {
         }
     }
 
-    /// Reads every token the wallet holds, as the Portfolio does (`WalletTokens`), once per `key`: coming back from the
-    /// token list runs this again, and the list already read stands. A new read (Retry, another wallet) keeps the pick
-    /// while it is still held; a pick it no longer holds is cleared with the amount, never swapped for another asset.
-    private func loadAssets(_ key: String) async {
-        guard key != assetsKey else { return }
+    /// Starts reading the list for `key` (`readAssets`), unless that read is done or still going: coming back from the
+    /// token list runs this again, and the list read for this key stands, with the pick made from it.
+    private func loadAssets(_ key: String) {
+        if assetsKey == key { return }
+        if let running = assetsRead, running.id == key, !running.task.isCancelled { return }
+        assetsRead?.task.cancel()
+        let env = env
+        let session = session
+        assetsRead = (key, Task { await readAssets(key, env: env, session: session) })
+    }
+
+    /// Reads every token the wallet holds, as the Portfolio does (`WalletTokens`), in two steps, so Send never waits on
+    /// the wallet's whole history to offer MON: first MON, the curated tokens and every token stored for the wallet,
+    /// listed at once with nothing preselected, while the history is read alongside; then the tokens the history shows
+    /// join the list, ranked again, and a token is preselected (`show`).
+    private func readAssets(_ key: String, env: AppEnvironment, session: Session) async {
         guard let address = session.address else {
             assets = .loaded([], complete: true, pricesFailed: false, unpriced: [])
             choice = nil
@@ -519,28 +546,62 @@ struct SendSheet: View {
             return
         }
         assets = .loading
+        async let history = WalletTokens.history(env: env, address: address)
+        let first: WalletTokens.Read
         do {
-            let read = try await WalletTokens.read(env: env, address: address)
-            let ranked = await WalletTokens.ranked(read, env: env)
-            guard !Task.isCancelled, address == session.address else { return }
-            assets = .loaded(ranked.tokens, complete: read.complete, pricesFailed: ranked.pricesFailed, unpriced: ranked.unpriced)
-            // Without every price the list isn't wholly ranked by value: nothing is preselected from it.
-            let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked.tokens, pricesRead: !ranked.valuesMissing)
-            if let previous = choice, kept == nil {
-                droppedChoice = previous.token.symbol
-                amount = ""
-            }
-            choice = kept
-            // Available and Max start from the balance this read found, never one an earlier read found; the balance
-            // task reads it again for this read.
-            balance = kept?.balance
-            balanceToken = kept?.id
-            assetsKey = key
+            first = try await WalletTokens.read(env: env, address: address, history: nil)
         } catch {
             guard !Task.isCancelled else { return }
             assets = .failed
             assetsKey = key
+            return
         }
+        let firstRanked = await WalletTokens.ranked(first, env: env)
+        guard !Task.isCancelled, address == session.address else { return }
+        show(firstRanked, complete: first.complete, readingHistory: true)
+        assetsKey = key + "#first"
+        let scan = await history
+        let read = try? await WalletTokens.read(env: env, address: address, history: scan)
+        var ranked: WalletTokens.Ranked?
+        if let read { ranked = await WalletTokens.ranked(read, env: env) }
+        guard !Task.isCancelled, address == session.address else { return }
+        if let read, let ranked {
+            show(ranked, complete: read.complete, readingHistory: false)
+        } else {
+            // No balance could be read this time: the first list stands, said to be incomplete.
+            show(firstRanked, complete: false, readingHistory: false)
+        }
+        assetsKey = key
+    }
+
+    /// Shows a list as read. While the wallet's history is still read (`readingHistory`) the list may yet grow, so
+    /// nothing is preselected from it: a pick it holds stays, with this read's balance, and a pick it doesn't hold yet
+    /// (one the history found, before Retry) waits for the history. Once the history is in, a pick is kept while the
+    /// wallet still holds it, and cleared with the amount once it doesn't, never swapped for another asset; with none,
+    /// the default is picked (`WalletHoldings.selection`).
+    private func show(_ ranked: WalletTokens.Ranked, complete: Bool, readingHistory: Bool) {
+        assets = .loaded(ranked.tokens, complete: complete, pricesFailed: ranked.pricesFailed, unpriced: ranked.unpriced, readingHistory: readingHistory)
+        if readingHistory {
+            guard let current = choice else { return }
+            let fresh = ranked.tokens.first { $0.id == current.id }
+            choice = fresh ?? current
+            // Available and Max start from the balance this read found; for a pick only the history holds, the balance
+            // task reads it for this read.
+            balance = fresh?.balance
+            balanceToken = fresh?.id
+            return
+        }
+        // Without every price the list isn't wholly ranked by value: nothing is preselected from it.
+        let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked.tokens, pricesRead: !ranked.valuesMissing)
+        if let previous = choice, kept == nil {
+            droppedChoice = previous.token.symbol
+            amount = ""
+        }
+        choice = kept
+        // Available and Max start from the balance this read found, never one an earlier read found; the balance
+        // task reads it again for this read.
+        balance = kept?.balance
+        balanceToken = kept?.id
     }
 
     /// Reads whether the recipient has code. An EIP-7702-delegated account (Monad accounts can carry a `0xef0100`
@@ -614,8 +675,9 @@ private enum AssetList: Equatable {
     case failed
     /// `complete`: false when part of the wallet's history couldn't be read, so a token may be missing (`WalletTokens.Read`).
     /// `pricesFailed`: values are missing and the order is by amount; `unpriced`: the curated tokens held with no price
-    /// (`WalletTokens.Ranked`).
-    case loaded([HeldToken], complete: Bool, pricesFailed: Bool, unpriced: [Token])
+    /// (`WalletTokens.Ranked`). `readingHistory`: MON, the curated tokens and the stored ones, while the wallet's history
+    /// is still read; the tokens it shows are added when it is.
+    case loaded([HeldToken], complete: Bool, pricesFailed: Bool, unpriced: [Token], readingHistory: Bool = false)
 }
 
 /// Every token the wallet holds, highest dollar value first (`WalletHoldings.ranked`), searchable by symbol, name or
@@ -623,6 +685,8 @@ private enum AssetList: Equatable {
 private struct SendAssetPicker: View {
     let assets: [HeldToken]
     let selected: Address?
+    /// The wallet's history is still read: more tokens may be added.
+    let readingHistory: Bool
     let onPick: (HeldToken) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -645,12 +709,15 @@ private struct SendAssetPicker: View {
                     .foregroundStyle(.primary)
                 }
             } footer: {
-                if shown.isEmpty {
-                    Text("No token in this wallet matches.")
-                } else if shown.contains(where: \.unverified) {
-                    Text("Unverified tokens arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you send.")
-                } else if shown.contains(where: { $0.imitates != nil }) {
-                    Text("Some tokens here carry the name of a token DyorHQ lists but are other contracts. Check the contract before you send.")
+                VStack(alignment: .leading, spacing: 8) {
+                    if readingHistory { Text("Still reading your wallet's history, so more tokens may be added.") }
+                    if shown.isEmpty {
+                        Text("No token in this wallet matches.")
+                    } else if shown.contains(where: \.unverified) {
+                        Text("Unverified tokens arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you send.")
+                    } else if shown.contains(where: { $0.imitates != nil }) {
+                        Text("Some tokens here carry the name of a token DyorHQ lists but are other contracts. Check the contract before you send.")
+                    }
                 }
             }
         }

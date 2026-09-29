@@ -81,6 +81,54 @@ final class LogScanTests: XCTestCase {
         XCTAssertEqual(LogsStub.queries().filter { $0.span > 150_000 }.count, 1, "the whole window asked once")
     }
 
+    /// rpc1's refusal of a history of more than 10K logs, as it reads live: it names the range from the same start that
+    /// fits its cap.
+    private func rpc1Refusal(_ range: LogsStub.Range, end: UInt64) -> LogsStub.Failure {
+        .error(code: -32602, message: "Log response size exceeded. You can make eth_getLogs requests with up to a 1,000 block range and no limit on the response size, or you can request any block range with a cap of 10K logs in the response. Based on your parameters and the response size limit, this block range should work: [\(BigUInt(range.from).hexQuantity), \(BigUInt(end).hexQuantity)]")
+    }
+
+    /// A wallet whose history is over rpc1's cap (here 3 logs an answer, 10K live) is read in the ranges rpc1 names: seven
+    /// requests for four pages, where 100,000-block ranges over 108.8M blocks took 1,089 requests in 182 rounds, minutes.
+    func testAHistoryOverTheCapIsReadInTheRangesTheEndpointNames() async {
+        let blocks: [UInt64] = [10, 5_000_000, 20_000_000, 40_000_000, 60_000_000, 80_000_000, 90_000_000, 100_000_000, 105_000_000, 108_000_000, 108_500_000, 108_799_999]
+        LogsStub.install(head: 108_800_000, logs: blocks.map(transfer)) { [self] range in
+            let inside = blocks.filter(range.contains)
+            return inside.count > 3 ? rpc1Refusal(range, end: inside[3] - 1) : nil
+        }
+        let report = await LogsStub.rpc().chunkedLogsReport(address: nil, topics: [transferTopic, nil, walletWord], fromBlock: 0, toBlock: 108_800_000)
+        XCTAssertTrue(report.complete)
+        XCTAssertEqual(report.logs.map(\.blockNumber), blocks)
+        XCTAssertEqual(LogsStub.queries().count, 7, "the whole window once, then each page and what is left after it")
+        XCTAssertFalse(LogsStub.queries().contains { $0.span == 100_000 }, "never the 100,000-block ranges")
+    }
+
+    /// An endpoint that names a tiny range every time is followed 200 times, then the rest is read in halves: it can't keep
+    /// the scan splitting off a block at a time.
+    func testTheRangesAnEndpointNamesAreFollowedABoundedNumberOfTimes() async {
+        LogsStub.install(head: 300_000, logs: [7, 250_000].map(transfer)) { [self] range in
+            range.span > 50_000 ? rpc1Refusal(range, end: range.from) : nil
+        }
+        let report = await LogsStub.rpc().chunkedLogsReport(address: nil, topics: [transferTopic, nil, walletWord], fromBlock: 0, toBlock: 300_000)
+        XCTAssertTrue(report.complete)
+        XCTAssertEqual(report.logs.map(\.blockNumber), [7, 250_000])
+        XCTAssertLessThan(LogsStub.queries().count, 450)
+    }
+
+    func testTheRangeASizeRefusalNamesIsReadOnlyWhenItFits() {
+        let refusal = RPCError(code: -32602, message: "Log response size exceeded. Based on your parameters and the response size limit, this block range should work: [0x6000000, 0x6000b41]")
+        XCTAssertEqual(RPCClient.suggestedEnd(refusal, from: 0x6000000, to: 0x6700000), 0x6000b41)
+        XCTAssertNil(RPCClient.suggestedEnd(refusal, from: 0x5000000, to: 0x6700000), "another start")
+        XCTAssertNil(RPCClient.suggestedEnd(refusal, from: 0x6000000, to: 0x6000b41), "not inside the window")
+        XCTAssertNil(RPCClient.suggestedEnd(RPCError(code: -32062, message: "Block range is too large"), from: 0, to: 1_000))
+        XCTAssertNil(RPCClient.suggestedEnd(RPCError(code: -32602, message: "should work: [0x, 0x]"), from: 0, to: 1_000))
+        let halves = RPCClient.split(LogFilter(fromBlock: 100, toBlock: 1_099), floor: 100)
+        XCTAssertEqual(halves?.map(\.fromBlock), [100, 600])
+        XCTAssertEqual(halves?.map(\.toBlock), [599, 1_099])
+        XCTAssertEqual(RPCClient.split(LogFilter(fromBlock: 100, toBlock: 1_099), at: 150, floor: 100)?.map(\.toBlock), [150, 1_099])
+        XCTAssertEqual(RPCClient.split(LogFilter(fromBlock: 100, toBlock: 1_099), at: 1_099, floor: 100)?.map(\.toBlock), [599, 1_099], "a cut outside: halves")
+        XCTAssertNil(RPCClient.split(LogFilter(fromBlock: 100, toBlock: 199), floor: 100), "no wider than the floor")
+    }
+
     /// The size refusals of Monad's endpoints, read live on 2026-09-29, and errors a smaller range doesn't fix.
     func testWhichRefusalsASmallerRangeFixes() {
         let size = [

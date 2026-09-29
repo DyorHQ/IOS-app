@@ -290,15 +290,31 @@ final class WalletHoldingsTests: XCTestCase {
         let end = try XCTUnwrap(profile.range(of: "enum QRCode", range: start.upperBound..<profile.endIndex))
         let send = String(profile[start.upperBound..<end.lowerBound])
         for source in [assets, send] {
-            XCTAssertTrue(source.contains("WalletTokens.read(env: env, address: address)"))
+            XCTAssertTrue(source.contains("WalletTokens.read(env: env, address: address"))
             XCTAssertTrue(source.contains("WalletTokens.ranked(read, env: env"))
             XCTAssertFalse(source.contains("heldTokens("), "no screen reads the wallet's tokens its own way")
         }
+        // Send lists MON, the curated tokens and the stored ones at once, with nothing preselected, and adds the tokens
+        // the wallet's history shows when it is read: it never waits on the history to offer MON.
+        XCTAssertTrue(send.contains("async let history = WalletTokens.history(env: env, address: address)"))
+        XCTAssertTrue(send.contains("first = try await WalletTokens.read(env: env, address: address, history: nil)"))
+        XCTAssertTrue(send.contains("show(firstRanked, complete: first.complete, readingHistory: true)"))
+        XCTAssertTrue(send.contains("let scan = await history"))
+        XCTAssertTrue(send.contains("let read = try? await WalletTokens.read(env: env, address: address, history: scan)"))
+        let show = try XCTUnwrap(send.range(of: "private func show("))
+        let shown = String(send[show.upperBound...].prefix(1_500))
+        let partial = try XCTUnwrap(shown.range(of: "if readingHistory {"))
+        let selection = try XCTUnwrap(shown.range(of: "WalletHoldings.selection("))
+        XCTAssertLessThan(shown.distance(from: shown.startIndex, to: partial.lowerBound), shown.distance(from: shown.startIndex, to: selection.lowerBound),
+                          "nothing is preselected while the history is read")
+        XCTAssertTrue(shown[partial.upperBound..<selection.lowerBound].contains("return"))
         XCTAssertTrue(send.contains("let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked.tokens, pricesRead: !ranked.valuesMissing)"))
         XCTAssertTrue(send.contains("usd: WalletHoldings.stableUSD(review.token, amount: review.amount)"))
         // Coming back from the token list restarts the form's tasks: the list is read once per wallet and attempt, a
         // finished recipient check stands, and Review takes only a pick from the list as read, with its Unverified mark.
-        XCTAssertTrue(send.contains("guard key != assetsKey else { return }"))
+        XCTAssertTrue(send.contains("if assetsKey == key { return }"))
+        XCTAssertTrue(send.contains("if let running = assetsRead, running.id == key, !running.task.isCancelled { return }"))
+        XCTAssertTrue(send.contains(".onDisappear { assetsRead?.task.cancel() }"))
         XCTAssertTrue(send.contains("if let to, to == checkedRecipient { return }"))
         XCTAssertTrue(send.contains("guard case .loaded = assets, choice != nil else { return false }"))
         XCTAssertTrue(send.contains("review = SendReview(asset: choice,"))

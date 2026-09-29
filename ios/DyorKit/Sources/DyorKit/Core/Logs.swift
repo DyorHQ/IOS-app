@@ -31,8 +31,9 @@ public struct LogFilter: Sendable, Equatable {
 enum LogsAnswer: Sendable {
     case logs([Log])
     /// Refused for its size: its block span, or how many logs it would return, is over the endpoint's cap
-    /// (`RPCClient.refusesSize`). A smaller range is answered.
-    case tooLarge
+    /// (`RPCClient.refusesSize`). A smaller range is answered: `cut`, when the endpoint names one, is the last block of a
+    /// range from the same start it can answer (`RPCClient.suggestedEnd`).
+    case tooLarge(cut: UInt64?)
     /// Anything else: an internal error, a throttle that outlasted the client's retries, no answer. A smaller range
     /// wouldn't be answered either.
     case failed
@@ -184,11 +185,17 @@ public extension RPCClient {
         // A wallet-scoped filter (a topic beyond the event signature) is cheap for the wide-range endpoints however
         // far back it reaches: rpc1 answers one wallet's whole transfer history in about a second. Ask for the whole
         // window first, up to three times, and fall back to ranges only when the endpoint refuses it. A refusal for its
-        // size is never sent again: the answer would be the same.
+        // size is never sent again: the answer would be the same. rpc1 refuses a history of more than 10K logs (an active
+        // trader's, or one an airdrop campaign spammed) and names the range from the same start it can answer: the
+        // history is then read in such ranges, a request or two for each 10K logs, where 100,000-block ranges took more
+        // than a thousand requests, minutes.
         if ranges.count > 1, chunk >= 100_000, topics.dropFirst().contains(where: { $0 != nil }) {
             let whole = LogFilter(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock)
-            if case .logs(let found) = await logsAnswer(whole, tries: 3) { return (found, true) }
-            if Task.isCancelled { return ([], false) }
+            switch await logsAnswer(whole, tries: 3) {
+            case .logs(let found): return (found, true)
+            case .tooLarge(let cut?): return await narrowedLogs(whole, cut: cut)
+            case .tooLarge(nil), .failed: if Task.isCancelled { return ([], false) }
+            }
         }
         var out: [Log] = []
         var complete = true
@@ -203,9 +210,9 @@ public extension RPCClient {
                 case .logs(let logs):
                     out.append(contentsOf: logs)
                     answered = true
-                case .tooLarge:
+                case .tooLarge(let cut):
                     answered = true
-                    let narrowed = await narrowedLogs(filter)
+                    let narrowed = await narrowedLogs(filter, cut: cut)
                     out.append(contentsOf: narrowed.logs)
                     complete = complete && narrowed.complete
                 case .failed:
@@ -248,10 +255,11 @@ public extension RPCClient {
     /// Each of `filters` asked once, in one round trip; every one failed when the request as a whole got no answer.
     private func batchAnswers(_ filters: [LogFilter]) async -> [LogsAnswer] {
         guard let results = try? await logs(filters), results.count == filters.count else { return filters.map { _ in .failed } }
-        return results.map { result in
+        return zip(filters, results).map { filter, result in
             switch result {
             case .success(let logs): return .logs(logs)
-            case .failure(let error): return Self.refusesSize(error) ? .tooLarge : .failed
+            case .failure(let error):
+                return Self.refusesSize(error) ? .tooLarge(cut: Self.suggestedEnd(error, from: filter.fromBlock, to: filter.toBlock)) : .failed
             }
         }
     }
@@ -269,34 +277,58 @@ public extension RPCClient {
         return error.code == -32614 || error.code == -32062
     }
 
-    /// A range the endpoint refused for its size, retried in halves down to 100 blocks (the cap of the default Monad
-    /// RPC; 5 000 on a local node), each half refused for its size split again. A part still refused at that size, or
-    /// refused for another reason after one more try, is left as a gap, and the range is reported incomplete.
-    private func narrowedLogs(_ filter: LogFilter) async -> (logs: [Log], complete: Bool) {
+    /// A range the endpoint refused for its size, read in parts down to 100 blocks (the cap of the default Monad RPC;
+    /// 5 000 on a local node), each part refused for its size split again: where the endpoint's refusal says a range it
+    /// can answer ends (`cut`), else in halves. The endpoint's word is taken up to 200 times a range (about 2M logs on
+    /// rpc1), then halves only, so no endpoint can keep it splitting off a block at a time. A part still refused at the
+    /// smallest size, or refused for another reason after one more try, is left as a gap, and the range is reported
+    /// incomplete.
+    private func narrowedLogs(_ filter: LogFilter, cut: UInt64? = nil) async -> (logs: [Log], complete: Bool) {
         let floor: UInt64 = isLocal ? 5_000 : 100
-        guard let halves = Self.halves(filter, floor: floor) else { return ([], false) }
+        var cuts = 200
+        func divide(_ part: LogFilter, _ cut: UInt64?) -> [LogFilter]? {
+            let named = cuts > 0 ? cut : nil
+            if named != nil { cuts -= 1 }
+            return Self.split(part, at: named, floor: floor)
+        }
+        guard let parts = divide(filter, cut) else { return ([], false) }
         var out: [Log] = []
         var complete = true
         // The parts still to read, the next one last, so the logs come out in block order.
-        var pending = Array(halves.reversed())
+        var pending = Array(parts.reversed())
         while let part = pending.popLast() {
             if Task.isCancelled { return (out, false) }
             switch await logsAnswer(part) {
             case .logs(let logs): out.append(contentsOf: logs)
             case .failed: complete = false
-            case .tooLarge:
-                if let split = Self.halves(part, floor: floor) { pending += split.reversed() } else { complete = false }
+            case .tooLarge(let cut):
+                if let smaller = divide(part, cut) { pending += smaller.reversed() } else { complete = false }
             }
         }
         return (out, complete)
     }
 
-    /// `filter`'s window in two halves; nil when it is no wider than `floor` blocks.
-    internal static func halves(_ filter: LogFilter, floor: UInt64) -> [LogFilter]? {
+    /// `filter`'s window in two: the first part ending at `cut` when that falls inside the window, else halves. Nil when
+    /// the window is no wider than `floor` blocks.
+    internal static func split(_ filter: LogFilter, at cut: UInt64? = nil, floor: UInt64) -> [LogFilter]? {
         guard filter.toBlock >= filter.fromBlock, filter.toBlock - filter.fromBlock + 1 > floor else { return nil }
-        let mid = filter.fromBlock + (filter.toBlock - filter.fromBlock + 1) / 2
-        return [LogFilter(address: filter.address, topics: filter.topics, fromBlock: filter.fromBlock, toBlock: mid - 1),
-                LogFilter(address: filter.address, topics: filter.topics, fromBlock: mid, toBlock: filter.toBlock)]
+        let half = filter.fromBlock + (filter.toBlock - filter.fromBlock + 1) / 2 - 1
+        let end = cut.flatMap { (filter.fromBlock..<filter.toBlock).contains($0) ? $0 : nil } ?? half
+        return [LogFilter(address: filter.address, topics: filter.topics, fromBlock: filter.fromBlock, toBlock: end),
+                LogFilter(address: filter.address, topics: filter.topics, fromBlock: end + 1, toBlock: filter.toBlock)]
+    }
+
+    /// The last block of the range a size refusal says the endpoint can answer, when that range starts at `from` and ends
+    /// before `to`: rpc1's refusal ends "this block range should work: [0x6000000, 0x6000b41]". Nil when it names none,
+    /// or one that doesn't fit.
+    internal static func suggestedEnd(_ error: RPCError, from: UInt64, to: UInt64) -> UInt64? {
+        let message = error.message
+        guard let open = message.lastIndex(of: "["), let close = message[open...].firstIndex(of: "]") else { return nil }
+        let bounds = message[message.index(after: open)..<close].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard bounds.count == 2, bounds.allSatisfy({ $0.count > 2 && $0.lowercased().hasPrefix("0x") }),
+              let start = BigUInt(hexQuantity: bounds[0]), let end = BigUInt(hexQuantity: bounds[1]),
+              start == BigUInt(from), end >= start, end < BigUInt(to), let cut = UInt64(exactly: end) else { return nil }
+        return cut
     }
 
     /// Block number and timestamp, for anchoring event times without one `eth_getBlockByNumber` per log.
