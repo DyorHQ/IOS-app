@@ -33,11 +33,13 @@ the table's, externalBaseURI() is the c4 link base, policy() pays the table's pl
 and guardian() are moments-143.json's; and each factory has no code at its record's deployBlock − 1 and has it at
 deployBlock.
 
-`--release` also reads the public docs' Contracts & Addresses page (as GitBook's Markdown), which Get Help opens ("Verify
-every contract DyorHQ uses", and the Help Center links it) and which tells people to confirm an address there before
-using it outside the app: it must list every module in DyorKit's two tables, and its first LaunchpadFactory and
-MomentsFactory rows must be the tables' factories, so it never presents a retired stack as the current one. A page that
-cannot be read refuses too. Publish the docs update before the archive.
+`--release` also reads the public docs' Contracts & Addresses page, which Get Help opens ("Verify every contract DyorHQ
+uses", and the Help Center links it) and which tells people to confirm an address there before using it outside the
+app. It is fetched at the URL the app opens (DyorKit's DocsLinks.contractsAndAddresses), with a plain HTTPS GET, and must
+show every address in DyorKit's two tables (case-insensitive: the modules, the shared contracts they name, and the
+Moments platform and treasury wallets); its first LaunchpadFactory and MomentsFactory rows, as the page reads, must be
+the tables' factories, so it never presents a retired stack as the current one. A page that cannot be read refuses too.
+Publish the docs update first, then archive.
 
 `--chain-fixture FILE` is for DyorKit's RetiredCohortGateTests only: the chain checks alone (the retired cohorts, and the
 live stacks when wired) and the docs check, against canned eth_call and eth_getCode answers and a canned page instead
@@ -46,6 +48,7 @@ of the chain and the docs site. It is refused together with `--release`.
 Local config values are compared, never printed: a problem there names the key only.
 """
 import json, os, re, sys, urllib.request
+from html.parser import HTMLParser
 
 ARGS = sys.argv[1:]
 FLAGS = {"--release", "--chain", "--chain-fixture"}
@@ -179,8 +182,10 @@ PAST_PIN = 20
 # count would move every name link after it.
 NAMED_MOMENTS = {"c1": 3, "c2": 2, "c3": 1}
 # The docs page Get Help's Contracts & Addresses row opens (DyorKit's DocsLinks.contractsAndAddresses, pinned by
-# RetiredCohortGateTests); GitBook serves each page as Markdown at its URL plus ".md".
+# RetiredCohortGateTests), read at that same URL.
 DOCS_CONTRACTS_PAGE = "https://dyorhq.gitbook.io/docs/resources/contracts-and-addresses"
+# Where the shared contracts a table names (`poolManager: Uniswap.poolManager`) are defined.
+CHAIN_CONSTANTS = "ios/DyorKit/Sources/DyorKit/Chain/Monad.swift"
 
 def retired_tables():
     """([(cohort, factory, pin)] in publish order, {coin: (factory, id)}), read from the Swift sources; problems for
@@ -423,40 +428,84 @@ def check_live_on_chain(call, code):
             problems.append(f"{where}: {whose}'s deployBlock {deploy_block} is not the block that created it "
                             f"(code at {deploy_block - 1}: {'yes' if before else 'no'}; at {deploy_block}: {'yes' if at else 'no'})")
 
+def table_addresses(block, where):
+    """Every address in a DyorKit table as (field, lowercase address): its literals, and the shared constants it names
+    (`poolManager: Uniswap.poolManager`) read from CHAIN_CONSTANTS."""
+    constants = open(os.path.join(ROOT, CHAIN_CONSTANTS)).read()
+    out = []
+    for field, literal, namespace, name in re.findall(
+            r'^\s*(\w+): (?:Address\(literal: "(0x[0-9a-fA-F]{40})"\)|([A-Z]\w*)\.(\w+)),?\s*$', block, re.M):
+        if not literal:
+            body = re.search(rf'public enum {namespace} \{{(.*?)\n\}}', constants, re.S)
+            found = body and re.search(rf'static let {name} = Address\(literal: "(0x[0-9a-fA-F]{{40}})"\)', body.group(1))
+            if not found:
+                problems.append(f"{where}.{field}: {namespace}.{name} could not be read from {CHAIN_CONSTANTS}")
+                continue
+            literal = found.group(1)
+        out.append((field, literal.lower()))
+    return out
+
+class VisibleText(HTMLParser):
+    """The text a reader sees on an HTML page: scripts, styles and templates left out."""
+    HIDDEN = {"script", "style", "template", "noscript"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.hidden = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        self.hidden += tag in self.HIDDEN
+
+    def handle_endtag(self, tag):
+        if tag in self.HIDDEN and self.hidden:
+            self.hidden -= 1
+
+    def handle_data(self, data):
+        if not self.hidden and data.strip():
+            self.parts.append(data.strip())
+
 def docs_page():
-    """The Contracts & Addresses page as Markdown: the fixture's in tests, else the published one."""
+    """The Contracts & Addresses page: the fixture's in tests, else the published one, fetched at the URL the app opens
+    (a plain HTTPS GET, no auth)."""
     if FIXTURE:
         page = json.load(open(FIXTURE)).get("docs")
         if not isinstance(page, str):
             raise RuntimeError("no page in the fixture")
         return page
-    request = urllib.request.Request(DOCS_CONTRACTS_PAGE + ".md", headers={"User-Agent": "dyorhq-release-gate"})
+    request = urllib.request.Request(DOCS_CONTRACTS_PAGE, headers={"User-Agent": "dyorhq-release-gate"})
     with urllib.request.urlopen(request, timeout=20) as reply:
         return reply.read().decode("utf-8")
 
 def check_docs_page():
-    """The published page names every contract this build calls, and its current-release rows are the tables' factories
-    (a retired stack may follow, under previous releases). See the docstring."""
+    """The published page shows every address in DyorKit's two tables, and its current-release rows are the tables'
+    factories (a retired stack may follow, under previous releases). See the docstring."""
     where = f"the docs page {DOCS_CONTRACTS_PAGE}"
     try:
         page = docs_page()
     except Exception as e:  # noqa: BLE001 — unread is not proven
-        problems.append(f"{where} could not be read ({type(e).__name__}: {str(e)[:160]}); a release needs it to list this build's contracts")
+        problems.append(f"{where} could not be read ({type(e).__name__}: {str(e)[:160]}); a release needs it to list "
+                        "this build's contracts: publish the docs update first, and archive once the page answers")
         return
     text = page.lower()
-    called = [(f"LaunchpadAddresses.monadMainnet.{field}", address) for field, address in launchpad.items()]
-    called += [(f"MomentsAddresses.monadMainnet.{field}", address) for field, address in moments.items() if field not in ("platform", "treasury")]
-    missing = [f"{name} {address}" for name, address in called if address not in text]
+    listed = [(f"LaunchpadAddresses.monadMainnet.{field}", address) for field, address in launchpad_addresses]
+    listed += [(f"MomentsAddresses.monadMainnet.{field}", address) for field, address in moments_addresses]
+    missing = [f"{name} {address}" for name, address in listed if address not in text]
     if missing:
-        problems.append(f"{where} does not list: {', '.join(missing)}. Publish the docs update (DyorHQ/docs) before the archive")
+        problems.append(f"{where} does not list: {', '.join(missing)}. Publish the docs update first (DyorHQ/docs), then "
+                        "archive")
+    reader = VisibleText()
+    reader.feed(page)
+    shown = " ".join(reader.parts)
     for row, factory, table in (("LaunchpadFactory", launchpad["factory"], "LaunchpadAddresses.monadMainnet"),
                                 ("MomentsFactory", moments["factory"], "MomentsAddresses.monadMainnet")):
-        first = re.search(rf'^\|\s*{row}\s*\|\s*`?(0x[0-9a-fA-F]{{40}})`?\s*\|', page, re.M)
+        first = re.search(rf'\b{row}\b.*?(0x[0-9a-fA-F]{{40}})', shown, re.S)
         if not first:
-            problems.append(f"{where} has no {row} row")
+            problems.append(f"{where} has no {row} row: publish the docs update first")
         elif first.group(1).lower() != factory:
             retired = " (a retired one)" if first.group(1).lower() in RETIRED_FACTORIES | RETIRED_MOMENTS_FACTORIES else ""
-            problems.append(f"{where} presents {first.group(1)}{retired} as the current {row}, not {table}'s {factory}")
+            problems.append(f"{where} presents {first.group(1)}{retired} as the current {row}, not {table}'s {factory}: "
+                            "publish the docs update first")
 
 def report(ok_line):
     for note in notes:
@@ -470,6 +519,7 @@ def report(ok_line):
 where = "DyorKit LaunchpadAddresses.monadMainnet"
 block = swift_block("ios/DyorKit/Sources/DyorKit/Services/Launchpad/LaunchpadModels.swift")
 launchpad = swift_fields(block, [field for (_, _, field) in KEYS.values()], where)
+launchpad_addresses = table_addresses(block, where)
 launchpad_state = state(launchpad, where)
 if "generation: .v2" not in block:
     problems.append(f"{where} must be `generation: .v2`")
@@ -486,6 +536,7 @@ elif launchpad_state == "pending" and record["factory"].lower() != PRE_V2_LAUNCH
 where = "DyorKit MomentsAddresses.monadMainnet"
 block = swift_block("ios/DyorKit/Sources/DyorKit/Services/Moments/MomentsModels.swift")
 moments = swift_fields(block, [field for (_, field) in MOMENTS_KEYS.values()], where)
+moments_addresses = table_addresses(block, where)
 deploy_block = re.search(r'\bdeployBlock: ([0-9_]+)(,? // PENDING)?', block)
 moments_state = state(moments, where)
 if "generation: .v2" not in block:

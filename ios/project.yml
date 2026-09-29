@@ -190,6 +190,7 @@ targets:
           - $(SRCROOT)/DyorKit/Sources/DyorKit/Services/Launchpad/LaunchpadModels.swift
           - $(SRCROOT)/DyorKit/Sources/DyorKit/Services/Moments/MomentsModels.swift
           - $(SRCROOT)/DyorKit/Sources/DyorKit/Services/Moments/MomentLink.swift
+          - $(SRCROOT)/DyorKit/Sources/DyorKit/Chain/Monad.swift
           - $(SRCROOT)/DyorHQ/Config/Secrets.xcconfig
         script: |
           exec python3 "$SRCROOT/../scripts/dev/check-launchpad-addresses.py" --release

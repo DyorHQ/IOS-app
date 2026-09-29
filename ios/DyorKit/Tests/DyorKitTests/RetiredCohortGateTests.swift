@@ -17,8 +17,8 @@ import XCTest
 /// governance and guardian, and each factory was created at its record's `deployBlock`, so a wrong record promoted with
 /// Swift that matches it (a simulated or rehearsal deployment, another stack) still refuses.
 ///
-/// A release also reads the public Contracts & Addresses page Get Help opens: it must list every contract in the two
-/// tables, with the tables' factories as its current LaunchpadFactory and MomentsFactory rows.
+/// A release also reads the public Contracts & Addresses page Get Help opens, at the URL the app opens: it must show every
+/// address in the two tables, with the tables' factories as its current LaunchpadFactory and MomentsFactory rows.
 ///
 /// Here the script runs against canned eth_call and eth_getCode answers and a canned page built from the compiled
 /// constants (its `--chain-fixture` mode, which it refuses together with `--release`): the chain and the page as they
@@ -100,8 +100,10 @@ final class RetiredCohortGateTests: XCTestCase {
         }
     }
 
-    /// The Contracts & Addresses page as the gate reads it (GitBook's Markdown), laid out like the docs update for build
-    /// 16: `current` as the current release, then the retired launchpad and cohort 3 under previous releases.
+    /// The Contracts & Addresses page as the gate reads it (the HTML GitBook serves at the URL Get Help opens), laid out
+    /// like the docs update for build 16: `current` as the current release, then the retired launchpad and cohort 3
+    /// under previous releases, each address checksummed. Like GitBook's, its script payload repeats the rows, here the
+    /// previous ones first; no reader sees it, so it never decides which row is current.
     static func docsPage(current: [(String, Address)]? = nil, previousFirst: Bool = false) -> String {
         let l = LaunchpadAddresses.monadMainnet
         let m = MomentsAddresses.monadMainnet
@@ -109,13 +111,18 @@ final class RetiredCohortGateTests: XCTestCase {
             ("LaunchpadFactory", l.factory), ("LaunchAndBuyRouter", l.router), ("FeeEscrow", l.escrow), ("HolderFeeSharing", l.holderFeeSharing),
             ("MemeHook (Uniswap v4 hook)", l.hook), ("MomentsFactory", m.factory), ("MomentCollect", m.collect), ("MomentVesting", m.vesting),
             ("MomentGraduation", m.graduation), ("MomentLocker", m.locker), ("MomentFeeHook (Uniswap v4 hook)", m.hook), ("MomentBuyback", m.buyback),
+            ("Platform wallet (DyorHQ fees)", m.platform), ("Treasury wallet", m.treasury),
+            ("Uniswap v4 PoolManager", l.poolManager), ("Permit2", m.permit2), ("USDC", m.usdc),
         ]
         let previous = [("LaunchpadFactory", V2WiringTests.relaunchFactory), ("MomentsFactory", V2WiringTests.cohort3Factory)]
         func table(_ title: String, _ rows: [(String, Address)]) -> String {
-            "## \(title)\n\n| Contract | Address |\n| --- | --- |\n" + rows.map { "| \($0.0) | `\($0.1.hex)` |" }.joined(separator: "\n") + "\n"
+            "<h2>\(title)</h2><table><thead><tr><th>Contract</th><th>Address</th></tr></thead><tbody>"
+                + rows.map { "<tr><td><p>\($0.0)</p></td><td><p><code>\($0.1.checksummed)</code></p></td></tr>" }.joined() + "</tbody></table>"
         }
         let sections = [table("Current release", current), table("Previous releases", previous)]
-        return "# Contracts & Addresses\n\n" + (previousFirst ? sections.reversed() : sections).joined(separator: "\n")
+        let payload = (previous + current).map { "\($0.0) \($0.1.checksummed)" }.joined(separator: " ")
+        return "<!DOCTYPE html><html><head><title>Contracts &amp; Addresses</title><script>self.__next_f.push([1,\"\(payload)\"])</script></head>"
+            + "<body><main><h1>Contracts &amp; Addresses</h1>" + (previousFirst ? sections.reversed() : sections).joined() + "</main></body></html>"
     }
 
     static func fixture(_ cohorts: [ChainCohort], live: LiveChain? = nil, docs: String? = docsPage()) throws -> Data {
@@ -310,35 +317,55 @@ final class RetiredCohortGateTests: XCTestCase {
     // MARK: The docs page
 
     /// The page as published on 2026-09-29: the retired 0x6B1C and cohort 3 as the current factories, none of v2's
-    /// contracts. Refused, naming each missing contract and each retired factory it presents as current.
+    /// contracts. Refused, naming each missing address (the wallets too) and each retired factory it presents as current.
     func testAPageListingTheRetiredStacksRefuses() throws {
         let l = LaunchpadAddresses.monadMainnet
         let m = MomentsAddresses.monadMainnet
-        let page = Self.docsPage(current: [("LaunchpadFactory", V2WiringTests.relaunchFactory), ("MomentsFactory", V2WiringTests.cohort3Factory)])
+        let page = Self.docsPage(current: [("LaunchpadFactory", V2WiringTests.relaunchFactory), ("MomentsFactory", V2WiringTests.cohort3Factory),
+                                           ("Uniswap v4 PoolManager", l.poolManager), ("Permit2", m.permit2), ("USDC", m.usdc)])
         let (status, output) = try check(Self.current(), docs: page)
         XCTAssertEqual(status, 1, output)
         XCTAssertTrue(output.contains("does not list: LaunchpadAddresses.monadMainnet.factory \(l.factory.hex), LaunchpadAddresses.monadMainnet.router \(l.router.hex)"), output)
-        XCTAssertTrue(output.contains("MomentsAddresses.monadMainnet.buyback \(m.buyback.hex). Publish the docs update"), output)
-        XCTAssertTrue(output.contains("presents \(V2WiringTests.relaunchFactory.hex) (a retired one) as the current LaunchpadFactory, not LaunchpadAddresses.monadMainnet's \(l.factory.hex)"), output)
-        XCTAssertTrue(output.contains("presents \(V2WiringTests.cohort3Factory.hex) (a retired one) as the current MomentsFactory, not MomentsAddresses.monadMainnet's \(m.factory.hex)"), output)
+        XCTAssertTrue(output.contains("MomentsAddresses.monadMainnet.buyback \(m.buyback.hex), MomentsAddresses.monadMainnet.platform \(m.platform.hex), "
+                                      + "MomentsAddresses.monadMainnet.treasury \(m.treasury.hex). Publish the docs update first"), output)
+        XCTAssertFalse(output.contains("poolManager"), "listed, in another case: \(output)")
+        XCTAssertTrue(output.contains("presents \(V2WiringTests.relaunchFactory.checksummed) (a retired one) as the current LaunchpadFactory, not LaunchpadAddresses.monadMainnet's \(l.factory.hex)"), output)
+        XCTAssertTrue(output.contains("presents \(V2WiringTests.cohort3Factory.checksummed) (a retired one) as the current MomentsFactory, not MomentsAddresses.monadMainnet's \(m.factory.hex)"), output)
     }
 
-    /// Every contract listed is not enough: a page whose first factory rows are the retired ones still refuses, and so
-    /// does a page that cannot be read.
+    /// Every address listed is not enough: a page whose first factory rows, as a reader sees it, are the retired ones
+    /// still refuses, and so does a page that cannot be read (a site that does not answer).
     func testThePagesCurrentFactoriesMustBeThisBuilds() throws {
         let reordered = try check(Self.current(), docs: Self.docsPage(previousFirst: true))
         XCTAssertEqual(reordered.status, 1, reordered.output)
         XCTAssertFalse(reordered.output.contains("does not list"), reordered.output)
-        XCTAssertTrue(reordered.output.contains("presents \(V2WiringTests.relaunchFactory.hex) (a retired one) as the current LaunchpadFactory"), reordered.output)
+        XCTAssertTrue(reordered.output.contains("presents \(V2WiringTests.relaunchFactory.checksummed) (a retired one) as the current LaunchpadFactory"), reordered.output)
+        XCTAssertTrue(reordered.output.contains("publish the docs update first"), reordered.output)
         let unread = try check(Self.current(), docs: nil)
         XCTAssertEqual(unread.status, 1, unread.output)
         XCTAssertTrue(unread.output.contains("the docs page \(DocsLinks.contractsAndAddresses.url.absoluteString) could not be read"), unread.output)
+        XCTAssertTrue(unread.output.contains("publish the docs update first"), unread.output)
     }
 
-    /// The gate reads the page Get Help's Contracts & Addresses row opens.
+    /// The gate reads the page Get Help's Contracts & Addresses row opens, at that URL.
     func testTheGateReadsThePageGetHelpOpens() throws {
         let script = try String(contentsOf: try script(), encoding: .utf8)
         XCTAssertTrue(script.contains("DOCS_CONTRACTS_PAGE = \"\(DocsLinks.contractsAndAddresses.url.absoluteString)\"\n"))
+        XCTAssertTrue(script.contains("urllib.request.Request(DOCS_CONTRACTS_PAGE, "))
+    }
+
+    /// Every archive runs the gate in the DyorHQ target's build phase with user script sandboxing on, which denies a file
+    /// under ios/ that the phase does not declare: each DyorKit source the script reads is one of its inputs.
+    func testTheArchivePhaseDeclaresEverySourceTheGateReads() throws {
+        let script = try String(contentsOf: try script(), encoding: .utf8)
+        let repo = try self.script().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let project = try String(contentsOf: repo.appendingPathComponent("ios/project.yml"), encoding: .utf8)
+        let path = try NSRegularExpression(pattern: #""ios/(DyorKit/Sources/[A-Za-z/]+\.swift)""#)
+        let read = Set(path.matches(in: script, range: NSRange(script.startIndex..., in: script)).map { (script as NSString).substring(with: $0.range(at: 1)) })
+        XCTAssertEqual(read.count, 4, "LaunchpadModels, MomentsModels, MomentLink and Monad: \(read.sorted())")
+        for source in read.sorted() {
+            XCTAssertTrue(project.contains("          - $(SRCROOT)/\(source)\n"), "\(source) is not an input of the v2 Release Gate phase")
+        }
     }
 
     /// Canned answers never stand in for the chain in a release, and a mistyped flag never runs a lesser check.

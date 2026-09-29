@@ -114,9 +114,10 @@ paused (their policy pays the retired wallets): either one open refuses. The sam
 so a wrong record promoted with matching Swift still refuses: every module in the two tables has code, each factory's
 getters name the table's modules and the records' owner, governance and guardian (and the Moments policy the table's
 platform and treasury, its link base c4's), and each factory was created at its record's `deployBlock`. It also reads
-the public docs' Contracts & Addresses page, which Get Help opens ("Verify every contract DyorHQ uses"): it refuses
-until the page lists every contract in the two tables with their factories as the current ones, so publish the docs
-update for a new stack before its archive (`DYOR_LIVE_DOCS=1` runs the same check in `DocsLinksTests`).
+the public docs' Contracts & Addresses page at the URL Get Help opens ("Verify every contract DyorHQ uses"): it refuses
+until the page lists every address in the two tables with their factories as the current ones, and when the page cannot
+be read, so publish the docs update for a new stack before its archive (`DYOR_LIVE_DOCS=1` runs the same check in
+`DocsLinksTests`).
 It runs in every archive: the DyorHQ target's install-only build phase (so Product › Archive in Xcode is gated too),
 `ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud) and `scripts/testflight.sh`, each refusing the archive.
 `python3 ../scripts/dev/check-launchpad-addresses.py --chain` runs the same chain checks without refusing the pending
