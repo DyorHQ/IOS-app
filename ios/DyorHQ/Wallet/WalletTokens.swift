@@ -53,8 +53,8 @@ enum WalletTokens {
     struct Ranked {
         let tokens: [HeldToken]
         /// Prices couldn't all be read: the pool finder's read failed (USDC and AUSD keep their $1, most tokens are
-        /// unpriced and ranked by amount rather than value), or a DyorHQ launch coin's own value couldn't be read (its
-        /// launch or its live price: `AppCoins.complete`), so it is unpriced. A list says so, and a send preselects
+        /// unpriced and ranked by amount rather than value), or a DyorHQ coin's own value couldn't be read (its launch or
+        /// Moment, or its live price: `AppCoins.complete`), so it is unpriced. A list says so, and a send preselects
         /// nothing.
         let pricesFailed: Bool
         /// The held coins still on a launchpad's curve, from the same read that valued them (`HeldLaunches.curve`); nil when
@@ -64,8 +64,8 @@ enum WalletTokens {
 
     /// `read`'s tokens valued and ranked by `order` (the Send list's unless another is given): at their pools' prices,
     /// and DyorHQ's own coins as the app values them (`WalletHoldings.pricing`) — a launch coin at its curve's or pool's
-    /// live price in its pair asset, a Moment coin at its pool's USDC price — which no pool the price finder looks for
-    /// gives them. Prices that can't be read leave tokens unpriced, never hidden, and say so (`Ranked.pricesFailed`).
+    /// live price in its pair asset, a Moment coin at its pool's live USDC price — which no pool the price finder looks
+    /// for gives them. Prices that can't be read leave tokens unpriced, never hidden, and say so (`Ranked.pricesFailed`).
     /// A DyorHQ coin the wallet launched, or whose Moment it collected or created, is its own, not Unverified
     /// (`WalletHoldings.unverified`).
     static func ranked(_ read: Read, env: AppEnvironment, by order: (HeldToken, HeldToken) -> Bool = WalletHoldings.precedes) async -> Ranked {
@@ -82,7 +82,7 @@ enum WalletTokens {
             failed = true
         }
         let own = await coins
-        let valued = WalletHoldings.pricing(prices.mapValues(\.usd), launches: own.launches, moments: own.moments.mapValues { $0.pool?.usdcPerCoin })
+        let valued = WalletHoldings.pricing(prices.mapValues(\.usd), launches: own.launches, moments: own.momentPrices)
         let unverified = WalletHoldings.unverified(read.unverified, owner: read.owner, launches: own.launches, staked: own.staked)
         return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: valued, unverified: unverified, by: order),
                       pricesFailed: failed || !own.complete, curve: own.curve)
@@ -92,20 +92,22 @@ enum WalletTokens {
     struct AppCoins {
         /// Launch coins: any launchpad, live or retired, in any phase, with their launches and live prices.
         var launches: HeldLaunches = .none
-        /// Moment coins, with their Moments: the live cohort's or a retired one's.
-        var moments: [Address: MomentInfo] = [:]
+        /// Moment coins' dollar prices (`WalletHoldings.momentPrice`), the live cohort's or a retired one's: nil for one
+        /// whose Moment or live price couldn't be read, or that has no pool.
+        var momentPrices: [Address: Double?] = [:]
         /// The Moment coins whose Moment this wallet collected or created.
         var staked: Set<Address> = []
-        /// Every launch coin among the tokens could be told apart and valued: false when the launchpads' records, a
-        /// factory's launches or a launch's live price couldn't be read.
+        /// Every DyorHQ coin among the tokens could be told apart and valued: false when the launchpads' records, a
+        /// factory's launches, a launch's live price, the live cohort's coin lookup, a Moment or a Moment's live price
+        /// couldn't be read.
         var complete = true
         /// The held coins still on a launchpad's curve; nil when the launchpads couldn't be asked.
         var curve: CurveHoldings? = CurveHoldings.none
     }
 
     /// Which of `read`'s tokens DyorHQ's contracts made, and their values. MON and the curated tokens are never asked. A
-    /// launch coin whose launch or live price couldn't be read is unpriced, never valued by another pool, and the read
-    /// says it is incomplete; a coin whose Moment couldn't be read is left out, and then valued like any other token.
+    /// coin whose launch, Moment or live price couldn't be read is unpriced, never valued by another pool, and the read
+    /// says it is incomplete.
     private static func appCoins(_ read: Read, env: AppEnvironment) async -> AppCoins {
         let candidates = read.tokens.filter { !$0.isNative && Token.core($0.address) == nil }
         guard !candidates.isEmpty else { return AppCoins() }
@@ -114,41 +116,59 @@ enum WalletTokens {
         async let moments = momentCoins(candidates.map(\.address), owner: read.owner, env: env)
         let found = await launches
         let coins = await moments
-        return AppCoins(launches: found ?? .none, moments: coins.moments, staked: coins.staked, complete: found?.complete ?? false, curve: found?.curve)
+        return AppCoins(launches: found ?? .none, momentPrices: coins.prices, staked: coins.staked,
+                        complete: (found?.complete ?? false) && coins.complete, curve: found?.curve)
     }
 
     /// The Moments whose coins are among `coins`: the live cohort's, by its factory's `momentIdByCoin`, and the retired
-    /// cohorts', from their fixed list (`MomentsAddresses.retiredMainnetCoins`). A Moment is kept only when it names the
-    /// coin it was found for. `staked`: those whose Moment `owner` collected or created, from each cohort's vesting; a
-    /// cohort whose stakes can't be read stakes nothing, and its coins stay as marked.
-    private static func momentCoins(_ coins: [Address], owner: Address, env: AppEnvironment) async -> (moments: [Address: MomentInfo], staked: Set<Address>) {
+    /// cohorts', from their fixed list (`MomentsAddresses.retiredMainnetCoins`), each cohort's in one read
+    /// (`MomentsService.infos`). A Moment counts only when it names the coin it was found for and belongs to the cohort
+    /// asked. `prices`: each such coin's (`WalletHoldings.momentPrice`), nil when its Moment or live price couldn't be
+    /// read. `staked`: those whose Moment `owner` collected or created, from each cohort's vesting; a cohort whose stakes
+    /// can't be read stakes nothing, and its coins stay as marked. `complete` is false when a lookup, a Moment or a live
+    /// price couldn't be read.
+    private static func momentCoins(_ coins: [Address], owner: Address, env: AppEnvironment) async -> (prices: [Address: Double?], staked: Set<Address>, complete: Bool) {
         let live = env.moments
-        let ids = (try? await live.momentIds(coins: coins)) ?? [:]
-        var reads: [(coin: Address, read: @Sendable () async -> MomentInfo?)] = []
-        for coin in coins {
-            if let id = ids[coin] {
-                reads.append((coin, { try? await live.info(id: id) }))
-            } else if let key = MomentsAddresses.retiredMainnetCoins[coin], let cohort = env.retiredMoments(for: key.factory) {
-                reads.append((coin, { try? await cohort.info(id: key.id) }))
-            }
+        var complete = true
+        var liveIds: [Address: BigUInt] = [:]
+        do { liveIds = try await live.momentIds(coins: coins) } catch { complete = false }
+        // Each cohort's coins, by id: the live one's, then each retired one's.
+        var retired: [Address: [(coin: Address, id: BigUInt)]] = [:]
+        for coin in coins where liveIds[coin] == nil {
+            if let key = MomentsAddresses.retiredMainnetCoins[coin], env.retiredMoments(for: key.factory) != nil { retired[key.factory, default: []].append((coin, key.id)) }
         }
-        guard !reads.isEmpty else { return ([:], []) }
-        let moments = await withTaskGroup(of: (Address, MomentInfo?).self) { group in
-            for (coin, read) in reads { group.addTask { (coin, await read()) } }
-            var out: [Address: MomentInfo] = [:]
-            for await (coin, info) in group { if let info, info.moment.coin == coin { out[coin] = info } }
-            return out
+        let liveFactory = env.config.moments.factory
+        let liveRead: [MomentInfo]? = liveIds.isEmpty ? [] : try? await live.infos(ids: Array(liveIds.values))
+        var infos: [MomentInfo] = liveRead ?? []
+        if liveRead == nil { complete = false }
+        for (factory, keys) in retired {
+            guard let cohort = env.retiredMoments(for: factory) else { continue }
+            if let read = try? await cohort.infos(ids: keys.map(\.id)) { infos += read } else { complete = false }
         }
+        var moments: [Address: MomentInfo] = [:]
+        for info in infos {
+            let expected = liveIds[info.moment.coin] != nil ? liveFactory : MomentsAddresses.retiredMainnetCoins[info.moment.coin]?.factory
+            if info.moment.factory == expected { moments[info.moment.coin] = info }
+        }
+        var prices: [Address: Double?] = [:]
+        for coin in Array(liveIds.keys) + retired.values.flatMap({ $0.map(\.coin) }) {
+            guard let info = moments[coin] else { prices[coin] = .some(nil); complete = false; continue }
+            let price = WalletHoldings.momentPrice(info)
+            // A pool whose live price wasn't read: unpriced, and said.
+            if price == nil, info.pool != nil { complete = false }
+            prices[coin] = .some(price)
+        }
+        guard !moments.isEmpty else { return (prices, [], complete) }
         // Each cohort's portfolio rows, in one read per cohort: the account's collects, plus a creator's allocation.
         var rows: [MomentPortfolioRow] = []
-        let infos = Array(moments.values)
-        let liveInfos = infos.filter { $0.moment.factory == env.config.moments.factory }
+        let found = Array(moments.values)
+        let liveInfos = found.filter { $0.moment.factory == liveFactory }
         if !liveInfos.isEmpty, let portfolio = try? await live.portfolio(account: owner, moments: liveInfos) { rows += portfolio.rows }
         for cohort in env.retiredMoments {
-            let own = infos.filter { $0.moment.factory == cohort.factory }
+            let own = found.filter { $0.moment.factory == cohort.factory }
             if !own.isEmpty, let positions = try? await cohort.positions(account: owner, moments: own) { rows += positions.map(\.row) }
         }
         let staked = Set(rows.filter { $0.isCreator || $0.entitlement > 0 }.map(\.moment.moment.coin)).intersection(moments.keys)
-        return (moments, staked)
+        return (prices, staked, complete)
     }
 }

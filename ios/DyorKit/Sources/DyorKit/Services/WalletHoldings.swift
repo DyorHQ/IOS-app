@@ -114,9 +114,9 @@ public enum WalletHoldings {
     /// `prices` (USD per whole token, from the pool finder) with DyorHQ's own coins valued as the app values them, which
     /// the pool finder can't: a launch coin (`launches`, found by its factory's record) at its live price in its pair
     /// asset (`HeldLaunches.pairPerCoin`: its curve's, or its pool's once graduated) times that asset's dollar price in
-    /// `prices`; a Moment coin (`moments`) at its pool's USDC price. Such a coin is never valued at a price another pool
-    /// quotes for it: without the app's own value (a launch or price that couldn't be read, a pair asset with no price, a
-    /// Moment with no pool read) it is unpriced.
+    /// `prices`; a Moment coin (`moments`) at its pool's live USDC price (`momentPrice`). Such a coin is never valued at a
+    /// price another pool quotes for it: without the app's own value (a launch or price that couldn't be read, a pair
+    /// asset with no price, a Moment whose pool wasn't read) it is unpriced.
     public static func pricing(_ prices: [Address: Double], launches: HeldLaunches, moments: [Address: Double?]) -> [Address: Double] {
         var out = prices
         for (coin, pair) in launches.pairAssets {
@@ -126,6 +126,13 @@ public enum WalletHoldings {
         }
         for (coin, usdcPerCoin) in moments { out[coin] = usdcPerCoin }
         return out
+    }
+
+    /// A Moment coin's dollar price for `pricing`: its pool's USDC price as read live. Nil when that read failed — never
+    /// the pool's opening price in its place — or the Moment has no pool.
+    public static func momentPrice(_ info: MomentInfo) -> Double? {
+        guard let pool = info.pool, pool.livePriceRead, pool.usdcPerCoin.isFinite, pool.usdcPerCoin > 0 else { return nil }
+        return pool.usdcPerCoin
     }
 
     /// The DyorHQ coins that are `owner`'s own: a launch coin it launched (its factory records the wallet as deployer —

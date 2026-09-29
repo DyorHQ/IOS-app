@@ -2,10 +2,11 @@ import BigInt
 import XCTest
 @testable import DyorKit
 
-/// What the wallet's lists (the Portfolio's Assets, the Send sheet) value DyorHQ's launch coins at: their live price in
-/// their pair asset, to a Double's precision — never `Launch.price`, whose whole units of a 6-decimal pair move in steps
-/// of $0.000001, nor the curve's last price once graduated. A coin whose launch or live price couldn't be read is
-/// unpriced, and the read says so. Contract reads come from `MomentsChainStub`.
+/// What the wallet's lists (the Portfolio's Assets, the Send sheet) value DyorHQ's own coins at: a launch coin at its live
+/// price in its pair asset, to a Double's precision — never `Launch.price`, whose whole units of a 6-decimal pair move in
+/// steps of $0.000001, nor its curve's last price once graduated — and a Moment coin at its pool's live USDC price, never
+/// its opening price. A coin whose launch, Moment or live price couldn't be read is unpriced, and the read says so.
+/// Contract reads come from `MomentsChainStub`.
 final class AppCoinValueTests: XCTestCase {
     private let owner = Address(literal: "0x7777777777777777777777777777777777777777")
 
@@ -134,8 +135,37 @@ final class AppCoinValueTests: XCTestCase {
         XCTAssertNil(LaunchpadService.pairPerCoin([.bytes(Data(count: 32))], graduated: true, token: coin, pairSide: .zero, pairDecimals: 18), "an uninitialised pool")
     }
 
-    /// The sources wire it in: the wallet's lists value launch coins from `heldLaunches`, say when a value couldn't be
-    /// read, and route curve coins from the same read.
+    // MARK: Moment coins
+
+    /// Many Moments are read in one read of the Moments and one hydration, not one round trip per coin; each carries its
+    /// pool's live price, and a pool whose live read failed is marked so, at its opening price, which never values a coin.
+    func testMomentsAreReadTogetherAndAnUnreadLivePriceNeverValuesACoin() async throws {
+        let chain = GraduatedMoments(liveSqrt: HeldLaunchChain.sqrtPrice(usdcPerCoin: 0.02, coin: GraduatedMoments.coin(1), pair: Monad.usdc))
+        MomentsChainStub.install(chain.answer)
+        let service = MomentsService(rpc: MomentsChainStub.rpc(), addresses: V2Fixture.moments)
+        let infos = try await service.infos(ids: [1, 2, 3, 2])
+        XCTAssertEqual(infos.map(\.moment.id), [1, 2, 3])
+        let momentReads = MomentsChainStub.batches().filter { $0.contains { $0.selector == ABI.selector(MomentsABI.Factory.getMoment).hexString } }
+        XCTAssertEqual(momentReads.map(\.count), [3], "one read of the three Moments")
+        XCTAssertLessThanOrEqual(MomentsChainStub.batches().count, 4, "their Moments, their ledgers, their pools and their live prices")
+        for info in infos {
+            let pool = try XCTUnwrap(info.pool)
+            XCTAssertTrue(pool.livePriceRead)
+            XCTAssertEqual(try XCTUnwrap(WalletHoldings.momentPrice(info)), MomentsMath.usdcPerCoin(sqrtPriceX96: chain.liveSqrt!, usdcIs0: pool.usdcIs0), accuracy: 1e-12)
+        }
+
+        var unread = chain
+        unread.liveSqrt = nil
+        MomentsChainStub.install(unread.answer)
+        let stale = try await service.infos(ids: [1])
+        let pool = try XCTUnwrap(stale.first?.pool)
+        XCTAssertFalse(pool.livePriceRead)
+        XCTAssertEqual(pool.sqrtPriceX96, GraduatedMoments.openingSqrt, "the page still shows the opening price…")
+        XCTAssertNil(WalletHoldings.momentPrice(try XCTUnwrap(stale.first)), "…which never values a held coin")
+    }
+
+    /// The sources wire it in: the wallet's lists value DyorHQ's coins from `heldLaunches` and the Moments' live prices,
+    /// say when a value couldn't be read, and route curve coins from the same read.
     func testTheWalletsListsValueDyorHQCoinsThisWay() throws {
         var app = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
@@ -143,9 +173,13 @@ final class AppCoinValueTests: XCTestCase {
         guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let tokens = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
         XCTAssertTrue(tokens.contains("async let launches = try? await launchpad.heldLaunches(candidates)"))
-        XCTAssertTrue(tokens.contains("complete: found?.complete ?? false, curve: found?.curve)"))
-        XCTAssertTrue(tokens.contains("let valued = WalletHoldings.pricing(prices.mapValues(\\.usd), launches: own.launches, moments:"))
+        XCTAssertTrue(tokens.contains("complete: (found?.complete ?? false) && coins.complete, curve: found?.curve)"))
+        XCTAssertTrue(tokens.contains("let valued = WalletHoldings.pricing(prices.mapValues(\\.usd), launches: own.launches, moments: own.momentPrices)"))
         XCTAssertTrue(tokens.contains("pricesFailed: failed || !own.complete, curve: own.curve)"))
+        XCTAssertTrue(tokens.contains("try? await live.infos(ids: Array(liveIds.values))"))
+        XCTAssertTrue(tokens.contains("let price = WalletHoldings.momentPrice(info)"))
+        XCTAssertFalse(tokens.contains("live.info(id:"), "never one round trip per Moment")
+        XCTAssertFalse(tokens.contains("usdcPerCoin"), "a Moment coin is valued only at a live price")
         let assets = try String(contentsOf: app.appendingPathComponent("Portfolio/AssetsModel.swift"), encoding: .utf8)
         XCTAssertTrue(assets.contains("found = result.curve"))
         XCTAssertFalse(assets.contains("curveHoldings("), "the Portfolio asks the launchpads once")
@@ -231,5 +265,45 @@ struct HeldLaunchChain: Sendable {
             return sqrtPriceX96.word
         }
         return nil
+    }
+}
+
+/// Three graduated Moments on the v2 fixture (`FakeMomentsStack`), each with its pool: the graduation record at
+/// `openingSqrt`, and the PoolManager's live slot0 at `liveSqrt` (nil: that read reverts).
+struct GraduatedMoments: Sendable {
+    static let openingSqrt = BigUInt(2).power(96) / 1_000
+    static func coin(_ id: Int) -> Address { stack.coin(id) }
+    static let stack = FakeMomentsStack(addresses: V2Fixture.moments, policy: V2Fixture.policy(), factoryBase: MomentsAddresses.expectedExternalBaseURI,
+                                        nftBase: MomentsAddresses.expectedExternalBaseURI, names: ["One", "Two", "Three"])
+    var liveSqrt: BigUInt?
+
+    func answer(_ to: Address, _ data: Data) -> Data? {
+        let selector = data.prefix(4)
+        let args = ABIWords(data.dropFirst(4))
+        func is_(_ signature: String) -> Bool { selector == ABI.selector(signature) }
+        func encode(_ values: [ABIValue], _ types: String) -> Data { try! ABI.encode(values, types) }
+        let a = V2Fixture.moments
+        let id = args.uint(0).flatMap { Int(exactly: $0) } ?? 0
+        switch to {
+        case a.graduation:
+            if is_(MomentsABI.Graduation.isGraduated) { return encode([.bool(true)], "bool") }
+            if is_(MomentsABI.Graduation.record) {
+                let key: ABIValue = .tuple([.address(a.usdc), .address(Self.coin(id)), .uint(5_000), .int(60), .address(a.hook)])
+                return encode([.tuple([key, .uint(Self.openingSqrt), .uint(1_000), .uint(0), .uint(0), .uint(0), .uint(0), .uint(1_790_000_000)])], MomentsABI.recordTuple)
+            }
+        case a.locker:
+            if is_(MomentsABI.Locker.liquidityOf) { return encode([.uint(1_000)], "uint128") }
+            if is_(MomentsABI.Locker.heldOf) { return encode([.uint(0)], "uint256") }
+        case a.hook:
+            if is_(MomentsABI.Hook.creatorAccrued) || is_(MomentsABI.Hook.platformAccrued) || is_(MomentsABI.Hook.buybackAccrued) { return encode([.uint(0)], "uint256") }
+        case a.buyback:
+            if is_(MomentsABI.Buyback.carry) || is_(MomentsABI.Buyback.minInterval) || is_(MomentsABI.Buyback.minAmount) { return encode([.uint(0)], "uint256") }
+            if is_(MomentsABI.Buyback.lastRun) { return encode([.uint(0)], "uint64") }
+        case a.poolManager:
+            if is_(MomentsABI.PoolManager.extsload) { return liveSqrt.map(\.word) }
+        default:
+            break
+        }
+        return Self.stack.answer(to, data)
     }
 }
