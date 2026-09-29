@@ -160,7 +160,7 @@ struct CreateMomentView: View {
                         let days = input.collectWindow / 86_400
                         DetailRow("Moment", "\(input.name) ($\(input.symbol))")
                         DetailRow("Collect price", MomentsFormat.usdc(input.price))
-                        DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: input.creatorAllocBps))) FDV")
+                        DetailRow("Graduates at", "\(MomentsFormat.usdcCents(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: input.creatorAllocBps))) FDV")
                         DetailRow("Your coins", "\(NumberStyle.basisPoints(input.creatorAllocBps)) · \(MomentsFormat.coins(MomentsConstants.supply * BigUInt(input.creatorAllocBps) / BigUInt(MomentsConstants.bps)))")
                         DetailRow("Window", "\(days) \(days == 1 ? "day" : "days")")
                         // Every term the publish's terms hash binds, as read with it.
@@ -223,6 +223,7 @@ struct CreateMomentView: View {
     private static func change(_ field: PendingMomentPolicy.Field, from now: MomentPolicy, to next: PendingMomentPolicy) -> String {
         func bps(_ value: Int) -> String { NumberStyle.basisPoints(value) }
         switch field {
+        // Exact, unlike the other threshold rows: a change under a cent still reads as a change.
         case .threshold: return "\(MomentsFormat.usdc(now.threshold)) → \(MomentsFormat.usdc(next.threshold))"
         case .minPrice: return "\(MomentsFormat.usdc(now.minPrice)) → \(MomentsFormat.usdc(next.minPrice))"
         case .split: return "\(bps(now.creatorBps)) · \(bps(now.platformBps)) · \(bps(now.reserveBps)) → \(bps(next.creatorBps)) · \(bps(next.platformBps)) · \(bps(next.reserveBps))"
@@ -337,7 +338,7 @@ struct CreateMomentView: View {
                     let reservePerCollect = price * BigUInt(policy.reserveBps) / BigUInt(MomentsConstants.bps)
                     let collects = reservePerCollect > 0 ? (policy.threshold + reservePerCollect - 1) / reservePerCollect : 0
                     let fdv = MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps ?? maxAllocBps)
-                    Text("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdc(policy.threshold)) reserve, and the coin graduates at a \(MomentsFormat.fdv(fdv)) FDV. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
+                    Text("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdcCents(policy.threshold)) reserve, and the coin graduates at a \(MomentsFormat.fdv(fdv)) FDV. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
                 } else if policy == nil {
                     Text("Loading the current policy…")
                 }
@@ -353,7 +354,7 @@ struct CreateMomentView: View {
                 let creatorCoins = MomentsConstants.supply * BigUInt(allocBps) / BigUInt(MomentsConstants.bps)
                 DetailRows {
                     DetailRow("Collect price", MomentsFormat.usdc(price))
-                    DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps))) FDV")
+                    DetailRow("Graduates at", "\(MomentsFormat.usdcCents(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps))) FDV")
                     DetailRow("Each collect", "\(NumberStyle.basisPoints(policy.reserveBps)) reserve · \(NumberStyle.basisPoints(policy.creatorBps)) you · \(NumberStyle.basisPoints(policy.platformBps)) DyorHQ")
                     DetailRow("Your coins", "\(MomentsFormat.coins(creatorCoins)) (\(NumberStyle.basisPoints(allocBps)))")
                     DetailRow("Collectors + pool", "\(MomentsFormat.coins(MomentsConstants.supply - creatorCoins)) at one price")

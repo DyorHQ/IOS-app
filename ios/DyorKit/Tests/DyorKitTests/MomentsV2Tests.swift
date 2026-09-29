@@ -267,4 +267,25 @@ final class MomentsV2Tests: XCTestCase {
         let v1 = try XCTUnwrap(v1Read)
         XCTAssertNil(v1.lapsesAt, "a v1 proposal never lapses")
     }
+
+    // MARK: The Moment page
+
+    /// Cohort 4's threshold is 771.428571 USDC, which the page printed in full ("US$771.428571", "Still needed
+    /// US$760.178571"). The reserve, the threshold and what is still needed are rounded to the cent
+    /// (`MomentsFormat.usdcCents`); what a collect pays, and a queued change of the threshold, stay exact
+    /// (`MomentsFormat.usdc`).
+    func testTheReserveRowsRoundToTheCentAndACollectStaysExact() throws {
+        XCTAssertEqual(V2Fixture.policy(termsHash: nil).threshold, 771_428_571)
+        let detail = try DocsLinksTests.appSource("Moments/MomentDetailView.swift")
+        XCTAssertTrue(detail.contains(#"LabeledContent("Reserve", value: "\(MomentsFormat.usdcCents(info.ledger.reserve)) of \(MomentsFormat.usdcCents(m.threshold))")"#))
+        XCTAssertTrue(detail.contains(#"LabeledContent("Still needed", value: "\(MomentsFormat.usdcCents(info.reserveRemaining)) · about"#))
+        for unrounded in ["MomentsFormat.usdc(m.threshold)", "MomentsFormat.usdc(info.reserveRemaining)", "MomentsFormat.usdc(info.ledger.reserve)"] {
+            XCTAssertFalse(detail.contains(unrounded), unrounded)
+        }
+        XCTAssertTrue(detail.contains(#"LabeledContent("You pay") { Text(MomentsFormat.usdc(quote.gross))"#))
+        XCTAssertTrue(detail.contains(#"DetailRow("You pay", MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))"#))
+        let create = try DocsLinksTests.appSource("Moments/CreateMomentView.swift")
+        XCTAssertEqual(create.components(separatedBy: "MomentsFormat.usdcCents(policy.threshold)").count - 1, 3, "Graduates at, twice, and the pricing footer")
+        XCTAssertTrue(create.contains(#"case .threshold: return "\(MomentsFormat.usdc(now.threshold)) → \(MomentsFormat.usdc(next.threshold))""#))
+    }
 }

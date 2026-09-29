@@ -108,9 +108,9 @@ struct MomentDetailView: View {
             }
             .gaugeStyle(.accessoryLinearCapacity)
             .tint(.brand)
-            LabeledContent("Reserve", value: "\(MomentsFormat.usdc(info.ledger.reserve)) of \(MomentsFormat.usdc(m.threshold))")
+            LabeledContent("Reserve", value: "\(MomentsFormat.usdcCents(info.ledger.reserve)) of \(MomentsFormat.usdcCents(m.threshold))")
             if info.state == .collecting, now < m.deadline {
-                LabeledContent("Still needed", value: "\(MomentsFormat.usdc(info.reserveRemaining)) · about \(info.collectsToGraduate) \(info.collectsToGraduate == 1 ? "collect" : "collects")")
+                LabeledContent("Still needed", value: "\(MomentsFormat.usdcCents(info.reserveRemaining)) · about \(info.collectsToGraduate) \(info.collectsToGraduate == 1 ? "collect" : "collects")")
                 LabeledContent("Window closes", value: MomentsFormat.date(m.deadline))
             }
         } footer: {
@@ -458,14 +458,14 @@ struct MomentDetailView: View {
             }
         case .retry:
             ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Retry", build: { await env.moments.retryGraduationPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Graduated $\(info.symbol)", subtitle: "\(MomentsFormat.usdc(info.ledger.reserve)) reserve into a locked pool", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
-                DetailRow("Reserve", MomentsFormat.usdc(info.ledger.reserve))
-                DetailRow("Pool", "\(MomentsFormat.usdc(info.ledger.reserve)) + coins, locked")
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Graduated $\(info.symbol)", subtitle: "\(MomentsFormat.usdcCents(info.ledger.reserve)) reserve into a locked pool", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
+                DetailRow("Reserve", MomentsFormat.usdcCents(info.ledger.reserve))
+                DetailRow("Pool", "\(MomentsFormat.usdcCents(info.ledger.reserve)) + coins, locked")
             }
         case .expire:
             ConfirmationSheet(title: "Expire Moment", confirmTitle: "Expire", build: { await env.moments.expirePlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Expired \(info.name)", subtitle: "\(MomentsFormat.usdc(info.ledger.reserve)) reserve wound down", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
-                DetailRow("Reserve", MomentsFormat.usdc(info.ledger.reserve))
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Expired \(info.name)", subtitle: "\(MomentsFormat.usdcCents(info.ledger.reserve)) reserve wound down", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
+                DetailRow("Reserve", MomentsFormat.usdcCents(info.ledger.reserve))
                 DetailRow("To creator", NumberStyle.basisPoints(m.expiryCreatorBps))
                 DetailRow("To treasury", NumberStyle.basisPoints(MomentsConstants.bps - m.expiryCreatorBps))
             }

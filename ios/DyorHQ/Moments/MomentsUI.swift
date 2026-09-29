@@ -256,9 +256,18 @@ struct MomentCard: View {
 
 /// Number formatting shared by the Moments screens.
 enum MomentsFormat {
-    /// USDC units as dollars, e.g. "$1.00".
+    /// USDC units as dollars with every decimal kept (up to 6), e.g. "$1.00", "$0.123456": for amounts that must be
+    /// exact, like what a collect pays and approves.
     static func usdc(_ units: BigUInt) -> String {
         MomentsMath.usdc(units).formatted(.currency(code: "USD").precision(.fractionLength(2...6)))
+    }
+
+    /// USDC units rounded to the cent, e.g. "$771.43": for the reserve, the graduation threshold and what is still needed,
+    /// which a policy can set to a sixth decimal (771.428571 USDC for cohort 4). Under a cent but not zero reads "<$0.01".
+    static func usdcCents(_ units: BigUInt) -> String {
+        let dollars = MomentsMath.usdc(units)
+        if units > 0, dollars < 0.005 { return "<" + 0.01.formatted(.currency(code: "USD")) }
+        return dollars.formatted(.currency(code: "USD").precision(.fractionLength(2)))
     }
 
     /// Whole coins, compact, e.g. "3.86M".
