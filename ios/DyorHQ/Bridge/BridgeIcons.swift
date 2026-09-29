@@ -84,6 +84,8 @@ struct ChainBadge: View {
         .frame(width: size, height: size)
         .background(chain.brandColor.opacity(0.18))
         .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.logoRing, lineWidth: 0.5))
+        .accessibilityIgnoresInvertColors()
         .accessibilityHidden(true)
     }
 
@@ -114,6 +116,7 @@ struct ChainDot: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        .accessibilityIgnoresInvertColors() // like the TokenLogo it sits on in AssetGlyph
         .accessibilityHidden(true)
     }
 }

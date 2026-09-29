@@ -226,6 +226,15 @@ extension Color {
         self = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(dark) : UIColor(light) })
     }
 
+    /// The hairline around every coin logo: it edges a white logo (WBTC, cbBTC, WETH) on a light card and a near-black
+    /// one (HYPE, USDe, LBTC) on a dark card, and is stronger under Increase Contrast. It resolves through the traits,
+    /// so it follows the in-app appearance too.
+    static let logoRing = Color(uiColor: UIColor { traits in
+        let strong = traits.accessibilityContrast == .high
+        return traits.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: strong ? 0.28 : 0.12)
+                                                  : UIColor(white: 0, alpha: strong ? 0.22 : 0.08)
+    })
+
     // Allocation ring hues — three restrained, distinguishable tones that hold up on paper and ink grounds.
     // They are identity, not status: never reused for up/down, which stay Positive/Negative.
     static let allocationSpot = Color(light: Color(red: 0.12, green: 0.51, blue: 0.60), dark: Color(red: 0.42, green: 0.79, blue: 0.86))

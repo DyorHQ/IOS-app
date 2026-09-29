@@ -16,17 +16,22 @@ struct TokenLogo: View {
     var body: some View {
         Group {
             // Curated tokens ship a rasterized logo (the token list only publishes SVGs, which the app cannot
-            // draw); anything else tries the remote image (capped and downsampled, RemoteImage) and falls back to a
-            // monogram.
+            // draw): a transparent disc that fills the square (TokenLogoAssetTests). Anything else tries the remote
+            // image (capped and downsampled, RemoteImage): a neutral disc while it loads, the monogram only when there
+            // is no image or it fails.
             if bundled, let shipped = UIImage(named: "logo-\(symbol)") {
                 Image(uiImage: shipped).resizable().scaledToFit()
             } else {
-                RemoteImage(url: url, pointSize: size, contentMode: .fit) { _ in monogram }
+                RemoteImage(url: url, pointSize: size, contentMode: .fit) { loading in
+                    if loading { Color.clear } else { monogram }
+                }
             }
         }
         .frame(width: size, height: size)
         .background(Color(.tertiarySystemFill))
         .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.logoRing, lineWidth: 0.5))
+        .accessibilityIgnoresInvertColors()
         .accessibilityHidden(true)
     }
 
@@ -77,6 +82,7 @@ struct Avatar: View {
         .frame(width: size, height: size)
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(Color(.separator).opacity(0.6), lineWidth: 0.5))
+        .accessibilityIgnoresInvertColors()
         .accessibilityHidden(true)
     }
 
