@@ -440,7 +440,9 @@ struct SendSheet: View {
                     DetailRow("To", review.to.checksummed, spellsOut: true) // in full: this review is the last check before funds leave
                     if review.toContract { DetailRow("Recipient", "A contract, not a wallet", tint: .attention) }
                     DetailRow("Amount", "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol)")
-                    if !review.token.isNative { DetailRow("Token contract", review.token.address.short, spellsOut: true) }
+                    // In full, like the recipient: a look-alike's contract can be made to match a short form.
+                    if !review.token.isNative { DetailRow("Token contract", review.token.address.checksummed, spellsOut: true) }
+                    if let listed = review.imitates { DetailRow("Token", "Not the \(listed.symbol) DyorHQ lists", tint: .attention) }
                     if review.unverified { DetailRow("Token", "Unverified: sent to you, not chosen here", tint: .attention) }
                     DetailRow("Network", "Monad")
                 }
@@ -580,6 +582,8 @@ private struct SendReview: Identifiable {
     /// The token reached the wallet without being chosen here (`HeldToken.unverified`), as the list marked it when it
     /// was picked.
     var unverified = false
+    /// The curated token this one carries the name of (`HeldToken.imitates`).
+    var imitates: Token?
 
     init(asset: HeldToken, to: Address, amount: BigUInt, toContract: Bool = false) {
         token = asset.token
@@ -587,6 +591,7 @@ private struct SendReview: Identifiable {
         self.amount = amount
         self.toContract = toContract
         unverified = asset.unverified
+        imitates = asset.imitates
     }
 
     func request() throws -> TransactionRequest { try TokenTransfer.request(token, to: to, amount: amount) }
@@ -633,6 +638,8 @@ private struct SendAssetPicker: View {
                     Text("No token in this wallet matches.")
                 } else if shown.contains(where: \.unverified) {
                     Text("Unverified tokens arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you send.")
+                } else if shown.contains(where: { $0.imitates != nil }) {
+                    Text("Some tokens here carry the name of a token DyorHQ lists but are other contracts. Check the contract before you send.")
                 }
             }
         }
@@ -643,22 +650,23 @@ private struct SendAssetPicker: View {
     }
 }
 
-/// One held token: logo, symbol (marked when Unverified), name, balance and dollar value — or "No price".
+/// One held token: logo, symbol (marked when Unverified), name, balance and dollar value — or "No price". A token that
+/// could pass for another — Unverified, or carrying a listed token's name — also shows its contract.
 private struct SendAssetRow: View {
     let asset: HeldToken
 
     var body: some View {
         HStack(spacing: 12) {
-            // A shipped logo only for the curated token itself: a look-alike "USDC" gets its own image or a monogram.
-            TokenLogo(symbol: asset.token.symbol, url: asset.token.logoURL, size: 32, bundled: Token.core(asset.token.address) != nil)
+            // A shipped logo only for the curated token itself, and no image at all for one carrying a listed token's name
+            // (its own could be the real one's artwork): a monogram.
+            TokenLogo(symbol: asset.token.symbol, url: asset.imitates == nil ? asset.token.logoURL : nil, size: 32, bundled: Token.core(asset.token.address) != nil)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(asset.token.symbol).font(.headline).lineLimit(1)
                     if asset.unverified { UnverifiedBadge() }
                 }
-                // An Unverified token also shows its contract, so a look-alike's name is never all there is to go on.
-                Text(asset.unverified ? "\(asset.token.name) · \(asset.token.address.short)" : asset.token.name)
-                    .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                // So a look-alike's name is never all there is to go on.
+                Text(subtitle).font(.footnote).foregroundStyle(asset.imitates == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.attention)).lineLimit(1)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
@@ -668,6 +676,11 @@ private struct SendAssetRow: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+
+    private var subtitle: String {
+        if let listed = asset.imitates { return "Not the \(listed.symbol) DyorHQ lists · \(asset.token.address.short)" }
+        return asset.unverified ? "\(asset.token.name) · \(asset.token.address.short)" : asset.token.name
     }
 
     private var valueText: String {

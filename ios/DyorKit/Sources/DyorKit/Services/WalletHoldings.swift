@@ -21,6 +21,9 @@ public struct HeldToken: Hashable, Sendable, Identifiable {
     }
 
     public var id: Address { token.address }
+    /// The curated token this one could pass for, by its symbol or name (`WalletHoldings.imitated(by:)`); nil for the
+    /// curated tokens and anything named otherwise.
+    public var imitates: Token? { WalletHoldings.imitated(by: token) }
     /// Whole tokens held.
     public var units: Double { Amount.units(balance, decimals: token.decimals) }
     /// Dollar value: nil when the price is unknown, never $0 in its place.
@@ -78,12 +81,13 @@ public enum WalletHoldings {
     }
 
     /// The asset a send starts on: the highest-ranked one the user chose. Never an Unverified token — a fake "USDC"
-    /// with a seeded pool can outrank everything — so when every held token is Unverified, or nothing is held, there is
-    /// none and the user picks. None either when the prices couldn't be read (`pricesRead` false): the ranking is then
+    /// with a seeded pool can outrank everything — nor one carrying a curated token's name (`imitates`), even one the
+    /// user tapped in Swap: it may be a look-alike, and a send must never start on it unasked. So when every held token
+    /// is one of those, or nothing is held, there is none and the user picks. None either when the prices couldn't be read (`pricesRead` false): the ranking is then
     /// by amount, not value, and the token with the most units is not the one worth the most.
     public static func defaultChoice(_ ranked: [HeldToken], pricesRead: Bool = true) -> HeldToken? {
         guard pricesRead else { return nil }
-        return ranked.first { !$0.unverified }
+        return ranked.first { !$0.unverified && $0.imitates == nil }
     }
 
     /// After the list is read: with nothing chosen yet, the default choice; with a choice, that token while the wallet
@@ -129,6 +133,20 @@ public enum WalletHoldings {
     /// so no look-alike passes for one; a coin that was only sent to the wallet stays Unverified.
     public static func unverified(_ unverified: Set<Address>, owner: Address, launches: [Address: Launch], staked: Set<Address>) -> Set<Address> {
         unverified.subtracting(launches.filter { $0.value.deployer == owner }.keys).subtracting(staked)
+    }
+
+    /// The curated token `token` could pass for: `token` is not curated, yet its symbol or name is a curated token's
+    /// symbol or name, ignoring case, accents, width and spaces — a second "USDC", a "Monad" that isn't MON. Being
+    /// chosen proves nothing here: tapping a search result in Swap stores a token as chosen. Nil for MON, the curated
+    /// tokens and every other name.
+    public static func imitated(by token: Token) -> Token? {
+        guard !token.isNative, Token.core(token.address) == nil else { return nil }
+        let names = [folded(token.symbol), folded(token.name)].filter { !$0.isEmpty }
+        return Token.core.first { curated in names.contains(folded(curated.symbol)) || names.contains(folded(curated.name)) }
+    }
+
+    static func folded(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil).filter { !$0.isWhitespace }
     }
 
     /// The curated dollar stables, by contract address. A token is one of them only by its address: anyone can deploy a

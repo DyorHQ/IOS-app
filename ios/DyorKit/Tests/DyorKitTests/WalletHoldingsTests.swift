@@ -113,6 +113,30 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertFalse(WalletHoldings.dollarStables.contains(fakeUSDC.address))
     }
 
+    /// A token the user chose (tapped in Swap, or swapped into) that carries a curated token's symbol or name is marked and
+    /// never the default, even when it is worth the most: a second "USDC" can be a look-alike.
+    func testALookAlikeOfACuratedTokenIsMarkedAndNeverTheDefault() {
+        XCTAssertEqual(WalletHoldings.imitated(by: fakeUSDC), .usdc)
+        XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: " usdc ", name: "Something", decimals: 6)), .usdc, "case and spaces")
+        XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "ＵＳＤＣ", name: "Wide", decimals: 6)), .usdc, "full-width letters")
+        XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "MONAD", name: "Monad", decimals: 18)), .mon, "MON's name")
+        XCTAssertNil(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "USDC.e", name: "USD Coin", decimals: 6)), "a different name is its own")
+        XCTAssertNil(WalletHoldings.imitated(by: .usdc))
+        XCTAssertNil(WalletHoldings.imitated(by: .mon))
+        XCTAssertNil(WalletHoldings.imitated(by: meme))
+
+        // Both "USDC"s chosen; the look-alike's seeded pool makes it worth the most.
+        let ranked = WalletHoldings.ranked([Token.mon, Token.usdc, fakeUSDC], balances: [Monad.native: units(10, .mon), Monad.usdc: units(20, .usdc), fakeUSDC.address: units(1_000_000, fakeUSDC)],
+                                           prices: [Monad.native: 0.03, Monad.usdc: 1, fakeUSDC.address: 1], unverified: [])
+        XCTAssertEqual(ranked.first?.id, fakeUSDC.address, "listed by its value…")
+        XCTAssertEqual(ranked.first?.imitates, .usdc, "…and marked")
+        XCTAssertNil(ranked.first { $0.id == Monad.usdc }?.imitates)
+        XCTAssertEqual(WalletHoldings.defaultChoice(ranked)?.id, Monad.usdc, "a send starts on the curated USDC")
+        let onlyLookAlike = WalletHoldings.ranked([fakeUSDC], balances: [fakeUSDC.address: 1], prices: [:], unverified: [])
+        XCTAssertNil(WalletHoldings.defaultChoice(onlyLookAlike), "the user picks it themselves")
+        XCTAssertEqual(WalletHoldings.selection(keeping: fakeUSDC.address, in: onlyLookAlike)?.id, fakeUSDC.address, "and keeps their pick")
+    }
+
     func testDefaultChoiceSkipsUnverifiedAndIsNoneWhenNothingIsChosen() {
         let onlySent = WalletHoldings.ranked([spam, fakeUSDC], balances: [spam.address: 1, fakeUSDC.address: 1], prices: [:], unverified: [spam.address, fakeUSDC.address])
         XCTAssertEqual(onlySent.count, 2, "still listed")
@@ -196,6 +220,11 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(send.contains("guard case .loaded = assets, choice != nil else { return false }"))
         XCTAssertTrue(send.contains("review = SendReview(asset: choice,"))
         XCTAssertTrue(send.contains("unverified = asset.unverified"))
+        // A look-alike shows its contract and mark in the list, and the review spells out every token contract.
+        XCTAssertTrue(send.contains("imitates = asset.imitates"))
+        XCTAssertTrue(send.contains("if let listed = asset.imitates { return \"Not the \\(listed.symbol) DyorHQ lists · \\(asset.token.address.short)\" }"))
+        XCTAssertTrue(send.contains("DetailRow(\"Token contract\", review.token.address.checksummed, spellsOut: true)"))
+        XCTAssertTrue(send.contains("if let listed = review.imitates { DetailRow(\"Token\", \"Not the \\(listed.symbol) DyorHQ lists\", tint: .attention) }"))
         XCTAssertTrue(assets.contains("WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes)"), "the Portfolio keeps its order")
         // Both lists value DyorHQ's own coins the app's way.
         let tokens = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
