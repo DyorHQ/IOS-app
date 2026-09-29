@@ -244,7 +244,7 @@ struct HomeView: View {
                     ForEach(Array(tokens.prefix(6).enumerated()), id: \.element.id) { index, row in
                         NavigationLink(value: row) { TokenListRow(rank: index + 1, row: row) }
                             .buttonStyle(.plain)
-                        if index < min(5, tokens.count - 1) { Divider().padding(.leading, 44) }
+                        if index < min(5, tokens.count - 1) { Divider().padding(.leading, 74) } // under the text: rank 16 + 12 + logo 34 + 12
                     }
                 }
             }
@@ -421,7 +421,7 @@ private struct TokenListRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Text("\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: 16, alignment: .center)
-            TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: 32)
+            TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: 34)
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.token.symbol).font(.subheadline.weight(.semibold))
                 Text(row.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
