@@ -68,6 +68,9 @@ public struct Address: Hashable, Sendable, Codable, CustomStringConvertible {
     private static let invisible: Set<UInt32> = Set([0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x180E, 0x3164, 0xFEFF]
         + Array(0x200B...0x200F) + Array(0x202A...0x202E) + Array(0x2060...0x2064) + Array(0x2066...0x2069))
 
+    /// Whether `scalar` is one of the invisible characters `cleanedInput` removes.
+    static func isInvisible(_ scalar: Unicode.Scalar) -> Bool { invisible.contains(scalar.value) }
+
     /// What is wrong with recipient text (after `cleanedInput`), in words a person can act on; nil when it is a valid
     /// address with a correct checksum, or empty (nothing to say yet).
     public static func inputProblem(_ text: String) -> String? {

@@ -9,14 +9,17 @@ struct TokenLogo: View {
     let symbol: String
     let url: URL?
     var size: CGFloat = 36
+    /// Whether a logo shipped for `symbol` may stand for this token: false for a token that merely carries a curated
+    /// symbol (a "USDC" sent to the wallet), which must never wear the real one's logo.
+    var bundled = true
 
     var body: some View {
         Group {
             // Curated tokens ship a rasterized logo (the token list only publishes SVGs, which the app cannot
             // draw); anything else tries the remote image (capped and downsampled, RemoteImage) and falls back to a
             // monogram.
-            if let bundled = UIImage(named: "logo-\(symbol)") {
-                Image(uiImage: bundled).resizable().scaledToFit()
+            if bundled, let shipped = UIImage(named: "logo-\(symbol)") {
+                Image(uiImage: shipped).resizable().scaledToFit()
             } else {
                 RemoteImage(url: url, pointSize: size, contentMode: .fit) { _ in monogram }
             }

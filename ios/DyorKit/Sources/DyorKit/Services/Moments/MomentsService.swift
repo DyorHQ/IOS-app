@@ -142,6 +142,20 @@ public actor MomentsService {
         return try await hydrate([MomentsABI.moment(id: id, values[0], factory: addresses.factory)]).first
     }
 
+    /// Fresh `MomentInfo`s for many ids at once: one read of their Moments, then one hydration of them all, in `ids`
+    /// order. An id whose Moment couldn't be read (out of range) is left out; throws when a read fails as a whole.
+    public func infos(ids: [BigUInt]) async throws -> [MomentInfo] {
+        var seen = Set<BigUInt>()
+        let ids = ids.filter { $0 > 0 && seen.insert($0).inserted }
+        guard isDeployed, !ids.isEmpty else { return [] }
+        let raws = try await multicall.read(ids.map { MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint($0)], returns: MomentsABI.momentTuple) })
+        var moments: [Moment] = []
+        for (id, raw) in zip(ids, raws) {
+            if case .success(let values) = raw, let tuple = values.first { moments.append(MomentsABI.moment(id: id, tuple, factory: addresses.factory)) }
+        }
+        return try await hydrate(moments)
+    }
+
     /// The Moment id of a coin, 0 when the address is not a Moment coin.
     public func momentId(coin: Address) async throws -> BigUInt {
         guard isDeployed else { return 0 }
@@ -461,15 +475,16 @@ public actor MomentsService {
             let key = record.key
             let usdcIs0 = key.currency0 == addresses.usdc
             var sqrtPrice = record.sqrtPriceX96
+            var liveRead = false
             if let priceReads, case .success(let values) = priceReads[i] {
                 let live = BigUInt(values[0].bytes) & ((BigUInt(1) << 160) - 1)
-                if live > 0 { sqrtPrice = live }
+                if live > 0 { sqrtPrice = live; liveRead = true }
             }
             out[id] = MomentPool(
                 key: key, poolId: key.id, usdcIs0: usdcIs0, sqrtPriceX96: sqrtPrice, openingSqrtPriceX96: record.sqrtPriceX96, liquidity: liquidity, seedLiquidity: record.liquidity,
                 reserveSeed: record.reserve, poolCoins: record.poolCoins, graduatedAt: record.at, usdcPerCoin: MomentsMath.usdcPerCoin(sqrtPriceX96: sqrtPrice, usdcIs0: usdcIs0),
                 creatorFees: creator, platformFees: platform, buybackFees: buyback, buybackCarry: carry, lastBuyback: lastRun, buybackInterval: interval, buybackMin: minAmount,
-                heldForLaterRounds: held
+                heldForLaterRounds: held, livePriceRead: liveRead
             )
         }
         return out

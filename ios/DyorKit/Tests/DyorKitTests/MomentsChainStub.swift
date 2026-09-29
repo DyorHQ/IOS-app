@@ -21,6 +21,10 @@ final class MomentsChainStub: URLProtocol {
     nonisolated(unsafe) private static var chainLogs: [Log] = []
     nonisolated(unsafe) private static var receipts: [Data: [Log]] = [:]
     nonisolated(unsafe) private static var filters: [LogQuery] = []
+    nonisolated(unsafe) private static var refused: Set<String> = []
+    nonisolated(unsafe) private static var breaking: Set<Address> = []
+    nonisolated(unsafe) private static var breakingSelectors: Set<Data> = []
+    nonisolated(unsafe) private static var nativeBalances: [Address: BigUInt] = [:]
 
     struct Call: Hashable, CustomStringConvertible {
         let to: Address
@@ -34,13 +38,23 @@ final class MomentsChainStub: URLProtocol {
         let topics: [Data?]
     }
 
-    static func install(_ answer: @escaping Answer, logs: [Log] = [], receipts: [Data: [Log]] = [:]) {
+    /// `refusing`: JSON-RPC methods the node answers with an error (not a throttle, so nothing retries), as a node that
+    /// can't serve them. `breaking`: contracts that make any `eth_call` reaching them fail as a whole, out of gas — as a
+    /// token whose return bomb exhausts a Multicall3 aggregate does, taking every other call in it down too.
+    /// `breakingSelectors` do the same for any call with one of those selectors, whatever it reaches. `native`: what
+    /// `eth_getBalance` answers for each account (any other account reverts).
+    static func install(_ answer: @escaping Answer, logs: [Log] = [], receipts: [Data: [Log]] = [:], refusing: Set<String> = [], breaking: Set<Address> = [],
+                        breakingSelectors: Set<Data> = [], native: [Address: BigUInt] = [:]) {
         lock.lock(); defer { lock.unlock() }
         self.answer = answer
         asked = []
         chainLogs = logs
         self.receipts = receipts
         filters = []
+        refused = refusing
+        self.breaking = breaking
+        self.breakingSelectors = breakingSelectors
+        nativeBalances = native
     }
 
     /// Every `eth_getLogs` filter asked, in order.
@@ -82,6 +96,10 @@ final class MomentsChainStub: URLProtocol {
         func result(_ data: Data) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": .string(data.hexString)]) }
         func json(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
         let reverted: JSON = .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(3), "message": .string("execution reverted"), "data": .string("0x")])])
+        lock.lock(); let refusedMethods = refused; lock.unlock()
+        if let method = call["method"].string, refusedMethods.contains(method) {
+            return .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(-32000), "message": .string("header not found")])])
+        }
         switch call["method"].string {
         case "eth_getBlockByNumber":
             return json(.object(["number": .string(BigUInt(head.number).hexQuantity), "timestamp": .string(BigUInt(head.timestamp).hexQuantity)]))
@@ -97,6 +115,9 @@ final class MomentsChainStub: URLProtocol {
                     && query.topics.enumerated().allSatisfy { i, topic in topic == nil || (log.topics.indices.contains(i) && log.topics[i] == topic) }
             }
             return json(.array(matching.map(Self.json)))
+        case "eth_getBalance":
+            lock.lock(); let balance = call["params"][0].string.flatMap(Address.init).flatMap { nativeBalances[$0] }; lock.unlock()
+            if let balance { return json(.string(balance.hexQuantity)) }
         case "eth_getTransactionReceipt":
             lock.lock(); let receipt = call["params"][0].string.flatMap { Data(hex: $0) }.flatMap { receipts[$0] }; lock.unlock()
             return json(receipt.map { .object(["status": .string("0x1"), "logs": .array($0.map(Self.json))]) } ?? .null)
@@ -105,7 +126,8 @@ final class MomentsChainStub: URLProtocol {
         }
         guard call["method"].string == "eth_call", let tx = call["params"].array?.first,
               let to = tx["to"].string.flatMap(Address.init), let data = tx["data"].string.flatMap({ Data(hex: $0) }) else { return reverted }
-        lock.lock(); let answer = self.answer; lock.unlock()
+        lock.lock(); let answer = self.answer; let breaking = self.breaking; let breakingSelectors = self.breakingSelectors; lock.unlock()
+        let outOfGas: JSON = .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(-32000), "message": .string("out of gas")])])
         if to == Multicall.address, let inner = try? ABI.decode(data.dropFirst(4), "(address,bool,bytes)[]")[0].elements {
             var batch: [Call] = []
             var out: [ABIValue] = []
@@ -116,8 +138,10 @@ final class MomentsChainStub: URLProtocol {
                 out.append(.tuple([.bool(returned != nil), .bytes(returned ?? Data())]))
             }
             record(batch)
+            if batch.contains(where: { breaking.contains($0.to) || breakingSelectors.contains(Data(hex: $0.selector) ?? Data()) }) { return outOfGas }
             return result((try? ABI.encode([.array(out)], "(bool,bytes)[]")) ?? Data())
         }
+        if breaking.contains(to) || breakingSelectors.contains(Data(data.prefix(4))) { return outOfGas }
         record([Call(to: to, selector: data.prefix(4).hexString)])
         return answer(to, data).map(result) ?? reverted
     }

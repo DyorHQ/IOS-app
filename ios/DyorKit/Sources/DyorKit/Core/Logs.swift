@@ -146,11 +146,18 @@ public extension RPCClient {
     /// sending `concurrency` ranges per round trip. A range that fails leaves a gap rather than failing the whole
     /// window, exactly as the web app's `chunkedLogs` does; the caller gets everything that could be read.
     func chunkedLogs(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6) async -> [Log] {
+        await chunkedLogsReport(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock, chunkSize: chunkSize, concurrency: concurrency).logs
+    }
+
+    /// `chunkedLogs`, saying whether the whole window was read: `complete` is false when a range was still refused at
+    /// the smallest size (a gap) or the scan was cancelled part-way, so a caller can tell "nothing there" from "couldn't
+    /// read it".
+    func chunkedLogsReport(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6) async -> (logs: [Log], complete: Bool) {
         // A local Anvil fork only holds logs from its fork block on (older ranges are forwarded upstream, where the
         // default RPC caps them at 100 blocks), so a development build scans the fork's own blocks only.
         var fromBlock = fromBlock
         if isLocal, let forkBlock = await localForkBlock() { fromBlock = max(fromBlock, forkBlock) }
-        guard fromBlock <= toBlock else { return [] }
+        guard fromBlock <= toBlock else { return ([], true) }
         let chunk = max(1, chunkSize ?? logChunkSize)
         var ranges: [LogFilter] = []
         var start = fromBlock
@@ -165,12 +172,13 @@ public extension RPCClient {
         // window first and fall back to ranges only when the endpoint refuses it.
         if ranges.count > 1, chunk >= 100_000, topics.dropFirst().contains(where: { $0 != nil }) {
             for attempt in 0..<3 {
-                if let whole = try? await logs(LogFilter(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock)) { return whole }
-                if Task.isCancelled { return [] }
+                if let whole = try? await logs(LogFilter(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock)) { return (whole, true) }
+                if Task.isCancelled { return ([], false) }
                 try? await Task.sleep(for: .milliseconds(400 * (attempt + 1)))
             }
         }
         var out: [Log] = []
+        var complete = true
         var next = 0
         while next < ranges.count, !Task.isCancelled {
             let slice = Array(ranges[next..<min(next + max(1, concurrency), ranges.count)])
@@ -179,36 +187,48 @@ public extension RPCClient {
                 for (filter, result) in zip(slice, results) {
                     switch result {
                     case .success(let logs): out.append(contentsOf: logs)
-                    case .failure: out.append(contentsOf: await narrowedLogs(filter))
+                    case .failure:
+                        let narrowed = await narrowedLogs(filter)
+                        out.append(contentsOf: narrowed.logs)
+                        complete = complete && narrowed.complete
                     }
                 }
             } else {
-                for filter in slice { out.append(contentsOf: await narrowedLogs(filter)) }
+                for filter in slice {
+                    let narrowed = await narrowedLogs(filter)
+                    out.append(contentsOf: narrowed.logs)
+                    complete = complete && narrowed.complete
+                }
             }
         }
-        return out
+        return (out, complete && next == ranges.count)
     }
 
     /// A range the endpoint refused, retried in halves down to 100 blocks (the cap of the default Monad RPC).
-    /// Anything still refused at that size is skipped; a local node stops narrowing at 5 000 blocks.
-    private func narrowedLogs(_ filter: LogFilter) async -> [Log] {
+    /// Anything still refused at that size is skipped, and the range is reported incomplete; a local node stops
+    /// narrowing at 5 000 blocks.
+    private func narrowedLogs(_ filter: LogFilter) async -> (logs: [Log], complete: Bool) {
         let span = filter.toBlock >= filter.fromBlock ? filter.toBlock - filter.fromBlock + 1 : 0
         let floor: UInt64 = isLocal ? 5_000 : 100
         guard span > floor, !Task.isCancelled else {
-            return (try? await logs(filter)) ?? []
+            if let found = try? await logs(filter) { return (found, true) }
+            return ([], false)
         }
         let mid = filter.fromBlock + span / 2
         let first = LogFilter(address: filter.address, topics: filter.topics, fromBlock: filter.fromBlock, toBlock: mid - 1)
         let second = LogFilter(address: filter.address, topics: filter.topics, fromBlock: mid, toBlock: filter.toBlock)
         var out: [Log] = []
+        var complete = true
         for half in [first, second] {
             if let results = try? await logs([half]), case .success(let logs)? = results.first {
                 out.append(contentsOf: logs)
             } else {
-                out.append(contentsOf: await narrowedLogs(half))
+                let narrowed = await narrowedLogs(half)
+                out.append(contentsOf: narrowed.logs)
+                complete = complete && narrowed.complete
             }
         }
-        return out
+        return (out, complete)
     }
 
     /// Block number and timestamp, for anchoring event times without one `eth_getBlockByNumber` per log.

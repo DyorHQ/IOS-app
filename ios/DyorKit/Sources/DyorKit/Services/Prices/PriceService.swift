@@ -103,6 +103,14 @@ public actor PriceService {
         return map
     }
 
+    /// The prices `prices(for:)` gives without reading the chain: USDC and AUSD at $1, by definition. What a list can
+    /// still show when the price read fails, exactly as a read that worked would show it.
+    public static func definedPrices(for tokens: [Token]) -> [Address: PriceInfo] {
+        var map: [Address: PriceInfo] = [:]
+        for token in tokens where isUSD(token) { map[token.address] = PriceInfo(usd: 1, change24h: 0, source: "USDC") }
+        return map
+    }
+
     /// Samples the token's pool at `points` evenly spaced blocks over `span`, ending at the latest block, in one
     /// batched JSON-RPC request. Samples the node cannot serve are dropped, so fewer than `points` may come back.
     public func history(for token: Token, points: Int = 48, span: TimeInterval = 86_400) async throws -> [PricePoint] {

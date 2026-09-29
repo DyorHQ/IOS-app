@@ -7,13 +7,8 @@ import SwiftUI
 @Observable
 @MainActor
 final class AssetsModel {
-    struct TokenAsset: Identifiable, Hashable {
-        let token: Token
-        let balance: BigUInt
-        let usd: Double?
-        var id: Address { token.address }
-        var value: Double? { usd.map { Amount.units(balance, decimals: token.decimals) * $0 } }
-    }
+    /// A held token, valued (`HeldToken`): the Send sheet lists the same ones (`WalletTokens`), in its own order.
+    typealias TokenAsset = HeldToken
 
     private(set) var tokens: [TokenAsset] = []
     /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12).
@@ -34,6 +29,9 @@ final class AssetsModel {
     /// gets a Swap row; a failed check keeps the coins already known, and the rest open Swap, whose "no venue" state
     /// checks again and points to the Launch page.
     private(set) var curve: CurveHoldings = .none
+    /// Prices couldn't all be read (`WalletTokens.Ranked.pricesFailed`): some tokens are unpriced, so the holdings total
+    /// would be a part passed off as the whole. It isn't shown, and the card says why.
+    private(set) var pricesFailed = false
     private(set) var loading = false
     private(set) var loadedFor: Address?
 
@@ -49,23 +47,29 @@ final class AssetsModel {
         async let momentsTask = env.moments.moments(limit: 200)
         async let retiredTask = PastMomentsModel.allMoments(env: env)
 
-        var universe = KnownTokenStore.universe(owner: address)
-        let known = Set(universe.map(\.address))
-        let discovered = await env.walletDiscovery.heldTokens(wallet: address, known: known, wholeHistory: true)
-        universe += discovered
-        unverified = KnownTokenStore.unverified(owner: address).union(discovered.map(\.address))
-        let balances = (try? await ERC20.balances(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
-        let held = universe.filter { (balances[$0.address] ?? 0) > 0 }
-        async let curveTask = try? env.launchpad.curveHoldings(held)
-        let prices = (try? await env.prices.prices(for: held)) ?? [:]
+        // The token part is the Send sheet's too (`WalletTokens`). Balances that couldn't be read list nothing, as before.
+        let read = try? await WalletTokens.read(env: env, address: address)
+        var ranked: [TokenAsset] = []
+        var found: CurveHoldings?
+        var failed = false
+        // The Portfolio keeps the order it has always had; the Send sheet ranks the same tokens its own way. The coins on a
+        // curve come from the same read that valued them: the launchpads are asked once.
+        if let read {
+            let result = await WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes)
+            ranked = result.tokens
+            found = result.curve
+            failed = result.pricesFailed
+        }
+        // As the list marks them: the DyorHQ coins the wallet launched or collected are its own, not Unverified.
+        unverified = read == nil ? KnownTokenStore.unverified(owner: address) : Set(ranked.filter(\.unverified).map(\.id))
         // Known before the token list shows, so a retired Moment coin or a coin on a curve is never offered a swap in between.
         for info in await retiredTask {
             retiredByCoin[info.moment.coin] = info
             retiredByNFT[info.moment.nft] = info
         }
-        if let found = await curveTask { curve = found }
-        tokens = held.map { TokenAsset(token: $0, balance: balances[$0.address] ?? 0, usd: prices[$0.address]?.usd) }
-            .sorted { ($0.value ?? 0, Amount.units($0.balance, decimals: $0.token.decimals)) > ($1.value ?? 0, Amount.units($1.balance, decimals: $1.token.decimals)) }
+        if let found { curve = found }
+        pricesFailed = failed
+        tokens = ranked
 
         let moments = (try? await momentsTask) ?? []
         momentsByNFT = Dictionary(moments.map { ($0.moment.nft, $0) }, uniquingKeysWith: { first, _ in first })
@@ -99,7 +103,7 @@ struct AssetsCard: View {
                 Text("My Holdings").font(.headline)
                 Spacer()
                 if model.loading { ProgressView().controlSize(.mini) }
-                else if kind == .assets, model.totalValue > 0 { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
+                else if kind == .assets, !model.pricesFailed, model.totalValue > 0 { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
                 else if kind == .nfts, !model.nfts.isEmpty { Text("\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
 
@@ -108,6 +112,10 @@ struct AssetsCard: View {
             }
             .pickerStyle(.segmented)
 
+            if kind == .assets, model.pricesFailed, !model.loading, !model.tokens.isEmpty {
+                Text("Some prices couldn't be read, so values are missing and no total is shown. Pull down to try again.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             if kind == .assets, model.tokens.isEmpty {
                 Text(model.loading ? "Reading the wallet…" : "No tokens in this wallet yet.").font(.subheadline).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)

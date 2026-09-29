@@ -521,8 +521,12 @@ public struct MomentPool: Sendable, Hashable {
     public let reserveSeed: BigUInt
     public let poolCoins: BigUInt
     public let graduatedAt: Int
-    /// Whole USDC per whole coin at the live price.
+    /// Whole USDC per whole coin at the live price: at the opening price when the live one couldn't be read
+    /// (`livePriceRead` false).
     public let usdcPerCoin: Double
+    /// Whether `sqrtPriceX96` and `usdcPerCoin` are the pool's live price. False when that read failed and they stand at
+    /// the opening price: a value that must be current (a wallet's holdings) is then unknown, not that.
+    public let livePriceRead: Bool
     public let creatorFees: BigUInt
     public let platformFees: BigUInt
     public let buybackFees: BigUInt
@@ -536,7 +540,7 @@ public struct MomentPool: Sendable, Hashable {
     /// balance.
     public let heldForLaterRounds: BigUInt?
 
-    public init(key: PoolKey, poolId: Data, usdcIs0: Bool, sqrtPriceX96: BigUInt, openingSqrtPriceX96: BigUInt, liquidity: BigUInt, seedLiquidity: BigUInt, reserveSeed: BigUInt, poolCoins: BigUInt, graduatedAt: Int, usdcPerCoin: Double, creatorFees: BigUInt, platformFees: BigUInt, buybackFees: BigUInt, buybackCarry: BigUInt, lastBuyback: Int, buybackInterval: Int, buybackMin: BigUInt, heldForLaterRounds: BigUInt? = nil) {
+    public init(key: PoolKey, poolId: Data, usdcIs0: Bool, sqrtPriceX96: BigUInt, openingSqrtPriceX96: BigUInt, liquidity: BigUInt, seedLiquidity: BigUInt, reserveSeed: BigUInt, poolCoins: BigUInt, graduatedAt: Int, usdcPerCoin: Double, creatorFees: BigUInt, platformFees: BigUInt, buybackFees: BigUInt, buybackCarry: BigUInt, lastBuyback: Int, buybackInterval: Int, buybackMin: BigUInt, heldForLaterRounds: BigUInt? = nil, livePriceRead: Bool = true) {
         self.key = key
         self.poolId = poolId
         self.usdcIs0 = usdcIs0
@@ -548,6 +552,7 @@ public struct MomentPool: Sendable, Hashable {
         self.poolCoins = poolCoins
         self.graduatedAt = graduatedAt
         self.usdcPerCoin = usdcPerCoin
+        self.livePriceRead = livePriceRead
         self.creatorFees = creatorFees
         self.platformFees = platformFees
         self.buybackFees = buybackFees

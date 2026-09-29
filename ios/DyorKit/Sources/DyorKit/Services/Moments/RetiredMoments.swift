@@ -86,6 +86,11 @@ public struct RetiredMoments: Sendable {
         try await service.info(id: id)
     }
 
+    /// Fresh `MomentInfo`s for many ids of THIS cohort, in one read and one hydration (`MomentsService.infos`).
+    public func infos(ids: [BigUInt]) async throws -> [MomentInfo] {
+        try await service.infos(ids: ids)
+    }
+
     /// The account's stake in one of this cohort's Moments; a Moment of another cohort is refused rather than read
     /// under the wrong contracts.
     public func accountView(_ info: MomentInfo, account: Address) async throws -> MomentAccountView {
