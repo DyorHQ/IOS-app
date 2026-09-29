@@ -17,10 +17,13 @@ import XCTest
 /// governance and guardian, and each factory was created at its record's `deployBlock`, so a wrong record promoted with
 /// Swift that matches it (a simulated or rehearsal deployment, another stack) still refuses.
 ///
-/// Here the script runs against canned eth_call and eth_getCode answers built from the compiled constants (its
-/// `--chain-fixture` mode, which it refuses together with `--release`): the chain as it is passes, so the script reads the
-/// sources the way the app compiles them, and each way a cohort can drift from its pin, or a live stack from its table,
-/// refuses.
+/// A release also reads the public Contracts & Addresses page Get Help opens: it must list every contract in the two
+/// tables, with the tables' factories as its current LaunchpadFactory and MomentsFactory rows.
+///
+/// Here the script runs against canned eth_call and eth_getCode answers and a canned page built from the compiled
+/// constants (its `--chain-fixture` mode, which it refuses together with `--release`): the chain and the page as they
+/// should be pass, so the script reads the sources the way the app compiles them, and each way a cohort can drift from
+/// its pin, a live stack from its table, or the page from this build, refuses.
 final class RetiredCohortGateTests: XCTestCase {
     /// The fixture's block, after both v2 deployments.
     static let block: UInt64 = 108_895_597
@@ -97,7 +100,25 @@ final class RetiredCohortGateTests: XCTestCase {
         }
     }
 
-    static func fixture(_ cohorts: [ChainCohort], live: LiveChain? = nil) throws -> Data {
+    /// The Contracts & Addresses page as the gate reads it (GitBook's Markdown), laid out like the docs update for build
+    /// 16: `current` as the current release, then the retired launchpad and cohort 3 under previous releases.
+    static func docsPage(current: [(String, Address)]? = nil, previousFirst: Bool = false) -> String {
+        let l = LaunchpadAddresses.monadMainnet
+        let m = MomentsAddresses.monadMainnet
+        let current = current ?? [
+            ("LaunchpadFactory", l.factory), ("LaunchAndBuyRouter", l.router), ("FeeEscrow", l.escrow), ("HolderFeeSharing", l.holderFeeSharing),
+            ("MemeHook (Uniswap v4 hook)", l.hook), ("MomentsFactory", m.factory), ("MomentCollect", m.collect), ("MomentVesting", m.vesting),
+            ("MomentGraduation", m.graduation), ("MomentLocker", m.locker), ("MomentFeeHook (Uniswap v4 hook)", m.hook), ("MomentBuyback", m.buyback),
+        ]
+        let previous = [("LaunchpadFactory", V2WiringTests.relaunchFactory), ("MomentsFactory", V2WiringTests.cohort3Factory)]
+        func table(_ title: String, _ rows: [(String, Address)]) -> String {
+            "## \(title)\n\n| Contract | Address |\n| --- | --- |\n" + rows.map { "| \($0.0) | `\($0.1.hex)` |" }.joined(separator: "\n") + "\n"
+        }
+        let sections = [table("Current release", current), table("Previous releases", previous)]
+        return "# Contracts & Addresses\n\n" + (previousFirst ? sections.reversed() : sections).joined(separator: "\n")
+    }
+
+    static func fixture(_ cohorts: [ChainCohort], live: LiveChain? = nil, docs: String? = docsPage()) throws -> Data {
         let live = try live ?? LiveChain.wired()
         var calls: [String: String] = [:]
         for c in cohorts {
@@ -119,7 +140,9 @@ final class RetiredCohortGateTests: XCTestCase {
             let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
             calls["\(parts[0]):\(MomentsABI.calldata(parts[1]).hexString)"] = answer.hexString
         }
-        return try JSONSerialization.data(withJSONObject: ["block": Self.block, "calls": calls, "code": live.code], options: [.sortedKeys])
+        var fixture: [String: Any] = ["block": Self.block, "calls": calls, "code": live.code]
+        fixture["docs"] = docs
+        return try JSONSerialization.data(withJSONObject: fixture, options: [.sortedKeys])
     }
 
     /// The checker at the repo root, or a skip when this checkout has no scripts.
@@ -146,9 +169,9 @@ final class RetiredCohortGateTests: XCTestCase {
         return (process.terminationStatus, output)
     }
 
-    private func check(_ cohorts: [ChainCohort], live: LiveChain? = nil) throws -> (status: Int32, output: String) {
+    private func check(_ cohorts: [ChainCohort], live: LiveChain? = nil, docs: String? = docsPage()) throws -> (status: Int32, output: String) {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("retired-cohorts-\(UUID().uuidString).json")
-        try Self.fixture(cohorts, live: live).write(to: file)
+        try Self.fixture(cohorts, live: live, docs: docs).write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
         return try run(["--chain-fixture", file.path])
     }
@@ -168,7 +191,7 @@ final class RetiredCohortGateTests: XCTestCase {
         XCTAssertEqual(status, 0, output)
         // The pins it read from the sources are the compiled ones.
         let pins = MomentLink.Cohort.allCases.compactMap { c in c.finalMomentCount.map { "\(c) \($0)" } }.joined(separator: ", ")
-        XCTAssertTrue(output.contains("OK: retired Moments cohorts at their pins at fixture block \(Self.block) (\(pins)); live stacks as wired\n"), output)
+        XCTAssertTrue(output.contains("OK: retired Moments cohorts at their pins at fixture block \(Self.block) (\(pins)); live stacks as wired; docs page lists them\n"), output)
         XCTAssertFalse(output.contains("note:"), output)
     }
 
@@ -178,7 +201,7 @@ final class RetiredCohortGateTests: XCTestCase {
         let (status, output) = try check(Self.current())
         XCTAssertEqual(status, 0, output)
         XCTAssertTrue(output.contains("note: Moments cohort c3 (\(MomentLink.Cohort.c3.factory.hex)): publishing is open on chain"), output)
-        XCTAssertTrue(output.contains("; publishing open on c3; live stacks as wired\n"), output)
+        XCTAssertTrue(output.contains("; publishing open on c3; live stacks as wired; docs page lists them\n"), output)
         XCTAssertFalse(output.contains("cohort c1"), output)
         XCTAssertFalse(output.contains("check failed"), output)
     }
@@ -281,6 +304,40 @@ final class RetiredCohortGateTests: XCTestCase {
         XCTAssertEqual(status, 1, output)
         XCTAssertTrue(output.contains("moments-143.json's deployBlock \(m.deployBlock) is not the block that created it (code at \(m.deployBlock - 1): yes; at \(m.deployBlock): yes)"), output)
         XCTAssertTrue(output.contains("live Moments factory \(m.factory.hex): buyback() could not be read on chain"), output)
+    }
+
+    // MARK: The docs page
+
+    /// The page as published on 2026-09-29: the retired 0x6B1C and cohort 3 as the current factories, none of v2's
+    /// contracts. Refused, naming each missing contract and each retired factory it presents as current.
+    func testAPageListingTheRetiredStacksRefuses() throws {
+        let l = LaunchpadAddresses.monadMainnet
+        let m = MomentsAddresses.monadMainnet
+        let page = Self.docsPage(current: [("LaunchpadFactory", V2WiringTests.relaunchFactory), ("MomentsFactory", V2WiringTests.cohort3Factory)])
+        let (status, output) = try check(Self.current(), docs: page)
+        XCTAssertEqual(status, 1, output)
+        XCTAssertTrue(output.contains("does not list: LaunchpadAddresses.monadMainnet.factory \(l.factory.hex), LaunchpadAddresses.monadMainnet.router \(l.router.hex)"), output)
+        XCTAssertTrue(output.contains("MomentsAddresses.monadMainnet.buyback \(m.buyback.hex). Publish the docs update"), output)
+        XCTAssertTrue(output.contains("presents \(V2WiringTests.relaunchFactory.hex) (a retired one) as the current LaunchpadFactory, not LaunchpadAddresses.monadMainnet's \(l.factory.hex)"), output)
+        XCTAssertTrue(output.contains("presents \(V2WiringTests.cohort3Factory.hex) (a retired one) as the current MomentsFactory, not MomentsAddresses.monadMainnet's \(m.factory.hex)"), output)
+    }
+
+    /// Every contract listed is not enough: a page whose first factory rows are the retired ones still refuses, and so
+    /// does a page that cannot be read.
+    func testThePagesCurrentFactoriesMustBeThisBuilds() throws {
+        let reordered = try check(Self.current(), docs: Self.docsPage(previousFirst: true))
+        XCTAssertEqual(reordered.status, 1, reordered.output)
+        XCTAssertFalse(reordered.output.contains("does not list"), reordered.output)
+        XCTAssertTrue(reordered.output.contains("presents \(V2WiringTests.relaunchFactory.hex) (a retired one) as the current LaunchpadFactory"), reordered.output)
+        let unread = try check(Self.current(), docs: nil)
+        XCTAssertEqual(unread.status, 1, unread.output)
+        XCTAssertTrue(unread.output.contains("the docs page \(DocsLinks.contractsAndAddresses.url.absoluteString) could not be read"), unread.output)
+    }
+
+    /// The gate reads the page Get Help's Contracts & Addresses row opens.
+    func testTheGateReadsThePageGetHelpOpens() throws {
+        let script = try String(contentsOf: try script(), encoding: .utf8)
+        XCTAssertTrue(script.contains("DOCS_CONTRACTS_PAGE = \"\(DocsLinks.contractsAndAddresses.url.absoluteString)\"\n"))
     }
 
     /// Canned answers never stand in for the chain in a release, and a mistyped flag never runs a lesser check.

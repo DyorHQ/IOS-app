@@ -253,7 +253,9 @@ final class DocsLinksTests: XCTestCase {
 
     /// Get Help's "Verify every contract DyorHQ uses" row opens Contracts & Addresses, so the published page must name
     /// every contract this build calls: the v2 launchpad's five modules and the v2 Moments' seven. Off by default: set
-    /// DYOR_LIVE_DOCS=1 (the release checklist does).
+    /// DYOR_LIVE_DOCS=1 (the release checklist does). Every archive checks the same page anyway:
+    /// `check-launchpad-addresses.py --release` refuses while it misses one, or presents a retired factory as the current
+    /// one (`RetiredCohortGateTests`).
     func testTheContractsPageListsThisBuildsContracts() async throws {
         guard ProcessInfo.processInfo.environment["DYOR_LIVE_DOCS"] == "1" else { throw XCTSkip("set DYOR_LIVE_DOCS=1") }
         let configuration = URLSessionConfiguration.ephemeral

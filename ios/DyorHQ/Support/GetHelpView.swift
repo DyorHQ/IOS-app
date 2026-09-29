@@ -58,7 +58,8 @@ struct GetHelpContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             // The docs, opened in Safari like the Terms and Privacy links. Contracts & Addresses lists the v2 contracts
-            // this build calls (`LaunchpadAddresses.monadMainnet`, `MomentsAddresses.monadMainnet`) and the retired ones.
+            // this build calls (`LaunchpadAddresses.monadMainnet`, `MomentsAddresses.monadMainnet`) and the retired ones:
+            // `check-launchpad-addresses.py --release` refuses every archive until the published page does.
             group("Learn") {
                 HelpRow(symbol: "book", title: "Help Center", detail: "Guides to every part of DyorHQ") { openURL(SupportLinks.helpCenter) }
                 HelpRow(symbol: "flag", title: "Getting Started", detail: "From sign-in to your first trade") { openURL(DocsLinks.quickstart.url) }

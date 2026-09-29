@@ -99,10 +99,11 @@ A build with a pending table must not ship, so before a release:
 
 ```bash
 (cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter V2WiringTests)
+(cd DyorKit && DYOR_LIVE_DOCS=1 swift test --filter DocsLinksTests)
 python3 ../scripts/dev/check-launchpad-addresses.py --release
 ```
 
-Both fail while either table is pending. The second one also proves the retired Moments cohorts final on chain
+The first and the last fail while either table is pending. The last one also proves the retired Moments cohorts final on chain
 (read-only calls to a public Monad RPC): each factory's `momentCount()` equals its pin
 (`MomentLink.Cohort.finalMomentCount`), and its coins are exactly its entries in `MomentsAddresses.retiredMainnetCoins`.
 Cohort 3's publishing is not paused on chain (owner decision 2026-09-28: the old stacks are retired in the app only),
@@ -110,7 +111,10 @@ which the check reports as a note; a Moment published there after its pin makes 
 paused (their policy pays the retired wallets): either one open refuses. The same reads prove the live stacks as wired,
 so a wrong record promoted with matching Swift still refuses: every module in the two tables has code, each factory's
 getters name the table's modules and the records' owner, governance and guardian (and the Moments policy the table's
-platform and treasury, its link base c4's), and each factory was created at its record's `deployBlock`.
+platform and treasury, its link base c4's), and each factory was created at its record's `deployBlock`. It also reads
+the public docs' Contracts & Addresses page, which Get Help opens ("Verify every contract DyorHQ uses"): it refuses
+until the page lists every contract in the two tables with their factories as the current ones, so publish the docs
+update for a new stack before its archive (`DYOR_LIVE_DOCS=1` runs the same check in `DocsLinksTests`).
 It runs in every archive: the DyorHQ target's install-only build phase (so Product › Archive in Xcode is gated too),
 `ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud) and `scripts/testflight.sh`, each refusing the archive.
 `python3 ../scripts/dev/check-launchpad-addresses.py --chain` runs the same chain checks without refusing the pending

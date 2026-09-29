@@ -30,9 +30,15 @@ the table's, externalBaseURI() is the c4 link base, policy() pays the table's pl
 and guardian() are moments-143.json's; and each factory has no code at its record's deployBlock − 1 and has it at
 deployBlock.
 
+`--release` also reads the public docs' Contracts & Addresses page (as GitBook's Markdown), which Get Help opens ("Verify
+every contract DyorHQ uses", and the Help Center links it) and which tells people to confirm an address there before
+using it outside the app: it must list every module in DyorKit's two tables, and its first LaunchpadFactory and
+MomentsFactory rows must be the tables' factories, so it never presents a retired stack as the current one. A page that
+cannot be read refuses too. Publish the docs update before the archive.
+
 `--chain-fixture FILE` is for DyorKit's RetiredCohortGateTests only: the chain checks alone (the retired cohorts, and the
-live stacks when wired), against canned eth_call and eth_getCode answers instead of the chain. It is refused together
-with `--release`.
+live stacks when wired) and the docs check, against canned eth_call and eth_getCode answers and a canned page instead
+of the chain and the docs site. It is refused together with `--release`.
 
 Local config values are compared, never printed: a problem there names the key only.
 """
@@ -166,6 +172,9 @@ POLICY_WORDS = 10  # MomentTypes.Policy, all static: (threshold, minPrice, 6 × 
 MOMENT_WORDS = 17  # MomentTypes.Moment, all static: (creator, platform, treasury, coin, nft, …); the coin is word 3
 # How many Moments past a pin are read, to name their coins, when a cohort has grown.
 PAST_PIN = 20
+# The docs page Get Help's Contracts & Addresses row opens (DyorKit's DocsLinks.contractsAndAddresses, pinned by
+# RetiredCohortGateTests); GitBook serves each page as Markdown at its URL plus ".md".
+DOCS_CONTRACTS_PAGE = "https://dyorhq.gitbook.io/docs/resources/contracts-and-addresses"
 
 def retired_tables():
     """([(cohort, factory, pin)] in publish order, {coin: (factory, id)}), read from the Swift sources; problems for
@@ -400,6 +409,41 @@ def check_live_on_chain(call, code):
             problems.append(f"{where}: {whose}'s deployBlock {deploy_block} is not the block that created it "
                             f"(code at {deploy_block - 1}: {'yes' if before else 'no'}; at {deploy_block}: {'yes' if at else 'no'})")
 
+def docs_page():
+    """The Contracts & Addresses page as Markdown: the fixture's in tests, else the published one."""
+    if FIXTURE:
+        page = json.load(open(FIXTURE)).get("docs")
+        if not isinstance(page, str):
+            raise RuntimeError("no page in the fixture")
+        return page
+    request = urllib.request.Request(DOCS_CONTRACTS_PAGE + ".md", headers={"User-Agent": "dyorhq-release-gate"})
+    with urllib.request.urlopen(request, timeout=20) as reply:
+        return reply.read().decode("utf-8")
+
+def check_docs_page():
+    """The published page names every contract this build calls, and its current-release rows are the tables' factories
+    (a retired stack may follow, under previous releases). See the docstring."""
+    where = f"the docs page {DOCS_CONTRACTS_PAGE}"
+    try:
+        page = docs_page()
+    except Exception as e:  # noqa: BLE001 — unread is not proven
+        problems.append(f"{where} could not be read ({type(e).__name__}: {str(e)[:160]}); a release needs it to list this build's contracts")
+        return
+    text = page.lower()
+    called = [(f"LaunchpadAddresses.monadMainnet.{field}", address) for field, address in launchpad.items()]
+    called += [(f"MomentsAddresses.monadMainnet.{field}", address) for field, address in moments.items() if field not in ("platform", "treasury")]
+    missing = [f"{name} {address}" for name, address in called if address not in text]
+    if missing:
+        problems.append(f"{where} does not list: {', '.join(missing)}. Publish the docs update (DyorHQ/docs) before the archive")
+    for row, factory, table in (("LaunchpadFactory", launchpad["factory"], "LaunchpadAddresses.monadMainnet"),
+                                ("MomentsFactory", moments["factory"], "MomentsAddresses.monadMainnet")):
+        first = re.search(rf'^\|\s*{row}\s*\|\s*`?(0x[0-9a-fA-F]{{40}})`?\s*\|', page, re.M)
+        if not first:
+            problems.append(f"{where} has no {row} row")
+        elif first.group(1).lower() != factory:
+            retired = " (a retired one)" if first.group(1).lower() in RETIRED_FACTORIES | RETIRED_MOMENTS_FACTORIES else ""
+            problems.append(f"{where} presents {first.group(1)}{retired} as the current {row}, not {table}'s {factory}")
+
 def report(ok_line):
     for note in notes:
         print(f"note: {note}")
@@ -473,12 +517,16 @@ if reader:
     if launchpad_state == moments_state == "wired":
         check_live_on_chain(call, code)
         live_checked = True
+docs_checked = (RELEASE or FIXTURE) and launchpad_state == moments_state == "wired"
+if docs_checked:
+    check_docs_page()
 
 if FIXTURE:
     # Tests only: the chain checks against canned answers (never with --release, and no local config; see the docstring).
     report(f"OK: retired Moments cohorts at their pins at fixture block {chain_block} ({', '.join(f'{c} {pin}' for c, _, pin in retired_cohorts)})"
            + (f"; publishing open on {', '.join(open_cohorts)}" if open_cohorts else "")
-           + ("; live stacks as wired" if live_checked else ""))
+           + ("; live stacks as wired" if live_checked else "")
+           + ("; docs page lists them" if docs_checked else ""))
     sys.exit(0)
 
 # Local overrides, when present. An xcconfig/env that sets the keys must set them to the current deployment
@@ -538,4 +586,5 @@ report(f"OK: DyorKit ({summary})"
        + "".join(f", {name}" for name in envs)
        + f"; live records: factory {record['factory']}, Moments factory {moments_record['factory']}"
        + (" (on chain as wired)" if live_checked else "")
+       + ("; the docs page lists them" if docs_checked else "")
        + retired)
