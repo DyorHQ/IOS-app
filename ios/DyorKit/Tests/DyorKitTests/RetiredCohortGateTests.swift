@@ -15,7 +15,8 @@ import XCTest
 /// The same reads prove the live stacks once wired: every module in `LaunchpadAddresses.monadMainnet` and
 /// `MomentsAddresses.monadMainnet` has code, each factory's getters name those modules and the records' owner,
 /// governance and guardian, and each factory was created at its record's `deployBlock`, so a wrong record promoted with
-/// Swift that matches it (a simulated or rehearsal deployment, another stack) still refuses.
+/// Swift that matches it (a simulated or rehearsal deployment, another stack) still refuses. The two live factories are
+/// pinned in the script too, as the keepers pin them.
 ///
 /// A release also reads the public Contracts & Addresses page Get Help opens, at the URL the app opens: it must show every
 /// address in the two tables, with the tables' factories as its current LaunchpadFactory and MomentsFactory rows.
@@ -161,11 +162,11 @@ final class RetiredCohortGateTests: XCTestCase {
         return url
     }
 
-    /// Runs the checker (never against a network: every mode used here exits before any RPC).
-    private func run(_ arguments: [String]) throws -> (status: Int32, output: String) {
+    /// Runs the checker, or a copy of it (never against a network: every mode used here exits before any RPC).
+    private func run(_ arguments: [String], script path: URL? = nil) throws -> (status: Int32, output: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", try script().path] + arguments
+        process.arguments = ["python3", try (path ?? script()).path] + arguments
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
@@ -176,11 +177,11 @@ final class RetiredCohortGateTests: XCTestCase {
         return (process.terminationStatus, output)
     }
 
-    private func check(_ cohorts: [ChainCohort], live: LiveChain? = nil, docs: String? = docsPage()) throws -> (status: Int32, output: String) {
+    private func check(_ cohorts: [ChainCohort], live: LiveChain? = nil, docs: String? = docsPage(), script: URL? = nil) throws -> (status: Int32, output: String) {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("retired-cohorts-\(UUID().uuidString).json")
         try Self.fixture(cohorts, live: live, docs: docs).write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
-        return try run(["--chain-fixture", file.path])
+        return try run(["--chain-fixture", file.path], script: script)
     }
 
     private func replacing(_ cohort: MomentLink.Cohort, _ change: (inout ChainCohort) -> Void) -> [ChainCohort] {
@@ -312,6 +313,51 @@ final class RetiredCohortGateTests: XCTestCase {
         XCTAssertEqual(status, 1, output)
         XCTAssertTrue(output.contains("moments-143.json's deployBlock \(m.deployBlock) is not the block that created it (code at \(m.deployBlock - 1): yes; at \(m.deployBlock): yes)"), output)
         XCTAssertTrue(output.contains("live Moments factory \(m.factory.hex): buyback() could not be read on chain"), output)
+    }
+
+    /// The script pins the live factories DyorKit's tables name, and the keepers pin the same two.
+    func testTheLiveFactoriesArePinnedAsTheKeepersPinThem() throws {
+        let l = LaunchpadAddresses.monadMainnet
+        let m = MomentsAddresses.monadMainnet
+        let script = try String(contentsOf: try script(), encoding: .utf8)
+        XCTAssertTrue(script.contains("LIVE_LAUNCHPAD = \"\(l.factory.hex)\"\n"), "the script's LIVE_LAUNCHPAD is not \(l.factory.hex)")
+        XCTAssertTrue(script.contains("LIVE_MOMENTS = \"\(m.factory.hex)\"\n"), "the script's LIVE_MOMENTS is not \(m.factory.hex)")
+        let keepers = try self.script().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("contracts/keepers/lib/deployments.mjs")
+        guard FileManager.default.fileExists(atPath: keepers.path) else { throw XCTSkip("contracts/keepers is not in this checkout") }
+        let pins = try String(contentsOf: keepers, encoding: .utf8).lowercased()
+        XCTAssertTrue(pins.contains("launchpad: \"\(l.factory.hex)\""), "the keepers' LIVE_FACTORIES.launchpad is not \(l.factory.hex)")
+        XCTAssertTrue(pins.contains("moments: \"\(m.factory.hex)\""), "the keepers' LIVE_FACTORIES.moments is not \(m.factory.hex)")
+    }
+
+    /// Swift and records that agree on a factory other than the pinned one refuse, before any chain read: here the
+    /// script's pins are moved in a copy that reads this checkout's sources and records.
+    func testAFactoryOtherThanThePinnedOneRefuses() throws {
+        let original = try script()
+        let repo = original.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let tree = FileManager.default.temporaryDirectory.appendingPathComponent("gate-pin-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tree) }
+        try FileManager.default.createDirectory(at: tree.appendingPathComponent("scripts/dev"), withIntermediateDirectories: true)
+        for folder in ["ios", "contracts"] {
+            try FileManager.default.createSymbolicLink(at: tree.appendingPathComponent(folder), withDestinationURL: repo.appendingPathComponent(folder))
+        }
+        let other = "0x00000000000000000000000000000000000c0401"
+        let l = LaunchpadAddresses.monadMainnet.factory.hex
+        let m = MomentsAddresses.monadMainnet.factory.hex
+        let moved = try String(contentsOf: original, encoding: .utf8)
+            .replacingOccurrences(of: "LIVE_LAUNCHPAD = \"\(l)\"", with: "LIVE_LAUNCHPAD = \"\(other)\"")
+            .replacingOccurrences(of: "LIVE_MOMENTS = \"\(m)\"", with: "LIVE_MOMENTS = \"\(other)\"")
+        let copy = tree.appendingPathComponent("scripts/dev/check-launchpad-addresses.py")
+        try moved.write(to: copy, atomically: true, encoding: .utf8)
+        let (status, output) = try check(Self.current(), script: copy)
+        XCTAssertEqual(status, 1, output)
+        for (whose, factory, stack) in [("DyorKit LaunchpadAddresses.monadMainnet", l, "launchpad"), ("contracts/deployments/143.json", l, "launchpad"),
+                                        ("DyorKit MomentsAddresses.monadMainnet", m, "Moments"), ("contracts/deployments/moments-143.json", m, "Moments")] {
+            XCTAssertTrue(output.contains("\(whose): factory is \(factory), not the live \(stack) factory pinned here (\(other))"), output)
+        }
+        // The same copy with the pins left alone passes, so nothing else about the copy refuses.
+        try String(contentsOf: original, encoding: .utf8).write(to: copy, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try check(Self.current(), script: copy).status, 0)
     }
 
     // MARK: The docs page

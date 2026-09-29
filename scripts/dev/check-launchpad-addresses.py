@@ -31,7 +31,9 @@ the launchpad factory's hook(), escrow(), holderFeeSharing() and router() are th
 modulesSealed() is true; the Moments factory's collect(), vesting(), graduation(), locker(), feeHook() and buyback() are
 the table's, externalBaseURI() is the c4 link base, policy() pays the table's platform and treasury, and governance()
 and guardian() are moments-143.json's; and each factory has no code at its record's deployBlock − 1 and has it at
-deployBlock.
+deployBlock. The two live factories are also pinned here (LIVE_LAUNCHPAD, LIVE_MOMENTS), as the keepers pin them
+(LIVE_FACTORIES in contracts/keepers/lib/deployments.mjs): Swift and a record that agree on any other factory refuse on
+every run, chain or not. Move the pins with the records when a new stack goes live.
 
 `--release` also reads the public docs' Contracts & Addresses page, which Get Help opens ("Verify every contract DyorHQ
 uses", and the Help Center links it) and which tells people to confirm an address there before using it outside the
@@ -91,6 +93,10 @@ MOMENTS_KEYS = {  # record key → (xcconfig key, Swift field)
 # The live factories while v2 is pending: the records are promoted only together with the Swift wiring.
 PRE_V2_LAUNCHPAD = "0x6b1c8769a8d6745955ac35b91ff1f37ab76859db"
 PRE_V2_MOMENTS = "0x0fd4ac52bbf387dbb3156805769bfc0c260f7e26"
+# The live factories on Monad (the v2 release, 2026-09-28: launchpad v2 and Moments cohort 4), pinned as a second source
+# like the keepers' LIVE_FACTORIES: a wired table and its record must both name them.
+LIVE_LAUNCHPAD = "0x3b1f5f562f5f61b980abfddbebd6cdf9a73b0b5b"
+LIVE_MOMENTS = "0x95eb7f5a88b10d9df32ac54f48c767927fa80840"
 # Retired launchpad factories (the app launches nothing there and still serves their existing launches; 0x6B1C stays
 # open on chain, owner decision 2026-09-28).
 RETIRED_FACTORIES = {
@@ -529,6 +535,10 @@ if launchpad_state == "wired":
             problems.append(f"{where}: {key} is {launchpad.get(field)}, deployment record says {record[key]}")
     if record["factory"].lower() in RETIRED_FACTORIES:
         problems.append(f"contracts/deployments/143.json: factory {record['factory']} is a retired launchpad")
+    for name, factory in ((where, launchpad.get("factory")), ("contracts/deployments/143.json", record["factory"].lower())):
+        if factory != LIVE_LAUNCHPAD:
+            problems.append(f"{name}: factory is {factory}, not the live launchpad factory pinned here ({LIVE_LAUNCHPAD}); "
+                            "a new stack moves this pin, the keepers' LIVE_FACTORIES and the records together")
 elif launchpad_state == "pending" and record["factory"].lower() != PRE_V2_LAUNCHPAD:
     problems.append(f"contracts/deployments/143.json names {record['factory']} but {where} is PENDING: wire it in the same change")
 
@@ -551,6 +561,10 @@ if moments_state == "wired":
         problems.append(f"{where}: deployBlock is {baked_block}, deployment record says {moments_record.get('deployBlock')} (add it to the record by hand)")
     if moments_record["factory"].lower() in RETIRED_MOMENTS_FACTORIES:
         problems.append(f"contracts/deployments/moments-143.json: factory {moments_record['factory']} is a retired Moments cohort")
+    for name, factory in ((where, moments.get("factory")), ("contracts/deployments/moments-143.json", moments_record["factory"].lower())):
+        if factory != LIVE_MOMENTS:
+            problems.append(f"{name}: factory is {factory}, not the live Moments factory pinned here ({LIVE_MOMENTS}); "
+                            "a new stack moves this pin, the keepers' LIVE_FACTORIES and the records together")
 elif moments_state == "pending":
     if not deploy_block or int(deploy_block.group(1).replace("_", "")) != 0:
         problems.append(f"{where} is PENDING but has a deployBlock")

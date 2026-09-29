@@ -113,7 +113,9 @@ table take it in (so the app never trades its coin). That moves no name link: a 
 paused (their policy pays the retired wallets): either one open refuses. The same reads prove the live stacks as wired,
 so a wrong record promoted with matching Swift still refuses: every module in the two tables has code, each factory's
 getters name the table's modules and the records' owner, governance and guardian (and the Moments policy the table's
-platform and treasury, its link base c4's), and each factory was created at its record's `deployBlock`. It also reads
+platform and treasury, its link base c4's), and each factory was created at its record's `deployBlock`. The two live
+factories are pinned in the script as well, as the keepers pin them (`LIVE_FACTORIES`), so every run refuses Swift and
+records that agree on another factory; a new stack moves both pins with its records. It also reads
 the public docs' Contracts & Addresses page at the URL Get Help opens ("Verify every contract DyorHQ uses"): it refuses
 until the page lists every address in the two tables with their factories as the current ones, and when the page cannot
 be read, so publish the docs update for a new stack before its archive (`DYOR_LIVE_DOCS=1` runs the same check in
