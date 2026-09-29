@@ -50,7 +50,7 @@ struct LaunchpadView: View {
             .refreshable { await model.load(env: env, account: session.address) }
             // Restarts with the wallet: whether it may launch is part of what the create screen is given.
             .task(id: session.address) { await model.poll(env: env, account: session.address) }
-            .overlay { if model.launches.isEmpty, model.loading { ProgressView().controlSize(.large) } }
+            .overlay { if firstLoad { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showCreate) { CreateLaunchView(protocolInfo: model.protocolInfo) { Task { await model.load(env: env, account: session.address) } } }
             .sheet(isPresented: $showProfile) { LaunchpadProfileView() }
             .onChange(of: router.pendingLaunch) { _, launch in
@@ -83,9 +83,10 @@ struct LaunchpadView: View {
                     Label("New launches open soon.", systemImage: "clock")
                         .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !model.loading {
+                if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !firstLoad {
                     // A search that found nothing says so: a coin the board doesn't list (a retired launchpad's sell-only
-                    // coin) is reached from Home, the Portfolio or Swap, not found here.
+                    // coin) is reached from Home, the Portfolio or Swap, not found here. Only the first load hides this:
+                    // a poll leaves it on screen.
                     if searching { ContentUnavailableView.search(text: query).padding(.top, 40) } else { emptyState }
                 } else {
                     if !graduated.isEmpty { section(title: "Graduated", count: graduated.count, subtitle: "Cleared the graduation threshold", coins: graduated) }
@@ -126,7 +127,7 @@ struct LaunchpadView: View {
         if climbing.isEmpty {
             // Nothing on the live curve yet: an invitation, not a gap (only while the launchpad is live, and not for a
             // search that found nothing, or for a first load).
-            if env.config.launchpad.isDeployed, !searching, !(model.loading && model.launches.isEmpty) {
+            if env.config.launchpad.isDeployed, !searching, !firstLoad {
                 exploreEmptyCard
             }
         } else {
@@ -211,6 +212,10 @@ struct LaunchpadView: View {
     private var sellOnly: [Launch] { searched(model.heldSellOnly) }
 
     private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    /// The first read hasn't answered yet: the spinner shows over the board, and nothing says "empty" or "not found".
+    /// Every later poll keeps what is on screen.
+    private var firstLoad: Bool { model.loading && model.launches.isEmpty }
 
     private func searched(_ launches: [Launch]) -> [Launch] {
         let q = query.trimmingCharacters(in: .whitespaces)

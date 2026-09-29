@@ -215,7 +215,10 @@ final class LaunchBoardTests: XCTestCase {
         let holders = try XCTUnwrap(source.range(of: "section(title: \"Your Sell-Only Coins\", count: sellOnly.count,"))
         XCTAssertLessThan(refund.lowerBound, holders.lowerBound, "shown last")
         XCTAssertTrue(source.contains("private var sellOnly: [Launch] { searched(model.heldSellOnly) }"))
-        XCTAssertTrue(source.contains("if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !model.loading {"))
+        // Only the first load hides the empty state and a search's "not found": a poll (every 20 s) leaves them on screen.
+        XCTAssertTrue(source.contains("private var firstLoad: Bool { model.loading && model.launches.isEmpty }"))
+        XCTAssertTrue(source.contains("if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !firstLoad {"))
+        XCTAssertTrue(source.contains(".overlay { if firstLoad { ProgressView().controlSize(.large) } }"))
 
         // The model: cleared on another account before any read, published only for the account it was read for and
         // only from a read every factory answered, kept when the balances can't be read, and decided by
@@ -237,7 +240,7 @@ final class LaunchBoardTests: XCTestCase {
 
         // The Explore card: only on the live launchpad, without a search, after the first load; Launch a Coin needs a
         // wallet that signs.
-        XCTAssertTrue(source.contains("if env.config.launchpad.isDeployed, !searching, !(model.loading && model.launches.isEmpty) {\n                exploreEmptyCard"))
+        XCTAssertTrue(source.contains("if env.config.launchpad.isDeployed, !searching, !firstLoad {\n                exploreEmptyCard"))
         XCTAssertTrue(source.contains("private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }"))
         // A search that finds nothing (a hidden coin's name, say) says so, instead of "No Launches Yet".
         XCTAssertTrue(source.contains("if searching { ContentUnavailableView.search(text: query).padding(.top, 40) } else { emptyState }"))

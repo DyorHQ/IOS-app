@@ -449,8 +449,8 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
             XCTAssertEqual(board.components(separatedBy: "matching.filter { $0.phase.boardSection == .\(section) }").count - 1, 1, "\(section): listed once, searched too")
         }
         XCTAssertFalse(board.contains("matching.filter { $0.phase =="), "no section picks its phases by hand")
-        XCTAssertEqual(board.components(separatedBy: "model.launches").count - 1, 3, "only the listed coins, the first-load spinner and the empty card's first load")
-        XCTAssertTrue(board.contains("if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !model.loading {"))
+        XCTAssertEqual(board.components(separatedBy: "model.launches").count - 1, 2, "only the listed coins and the first load")
+        XCTAssertTrue(board.contains("if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !firstLoad {"))
         XCTAssertTrue(board.contains("if !refundAndMigrating.isEmpty {\n                        section(title: \"Refund & Migrating\", count: refundAndMigrating.count,"))
         XCTAssertTrue(board.contains("coins: refundAndMigrating)"))
         XCTAssertEqual(Set(LaunchPhase.allCases.map(\.boardSection)), Set(LaunchBoardSection.allCases), "every section lists some phase")
