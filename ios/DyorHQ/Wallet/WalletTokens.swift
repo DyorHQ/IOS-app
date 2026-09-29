@@ -8,7 +8,7 @@ import DyorKit
 @MainActor
 enum WalletTokens {
     struct Read {
-        /// The tokens held (balance above zero), in universe order.
+        /// The tokens held (balance above zero), in universe order. Never an NFT collection.
         let tokens: [Token]
         let balances: [Address: BigUInt]
         /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12).
@@ -24,7 +24,11 @@ enum WalletTokens {
         universe += discovered
         let unverified = KnownTokenStore.unverified(owner: address).union(discovered.map(\.address))
         let balances = try await ERC20.balances(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)
-        return Read(tokens: WalletHoldings.held(universe, balances: balances), balances: balances, unverified: unverified)
+        let held = WalletHoldings.held(universe, balances: balances)
+        // Earlier builds' discovery stored NFT collections as tokens (their `balanceOf` counts editions): left out, as
+        // discovery now leaves them out. An edition can't be sent as a token, and it shows under NFTs.
+        let collections = await env.walletDiscovery.collections(among: held)
+        return Read(tokens: held.filter { !collections.contains($0.address) }, balances: balances, unverified: unverified)
     }
 
     /// `read`'s tokens valued at their pools' prices and ranked. Prices that can't be read leave tokens unpriced, never

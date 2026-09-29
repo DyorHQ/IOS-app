@@ -41,7 +41,7 @@ public struct WalletTokenDiscovery: Sendable {
 
         var candidates: [Address] = []
         var seen = Set<Address>()
-        for log in incoming where !log.address.isZero && !known.contains(log.address) && seen.insert(log.address).inserted {
+        for log in incoming where Self.isERC20Transfer(log) && !log.address.isZero && !known.contains(log.address) && seen.insert(log.address).inserted {
             candidates.append(log.address)
         }
         guard !candidates.isEmpty else { return [] }
@@ -66,5 +66,46 @@ public struct WalletTokenDiscovery: Sendable {
             if let resolved = try? await ERC20.metadata(token, multicall: multicall) { out.append(resolved) }
         }
         return out
+    }
+
+    /// An ERC-20 `Transfer`: three topics (the signature, `from`, `to`) and the amount as 32 bytes of data. An ERC-721
+    /// `Transfer` has the same signature but indexes the token id (four topics, no data), as `SwapHistory` tells them
+    /// apart: its contract is a collection, whose `balanceOf` counts editions, not a token a send can move.
+    static func isERC20Transfer(_ log: Log) -> Bool { log.topics.count == 3 && log.data.count == 32 }
+
+    /// ERC-165 ids: ERC-721's, and the one every ERC-165 contract must answer false for.
+    static let erc721Interface = Data([0x80, 0xac, 0x58, 0xcd])
+    static let invalidInterface = Data([0xff, 0xff, 0xff, 0xff])
+
+    /// Which of `tokens` are NFT collections (ERC-721, by ERC-165), so a list of tokens leaves them out: earlier builds'
+    /// discovery stored collections the wallet received as if they were tokens, and a Moment edition is one too. A
+    /// collection answers true for ERC-721's id and false for the invalid one; a contract answering true to both answers
+    /// everything and proves nothing. MON and the curated tokens are never asked, and a contract that doesn't answer, or
+    /// a read that fails, stays a token: a collection left in a list can't be sent (the review's simulation refuses it),
+    /// while a real token left out couldn't be sent from the app at all.
+    public func collections(among tokens: [Token]) async -> Set<Address> {
+        var seen = Set<Address>()
+        let candidates = tokens.filter { !$0.isNative && Token.core($0.address) == nil && seen.insert($0.address).inserted }.map(\.address)
+        var out = Set<Address>()
+        var index = 0
+        while index < candidates.count {
+            let batch = Array(candidates[index ..< min(index + 100, candidates.count)])
+            index += batch.count
+            guard let calls = try? batch.flatMap({ [try Self.supportsInterface($0, Self.erc721Interface), try Self.supportsInterface($0, Self.invalidInterface)] }),
+                  let results = try? await multicall.read(calls), results.count == calls.count else { continue }
+            for (i, token) in batch.enumerated() where Self.answersTrue(results[2 * i]) && !Self.answersTrue(results[2 * i + 1]) {
+                out.insert(token)
+            }
+        }
+        return out
+    }
+
+    static func supportsInterface(_ contract: Address, _ id: Data) throws -> ContractCall {
+        try ContractCall(to: contract, "supportsInterface(bytes4)", [.bytes(id)], returns: "bool")
+    }
+
+    private static func answersTrue(_ result: Result<[ABIValue], Error>) -> Bool {
+        if case .success(let values) = result, case .bool(true)? = values.first { return true }
+        return false
     }
 }
