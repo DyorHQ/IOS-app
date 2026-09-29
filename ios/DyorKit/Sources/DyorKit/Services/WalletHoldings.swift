@@ -87,11 +87,12 @@ public enum WalletHoldings {
     /// with a seeded pool can outrank everything — nor one carrying a curated token's name (`imitates`), even one the
     /// user tapped in Swap, nor one whose symbol isn't plain (`plainSymbol`): it may be a look-alike, and a send must
     /// never start on it unasked. So when every held token is one of those, or nothing is held, there is none and the
-    /// user picks. None either when the prices couldn't be read (`pricesRead` false): the ranking is then by amount, not
-    /// value, and the token with the most units is not the one worth the most.
+    /// user picks. None either when the prices couldn't be read (`pricesRead` false), and never a token with no price:
+    /// the list below the priced tokens is by amount, not value, and the token with the most units is not the one worth
+    /// the most.
     public static func defaultChoice(_ ranked: [HeldToken], pricesRead: Bool = true) -> HeldToken? {
         guard pricesRead else { return nil }
-        return ranked.first { !$0.unverified && $0.imitates == nil && $0.plainSymbol }
+        return ranked.first { ($0.usd ?? 0) > 0 && !$0.unverified && $0.imitates == nil && $0.plainSymbol }
     }
 
     /// After the list is read: with nothing chosen yet, the default choice; with a choice, that token while the wallet

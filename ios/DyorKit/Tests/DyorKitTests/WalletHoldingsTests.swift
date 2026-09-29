@@ -177,6 +177,19 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.defaultChoice(withHidden)?.id, Monad.usdc)
     }
 
+    /// Held tokens no pool prices (aprMON, cbBTC) are ranked by amount below the priced ones: a send never starts on one,
+    /// since the most units is not the most value. With a priced token held, that one is the default.
+    func testDefaultChoiceIsNeverAnUnpricedToken() {
+        let aprMON = Token(address: spam.address, symbol: "aprMON", name: "aPriori Monad LST", decimals: 18)
+        let unpricedOnly = WalletHoldings.ranked([aprMON, meme], balances: [aprMON.address: units(10, aprMON), meme.address: units(1, meme)], prices: [:], unverified: [])
+        XCTAssertEqual(unpricedOnly.count, 2, "both listed")
+        XCTAssertNil(WalletHoldings.defaultChoice(unpricedOnly), "no price, no preselection: the user picks")
+        let withMON = WalletHoldings.ranked([aprMON, Token.mon], balances: [aprMON.address: units(10, aprMON), Monad.native: units(1, .mon)], prices: [Monad.native: 0.03], unverified: [])
+        XCTAssertEqual(WalletHoldings.defaultChoice(withMON)?.token, .mon, "the priced token, though it holds fewer units")
+        let zeroPriced = WalletHoldings.ranked([meme], balances: [meme.address: units(5, meme)], prices: [meme.address: 0], unverified: [])
+        XCTAssertNil(WalletHoldings.defaultChoice(zeroPriced), "a zero price is no price")
+    }
+
     func testDefaultChoiceSkipsUnverifiedAndIsNoneWhenNothingIsChosen() {
         let onlySent = WalletHoldings.ranked([spam, fakeUSDC], balances: [spam.address: 1, fakeUSDC.address: 1], prices: [:], unverified: [spam.address, fakeUSDC.address])
         XCTAssertEqual(onlySent.count, 2, "still listed")
