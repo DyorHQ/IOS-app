@@ -2,8 +2,8 @@ import BigInt
 import Foundation
 
 /// One token the wallet holds: its balance and, when a pool prices it, its dollar value. The Portfolio's Assets and
-/// the Send sheet's list are both made of these, from the same read in the same order (`WalletHoldings.ranked`), so
-/// the two can't drift.
+/// the Send sheet's list are both made of these, from the same read (`WalletHoldings.ranked`), so the two hold the same
+/// tokens and can't drift; each keeps its own order.
 public struct HeldToken: Hashable, Sendable, Identifiable {
     public let token: Token
     public let balance: BigUInt
@@ -41,15 +41,22 @@ public enum WalletHoldings {
         return universe.filter { (balances[$0.address] ?? 0) > 0 && seen.insert($0.address).inserted }
     }
 
-    /// `tokens` with their balances and prices (USD per whole token), ranked by `precedes`. Tokens with no balance are
-    /// left out here too.
-    public static func ranked(_ tokens: [Token], balances: [Address: BigUInt], prices: [Address: Double], unverified: Set<Address>) -> [HeldToken] {
+    /// `tokens` with their balances and prices (USD per whole token), ranked by `order`: the Send list's (`precedes`)
+    /// unless another is given (the Portfolio's, `portfolioPrecedes`). Tokens with no balance are left out here too.
+    public static func ranked(_ tokens: [Token], balances: [Address: BigUInt], prices: [Address: Double], unverified: Set<Address>,
+                              by order: (HeldToken, HeldToken) -> Bool = precedes) -> [HeldToken] {
         held(tokens, balances: balances)
             .map { HeldToken(token: $0, balance: balances[$0.address] ?? 0, usd: prices[$0.address], unverified: unverified.contains($0.address)) }
-            .sorted(by: precedes)
+            .sorted(by: order)
     }
 
-    /// The order every list of held tokens uses:
+    /// The order the Portfolio's Assets has always used, unchanged: dollar value, highest first, a token with no price
+    /// counted as $0, then the larger amount held.
+    public static func portfolioPrecedes(_ a: HeldToken, _ b: HeldToken) -> Bool {
+        (a.value ?? 0, a.units) > (b.value ?? 0, b.units)
+    }
+
+    /// The Send list's order:
     /// 1. dollar value, highest first; every token with no price comes after every priced one, never ranked as $0;
     /// 2. then tokens the user chose before Unverified ones;
     /// 3. then the larger amount held (whole tokens);

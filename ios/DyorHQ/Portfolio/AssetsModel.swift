@@ -7,7 +7,7 @@ import SwiftUI
 @Observable
 @MainActor
 final class AssetsModel {
-    /// A held token, valued (`HeldToken`): the Send sheet lists the same ones, in the same order (`WalletTokens`).
+    /// A held token, valued (`HeldToken`): the Send sheet lists the same ones (`WalletTokens`), in its own order.
     typealias TokenAsset = HeldToken
 
     private(set) var tokens: [TokenAsset] = []
@@ -50,7 +50,8 @@ final class AssetsModel {
         let held = read?.tokens ?? []
         async let curveTask = try? env.launchpad.curveHoldings(held)
         var ranked: [TokenAsset] = []
-        if let read { ranked = await WalletTokens.ranked(read, env: env).tokens }
+        // The Portfolio keeps the order it has always had; the Send sheet ranks the same tokens its own way.
+        if let read { ranked = await WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes).tokens }
         // Known before the token list shows, so a retired Moment coin or a coin on a curve is never offered a swap in between.
         for info in await retiredTask {
             retiredByCoin[info.moment.coin] = info

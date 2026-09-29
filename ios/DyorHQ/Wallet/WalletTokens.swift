@@ -4,7 +4,8 @@ import DyorKit
 /// Every token the wallet holds on Monad, read one way for every list of them — the Portfolio's Assets and the Send
 /// sheet — so the two can't drift: native MON, the curated list, every token acquired in the app, and every ERC-20
 /// the wallet's whole transfer history shows it received (Launchpad and Moment coins, airdrops, wrapped tokens), kept
-/// while its balance is above zero and ranked by `WalletHoldings.ranked`.
+/// while its balance is above zero, valued, and ranked (`WalletHoldings.ranked`): the Send list by value with unpriced
+/// tokens after priced ones, the Portfolio in the order it has always used.
 @MainActor
 enum WalletTokens {
     struct Read {
@@ -42,9 +43,9 @@ enum WalletTokens {
         let pricesFailed: Bool
     }
 
-    /// `read`'s tokens valued at their pools' prices and ranked. Prices that can't be read leave tokens unpriced, never
-    /// hidden, and say so (`Ranked.pricesFailed`).
-    static func ranked(_ read: Read, env: AppEnvironment) async -> Ranked {
+    /// `read`'s tokens valued at their pools' prices and ranked by `order` (the Send list's unless another is given).
+    /// Prices that can't be read leave tokens unpriced, never hidden, and say so (`Ranked.pricesFailed`).
+    static func ranked(_ read: Read, env: AppEnvironment, by order: (HeldToken, HeldToken) -> Bool = WalletHoldings.precedes) async -> Ranked {
         let prices: [Address: PriceInfo]
         var failed = false
         do {
@@ -53,6 +54,6 @@ enum WalletTokens {
             prices = PriceService.definedPrices(for: read.tokens)
             failed = true
         }
-        return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: prices.mapValues(\.usd), unverified: read.unverified), pricesFailed: failed)
+        return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: prices.mapValues(\.usd), unverified: read.unverified, by: order), pricesFailed: failed)
     }
 }

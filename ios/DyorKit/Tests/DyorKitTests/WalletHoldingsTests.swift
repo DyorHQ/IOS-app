@@ -50,6 +50,26 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(ranked.filter { $0.value == nil }.count, 3)
     }
 
+    /// The Portfolio keeps the order it has always used, (value or $0, amount) highest first, on the same tokens the Send
+    /// list ranks its own way.
+    func testThePortfolioKeepsItsOrder() {
+        let chosen = Token(address: Address(literal: "0x5555555555555555555555555555555555555555"), symbol: "A", name: "Chosen", decimals: 18)
+        let universe = [Token.mon, Token.usdc, chosen, spam, meme]
+        let balances: [Address: BigUInt] = [Monad.native: units(100, .mon), Monad.usdc: units(0.01, .usdc), chosen.address: units(10, chosen),
+                                            spam.address: units(9_000_000, spam), meme.address: units(40, meme)]
+        let prices: [Address: Double] = [Monad.native: 0.03, Monad.usdc: 1, meme.address: 0]
+        let portfolio = WalletHoldings.ranked(universe, balances: balances, prices: prices, unverified: [spam.address], by: WalletHoldings.portfolioPrecedes)
+        // The rule the Portfolio sorted by before the Send list shared its read, applied to the same tokens.
+        let before = WalletHoldings.held(universe, balances: balances)
+            .map { HeldToken(token: $0, balance: balances[$0.address]!, usd: prices[$0.address], unverified: $0 == spam) }
+            .sorted { ($0.value ?? 0, Amount.units($0.balance, decimals: $0.token.decimals)) > ($1.value ?? 0, Amount.units($1.balance, decimals: $1.token.decimals)) }
+        XCTAssertEqual(portfolio, before)
+        XCTAssertEqual(portfolio.map(\.token.symbol), ["MON", "USDC", "VISIT", "MEME", "A"], "unpriced and $0 tokens by amount, as always")
+        let send = WalletHoldings.ranked(universe, balances: balances, prices: prices, unverified: [spam.address])
+        XCTAssertEqual(send.map(\.token.symbol), ["MON", "USDC", "MEME", "A", "VISIT"], "the Send list: priced first ($0 included), then chosen before Unverified")
+        XCTAssertEqual(Set(send), Set(portfolio), "the same tokens, values and marks")
+    }
+
     func testTiesAreBrokenTheSameWayWhateverTheReadOrder() {
         let twin = Token(address: Address(literal: "0x0000000000000000000000000000000000000abc"), symbol: "meme", name: "Twin", decimals: 18)
         let other = Token(address: Address(literal: "0x5555555555555555555555555555555555555555"), symbol: "ALPHA", name: "Alpha", decimals: 18)
@@ -176,6 +196,8 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(send.contains("guard case .loaded = assets, choice != nil else { return false }"))
         XCTAssertTrue(send.contains("review = SendReview(asset: choice,"))
         XCTAssertTrue(send.contains("unverified = asset.unverified"))
+        XCTAssertTrue(assets.contains("WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes)"), "the Portfolio keeps its order")
+        XCTAssertFalse(send.contains("portfolioPrecedes"), "the Send list ranks by value, unpriced last")
         XCTAssertFalse(send.contains("Token.core.filter"), "no fixed short list")
         XCTAssertFalse(send.contains("\"USDC\", \"USDT0\""), "dollars are never decided by symbol")
     }
