@@ -77,10 +77,12 @@ public enum WalletHoldings {
         ranked.first { !$0.unverified }
     }
 
-    /// After the list is read again: `current` while the wallet still holds it, otherwise the default choice.
+    /// After the list is read: with nothing chosen yet, the default choice; with a choice, that token while the wallet
+    /// still holds it, and none once it doesn't — the user picks again, rather than a send switching to another asset
+    /// under an amount already typed.
     public static func selection(keeping current: Address?, in ranked: [HeldToken]) -> HeldToken? {
-        if let current, let kept = ranked.first(where: { $0.id == current }) { return kept }
-        return defaultChoice(ranked)
+        guard let current else { return defaultChoice(ranked) }
+        return ranked.first { $0.id == current }
     }
 
     /// The held tokens a search matches, in `held` order: a pasted address matches that contract only; other text

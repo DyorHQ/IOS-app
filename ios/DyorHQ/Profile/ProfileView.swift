@@ -287,16 +287,24 @@ struct SendSheet: View {
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
-    /// The token to send: the highest-value one the wallet holds once the list is read (`WalletHoldings.defaultChoice`),
-    /// then the user's pick. Nil before that, and when every held token is Unverified: the user picks.
-    @State private var token: Token?
+    /// The asset to send, as the list showed it when it was chosen, Unverified mark included: the highest-value one the
+    /// wallet holds once the list is read (`WalletHoldings.selection`), then the user's pick. Nil before that, when every
+    /// held token is Unverified, and when a new read no longer holds it: the user picks.
+    @State private var choice: HeldToken?
     /// Every token the wallet holds, ranked: the Portfolio's list (`WalletTokens`).
     @State private var assets: AssetList = .loading
     /// Retry bumps it, to read the list again.
     @State private var attempt = 0
+    /// The wallet and attempt the list was last read for. Coming back from the token list shows the form again, which
+    /// restarts its tasks: the list read for this key stands, with the pick made from it.
+    @State private var assetsKey: String?
+    /// The symbol of a pick a new read no longer held: it was cleared, with the amount, and the user picks again.
+    @State private var droppedChoice: String?
     @State private var recipient = ""
     @State private var amount = ""
     @State private var balance: BigUInt?
+    /// The token `balance` is for.
+    @State private var balanceToken: Address?
     /// What the review shows and signs, frozen when Review is tapped (RT-7): a Max that lands late or an edit behind
     /// the sheet can't change the amount signed after it was shown.
     @State private var review: SendReview?
@@ -305,19 +313,20 @@ struct SendSheet: View {
     /// Whether the recipient has contract code (GR-3): nil until read, or when it couldn't be read.
     @State private var recipientIsContract: Bool?
     @State private var recipientCheckFailed = false
+    /// The recipient whose check finished (`checkRecipient`): coming back from the token list neither checks it again
+    /// nor clears the acknowledgement given for it.
+    @State private var checkedRecipient: Address?
     /// Sending to a contract (or to an address that couldn't be checked) takes this acknowledgement.
     @State private var sendToContract = false
 
+    private var token: Token? { choice?.token }
+    /// Which read of the list the form wants: this wallet's, the `attempt`th.
+    private var assetsReadKey: String { "\(session.address?.hex ?? "")#\(attempt)" }
     /// What was typed or pasted, without surrounding whitespace or invisible characters (GR-4).
     private var recipientText: String { Address.cleanedInput(recipient).text }
     /// Nil for a mixed-case address whose EIP-55 checksum is wrong: a mistyped character must never become the recipient.
     private var recipientAddress: Address? { Address.inputProblem(recipientText) == nil ? Address(recipientText) : nil }
     private var rawAmount: BigUInt? { token.flatMap { Amount.parse(amount, decimals: $0.decimals) } }
-    /// The chosen token as the list shows it: its value, and whether it is Unverified.
-    private var selected: HeldToken? {
-        guard case .loaded(let held) = assets, let token else { return nil }
-        return held.first { $0.id == token.address }
-    }
 
     /// Why this can't be sent, in words: nil when it can. Nothing is said about a field still empty.
     private var problem: String? {
@@ -337,7 +346,9 @@ struct SendSheet: View {
     private var needsContractAcknowledgement: Bool { recipientIsContract == true || recipientCheckFailed }
 
     private var valid: Bool {
-        guard token != nil, problem == nil, let recipientAddress, !recipientAddress.isZero, let rawAmount, rawAmount > 0 else { return false }
+        // Only a pick from the list as read: while it is read again, or when that read failed, there is nothing to send.
+        guard case .loaded = assets, choice != nil else { return false }
+        guard problem == nil, let recipientAddress, !recipientAddress.isZero, let rawAmount, rawAmount > 0 else { return false }
         guard recipientIsContract != nil || recipientCheckFailed else { return false } // still checking
         return !needsContractAcknowledgement || sendToContract
     }
@@ -388,20 +399,23 @@ struct SendSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Review") {
-                        guard let token, let to = recipientAddress, let raw = rawAmount else { return }
-                        review = SendReview(token: token, to: to, amount: raw, toContract: recipientIsContract == true, unverified: selected?.unverified == true)
+                        guard valid, let choice, let to = recipientAddress, let raw = rawAmount else { return }
+                        review = SendReview(asset: choice, to: to, amount: raw, toContract: recipientIsContract == true)
                     }
                     .disabled(!valid)
                 }
             }
-            .task(id: "\(session.address?.hex ?? "")#\(attempt)") { await loadAssets() }
+            .task(id: assetsReadKey) { await loadAssets(assetsReadKey) }
             .task(id: token) {
-                // Available and Max are always the chosen token's, read fresh: never the previous token's balance.
-                balance = nil
+                // Available and Max are always the chosen token's, read fresh: never another token's balance. Coming back
+                // from the token list runs this again; the balance already read for the same token stays until the new
+                // one lands.
+                if balanceToken != token?.address { balance = nil; balanceToken = nil }
                 guard let token, let address = session.address else { return }
                 let fresh = try? await ERC20.balances(of: [token], owner: address, rpc: env.rpc, multicall: env.multicall)[token.address]
-                guard !Task.isCancelled, token == self.token else { return }
+                guard !Task.isCancelled, token == self.token, let fresh else { return }
                 balance = fresh
+                balanceToken = token.address
             }
             .task(id: recipientAddress) { await checkRecipient() }
             .sheet(item: $review) { review in
@@ -452,19 +466,25 @@ struct SendSheet: View {
             Text("This wallet holds no tokens on Monad, so there's nothing to send.").foregroundStyle(.secondary)
         case .loaded(let held):
             NavigationLink {
-                SendAssetPicker(assets: held, selected: token?.address) { token = $0.token }
+                SendAssetPicker(assets: held, selected: choice?.id) { choice = $0; droppedChoice = nil }
             } label: {
-                if let selected { SendAssetRow(asset: selected) } else { Text("Choose a token") }
+                if let choice { SendAssetRow(asset: choice) } else { Text("Choose a token") }
+            }
+            if let droppedChoice, choice == nil {
+                Text("Your wallet no longer holds the \(droppedChoice) you picked. Choose a token.").font(.footnote).foregroundStyle(Color.attention)
             }
         }
     }
 
-    /// Reads every token the wallet holds, as the Portfolio does (`WalletTokens`), and keeps the pick while it is still
-    /// held; otherwise starts on the highest-value one.
-    private func loadAssets() async {
+    /// Reads every token the wallet holds, as the Portfolio does (`WalletTokens`), once per `key`: coming back from the
+    /// token list runs this again, and the list already read stands. A new read (Retry, another wallet) keeps the pick
+    /// while it is still held; a pick it no longer holds is cleared with the amount, never swapped for another asset.
+    private func loadAssets(_ key: String) async {
+        guard key != assetsKey else { return }
         guard let address = session.address else {
             assets = .loaded([])
-            token = nil
+            choice = nil
+            assetsKey = key
             return
         }
         assets = .loading
@@ -473,27 +493,40 @@ struct SendSheet: View {
             let ranked = await WalletTokens.ranked(read, env: env)
             guard !Task.isCancelled, address == session.address else { return }
             assets = .loaded(ranked)
-            token = WalletHoldings.selection(keeping: token?.address, in: ranked)?.token
+            let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked)
+            if let previous = choice, kept == nil {
+                droppedChoice = previous.token.symbol
+                amount = ""
+            }
+            choice = kept
+            assetsKey = key
         } catch {
             guard !Task.isCancelled else { return }
             assets = .failed
+            assetsKey = key
         }
     }
 
     /// Reads whether the recipient has code. An EIP-7702-delegated account (Monad accounts can carry a `0xef0100`
-    /// delegation) is still a wallet its key controls, so only other code counts as a contract.
+    /// delegation) is still a wallet its key controls, so only other code counts as a contract. A check that finished
+    /// for this address stands: coming back from the token list runs this again, and must not clear the acknowledgement.
     private func checkRecipient() async {
+        let to = recipientAddress
+        if let to, to == checkedRecipient { return }
         recipientIsContract = nil
         recipientCheckFailed = false
         sendToContract = false
-        guard let to = recipientAddress, !to.isZero else { return }
+        checkedRecipient = nil
+        guard let to, !to.isZero else { return }
         do {
             let code = try await env.rpc.code(at: to)
-            guard to == recipientAddress else { return }
+            guard !Task.isCancelled, to == recipientAddress else { return }
             recipientIsContract = !code.isEmpty && !(code.count == 23 && code.prefix(3) == Data([0xef, 0x01, 0x00]))
+            checkedRecipient = to
         } catch {
             guard !Task.isCancelled, to == recipientAddress else { return }
             recipientCheckFailed = true
+            checkedRecipient = to
         }
     }
 
@@ -520,15 +553,16 @@ private struct SendReview: Identifiable {
     let to: Address
     let amount: BigUInt
     var toContract = false
-    /// The token reached the wallet without being chosen here (`HeldToken.unverified`).
+    /// The token reached the wallet without being chosen here (`HeldToken.unverified`), as the list marked it when it
+    /// was picked.
     var unverified = false
 
-    init(token: Token, to: Address, amount: BigUInt, toContract: Bool = false, unverified: Bool = false) {
-        self.token = token
+    init(asset: HeldToken, to: Address, amount: BigUInt, toContract: Bool = false) {
+        token = asset.token
         self.to = to
         self.amount = amount
         self.toContract = toContract
-        self.unverified = unverified
+        unverified = asset.unverified
     }
 
     func request() throws -> TransactionRequest { try TokenTransfer.request(token, to: to, amount: amount) }

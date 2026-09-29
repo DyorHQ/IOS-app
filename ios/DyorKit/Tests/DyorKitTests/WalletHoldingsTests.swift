@@ -108,11 +108,16 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(WalletHoldings.matching(ranked, query: "usdc").isEmpty)
     }
 
-    func testSelectionKeepsTheCurrentTokenWhileItIsHeld() {
+    func testSelectionKeepsTheCurrentTokenWhileItIsHeldAndNeverSwitchesToAnother() throws {
         let ranked = WalletHoldings.ranked([Token.mon, meme], balances: [Monad.native: units(100, .mon), meme.address: units(1, meme)], prices: [Monad.native: 0.03], unverified: [])
         XCTAssertEqual(WalletHoldings.selection(keeping: meme.address, in: ranked)?.id, meme.address)
-        XCTAssertEqual(WalletHoldings.selection(keeping: Monad.usdc, in: ranked)?.id, Monad.native, "no longer held: back to the default")
-        XCTAssertEqual(WalletHoldings.selection(keeping: nil, in: ranked)?.id, Monad.native)
+        XCTAssertNil(WalletHoldings.selection(keeping: Monad.usdc, in: ranked), "no longer held: cleared, never swapped for the default under a typed amount")
+        XCTAssertEqual(WalletHoldings.selection(keeping: nil, in: ranked)?.id, Monad.native, "nothing chosen yet: the default")
+        // A re-read carries the kept token's fresh balance and marks.
+        let reread = WalletHoldings.ranked([Token.mon, meme], balances: [Monad.native: units(100, .mon), meme.address: units(3, meme)], prices: [Monad.native: 0.03], unverified: [meme.address])
+        let kept = try XCTUnwrap(WalletHoldings.selection(keeping: meme.address, in: reread))
+        XCTAssertEqual(kept.balance, units(3, meme))
+        XCTAssertTrue(kept.unverified)
     }
 
     func testSearchMatchesSymbolNameOrAddress() {
@@ -146,8 +151,15 @@ final class WalletHoldingsTests: XCTestCase {
             XCTAssertTrue(source.contains("WalletTokens.ranked(read, env: env)"))
             XCTAssertFalse(source.contains("heldTokens("), "no screen reads the wallet's tokens its own way")
         }
-        XCTAssertTrue(send.contains("token = WalletHoldings.selection(keeping: token?.address, in: ranked)?.token"))
+        XCTAssertTrue(send.contains("let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked"))
         XCTAssertTrue(send.contains("usd: WalletHoldings.stableUSD(review.token, amount: review.amount)"))
+        // Coming back from the token list restarts the form's tasks: the list is read once per wallet and attempt, a
+        // finished recipient check stands, and Review takes only a pick from the list as read, with its Unverified mark.
+        XCTAssertTrue(send.contains("guard key != assetsKey else { return }"))
+        XCTAssertTrue(send.contains("if let to, to == checkedRecipient { return }"))
+        XCTAssertTrue(send.contains("guard case .loaded = assets, choice != nil else { return false }"))
+        XCTAssertTrue(send.contains("review = SendReview(asset: choice,"))
+        XCTAssertTrue(send.contains("unverified = asset.unverified"))
         XCTAssertFalse(send.contains("Token.core.filter"), "no fixed short list")
         XCTAssertFalse(send.contains("\"USDC\", \"USDT0\""), "dollars are never decided by symbol")
     }
