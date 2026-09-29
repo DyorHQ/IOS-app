@@ -675,6 +675,24 @@ public extension LaunchpadMath {
         price * supply / BigUInt(10).power(18)
     }
 
+    /// Launches by market cap, largest first, across pair assets: each cap in whole pair units (6 decimals for USDC and
+    /// AUSD, 18 for MON and aBIL) times its pair asset's USD price (`pairUSD`, by pair token; MON under the zero
+    /// address), so a 50,000 USDC coin ranks above a 1 MON one although its raw amount is smaller. A launch whose pair has
+    /// no price yet ranks after every priced one, by its cap in whole pair units. Ties keep the given order.
+    static func byMarketCap(_ launches: [Launch], pairUSD: [Address: Double]) -> [Launch] {
+        let keyed = launches.enumerated().map { index, launch -> (index: Int, launch: Launch, priced: Bool, value: Double) in
+            let units = Amount.units(launch.marketCap, decimals: launch.pair.decimals)
+            if let usd = pairUSD[launch.pairToken], usd > 0 { return (index, launch, true, units * usd) }
+            return (index, launch, false, units)
+        }
+        return keyed.sorted { a, b in
+            if a.priced != b.priced { return a.priced }
+            if a.value != b.value { return a.value > b.value }
+            return a.index < b.index
+        }
+        .map(\.launch)
+    }
+
     /// Progress to graduation in basis points: 10 000 once graduated, else raised / threshold with the raise
     /// capped at the threshold.
     static func progressBps(phase: LaunchPhase, realQuoteReserve: BigUInt, sweptQuote: BigUInt, threshold: BigUInt) -> Int {

@@ -161,7 +161,7 @@ struct LaunchpadView: View {
         let live = matching.filter { $0.phase.boardSection == .climbing }
         switch sort {
         case .newest: return live.sorted { $0.launchedAt > $1.launchedAt }
-        case .marketCap: return live.sorted { $0.marketCap > $1.marketCap }
+        case .marketCap: return LaunchpadMath.byMarketCap(live, pairUSD: model.pairUSD)
         case .progress: return live.sorted { $0.progressBps > $1.progressBps }
         }
     }
@@ -345,6 +345,10 @@ enum RelativeTime {
 final class LaunchpadModel {
     private(set) var launches: [Launch] = []
     private(set) var protocolInfo: ProtocolInfo?
+    /// Each pair asset's USD price, by pair token (MON under the zero address; USDC and AUSD $1), read the way
+    /// `LaunchpadProfileModel` reads them: the Market Cap sort compares coins in dollars across pair assets. A pair with
+    /// no price is left out, and a failed read keeps the last prices.
+    private(set) var pairUSD: [Address: Double] = [:]
     private(set) var loading = false
     private(set) var error: String?
 
@@ -368,6 +372,16 @@ final class LaunchpadModel {
         } catch {
             self.error = describe(error)
         }
+        if let prices = await Self.pairPrices(env: env, launches: launches) { pairUSD = prices }
+    }
+
+    private static func pairPrices(env: AppEnvironment, launches: [Launch]) async -> [Address: Double]? {
+        var tokens: [Address: Token] = [:]
+        for launch in launches where tokens[launch.pairToken] == nil {
+            tokens[launch.pairToken] = Token(address: launch.pairToken, symbol: launch.pair.symbol, name: launch.pair.symbol, decimals: launch.pair.decimals)
+        }
+        guard !tokens.isEmpty, let prices = try? await env.prices.prices(for: Array(tokens.values)) else { return nil }
+        return prices.compactMapValues { $0.usd > 0 ? $0.usd : nil }
     }
 }
 

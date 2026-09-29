@@ -510,6 +510,34 @@ final class LaunchpadTests: XCTestCase {
         }
     }
 
+    /// The board's Market Cap sort compares every pair asset in dollars: a 50,000 USDC coin (5e10 raw, 6 decimals) above
+    /// a 1 MON coin (1e18 raw), an aBIL coin by aBIL's price, and a coin whose pair has no price yet after every priced
+    /// one, by its cap in whole units.
+    func testMarketCapSortComparesPairAssetsInDollars() {
+        let usdc = PairInfo(address: Monad.usdc, symbol: "USDC", decimals: 6, isNative: false)
+        let ausd = PairInfo(address: Monad.ausd, symbol: "AUSD", decimals: 6, isNative: false)
+        let abil = PairInfo(address: Token.abil.address, symbol: "aBIL", decimals: 18, isNative: false)
+        func launch(_ n: UInt8, _ pair: PairInfo, cap: BigUInt) -> Launch {
+            Launch(token: Address(data: Data(repeating: n, count: 20))!, curve: curve, deployer: deployer, creatorFeeRecipient: creatorFeeRecipient, pairToken: pair.address,
+                   graduationThreshold: 0, creatorTaxBps: 0, poolFeeBps: 100, tickSpacing: 60, holderFeeSharing: false, graduationVenue: .uniswapV4, phase: .bonding,
+                   sweptQuote: 0, sweptTokens: 0, sweptAt: 0, poolId: Data(repeating: 0, count: 32), name: "Coin \(n)", symbol: "C\(n)", logo: "", description: "",
+                   socials: .none, pair: pair, price: 0, realQuoteReserve: 0, completed: false, rescued: false, launchedAt: Int(n), supply: 0, marketCap: cap, progressBps: 0)
+        }
+        let oneMON = launch(1, .mon, cap: e18(1))
+        let bigUSDC = launch(2, usdc, cap: e6(50_000))
+        let smallAUSD = launch(3, ausd, cap: e6(2))
+        let abilCoin = launch(4, abil, cap: e18(30))
+        let unpriced = launch(5, PairInfo(address: Address(literal: "0x00000000000000000000000000000000000a0005"), symbol: "NEW", decimals: 18, isNative: false), cap: e18(1_000_000))
+        let prices: [Address: Double] = [Monad.native: 0.03, Monad.usdc: 1, Monad.ausd: 1, Token.abil.address: 101]
+        let sorted = LaunchpadMath.byMarketCap([oneMON, smallAUSD, unpriced, bigUSDC, abilCoin], pairUSD: prices)
+        XCTAssertEqual(sorted.map(\.symbol), ["C2", "C4", "C3", "C1", "C5"], "50,000 USDC, 30 aBIL ($3,030), 2 AUSD, 1 MON ($0.03), then the unpriced one")
+        // Raw amounts alone would have put every 6-decimal coin last.
+        XCTAssertEqual([oneMON, smallAUSD, unpriced, bigUSDC, abilCoin].sorted { $0.marketCap > $1.marketCap }.map(\.symbol), ["C5", "C4", "C1", "C2", "C3"])
+        // With no prices at all, whole units still compare across decimals; equal caps keep their order.
+        XCTAssertEqual(LaunchpadMath.byMarketCap([oneMON, smallAUSD, bigUSDC], pairUSD: [:]).map(\.symbol), ["C2", "C3", "C1"])
+        XCTAssertEqual(LaunchpadMath.byMarketCap([launch(6, usdc, cap: e6(5)), launch(7, ausd, cap: e6(5))], pairUSD: prices).map(\.symbol), ["C6", "C7"])
+    }
+
     func testPhaseMappingAndPriceNumber() {
         XCTAssertEqual(LaunchPhase(raw: BigUInt(0)), .bonding)
         XCTAssertEqual(LaunchPhase(raw: BigUInt(1)), .migrating)
