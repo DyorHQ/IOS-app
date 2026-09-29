@@ -168,9 +168,9 @@ public enum LaunchPhase: Int, Sendable, Hashable, CaseIterable {
 
     init(raw: BigUInt) { self = LaunchPhase(rawValue: Int(clamping: raw)) ?? .bonding }
 
-    /// The Launch tab's section that lists a coin in this phase (and finds it by search). Every phase has one, so a screen
-    /// that sends a holder to the Launch tab for a coin (`CurveRoute.launchTab`) never sends them to a board that leaves
-    /// it out: a coin in refund mode, whose holders sell it back into the curve, least of all.
+    /// The Launch tab's section that lists a coin in this phase (and finds it by search), among the coins the board lists
+    /// (`Launch.listsOnBoard`: a retired launchpad's only once graduated). Every phase has one. No screen sends a holder to
+    /// the board for a coin: it opens the coin's page, from its launch or by reference (`CurveRoute.launchUnread`).
     public var boardSection: LaunchBoardSection {
         switch self {
         case .graduated: return .graduated
@@ -189,6 +189,49 @@ public enum LaunchBoardSection: Sendable, Hashable, CaseIterable {
     /// Off the curve's trading side without a pool: in refund mode (holders sell back into the curve) or migrating
     /// (nothing trades until it graduates).
     case refundAndMigrating
+}
+
+/// One read of every launchpad's launches (`LaunchpadService.allLaunchesRead`): what the factories that answered
+/// recorded, and the factories that didn't, whose launches are missing.
+public struct LaunchesRead: Sendable, Hashable {
+    public let launches: [Launch]
+    /// The factories, live or retired, whose read failed: none of their launches is in `launches`.
+    public let unread: [Address]
+
+    public init(launches: [Launch], unread: [Address]) {
+        self.launches = launches
+        self.unread = unread
+    }
+
+    /// Every factory answered: `launches` holds every launchpad's launches (the newest of each).
+    public var complete: Bool { unread.isEmpty }
+}
+
+/// What the Launch tab's board shows beyond its public sections.
+public enum LaunchBoard {
+    /// The coins among `launches` that the public board leaves out (`Launch.listsOnBoard`: sell-only) and the wallet
+    /// holds, per `balances`, newest first: the board's holder-only "Your Sell-Only Coins", so a holder can always reach
+    /// their page from the Launch tab. Nil when a balance of one of them is missing (its read failed): the section then
+    /// keeps what it last showed, never a coin dropped or added on a failed read. For the same reason `launches` must
+    /// come from a complete read (`LaunchesRead.complete`): a retired factory that didn't answer leaves its coins out,
+    /// and a held one would drop from the section.
+    public static func heldSellOnly(_ launches: [Launch], balances: [Address: BigUInt]) -> [Launch]? {
+        var held: [Launch] = []
+        for launch in launches where !launch.listsOnBoard {
+            guard let balance = balances[launch.token] else { return nil }
+            if balance > 0 { held.append(launch) }
+        }
+        return held.sorted { $0.launchedAt > $1.launchedAt }
+    }
+
+    /// What "Your Sell-Only Coins" says of `coins`: they sell on their page and can't be bought, and, when one of them
+    /// takes no sell now (`Launch.curveSellsOpen`: its graduation is pending, or it migrates), that a coin waiting to
+    /// graduate can't be sold until it does.
+    public static func sellOnlySubtitle(_ coins: [Launch]) -> String {
+        coins.allSatisfy(\.curveSellsOpen)
+            ? "From retired launchpads: sell them on their page. They can't be bought."
+            : "From retired launchpads: sell them on their page. They can't be bought, and a coin waiting to graduate can't be sold until it does."
+    }
 }
 
 /// `Types.GraduationVenue` in the contracts: where a completed curve graduates. The creator chooses at launch;
@@ -464,6 +507,12 @@ public struct Launch: Identifiable, Hashable, Sendable {
     /// The sell goes into the curve, whenever it takes one (`curveSellsOpen`: not while a stuck graduation waits).
     public var isSellOnly: Bool { isRetiredLaunchpad && phase != .graduated }
 
+    /// Listed on the Launch tab's public board: every live-launchpad coin, and a retired launchpad's coin only once it
+    /// graduated into a pool, like QT (owner decision 2026-09-29). The rule follows the phase, so a retired coin that
+    /// graduates later lists by itself. A sell-only coin stays reachable by its page (Home, the Portfolio, Swap, My
+    /// Launchpad, and the board's "Your Sell-Only Coins" for its holders: `LaunchBoard.heldSellOnly`), never by the board.
+    public var listsOnBoard: Bool { !isSellOnly }
+
     /// A stuck Monday graduation that DyorHQ's keepers finish, on every stack with a `graduateFallback` (v1 and v2): they
     /// retry Monday Trade with about 29.9M gas and take the Uniswap v4 fallback when it still fails. The app never sends
     /// the fallback itself (`LaunchpadService.graduateFallbackPlan` refuses it); anyone may still retry the plain
@@ -493,6 +542,10 @@ public struct Launch: Identifiable, Hashable, Sendable {
 
     /// The coin page's status line: "Graduation pending" for a completed curve waiting to graduate, else the phase.
     public var statusTitle: String { awaitsGraduation ? "Graduation pending" : phase.title }
+
+    /// A sell-only coin's badge on its card: "Sell only" while its curve takes a sell, else what it waits for
+    /// (`statusTitle`: "Graduation pending" or "Migrating"), when nothing trades until it graduates.
+    public var sellOnlyBadge: String { curveSellsOpen ? "Sell only" : statusTitle }
 }
 
 /// Everything the token page needs beyond the list row.

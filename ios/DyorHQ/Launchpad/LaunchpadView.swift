@@ -6,7 +6,9 @@ import SwiftUI
 
 /// The launchpad: a discovery board of coins — graduated pools, coins still climbing their bonding curve, and coins in
 /// refund mode or migrating — as an image-forward two-column grid, plus the flow to launch a new one. Modeled on the
-/// Ponsfamily launchpad, rebuilt in DyorHQ's serif / monochrome system with the Monad-purple accent.
+/// Ponsfamily launchpad, rebuilt in DyorHQ's serif / monochrome system with the Monad-purple accent. The board lists the
+/// live launchpad's coins and a retired one's only once graduated (`Launch.listsOnBoard`); a retired launchpad's
+/// sell-only coins show only to their holders, under "Your Sell-Only Coins".
 struct LaunchpadView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
@@ -16,18 +18,24 @@ struct LaunchpadView: View {
     @State private var showProfile = false
     @State private var query = ""
     @State private var sort: LaunchSort = .newest
-    @State private var path: [Launch] = []
+    /// The pages over the board: a launch's, or the loader of one opened by reference.
+    @State private var path: [LaunchPage] = []
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
     var body: some View {
         NavigationStack(path: $path) {
-            // While the live (v2) launchpad is not deployed the board still lists the retired launchpads' coins: their
-            // holders can sell them and claim what they earned, graduated ones trade on Swap, and nobody buys one still
-            // on its curve (sell-only, owner decision 2026-09-28). Only new launches wait.
+            // The retired launchpads' coins list only once graduated (they trade on Swap). One still on its curve is
+            // sell-only (owner decision 2026-09-28) and hidden from the board (2026-09-29): its holders reach its page
+            // from "Your Sell-Only Coins", Home, the Portfolio and Swap.
             board
             .navigationTitle("Launch")
-            .navigationDestination(for: Launch.self) { launch in LaunchDetailView(launch: launch) }
+            .navigationDestination(for: LaunchPage.self) { page in
+                switch page {
+                case .launch(let launch): LaunchDetailView(launch: launch)
+                case .reference(let reference): LaunchReferenceView(reference: reference)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Haptics.tap(); showProfile = true } label: { Label("My Launchpad", systemImage: "person.crop.circle") }
@@ -42,35 +50,62 @@ struct LaunchpadView: View {
             .refreshable { await model.load(env: env, account: session.address) }
             // Restarts with the wallet: whether it may launch is part of what the create screen is given.
             .task(id: session.address) { await model.poll(env: env, account: session.address) }
-            .overlay { if model.launches.isEmpty, model.loading { ProgressView().controlSize(.large) } }
+            // Another account can take over in place (a Privy session adopted over a watch-only one, say) without the
+            // tabs being rebuilt: the pages over the board were the previous account's, so they go.
+            .onChange(of: session.address) { _, _ in path = [] }
+            .overlay { if firstLoad { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showCreate) { CreateLaunchView(protocolInfo: model.protocolInfo) { Task { await model.load(env: env, account: session.address) } } }
             .sheet(isPresented: $showProfile) { LaunchpadProfileView() }
             .onChange(of: router.pendingLaunch) { _, launch in
                 guard let launch else { return }
-                if path.last != launch { path.append(launch) }
+                open(.launch(launch))
                 router.pendingLaunch = nil
             }
-            .onAppear { if let launch = router.pendingLaunch { path = [launch]; router.pendingLaunch = nil } }
+            .onChange(of: router.pendingLaunchReference) { _, reference in
+                guard let reference else { return }
+                open(.reference(reference))
+                router.pendingLaunchReference = nil
+            }
+            // The tab is built lazily: a page sent before it first appears opens then, over the board.
+            .onAppear {
+                if let launch = router.pendingLaunch { path = [.launch(launch)]; router.pendingLaunch = nil }
+                if let reference = router.pendingLaunchReference { path = [.reference(reference)]; router.pendingLaunchReference = nil }
+            }
         }
+    }
+
+    /// Pushes `page`, unless its coin's page is already on top: a launch read elsewhere (Home's copy differs in every live
+    /// field) or a reference to the same coin is the same page, never a second one over it.
+    private func open(_ page: LaunchPage) {
+        if path.last?.token != page.token { path.append(page) }
     }
 
     private var board: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 if !env.config.launchpad.isDeployed {
-                    Label("New launches open soon. Coins from the retired launchpads can be sold here, but not bought; graduated ones trade on Swap.", systemImage: "clock")
+                    Label("New launches open soon.", systemImage: "clock")
                         .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, !model.loading {
-                    emptyState
+                if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !firstLoad {
+                    // A search that found nothing says so: a coin the board doesn't list (a retired launchpad's sell-only
+                    // coin) is reached from Home, the Portfolio or Swap, not found here. Only the first load hides this:
+                    // a poll leaves it on screen.
+                    if searching { ContentUnavailableView.search(text: query).padding(.top, 40) } else { emptyState }
                 } else {
                     if !graduated.isEmpty { section(title: "Graduated", count: graduated.count, subtitle: "Cleared the graduation threshold", coins: graduated) }
                     exploreSection
-                    // Every phase has its section (`LaunchPhase.boardSection`): a holder sent here for a coin whose own
-                    // launch couldn't be read (`CurveRoute.launchTab`) finds it, one in refund mode above all.
+                    // Every phase has its section (`LaunchPhase.boardSection`), among the coins the board lists: the live
+                    // launchpad's in refund mode or migrating.
                     if !refundAndMigrating.isEmpty {
                         section(title: "Refund & Migrating", count: refundAndMigrating.count,
                                 subtitle: "In refund mode, holders sell back into the curve; a migrating coin trades once it graduates", coins: refundAndMigrating)
+                    }
+                    // Only the signed-in wallet's own: the retired launchpads' coins it still holds, which the board
+                    // doesn't list, so the Launch tab is never a dead end for their holders.
+                    if !sellOnly.isEmpty {
+                        section(title: "Your Sell-Only Coins", count: sellOnly.count,
+                                subtitle: LaunchBoard.sellOnlySubtitle(sellOnly), coins: sellOnly)
                     }
                 }
             }
@@ -85,7 +120,7 @@ struct LaunchpadView: View {
             sectionHeader(title, count: count, subtitle: subtitle)
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(coins) { launch in
-                    NavigationLink(value: launch) { LaunchCard(launch: launch) }
+                    NavigationLink(value: LaunchPage.launch(launch)) { LaunchCard(launch: launch) }
                         .buttonStyle(.plain)
                 }
             }
@@ -93,7 +128,13 @@ struct LaunchpadView: View {
     }
 
     @ViewBuilder private var exploreSection: some View {
-        if !climbing.isEmpty {
+        if climbing.isEmpty {
+            // Nothing on the live curve yet: an invitation, not a gap (only while the launchpad is live, and not for a
+            // search that found nothing, or for a first load).
+            if env.config.launchpad.isDeployed, !searching, !firstLoad {
+                exploreEmptyCard
+            }
+        } else {
             VStack(alignment: .leading, spacing: 12) {
                 sectionHeader("Explore", count: climbing.count, subtitle: "Coins still climbing toward graduation")
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -113,7 +154,7 @@ struct LaunchpadView: View {
                 }
                 LazyVGrid(columns: columns, spacing: 12) {
                     ForEach(climbing) { launch in
-                        NavigationLink(value: launch) { LaunchCard(launch: launch) }
+                        NavigationLink(value: LaunchPage.launch(launch)) { LaunchCard(launch: launch) }
                             .buttonStyle(.plain)
                     }
                 }
@@ -121,13 +162,33 @@ struct LaunchpadView: View {
         }
     }
 
-    private func sectionHeader(_ title: String, count: Int, subtitle: String) -> some View {
+    private var exploreEmptyCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("Explore", count: nil, subtitle: "Coins still climbing toward graduation")
+            VStack(spacing: 12) {
+                Image(systemName: "flame").font(.title2).foregroundStyle(Color.brand)
+                Text("No coins on the curve yet: launch the first one.")
+                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button { Haptics.tap(); showCreate = true } label: { Text("Launch a Coin").fontWeight(.semibold) }
+                    .buttonStyle(.borderedProminent).disabled(!session.canSign)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 20).padding(.horizontal, 16)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color(.separator).opacity(0.4), lineWidth: 0.5))
+        }
+    }
+
+    /// A section's title with its count (none for an empty section), and what it lists.
+    private func sectionHeader(_ title: String, count: Int?, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 Text(title).font(.title3.weight(.semibold))
-                Text("\(count)").font(.caption.weight(.semibold)).monospacedDigit()
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(Color.brand.opacity(0.14), in: Capsule()).foregroundStyle(Color.brand)
+                if let count {
+                    Text("\(count)").font(.caption.weight(.semibold)).monospacedDigit()
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Color.brand.opacity(0.14), in: Capsule()).foregroundStyle(Color.brand)
+                }
             }
             Text(subtitle).font(.footnote).foregroundStyle(.secondary)
         }
@@ -147,10 +208,23 @@ struct LaunchpadView: View {
         .frame(maxWidth: .infinity).padding(.top, 60)
     }
 
-    private var matching: [Launch] {
+    /// The coins the board lists (`Launch.listsOnBoard`), searched: every public section is taken from these, so a
+    /// hidden coin is never listed, counted or found by search.
+    private var matching: [Launch] { searched(model.launches.filter(\.listsOnBoard)) }
+
+    /// The wallet's own sell-only coins (`LaunchpadModel.heldSellOnly`), searched too.
+    private var sellOnly: [Launch] { searched(model.heldSellOnly) }
+
+    private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    /// The first read hasn't answered yet: the spinner shows over the board, and nothing says "empty" or "not found".
+    /// Every later poll keeps what is on screen.
+    private var firstLoad: Bool { model.loading && model.launches.isEmpty }
+
+    private func searched(_ launches: [Launch]) -> [Launch] {
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return model.launches }
-        return model.launches.filter { $0.name.localizedCaseInsensitiveContains(q) || $0.symbol.localizedCaseInsensitiveContains(q) }
+        guard !q.isEmpty else { return launches }
+        return launches.filter { $0.name.localizedCaseInsensitiveContains(q) || $0.symbol.localizedCaseInsensitiveContains(q) }
     }
 
     private var graduated: [Launch] {
@@ -166,10 +240,26 @@ struct LaunchpadView: View {
         }
     }
 
-    /// Coins in refund mode (holders sell back into the curve, the retired launchpads' too) or migrating (nothing trades
-    /// until they graduate), newest first.
+    /// Coins in refund mode (holders sell back into the curve) or migrating (nothing trades until they graduate), newest
+    /// first. The board lists none of a retired launchpad's: those are sell-only.
     private var refundAndMigrating: [Launch] {
         matching.filter { $0.phase.boardSection == .refundAndMigrating }.sorted { $0.launchedAt > $1.launchedAt }
+    }
+}
+
+/// A page over the Launch tab's board: a launch's own, or that of a launch opened by reference
+/// (`Router.openLaunch(_: LaunchReference)`), which reads it first. One typed path holds both, pushed by value: a stack
+/// bound to a typed path pushes its own element type and nothing else.
+enum LaunchPage: Hashable {
+    case launch(Launch)
+    case reference(LaunchReference)
+
+    /// The coin whose page it is, however it was opened: one page per coin on the stack.
+    var token: Address {
+        switch self {
+        case .launch(let launch): return launch.token
+        case .reference(let reference): return reference.token
+        }
     }
 }
 
@@ -220,7 +310,8 @@ struct LaunchCard: View {
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 1) {
-                        if launch.isRetiredLaunchpad { Text("Retired launchpad").font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                        // A retired launchpad's graduated coin (QT) is an ordinary pool coin: no caption.
+                        if launch.isSellOnly { Text("Retired launchpad").font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                         Text(RelativeTime.short(launch.launchedAt)).font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
@@ -237,7 +328,15 @@ struct LaunchCard: View {
     }
 
     @ViewBuilder private var badge: some View {
-        if isGraduated {
+        if launch.isSellOnly {
+            // Only under Your Sell-Only Coins: the public board lists none. A stuck or migrating one is badged with what
+            // it waits for: nothing trades until it graduates.
+            Text(launch.sellOnlyBadge)
+                .font(.caption2.weight(.bold))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .foregroundStyle(.secondary)
+        } else if isGraduated {
             Label("Graduated", systemImage: "checkmark.seal.fill")
                 .font(.caption2.weight(.bold))
                 .padding(.horizontal, 8).padding(.vertical, 4)
@@ -269,34 +368,6 @@ struct LaunchCard: View {
             .frame(height: 5)
             Text("\(launch.progressBps / 100)% to graduation").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
         }
-    }
-}
-
-/// A compact launch row for lists (the Home page's launchpad holdings), as opposed to the discovery-grid card.
-struct LaunchRow: View {
-    let launch: Launch
-
-    var body: some View {
-        HStack(spacing: 12) {
-            LaunchArtwork(symbol: launch.symbol, logo: launch.logo, pointSize: 40)
-                .frame(width: 40, height: 40)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(launch.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text("$\(launch.symbol)").font(.caption).foregroundStyle(.secondary)
-                }
-                if launch.phase == .bonding {
-                    Text("\(launch.progressBps / 100)% to graduation").font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                } else {
-                    Text(launch.phase.title).font(.caption).foregroundStyle(launch.phase == .graduated ? Color.positive : .secondary)
-                }
-            }
-            Spacer()
-            Text("\(NumberStyle.units(launch.marketCap, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)")
-                .font(.subheadline.weight(.medium)).monospacedDigit()
-        }
-        .padding(.vertical, 8)
     }
 }
 
@@ -349,6 +420,12 @@ final class LaunchpadModel {
     /// `LaunchpadProfileModel` reads them: the Market Cap sort compares coins in dollars across pair assets. A pair with
     /// no price is left out, and a failed read keeps the last prices.
     private(set) var pairUSD: [Address: Double] = [:]
+    /// The retired launchpads' sell-only coins the signed-in wallet holds, which the board doesn't list: its "Your
+    /// Sell-Only Coins" (`LaunchBoard.heldSellOnly`). Cleared on an account change; a read that failed, of a factory
+    /// or a balance, keeps it.
+    private(set) var heldSellOnly: [Launch] = []
+    /// The account `heldSellOnly` belongs to.
+    private var loadedFor: Address?
     private(set) var loading = false
     private(set) var error: String?
 
@@ -361,18 +438,42 @@ final class LaunchpadModel {
 
     /// `account` is the signed-in wallet: whether it may launch (`canLaunch`) comes with the factory's terms.
     func load(env: AppEnvironment, account: Address?) async {
-        // Runs while the live stack is pending too: the retired stacks' launches still list (and `protocolInfo` is nil).
+        // Runs while the live stack is pending too: the retired stacks' launches are still read (and `protocolInfo` is nil).
         loading = true
         defer { loading = false }
+        // Another account: none of the previous one's coins may stay on screen, even when a read below fails (RS-10).
+        if account != loadedFor {
+            heldSellOnly = []
+            loadedFor = account
+        }
+        var read: LaunchesRead?
         do {
             async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets, account: account)
-            launches = try await env.launchpad.allLaunches(limit: 60)
+            let fresh = try await env.launchpad.allLaunchesRead(limit: 60)
+            launches = fresh.launches
+            read = fresh
             protocolInfo = try? await info
             error = nil
         } catch {
             self.error = describe(error)
         }
+        if let read, let held = await Self.heldSellOnly(env: env, account: account, read: read), !Task.isCancelled, account == loadedFor {
+            heldSellOnly = held
+        }
         if let prices = await Self.pairPrices(env: env, launches: launches) { pairUSD = prices }
+    }
+
+    /// The sell-only coins among a read's launches that `account` holds, in one balanceOf multicall; none without an
+    /// account or such a coin, and nil when a balance couldn't be read.
+    private static func heldSellOnly(env: AppEnvironment, account: Address?, read: LaunchesRead) async -> [Launch]? {
+        // A factory that didn't answer left its coins out of the read: nothing can be decided from the rest, or a held
+        // coin of a retired stack that failed would drop from the section (RS-10).
+        guard read.complete else { return nil }
+        let sellOnly = read.launches.filter { !$0.listsOnBoard }
+        guard let account, !sellOnly.isEmpty else { return [] }
+        let tokens = sellOnly.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
+        guard let balances = try? await ERC20.balances(of: tokens, owner: account, rpc: env.rpc, multicall: env.multicall) else { return nil }
+        return LaunchBoard.heldSellOnly(sellOnly, balances: balances)
     }
 
     private static func pairPrices(env: AppEnvironment, launches: [Launch]) async -> [Address: Double]? {
@@ -511,7 +612,7 @@ struct LaunchDetailView: View {
                     TokenLogo(symbol: launch.symbol, url: URL(string: launch.logo), size: 48)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(launch.name).font(.title3.weight(.semibold))
-                        Text(launch.isRetiredLaunchpad ? "\(launch.statusTitle) · Retired launchpad" : launch.statusTitle).font(.subheadline).foregroundStyle(.secondary)
+                        Text(launch.isSellOnly ? "\(launch.statusTitle) · Retired launchpad" : launch.statusTitle).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
                 HStack(alignment: .firstTextBaseline) {

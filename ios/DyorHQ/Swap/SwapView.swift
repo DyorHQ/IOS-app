@@ -218,15 +218,14 @@ struct SwapView: View {
 
     /// Swap's "no venue" state when a side is still on a launchpad's bonding curve (the live launchpad's or a retired
     /// one's): no venue routes a curve, so rather than a dead end it says where the coin trades and opens its Launch page
-    /// (the Launch tab when its launch couldn't be read), or, when the check failed, offers to check again.
+    /// (by reference when its launch couldn't be read), or, when the check failed, offers to check again or the Launch
+    /// tab, where a retired coin's holder finds it under "Your Sell-Only Coins".
     @ViewBuilder private var curveSection: some View {
         if model.amountIn > 0, let curve = model.currentCurve, let notice = curve.route.notice {
             Section {
                 Label(notice, systemImage: "arrow.up.right.circle").font(.subheadline).foregroundStyle(.secondary)
                 if let title = curve.route.actionTitle(curve.token.symbol) {
-                    Button(title, systemImage: "arrow.up.right.circle") {
-                        if let launch = curve.route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
-                    }
+                    Button(title, systemImage: "arrow.up.right.circle") { router.openLaunchPage(for: curve.route) }
                 } else {
                     Button("Check Again", systemImage: "arrow.clockwise") { Task { await model.recheckCurve(env: env) } }
                         .disabled(model.checkingCurve)
