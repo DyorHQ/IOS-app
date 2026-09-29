@@ -615,6 +615,22 @@ test("install-hooks leaves another tool's hooks alone", () => {
   assert.equal(git(repo, "config", "--get", "core.hooksPath").out.trim(), ".githooks");
 });
 
+test("a single compressed file is read even when a tar tool takes it for an archive and unpacks nothing", () => {
+  const repo = newRepo("lenienttar");
+  write(repo, "logs/k6.log.gz", gzipSync(Buffer.from(`PRIVATE_KEY=0x${fake(hex(32))}\n`)));
+  git(repo, "add", "logs/k6.log.gz");
+  // Tar tools that list and "extract" anything, as some Linux builds do for a compressed file that is not a tar.
+  const bin = path.join(dir, "lenient-tar-bin");
+  mkdirSync(bin, { recursive: true });
+  for (const tool of ["bsdtar", "tar"]) {
+    writeFileSync(path.join(bin, tool), "#!/bin/sh\nexit 0\n");
+    chmodSync(path.join(bin, tool), 0o755);
+  }
+  const r = run("/bin/bash", [path.join(repo, "scripts/dev/secret-scan.sh"), "--staged"], repo, { PATH: `${bin}:${process.env.PATH}` });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /logs\/k6\.log\.gz \(inside the archive\): private key assignment/);
+});
+
 test("the scanner fails closed when a helper is broken, and reads odd file names", () => {
   const repo = newRepo("failclosed");
   write(repo, "src/deploy.ts", `export const DEPLOYER_KEY = "0x${fake(hex(32))}";\n`);

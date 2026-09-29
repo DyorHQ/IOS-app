@@ -665,11 +665,16 @@ unpack() { # kind file dir — each extracted file is capped at 256 MB
         if have bsdtar; then bsdtar -xf "$2" -C "$3"
         elif [ "$1" = zip ] && have unzip; then unzip -qq -o "$2" -d "$3"
         else exit 1; fi ;;
-      *) # a compressed tar, else a single compressed file
-        if have bsdtar && bsdtar -tf "$2" >/dev/null 2>&1; then bsdtar -xf "$2" -C "$3"
-        elif tar -tf "$2" >/dev/null 2>&1; then tar -xf "$2" -C "$3"
-        else
-          case "$1" in gzip) gzip -dc ;; bzip2) bzip2 -dc ;; xz) xz -dc ;; zstd) zstd -dcq ;; esac < "$2" > "$3/content"
+      *) # a compressed tar is unpacked, and the decompressed stream itself is always checked too: some tar builds
+         # take a single compressed file (a .log.gz) for an archive and unpack nothing from it
+        extracted=
+        if have bsdtar && bsdtar -tf "$2" >/dev/null 2>&1; then bsdtar -xf "$2" -C "$3" || exit 1; extracted=1
+        elif tar -tf "$2" >/dev/null 2>&1; then tar -xf "$2" -C "$3" || exit 1; extracted=1
+        fi
+        # Written after the unpacking, so an archive entry of the same name cannot replace it.
+        if ! { case "$1" in gzip) gzip -dc ;; bzip2) bzip2 -dc ;; xz) xz -dc ;; zstd) zstd -dcq ;; esac < "$2" > "$3/.decompressed-stream"; }; then
+          rm -f "$3/.decompressed-stream"
+          [ -n "$extracted" ] || exit 1
         fi ;;
     esac
   ) >/dev/null 2>&1
