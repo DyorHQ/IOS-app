@@ -25,6 +25,7 @@ struct MomentArtwork: View {
             else { Color(.tertiarySystemFill); ProgressView().controlSize(.small) }
         }
         .task(id: provenance.mediaURI + "|" + (creator?.hex ?? "")) { await load() }
+        .accessibilityIgnoresInvertColors()
     }
 
     private func load() async {
@@ -48,9 +49,15 @@ struct MomentArtwork: View {
     private var placeholder: some View {
         ZStack {
             LinearGradient(colors: [Color.allocationMoments.opacity(0.35), Color.brand.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            Text(symbol.prefix(2).uppercased())
-                .font(.system(size: 36, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.brand)
+            // Sized to the frame: a fixed 36 pt shows only "…" in the 34–44 pt rows. Cards and headers keep 36.
+            GeometryReader { frame in
+                Text(symbol.prefix(2).uppercased())
+                    .font(.system(size: min(36, frame.size.width * 0.4), weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .foregroundStyle(Color.brand)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 }
