@@ -46,6 +46,9 @@ import {
   assessMondaySquat,
   squatSeverity,
 } from "./decide.mjs";
+import { formatEther } from "viem";
+import { MinedRevert, SendStatusUnknown } from "./send.mjs";
+import { nowSeconds, recordSpend } from "./budget.mjs";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 /** Gas for a Monday graduate / graduateFallback: just under Monad's 30M per-transaction cap. Monad bills the limit
@@ -102,13 +105,38 @@ async function gasPriceOf(client) {
   }
 }
 
-/** Sends one transaction; a failed send becomes an alert instead of aborting the rest of the run (other targets and
-    other jobs still get their turn). */
-async function safeSend(sender, reporter, job, target, tx) {
+const mon = (wei) => formatEther(BigInt(wei));
+
+/**
+ * Sends one transaction; a failed send becomes an alert instead of aborting the rest of the run (other targets and
+ * other jobs still get their turn). Only a receipt with status 1 is a success (build 17, K1): a transaction mined but
+ * reverted, a cast that had to be killed, or a receipt that cannot be read is a critical alert, and what the send cost
+ * (or may have cost, at its gas limit x the gas price) goes into the spend ledger (budget.mjs).
+ */
+async function safeSend({ sender, reporter, client, state, clock = nowSeconds }, job, target, tx) {
+  const live = sender.live === true;
+  const gasPrice = live ? await gasPriceOf(client) : 0n; // for the worst case of a send whose outcome is unknown
+  const record = (wei, extra) => {
+    if (live && state) recordSpend(state, { at: clock(), wei, job, target, ...extra });
+  };
   try {
-    return await sender.call(tx);
+    const r = await sender.call(tx);
+    if (!live || r?.dryRun) return r;
+    if (!r?.receipt) throw new SendStatusUnknown(`cast send exited 0 but printed no readable receipt (${r?.receiptError ?? "no output"})`, { gasLimit: tx.gasLimit });
+    record(r.spentWei, { tx: r.receipt.transactionHash });
+    reporter.info(`sent ${tx.label ?? tx.signature}: tx ${r.receipt.transactionHash} succeeded; cost ${mon(r.spentWei)} MON`);
+    return r;
   } catch (e) {
-    reporter.alert({ job, target, severity: "critical", reason: `send failed: ${errText(e)}` });
+    if (e instanceof MinedRevert) {
+      record(e.spentWei, { tx: e.txHash });
+      reporter.alert({ job, target, severity: "critical", reason: `send failed: ${tx.signature} was mined but REVERTED (tx ${e.txHash}); it cost ${mon(e.spentWei)} MON (gas limit ${e.gasLimit ?? e.gasUsed} at ${e.effectiveGasPrice} wei; Monad bills the limit)` });
+    } else if (e?.statusUnknown) {
+      const worst = tx.gasLimit ? BigInt(tx.gasLimit) * gasPrice : 0n;
+      record(worst, { estimated: true });
+      reporter.alert({ job, target, severity: "critical", reason: `send failed: outcome UNKNOWN for ${tx.signature}: ${errText(e)}. Check the keeper address on the explorer; counted as up to ${mon(worst)} MON spent` });
+    } else {
+      reporter.alert({ job, target, severity: "critical", reason: `send failed: ${errText(e)}` });
+    }
     return null;
   }
 }
@@ -177,7 +205,7 @@ async function retryMoment({ client, c, id, t, sender, reporter, state, simAccou
   if (d.action === "graduate") {
     reporter.action({ job: "moments-graduation", target, what: "graduate(id)" });
     const gas = await gasFor(client, req, gasLimit);
-    await safeSend(sender, reporter, "moments-graduation", target, { to: c.graduation, signature: "graduate(uint256)", args: [id], gasLimit: gas, label: `graduate ${target}` });
+    await safeSend({ sender, reporter, client, state }, "moments-graduation", target, { to: c.graduation, signature: "graduate(uint256)", args: [id], gasLimit: gas, label: `graduate ${target}` });
   }
 }
 
@@ -216,7 +244,7 @@ export async function momentsGraduationJob({ client, cohorts, sender, reporter, 
  * locker (`heldOf`), where each round adds at most 0.5% of the position and a remainder is normal; for the whole
  * cohort on a v1 locker, which adds everything it holds every round.
  */
-export async function buybacksJob({ client, cohorts, sender, reporter, simAccount = DEFAULT_SIM_ACCOUNT, slippageBps = 50n, lockerIdleAlert = 50_000_000n, gasLimit = 3_000_000n }) {
+export async function buybacksJob({ client, cohorts, sender, reporter, state, simAccount = DEFAULT_SIM_ACCOUNT, slippageBps = 50n, lockerIdleAlert = 50_000_000n, gasLimit = 3_000_000n }) {
   const t = await now(client);
   for (const c of cohorts) {
     await guard(reporter, "buybacks", c.label, async () => {
@@ -252,7 +280,7 @@ export async function buybacksJob({ client, cohorts, sender, reporter, simAccoun
           const minCoinOut = minOutWithSlippage(sim.result.coinBought, slippageBps);
           reporter.action({ job: "buybacks", target, what: `execute(id, ${minCoinOut}) budget ${d.budget}` });
           const gas = await gasFor(client, { address: c.buyback, abi: momentBuybackAbi, functionName: "execute", args: [id, minCoinOut], account: simAccount }, gasLimit);
-          await safeSend(sender, reporter, "buybacks", target, { to: c.buyback, signature: "execute(uint256,uint256)", args: [id, minCoinOut], gasLimit: gas, label: `buyback ${target}` });
+          await safeSend({ sender, reporter, client, state }, "buybacks", target, { to: c.buyback, signature: "execute(uint256,uint256)", args: [id, minCoinOut], gasLimit: gas, label: `buyback ${target}` });
         });
       }
       if (perMoment) return;
@@ -291,7 +319,7 @@ async function launchRecord(client, lp, token) {
  * (see decide.mjs `minHolderSweep`), other fees above `minOther`. On a v2 hook the protocol's cut of holder-sharing
  * pools sits in `pendingProtocolFees` (LP-2), which is counted too; on the v1 hooks that read reverts and is 0.
  */
-export async function sweepsJob({ client, launchpads, sender, reporter, minOther, simAccount = DEFAULT_SIM_ACCOUNT, gasLimit = 1_500_000n }) {
+export async function sweepsJob({ client, launchpads, sender, reporter, state, minOther, simAccount = DEFAULT_SIM_ACCOUNT, gasLimit = 1_500_000n }) {
   for (const lp of launchpads) {
     await guard(reporter, "sweeps", lp.label, async () => {
       if (lp.legacyRecord) return; // every launch on it graduates on Monday Trade: no hook fees
@@ -329,7 +357,7 @@ export async function sweepsJob({ client, launchpads, sender, reporter, minOther
             }
             reporter.action({ job: "sweeps", target, what: `sweepPoolFees ${pending} (${d.reason})` });
             const gas = await gasFor(client, req, gasLimit);
-            await safeSend(sender, reporter, "sweeps", target, { to: lp.hook, signature: "sweepPoolFees(bytes32,address)", args: [l.poolId, currency], gasLimit: gas, label: `sweep ${target}` });
+            await safeSend({ sender, reporter, client, state }, "sweeps", target, { to: lp.hook, signature: "sweepPoolFees(bytes32,address)", args: [l.poolId, currency], gasLimit: gas, label: `sweep ${target}` });
           }
         });
       }
@@ -386,7 +414,7 @@ async function mondayOnlyRule(client, lp, token, pairToken) {
   return { mondayOnly: true, valveDelay: await readOr(client, { ...at, functionName: "MONDAY_ONLY_FALLBACK_DELAY" }, undefined) };
 }
 
-async function checkLaunch({ client, lp, token, monday, t, sender, reporter, simAccount, mondayGas, v4Gas, watchProgressBps }) {
+async function checkLaunch({ client, lp, token, monday, t, sender, reporter, state, simAccount, mondayGas, v4Gas, watchProgressBps }) {
   const l = await launchRecord(client, lp, token);
   if (Number(l.phase) !== LAUNCH_PHASE.NotGraduated) return;
   const [completed, rescued, stuckSince] = await Promise.all([
@@ -430,10 +458,10 @@ async function checkLaunch({ client, lp, token, monday, t, sender, reporter, sim
   if (d.action === "graduate") {
     reporter.action({ job: "launchpad-graduation", target, what: "graduate(token)" });
     const gas = venue === VENUE.Monday ? mondayGas : await gasFor(client, { address: lp.factory, abi: launchpadFactoryAbi, functionName: "graduate", args: [token], account: simAccount }, v4Gas);
-    await safeSend(sender, reporter, "launchpad-graduation", target, { to: lp.factory, signature: "graduate(address)", args: [token], gasLimit: gas, label: `graduate ${target}` });
+    await safeSend({ sender, reporter, client, state }, "launchpad-graduation", target, { to: lp.factory, signature: "graduate(address)", args: [token], gasLimit: gas, label: `graduate ${target}` });
   } else if (d.action === "graduateFallback") {
     reporter.action({ job: "launchpad-graduation", target, what: "graduateFallback(token)" });
-    await safeSend(sender, reporter, "launchpad-graduation", target, { to: lp.factory, signature: "graduateFallback(address)", args: [token], gasLimit: mondayGas, label: `fallback ${target}` });
+    await safeSend({ sender, reporter, client, state }, "launchpad-graduation", target, { to: lp.factory, signature: "graduateFallback(address)", args: [token], gasLimit: mondayGas, label: `fallback ${target}` });
   }
 }
 
@@ -441,7 +469,7 @@ async function checkLaunch({ client, lp, token, monday, t, sender, reporter, sim
  * Watches Monday-venue launches for squatted Monday pools BEFORE they complete (alert: pre-align or steer the
  * creator), and retries graduation of completed-but-stuck launches (plain graduate first, then the v4 fallback).
  */
-export async function launchpadGraduationJob({ client, launchpads, sender, reporter, simAccount = DEFAULT_SIM_ACCOUNT, mondayGas = MONDAY_GAS, v4Gas = 3_000_000n, watchProgressBps = 0n }) {
+export async function launchpadGraduationJob({ client, launchpads, sender, reporter, state, simAccount = DEFAULT_SIM_ACCOUNT, mondayGas = MONDAY_GAS, v4Gas = 3_000_000n, watchProgressBps = 0n }) {
   const t = await now(client);
   for (const lp of launchpads) {
     await guard(reporter, "launchpad-graduation", lp.label, async () => {
@@ -461,7 +489,7 @@ export async function launchpadGraduationJob({ client, launchpads, sender, repor
       const tokens = await allLaunches(client, lp.factory);
       for (const token of tokens) {
         await guard(reporter, "launchpad-graduation", `${lp.label} ${token}`, () =>
-          checkLaunch({ client, lp, token, monday, t, sender, reporter, simAccount, mondayGas, v4Gas, watchProgressBps }),
+          checkLaunch({ client, lp, token, monday, t, sender, reporter, state, simAccount, mondayGas, v4Gas, watchProgressBps }),
         );
       }
     });
