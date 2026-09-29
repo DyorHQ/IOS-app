@@ -241,6 +241,39 @@ final class LogScanTests: XCTestCase {
         XCTAssertTrue(logs.contains("mode: LogScanMode = .patient) async -> (logs: [Log], complete: Bool)"))
     }
 
+    /// The finding (build 17): rpc3 answers 1,000 blocks a range and refuses 1,001, yet ranges were sized at 100,000 for
+    /// it, as for rpc1. Each refused range is split, a request a split, and a scan splits at most 4,096 times: a 5M-block
+    /// segment of the venue scan needed about 6,350, so part of every segment was left unread, and never read again.
+    /// Sized at 1,000, the same endpoint reads the segment in full, no range refused.
+    func testAnEndpointThatAnswers1000BlocksReadsA5MBlockSegmentWithNoGap() async {
+        let blocks: [UInt64] = [100_000_000, 100_000_999, 100_001_000, 101_234_567, 102_500_000, 104_999_999]
+        let rule: LogsStub.Rule = { range in range.span > 1_000 ? .error(code: -32062, message: "Block range is too large") : nil }
+        LogsStub.install(head: 105_000_000, logs: blocks.map(transfer), rule: rule)
+        // 100 ranges a round trip only makes the test quicker; the ranges asked are the same.
+        let report = await LogsStub.rpc(url: LogsStub.rpc3).chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 100_000_000, toBlock: 104_999_999,
+                                                                              concurrency: 100)
+        XCTAssertTrue(report.complete)
+        XCTAssertEqual(report.logs.map(\.blockNumber), blocks)
+        XCTAssertEqual(LogsStub.queries().count, 5_000)
+        XCTAssertTrue(LogsStub.queries().allSatisfy { $0.span == 1_000 }, "every range answered as asked")
+
+        // Build 16's range against the same endpoint: 127 splits and 255 requests for 100,000 blocks, so 6,350 splits for
+        // the segment's 50 ranges, past what a scan may make.
+        LogsStub.install(head: 105_000_000, logs: blocks.map(transfer), rule: rule)
+        let build16 = await LogsStub.rpc(url: LogsStub.rpc3).chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 100_000_000, toBlock: 100_099_999,
+                                                                              chunkSize: 100_000)
+        XCTAssertTrue(build16.complete)
+        XCTAssertEqual(LogsStub.queries().count, 255)
+        XCTAssertGreaterThan(50 * (LogsStub.queries().count - 1) / 2, LogScanLimits().splits)
+    }
+
+    /// Ranges are sized to what each endpoint answers, as measured on 2026-09-29 (rpc4: what every node behind it answers).
+    func testRangesAreSizedToWhatEachEndpointAnswers() {
+        let sizes: [(String, UInt64)] = [("https://rpc1.monad.xyz", 100_000), ("https://rpc3.monad.xyz", 1_000), ("https://rpc4.monad.xyz", 1_000),
+                                         ("https://rpc.monad.xyz", 100), ("http://127.0.0.1:8545", 50_000), ("http://localhost:8545", 50_000)]
+        for (url, size) in sizes { XCTAssertEqual(RPCClient.logChunkSize(for: URL(string: url)!), size, url) }
+    }
+
     func testTheRangeASizeRefusalNamesIsReadOnlyWhenItFits() {
         let refusal = RPCError(code: -32602, message: "Log response size exceeded. Based on your parameters and the response size limit, this block range should work: [0x6000000, 0x6000b41]")
         XCTAssertEqual(RPCClient.suggestedEnd(refusal, from: 0x6000000, to: 0x6700000), 0x6000b41)
@@ -277,9 +310,9 @@ final class LogScanTests: XCTestCase {
     }
 }
 
-/// An `eth_getLogs` endpoint answered from memory, named like rpc1 so ranges are 100,000 blocks: the chain head is
-/// `head`, every range asked is recorded (`queries()`), and `rule` refuses a range (an error, or no answer to the whole
-/// request) or lets it be answered from `logs`.
+/// An `eth_getLogs` endpoint answered from memory, named like rpc1 so ranges are 100,000 blocks (`rpc(url: rpc3)` names
+/// it like rpc3: 1,000 blocks): the chain head is `head`, every range asked is recorded (`queries()`), and `rule` refuses
+/// a range (an error, or no answer to the whole request) or lets it be answered from `logs`.
 final class LogsStub: URLProtocol {
     struct Range: Hashable, Sendable {
         let from: UInt64
@@ -303,6 +336,7 @@ final class LogsStub: URLProtocol {
     typealias Rule = @Sendable (Range) -> Failure?
 
     static let url = URL(string: "https://rpc1.logs-stub.invalid")!
+    static let rpc3 = URL(string: "https://rpc3.logs-stub.invalid")!
     private static let lock = NSLock()
     nonisolated(unsafe) private static var head: UInt64 = 0
     nonisolated(unsafe) private static var chainLogs: [Log] = []
@@ -323,7 +357,7 @@ final class LogsStub: URLProtocol {
         return asked
     }
 
-    static func rpc() -> RPCClient {
+    static func rpc(url: URL = LogsStub.url) -> RPCClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LogsStub.self]
         return RPCClient(url: url, session: URLSession(configuration: configuration))

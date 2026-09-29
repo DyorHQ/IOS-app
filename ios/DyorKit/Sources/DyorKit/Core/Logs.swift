@@ -201,15 +201,21 @@ public extension RPCClient {
     /// keccak256 of a canonical event signature; see `ABI.eventTopic`.
     static func eventTopic(_ signature: String) -> Data { ABI.eventTopic(signature) }
 
-    /// The block-range cap Monad's public endpoints enforce per `eth_getLogs` request: 100 blocks on
-    /// rpc.monad.xyz, effectively unlimited on rpc1/rpc3 (they answer a full day's range in one ~2 s call, so the
-    /// web app's cautious 1 000 was leaving ~50× the round trips on the table), and unlimited on a local fork.
-    /// Every caller here filters by a specific address or the viewer's own wallet, so a wide range returns a small,
-    /// un-truncated result set. Matches on the URL text rather than the host, like the web app's `CHUNK`.
+    /// The widest block range each of Monad's public endpoints answers per `eth_getLogs` request, measured read-only on
+    /// 2026-09-29: rpc1 has no range cap (it answered 10M blocks in a second; its cap is 10K logs an answer, and it names
+    /// a range that fits); rpc3 answers 1,000 blocks, `fromBlock` and `toBlock` both counted, and refuses 1,001 ("Block
+    /// range is too large", -32062); rpc4 is served by nodes that answer 100,000 and nodes that refuse 1,001 ("limited to
+    /// a 1,000 range", -32614 in an HTTP 413), so 1,000 is what every one of them answers; rpc.monad.xyz answers 100 and
+    /// refuses 500. A local fork has no cap; 50,000 keeps its answers quick. A range sized over the cap is refused and
+    /// split (`chunkedLogsReport`), one request a split, and a scan may split only so often (`LogScanLimits`): rpc3 sized
+    /// at 100,000, as build 16 sized it, needs about 6,350 splits for 5M blocks, so a wide scan spent them all and left
+    /// the rest as gaps. Every caller here filters by a specific address or the viewer's own wallet, so a wide range
+    /// returns a small result set. Matches on the URL text rather than the host, like the web app's `CHUNK`.
     static func logChunkSize(for url: URL) -> UInt64 {
         let text = url.absoluteString
         if text.contains("127.0.0.1") || text.contains("localhost") { return 50_000 }
-        if text.contains("rpc1") || text.contains("rpc3") { return 100_000 }
+        if text.contains("rpc1") { return 100_000 }
+        if text.contains("rpc3") || text.contains("rpc4") { return 1_000 }
         return 100
     }
 
