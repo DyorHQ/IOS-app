@@ -2,9 +2,11 @@ import BigInt
 import XCTest
 @testable import DyorKit
 
-/// What the wallet's transfer history says it holds (`WalletTokenDiscovery`): ERC-20 tokens only. An NFT collection's
-/// `Transfer` shares the ERC-20 signature and its `balanceOf` counts editions, so it is told apart by its log (four
-/// topics) and, for a collection already stored as a token, by ERC-165. Contract reads come from `MomentsChainStub`.
+/// What the wallet's transfer history says it holds (`WalletTokenDiscovery`): ERC-20 tokens only, every one of them. An
+/// NFT collection's `Transfer` shares the ERC-20 signature and its `balanceOf` counts editions; its log indexes the token
+/// id (four topics), as a few tokens index their amount, so a four-topic sender is told apart by ERC-165, as a collection
+/// already stored as a token is. A held token is never dropped for its metadata. Contract reads come from
+/// `MomentsChainStub`.
 final class WalletTokenDiscoveryTests: XCTestCase {
     private let chain = DiscoveryChain()
     private var wallet: Address { chain.wallet }
@@ -33,9 +35,61 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         let found = await discovery().heldTokens(wallet: wallet, wholeHistory: true)
         XCTAssertEqual(found.map(\.address), [coin], "the collection's edition transfer is not a token transfer")
         XCTAssertEqual(found.first?.symbol, "CN")
-        XCTAssertFalse(MomentsChainStub.calls().contains { $0.to == collection }, "the collection is never read as a token")
+        let asked = Set(MomentsChainStub.calls().filter { $0.to == collection }.map(\.selector))
+        XCTAssertEqual(asked, Set(["balanceOf(address)", "supportsInterface(bytes4)"].map { ABI.selector($0).hexString }),
+                       "the collection is told apart by ERC-165, never read as a token")
         XCTAssertTrue(WalletTokenDiscovery.isERC20Transfer(transfer(coin, nft: false, block: 1)))
         XCTAssertFalse(WalletTokenDiscovery.isERC20Transfer(transfer(collection, nft: true, block: 1)))
+        XCTAssertTrue(WalletTokenDiscovery.isIndexedTransfer(transfer(collection, nft: true, block: 1)))
+        XCTAssertFalse(WalletTokenDiscovery.isIndexedTransfer(transfer(coin, nft: false, block: 1)))
+    }
+
+    /// A token that declares its `Transfer` amount indexed logs four topics and no data, like a collection: ERC-165 tells
+    /// them apart, so it is listed and the collection isn't. When ERC-165 can't be asked, the four-topic sender is left out
+    /// — never listed as a token it may not be — and the scan says a token may be missing.
+    func testATokenWhoseAmountIsIndexedIsListed() async {
+        let logs = [transfer(chain.indexed, nft: true, block: 10), transfer(collection, nft: true, block: 20), transfer(coin, nft: false, block: 30)]
+        MomentsChainStub.install(chain.answer, logs: logs)
+        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        XCTAssertEqual(scan.tokens.map(\.address), [chain.indexed, coin])
+        XCTAssertEqual(scan.tokens.first?.symbol, "IDX")
+        XCTAssertTrue(scan.complete)
+
+        MomentsChainStub.install(chain.answer, logs: logs, breakingSelectors: [ABI.selector("supportsInterface(bytes4)")])
+        let unchecked = await discovery().scan(wallet: wallet, wholeHistory: true)
+        XCTAssertEqual(unchecked.tokens.map(\.address), [coin], "neither four-topic sender is listed unchecked")
+        XCTAssertFalse(unchecked.complete, "and the list says a token may be missing")
+    }
+
+    /// A held token is never dropped for its metadata: a bytes32 symbol and name (as older tokens have them) are read as
+    /// text, and a token with no readable symbol is listed under its short address.
+    func testAHeldTokenIsNeverDroppedForItsMetadata() async {
+        let logs = [transfer(chain.bytes32, nft: false, block: 10), transfer(chain.nameless, nft: false, block: 20), transfer(chain.blank, nft: false, block: 30)]
+        MomentsChainStub.install(chain.answer, logs: logs)
+        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        XCTAssertEqual(scan.tokens.map(\.address), [chain.bytes32, chain.nameless, chain.blank])
+        XCTAssertEqual(scan.tokens.map(\.symbol), ["MKR", chain.nameless.short, chain.blank.short])
+        XCTAssertEqual(scan.tokens.map(\.name), ["Maker", "Token with no name", "Blank"])
+        XCTAssertEqual(scan.tokens.map(\.decimals), [18, 6, 18])
+        XCTAssertTrue(scan.complete)
+    }
+
+    /// Metadata is read 50 tokens a read, not one round trip per token; a token that breaks its read is read on its own,
+    /// so it costs only itself.
+    func testMetadataIsReadInBatches() async {
+        let many = (1...120).map { i in Address(data: Data(count: 16) + Data([0x00, 0x0e, 0x00, UInt8(i)]))! }
+        let logs = many.enumerated().map { i, token in transfer(token, nft: false, block: UInt64(i + 1)) }
+        MomentsChainStub.install(chain.answer(many: Set(many)), logs: logs)
+        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        XCTAssertEqual(scan.tokens.map(\.address), many)
+        XCTAssertTrue(scan.complete)
+        let symbolReads = MomentsChainStub.batches().filter { $0.first?.selector == ABI.selector("symbol()").hexString }
+        XCTAssertEqual(symbolReads.map(\.count), [150, 150, 60], "three reads of 50 tokens × symbol, name, decimals")
+
+        MomentsChainStub.install(chain.answer(many: Set(many)), logs: logs, breaking: [many[70]])
+        let broken = await discovery().scan(wallet: wallet, wholeHistory: true)
+        XCTAssertEqual(broken.tokens.map(\.address), many.filter { $0 != many[70] }, "the breaking token's own balanceOf fails: it holds nothing a send could move")
+        XCTAssertTrue(broken.complete)
     }
 
     func testACollectionStoredAsATokenIsFoundByERC165() async {
@@ -113,11 +167,51 @@ private struct DiscoveryChain: Sendable {
     let collection = Address(literal: "0x00000000000000000000000000000000000c0002")
     /// A contract that answers true to every `supportsInterface`, the invalid id included.
     let yesToAll = Address(literal: "0x00000000000000000000000000000000000c0003")
+    /// A token that declares its `Transfer` amount indexed; it has no ERC-165.
+    let indexed = Address(literal: "0x00000000000000000000000000000000000c0004")
+    /// A token whose symbol and name are bytes32, as older tokens have them.
+    let bytes32 = Address(literal: "0x00000000000000000000000000000000000c0005")
+    /// A token with no symbol or name (both revert), and 6 decimals.
+    let nameless = Address(literal: "0x00000000000000000000000000000000000c0006")
+    /// A token whose symbol is an empty string.
+    let blank = Address(literal: "0x00000000000000000000000000000000000c0007")
+
+    /// `answer`, plus each of `many` as a plain token holding 5.
+    func answer(many: Set<Address>) -> MomentsChainStub.Answer {
+        { to, data in
+            guard many.contains(to) else { return answer(to, data) }
+            let selector = data.prefix(4)
+            if selector == ABI.selector("balanceOf(address)") { return try! ABI.encode([.uint(5)], "uint256") }
+            if selector == ABI.selector("symbol()") || selector == ABI.selector("name()") { return try! ABI.encode([.string("T\(to.data.last ?? 0)")], "string") }
+            if selector == ABI.selector("decimals()") { return try! ABI.encode([.uint(18)], "uint8") }
+            return nil
+        }
+    }
 
     func answer(_ to: Address, _ data: Data) -> Data? {
         let selector = data.prefix(4)
         func is_(_ signature: String) -> Bool { selector == ABI.selector(signature) }
         func encode(_ values: [ABIValue], _ types: String) -> Data { try! ABI.encode(values, types) }
+        if [indexed, bytes32, nameless, blank].contains(to) {
+            if is_("balanceOf(address)") { return encode([.uint(5)], "uint256") }
+            switch to {
+            case indexed:
+                if is_("symbol()") { return encode([.string("IDX")], "string") }
+                if is_("name()") { return encode([.string("Indexed")], "string") }
+                if is_("decimals()") { return encode([.uint(18)], "uint8") }
+            case bytes32:
+                func word(_ text: String) -> Data { Data(text.utf8) + Data(count: 32 - text.utf8.count) }
+                if is_("symbol()") { return word("MKR") }
+                if is_("name()") { return word("Maker") }
+                if is_("decimals()") { return encode([.uint(18)], "uint8") }
+            case nameless:
+                if is_("decimals()") { return encode([.uint(6)], "uint8") }
+            default:
+                if is_("symbol()") { return encode([.string("")], "string") }
+                if is_("name()") { return encode([.string("Blank")], "string") }
+            }
+            return nil
+        }
         guard [coin, collection, yesToAll].contains(to) else { return nil }
         if is_("balanceOf(address)") { return encode([.uint(to == collection ? 1 : 5)], "uint256") }
         if is_("symbol()") { return encode([.string(to == collection ? "EDN" : "CN")], "string") }
