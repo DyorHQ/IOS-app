@@ -31,20 +31,39 @@ public struct WalletTokenDiscovery: Sendable {
     /// far back the incoming-transfer scan looks; `known` addresses (already-surfaced tokens, native MON) are skipped
     /// so only NEW tokens are read.
     public func heldTokens(wallet: Address, window: UInt64 = Monad.blocksPerDay * 30, known: Set<Address> = [], wholeHistory: Bool = false) async -> [Token] {
-        guard let anchor = try? await logsRPC.block(.latest) else { return [] }
+        await scan(wallet: wallet, window: window, known: known, wholeHistory: wholeHistory).tokens
+    }
+
+    /// What a scan found, and whether every read it needed answered.
+    public struct Scan: Sendable, Equatable {
+        public let tokens: [Token]
+        /// False when the chain head, part of the history, a balance batch or a token's metadata couldn't be read: a
+        /// token the wallet holds may be missing, which a list must say rather than pass off as everything it holds.
+        public let complete: Bool
+
+        public init(tokens: [Token], complete: Bool) {
+            self.tokens = tokens
+            self.complete = complete
+        }
+    }
+
+    /// `heldTokens`, saying whether the scan was complete.
+    public func scan(wallet: Address, window: UInt64 = Monad.blocksPerDay * 30, known: Set<Address> = [], wholeHistory: Bool = false) async -> Scan {
+        guard let anchor = try? await logsRPC.block(.latest) else { return Scan(tokens: [], complete: false) }
         let latest = anchor.number
         let from = wholeHistory ? 0 : (latest > window ? latest - window : 0)
         let topic = ABI.eventTopic(Self.transferSig)
         let walletWord = wallet.data.leftPadded(to: 32)
         // Every ERC-20 that has sent tokens to this wallet in the window; the emitting contract IS the token.
-        let incoming = await logsRPC.chunkedLogs(address: nil, topics: [topic, nil, walletWord], fromBlock: from, toBlock: latest)
+        let incoming = await logsRPC.chunkedLogsReport(address: nil, topics: [topic, nil, walletWord], fromBlock: from, toBlock: latest)
+        var complete = incoming.complete
 
         var candidates: [Address] = []
         var seen = Set<Address>()
-        for log in incoming where Self.isERC20Transfer(log) && !log.address.isZero && !known.contains(log.address) && seen.insert(log.address).inserted {
+        for log in incoming.logs where Self.isERC20Transfer(log) && !log.address.isZero && !known.contains(log.address) && seen.insert(log.address).inserted {
             candidates.append(log.address)
         }
-        guard !candidates.isEmpty else { return [] }
+        guard !candidates.isEmpty else { return Scan(tokens: [], complete: complete) }
 
         // Keep only currently-held tokens, reading balanceOf in batches so one multicall response stays bounded.
         var held: [Address] = []
@@ -53,19 +72,24 @@ public struct WalletTokenDiscovery: Sendable {
             let batch = Array(candidates[index ..< min(index + 150, candidates.count)])
             index += batch.count
             guard let calls = try? batch.map({ try ERC20.balanceOf($0, wallet) }),
-                  let results = try? await multicall.read(calls) else { continue }
+                  let results = try? await multicall.read(calls) else { complete = false; continue }
             for (token, result) in zip(batch, results) {
                 if case .success(let values) = result, let balance = values.first.flatMap(\.uintOrNil), balance > 0 { held.append(token) }
             }
         }
-        guard !held.isEmpty else { return [] }
+        guard !held.isEmpty else { return Scan(tokens: [], complete: complete) }
 
-        // Resolve metadata for the survivors; drop only those with no readable symbol.
+        // Resolve metadata for the survivors; drop only those with no readable symbol. A read that failed is not "no
+        // symbol": the token is missing, and the scan says so.
         var out: [Token] = []
         for token in held {
-            if let resolved = try? await ERC20.metadata(token, multicall: multicall) { out.append(resolved) }
+            do {
+                if let resolved = try await ERC20.metadata(token, multicall: multicall) { out.append(resolved) }
+            } catch {
+                complete = false
+            }
         }
-        return out
+        return Scan(tokens: out, complete: complete)
     }
 
     /// An ERC-20 `Transfer`: three topics (the signature, `from`, `to`) and the amount as 32 bytes of data. An ERC-721

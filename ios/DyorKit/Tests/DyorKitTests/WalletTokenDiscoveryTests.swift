@@ -50,9 +50,36 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         XCTAssertTrue(none.isEmpty)
     }
 
+    /// A scan tells "nothing there" from "couldn't read it": a refused history, chain head or balance read leaves it
+    /// incomplete, so a list can say a token may be missing instead of showing what it found as everything.
+    func testAScanSaysWhenItCouldNotReadEverything() async {
+        let found = Token(address: coin, symbol: "CN", name: "Coin", decimals: 18)
+        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)])
+        let full = await discovery().scan(wallet: wallet, wholeHistory: true)
+        XCTAssertEqual(full, WalletTokenDiscovery.Scan(tokens: [found], complete: true))
+
+        MomentsChainStub.install(chain.answer)
+        let nothing = await discovery().scan(wallet: wallet, wholeHistory: true)
+        XCTAssertEqual(nothing, WalletTokenDiscovery.Scan(tokens: [], complete: true), "an empty history, read in full")
+
+        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)], refusing: ["eth_getLogs"])
+        let noHistory = await discovery().scan(wallet: wallet, wholeHistory: true)
+        XCTAssertEqual(noHistory, WalletTokenDiscovery.Scan(tokens: [], complete: false), "the history refused: nothing found, and not complete")
+        let listed = await discovery().heldTokens(wallet: wallet, wholeHistory: true)
+        XCTAssertTrue(listed.isEmpty, "heldTokens still lists what it found")
+
+        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)], refusing: ["eth_getBlockByNumber"])
+        let noHead = await discovery().scan(wallet: wallet, wholeHistory: true)
+        XCTAssertEqual(noHead, WalletTokenDiscovery.Scan(tokens: [], complete: false))
+
+        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)], refusing: ["eth_call"])
+        let noBalances = await discovery().scan(wallet: wallet, wholeHistory: true)
+        XCTAssertEqual(noBalances, WalletTokenDiscovery.Scan(tokens: [], complete: false), "the token was seen, its balance couldn't be read")
+    }
+
     /// The app's one read of the wallet's tokens (`WalletTokens`, behind the Portfolio's Assets and the Send list) leaves
-    /// collections out.
-    func testTheWalletsTokenListLeavesCollectionsOut() throws {
+    /// collections out and carries whether the scan was complete; the Send list says when it wasn't, with Retry.
+    func testTheWalletsTokenListLeavesCollectionsOutAndSaysWhenItIsIncomplete() throws {
         var app = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
         app.appendPathComponent("DyorHQ")
@@ -60,6 +87,12 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         let source = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("let collections = await env.walletDiscovery.collections(among: held)"))
         XCTAssertTrue(source.contains("tokens: held.filter { !collections.contains($0.address) }"))
+        XCTAssertTrue(source.contains("let scan = await env.walletDiscovery.scan(wallet: address, known: known, wholeHistory: true)"))
+        XCTAssertTrue(source.contains("complete: scan.complete)"))
+        let profile = try String(contentsOf: app.appendingPathComponent("Profile/ProfileView.swift"), encoding: .utf8)
+        XCTAssertTrue(profile.contains("assets = .loaded(ranked, complete: read.complete)"))
+        XCTAssertTrue(profile.contains("if !complete { readNotice("))
+        XCTAssertTrue(profile.contains("readNotice(\"No tokens found, but part of your wallet's history couldn't be read"), "an incomplete empty read is never \"nothing to send\"")
     }
 
     func testAFailedCheckKeepsEveryToken() async {

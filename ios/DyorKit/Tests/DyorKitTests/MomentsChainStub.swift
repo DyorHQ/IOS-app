@@ -21,6 +21,7 @@ final class MomentsChainStub: URLProtocol {
     nonisolated(unsafe) private static var chainLogs: [Log] = []
     nonisolated(unsafe) private static var receipts: [Data: [Log]] = [:]
     nonisolated(unsafe) private static var filters: [LogQuery] = []
+    nonisolated(unsafe) private static var refused: Set<String> = []
 
     struct Call: Hashable, CustomStringConvertible {
         let to: Address
@@ -34,13 +35,16 @@ final class MomentsChainStub: URLProtocol {
         let topics: [Data?]
     }
 
-    static func install(_ answer: @escaping Answer, logs: [Log] = [], receipts: [Data: [Log]] = [:]) {
+    /// `refusing`: JSON-RPC methods the node answers with an error (not a throttle, so nothing retries), as a node that
+    /// can't serve them.
+    static func install(_ answer: @escaping Answer, logs: [Log] = [], receipts: [Data: [Log]] = [:], refusing: Set<String> = []) {
         lock.lock(); defer { lock.unlock() }
         self.answer = answer
         asked = []
         chainLogs = logs
         self.receipts = receipts
         filters = []
+        refused = refusing
     }
 
     /// Every `eth_getLogs` filter asked, in order.
@@ -82,6 +86,10 @@ final class MomentsChainStub: URLProtocol {
         func result(_ data: Data) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": .string(data.hexString)]) }
         func json(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
         let reverted: JSON = .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(3), "message": .string("execution reverted"), "data": .string("0x")])])
+        lock.lock(); let refusedMethods = refused; lock.unlock()
+        if let method = call["method"].string, refusedMethods.contains(method) {
+            return .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(-32000), "message": .string("header not found")])])
+        }
         switch call["method"].string {
         case "eth_getBlockByNumber":
             return json(.object(["number": .string(BigUInt(head.number).hexQuantity), "timestamp": .string(BigUInt(head.timestamp).hexQuantity)]))
