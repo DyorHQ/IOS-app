@@ -17,6 +17,10 @@ cd "$(dirname "$0")/.."
 TEAM=$(sed -n 's/^DEVELOPMENT_TEAM *= *//p' DyorHQ/Config/Secrets.xcconfig | tr -d ' ')
 if [[ -z "$TEAM" ]]; then echo "DEVELOPMENT_TEAM is not set in DyorHQ/Config/Secrets.xcconfig" >&2; exit 1; fi
 if grep -q "127.0.0.1" DyorHQ/Config/Secrets.xcconfig; then echo "Secrets.xcconfig points at a local fork; restore the mainnet RPC first" >&2; exit 1; fi
+# The v2 wiring gate, as in ci_scripts/ci_post_xcodebuild.sh: nothing ships while DyorKit's v2 addresses are PENDING or
+# a retired Moments cohort is not final on chain (the archive's own build phase checks again).
+# Run the Swift half too before a release: (cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter V2WiringTests).
+python3 ../scripts/dev/check-launchpad-addresses.py --release || { echo "The release gate failed (above); nothing was built." >&2; exit 1; }
 
 # Bump the build number so every upload is unique — App Store Connect rejects a duplicate CFBundleVersion, which is
 # the most common first-timer failure. Pin an exact number with BUILD=<n>; keep the current one with NO_BUMP=1.
@@ -47,7 +51,9 @@ xcodebuild -project DyorHQ.xcodeproj -scheme DyorHQ -configuration Release \
 APP="$ARCHIVE/Products/Applications/DyorHQ.app"
 [[ -d "$APP" ]] || { echo "Archive has no app bundle at $APP" >&2; exit 1; }
 PUBLIC_VARS=(DEVELOPMENT_TEAM DYOR_SLASH PRIVY_APP_ID PRIVY_CLIENT_ID PASSKEY_RP_ID PERPL_BUILDER_ID SOCIAL_LOGINS_ENABLED
-  PASSKEYS_ENABLED LAUNCHPAD_FACTORY LAUNCH_ROUTER FEE_ESCROW HOLDER_FEE_SHARING MEME_HOOK AURORA_FEE_RECIPIENT)
+  PASSKEYS_ENABLED LAUNCHPAD_FACTORY LAUNCH_ROUTER FEE_ESCROW HOLDER_FEE_SHARING MEME_HOOK AURORA_FEE_RECIPIENT
+  MOMENTS_FACTORY MOMENTS_COLLECT MOMENTS_VESTING MOMENTS_GRADUATION MOMENTS_LOCKER MOMENTS_HOOK MOMENTS_BUYBACK
+  MOMENTS_PLATFORM MOMENTS_TREASURY MOMENTS_DEPLOY_BLOCK)
 LEAKS=()
 while IFS= read -r line; do
   name=${line%%=*}; name=${name%%\[*}; name=${name//[[:space:]]/}

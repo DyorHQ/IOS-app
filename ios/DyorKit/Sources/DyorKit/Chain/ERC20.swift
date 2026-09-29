@@ -60,6 +60,107 @@ public enum ERC20 {
         return out
     }
 
+    /// Balances, and which couldn't be read (`balanceReport`).
+    public struct BalanceReport: Sendable, Equatable {
+        public var balances: [Address: BigUInt] = [:]
+        /// Tokens whose read failed as a whole — the node or the connection didn't answer it — so nothing is known of them.
+        public var unread: Set<Address> = []
+        /// Tokens whose own `balanceOf` failed, read on its own: the contract refuses it (it reverts, burns its gas, or
+        /// answers what isn't a balance).
+        public var failed: Set<Address> = []
+
+        public init(balances: [Address: BigUInt] = [:], unread: Set<Address> = [], failed: Set<Address> = []) {
+            self.balances = balances
+            self.unread = unread
+            self.failed = failed
+        }
+    }
+
+    /// Native and ERC-20 balances read so that no one token can keep the others from being read: native MON on its own
+    /// (`eth_getBalance`), the curated tokens in a read of their own, every other token in reads of at most `batch`, all
+    /// at once (`balanceReport(ofTokens:)`). What couldn't be read is said (`BalanceReport.unread`, `.failed`), never
+    /// taken for zero.
+    public static func balanceReport(of tokens: [Token], owner: Address, rpc: RPCClient, multicall: Multicall, batch: Int = 50) async -> BalanceReport {
+        var seen = Set<Address>()
+        let unique = tokens.filter { seen.insert($0.address).inserted }
+        let erc20s = unique.filter { !$0.isNative }
+        let curated = erc20s.filter { Token.core($0.address) != nil }.map(\.address)
+        let others = erc20s.filter { Token.core($0.address) == nil }.map(\.address)
+        let readsNative = unique.contains(where: \.isNative)
+        async let native: Result<BigUInt, Error>? = readsNative ? await captured { try await rpc.balance(of: owner) } : nil
+        async let curatedRead = balanceReport(ofTokens: curated, owner: owner, multicall: multicall, batch: max(1, curated.count))
+        async let othersRead = balanceReport(ofTokens: others, owner: owner, multicall: multicall, batch: batch)
+        var report = await curatedRead
+        let rest = await othersRead
+        report.balances.merge(rest.balances) { first, _ in first }
+        report.unread.formUnion(rest.unread)
+        report.failed.formUnion(rest.failed)
+        switch await native {
+        case .success(let balance)?: report.balances[Monad.native] = balance
+        case .failure?: report.unread.insert(Monad.native)
+        case nil: break
+        }
+        return report
+    }
+
+    /// ERC-20 balances of `tokens`, in reads of at most `batch` tokens, all at once. A read the node refuses as a whole
+    /// (one token's return bomb makes the aggregate run out of gas) and a token whose call fails inside a read (starved
+    /// of gas by a token before it) are read again, each token on its own, so only the token at fault is left out; a
+    /// read that got no answer at all (the connection) is not retried here.
+    public static func balanceReport(ofTokens tokens: [Address], owner: Address, multicall: Multicall, batch: Int = 50) async -> BalanceReport {
+        guard !tokens.isEmpty else { return BalanceReport() }
+        let size = max(1, batch)
+        let groups = stride(from: 0, to: tokens.count, by: size).map { Array(tokens[$0 ..< min($0 + size, tokens.count)]) }
+        var report = BalanceReport()
+        var retry: [Address] = []
+        await withTaskGroup(of: (group: [Address], outcome: Result<[Result<[ABIValue], Error>], Error>).self) { tasks in
+            for group in groups {
+                tasks.addTask { (group, await captured { try await multicall.read(try group.map { try balanceOf($0, owner) }) }) }
+            }
+            for await (group, outcome) in tasks {
+                switch outcome {
+                case .success(let results):
+                    for (token, result) in zip(group, results) {
+                        if case .success(let values) = result, let balance = values.first?.uintOrNil { report.balances[token] = balance } else { retry.append(token) }
+                    }
+                case .failure(let error):
+                    // The node answered with an error about the call itself: a token in it may be at fault. Anything
+                    // else (no answer, or throttling that outlasted the client's retries) would fail again token by token.
+                    if isCallError(error) { if group.count > 1 { retry += group } else { report.failed.formUnion(group) } } else { report.unread.formUnion(group) }
+                }
+            }
+        }
+        guard !retry.isEmpty else { return report }
+        await withTaskGroup(of: (token: Address, outcome: Result<[Result<[ABIValue], Error>], Error>).self) { tasks in
+            for token in retry {
+                tasks.addTask { (token, await captured { try await multicall.read([try balanceOf(token, owner)]) }) }
+            }
+            for await (token, outcome) in tasks {
+                switch outcome {
+                case .success(let results):
+                    if case .success(let values)? = results.first, let balance = values.first?.uintOrNil { report.balances[token] = balance } else { report.failed.insert(token) }
+                case .failure(let error):
+                    if isCallError(error) { report.failed.insert(token) } else { report.unread.insert(token) }
+                }
+            }
+        }
+        return report
+    }
+
+    /// The node's answer that the call itself fails — it reverts or runs out of gas — as opposed to a request that
+    /// failed (no answer, throttling, a node that can't serve it).
+    static func isCallError(_ error: Error) -> Bool {
+        guard let error = error as? RPCError, !RPCClient.isRateLimited(error) else { return false }
+        let message = error.message.lowercased()
+        return error.code == 3 || message.contains("revert") || message.contains("out of gas") || message.contains("gas required exceeds")
+            || message.contains("invalid opcode")
+    }
+
+    /// `body`'s outcome as a value.
+    static func captured<T>(_ body: () async throws -> T) async -> Result<T, Error> {
+        do { return .success(try await body()) } catch { return .failure(error) }
+    }
+
     /// Native and ERC-20 balances for a list of tokens, keyed by address. Missing entries mean the read failed.
     public static func balances(of tokens: [Token], owner: Address, rpc: RPCClient, multicall: Multicall) async throws -> [Address: BigUInt] {
         let erc20s = tokens.filter { !$0.isNative }

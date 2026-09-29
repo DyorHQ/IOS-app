@@ -214,7 +214,7 @@ export async function momentsGraduationJob({ client, cohorts, sender, reporter, 
 /**
  * Executes every due buyback round (bounded by its own simulation) and watches idle locker USDC: per Moment on a v2
  * locker (`heldOf`), where each round adds at most 0.5% of the position and a remainder is normal; for the whole
- * cohort on a live (v1) locker, which adds everything it holds every round.
+ * cohort on a v1 locker, which adds everything it holds every round.
  */
 export async function buybacksJob({ client, cohorts, sender, reporter, simAccount = DEFAULT_SIM_ACCOUNT, slippageBps = 50n, lockerIdleAlert = 50_000_000n, gasLimit = 3_000_000n }) {
   const t = await now(client);
@@ -289,7 +289,7 @@ async function launchRecord(client, lp, token) {
 /**
  * Sweeps hook fees of every graduated Uniswap v4 pool: holder-sharing quote fees once they are worth the sweep's gas
  * (see decide.mjs `minHolderSweep`), other fees above `minOther`. On a v2 hook the protocol's cut of holder-sharing
- * pools sits in `pendingProtocolFees` (LP-2), which is counted too; on the live (v1) hooks that read reverts and is 0.
+ * pools sits in `pendingProtocolFees` (LP-2), which is counted too; on the v1 hooks that read reverts and is 0.
  */
 export async function sweepsJob({ client, launchpads, sender, reporter, minOther, simAccount = DEFAULT_SIM_ACCOUNT, gasLimit = 1_500_000n }) {
   for (const lp of launchpads) {
@@ -374,7 +374,7 @@ async function assessSquat(client, { mondayFactory, fee, wmon, token, pairToken,
  * Is this Monday launch bound to Monday (a Monday-only quote asset, aBIL), and when may anyone take its v4 fallback?
  * A v2 factory snapshots the rule per launch (`launchMondayOnly`: a pair flagged after the launch does not bind it)
  * and opens the fallback to anyone once the launch has been stuck for `MONDAY_ONLY_FALLBACK_DELAY` (`valveDelay`).
- * The live (v1) factories have neither: the per-pair rule applies, and only the owner's allowV4Fallback opens it.
+ * The v1 factories have neither: the per-pair rule applies, and only the owner's allowV4Fallback opens it.
  */
 async function mondayOnlyRule(client, lp, token, pairToken) {
   const at = { address: lp.factory, abi: launchpadFactoryV2Abi };
@@ -474,7 +474,7 @@ export async function launchpadGraduationJob({ client, launchpads, sender, repor
 // kind. CreatorFeeRecipientChangeProposed is the owner's most direct money lever on the live factories: anyone can
 // execute it after 3 days unless the creator vetoes, and a pending takeover cannot be read from state, so this scan is
 // the only way to see it in time. The v2-only events (ModulesSealed, GuardianSet, GuardianPaused) match nothing on the
-// live contracts.
+// v1 contracts.
 export const LAUNCHPAD_GOV_EVENTS = [
   "ModulesSet", "MondayExecutorSet", "ModulesSealed", "OwnershipTransferStarted", "FeePolicySet", "LaunchFeeSet", "MaxCreatorTaxSet",
   "PairEconomicsSet", "PairMondayOnlySet", "WhitelistSet", "WhitelistedSet", "LaunchConfigAdded", "LaunchConfigEnabled",
@@ -523,7 +523,12 @@ function throttled(state, key, t, fn) {
  * with no launch, repoint fees, and propose Moments policies. This job compares every factory's and vault's roles and
  * modules with the deployment records (critical on any drift), flags a launchpad whose modules are not frozen yet,
  * pending ownership/governance transfers and policy proposals, and, with `logsLookback`, every governance event.
- * `expected` = { owner, treasury, feesRecipient, momentsGovernance, externalBaseURI } from the live records.
+ * `expected` = { owner, treasury, feesRecipient, momentsGovernance, externalBaseURI } from the live records; a cohort
+ * whose record names a `guardian` (v2) is held to it, and its guardian's pause is a warning. The previous
+ * stacks keep their own owner key and are not paused on chain (owner decision 2026-09-28: retired in the app only), so a
+ * retired stack's owner/governance is checked against its own record, and a retired cohort that is open by that decision
+ * (`openOnChain`, deployments.mjs) or a retired launchpad left unfrozen (0x6B1C) is reported, not alerted; treasury and
+ * fee recipients are the live ones everywhere.
  */
 export async function governanceJob({ client, launchpads, cohorts, reporter, state, expected, logsLookback = 0n, logsChunk = 100n }) {
   const t = await now(client);
@@ -547,20 +552,24 @@ export async function governanceJob({ client, launchpads, cohorts, reporter, sta
         if (lp[key] && !eqAddr(onChain, lp[key])) critical(lp.label, `module ${fn}() is ${onChain}, the record says ${lp[key]}: a module was swapped`);
       }
       const [owner, pendingOwner, recipient, count] = await Promise.all([read("owner"), read("pendingOwner"), read("protocolFeeRecipient"), read("launchCount")]);
-      if (!eqAddr(owner, expected.owner)) critical(lp.label, `owner() is ${owner}, expected ${expected.owner}`);
+      const wantOwner = lp.live ? expected.owner : lp.owner ?? expected.owner;
+      if (!eqAddr(owner, wantOwner)) critical(lp.label, `owner() is ${owner}, expected ${wantOwner}`);
       if (!eqAddr(pendingOwner, ZERO)) critical(lp.label, `an ownership transfer to ${pendingOwner} is pending`);
       if (!eqAddr(recipient, expected.treasury)) critical(lp.label, `protocolFeeRecipient() is ${recipient}, expected ${expected.treasury}`);
       const sealed = await readOr(client, { address: lp.factory, abi: launchpadFactoryV2Abi, functionName: "modulesSealed" }, false);
-      if (count === 0n && !sealed) {
+      if (count === 0n && !sealed && lp.live) {
         throttled(state, `gov:${lp.factory.toLowerCase()}:unfrozen`, t, () =>
           reporter.alert({ job, target: lp.label, severity: "warning", reason: "no launch yet and modules not sealed: the owner key can still replace any module, and the first launch freezes whatever is set. Close the factory or freeze it with a canary launch (owner runbook)" }),
         );
+      } else if (count === 0n && !sealed) {
+        // Left open on chain by the same decision; a module swap there is still critical (the checks above, the event scan).
+        reporter.alert({ job, target: lp.label, severity: "info", reason: "no launch yet and modules not sealed: retired in the app only and left open on chain (owner decision 2026-09-28)" });
       }
       if (lp.feeVault && !eqAddr(lp.feeVault, ZERO)) {
         const v = (functionName) => client.readContract({ address: lp.feeVault, abi: mondayFeeVaultAbi, functionName });
         const [vOwner, vPending, vRecipient] = await Promise.all([v("owner"), v("pendingOwner"), v("lpFeeRecipient")]);
         const target = `${lp.label} fee vault`;
-        if (!eqAddr(vOwner, expected.owner)) critical(target, `owner() is ${vOwner}, expected ${expected.owner}`);
+        if (!eqAddr(vOwner, wantOwner)) critical(target, `owner() is ${vOwner}, expected ${wantOwner}`);
         if (!eqAddr(vPending, ZERO)) critical(target, `an ownership transfer to ${vPending} is pending`);
         if (!eqAddr(vRecipient, expected.feesRecipient)) critical(target, `lpFeeRecipient() is ${vRecipient}, expected ${expected.feesRecipient}`);
       }
@@ -570,15 +579,27 @@ export async function governanceJob({ client, launchpads, cohorts, reporter, sta
     await guard(reporter, job, c.label, async () => {
       const read = (functionName) => client.readContract({ address: c.factory, abi: momentsFactoryAbi, functionName });
       const [gov, pendingGov, pendingAt, paused] = await Promise.all([read("governance"), read("pendingGovernance"), read("pendingPolicyAt"), read("publishingPaused")]);
-      if (!eqAddr(gov, expected.momentsGovernance)) critical(c.label, `governance() is ${gov}, expected ${expected.momentsGovernance}`);
+      const wantGov = c.live ? expected.momentsGovernance : c.governance ?? expected.momentsGovernance;
+      if (!eqAddr(gov, wantGov)) critical(c.label, `governance() is ${gov}, expected ${wantGov}`);
       if (!eqAddr(pendingGov, ZERO)) critical(c.label, `a governance transfer to ${pendingGov} is pending`);
       if (BigInt(pendingAt) !== 0n) {
         reporter.alert({ job, target: c.label, severity: BigInt(pendingAt) <= t ? "critical" : "warning", reason: `a policy proposal is pending, applicable from ${pendingAt}: check it is intended, or cancel it` });
       }
-      if (!c.live && !paused) critical(c.label, "a retired cohort is publishing again (its policy pays retired wallets)");
+      if (!c.live && !paused) {
+        if (c.openOnChain) reporter.alert({ job, target: c.label, severity: "info", reason: "publishing is open on chain: retired in the app only (owner decision 2026-09-28)" });
+        else critical(c.label, "a retired cohort is publishing again (its policy pays retired wallets)");
+      }
       if (c.live && expected.externalBaseURI !== undefined) {
         const base = await read("externalBaseURI");
         if (base !== expected.externalBaseURI) critical(c.label, `externalBaseURI() is "${base}", expected "${expected.externalBaseURI}"`);
+      }
+      // A v2 cohort's record names its guardian. Only the guardian can hand the role on or lift its own pause, and
+      // governance cannot, so a changed guardian is critical and its pause (publishing stops) is a warning.
+      if (c.guardian) {
+        const readV2 = (functionName) => client.readContract({ address: c.factory, abi: momentsFactoryV2Abi, functionName });
+        const [guardian, guardianPaused] = await Promise.all([readV2("guardian"), readV2("guardianPaused")]);
+        if (!eqAddr(guardian, c.guardian)) critical(c.label, `guardian() is ${guardian}, the record says ${c.guardian}: the guardian role was handed on or renounced`);
+        if (guardianPaused) reporter.alert({ job, target: c.label, severity: "warning", reason: "the guardian paused publishing (guardianPaused): only the guardian can lift it" });
       }
     });
   }

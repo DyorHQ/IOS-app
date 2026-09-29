@@ -8,8 +8,10 @@ import UniformTypeIdentifiers
 /// Publish a Moment: the photo (uploaded to DyorHQ's media bucket and fingerprinted with keccak-256 on-chain, or a
 /// link you already host), the name and coin ticker, where and when it happened, the collect price, your coin
 /// allocation and how long collecting stays open. Everything is fixed at publish; the preview shows the economics
-/// exactly as the contract will apply them.
+/// exactly as the contract will apply them. The review is bound to what it shows: the publish carries the terms hash read
+/// with the terms on screen, so if they change before it confirms the factory refuses it and nothing is published.
 struct CreateMomentView: View {
+    /// The live policy; the Moments board refreshes it every 20 s.
     let policy: MomentPolicy?
     /// Called after the publish transaction settles; the new Moment is passed when it could be resolved.
     let onPublished: (MomentInfo?) -> Void
@@ -46,6 +48,10 @@ struct CreateMomentView: View {
     /// The photo goes on-chain as DyorHQ's https copy, by the user's choice, because it could not be pinned.
     @State private var usesMirror = false
     @State private var showConfirm = false
+    /// The terms and the form as they were when Review was tapped. The sheet shows these and publishes exactly these (the
+    /// hash in the transaction is `reviewedPolicy.termsHash`), never the live `policy`, which can refresh under it.
+    @State private var reviewedPolicy: MomentPolicy?
+    @State private var reviewedInput: MomentPublishInput?
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
     private var symbolValid: Bool { symbol.count >= 2 && symbol.count <= 10 && symbol.allSatisfy { $0.isLetter || $0.isNumber } }
@@ -79,7 +85,7 @@ struct CreateMomentView: View {
     }
     private var valid: Bool {
         trimmedName.count >= 2 && trimmedName.count <= 48 && symbolValid && !place.trimmingCharacters(in: .whitespaces).isEmpty && place.count <= 64
-            && mediaValid && animationValid && priceProblem == nil && allocProblem == nil && !uploading && policy != nil && policy?.publishingPaused != true
+            && mediaValid && animationValid && priceProblem == nil && allocProblem == nil && !uploading && policy?.canPublish == true
     }
 
     /// The provenance hash: the uploaded bytes' keccak-256 when a photo was chosen, else the hash of the link itself.
@@ -121,13 +127,24 @@ struct CreateMomentView: View {
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Review") { Haptics.tap(); showConfirm = true }.fontWeight(.semibold).disabled(!valid || !session.canSign) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Review") {
+                        Haptics.tap()
+                        // Snapshot what the sheet shows and publishes; the live policy may refresh while it is open.
+                        reviewedPolicy = policy
+                        reviewedInput = input
+                        showConfirm = true
+                    }
+                    .fontWeight(.semibold).disabled(!valid || !session.canSign)
+                }
             }
             .sheet(isPresented: $showConfirm) {
-                if let input, let policy {
+                if let input = reviewedInput, let policy = reviewedPolicy {
                     ConfirmationSheet(
                         title: "Publish \(input.symbol)", confirmTitle: "Publish",
-                        build: { await env.moments.publishPlan(input) },
+                        // The reviewed terms' hash, never a fresh read: if the terms changed since, the factory refuses the
+                        // publish (TermsChanged) before anything is signed, and the creator reviews again.
+                        build: { try await env.moments.publishPlan(input, termsHash: policy.termsHash) },
                         onDone: { dismiss(); onPublished(nil) },
                         onCompleted: { hash in
                             Activity.record(ActivityRecord(kind: .moment, title: "Published \(input.name)", subtitle: "$\(input.symbol) · \(MomentsFormat.usdc(input.price)) per edition", hash: hash, section: "moments"), owner: session.address)
@@ -140,13 +157,23 @@ struct CreateMomentView: View {
                         },
                         intent: .alwaysAsks(.launch)
                     ) {
+                        let days = input.collectWindow / 86_400
                         DetailRow("Moment", "\(input.name) ($\(input.symbol))")
                         DetailRow("Collect price", MomentsFormat.usdc(input.price))
-                        DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: input.creatorAllocBps))) FDV")
+                        DetailRow("Graduates at", "\(MomentsFormat.usdcCents(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: input.creatorAllocBps))) FDV")
                         DetailRow("Your coins", "\(NumberStyle.basisPoints(input.creatorAllocBps)) · \(MomentsFormat.coins(MomentsConstants.supply * BigUInt(input.creatorAllocBps) / BigUInt(MomentsConstants.bps)))")
-                        DetailRow("Window", "\(windowDays) \(windowDays == 1 ? "day" : "days")")
-                        if let pending = policy.pending {
-                            DetailRow("Policy change", pending.isApplicable(at: Date()) ? "can apply before this lands" : "queued", tint: Color.attention)
+                        DetailRow("Window", "\(days) \(days == 1 ? "day" : "days")")
+                        // Every term the publish's terms hash binds, as read with it.
+                        DetailRow("Each collect", "\(NumberStyle.basisPoints(policy.creatorBps)) you · \(NumberStyle.basisPoints(policy.platformBps)) DyorHQ · \(NumberStyle.basisPoints(policy.reserveBps)) reserve")
+                        DetailRow("Minimum price", MomentsFormat.usdc(policy.minPrice))
+                        DetailRow("Most you can keep", NumberStyle.basisPoints(policy.maxCreatorAllocBps))
+                        DetailRow("NFT royalty", NumberStyle.basisPoints(policy.royaltyBps))
+                        DetailRow("If it expires", "\(NumberStyle.basisPoints(policy.expiryCreatorBps)) of the reserve to you, the rest to the treasury")
+                        DetailRow("Platform wallet", policy.platform.short)
+                        DetailRow("Treasury wallet", policy.treasury.short)
+                        DetailRow("Link", policy.externalBaseURI.replacingOccurrences(of: "https://", with: "") + "<id>")
+                        if let pending = policy.pending, !pending.hasLapsed(at: Date()) {
+                            DetailRow("Policy change", pending.isApplicable(at: Date()) ? "if applied first, nothing is published" : "queued", tint: Color.attention)
                         }
                         DetailRow("Media", mediaHash == nil ? "link, hashed" : usesMirror ? "photo, fingerprinted · DyorHQ link, not IPFS" : (isVideo ? "video, fingerprinted · IPFS" : "photo, fingerprinted · IPFS"))
                     }
@@ -159,16 +186,19 @@ struct CreateMomentView: View {
     // MARK: Sections
 
     /// A policy change queued on the contract (security audit 2026-09-26, MO-4). Once it can be applied, anyone may
-    /// apply it at any moment, and a publish that lands after that takes the new terms, not the ones reviewed here.
+    /// apply it at any moment. The publish carries the hash of the terms reviewed here, so if the new terms take effect
+    /// before it confirms, the factory refuses it: nothing is published, and the creator reviews the new terms. They
+    /// never change silently. A proposal nobody applied in time has lapsed and is not shown.
     @ViewBuilder private var pendingPolicySection: some View {
-        if let policy, let pending = policy.pending {
+        if let policy, let pending = policy.pending, !pending.hasLapsed(at: Date()) {
             let applicable = pending.isApplicable(at: Date())
+            let window = pending.lapsesAt.map { " until \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""
             Section {
                 Label(applicable ? "New terms can take effect at any moment" : "New terms are queued", systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
                 Text(applicable
-                     ? "Anyone can apply the queued policy now. If it's applied before your publish confirms, your Moment gets the new terms below instead of the ones shown here."
-                     : "The queued policy can be applied from \(pending.applicableAt.formatted(date: .abbreviated, time: .shortened)). A publish that confirms after it's applied gets the new terms below instead of the ones shown here.")
+                     ? "Anyone can apply the queued policy now\(window). If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them."
+                     : "The queued policy can be applied from \(pending.applicableAt.formatted(date: .abbreviated, time: .shortened))\(window). If it's applied before your publish confirms, nothing is published and you review the new terms below.")
                     .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 ForEach(pending.changes(from: policy), id: \.self) { field in
                     LabeledContent(Self.title(field), value: Self.change(field, from: policy, to: pending)).font(.footnote)
@@ -193,6 +223,7 @@ struct CreateMomentView: View {
     private static func change(_ field: PendingMomentPolicy.Field, from now: MomentPolicy, to next: PendingMomentPolicy) -> String {
         func bps(_ value: Int) -> String { NumberStyle.basisPoints(value) }
         switch field {
+        // Exact, unlike the other threshold rows: a change under a cent still reads as a change.
         case .threshold: return "\(MomentsFormat.usdc(now.threshold)) → \(MomentsFormat.usdc(next.threshold))"
         case .minPrice: return "\(MomentsFormat.usdc(now.minPrice)) → \(MomentsFormat.usdc(next.minPrice))"
         case .split: return "\(bps(now.creatorBps)) · \(bps(now.platformBps)) · \(bps(now.reserveBps)) → \(bps(next.creatorBps)) · \(bps(next.platformBps)) · \(bps(next.reserveBps))"
@@ -307,10 +338,12 @@ struct CreateMomentView: View {
                     let reservePerCollect = price * BigUInt(policy.reserveBps) / BigUInt(MomentsConstants.bps)
                     let collects = reservePerCollect > 0 ? (policy.threshold + reservePerCollect - 1) / reservePerCollect : 0
                     let fdv = MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps ?? maxAllocBps)
-                    Text("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdc(policy.threshold)) reserve, and the coin graduates at a \(MomentsFormat.fdv(fdv)) FDV. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
+                    Text("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdcCents(policy.threshold)) reserve, and the coin graduates at a \(MomentsFormat.fdv(fdv)) FDV. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
                 } else if policy == nil {
                     Text("Loading the current policy…")
                 }
+                if let block = policy?.publishBlock { Text(block.message).foregroundStyle(Color.attention) }
+                LearnMoreLink(.publishAMoment)
             }
         }
     }
@@ -321,7 +354,7 @@ struct CreateMomentView: View {
                 let creatorCoins = MomentsConstants.supply * BigUInt(allocBps) / BigUInt(MomentsConstants.bps)
                 DetailRows {
                     DetailRow("Collect price", MomentsFormat.usdc(price))
-                    DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps))) FDV")
+                    DetailRow("Graduates at", "\(MomentsFormat.usdcCents(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps))) FDV")
                     DetailRow("Each collect", "\(NumberStyle.basisPoints(policy.reserveBps)) reserve · \(NumberStyle.basisPoints(policy.creatorBps)) you · \(NumberStyle.basisPoints(policy.platformBps)) DyorHQ")
                     DetailRow("Your coins", "\(MomentsFormat.coins(creatorCoins)) (\(NumberStyle.basisPoints(allocBps)))")
                     DetailRow("Collectors + pool", "\(MomentsFormat.coins(MomentsConstants.supply - creatorCoins)) at one price")

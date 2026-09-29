@@ -40,5 +40,33 @@ final class MomentsPendingPolicyTests: XCTestCase {
         let proposal = pending(at: Date(timeIntervalSince1970: 1_800_000_000))
         XCTAssertFalse(proposal.isApplicable(at: Date(timeIntervalSince1970: 1_799_999_999)))
         XCTAssertTrue(proposal.isApplicable(at: Date(timeIntervalSince1970: 1_800_000_000)))
+        // A v1 proposal has no lapse: it stays applicable until applied or cancelled.
+        XCTAssertNil(proposal.lapsesAt)
+        XCTAssertTrue(proposal.isApplicable(at: Date(timeIntervalSince1970: 1_900_000_000)))
+        XCTAssertFalse(proposal.hasLapsed(at: Date(timeIntervalSince1970: 1_900_000_000)))
+    }
+
+    /// v2: `applyPolicy` works from `pendingPolicyAt` through `pendingPolicyAt + POLICY_APPLY_WINDOW` (7 days) and reverts
+    /// `PolicyLapsed` once the time is past it (`block.timestamp > pendingPolicyAt + window`). A lapsed proposal is no
+    /// longer a threat to a publish.
+    func testAV2ProposalLapsesSevenDaysAfterItBecomesApplicable() {
+        XCTAssertEqual(ABI.selector(MomentsABI.Factory.policyApplyWindow).hexString, "0xbfd9aa02")
+        XCTAssertEqual(MomentsConstants.policyApplyWindowSeconds, 604_800)
+        let at = 1_800_000_000
+        let proposal = PendingMomentPolicy(threshold: 50_000_000, minPrice: 1_000_000, creatorBps: 2000, platformBps: 500, reserveBps: 7500, maxCreatorAllocBps: 1000,
+                                           expiryCreatorBps: 6000, royaltyBps: 500, platform: platform, treasury: treasury,
+                                           applicableAt: Date(timeIntervalSince1970: TimeInterval(at)),
+                                           lapsesAt: Date(timeIntervalSince1970: TimeInterval(at + MomentsConstants.policyApplyWindowSeconds)))
+        func time(_ t: Int) -> Date { Date(timeIntervalSince1970: TimeInterval(t)) }
+        let edges: [(Int, applicable: Bool, lapsed: Bool)] = [
+            (at - 1, false, false), // before it can be applied
+            (at, true, false), // from its time
+            (at + 7 * 86_400, true, false), // the last second of the window
+            (at + 7 * 86_400 + 1, false, true), // one second after: lapsed
+        ]
+        for (t, applicable, lapsed) in edges {
+            XCTAssertEqual(proposal.isApplicable(at: time(t)), applicable, "t = at + \(t - at)")
+            XCTAssertEqual(proposal.hasLapsed(at: time(t)), lapsed, "t = at + \(t - at)")
+        }
     }
 }

@@ -257,10 +257,14 @@ struct SignInView: View {
                                      symbol: "eye") { Haptics.tap(); path.append(.watch) }
                 }
 
-                Label("DyorHQ never holds your keys or your funds.", systemImage: "lock.shield")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 6)
+                VStack(spacing: 4) {
+                    Label("DyorHQ never holds your keys or your funds.", systemImage: "lock.shield")
+                        .foregroundStyle(.secondary)
+                    LearnMoreLink(.selfCustodyAndSecurity)
+                }
+                .font(.footnote)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 6)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 28)

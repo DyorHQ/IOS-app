@@ -29,7 +29,7 @@ struct PortfolioView: View {
                         heroCard
                         breakdownCard
                         ForEach(PortfolioModel.Section.allCases) { section in sectionCard(section) }
-                        AssetsCard(model: assets)
+                        AssetsCard(model: assets) { Task { await assets.load(env: env, address: session.address, force: true) } }
                         PastCohortsCard(model: pastMoments)
                         activityCard
                     }

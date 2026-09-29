@@ -152,7 +152,10 @@ struct WalletExportView: View {
             Label("Only enter it into a wallet you trust (MetaMask, Rabby, OKX…). A hardware wallet is safest.", systemImage: "hand.raised.fill")
                 .font(.footnote).foregroundStyle(.secondary)
         } footer: {
-            Text("This is the key for \(session.address?.short ?? "your wallet"). Treat it like the keys to a safe.")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("This is the key for \(session.address?.short ?? "your wallet"). Treat it like the keys to a safe.")
+                LearnMoreLink(.exportSignOutDelete)
+            }
         }
     }
 

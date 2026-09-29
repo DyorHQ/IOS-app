@@ -94,8 +94,9 @@ final class Router {
         tab = .moments
     }
 
-    /// Opens Swap on a pair. A retired cohort's Moment coin on either side opens nothing: trading it is closed
-    /// everywhere in the app (its pool pays the retired platform wallet), and the engine refuses it too.
+    /// Opens Swap on a pair. A retired cohort's Moment coin on either side opens nothing: past cohorts are claim-only,
+    /// so trading their coins is closed everywhere in the app (cohorts 1 and 2's pools also pay the retired platform
+    /// wallet), and the engine refuses it too.
     func openSwap(tokenIn: Token? = nil, tokenOut: Token? = nil) {
         guard SwapEngine.isTradablePair(tokenIn, tokenOut) else { return }
         pendingSwap = (tokenIn, tokenOut)
@@ -111,6 +112,13 @@ final class Router {
 
     func openLaunch(_ launch: Launch) {
         pendingLaunch = launch
+        tab = .launch
+    }
+
+    /// Opens the Launch tab's board: where a coin still on a launchpad's curve is listed when its own launch couldn't be
+    /// read (`CurveRoute.launchTab`), in its phase's section (`LaunchPhase.boardSection`: refund mode and migrating
+    /// included), so the screen that found it isn't a dead end.
+    func openLaunchTab() {
         tab = .launch
     }
 

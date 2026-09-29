@@ -14,15 +14,21 @@ import { fileURLToPath } from "node:url";
 const DEPLOYMENTS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "deployments");
 export const CHAIN_ID = 143;
 
-/** The live factories as deployed on Monad (2026-09-23 relaunch). */
+/** The live factories as deployed on Monad (the v2 release, 2026-09-28: launchpad v2 and Moments cohort 4). */
 export const LIVE_FACTORIES = Object.freeze({
-  launchpad: "0x6B1C8769a8d6745955aC35b91FF1F37AB76859dB",
-  moments: "0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26",
+  launchpad: "0x3B1f5f562f5F61B980aBfDDbebD6cdF9a73b0b5b",
+  moments: "0x95eb7F5A88B10D9dF32aC54F48C767927fa80840",
 });
+
+/** Moments factories left open on chain once retired (owner decision 2026-09-28: the previous stacks are retired in the
+    app only, and builds before 16 can still publish there): cohort 3, retired by the v2 release. The governance watch
+    reports their open publishing instead of alerting. */
+export const OPEN_ON_CHAIN_MOMENTS = Object.freeze(["0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26"]);
 
 // [file, label, required]
 const MOMENTS_FILES = [
-  ["moments-143.json", "cohort3 (live)", true],
+  ["moments-143.json", "cohort4 (live)", true],
+  ["moments-143-cohort3.json", "cohort3 (retired)", false],
   ["moments-143-cohort2.json", "cohort2 (retired)", false],
   ["moments-143-cohort1.json", "cohort1 (retired)", false],
   ["moments-143-v1.1-preview.json", "v1.1-preview (= cohort1)", false],
@@ -34,6 +40,7 @@ const MOMENTS_FILES = [
 // graduateFallback(). The flag comes from the record.
 const LAUNCHPAD_FILES = [
   ["143.json", "launchpad (live)", true],
+  ["143-retired-0x6B1C.json", "launchpad 0x6B1C (retired)", false],
   ["143-retired-0x10F3.json", "launchpad 0x10F3 (retired)", false],
   ["143-retired-0x2F02.json", "launchpad 0x2F02 (retired)", false],
   ["143-retired-0xad3d.json", "launchpad 0xad3d (retired)", false],
@@ -67,7 +74,8 @@ export function momentsCohorts(dir = DEPLOYMENTS) {
     const k = d.collect.toLowerCase();
     if (seen.has(k)) continue;
     seen.add(k);
-    out.push({ label, file, live: required, ...d });
+    const openOnChain = OPEN_ON_CHAIN_MOMENTS.some((f) => f.toLowerCase() === d.factory.toLowerCase());
+    out.push({ label, file, live: required, openOnChain, ...d });
   }
   return out;
 }

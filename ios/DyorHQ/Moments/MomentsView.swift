@@ -35,7 +35,9 @@ struct MomentsView: View {
         NavigationStack(path: $path) {
             Group {
                 if !env.config.moments.isDeployed {
-                    ContentUnavailableView("Moments Not Live Yet", systemImage: "camera.aperture", description: Text("Moments appear here once the contracts are deployed on Monad."))
+                    // The live (v2) cohort is pending. Past-cohort Moments stay reachable through My Moments and links.
+                    ContentUnavailableView("Moments Not Live Yet", systemImage: "camera.aperture",
+                                           description: Text("New Moments appear here once the new DyorHQ Moments contracts are live on Monad. Moments from earlier cohorts are in My Moments."))
                 } else {
                     board
                 }
@@ -46,11 +48,13 @@ struct MomentsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Haptics.tap(); showPortfolio = true } label: { Label("My Moments", systemImage: "person.crop.rectangle.stack") }
-                        .disabled(!env.config.moments.isDeployed || session.address == nil)
+                        .disabled(session.address == nil)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    // Only on terms the app can bind a publish to (`MomentPolicy.canPublish`): neither pause, the c4 link
+                    // base, and an on-chain terms hash that matches the terms read with it.
                     Button { Haptics.tap(); showCreate = true } label: { Label("Publish", systemImage: "plus") }
-                        .disabled(!env.config.moments.isDeployed || model.policy?.publishingPaused == true)
+                        .disabled(!env.config.moments.isDeployed || model.policy?.canPublish != true)
                 }
             }
             .sheet(isPresented: $showCreate) {
@@ -121,12 +125,16 @@ struct MomentsView: View {
             Text("Publish a photo or video as an NFT on Monad. Share it with everyone and earn every time it's collected.")
                 .font(.subheadline).foregroundStyle(.secondary)
             if let policy = model.policy {
-                if policy.publishingPaused {
-                    Label("Publishing is paused by governance; collecting continues.", systemImage: "pause.circle").font(.caption).foregroundStyle(Color.attention)
-                }
-                if policy.pending != nil {
-                    // MO-4: Publish a Moment shows what the queued policy would change.
-                    Label("New terms for new Moments are queued; Publish a Moment shows what changes.", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention)
+                if let block = policy.publishBlock {
+                    // Why Publish is off: a pause (governance's or the guardian's), a link base that isn't DyorHQ's, or terms
+                    // the app can't bind a publish to.
+                    Label(block.message, systemImage: block == .publishingPaused || block == .guardianPaused ? "pause.circle" : "exclamationmark.octagon")
+                        .font(.caption).foregroundStyle(Color.attention)
+                } else if let pending = policy.pending, !pending.hasLapsed(at: Date(timeIntervalSince1970: TimeInterval(clock.now))) {
+                    // MO-4: a queued policy can't change a Moment silently. If it's applied before a publish confirms, the
+                    // publish is refused and the creator reviews the new terms; Publish a Moment shows what would change.
+                    Label("New terms for new Moments are queued. If they take effect before your publish confirms, nothing is published and you review them again.",
+                          systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention)
                 }
             }
         }
@@ -138,7 +146,7 @@ struct MomentsView: View {
             Text(filter == .all ? "No Moments yet" : "Nothing here yet").font(.headline)
             Text(filter == .all ? "Be the first: publish a photo or video and make it last forever." : "Change the filter to see other Moments.")
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            if filter == .all, session.canSign {
+            if filter == .all, session.canSign, model.policy?.canPublish == true {
                 Button("Publish a Moment") { Haptics.tap(); showCreate = true }.buttonStyle(.borderedProminent).foregroundStyle(.white).padding(.top, 4)
             } else if filter != .all {
                 Button("Show All Moments") { Haptics.selection(); filter = .all }.padding(.top, 4)

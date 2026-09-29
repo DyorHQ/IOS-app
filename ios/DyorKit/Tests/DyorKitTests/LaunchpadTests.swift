@@ -61,9 +61,9 @@ final class LaunchpadTests: XCTestCase {
     private var sellTokensIn: BigUInt { e18(500) }
     private var sellMinOut: BigUInt { e6(480) }
 
-    private func makeService(deployed: Bool = true) -> LaunchpadService {
+    private func makeService(deployed: Bool = true, generation: LaunchpadAddresses.Generation = .v1) -> LaunchpadService {
         let addresses = deployed
-            ? LaunchpadAddresses(factory: factory, router: router, escrow: escrow, holderFeeSharing: sharing, hook: hook, poolManager: poolManager)
+            ? LaunchpadAddresses(factory: factory, router: router, escrow: escrow, holderFeeSharing: sharing, hook: hook, poolManager: poolManager, generation: generation)
             : .none
         return LaunchpadService(rpc: RPCClient(url: Monad.defaultRPC), addresses: addresses)
     }
@@ -93,18 +93,18 @@ final class LaunchpadTests: XCTestCase {
 
     // MARK: - Write calldata parity (byte-for-byte vs viem)
 
-    func testLaunchPlanCalldataMatchesViem() async {
+    func testLaunchPlanCalldataMatchesViem() async throws {
         let service = makeService()
 
         // launchToken: no developer buy, native pair -> one call to the factory carrying the launch fee.
-        let plain = await service.launchPlan(sampleInput(pairToken: .zero, initialBuy: 0, minTokensOut: 0), launchFee: launchFee, from: recipient)
+        let plain = try await service.launchPlan(sampleInput(pairToken: .zero, initialBuy: 0, minTokensOut: 0), launchFee: launchFee, from: recipient)
         XCTAssertEqual(plain.count, 1)
         XCTAssertEqual(plain[0].request?.to, factory)
         XCTAssertEqual(plain[0].request?.data.hexString, cd("launchToken"))
         XCTAssertEqual(plain[0].request?.value, launchFee)
 
         // launchAndBuy with an ERC-20 pair: approve the pair for the router, then call the router (fee only as value).
-        let usdcBuy = await service.launchPlan(sampleInput(pairToken: usdc, initialBuy: initialBuy, minTokensOut: devMinOut), launchFee: launchFee, from: recipient)
+        let usdcBuy = try await service.launchPlan(sampleInput(pairToken: usdc, initialBuy: initialBuy, minTokensOut: devMinOut), launchFee: launchFee, from: recipient)
         XCTAssertEqual(usdcBuy.count, 2)
         XCTAssertEqual(usdcBuy[0].kind, .approve(token: usdc, spender: router, amount: initialBuy))
         XCTAssertEqual(usdcBuy[1].request?.to, router)
@@ -113,18 +113,18 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(try! ERC20.approveCalldata(spender: router, amount: initialBuy).hexString, cd("approvePairForRouter"))
 
         // launchAndBuy with a native pair: no approval, value = fee + developer buy.
-        let nativeBuy = await service.launchPlan(sampleInput(pairToken: .zero, initialBuy: initialBuy, minTokensOut: devMinOut), launchFee: launchFee, from: recipient)
+        let nativeBuy = try await service.launchPlan(sampleInput(pairToken: .zero, initialBuy: initialBuy, minTokensOut: devMinOut), launchFee: launchFee, from: recipient)
         XCTAssertEqual(nativeBuy.count, 1)
         XCTAssertEqual(nativeBuy[0].request?.to, router)
         XCTAssertEqual(nativeBuy[0].request?.data.hexString, cd("launchAndBuyNative"))
         XCTAssertEqual(nativeBuy[0].request?.value, launchFee + initialBuy)
     }
 
-    func testBuyPlanCalldataMatchesViem() async {
+    func testBuyPlanCalldataMatchesViem() async throws {
         let service = makeService()
 
         // Native pair: a single buy carrying the quote as value, no approval.
-        let native = await service.buyPlan(launch: makeLaunch(pairToken: .zero, pair: monPair), quoteIn: buyQuoteIn, minTokensOut: buyMinOut, recipient: recipient)
+        let native = try await service.buyPlan(launch: makeLaunch(pairToken: .zero, pair: monPair), quoteIn: buyQuoteIn, minTokensOut: buyMinOut, recipient: recipient)
         XCTAssertEqual(native.count, 1)
         XCTAssertEqual(native[0].kind, .call)
         XCTAssertEqual(native[0].request?.to, curve)
@@ -132,7 +132,7 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(native[0].request?.value, buyQuoteIn)
 
         // ERC-20 pair: approve the pair for the curve first, then buy with zero value.
-        let erc20 = await service.buyPlan(launch: makeLaunch(pairToken: usdc, pair: usdcPair), quoteIn: buyQuoteIn, minTokensOut: buyMinOut, recipient: recipient)
+        let erc20 = try await service.buyPlan(launch: makeLaunch(pairToken: usdc, pair: usdcPair), quoteIn: buyQuoteIn, minTokensOut: buyMinOut, recipient: recipient)
         XCTAssertEqual(erc20.count, 2)
         XCTAssertEqual(erc20[0].kind, .approve(token: usdc, spender: curve, amount: buyQuoteIn))
         XCTAssertEqual(erc20[1].request?.data.hexString, cd("buy"))
@@ -422,10 +422,11 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertFalse(SwapCalldata.graduatedOnV4(synthetic))
     }
 
-    /// Every per-launch plan goes to the launch's own stack; `.zero` and the live factory mean the live stack.
+    /// Every per-launch plan goes to the launch's own stack; `.zero` and the live factory mean the live (v2) stack.
     func testPlansTargetTheLaunchStack() async throws {
-        let service = makeService()
+        let service = makeService(generation: .v2)
         let retired = try XCTUnwrap(LaunchpadAddresses.retiredStacks.first)
+        let auditFix = try XCTUnwrap(LaunchpadAddresses.retiredStack(for: Address(literal: "0x10F34A174d9C393a90aFf94BDED7E1Db185446D7")))
         let legacy = try XCTUnwrap(LaunchpadAddresses.retiredStacks.last)
         func launch(on factory: Address) -> Launch {
             let l = makeLaunch(pairToken: usdc, pair: usdcPair, poolId: poolId)
@@ -436,34 +437,44 @@ final class LaunchpadTests: XCTestCase {
                           completed: false, rescued: false, launchedAt: 0, supply: 0, marketCap: 0, progressBps: 0, factory: factory)
         }
 
+        // v2: no in-app fallback (it needs ~22M gas, over the app's 15M cap); DyorHQ's keepers take it.
         for live in [launch(on: .zero), launch(on: factory)] {
             XCTAssertFalse(live.isRetiredLaunchpad)
             let rewards = await service.claimRewardsPlan(launch: live)
             XCTAssertEqual(rewards[0].request?.to, sharing)
-            let fallback = await service.graduateFallbackPlan(launch: live)
-            XCTAssertEqual(fallback.first?.request?.to, factory)
+            let graduate = await service.graduatePlan(launch: live)
+            XCTAssertEqual(graduate.map { $0.request?.to }, [factory], "Retry Graduation stays: plain graduate, gas estimated")
+        }
+        XCTAssertTrue(launch(on: .zero).keepersTakeGraduateFallback)
+
+        // v1 (0x6B1C, 0x10F3): the keepers take the fallback there too; the app only retries the plain graduation.
+        for stack in [retired, auditFix] {
+            XCTAssertEqual(stack.generation, .v1)
+            let v1 = launch(on: stack.factory)
+            XCTAssertTrue(v1.keepersTakeGraduateFallback)
+            let graduate = await service.graduatePlan(launch: v1)
+            XCTAssertEqual(graduate.map { $0.request?.to }, [stack.factory])
+            XCTAssertEqual(graduate.first?.request?.data, LaunchpadABI.calldata(LaunchpadABI.Factory.graduate, [.address(v1.token)]))
         }
 
         let old = launch(on: retired.factory)
         XCTAssertTrue(old.isRetiredLaunchpad)
-        XCTAssertTrue(old.hasGraduateFallback)
         let rewards = await service.claimRewardsPlan(launch: old, view: LaunchAccountView(tokenBalance: 0, pairBalance: 0, allowance: 0, snipeTaxBps: 0, pendingRewards: 1, escrowBalance: 1))
         XCTAssertEqual(rewards.map { $0.request?.to }, [retired.holderFeeSharing, retired.escrow])
         XCTAssertEqual(rewards[1].request?.data.hexString, cd("claimEscrowToken"))
         let graduate = await service.graduatePlan(launch: old)
         XCTAssertEqual(graduate[0].request?.to, retired.factory)
-        let fallback = await service.graduateFallbackPlan(launch: old)
-        XCTAssertEqual(fallback.first?.request?.to, retired.factory)
         let sweep = await service.sweepPoolFeesPlan(launch: old)
         XCTAssertEqual(sweep[0].request?.to, retired.hook)
         XCTAssertEqual(sweep[0].request?.data.hexString, cd("sweepPoolFees"))
 
-        // The pre-audit stacks have no `graduateFallback`: no plan, and the screen offers none.
-        for stack in LaunchpadAddresses.retiredStacks.dropFirst() {
+        // The pre-audit stacks (0x2F02, 0xad3d) have no `graduateFallback` at all: nothing for the keepers to take either.
+        let preAuditStacks = LaunchpadAddresses.retiredStacks.filter { $0.generation < .v1 }
+        XCTAssertEqual(preAuditStacks.map(\.generation), [.preAudit, .legacy])
+        for stack in preAuditStacks {
             let preAudit = launch(on: stack.factory)
-            XCTAssertFalse(preAudit.hasGraduateFallback)
-            let none = await service.graduateFallbackPlan(launch: preAudit)
-            XCTAssertTrue(none.isEmpty)
+            XCTAssertFalse(preAudit.generation.hasGraduateFallback)
+            XCTAssertFalse(preAudit.keepersTakeGraduateFallback)
         }
         let legacyEscrow = await service.claimEscrowPlan(launch: launch(on: legacy.factory))
         XCTAssertEqual(legacyEscrow[0].request?.to, legacy.escrow)
@@ -497,6 +508,34 @@ final class LaunchpadTests: XCTestCase {
                 Int(c["expected"].number!), "\(c)"
             )
         }
+    }
+
+    /// The board's Market Cap sort compares every pair asset in dollars: a 50,000 USDC coin (5e10 raw, 6 decimals) above
+    /// a 1 MON coin (1e18 raw), an aBIL coin by aBIL's price, and a coin whose pair has no price yet after every priced
+    /// one, by its cap in whole units.
+    func testMarketCapSortComparesPairAssetsInDollars() {
+        let usdc = PairInfo(address: Monad.usdc, symbol: "USDC", decimals: 6, isNative: false)
+        let ausd = PairInfo(address: Monad.ausd, symbol: "AUSD", decimals: 6, isNative: false)
+        let abil = PairInfo(address: Token.abil.address, symbol: "aBIL", decimals: 18, isNative: false)
+        func launch(_ n: UInt8, _ pair: PairInfo, cap: BigUInt) -> Launch {
+            Launch(token: Address(data: Data(repeating: n, count: 20))!, curve: curve, deployer: deployer, creatorFeeRecipient: creatorFeeRecipient, pairToken: pair.address,
+                   graduationThreshold: 0, creatorTaxBps: 0, poolFeeBps: 100, tickSpacing: 60, holderFeeSharing: false, graduationVenue: .uniswapV4, phase: .bonding,
+                   sweptQuote: 0, sweptTokens: 0, sweptAt: 0, poolId: Data(repeating: 0, count: 32), name: "Coin \(n)", symbol: "C\(n)", logo: "", description: "",
+                   socials: .none, pair: pair, price: 0, realQuoteReserve: 0, completed: false, rescued: false, launchedAt: Int(n), supply: 0, marketCap: cap, progressBps: 0)
+        }
+        let oneMON = launch(1, .mon, cap: e18(1))
+        let bigUSDC = launch(2, usdc, cap: e6(50_000))
+        let smallAUSD = launch(3, ausd, cap: e6(2))
+        let abilCoin = launch(4, abil, cap: e18(30))
+        let unpriced = launch(5, PairInfo(address: Address(literal: "0x00000000000000000000000000000000000a0005"), symbol: "NEW", decimals: 18, isNative: false), cap: e18(1_000_000))
+        let prices: [Address: Double] = [Monad.native: 0.03, Monad.usdc: 1, Monad.ausd: 1, Token.abil.address: 101]
+        let sorted = LaunchpadMath.byMarketCap([oneMON, smallAUSD, unpriced, bigUSDC, abilCoin], pairUSD: prices)
+        XCTAssertEqual(sorted.map(\.symbol), ["C2", "C4", "C3", "C1", "C5"], "50,000 USDC, 30 aBIL ($3,030), 2 AUSD, 1 MON ($0.03), then the unpriced one")
+        // Raw amounts alone would have put every 6-decimal coin last.
+        XCTAssertEqual([oneMON, smallAUSD, unpriced, bigUSDC, abilCoin].sorted { $0.marketCap > $1.marketCap }.map(\.symbol), ["C5", "C4", "C1", "C2", "C3"])
+        // With no prices at all, whole units still compare across decimals; equal caps keep their order.
+        XCTAssertEqual(LaunchpadMath.byMarketCap([oneMON, smallAUSD, bigUSDC], pairUSD: [:]).map(\.symbol), ["C2", "C3", "C1"])
+        XCTAssertEqual(LaunchpadMath.byMarketCap([launch(6, usdc, cap: e6(5)), launch(7, ausd, cap: e6(5))], pairUSD: prices).map(\.symbol), ["C6", "C7"])
     }
 
     func testPhaseMappingAndPriceNumber() {
@@ -708,8 +747,7 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertNil(one)
         let canLaunch = try await service.canLaunch(account: recipient)
         XCTAssertFalse(canLaunch)
-        let activity = try await service.activity()
-        XCTAssertEqual(activity, [])
+        // The retired stacks' board, feed and history keep working meanwhile (LaunchpadPendingTests).
 
         // The calldata-building reads that need the factory throw rather than build a bad transaction.
         do {

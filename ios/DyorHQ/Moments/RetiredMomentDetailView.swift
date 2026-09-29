@@ -3,10 +3,11 @@ import DyorKit
 import SwiftUI
 
 /// A Moment of a retired cohort, CLAIM-ONLY: the wallet's editions and coins, its vested coins to claim, and — for the
-/// creator — the creator's own proceeds and pool fees to withdraw. Every Moment there snapshotted the retired fee
-/// wallets, so there is no collect, expire, graduation retry, buyback, platform / treasury withdrawal or trade here;
-/// every write is a `RetiredMoments.plan` against this cohort's own contracts, and every read goes to this cohort
-/// (its Moment ids overlap the live cohort's).
+/// creator — the creator's own proceeds and pool fees to withdraw. Cohorts 1 and 2 snapshotted the retired fee wallets;
+/// cohort 3 pays the current ones and was replaced by the v2 contracts (`RetiredMoments.retirement`). Either way there is
+/// no collect, expire, graduation retry, buyback, platform / treasury withdrawal or trade here; every write is a
+/// `RetiredMoments.plan` against this cohort's own contracts, and every read goes to this cohort (its Moment ids overlap
+/// the live cohort's).
 struct RetiredMomentDetailView: View {
     let cohort: RetiredMoments
     @State var info: MomentInfo
@@ -84,7 +85,12 @@ struct RetiredMomentDetailView: View {
         Section {
             Label("Past cohort — collecting closed", systemImage: "archivebox").font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
         } footer: {
-            Text("This Moment was published on an earlier DyorHQ Moments contract whose fee wallets have been retired. You can claim your vested coins and, as its creator, withdraw your own proceeds and pool fees; collecting, trading and every other action are closed in the app.")
+            switch cohort.retirement {
+            case .retiredWallets:
+                Text("This Moment was published on an earlier DyorHQ Moments contract whose fee wallets have been retired. You can claim your vested coins and, as its creator, withdraw your own proceeds and pool fees; collecting, trading and every other action are closed in the app.")
+            case .replaced:
+                Text("This Moment was published on an earlier DyorHQ Moments contract, since replaced by a new release. You can claim your vested coins and, as its creator, withdraw your own proceeds and pool fees; collecting, trading and every other action are closed in the app.")
+            }
         }
     }
 
@@ -110,7 +116,13 @@ struct RetiredMomentDetailView: View {
             Text("Your Position")
         } footer: {
             if !info.graduated {
-                Text(info.state == .expired ? "It expired before graduating, so its coins never vest. Your editions stay yours." : "Coins vest only once a Moment graduates; collecting is closed in the app.")
+                if info.state == .expired {
+                    Text("It expired before graduating, so its coins never vest. Your editions stay yours.")
+                } else if info.missedGraduation(at: now) {
+                    Text("Its collecting window ended before it graduated, so its coins never vest. Your editions stay yours.")
+                } else {
+                    Text("Coins vest only once a Moment graduates; collecting is closed in the app.")
+                }
             }
         }
     }

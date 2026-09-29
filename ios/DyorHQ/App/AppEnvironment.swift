@@ -14,9 +14,12 @@ final class AppEnvironment {
     let swap: SwapEngine
     let perpl: PerplService
     let launchpad: LaunchpadService
+    /// The live Moments cohort (v2). Not deployed while its addresses are pending: then the board says "not live yet"
+    /// and the retired cohorts below still serve their holders.
     let moments: MomentsService
-    /// The retired Moments cohorts (2, then 1), one service each, CLAIM-ONLY: holders claim vested coins and creators
-    /// withdraw their own proceeds and pool fees; nothing else is reachable. They never feed the Moments board, the
+    /// The retired Moments cohorts (3, 2, then 1), one service each, CLAIM-ONLY: holders claim vested coins and creators
+    /// withdraw their own proceeds and pool fees; nothing else is reachable. Cohorts 1 and 2 paid the retired wallets;
+    /// cohort 3 pays the current ones and is retired because v2 replaced it. They never feed the Moments board, the
     /// feeds, publishing or swap routing — those stay on `moments`.
     let retiredMoments: [RetiredMoments]
     /// Moment names → share-link slugs, across every cohort (`MomentLink`, `MomentSlug`).
@@ -62,15 +65,21 @@ final class AppEnvironment {
                                authorize: { try await backend.sessionHeaders() })
         bridgeTracker = BridgeTracker(aurora: aurora, balances: MultiChainBalances(), monad: EVMChain.monad(rpc: config.rpcURL))
         prices = PriceService(rpc: rpc)
-        // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools and those of
-        // the retired factories with the current record (the legacy 0xad3d… launches all graduate on Monday Trade).
-        let retiredFactories = LaunchpadAddresses.retiredStacks.filter { !$0.legacyRecord && $0.factory != config.launchpad.factory }.map(\.factory)
-        swap = SwapEngine(rpc: rpc, launchpadFactories: config.launchpad.isDeployed ? [config.launchpad.factory] + retiredFactories : [], moments: config.moments)
+        // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools (once v2 is
+        // deployed) and those of the retired factories with the current record (the legacy 0xad3d… launches all
+        // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0.
+        swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments)
         perpl = PerplService(rpc: rpc)
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
         moments = MomentsService(rpc: rpc, addresses: config.moments)
         retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc] in RetiredMoments(rpc: rpc, addresses: $0) }
-        // Every Moment's name in publish order, for share links by name (dyorhq.fun/moments/<name>).
+        #if DEBUG
+        // A fork rehearsal (Secrets.xcconfig MOMENTS_*, Debug only): v2 links (c4) and names follow the Moments this build
+        // shows. Without the override this is nil, and c4 stays MomentsAddresses.monadMainnet.
+        MomentLink.Cohort.rehearse(liveFactory: config.moments.factory == MomentsAddresses.monadMainnet.factory ? nil : config.moments.factory)
+        #endif
+        // Every Moment's name in publish order, for share links by name (dyorhq.fun/moments/<name>): cohorts 1–3 up to
+        // their pinned counts, then v2 once it is wired.
         momentDirectory = MomentDirectory(rpc: rpc)
         news = NewsService()
         // History reads want the larger log-chunk RPC (rpc1), like the launchpad does. A local fork keeps its own
@@ -87,10 +96,14 @@ final class AppEnvironment {
         // own history scans on rpc1, which answer a whole history in one call.
         venueTokens = VenueTokensService(logsRPC: RPCClient(url: URL(string: "https://rpc3.monad.xyz")!), multicall: multicall)
         session = Session(config: config, backend: social)
-        // A passkey session's scope check trusts only the configured Moments cohorts, and signs a launchpad trade only
-        // against the curve a known factory recorded on-chain (MERA-PLAN §3).
+        // A passkey session's scope check trusts only the configured Moments cohorts — v2 (collects, once deployed), then
+        // cohorts 3, 2 and 1 (claims and creator withdrawals) — and signs a launchpad trade only against the curve a
+        // known factory recorded on-chain (MERA-PLAN §3).
         session.mera.contracts = Mera.SigningPolicy.Contracts(moments: config.moments)
         session.mera.curveVerifier = { [launchpad] token in await launchpad.knownCurve(token: token) }
+        // Retired launchpads are sell-only (owner decision 2026-09-28): the wallet refuses a buy into a curve a retired
+        // factory recorded, whatever the sheet declared or a Face ID approved.
+        session.mera.retiredCurveLookup = { [launchpad] curves in await launchpad.retiredCurves(among: curves) }
         perplTrading = PerplTrading(mera: session.mera)
         // The chain's word on which positions are open, which the automatic TP/SL clean-up needs besides the stream's.
         // A position the account's bitmap holds but the read left out (a failed sub-read, a market not listed) throws:

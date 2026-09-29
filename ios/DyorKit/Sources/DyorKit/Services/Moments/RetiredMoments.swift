@@ -1,11 +1,14 @@
 import BigInt
 import Foundation
 
-/* Retired Moments cohorts (`MomentsAddresses.retiredMainnet`), CLAIM-ONLY. Every Moment in them snapshotted the
-   retired beneficiaries at publish (platform 0xf4D4…, treasury 0x5282… whose key leaked), so collecting, expiring,
-   retrying a graduation, running a buyback, platform / treasury withdrawals and trading on a retired pool are all out
-   of reach from here: each of them either pays those wallets or feeds a pool whose hook does. What stays is what the
-   holders and creators are owed — vested coins, and the creator's own proceeds and pool fees. */
+/* Retired Moments cohorts (`MomentsAddresses.retiredMainnet`), CLAIM-ONLY. Cohorts 1 and 2 snapshotted the retired
+   beneficiaries at publish (platform 0xf4D4…, treasury 0x5282… whose key leaked); cohort 3 pays the current fees wallet
+   0x15ED… and treasury 0x5aDb…, and is retired because the v2 contracts replaced it (`MomentsAddresses.retirement`).
+   Either way collecting, expiring, retrying a graduation, running a buyback, platform / treasury withdrawals and trading
+   on a retired pool are all out of reach from here: on cohorts 1 and 2 each of them either pays the retired wallets or
+   feeds a pool whose hook does, and the app serves no past cohort beyond what its people are owed. What stays is
+   exactly that — vested coins, and the creator's own proceeds and pool fees. The service below is v1 (`generation`),
+   so it never sends a v2-only getter to a retired cohort. */
 
 /// The only writes a retired cohort allows.
 public enum RetiredMomentAction: String, Sendable, Hashable, CaseIterable, Identifiable {
@@ -26,11 +29,14 @@ public struct RetiredMomentPosition: Sendable, Hashable, Identifiable {
     public let creatorProceeds: BigUInt
     /// Pool fees still to withdraw (non-zero only for the creator).
     public let creatorFees: BigUInt
+    /// When the position was read (unix seconds): a Moment past its deadline has missed graduation from then on.
+    public let asOf: Int
 
-    public init(row: MomentPortfolioRow, creatorProceeds: BigUInt, creatorFees: BigUInt) {
+    public init(row: MomentPortfolioRow, creatorProceeds: BigUInt, creatorFees: BigUInt, asOf: Int = Int(Date().timeIntervalSince1970)) {
         self.row = row
         self.creatorProceeds = creatorProceeds
         self.creatorFees = creatorFees
+        self.asOf = asOf
     }
 
     public var info: MomentInfo { row.moment }
@@ -41,11 +47,12 @@ public struct RetiredMomentPosition: Sendable, Hashable, Identifiable {
     /// Creator USDC waiting: collect proceeds plus pool fees.
     public var creatorWithdrawable: BigUInt { creatorProceeds + creatorFees }
     /// Something to claim or hold: coins claimable or still vesting, creator withdrawals, editions or coins in the
-    /// wallet, or coins promised by a Moment that has not ended. An expired Moment's promise never vests, so on its
-    /// own it does not count.
+    /// wallet, or coins promised by a Moment that may still graduate. The promise of a Moment that missed graduation
+    /// (expired, or collecting past its deadline, which nothing in the app expires on a retired cohort) never vests,
+    /// so on its own it does not count.
     public var isOpen: Bool {
         if claimable > 0 || creatorWithdrawable > 0 || row.nftBalance > 0 || row.coinBalance > 0 { return true }
-        return info.state != .expired && row.entitlement > row.claimed
+        return !info.missedGraduation(at: asOf) && row.entitlement > row.claimed
     }
 }
 
@@ -63,10 +70,13 @@ public struct RetiredMoments: Sendable {
     }
 
     public var factory: Address { addresses.factory }
+    /// Why the cohort is retired (what its pages say).
+    public var retirement: MomentsRetirement { addresses.retirement ?? .replaced }
 
     // MARK: Reads
 
-    /// Every Moment of the cohort, newest first (publishing is paused, so the list is final).
+    /// Every Moment of the cohort, newest first, read from the chain: on cohort 3, whose publishing is not paused (owner
+    /// decision 2026-09-28), that includes any Moment published after its pin.
     public func moments() async throws -> [MomentInfo] {
         try await service.moments(limit: 200)
     }
@@ -74,6 +84,11 @@ public struct RetiredMoments: Sendable {
     /// A refreshed `MomentInfo` for an id of THIS cohort.
     public func info(id: BigUInt) async throws -> MomentInfo? {
         try await service.info(id: id)
+    }
+
+    /// Fresh `MomentInfo`s for many ids of THIS cohort, in one read and one hydration (`MomentsService.infos`).
+    public func infos(ids: [BigUInt]) async throws -> [MomentInfo] {
+        try await service.infos(ids: ids)
     }
 
     /// The account's stake in one of this cohort's Moments; a Moment of another cohort is refused rather than read
@@ -118,8 +133,8 @@ public struct RetiredMoments: Sendable {
 
     /// Pure half of `positions`. The portfolio rows are matched to their Moments by (factory, id); a Moment the
     /// account only created (no allocation, nothing collected or held) has no row, so its creator proceeds and pool
-    /// fees get one here.
-    static func positions(rows: [MomentPortfolioRow], moments: [MomentInfo], account: Address) -> [RetiredMomentPosition] {
+    /// fees get one here. `now` decides which Moments have missed graduation (`RetiredMomentPosition.isOpen`).
+    static func positions(rows: [MomentPortfolioRow], moments: [MomentInfo], account: Address, now: Int = Int(Date().timeIntervalSince1970)) -> [RetiredMomentPosition] {
         let rowsByKey = Dictionary(rows.map { ($0.moment.key, $0) }, uniquingKeysWith: { first, _ in first })
         var out: [RetiredMomentPosition] = []
         for info in moments {
@@ -129,7 +144,7 @@ public struct RetiredMoments: Sendable {
             let row = rowsByKey[info.key]
                 ?? (proceeds + fees > 0 ? MomentPortfolioRow(moment: info, entitlement: 0, claimed: 0, claimableCollector: 0, claimableCreator: 0, nftBalance: 0, coinBalance: 0, isCreator: true) : nil)
             guard let row else { continue }
-            let position = RetiredMomentPosition(row: row, creatorProceeds: proceeds, creatorFees: fees)
+            let position = RetiredMomentPosition(row: row, creatorProceeds: proceeds, creatorFees: fees, asOf: now)
             if position.isOpen { out.append(position) }
         }
         return out

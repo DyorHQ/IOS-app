@@ -18,12 +18,15 @@ final class MeraPolicyTests: XCTestCase {
     let now = Date(timeIntervalSince1970: 1_790_000_000)
     var expiresAt: Date { now.addingTimeInterval(15 * 60) }
     var unix: Int { Int(now.timeIntervalSince1970) }
-    let moments = MomentsAddresses.monadMainnet
+    /// The live (v2) Moments cohort. `MomentsAddresses.monadMainnet` is all zero until the owner deploys v2, so the
+    /// session context here is built on a v2 fixture (`testMainnetContractsWhileV2IsPending` covers the pending table).
+    let moments = V2Fixture.moments
+    let cohort3 = MomentsAddresses.retiredMainnet[0]
     let usdcIn = BigUInt(50_000_000) // 50 USDC
     let monIn = BigUInt(10).power(18) * 10 // 10 MON
 
     private var context: Policy.Context {
-        Policy.Context(account: account, expiresAt: expiresAt, verifiedCurves: [launchToken: curve])
+        Policy.Context(account: account, expiresAt: expiresAt, contracts: Policy.Contracts(moments: moments), verifiedCurves: [launchToken: curve])
     }
 
     // MARK: Builders
@@ -142,6 +145,10 @@ final class MeraPolicyTests: XCTestCase {
             ("Moments claim", [call(moments.vesting, encode(MomentsABI.Vesting.claim, [.uint(7)]))], .momentsClaim),
             ("Moments claim all", [call(moments.vesting, encode(MomentsABI.Vesting.claimAll, [.array([.uint(7), .uint(8)])]))], .momentsClaim),
             ("Past-cohort claim", [call(MomentsAddresses.retiredMainnet[0].vesting, encode(MomentsABI.Vesting.claim, [.uint(3)]))], .momentsClaim),
+            ("Cohort 3 claim", [call(cohort3.vesting, encode(MomentsABI.Vesting.claim, [.uint(1)]))], .momentsClaim),
+            ("Cohort 1 claim all", [call(MomentsAddresses.retiredMainnet[2].vesting, encode(MomentsABI.Vesting.claimAll, [.array([.uint(2)])]))], .momentsClaim),
+            ("Cohort 3 creator proceeds", [call(cohort3.collect, encode(MomentsABI.Collect.withdrawCreator, [.uint(1)]))], .momentsWithdraw),
+            ("Cohort 3 creator pool fees", [call(cohort3.hook, encode(MomentsABI.Hook.withdrawCreator, [.uint(1)]))], .momentsWithdraw),
             ("Creator proceeds", [call(moments.collect, encode(MomentsABI.Collect.withdrawCreator, [.uint(7)]))], .momentsWithdraw),
             ("Creator pool fees", [call(moments.hook, encode(MomentsABI.Hook.withdrawCreator, [.uint(7)]))], .momentsWithdraw),
             ("Perpl deposit", [approve(Perpl.collateral, Perpl.exchange, usdcIn), call(Perpl.exchange, encode(PerplExchange.Signature.depositCollateral, [.uint(usdcIn)]))],
@@ -223,8 +230,19 @@ final class MeraPolicyTests: XCTestCase {
             ("selling more than declared", [curveCall(LaunchpadABI.Curve.sell, monIn + 1)], sell, .amountOverDeclared),
             ("a buy declared as a sell", [curveCall(LaunchpadABI.Curve.buy, monIn)], sell, .notAllowlisted),
             // Moments.
-            ("collecting on a retired cohort", [call(MomentsAddresses.retiredMainnet[0].collect, encode(MomentsABI.Collect.collect, [.uint(1), .uint(1)]))],
+            ("collecting on a retired cohort", [call(MomentsAddresses.retiredMainnet[1].collect, encode(MomentsABI.Collect.collect, [.uint(1), .uint(1)]))],
              .momentsCollect(pay: .init(token: moments.usdc, amount: usdcIn), usd: 50), .notAllowlisted),
+            ("collecting on cohort 3", [call(cohort3.collect, encode(MomentsABI.Collect.collect, [.uint(1), .uint(1)]))],
+             .momentsCollect(pay: .init(token: moments.usdc, amount: usdcIn), usd: 50), .notAllowlisted),
+            ("an approval of cohort 3's collect", [approve(moments.usdc, cohort3.collect, usdcIn)],
+             .momentsCollect(pay: .init(token: moments.usdc, amount: usdcIn), usd: 50), .approval(.spender)),
+            ("a Permit2 collect", [call(moments.collect, encode(MomentsABI.Collect.collectWithPermit2, [.uint(7), .uint(1), MomentsABI.permit(token: moments.usdc, amount: usdcIn, nonce: 1, deadline: 1), .bytes(Data(count: 65))]))],
+             .momentsCollect(pay: .init(token: moments.usdc, amount: usdcIn), usd: 50), .notAllowlisted),
+            ("expiring a Moment as a withdrawal", [call(moments.collect, encode(MomentsABI.Collect.expire, [.uint(7)]))], .momentsWithdraw, .notAllowlisted),
+            ("expiring cohort 3's Moment as a withdrawal", [call(cohort3.collect, encode(MomentsABI.Collect.expire, [.uint(1)]))], .momentsWithdraw, .notAllowlisted),
+            ("a buyback as a claim", [call(moments.buyback, encode(MomentsABI.Buyback.execute, [.uint(7), .uint(0)]))], .momentsClaim, .notAllowlisted),
+            ("a graduation as a claim", [call(moments.graduation, encode(MomentsABI.Graduation.graduate, [.uint(7)]))], .momentsClaim, .notAllowlisted),
+            ("a treasury withdrawal as withdraw-to-self", [call(cohort3.collect, encode(MomentsABI.Collect.withdrawTreasury, [.uint(1)]))], .momentsWithdraw, .notAllowlisted),
             ("a platform withdrawal as withdraw-to-self", [call(moments.collect, encode(MomentsABI.Collect.withdrawPlatform, [.uint(7)]))], .momentsWithdraw, .notAllowlisted),
             ("a claim on a stranger contract", [call(stranger, encode(MomentsABI.Vesting.claim, [.uint(7)]))], .momentsClaim, .notAllowlisted),
             // Perpl.
@@ -450,6 +468,78 @@ final class MeraPolicyTests: XCTestCase {
         XCTAssertNil(refusal(call(stranger, Data([1, 2, 3, 4])), .alwaysAsks(.send)))
     }
 
+    // MARK: Moments v2
+
+    /// v2 `publish(PublishParams, bytes32)` (0xa270dccc) to the v2 factory always asks: no intent admits it, whatever the
+    /// sheet declares, and the create sheet declares `AlwaysAsk.launch`. So do the policy and guardian calls.
+    func testV2PublishAndGovernanceCallsAlwaysAsk() {
+        let input = MomentPublishInput(name: "Nature", symbol: "NATURE", mediaURI: "ipfs://bafy", mediaHash: Data(count: 32), place: "Accra", date: unix,
+                                       price: 1_000_000, creatorAllocBps: 1_000, collectWindow: 86_400)
+        let publish = call(moments.factory, MomentsABI.calldata(MomentsABI.Factory.publish, [MomentsABI.publishParams(input, salt: Data(count: 32)), .bytes(V2Fixture.termsHash)]))
+        XCTAssertEqual(publish.data.prefix(4).hexString, "0xa270dccc")
+        let intents: [(String, Intent)] = [
+            ("collect", .momentsCollect(pay: .init(token: moments.usdc, amount: usdcIn), usd: 50)), ("claim", .momentsClaim), ("withdraw", .momentsWithdraw),
+            ("swap", swapIntent(.uniswap, pay: usdc, usdcIn)), ("launchpad buy", .launchpadBuy(token: launchToken, pay: .init(token: Monad.native, amount: monIn), usd: 30)),
+            ("Perpl withdraw", .perplWithdraw),
+        ]
+        let governance: [(String, Data)] = [
+            ("applyPolicy", encode("applyPolicy()")), ("cancelPolicy", encode("cancelPolicy()")), ("setGuardianPaused", encode("setGuardianPaused(bool)", [.bool(true)])),
+            ("setGuardian", encode("setGuardian(address)", [.address(stranger)])), ("setExternalBaseURI", encode("setExternalBaseURI(string)", [.string("https://evil.example/")])),
+            ("setPublishingPaused", encode("setPublishingPaused(bool)", [.bool(false)])),
+        ]
+        for (name, intent) in intents {
+            // A launchpad sheet names the first thing it checks: the call isn't to the verified curve.
+            let reason: Policy.Reason = name == "launchpad buy" ? .unverifiedCurve : .notAllowlisted
+            XCTAssertEqual(review([publish], intent), .ask(reason), "publish under \(name)")
+            for (what, data) in governance {
+                XCTAssertEqual(review([call(moments.factory, data)], intent), .ask(reason), "\(what) under \(name)")
+            }
+        }
+        XCTAssertEqual(review([publish], .alwaysAsks(.launch)), .ask(.alwaysAsks(.launch)))
+        XCTAssertEqual(review([publish], .ask), .ask(.alwaysAsks(.unlisted)))
+    }
+
+    /// While v2 is pending the shipped contracts table is all zero for the live cohort: collecting asks (nothing points at
+    /// address 0), and claims and creator withdrawals still work on every retired cohort, newest first.
+    func testMainnetContractsWhileV2IsPending() {
+        let mainnet = Policy.Contracts.monadMainnet
+        XCTAssertEqual(mainnet.moments, MomentsAddresses.monadMainnet)
+        guard !MomentsAddresses.monadMainnet.isDeployed else {
+            // Wired: the live cohort leads, then cohorts 3, 2, 1.
+            XCTAssertEqual(mainnet.momentsCohorts, [MomentsAddresses.monadMainnet] + MomentsAddresses.retiredMainnet)
+            return
+        }
+        XCTAssertEqual(mainnet.momentsCohorts, MomentsAddresses.retiredMainnet, "cohorts 3, 2, 1; nothing at address 0")
+        XCTAssertEqual(Policy.Contracts(moments: V2Fixture.moments).momentsCohorts, [V2Fixture.moments] + MomentsAddresses.retiredMainnet)
+        let pending = Policy.Context(account: account, expiresAt: expiresAt, contracts: mainnet)
+        let collect = Intent.momentsCollect(pay: .init(token: usdc, amount: usdcIn), usd: 50)
+        XCTAssertEqual(review([approve(usdc, .zero, usdcIn)], collect, context: pending), .ask(.approval(.spender)))
+        XCTAssertEqual(review([call(.zero, encode(MomentsABI.Collect.collect, [.uint(1), .uint(1)]))], collect, context: pending), .ask(.notAllowlisted))
+        XCTAssertEqual(review([call(.zero, encode(MomentsABI.Vesting.claim, [.uint(1)]))], .momentsClaim, context: pending), .ask(.notAllowlisted))
+        XCTAssertEqual(review([call(.zero, encode(MomentsABI.Collect.withdrawCreator, [.uint(1)]))], .momentsWithdraw, context: pending), .ask(.notAllowlisted))
+        for cohort in MomentsAddresses.retiredMainnet {
+            XCTAssertEqual(review([call(cohort.vesting, encode(MomentsABI.Vesting.claim, [.uint(1)]))], .momentsClaim, context: pending), .allowed)
+            XCTAssertEqual(review([call(cohort.collect, encode(MomentsABI.Collect.withdrawCreator, [.uint(1)]))], .momentsWithdraw, context: pending), .allowed)
+            XCTAssertEqual(review([call(cohort.hook, encode(MomentsABI.Hook.withdrawCreator, [.uint(1)]))], .momentsWithdraw, context: pending), .allowed)
+            XCTAssertEqual(review([call(cohort.collect, encode(MomentsABI.Collect.collect, [.uint(1), .uint(1)]))], collect, context: pending), .ask(.notAllowlisted))
+        }
+    }
+
+    /// The v2 launchpad's `graduateFallback` needs at least 22,062,500 gas: over the 15M ceiling, so it is refused on the
+    /// fee bound whatever the sheet or a step-up says. The app never sends it; the keepers do.
+    func testGraduateFallbackIsRefusedAtTheGasItNeeds() {
+        let gwei = BigUInt(10).power(9)
+        let fallback = Policy.Call(PreparedTransaction(from: account, to: V2Fixture.launchpad.factory,
+                                                       data: encode(LaunchpadABI.Factory.graduateFallback, [.address(launchToken)]), value: 0, nonce: 3,
+                                                       gasLimit: 22_100_000, maxFeePerGas: 110 * gwei, maxPriorityFeePerGas: 2 * gwei, chainId: Monad.chainId))
+        for intent in [Intent.ask, .alwaysAsks(.unlisted), .alwaysAsks(.launch), .momentsClaim] {
+            XCTAssertEqual(Policy.refusal(fallback, intent: intent, account: account), .networkFee)
+        }
+        XCTAssertEqual(review([fallback], .momentsClaim), .ask(.notAllowlisted), "and it is on no list")
+        XCTAssertLessThan(Policy.maxGasLimit, 22_062_500)
+        XCTAssertEqual(Policy.maxGasLimit, NetworkFeeLimits.monad.maxGasLimit, "the caps are unchanged")
+    }
+
     // MARK: Messages
 
     func testOnlyTheWalletAuthTemplateIsPromptFree() {
@@ -567,15 +657,19 @@ final class MeraPolicyTests: XCTestCase {
             if legacy { fields.remove(at: 10) }
             return .tuple(fields)
         }
-        let stacks = [LaunchpadAddresses.monadMainnet] + LaunchpadAddresses.retiredStacks
+        // The v2 stack (a fixture while the mainnet table is pending), then the four retired ones: 0x6B1C, 0x10F3, 0x2F02
+        // and the legacy 0xad3d.
+        let stacks = [V2Fixture.launchpad] + LaunchpadAddresses.retiredStacks
+        XCTAssertEqual(stacks.count, 5)
         struct Failed: Error {}
         let found = LaunchpadService.knownCurve(stacks: stacks, records: [
             .failure(Failed()),
             .success([record(curve: .zero, exists: false, legacy: false)]),
             .success([record(curve: stranger, exists: false, legacy: false)]),
+            .success([record(curve: stranger, exists: false, legacy: false)]),
             .success([record(curve: curve, exists: true, legacy: true)]),
         ])
         XCTAssertEqual(found, curve, "the first stack that recorded the launch, legacy layout included")
-        XCTAssertNil(LaunchpadService.knownCurve(stacks: stacks, records: stacks.map { .success([record(curve: curve, exists: false, legacy: $0.legacyRecord)]) }))
+        XCTAssertNil(LaunchpadService.knownCurve(stacks: stacks, records: stacks.map { .success([record(curve: curve, exists: false, legacy: $0.generation.legacyRecord)]) }))
     }
 }

@@ -108,9 +108,9 @@ struct MomentDetailView: View {
             }
             .gaugeStyle(.accessoryLinearCapacity)
             .tint(.brand)
-            LabeledContent("Reserve", value: "\(MomentsFormat.usdc(info.ledger.reserve)) of \(MomentsFormat.usdc(m.threshold))")
+            LabeledContent("Reserve", value: "\(MomentsFormat.usdcCents(info.ledger.reserve)) of \(MomentsFormat.usdcCents(m.threshold))")
             if info.state == .collecting, now < m.deadline {
-                LabeledContent("Still needed", value: "\(MomentsFormat.usdc(info.reserveRemaining)) · about \(info.collectsToGraduate) \(info.collectsToGraduate == 1 ? "collect" : "collects")")
+                LabeledContent("Still needed", value: "\(MomentsFormat.usdcCents(info.reserveRemaining)) · about \(info.collectsToGraduate) \(info.collectsToGraduate == 1 ? "collect" : "collects")")
                 LabeledContent("Window closes", value: MomentsFormat.date(m.deadline))
             }
         } footer: {
@@ -188,7 +188,10 @@ struct MomentDetailView: View {
         } header: {
             Text("Collect")
         } footer: {
-            Text("Paid in USDC: \(NumberStyle.basisPoints(m.reserveBps)) reserve, \(NumberStyle.basisPoints(m.creatorBps)) creator, \(NumberStyle.basisPoints(m.platformBps)) DyorHQ. Your NFT appears on OpenSea as soon as it settles.")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Paid in USDC: \(NumberStyle.basisPoints(m.reserveBps)) reserve, \(NumberStyle.basisPoints(m.creatorBps)) creator, \(NumberStyle.basisPoints(m.platformBps)) DyorHQ. Your NFT appears on OpenSea as soon as it settles.")
+                LearnMoreLink(.collectAMoment)
+            }
         }
     }
 
@@ -254,7 +257,11 @@ struct MomentDetailView: View {
         } header: {
             Text("Your Position")
         } footer: {
-            if !info.graduated, info.state != .expired { Text("Coins are minted to you as they vest once the Moment graduates.") }
+            // Where a collector's coins vest and are claimed.
+            VStack(alignment: .leading, spacing: 4) {
+                if !info.graduated, info.state != .expired { Text("Coins are minted to you as they vest once the Moment graduates.") }
+                LearnMoreLink(.momentsGraduationAndVesting)
+            }
         }
     }
 
@@ -277,7 +284,10 @@ struct MomentDetailView: View {
         } header: {
             Text("You Created This")
         } footer: {
-            Text("\(NumberStyle.basisPoints(m.creatorBps)) of every collect, plus \(NumberStyle.basisPoints(MomentsConstants.hookCreatorShareBps)) of the pool's 1% fee after graduation, accrue here for you.")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(NumberStyle.basisPoints(m.creatorBps)) of every collect, plus \(NumberStyle.basisPoints(MomentsConstants.hookCreatorShareBps)) of the pool's 1% fee after graduation, accrue here for you.")
+                LearnMoreLink(.momentsEarningsAndFees)
+            }
         }
     }
 
@@ -307,6 +317,10 @@ struct MomentDetailView: View {
             LabeledContent("Position", value: "Full range · locked forever")
             LabeledContent("Fees accrued", value: "creator \(MomentsFormat.usdc(pool.creatorFees)) · DyorHQ \(MomentsFormat.usdc(pool.platformFees)) · buyback \(MomentsFormat.usdc(pool.buybackFees))")
             LabeledContent("Buyback budget", value: MomentsFormat.usdc(pool.buybackBudget))
+            // v2: each round adds at most 0.5% of the position as liquidity; the rest waits in the locker for later rounds.
+            if let held = pool.heldForLaterRounds, held > 0 {
+                LabeledContent("Held for later buyback rounds", value: MomentsFormat.usdc(held))
+            }
             if pool.buybackReady(at: now) {
                 Button("Run Buyback", systemImage: "arrow.triangle.2.circlepath") { Haptics.tap(); action = .buyback }.disabled(!session.canSign)
             } else if pool.lastBuyback > 0 {
@@ -444,14 +458,14 @@ struct MomentDetailView: View {
             }
         case .retry:
             ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Retry", build: { await env.moments.retryGraduationPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Graduated $\(info.symbol)", subtitle: "\(MomentsFormat.usdc(info.ledger.reserve)) reserve into a locked pool", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
-                DetailRow("Reserve", MomentsFormat.usdc(info.ledger.reserve))
-                DetailRow("Pool", "\(MomentsFormat.usdc(info.ledger.reserve)) + coins, locked")
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Graduated $\(info.symbol)", subtitle: "\(MomentsFormat.usdcCents(info.ledger.reserve)) reserve into a locked pool", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
+                DetailRow("Reserve", MomentsFormat.usdcCents(info.ledger.reserve))
+                DetailRow("Pool", "\(MomentsFormat.usdcCents(info.ledger.reserve)) + coins, locked")
             }
         case .expire:
             ConfirmationSheet(title: "Expire Moment", confirmTitle: "Expire", build: { await env.moments.expirePlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Expired \(info.name)", subtitle: "\(MomentsFormat.usdc(info.ledger.reserve)) reserve wound down", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
-                DetailRow("Reserve", MomentsFormat.usdc(info.ledger.reserve))
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Expired \(info.name)", subtitle: "\(MomentsFormat.usdcCents(info.ledger.reserve)) reserve wound down", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
+                DetailRow("Reserve", MomentsFormat.usdcCents(info.ledger.reserve))
                 DetailRow("To creator", NumberStyle.basisPoints(m.expiryCreatorBps))
                 DetailRow("To treasury", NumberStyle.basisPoints(MomentsConstants.bps - m.expiryCreatorBps))
             }
@@ -461,6 +475,10 @@ struct MomentDetailView: View {
                 DetailRow("Budget", MomentsFormat.usdc(info.pool?.buybackBudget ?? 0))
                 DetailRow("Spends", "half on coins, half paired as liquidity")
                 DetailRow("Impact cap", "1%")
+                if info.pool?.heldForLaterRounds != nil {
+                    // v2's guards: a round runs at most hourly, and not when the price moved over 2% within the block.
+                    DetailRow("Price check", "refused if the price moved over 2% this block")
+                }
             }
         }
     }

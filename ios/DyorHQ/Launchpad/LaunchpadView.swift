@@ -4,9 +4,9 @@ import DyorKit
 import PhotosUI
 import SwiftUI
 
-/// The launchpad: a discovery board of coins — graduated pools and coins still climbing their bonding curve — as an
-/// image-forward two-column grid, plus the flow to launch a new one. Modeled on the Ponsfamily launchpad, rebuilt in
-/// DyorHQ's serif / monochrome system with the Monad-purple accent.
+/// The launchpad: a discovery board of coins — graduated pools, coins still climbing their bonding curve, and coins in
+/// refund mode or migrating — as an image-forward two-column grid, plus the flow to launch a new one. Modeled on the
+/// Ponsfamily launchpad, rebuilt in DyorHQ's serif / monochrome system with the Monad-purple accent.
 struct LaunchpadView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
@@ -22,23 +22,16 @@ struct LaunchpadView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            Group {
-                if !env.config.launchpad.isDeployed {
-                    ContentUnavailableView {
-                        Label("Launchpad Not Live Yet", systemImage: "flame")
-                    } description: {
-                        Text("Launches appear here once the DyorHQ launchpad contracts are deployed on Monad.")
-                    }
-                } else {
-                    board
-                }
-            }
+            // While the live (v2) launchpad is not deployed the board still lists the retired launchpads' coins: their
+            // holders can sell them and claim what they earned, graduated ones trade on Swap, and nobody buys one still
+            // on its curve (sell-only, owner decision 2026-09-28). Only new launches wait.
+            board
             .navigationTitle("Launch")
             .navigationDestination(for: Launch.self) { launch in LaunchDetailView(launch: launch) }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Haptics.tap(); showProfile = true } label: { Label("My Launchpad", systemImage: "person.crop.circle") }
-                        .disabled(!env.config.launchpad.isDeployed || session.address == nil)
+                        .disabled(session.address == nil)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Haptics.tap(); showCreate = true } label: { Label("New Launch", systemImage: "plus.circle.fill") }
@@ -46,10 +39,11 @@ struct LaunchpadView: View {
                 }
             }
             .searchable(text: $query, prompt: "Search coins")
-            .refreshable { await model.load(env: env) }
-            .task { await model.poll(env: env) }
-            .overlay { if model.launches.isEmpty, model.loading, env.config.launchpad.isDeployed { ProgressView().controlSize(.large) } }
-            .sheet(isPresented: $showCreate) { CreateLaunchView(protocolInfo: model.protocolInfo) { Task { await model.load(env: env) } } }
+            .refreshable { await model.load(env: env, account: session.address) }
+            // Restarts with the wallet: whether it may launch is part of what the create screen is given.
+            .task(id: session.address) { await model.poll(env: env, account: session.address) }
+            .overlay { if model.launches.isEmpty, model.loading { ProgressView().controlSize(.large) } }
+            .sheet(isPresented: $showCreate) { CreateLaunchView(protocolInfo: model.protocolInfo) { Task { await model.load(env: env, account: session.address) } } }
             .sheet(isPresented: $showProfile) { LaunchpadProfileView() }
             .onChange(of: router.pendingLaunch) { _, launch in
                 guard let launch else { return }
@@ -63,11 +57,21 @@ struct LaunchpadView: View {
     private var board: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
-                if graduated.isEmpty, climbing.isEmpty, !model.loading {
+                if !env.config.launchpad.isDeployed {
+                    Label("New launches open soon. Coins from the retired launchpads can be sold here, but not bought; graduated ones trade on Swap.", systemImage: "clock")
+                        .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, !model.loading {
                     emptyState
                 } else {
                     if !graduated.isEmpty { section(title: "Graduated", count: graduated.count, subtitle: "Cleared the graduation threshold", coins: graduated) }
                     exploreSection
+                    // Every phase has its section (`LaunchPhase.boardSection`): a holder sent here for a coin whose own
+                    // launch couldn't be read (`CurveRoute.launchTab`) finds it, one in refund mode above all.
+                    if !refundAndMigrating.isEmpty {
+                        section(title: "Refund & Migrating", count: refundAndMigrating.count,
+                                subtitle: "In refund mode, holders sell back into the curve; a migrating coin trades once it graduates", coins: refundAndMigrating)
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -132,10 +136,13 @@ struct LaunchpadView: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "flame").font(.largeTitle).foregroundStyle(Color.brand)
-            Text("No Launches Yet").font(.headline)
-            Text("Be the first to launch a coin on DyorHQ.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Button { Haptics.tap(); showCreate = true } label: { Text("Launch a Coin").fontWeight(.semibold) }
-                .buttonStyle(.borderedProminent).controlSize(.large).disabled(!session.canSign)
+            Text(env.config.launchpad.isDeployed ? "No Launches Yet" : "New Launches Open Soon").font(.headline)
+            Text(env.config.launchpad.isDeployed ? "Be the first to launch a coin on DyorHQ." : "Launches appear here once the new DyorHQ launchpad contracts are live on Monad.")
+                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if env.config.launchpad.isDeployed {
+                Button { Haptics.tap(); showCreate = true } label: { Text("Launch a Coin").fontWeight(.semibold) }
+                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(!session.canSign)
+            }
         }
         .frame(maxWidth: .infinity).padding(.top, 60)
     }
@@ -147,16 +154,22 @@ struct LaunchpadView: View {
     }
 
     private var graduated: [Launch] {
-        matching.filter { $0.phase == .graduated }.sorted { $0.launchedAt > $1.launchedAt }
+        matching.filter { $0.phase.boardSection == .graduated }.sorted { $0.launchedAt > $1.launchedAt }
     }
 
     private var climbing: [Launch] {
-        let live = matching.filter { $0.phase == .bonding }
+        let live = matching.filter { $0.phase.boardSection == .climbing }
         switch sort {
         case .newest: return live.sorted { $0.launchedAt > $1.launchedAt }
-        case .marketCap: return live.sorted { $0.marketCap > $1.marketCap }
+        case .marketCap: return LaunchpadMath.byMarketCap(live, pairUSD: model.pairUSD)
         case .progress: return live.sorted { $0.progressBps > $1.progressBps }
         }
+    }
+
+    /// Coins in refund mode (holders sell back into the curve, the retired launchpads' too) or migrating (nothing trades
+    /// until they graduate), newest first.
+    private var refundAndMigrating: [Launch] {
+        matching.filter { $0.phase.boardSection == .refundAndMigrating }.sorted { $0.launchedAt > $1.launchedAt }
     }
 }
 
@@ -230,6 +243,12 @@ struct LaunchCard: View {
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(.ultraThinMaterial, in: Capsule())
                 .foregroundStyle(Color.positive)
+        } else if launch.phase.boardSection == .refundAndMigrating {
+            Text(launch.phase.title)
+                .font(.caption2.weight(.bold))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .foregroundStyle(.secondary)
         } else if launch.progressBps >= 8000 {
             Text("\(launch.progressBps / 100)%")
                 .font(.caption2.weight(.bold))
@@ -326,32 +345,49 @@ enum RelativeTime {
 final class LaunchpadModel {
     private(set) var launches: [Launch] = []
     private(set) var protocolInfo: ProtocolInfo?
+    /// Each pair asset's USD price, by pair token (MON under the zero address; USDC and AUSD $1), read the way
+    /// `LaunchpadProfileModel` reads them: the Market Cap sort compares coins in dollars across pair assets. A pair with
+    /// no price is left out, and a failed read keeps the last prices.
+    private(set) var pairUSD: [Address: Double] = [:]
     private(set) var loading = false
     private(set) var error: String?
 
-    func poll(env: AppEnvironment) async {
+    func poll(env: AppEnvironment, account: Address?) async {
         while !Task.isCancelled {
-            await load(env: env)
+            await load(env: env, account: account)
             try? await Task.sleep(for: .seconds(20))
         }
     }
 
-    func load(env: AppEnvironment) async {
-        guard env.config.launchpad.isDeployed else { return }
+    /// `account` is the signed-in wallet: whether it may launch (`canLaunch`) comes with the factory's terms.
+    func load(env: AppEnvironment, account: Address?) async {
+        // Runs while the live stack is pending too: the retired stacks' launches still list (and `protocolInfo` is nil).
         loading = true
         defer { loading = false }
         do {
-            async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets)
+            async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets, account: account)
             launches = try await env.launchpad.allLaunches(limit: 60)
             protocolInfo = try? await info
             error = nil
         } catch {
             self.error = describe(error)
         }
+        if let prices = await Self.pairPrices(env: env, launches: launches) { pairUSD = prices }
+    }
+
+    private static func pairPrices(env: AppEnvironment, launches: [Launch]) async -> [Address: Double]? {
+        var tokens: [Address: Token] = [:]
+        for launch in launches where tokens[launch.pairToken] == nil {
+            tokens[launch.pairToken] = Token(address: launch.pairToken, symbol: launch.pair.symbol, name: launch.pair.symbol, decimals: launch.pair.decimals)
+        }
+        guard !tokens.isEmpty, let prices = try? await env.prices.prices(for: Array(tokens.values)) else { return nil }
+        return prices.compactMapValues { $0.usd > 0 ? $0.usd : nil }
     }
 }
 
-/// One coin: price and progress, the curve's trades as candles, and the buy/sell ticket.
+/// One coin: price and progress, the curve's trades as candles, and the buy/sell ticket while the curve takes trades —
+/// sell only for a coin on a retired launchpad (`Launch.isRetiredLaunchpad`, owner decision 2026-09-28) and in refund
+/// mode. A completed curve waiting to graduate (stuck), a migrating launch and a graduated one get the graduation section.
 struct LaunchDetailView: View {
     let launch: Launch
     @Environment(AppEnvironment.self) private var env
@@ -372,9 +408,16 @@ struct LaunchDetailView: View {
     @State private var showClaim = false
     @State private var showCreatorClaim = false
     @State private var showGraduate = false
-    @State private var showFallback = false
+
+    init(launch: Launch) {
+        self.launch = launch
+        // A retired launchpad's curve, and one in refund mode, takes sells only: the ticket never starts on (or offers) Buy.
+        _side = State(initialValue: launch.curveBuysOpen ? .buy : .sell)
+    }
 
     private var isCreator: Bool { session.address != nil && session.address == launch.deployer }
+    /// Buying on the curve is open: while it trades, and never on a retired launchpad, whose holders can only sell.
+    private var buysOpen: Bool { launch.curveBuysOpen }
 
     /// The coin's price and market cap in USD, when the pair asset has a known dollar price.
     private var priceUSD: Double? { pairUSD.map { LaunchpadService.priceNumber(launch) * $0 } }
@@ -393,7 +436,9 @@ struct LaunchDetailView: View {
             headerSection
             statsSection
             chartSection
-            if launch.phase == .bonding { ticketSection } else { graduatedSection }
+            // The ticket only while the curve takes a sell: a completed curve still waiting to graduate (a stuck launch's
+            // record says NotGraduated) refuses them, and gets the graduation section with Retry Graduation instead.
+            if launch.curveSellsOpen { ticketSection } else { graduatedSection }
             if let account, account.tokenBalance > 0 || account.pendingRewards > 0 { holdingsSection(account) }
             feesSection
             if !trades.isEmpty { tradesSection }
@@ -409,13 +454,6 @@ struct LaunchDetailView: View {
             ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Graduate", build: { env.launchpad.graduatePlan(launch: launch) }, onDone: { Task { await load() } },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "\(launch.symbol) graduated", subtitle: launch.graduationVenue.title, hash: hash, section: "launch"), owner: session.address) }) {
                 DetailRow("Venue", launch.graduationVenue.title)
-                DetailRow("Who pays", "You (gas only)")
-            }
-        }
-        .sheet(isPresented: $showFallback) {
-            ConfirmationSheet(title: "Graduate on Uniswap v4", confirmTitle: "Graduate", build: { env.launchpad.graduateFallbackPlan(launch: launch) }, onDone: { Task { await load() } },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "\(launch.symbol) graduated on Uniswap v4", subtitle: "Uniswap v4 (fallback)", hash: hash, section: "launch"), owner: session.address) }) {
-                DetailRow("Venue", "Uniswap v4 (fallback)")
                 DetailRow("Who pays", "You (gas only)")
             }
         }
@@ -455,9 +493,14 @@ struct LaunchDetailView: View {
         } header: {
             Text("Creator Fees")
         } footer: {
-            Text(launch.holderFeeSharing
-                ? "This coin routes its creator fees to holders — each holder claims their pro-rata share (see Your Holdings, or My Launchpad)."
-                : "The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset.")
+            VStack(alignment: .leading, spacing: 4) {
+                Text((launch.holderFeeSharing
+                    ? "This coin routes its creator fees to holders — each holder claims their pro-rata share (see Your Holdings, or My Launchpad)."
+                    : "The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset.")
+                    // A Monday Trade pool has no hook: its 1% fee is harvested to DyorHQ, with no creator tax or share in it.
+                    + (launch.graduationVenue == .monday ? " These come from curve trades only: once it graduates on Monday Trade, the pool's 1% fee goes to DyorHQ." : ""))
+                LearnMoreLink(.launchpadFeesAndRewards)
+            }
         }
     }
 
@@ -468,7 +511,7 @@ struct LaunchDetailView: View {
                     TokenLogo(symbol: launch.symbol, url: URL(string: launch.logo), size: 48)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(launch.name).font(.title3.weight(.semibold))
-                        Text(launch.isRetiredLaunchpad ? "\(launch.phase.title) · Retired launchpad" : launch.phase.title).font(.subheadline).foregroundStyle(.secondary)
+                        Text(launch.isRetiredLaunchpad ? "\(launch.statusTitle) · Retired launchpad" : launch.statusTitle).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
                 HStack(alignment: .firstTextBaseline) {
@@ -496,6 +539,10 @@ struct LaunchDetailView: View {
                 }
             }
             .padding(.vertical, 4)
+        } footer: {
+            // Graduation is explained by the gauge while the curve trades, and by the graduation section once it doesn't:
+            // the link follows the explanation on screen, so there is one either way.
+            if launch.phase == .bonding, launch.curveSellsOpen { LearnMoreLink(.launchpadGraduation) }
         }
     }
 
@@ -549,11 +596,16 @@ struct LaunchDetailView: View {
 
     private var ticketSection: some View {
         Section {
-            Picker("Side", selection: $side) {
-                Text("Buy").tag(TradeSide.buy)
-                Text("Sell").tag(TradeSide.sell)
+            if buysOpen {
+                Picker("Side", selection: $side) {
+                    Text("Buy").tag(TradeSide.buy)
+                    Text("Sell").tag(TradeSide.sell)
+                }
+                .pickerStyle(.segmented)
+            } else {
+                Label(launch.isRetiredLaunchpad ? RetiredLaunchpad.notice : "Refund mode: sell back into the curve at its price, with no fees.", systemImage: "arrow.up.right.circle")
+                    .font(.subheadline).foregroundStyle(.secondary)
             }
-            .pickerStyle(.segmented)
             AmountField(title: "0", text: $amountText, token: side == .buy ? pairToken : token) {
                 guard let account else { return }
                 // A native-MON buy keeps the network fee back (as Swap, Send and Bridge Max do), or the buy cannot pay gas.
@@ -575,7 +627,7 @@ struct LaunchDetailView: View {
                           isDisabled: rawAmount == 0 || !session.canSign || (side == .buy ? buyQuote == nil : sellQuote == nil) || shortfall != nil) { showConfirm = true }
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         } header: {
-            Text("Trade on the Curve")
+            Text(buysOpen ? "Trade on the Curve" : "Sell on the Curve")
         } footer: {
             if !session.canSign { Text("Sign in to trade.") }
             else if let shortfall { Text(shortfall).foregroundStyle(Color.attention) }
@@ -598,44 +650,71 @@ struct LaunchDetailView: View {
 
     private var graduatedSection: some View {
         Section {
-            Button("Swap \(launch.symbol) on \(launch.graduationVenue.title)", systemImage: "arrow.left.arrow.right") {
-                router.openSwap(tokenIn: pairToken.isNative ? Token.mon : pairToken, tokenOut: token)
-            }
+            // Only a graduated coin has a pool to swap in (a retired launchpad's too, both ways). Stuck or migrating, nothing
+            // trades yet: no Swap, and no "you can sell" either.
             if launch.phase == .graduated {
+                Button("Swap \(launch.symbol) on \(launch.graduationVenue.title)", systemImage: "arrow.left.arrow.right") {
+                    router.openSwap(tokenIn: pairToken.isNative ? Token.mon : pairToken, tokenOut: token)
+                }
                 // The v4 pool key carries fee 0 (the hook levies the launch's poolFeeBps); a Monday Trade pool uses
                 // the graduation executor's fixed 1% tier (MondayGraduationExecutor.FEE).
                 LabeledContent("Pool fee", value: NumberStyle.basisPoints(launch.graduationVenue == .monday ? 100 : launch.poolFeeBps))
+                if launch.graduationVenue == .uniswapV4, let detail, detail.hookFeesAwaitingSweep > 0 {
+                    LabeledContent("Waiting for a sweep") {
+                        Text("\(NumberStyle.units(detail.hookFeesAwaitingSweep, decimals: launch.pair.decimals)) \(launch.pair.symbol)").monospacedDigit()
+                    }
+                }
             }
             if isStuck, let detail {
                 LabeledContent("Stuck since", value: Date(timeIntervalSince1970: TimeInterval(detail.stuckSince)).formatted(date: .abbreviated, time: .shortened))
-                Button("Retry Graduation", systemImage: "arrow.clockwise") { showGraduate = true }.disabled(!session.canSign)
-                if offersFallback {
-                    Button("Graduate on Uniswap v4 Instead", systemImage: "arrow.triangle.branch") { showFallback = true }.disabled(!session.canSign)
+                if launch.keepersTakeGraduateFallback, let opens = detail.v4FallbackOpensAt {
+                    LabeledContent("Uniswap v4 fallback", value: detail.isV4FallbackOpen(at: Int(Date().timeIntervalSince1970))
+                                   ? "Open" : "Opens \(Date(timeIntervalSince1970: TimeInterval(opens)).formatted(date: .abbreviated, time: .shortened))")
                 }
+                Button("Retry Graduation", systemImage: "arrow.clockwise") { showGraduate = true }.disabled(!session.canSign)
             }
         } header: {
-            Text(launch.phase == .graduated ? "Graduated" : launch.phase.title)
+            Text(launch.phase == .graduated ? "Graduated" : launch.awaitsGraduation ? "Graduation Pending" : launch.phase.title)
         } footer: {
-            if launch.phase == .graduated {
-                // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes (GP-6).
-                Text(launch.graduationVenue == .monday
-                     ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's swap fees are harvested to a DyorHQ fees wallet; they aren't paid to holders or the creator."
-                     : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. Fees wait in the hook until they're swept.")
-            } else if isStuck {
-                Text(offersFallback
-                     ? "The last graduation attempt failed. Anyone can retry it; if Monday Trade keeps rejecting it, the launch can graduate into a locked Uniswap v4 pool right away instead."
-                     : "The last graduation attempt failed. Anyone can retry it; you only pay the gas.")
-            } else {
-                Text("This launch is between phases. Trading resumes when migration completes.")
+            VStack(alignment: .leading, spacing: 4) {
+                if launch.phase == .graduated {
+                    // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes (GP-6).
+                    Text(launch.graduationVenue == .monday
+                         ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's 1% swap fee is harvested to a DyorHQ fees wallet; it isn't paid to holders or the creator, and there is no creator tax on the pool."
+                         : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. \(v4FeeTiming)")
+                } else if isStuck {
+                    Text(stuckFooter)
+                } else if launch.awaitsGraduation {
+                    Text("The curve is full. It graduates next, into a locked \(launch.graduationVenue.title) pool, and then trades on the Swap screen.")
+                } else {
+                    Text("This launch is between phases. Trading resumes when migration completes.")
+                }
+                LearnMoreLink(.launchpadGraduation)
             }
         }
     }
 
-    /// A completed curve whose migration reverted (the factory records `stuckSince`): the audit's rescue paths apply.
-    private var isStuck: Bool { launch.phase != .graduated && (detail?.stuckSince ?? 0) > 0 }
+    /// When the hook pays what a v4 swap earned: a v2 hook pays the holders' part in the swap itself (released to them a
+    /// block later) and keeps only the creator's and DyorHQ's parts for a sweep; an older hook keeps everything.
+    private var v4FeeTiming: String {
+        launch.generation.hasV2Getters
+            ? "Holders are paid as trades happen; only the creator's and DyorHQ's parts wait in the hook until they're swept."
+            : "Fees wait in the hook until they're swept."
+    }
 
-    /// A stuck Monday graduation can fall back to Uniswap v4, where the launch's factory has `graduateFallback`.
-    private var offersFallback: Bool { launch.graduationVenue == .monday && launch.hasGraduateFallback }
+    /// A completed curve whose migration reverted (the factory records `stuckSince`): the audit's rescue paths apply. Only
+    /// while it still waits to graduate: a rescued launch keeps its `stuckSince`, but `graduate` reverts
+    /// `WrongGraduationPhase` there.
+    private var isStuck: Bool { launch.awaitsGraduation && (detail?.stuckSince ?? 0) > 0 }
+
+    /// The app never offers the Uniswap v4 fallback (`graduateFallback`), on any stack: DyorHQ's keepers send it with the
+    /// gas it needs (owner decision 2026-09-28). Only the plain Retry Graduation is offered here.
+    private var stuckFooter: String {
+        guard launch.keepersTakeGraduateFallback else { return "The last graduation attempt failed. Anyone can retry it; you only pay the gas." }
+        let waits = detail?.fallbackRule?.waits ?? false
+        return "The last graduation attempt failed. Anyone can retry it on Monday Trade; you only pay the gas. DyorHQ's keepers will finish the graduation: they retry it with about 29.9M gas and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool"
+            + (waits ? " once it has been stuck for a day (a \(launch.pair.symbol) coin stays on Monday Trade until then)." : ".")
+    }
 
     private func holdingsSection(_ account: LaunchAccountView) -> some View {
         Section("Your Holdings") {
@@ -673,8 +752,11 @@ struct LaunchDetailView: View {
 
     @ViewBuilder private var confirmation: some View {
         if let address = session.address {
-            if side == .buy, let q = buyQuote {
-                ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
+            if side == .buy, buysOpen, let q = buyQuote {
+                ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { try await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
+                    // Bought here, so chosen here: never shown as Unverified, as a swap into a token isn't.
+                    KnownTokenStore.add(token, owner: session.address)
+                    KnownTokenStore.markChosen(launch.token, owner: session.address)
                     Activity.record(ActivityRecord(kind: .buy, title: "Bought \(launch.symbol)", subtitle: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }, intent: .launchpadBuy(token: launch.token, pay: .init(token: launch.pairToken, amount: rawAmount), usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 })) {
                     DetailRow("You pay", "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
@@ -735,10 +817,11 @@ struct LaunchDetailView: View {
         // task when the amount changes, and a cancelled task's answer is discarded.
         buyQuote = nil
         sellQuote = nil
-        guard rawAmount > 0, launch.phase == .bonding else { return }
+        guard rawAmount > 0, launch.curveSellsOpen else { return }
         try? await Task.sleep(for: .milliseconds(300))
         if Task.isCancelled { return }
         if side == .buy {
+            guard buysOpen else { return }
             let fresh = try? await env.launchpad.quoteBuy(curve: launch.curve, quoteIn: rawAmount, recipient: session.address ?? .zero)
             if !Task.isCancelled { buyQuote = fresh }
         } else {
@@ -819,6 +902,13 @@ struct CreateLaunchView: View {
 
     private var symbolValid: Bool { symbol.count >= 2 && symbol.count <= 10 && symbol.allSatisfy { $0.isLetter || $0.isNumber } }
     private var valid: Bool { name.trimmingCharacters(in: .whitespaces).count >= 2 && symbolValid }
+    /// Why the factory would refuse this launch (v2's unsealed or unexpected modules, template 0 switched off, or a
+    /// whitelist this wallet isn't on): Review stays off, so nothing, not even a developer buy's approval, is signed.
+    /// The launch plan checks again from a fresh read.
+    private var blocker: String? {
+        guard let protocolInfo else { return "The launchpad's terms couldn't be read. Close this screen and try again." }
+        return protocolInfo.launchBlocker?.message
+    }
     private var pairInfo: PairInfo? { protocolInfo?.pairs.first { $0.pair.address == pair }?.pair }
     private var initialBuy: BigUInt { Amount.parse(initialBuyText, decimals: pairInfo?.decimals ?? 18) ?? 0 }
     /// aBIL (and any `pairMondayOnly` pair) can only graduate on Monday Trade; the factory reverts `PairRequiresMonday`
@@ -830,6 +920,11 @@ struct CreateLaunchView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let blocker {
+                    Section {
+                        Label(blocker, systemImage: "exclamationmark.triangle").font(.subheadline).foregroundStyle(Color.attention)
+                    }
+                }
                 imageSection
                 previewSection
 
@@ -860,7 +955,10 @@ struct CreateLaunchView: View {
                     Text("Pairing")
                 } footer: {
                     if let info = protocolInfo, let pi = pairInfo {
-                        Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol).\(pairMondayOnly ? " \(pi.symbol) coins graduate on Monday Trade." : "") Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol).\(pairMondayOnly ? " A \(pi.symbol) coin graduates on Monday Trade; if it stays stuck for a day, anyone can move it to a locked Uniswap v4 pool." : "") Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                            LearnMoreLink(.launchACoin)
+                        }
                     }
                 }
                 Section {
@@ -877,7 +975,7 @@ struct CreateLaunchView: View {
             .keyboardDoneButton()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Review") { Haptics.tap(); showConfirm = true }.fontWeight(.semibold).disabled(!valid) }
+                ToolbarItem(placement: .confirmationAction) { Button("Review") { Haptics.tap(); showConfirm = true }.fontWeight(.semibold).disabled(!valid || blocker != nil) }
             }
             .sheet(isPresented: $showConfirm) {
                 if let address = session.address, let info = protocolInfo {
@@ -893,6 +991,20 @@ struct CreateLaunchView: View {
                         onDone: { dismiss(); onLaunched() },
                         onCompleted: { hash in
                             Activity.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
+                            // Launched here, so chosen here: its coin is never shown as Unverified, on Home either (whose
+                            // discovery would otherwise store it as merely found in the wallet's history). The coin is the
+                            // one the live factory's event names for this wallet, never one a caller supplied.
+                            let owner = session.address
+                            let launchpad = env.launchpad
+                            let multicall = env.multicall
+                            let launched = input
+                            Task { @MainActor in
+                                guard let owner, let result = (try? await launchpad.launchResult(transaction: hash)) ?? nil, result.deployer == owner else { return }
+                                let read = (try? await ERC20.metadata(result.token, multicall: multicall)) ?? nil
+                                let symbol = read?.symbol ?? launched.symbol
+                                KnownTokenStore.add(Token(address: result.token, symbol: symbol, name: read?.name ?? (launched.name.isEmpty ? symbol : launched.name), decimals: 18, isLaunchpad: true), owner: owner)
+                                KnownTokenStore.markChosen(result.token, owner: owner)
+                            }
                         },
                         onView: { hash in
                             // Route to the coin's in-app page instead of the block explorer (the explorer link lives
@@ -973,8 +1085,18 @@ struct CreateLaunchView: View {
                 Label("Advanced", systemImage: "slider.horizontal.3")
             }
         } footer: {
-            Text("Creator tax is charged on curve trades and paid to you. Fee sharing splits pool fees with holders after graduation.")
+            Text(feeFooter)
         }
+    }
+
+    /// Where the creator tax and the creator's share of trading fees come from on the chosen venue: the curve and a
+    /// Uniswap v4 pool's hook both pay them (to holders instead with fee sharing); a Monday Trade pool has no hook, and its
+    /// 1% fee is harvested to DyorHQ (MondayFeeVault).
+    private var feeFooter: String {
+        let recipients = "You receive it with your share of the trading fees; with fee sharing on, holders receive both instead."
+        return effectiveVenue == .monday
+            ? "Creator tax is charged on curve trades only. \(recipients) After graduation the Monday Trade pool's 1% fee goes to DyorHQ: there is no creator tax or fee share in the pool."
+            : "Creator tax is charged on curve trades and, after graduation, on Uniswap v4 pool swaps. \(recipients)"
     }
 
     private var pairGraduation: BigUInt {

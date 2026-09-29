@@ -423,10 +423,75 @@ public enum RevertReason {
         return message.isEmpty ? "The transaction would fail." : message
     }
 
-    /// Custom error selectors worth naming. Extend as contracts are added.
-    static let knownErrors: [String: String] = [
-        ABI.selector("InsufficientGasForGraduation()").hexString: "This buy would graduate the token and needs more gas. Try again.",
-    ]
+    /// Custom error selectors worth naming: the DyorHQ launchpad and Moments contracts' errors (v1 and v2), keyed by
+    /// selector. A selector is only the error's name and arguments, so several contracts can raise the same one
+    /// (`ModulesNotSet`, `NothingToClaim`, `InsufficientGasForGraduation`, `ZeroAddress`, `PriceOutOfRange`…): every
+    /// sentence reads right whichever contract raised it. `RevertReasonTests` pins each selector against `cast sig`.
+    /// A flow with better context names its own (`MomentsService.collectReason`). Extend as contracts are added.
+    static let knownErrors: [String: String] = {
+        let table: [(String, String)] = [
+            // Shared by several contracts.
+            ("ModulesNotSet", "The contracts aren't fully set up yet, so nothing was sent."),
+            ("ZeroAddress", "The transaction names the zero address, so the contract refused it."),
+            ("NothingToClaim", "There is nothing to claim yet."),
+            ("InsufficientGasForGraduation", "This transaction would graduate the coin and needs more gas to graduate. Try again."),
+            ("PriceOutOfRange", "The pool price is out of the range graduation accepts right now. Try again later."),
+            ("NotGraduated", "This hasn't graduated yet."),
+            // Moments factory.
+            ("TermsChanged", "The Moments terms changed after you reviewed them, so nothing was published. Review them again."),
+            ("Paused", "Publishing is paused right now, so nothing was published."),
+            ("PriceTooHigh", "That price is above the most a collect can be charged (the gross that completes the reserve). Lower it."),
+            ("PriceTooLow", "That price is below the minimum collect price."),
+            ("AllocTooHigh", "That allocation is above the most a creator can keep."),
+            ("BadWindow", "The collect window must be between 1 hour and 30 days."),
+            ("UnknownMoment", "That Moment does not exist."),
+            ("PolicyLapsed", "That proposed policy lapsed: nobody applied it within 7 days of it becoming applicable."),
+            ("NotGuardian", "Only the Moments guardian can do that."),
+            ("NotGovernanceOrGuardian", "Only governance or the Moments guardian can do that."),
+            ("UnpauseFirst", "The guardian's pause must be lifted first."),
+            ("BaseURITooLong", "That link base is too long."),
+            // Moments collect, graduation and vesting.
+            ("NotCollecting", "This Moment is no longer collecting."),
+            ("CollectWindowClosed", "The collect window has closed."),
+            ("BadQuantity", "Choose between 1 and 20 editions."),
+            ("NotExpirable", "This Moment can't be expired yet."),
+            ("WrongState", "This Moment isn't in a state that allows this."),
+            ("NotBeneficiary", "Only the wallet this is owed to can withdraw it."),
+            ("NothingToWithdraw", "There is nothing to withdraw."),
+            ("NotPending", "This Moment isn't waiting to graduate."),
+            ("AlreadyGraduated", "This Moment has already graduated."),
+            // Moments buyback.
+            ("TooSoon", "A buyback for this Moment ran less than an hour ago. Try again later."),
+            ("BelowMinimum", "The buyback budget is below the 1 USDC minimum a round needs."),
+            ("Slippage", "The pool price moved past the buyback's slippage limit. Try again."),
+            ("PriceMoved", "The pool price moved more than 2% within this block, so the buyback was refused. Try again in a later block."),
+            // Launchpad factory.
+            ("NotWhitelisted", "Launching is limited to approved wallets right now."),
+            ("LaunchConfigDisabled", "This launch template is turned off, so nothing was launched."),
+            ("PairTokenNotApproved", "That pair asset isn't approved for launches."),
+            ("PairRequiresMonday", "That pair asset can only graduate on Monday Trade."),
+            ("GraduationVenueUnavailable", "That graduation venue isn't available."),
+            ("LaunchFeeNotPaid", "The launch fee wasn't paid in full."),
+            ("CreatorTaxTooHigh", "That creator tax is above the maximum."),
+            ("ExemptionListTooLong", "Too many snipe-tax exemptions: at most \(LaunchpadService.maxExemptions)."),
+            ("LaunchEconomicsMismatch", LaunchpadError.termsChanged.errorDescription ?? ""),
+            ("UnknownLaunch", "That coin wasn't launched on this launchpad."),
+            ("WrongGraduationPhase", "This coin isn't in the phase that allows this."),
+            ("FallbackNotAvailable", "The Uniswap v4 fallback isn't available for this coin yet."),
+            ("Create2Mismatch", "The coin couldn't be created at its expected address. Try again."),
+            ("InvalidTickSpacing", "That tick spacing isn't valid."),
+            // Bonding curve.
+            ("CurveNotTrading", "This coin's bonding curve isn't trading."),
+            ("CurveIsCompleted", "This coin's bonding curve is complete; it trades in its pool now."),
+            ("SlippageExceeded", "The price moved past your slippage limit. Try again."),
+            ("NativeValueMismatch", "The MON sent doesn't match the amount."),
+            ("UnexpectedNativeValue", "MON was sent with a trade that takes none."),
+            ("ZeroAmount", "Enter an amount above zero."),
+            ("InsufficientRealReserve", "The curve doesn't hold enough to pay that out. Try a smaller amount."),
+            ("UnsupportedQuoteToken", "This pair asset can't trade on the curve."),
+        ]
+        return Dictionary(table.map { (ABI.selector("\($0.0)()").hexString, $0.1) }, uniquingKeysWith: { first, _ in first })
+    }()
 }
 
 /// EIP-1559 transaction encoding (type 2) for wallets that sign a hash rather than a JSON request.

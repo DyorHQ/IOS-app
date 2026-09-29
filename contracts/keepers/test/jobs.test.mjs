@@ -10,7 +10,7 @@ import { momentsGraduationJob, buybacksJob, sweepsJob, launchpadGraduationJob, g
 import { makeSender } from "../lib/send.mjs";
 import { makeReporter } from "../lib/report.mjs";
 import { mondayTargetSqrtPriceX96, tickAtSqrtPrice } from "../lib/decide.mjs";
-import { launchpads, momentsCohorts, pinMismatches, LIVE_FACTORIES } from "../lib/deployments.mjs";
+import { launchpads, momentsCohorts, pinMismatches, LIVE_FACTORIES, OPEN_ON_CHAIN_MOMENTS } from "../lib/deployments.mjs";
 
 const NOW = 1_790_000_000n;
 const DAY = 86_400n;
@@ -72,7 +72,7 @@ function harness() {
 
 // ---------------------------------------------------------------- MO-1
 
-const cohort = { label: "cohort3 (live)", factory: a(0xf1), collect: a(0xc1), graduation: a(0x91), hook: a(0x41), buyback: a(0xb1), locker: a(0x11), usdc: a(0x05) };
+const cohort = { label: "cohort4 (live)", factory: a(0xf1), collect: a(0xc1), graduation: a(0x91), hook: a(0x41), buyback: a(0xb1), locker: a(0x11), usdc: a(0x05) };
 const moment = (deadline) => ({ deadline, creator: a(1), platform: a(2), treasury: a(3), coin: a(4), nft: a(5) });
 const ledger = (stuckSince) => ({ state: 1, completedAt: stuckSince, stuckSince, endedAt: 0n, reserve: 1n });
 
@@ -560,9 +560,10 @@ test("sec2 LP-1 (v2): a blocking squat on a Monday-only launch is a warning nami
 
 // ---------------------------------------------------------------- sec2: governance watch
 
-const expected = { owner: a(0x0a), treasury: a(0x0b), feesRecipient: a(0x0c), momentsGovernance: a(0x0a), externalBaseURI: "https://dyorhq.fun/moments/" };
+const expected = { owner: a(0x0a), treasury: a(0x0b), feesRecipient: a(0x0c), momentsGovernance: a(0x0a), externalBaseURI: "https://dyorhq.fun/moments/c4/" };
 const govPad = {
   label: "launchpad (live)",
+  live: true,
   factory: a(0xfa),
   hook: a(0x4a),
   graduationExecutor: a(0x61),
@@ -574,7 +575,7 @@ const govPad = {
   mondayExecutor: a(0x67),
   feeVault: a(0x68),
 };
-const govCohort = { label: "cohort3 (live)", factory: a(0xf1), live: true };
+const govCohort = { label: "cohort4 (live)", factory: a(0xf1), live: true };
 const oldCohort = { label: "cohort2 (retired)", factory: a(0xf2), live: false };
 
 function govReads(over = {}) {
@@ -629,7 +630,49 @@ test("sec2 governance: a swapped executor, a repointed fee, an unpaused retired 
   assert.match(reasons, /warning a policy proposal is pending/);
 });
 
-// The live factory 0x6B1C has no launch, so the owner key can still swap every module (2026-09-26 ops audit, medium).
+// Owner decision 2026-09-28: the previous stacks are retired in the app only. They keep their owner key and cohort 3
+// stays open on chain, so with the v2 records promoted (new owner: the Safe) the watch holds each retired stack to its
+// own record, and cohort 3's open publishing is a note, not a page.
+test("sec2 governance: a retired stack is held to its own record's owner, and cohort 3 open on chain is only reported", async () => {
+  const oldKey = a(0x0d);
+  const livePad = { ...govPad, live: true };
+  const retiredPad = { ...govPad, label: "launchpad 0x6B1C (retired)", factory: a(0xfb), feeVault: a(0x69), owner: oldKey, live: false };
+  const retiredCohort = { ...oldCohort, governance: oldKey };
+  const openCohort = { label: "cohort3 (retired)", factory: a(0xf3), live: false, openOnChain: true, governance: oldKey };
+  const retiredReads = (owner) =>
+    Object.fromEntries(
+      Object.entries(govReads())
+        .filter(([k]) => k.startsWith(`${govPad.factory}:`) || k.startsWith(`${govPad.feeVault}:`))
+        .map(([k, v]) => [k.replace(govPad.factory, retiredPad.factory).replace(govPad.feeVault, retiredPad.feeVault), k.endsWith(":owner:") ? owner : v]),
+    );
+  const reads = (owner) =>
+    govReads({
+      ...retiredReads(owner),
+      [`${oldCohort.factory}:governance:`]: oldKey,
+      [`${openCohort.factory}:governance:`]: oldKey,
+      [`${openCohort.factory}:pendingGovernance:`]: ZERO,
+      [`${openCohort.factory}:pendingPolicyAt:`]: 0n,
+      [`${openCohort.factory}:publishingPaused:`]: false,
+    });
+  const run = async (owner) => {
+    const h = harness();
+    await governanceJob({ client: mockClient({ reads: reads(owner) }), launchpads: [livePad, retiredPad], cohorts: [govCohort, retiredCohort, openCohort], expected, ...h });
+    return h.reporter.alerts;
+  };
+  const asRecorded = await run(oldKey);
+  assert.deepEqual(asRecorded.filter((x) => x.severity !== "info"), [], "the old key on the retired stacks is what their records say");
+  assert.equal(asRecorded.length, 1);
+  assert.equal(asRecorded[0].target, "cohort3 (retired)");
+  assert.match(asRecorded[0].reason, /publishing is open on chain: retired in the app only/);
+  const moved = (await run(a(0xbad))).filter((x) => x.severity === "critical").map((x) => `${x.target}: ${x.reason}`);
+  assert.deepEqual(moved, [
+    `launchpad 0x6B1C (retired): owner() is ${a(0xbad)}, expected ${oldKey}`,
+    `launchpad 0x6B1C (retired) fee vault: owner() is ${a(0xbad)}, expected ${oldKey}`,
+  ]);
+});
+
+// A live factory with no launch and unsealed modules lets the owner key swap every module (2026-09-26 ops audit,
+// medium; 0x6B1C while it was live). A v2 factory is sealed at deploy.
 test("sec2 governance: an unfrozen factory warns once a day, not on every run", async () => {
   const client = mockClient({ reads: govReads({ [`${govPad.factory}:launchCount:`]: 0n }) });
   const h = harness();
@@ -643,6 +686,44 @@ test("sec2 governance: an unfrozen factory warns once a day, not on every run", 
   const sealed = harness();
   await governanceJob({ client: mockClient({ reads: govReads({ [`${govPad.factory}:launchCount:`]: 0n, [`${govPad.factory}:modulesSealed:`]: true }) }), launchpads: [govPad], cohorts: [], expected, ...sealed });
   assert.equal(sealed.reporter.alerts.length, 0, "a v2 factory sealed at deploy is fine");
+});
+
+// With the v2 records promoted, 0x6B1C is a retired record: no launch, modules not sealed, and left open on chain by
+// the owner decision (2026-09-28). The watch reports it and does not advise closing it; a live factory still warns.
+test("sec2 governance: a retired launchpad left unfrozen on chain is reported, not alerted", async () => {
+  const retiredPad = { ...govPad, label: "launchpad 0x6B1C (retired)", live: false };
+  const h = harness();
+  await governanceJob({ client: mockClient({ reads: govReads({ [`${govPad.factory}:launchCount:`]: 0n }) }), launchpads: [retiredPad], cohorts: [], expected, ...h });
+  assert.deepEqual(h.reporter.alerts.filter((x) => x.severity !== "info"), []);
+  assert.equal(h.reporter.alerts.length, 1);
+  assert.equal(h.reporter.alerts[0].target, "launchpad 0x6B1C (retired)");
+  assert.match(h.reporter.alerts[0].reason, /modules not sealed: retired in the app only/);
+  assert.doesNotMatch(h.reporter.alerts[0].reason, /Close the factory/);
+});
+
+// A v2 cohort's record names its guardian: only the guardian can hand the role on (or renounce it) and lift its own
+// pause, so a different guardian() is critical and its pause, which stops publishing, is a warning.
+test("sec2 governance: a v2 cohort is held to its record's guardian, and the guardian's pause is reported", async () => {
+  const guardian = a(0x9d);
+  const v2Cohort = { ...govCohort, guardian };
+  const reads = (over = {}) => govReads({ [`${govCohort.factory}:guardian:`]: guardian, [`${govCohort.factory}:guardianPaused:`]: false, ...over });
+  const run = async (over) => {
+    const h = harness();
+    await governanceJob({ client: mockClient({ reads: reads(over) }), launchpads: [], cohorts: [v2Cohort], expected, ...h });
+    return h.reporter.alerts.map((x) => `${x.severity} ${x.reason}`);
+  };
+  assert.deepEqual(await run(), []);
+  assert.deepEqual(await run({ [`${govCohort.factory}:guardian:`]: a(0xbad) }), [
+    `critical guardian() is ${a(0xbad)}, the record says ${guardian}: the guardian role was handed on or renounced`,
+  ]);
+  assert.deepEqual(await run({ [`${govCohort.factory}:guardian:`]: ZERO }), [
+    `critical guardian() is ${ZERO}, the record says ${guardian}: the guardian role was handed on or renounced`,
+  ]);
+  assert.deepEqual(await run({ [`${govCohort.factory}:guardianPaused:`]: true }), ["warning the guardian paused publishing (guardianPaused): only the guardian can lift it"]);
+  // A cohort whose record names no guardian (v1) is never asked: those getters revert there.
+  const h = harness();
+  await governanceJob({ client: mockClient({ reads: govReads() }), launchpads: [], cohorts: [govCohort], expected, ...h });
+  assert.deepEqual(h.reporter.alerts, []);
 });
 
 test("sec2 governance: every governance event in the lookback is critical", async () => {
@@ -739,11 +820,13 @@ test("sec2: the records cover every launchpad with launches, and the live factor
   const pads = launchpads();
   assert.deepEqual(
     pads.map((p) => p.factory.slice(0, 6)),
-    ["0x6B1C", "0x10F3", "0x2F02", "0xad3d"],
+    ["0x3B1f", "0x6B1C", "0x10F3", "0x2F02", "0xad3d"],
   );
   assert.equal(pads.find((p) => p.factory.startsWith("0xad3d")).legacyRecord, true);
   assert.deepEqual(pinMismatches({ cohorts: momentsCohorts(), pads }), []);
   assert.equal(pads[0].factory, LIVE_FACTORIES.launchpad);
+  // Cohort 3 is the only cohort left open on chain once retired (owner decision 2026-09-28).
+  assert.deepEqual(momentsCohorts().filter((c) => c.openOnChain).map((c) => c.factory), [...OPEN_ON_CHAIN_MOMENTS]);
   const moved = withRecords(
     (d) => {
       const f = join(d, "143.json");
@@ -753,4 +836,38 @@ test("sec2: the records cover every launchpad with launches, and the live factor
   );
   assert.equal(moved.length, 1);
   assert.equal(moved[0].file, "143.json");
+});
+
+// The v2 release (2026-09-28): launchpad v2 and Moments cohort 4 are the live records, owned by the Owner Safe; the
+// stacks they replaced keep their own records, and cohort 3 is the only cohort left open on chain.
+test("sec2: the v2 records are live, and the stacks they replaced are covered as retired ones", () => {
+  const safe = "0x6D2A4D821e57b2B918B97CF575D81738bc16C100";
+  const pads = launchpads();
+  const live = pads.filter((p) => p.live);
+  assert.equal(live.length, 1);
+  assert.equal(live[0].factory, LIVE_FACTORIES.launchpad);
+  assert.equal(live[0].owner, safe);
+  assert.equal(live[0].deployBlock, 108_859_147);
+  const relaunch = pads.find((p) => p.factory === "0x6B1C8769a8d6745955aC35b91FF1F37AB76859dB");
+  assert.equal(relaunch.live, false);
+  assert.equal(relaunch.file, "143-retired-0x6B1C.json");
+  const cohorts = momentsCohorts();
+  assert.deepEqual(
+    cohorts.map((c) => [c.label, c.factory.slice(0, 6), c.live, c.openOnChain]),
+    [
+      ["cohort4 (live)", "0x95eb", true, false],
+      ["cohort3 (retired)", "0x0FD4", false, true],
+      ["cohort2 (retired)", "0xc12B", false, false],
+      ["cohort1 (retired)", "0x6469", false, false],
+      ["v1 (retired)", "0x47D9", false, false],
+    ],
+  );
+  assert.equal(cohorts[0].factory, LIVE_FACTORIES.moments);
+  assert.equal(cohorts[0].governance, safe);
+  assert.equal(cohorts[0].guardian, "0x686C7A2886608082e698E0062EA3E4C408d43845");
+  assert.equal(cohorts[0].deployBlock, 108_859_966);
+  assert.equal(cohorts.filter((c) => c.guardian).length, 1, "only cohort 4 has a guardian");
+  // A retired record may go missing (the keeper covers what is there); the live ones may not.
+  withRecords((d) => rmSync(join(d, "143-retired-0x6B1C.json")), (d) => assert.equal(launchpads(d).length, pads.length - 1));
+  withRecords((d) => rmSync(join(d, "moments-143-cohort3.json")), (d) => assert.equal(momentsCohorts(d).length, cohorts.length - 1));
 });

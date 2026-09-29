@@ -7,13 +7,8 @@ import SwiftUI
 @Observable
 @MainActor
 final class AssetsModel {
-    struct TokenAsset: Identifiable, Hashable {
-        let token: Token
-        let balance: BigUInt
-        let usd: Double?
-        var id: Address { token.address }
-        var value: Double? { usd.map { Amount.units(balance, decimals: token.decimals) * $0 } }
-    }
+    /// A held token, valued (`HeldToken`): the Send sheet lists the same ones (`WalletTokens`), in its own order.
+    typealias TokenAsset = HeldToken
 
     private(set) var tokens: [TokenAsset] = []
     /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12).
@@ -27,13 +22,49 @@ final class AssetsModel {
     private(set) var retiredByCoin: [Address: MomentInfo] = [:]
     /// Retired-cohort Moments by their NFT contract, so a past-cohort edition opens its claim-only page.
     private(set) var retiredByNFT: [Address: MomentInfo] = [:]
+    /// Held coins still on a launchpad's bonding curve, the live launchpad's or a retired one's, with their launches
+    /// (`LaunchpadService.curveHoldings`): no Swap venue routes a curve, so such a coin's row opens its Launch page, where
+    /// its curve trades (Buy and Sell on the live launchpad, Sell only on a retired one), as Home's token page does. A
+    /// coin whose launch couldn't be read opens the Launch tab. Known before the token list shows, so such a coin never
+    /// gets a Swap row; a failed check keeps the coins already known, and the rest open Swap, whose "no venue" state
+    /// checks again and points to the Launch page.
+    private(set) var curve: CurveHoldings = .none
+    /// Prices couldn't all be read (`WalletTokens.Ranked.pricesFailed`): some tokens are unpriced, so the holdings total
+    /// would be a part passed off as the whole. It isn't shown, and the card says why.
+    private(set) var pricesFailed = false
+    /// The curated tokens held that no pool prices (`WalletTokens.Ranked.unpriced`): they simply have no price, so the
+    /// total is of the priced assets, and the card names what it leaves out.
+    private(set) var unpriced: [Token] = []
+    /// False when part of the wallet couldn't be read (`WalletTokens.Read.complete`: its history, read fail-fast, or a
+    /// balance): a token it holds may be missing, which the card says, with Retry, rather than pass the list off as
+    /// everything the wallet holds.
+    private(set) var complete = true
+    /// No balance could be read at all (`WalletTokens.read` threw): the list is empty for that, not because the wallet
+    /// holds nothing.
+    private(set) var balancesUnread = false
     private(set) var loading = false
     private(set) var loadedFor: Address?
 
+    /// The priced assets' dollar value: a token with no price adds nothing.
     var totalValue: Double { tokens.compactMap(\.value).reduce(0, +) }
+    /// The holdings total is shown: every price that exists was read, and something is priced.
+    var showsTotal: Bool { !pricesFailed && totalValue > 0 }
+
+    /// What part of the read failed, in words, as the Send sheet says it: nil when all of it was read. Nothing about
+    /// prices when there is nothing to value.
+    var readGap: String? {
+        if balancesUnread { return "Your balances couldn't be read. Check your connection and try again." }
+        switch (complete, pricesFailed) {
+        case (true, false): return nil
+        case (true, true): return tokens.isEmpty ? nil : "Some prices couldn't be read, so values are missing and no total is shown."
+        case (false, _) where tokens.isEmpty: return "No tokens found, but part of your wallet couldn't be read, so some may be missing."
+        case (false, false): return "Part of your wallet couldn't be read, so a token may be missing from the list and the total."
+        case (false, true): return "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no total is shown."
+        }
+    }
 
     func load(env: AppEnvironment, address: Address?, force: Bool) async {
-        guard let address else { tokens = []; nfts = []; loadedFor = nil; return }
+        guard let address else { tokens = []; nfts = []; complete = true; balancesUnread = false; loadedFor = nil; return }
         if !force, loadedFor == address { return }
         loading = true
         defer { loading = false }
@@ -42,21 +73,35 @@ final class AssetsModel {
         async let momentsTask = env.moments.moments(limit: 200)
         async let retiredTask = PastMomentsModel.allMoments(env: env)
 
-        var universe = KnownTokenStore.universe(owner: address)
-        let known = Set(universe.map(\.address))
-        let discovered = await env.walletDiscovery.heldTokens(wallet: address, known: known, wholeHistory: true)
-        universe += discovered
-        unverified = KnownTokenStore.unverified(owner: address).union(discovered.map(\.address))
-        let balances = (try? await ERC20.balances(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
-        let held = universe.filter { (balances[$0.address] ?? 0) > 0 }
-        let prices = (try? await env.prices.prices(for: held)) ?? [:]
-        // Known before the token list shows, so a retired coin is never offered a swap in between.
+        // The token part is the Send sheet's too (`WalletTokens`). Balances that couldn't be read list nothing, as before,
+        // and the card says so, as it says when only part of the wallet couldn't be read.
+        let read = try? await WalletTokens.read(env: env, address: address)
+        var ranked: [TokenAsset] = []
+        var found: CurveHoldings?
+        var failed = false
+        var unpricedHeld: [Token] = []
+        // The Portfolio keeps the order it has always had; the Send sheet ranks the same tokens its own way. The coins on a
+        // curve come from the same read that valued them: the launchpads are asked once.
+        if let read {
+            let result = await WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes)
+            ranked = result.tokens
+            found = result.curve
+            failed = result.pricesFailed
+            unpricedHeld = result.unpriced
+        }
+        // As the list marks them: the DyorHQ coins the wallet launched or collected are its own, not Unverified.
+        unverified = read == nil ? KnownTokenStore.unverified(owner: address) : Set(ranked.filter(\.unverified).map(\.id))
+        // Known before the token list shows, so a retired Moment coin or a coin on a curve is never offered a swap in between.
         for info in await retiredTask {
             retiredByCoin[info.moment.coin] = info
             retiredByNFT[info.moment.nft] = info
         }
-        tokens = held.map { TokenAsset(token: $0, balance: balances[$0.address] ?? 0, usd: prices[$0.address]?.usd) }
-            .sorted { ($0.value ?? 0, Amount.units($0.balance, decimals: $0.token.decimals)) > ($1.value ?? 0, Amount.units($1.balance, decimals: $1.token.decimals)) }
+        if let found { curve = found }
+        pricesFailed = failed
+        unpriced = unpricedHeld
+        complete = read?.complete ?? false
+        balancesUnread = read == nil
+        tokens = ranked
 
         let moments = (try? await momentsTask) ?? []
         momentsByNFT = Dictionary(moments.map { ($0.moment.nft, $0) }, uniquingKeysWith: { first, _ in first })
@@ -70,6 +115,8 @@ final class AssetsModel {
 /// opens on OpenSea.
 struct AssetsCard: View {
     let model: AssetsModel
+    /// Reads the holdings again, after a read that failed in part.
+    let retry: () -> Void
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -90,7 +137,7 @@ struct AssetsCard: View {
                 Text("My Holdings").font(.headline)
                 Spacer()
                 if model.loading { ProgressView().controlSize(.mini) }
-                else if kind == .assets, model.totalValue > 0 { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
+                else if kind == .assets, model.showsTotal { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
                 else if kind == .nfts, !model.nfts.isEmpty { Text("\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
 
@@ -99,7 +146,19 @@ struct AssetsCard: View {
             }
             .pickerStyle(.segmented)
 
-            if kind == .assets, model.tokens.isEmpty {
+            if kind == .assets, !model.loading, let gap = model.readGap {
+                // A read that failed in part is said, with Retry, never passed off as all the wallet holds.
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(gap).font(.footnote).foregroundStyle(.secondary)
+                    Button("Retry", systemImage: "arrow.clockwise", action: retry).font(.footnote.weight(.medium))
+                }
+            }
+            if kind == .assets, model.showsTotal, !model.unpriced.isEmpty, !model.loading {
+                // A token no pool prices is no failure: the total is of the rest, and says what it leaves out.
+                Text("Doesn't include \(WalletHoldings.symbolList(model.unpriced)): no price found.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if kind == .assets, model.tokens.isEmpty, model.loading || model.readGap == nil {
                 Text(model.loading ? "Reading the wallet…" : "No tokens in this wallet yet.").font(.subheadline).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
             }
@@ -112,6 +171,7 @@ struct AssetsCard: View {
                 let shown = showAllTokens ? model.tokens : Array(model.tokens.prefix(6))
                 VStack(spacing: 0) {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, asset in
+                        let route = model.curve.route(asset.token.address)
                         if let retired = model.retiredByCoin[asset.token.address] {
                             // A retired cohort's coin is never offered a swap: it opens its claim-only page.
                             NavigationLink(value: PastMomentRoute(info: retired)) { tokenRow(asset) }
@@ -119,6 +179,16 @@ struct AssetsCard: View {
                         } else if MomentsAddresses.isRetiredCoin(asset.token.address) {
                             // Its cohort could not be read yet: still no swap, just the row.
                             tokenRow(asset, note: "Past cohort · trading closed")
+                        } else if route.isOnCurve {
+                            // Never Swap: no venue routes a coin still on a launchpad's curve, live or retired. It trades
+                            // on its curve, from its Launch page, where Home sends it too; unread, the Launch tab lists it.
+                            Button {
+                                if let launch = route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
+                                dismiss()
+                            } label: {
+                                tokenRow(asset, note: route.rowNote, unverified: model.unverified.contains(asset.token.address))
+                            }
+                            .buttonStyle(.plain)
                         } else {
                             Button { router.openSwap(tokenIn: asset.token, tokenOut: asset.token.symbol == "USDC" ? .mon : .usdc); dismiss() } label: { tokenRow(asset, unverified: model.unverified.contains(asset.token.address)) }
                                 .buttonStyle(.plain)

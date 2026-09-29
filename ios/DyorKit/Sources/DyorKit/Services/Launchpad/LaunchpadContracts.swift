@@ -27,6 +27,8 @@ enum LaunchpadABI {
         static let pairMondayOnly = "pairMondayOnly(address)"
         static let getLaunches = "getLaunches(uint256,uint256)"
         static let getLaunchedToken = "getLaunchedToken(address)"
+        /// The launch token a curve belongs to (address 0 for a curve the factory never deployed), on every generation.
+        static let curveToToken = "curveToToken(address)"
         static let stuckSince = "stuckSince(address)"
         static let poolKeyOf = "poolKeyOf(address)"
         static let previewLaunchEconomics = "previewLaunchEconomics(uint256,address)"
@@ -36,6 +38,24 @@ enum LaunchpadABI {
         /// Audit fix H-3: retries the creator's venue, then graduates a stuck Monday launch on Uniswap v4.
         static let graduateFallback = "graduateFallback(address)"
         static let v4FallbackAllowed = "v4FallbackAllowed(address)"
+        /// v2: whether the launch's pair was Monday-only when it launched, the snapshot the fallback's one-day rule reads
+        /// (never today's `pairMondayOnly`).
+        static let launchMondayOnly = "launchMondayOnly(address)"
+        /// v2: the least gas `graduateFallback` gives its Monday retry (20,000,000), on top of the v4 reserve.
+        static let mondayRetryGas = "MONDAY_RETRY_GAS()"
+        /// v2: how long a Monday-only launch must have been stuck before anyone may take the v4 fallback (86,400 s).
+        static let mondayOnlyFallbackDelay = "MONDAY_ONLY_FALLBACK_DELAY()"
+        /// v2: true once no module can change again (`sealModules`, the deploy's last wiring step, or the first launch).
+        static let modulesSealed = "modulesSealed()"
+        // The module getters, compared with this build's addresses before Launch is offered (v2).
+        static let hook = "hook()"
+        static let router = "router()"
+        static let escrow = "escrow()"
+        static let holderFeeSharing = "holderFeeSharing()"
+        static let locker = "locker()"
+        static let graduationExecutor = "graduationExecutor()"
+        static let mondayExecutor = "mondayExecutor()"
+        static let launchDeployer = "launchDeployer()"
     }
 
     enum Router {
@@ -89,6 +109,9 @@ enum LaunchpadABI {
     enum Hook {
         static let pendingFees = "pendingFees(bytes32,address)"
         static let pendingCreatorTax = "pendingCreatorTax(bytes32,address)"
+        /// v2: the protocol's cut of fees whose holders' cut was forwarded to fee sharing in the swap that earned them;
+        /// `pendingFees` stays 0 for that currency, and `sweepPoolFees` pays this out.
+        static let pendingProtocolFees = "pendingProtocolFees(bytes32,address)"
         static let sweepPoolFees = "sweepPoolFees(bytes32,address)"
     }
 
@@ -109,11 +132,17 @@ enum LaunchpadABI {
         static let sell = "CurveSell(address,address,uint256,uint256,uint256,uint256)"
         static let launched = "TokenLaunched(address,address,address,address,uint256,uint256)"
         static let graduated = "PoolGraduated(address,bytes32,uint128)"
+        /// v2 MemeHook: the holders' cut of a quote-asset fee, handed to fee sharing inside the swap.
+        static let holderFeesForwarded = "HolderFeesForwarded(bytes32,address,uint256)"
+        /// v2 factory: the modules are frozen for good.
+        static let modulesSealed = "ModulesSealed()"
 
         static let buyTopic = ABI.eventTopic(buy)
         static let sellTopic = ABI.eventTopic(sell)
         static let launchedTopic = ABI.eventTopic(launched)
         static let graduatedTopic = ABI.eventTopic(graduated)
+        static let holderFeesForwardedTopic = ABI.eventTopic(holderFeesForwarded)
+        static let modulesSealedTopic = ABI.eventTopic(modulesSealed)
     }
 
     struct CurveFill {
