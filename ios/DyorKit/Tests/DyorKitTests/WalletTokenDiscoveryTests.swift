@@ -141,7 +141,7 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         let source = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("let collections = await env.walletDiscovery.collections(among: held)"))
         XCTAssertTrue(source.contains("tokens: held.filter { !collections.contains($0.address) }"))
-        XCTAssertTrue(source.contains("return await env.walletDiscovery.scan(wallet: address, known: known, wholeHistory: true)"))
+        XCTAssertTrue(source.contains("return await env.walletDiscovery.scan(wallet: address, known: known, wholeHistory: true, logScan: .failFast)"))
         XCTAssertTrue(source.contains("complete: (scan?.complete ?? true) && balancesComplete)"))
         let profile = try String(contentsOf: app.appendingPathComponent("Profile/ProfileView.swift"), encoding: .utf8)
         XCTAssertTrue(profile.contains("assets = .loaded(ranked.tokens, complete: complete, pricesFailed: ranked.pricesFailed, readingHistory: readingHistory)"))

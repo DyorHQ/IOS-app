@@ -47,15 +47,18 @@ public struct WalletTokenDiscovery: Sendable {
         }
     }
 
-    /// `heldTokens`, saying whether the scan was complete.
-    public func scan(wallet: Address, window: UInt64 = Monad.blocksPerDay * 30, known: Set<Address> = [], wholeHistory: Bool = false) async -> Scan {
+    /// `heldTokens`, saying whether the scan was complete. `logScan` is how the history meets an endpoint that stops
+    /// answering (`LogScanMode`): patient, as every other log scan, unless the caller says what it couldn't read and offers
+    /// Retry, as the Send sheet and the Portfolio do (`.failFast`).
+    public func scan(wallet: Address, window: UInt64 = Monad.blocksPerDay * 30, known: Set<Address> = [], wholeHistory: Bool = false,
+                     logScan: LogScanMode = .patient) async -> Scan {
         guard let anchor = try? await logsRPC.block(.latest) else { return Scan(tokens: [], complete: false) }
         let latest = anchor.number
         let from = wholeHistory ? 0 : (latest > window ? latest - window : 0)
         let topic = ABI.eventTopic(Self.transferSig)
         let walletWord = wallet.data.leftPadded(to: 32)
         // Every ERC-20 that has sent tokens to this wallet in the window; the emitting contract IS the token.
-        let incoming = await logsRPC.chunkedLogsReport(address: nil, topics: [topic, nil, walletWord], fromBlock: from, toBlock: latest)
+        let incoming = await logsRPC.chunkedLogsReport(address: nil, topics: [topic, nil, walletWord], fromBlock: from, toBlock: latest, mode: logScan)
         var complete = incoming.complete
 
         // The emitting contract of every Transfer into the wallet. A token logs its amount as data (three topics); a few

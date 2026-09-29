@@ -35,8 +35,104 @@ enum LogsAnswer: Sendable {
     /// range from the same start it can answer (`RPCClient.suggestedEnd`).
     case tooLarge(cut: UInt64?)
     /// Anything else: an internal error, a throttle that outlasted the client's retries, no answer. A smaller range
-    /// wouldn't be answered either.
+    /// may not be answered either.
     case failed
+}
+
+/// How a scan (`RPCClient.chunkedLogsReport`) meets a range the endpoint doesn't answer for a reason other than its size:
+/// an internal error, a throttle that outlasted the client's retries, no answer. In either mode a range refused for its
+/// size is read in the parts the endpoint names, or in halves.
+public enum LogScanMode: Sendable, Equatable {
+    /// Every scan but the wallet's history on Send and the Portfolio, whose callers take what it read: such a range is read
+    /// again in halves, each part that fails halved again down to the smallest range, as build 15 read it, with a pause
+    /// that grows while nothing is answered, so an outage of a few seconds doesn't cut a history short. Bounded
+    /// (`LogScanLimits`): once no range has been answered for 45 s the endpoint is down, and the scan stops there,
+    /// incomplete; and it halves failed ranges at most 256 times.
+    case patient
+    /// The wallet's history on Send and the Portfolio, which say what they couldn't read and offer Retry: such a range is
+    /// asked once more, then left as a gap, and two rounds in a row with no range answered end the scan, in about 27
+    /// requests.
+    case failFast
+}
+
+/// What a scan may spend (`LogScanMode`), so no endpoint can keep one going for hours. Tests make them smaller.
+struct LogScanLimits: Sendable, Equatable {
+    /// Splits a scan may make in all, whatever refused the range: past them, a part refused again is left as a gap.
+    var splits = 4_096
+    /// Patient: splits of ranges that failed for a reason other than their size.
+    var failedSplits = 256
+    /// Patient: the endpoint is down once no range has been answered for this long, in seconds…
+    var outage: TimeInterval = 45
+    /// …and while nothing is answered, a part waits `pause` seconds for each request in a row that got no answer, at most
+    /// `maxPause`.
+    var pause: TimeInterval = 0.25
+    var maxPause: TimeInterval = 2
+}
+
+/// A scan's running account (`RPCClient.chunkedLogsReport`): what it may still split, and whether the endpoint is
+/// answering.
+struct LogScan {
+    let mode: LogScanMode
+    let limits: LogScanLimits
+    private(set) var splits: Int
+    private(set) var failedSplits: Int
+    /// Requests in a row that got no range answered.
+    private(set) var failedInARow = 0
+    /// When a range was last answered — with its logs, or a refusal of its size — or the scan started.
+    private var answeredAt = Date()
+    /// Patient: no range has been answered for `limits.outage`. The endpoint is down; the scan stops there, incomplete.
+    private(set) var down = false
+
+    init(mode: LogScanMode, limits: LogScanLimits) {
+        self.mode = mode
+        self.limits = limits
+        splits = limits.splits
+        failedSplits = limits.failedSplits
+    }
+
+    /// One request's answers. A range answered with its logs, or refused for its size, is the endpoint answering.
+    mutating func record(_ answers: [LogsAnswer]) {
+        if answers.contains(where: { if case .failed = $0 { return false }; return true }) {
+            failedInARow = 0
+            answeredAt = Date()
+            return
+        }
+        failedInARow += 1
+        if mode == .patient, Date().timeIntervalSince(answeredAt) >= limits.outage { down = true }
+    }
+
+    /// Patient, while the endpoint isn't answering: how long the next part waits. 0 otherwise.
+    var pause: TimeInterval {
+        mode == .patient && failedInARow > 0 ? min(limits.pause * Double(failedInARow), limits.maxPause) : 0
+    }
+
+    /// Whether `part` would be read in halves if it failed for a reason other than its size: patient, while the scan's
+    /// splits last, and when it is wider than `floor` blocks.
+    func halvesFailures(_ part: LogFilter, floor: UInt64) -> Bool {
+        mode == .patient && splits > 0 && failedSplits > 0 && part.toBlock >= part.fromBlock && part.toBlock - part.fromBlock + 1 > floor
+    }
+
+    /// `part` in two after `answer`. Refused for its size: where the refusal says a range the endpoint can answer ends,
+    /// while `cuts` lasts, else in halves. Failed for another reason: in halves when `halvesFailures`. Nil — the part is a
+    /// gap — when it was answered, is no wider than `floor` blocks, or the scan's splits are spent.
+    mutating func divide(_ part: LogFilter, after answer: LogsAnswer, cuts: inout Int, floor: UInt64) -> [LogFilter]? {
+        guard splits > 0 else { return nil }
+        let parts: [LogFilter]?
+        switch answer {
+        case .logs:
+            return nil
+        case .tooLarge(let cut):
+            let named = cuts > 0 ? cut : nil
+            if named != nil { cuts -= 1 }
+            parts = RPCClient.split(part, at: named, floor: floor)
+        case .failed:
+            guard halvesFailures(part, floor: floor) else { return nil }
+            parts = RPCClient.split(part, floor: floor)
+            if parts != nil { failedSplits -= 1 }
+        }
+        if parts != nil { splits -= 1 }
+        return parts
+    }
 }
 
 /// One event emitted by a contract, as `eth_getLogs` and transaction receipts report it.
@@ -155,19 +251,29 @@ public extension RPCClient {
     }
 
     /// Fetches logs over `[fromBlock, toBlock]` by splitting the window into ranges the endpoint accepts and
-    /// sending `concurrency` ranges per round trip. A range that fails leaves a gap rather than failing the whole
-    /// window, exactly as the web app's `chunkedLogs` does; the caller gets everything that could be read.
+    /// sending `concurrency` ranges per round trip. A range that fails is read again in smaller parts, as build 15 read it
+    /// (`LogScanMode.patient`); what still can't be read leaves a gap rather than failing the whole window, exactly as the
+    /// web app's `chunkedLogs` does, and the caller gets everything that could be read.
     func chunkedLogs(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6) async -> [Log] {
         await chunkedLogsReport(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock, chunkSize: chunkSize, concurrency: concurrency).logs
     }
 
     /// `chunkedLogs`, saying whether the whole window was read: `complete` is false when a range was left as a gap, or the
     /// scan was cancelled or stopped part-way, so a caller can tell "nothing there" from "couldn't read it". A range the
-    /// endpoint refuses for its size is read in smaller parts (`narrowedLogs`); a range refused for any other reason — an
-    /// internal error, a throttle that outlasted the client's retries, no answer — is asked once more, then left as a gap,
-    /// since a smaller range wouldn't fix it. Once two rounds in a row get no range answered, the endpoint is failing and
-    /// the scan stops there, incomplete, rather than asking the rest of the window range by range.
-    func chunkedLogsReport(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6) async -> (logs: [Log], complete: Bool) {
+    /// endpoint refuses for its size is read in smaller parts (`narrowedLogs`). A range refused for any other reason — an
+    /// internal error, a throttle that outlasted the client's retries, no answer — is asked once more, then read as `mode`
+    /// says (`LogScanMode`): patient, the default, in halves, as build 15 read it, until the endpoint has answered nothing
+    /// for 45 s; fail-fast, for the wallet's history on Send and the Portfolio, left as a gap, and two rounds in a row with
+    /// no range answered end the scan. Either way no endpoint can keep a scan going for hours (`LogScanLimits`).
+    func chunkedLogsReport(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6,
+                           mode: LogScanMode = .patient) async -> (logs: [Log], complete: Bool) {
+        await chunkedLogsReport(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock, chunkSize: chunkSize, concurrency: concurrency,
+                                mode: mode, limits: LogScanLimits())
+    }
+
+    /// `chunkedLogsReport` within `limits`.
+    internal func chunkedLogsReport(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6,
+                                    mode: LogScanMode, limits: LogScanLimits) async -> (logs: [Log], complete: Bool) {
         // A local Anvil fork only holds logs from its fork block on (older ranges are forwarded upstream, where the
         // default RPC caps them at 100 blocks), so a development build scans the fork's own blocks only.
         var fromBlock = fromBlock
@@ -182,6 +288,7 @@ public extension RPCClient {
             if end == UInt64.max { break }
             start = end + 1
         }
+        var scan = LogScan(mode: mode, limits: limits)
         // A wallet-scoped filter (a topic beyond the event signature) is cheap for the wide-range endpoints however
         // far back it reaches: rpc1 answers one wallet's whole transfer history in about a second. Ask for the whole
         // window first, up to three times, and fall back to ranges only when the endpoint refuses it. A refusal for its
@@ -191,84 +298,101 @@ public extension RPCClient {
         // than a thousand requests, minutes.
         if ranges.count > 1, chunk >= 100_000, topics.dropFirst().contains(where: { $0 != nil }) {
             let whole = LogFilter(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock)
-            switch await logsAnswer(whole, tries: 3) {
+            let answer = await logsAnswer(whole, tries: 3, scan: &scan)
+            switch answer {
             case .logs(let found): return (found, true)
-            case .tooLarge(let cut?): return await narrowedLogs(whole, cut: cut)
-            case .tooLarge(nil), .failed: if Task.isCancelled { return ([], false) }
+            case .tooLarge(_?): return await narrowedLogs(whole, after: answer, scan: &scan)
+            case .tooLarge(nil), .failed: if Task.isCancelled || scan.down { return ([], false) }
             }
         }
         var out: [Log] = []
         var complete = true
         var next = 0
         var unanswered = 0
-        while next < ranges.count, !Task.isCancelled {
+        while next < ranges.count, !Task.isCancelled, !scan.down {
             let slice = Array(ranges[next..<min(next + max(1, concurrency), ranges.count)])
             next += slice.count
             var answered = false
-            for (filter, answer) in zip(slice, await rangeAnswers(slice)) {
+            let answers = await rangeAnswers(slice, scan: &scan)
+            for (filter, answer) in zip(slice, answers) {
                 switch answer {
                 case .logs(let logs):
                     out.append(contentsOf: logs)
                     answered = true
-                case .tooLarge(let cut):
+                case .tooLarge:
                     answered = true
-                    let narrowed = await narrowedLogs(filter, cut: cut)
+                    let narrowed = await narrowedLogs(filter, after: answer, scan: &scan)
+                    out.append(contentsOf: narrowed.logs)
+                    complete = complete && narrowed.complete
+                case .failed where mode == .patient:
+                    // As build 15 read it: in halves, which a moment's outage, or a range too heavy for the endpoint to
+                    // answer in time, lets through.
+                    let narrowed = await narrowedLogs(filter, after: answer, scan: &scan)
                     out.append(contentsOf: narrowed.logs)
                     complete = complete && narrowed.complete
                 case .failed:
                     complete = false
                 }
             }
+            guard mode == .failFast else { continue }
             unanswered = answered ? 0 : unanswered + 1
             if unanswered >= 2 { return (out, false) }
         }
-        return (out, complete && next == ranges.count)
+        return (out, complete && next == ranges.count && !scan.down)
     }
 
     /// What the endpoint answered each of `filters`, in one round trip: those that failed for a reason other than their
     /// size are asked once more, together, 400 ms later.
-    private func rangeAnswers(_ filters: [LogFilter]) async -> [LogsAnswer] {
-        var answers = await batchAnswers(filters)
+    private func rangeAnswers(_ filters: [LogFilter], scan: inout LogScan) async -> [LogsAnswer] {
+        var answers = await batchAnswers(filters, scan: &scan)
         let failed = answers.indices.filter { if case .failed = answers[$0] { return true }; return false }
-        guard !failed.isEmpty, !Task.isCancelled else { return answers }
+        guard !failed.isEmpty, !Task.isCancelled, !scan.down else { return answers }
         try? await Task.sleep(for: .milliseconds(400))
-        let again = await batchAnswers(failed.map { filters[$0] })
+        let again = await batchAnswers(failed.map { filters[$0] }, scan: &scan)
         for (k, i) in failed.enumerated() { answers[i] = again[k] }
         return answers
     }
 
     /// One range, asked again while it fails for a reason other than its size: `tries` times in all, 400 ms apart, then
     /// 800 ms.
-    private func logsAnswer(_ filter: LogFilter, tries: Int = 2) async -> LogsAnswer {
+    private func logsAnswer(_ filter: LogFilter, tries: Int = 2, scan: inout LogScan) async -> LogsAnswer {
         var answer = LogsAnswer.failed
         for attempt in 0..<max(1, tries) {
             if attempt > 0 {
-                if Task.isCancelled { break }
+                if Task.isCancelled || scan.down { break }
                 try? await Task.sleep(for: .milliseconds(400 * attempt))
             }
-            answer = await batchAnswers([filter])[0]
+            answer = await batchAnswers([filter], scan: &scan)[0]
             guard case .failed = answer else { break }
         }
         return answer
     }
 
-    /// Each of `filters` asked once, in one round trip; every one failed when the request as a whole got no answer.
-    private func batchAnswers(_ filters: [LogFilter]) async -> [LogsAnswer] {
-        guard let results = try? await logs(filters), results.count == filters.count else { return filters.map { _ in .failed } }
-        return zip(filters, results).map { filter, result in
-            switch result {
-            case .success(let logs): return .logs(logs)
-            case .failure(let error):
-                return Self.refusesSize(error) ? .tooLarge(cut: Self.suggestedEnd(error, from: filter.fromBlock, to: filter.toBlock)) : .failed
+    /// Each of `filters` asked once, in one round trip, and recorded in `scan`; every one failed when the request as a
+    /// whole got no answer.
+    private func batchAnswers(_ filters: [LogFilter], scan: inout LogScan) async -> [LogsAnswer] {
+        let answers: [LogsAnswer]
+        if let results = try? await logs(filters), results.count == filters.count {
+            answers = zip(filters, results).map { filter, result in
+                switch result {
+                case .success(let logs): return .logs(logs)
+                case .failure(let error):
+                    return Self.refusesSize(error) ? .tooLarge(cut: Self.suggestedEnd(error, from: filter.fromBlock, to: filter.toBlock)) : .failed
+                }
             }
+        } else {
+            answers = filters.map { _ in .failed }
         }
+        scan.record(answers)
+        return answers
     }
 
     /// Whether an `eth_getLogs` error refuses the range for its size — its block span, or how many logs it would return —
     /// which a smaller range fixes: rpc1's "Log response size exceeded" (-32602, its cap of 10K logs an answer),
     /// rpc.monad.xyz's "eth_getLogs is limited to a 100 range" (-32614), rpc3's "Block range is too large" (-32062), and
     /// the same said in other words. Never a throttle, an internal error or a node that can't serve the method: a smaller
-    /// range doesn't fix those, and splitting a range for them sends thousands of requests that fail the same way.
+    /// range doesn't reliably fix those, so only a patient scan splits a range for them, and within its limits
+    /// (`LogScanLimits`): splitting every one sends thousands of requests that fail the same way.
     internal static func refusesSize(_ error: RPCError) -> Bool {
         let message = error.message.lowercased()
         let sizes = ["response size", "block range", "too large", "limited to a", "returned more than", "too many logs", "too many results"]
@@ -277,32 +401,32 @@ public extension RPCClient {
         return error.code == -32614 || error.code == -32062
     }
 
-    /// A range the endpoint refused for its size, read in parts down to 100 blocks (the cap of the default Monad RPC;
-    /// 5 000 on a local node), each part refused for its size split again: where the endpoint's refusal says a range it
-    /// can answer ends (`cut`), else in halves. The endpoint's word is taken up to 200 times a range (about 2M logs on
-    /// rpc1), then halves only, so no endpoint can keep it splitting off a block at a time. A part still refused at the
-    /// smallest size, or refused for another reason after one more try, is left as a gap, and the range is reported
-    /// incomplete.
-    private func narrowedLogs(_ filter: LogFilter, cut: UInt64? = nil) async -> (logs: [Log], complete: Bool) {
+    /// A range refused — for its size, or, patient, for any reason (`answer`) — read in parts down to 100 blocks (the cap
+    /// of the default Monad RPC; 5 000 on a local node), each part refused again split again (`LogScan.divide`): where a
+    /// size refusal says a range the endpoint can answer ends, else in halves. The endpoint's word is taken up to 200
+    /// times a range (about 2M logs on rpc1), then halves only, so no endpoint can keep it splitting off a block at a time.
+    /// Patient, a part that would be halved if it failed is asked once, after a pause while the endpoint isn't answering;
+    /// every other part is asked twice. A part refused at the smallest size, or once the scan's splits are spent, is left
+    /// as a gap, and the range is reported incomplete, as it is when the scan stops part-way.
+    private func narrowedLogs(_ filter: LogFilter, after answer: LogsAnswer, scan: inout LogScan) async -> (logs: [Log], complete: Bool) {
         let floor: UInt64 = isLocal ? 5_000 : 100
         var cuts = 200
-        func divide(_ part: LogFilter, _ cut: UInt64?) -> [LogFilter]? {
-            let named = cuts > 0 ? cut : nil
-            if named != nil { cuts -= 1 }
-            return Self.split(part, at: named, floor: floor)
-        }
-        guard let parts = divide(filter, cut) else { return ([], false) }
+        guard !scan.down, let parts = scan.divide(filter, after: answer, cuts: &cuts, floor: floor) else { return ([], false) }
         var out: [Log] = []
         var complete = true
         // The parts still to read, the next one last, so the logs come out in block order.
         var pending = Array(parts.reversed())
         while let part = pending.popLast() {
-            if Task.isCancelled { return (out, false) }
-            switch await logsAnswer(part) {
+            if Task.isCancelled || scan.down { return (out, false) }
+            if scan.pause > 0 {
+                try? await Task.sleep(for: .seconds(scan.pause))
+                if Task.isCancelled { return (out, false) }
+            }
+            let reply = await logsAnswer(part, tries: scan.halvesFailures(part, floor: floor) ? 1 : 2, scan: &scan)
+            switch reply {
             case .logs(let logs): out.append(contentsOf: logs)
-            case .failed: complete = false
-            case .tooLarge(let cut):
-                if let smaller = divide(part, cut) { pending += smaller.reversed() } else { complete = false }
+            case .tooLarge, .failed:
+                if let smaller = scan.divide(part, after: reply, cuts: &cuts, floor: floor) { pending += smaller.reversed() } else { complete = false }
             }
         }
         return (out, complete)

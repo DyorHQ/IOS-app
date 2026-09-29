@@ -35,10 +35,11 @@ enum WalletTokens {
 
     /// The ERC-20s the wallet's whole transfer history shows it received (`WalletTokenDiscovery.scan`, on rpc1): the slow
     /// part of a read, so the Send sheet lists the rest while it runs. Tokens stored for the wallet are skipped: every read
-    /// has them.
+    /// has them. Read fail-fast (`LogScanMode.failFast`): an endpoint that stops answering ends the scan in a few requests,
+    /// and the Send sheet says part of the wallet couldn't be read, with Retry, rather than wait on it.
     static func history(env: AppEnvironment, address: Address) async -> WalletTokenDiscovery.Scan {
         let known = Set(KnownTokenStore.universe(owner: address).map(\.address))
-        return await env.walletDiscovery.scan(wallet: address, known: known, wholeHistory: true)
+        return await env.walletDiscovery.scan(wallet: address, known: known, wholeHistory: true, logScan: .failFast)
     }
 
     /// `read`, with the history already scanned (`history`), or not yet (nil): then the tokens are MON, the curated ones
