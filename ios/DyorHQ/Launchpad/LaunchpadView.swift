@@ -403,7 +403,8 @@ final class LaunchpadModel {
     /// no price is left out, and a failed read keeps the last prices.
     private(set) var pairUSD: [Address: Double] = [:]
     /// The retired launchpads' sell-only coins the signed-in wallet holds, which the board doesn't list: its "Your
-    /// Sell-Only Coins" (`LaunchBoard.heldSellOnly`). Cleared on an account change; a failed balance read keeps it.
+    /// Sell-Only Coins" (`LaunchBoard.heldSellOnly`). Cleared on an account change; a read that failed, of a factory
+    /// or a balance, keeps it.
     private(set) var heldSellOnly: [Launch] = []
     /// The account `heldSellOnly` belongs to.
     private var loadedFor: Address?
@@ -427,24 +428,30 @@ final class LaunchpadModel {
             heldSellOnly = []
             loadedFor = account
         }
+        var read: LaunchesRead?
         do {
             async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets, account: account)
-            launches = try await env.launchpad.allLaunches(limit: 60)
+            let fresh = try await env.launchpad.allLaunchesRead(limit: 60)
+            launches = fresh.launches
+            read = fresh
             protocolInfo = try? await info
             error = nil
         } catch {
             self.error = describe(error)
         }
-        if let held = await Self.heldSellOnly(env: env, account: account, launches: launches), !Task.isCancelled, account == loadedFor {
+        if let read, let held = await Self.heldSellOnly(env: env, account: account, read: read), !Task.isCancelled, account == loadedFor {
             heldSellOnly = held
         }
         if let prices = await Self.pairPrices(env: env, launches: launches) { pairUSD = prices }
     }
 
-    /// The sell-only coins among `launches` that `account` holds, in one balanceOf multicall; none without an account or
-    /// such a coin, and nil when a balance couldn't be read.
-    private static func heldSellOnly(env: AppEnvironment, account: Address?, launches: [Launch]) async -> [Launch]? {
-        let sellOnly = launches.filter { !$0.listsOnBoard }
+    /// The sell-only coins among a read's launches that `account` holds, in one balanceOf multicall; none without an
+    /// account or such a coin, and nil when a balance couldn't be read.
+    private static func heldSellOnly(env: AppEnvironment, account: Address?, read: LaunchesRead) async -> [Launch]? {
+        // A factory that didn't answer left its coins out of the read: nothing can be decided from the rest, or a held
+        // coin of a retired stack that failed would drop from the section (RS-10).
+        guard read.complete else { return nil }
+        let sellOnly = read.launches.filter { !$0.listsOnBoard }
         guard let account, !sellOnly.isEmpty else { return [] }
         let tokens = sellOnly.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
         guard let balances = try? await ERC20.balances(of: tokens, owner: account, rpc: env.rpc, multicall: env.multicall) else { return nil }

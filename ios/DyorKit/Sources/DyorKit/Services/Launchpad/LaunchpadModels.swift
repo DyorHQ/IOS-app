@@ -191,12 +191,30 @@ public enum LaunchBoardSection: Sendable, Hashable, CaseIterable {
     case refundAndMigrating
 }
 
+/// One read of every launchpad's launches (`LaunchpadService.allLaunchesRead`): what the factories that answered
+/// recorded, and the factories that didn't, whose launches are missing.
+public struct LaunchesRead: Sendable, Hashable {
+    public let launches: [Launch]
+    /// The factories, live or retired, whose read failed: none of their launches is in `launches`.
+    public let unread: [Address]
+
+    public init(launches: [Launch], unread: [Address]) {
+        self.launches = launches
+        self.unread = unread
+    }
+
+    /// Every factory answered: `launches` holds every launchpad's launches (the newest of each).
+    public var complete: Bool { unread.isEmpty }
+}
+
 /// What the Launch tab's board shows beyond its public sections.
 public enum LaunchBoard {
     /// The coins among `launches` that the public board leaves out (`Launch.listsOnBoard`: sell-only) and the wallet
     /// holds, per `balances`, newest first: the board's holder-only "Your Sell-Only Coins", so a holder can always reach
     /// their page from the Launch tab. Nil when a balance of one of them is missing (its read failed): the section then
-    /// keeps what it last showed, never a coin dropped or added on a failed read.
+    /// keeps what it last showed, never a coin dropped or added on a failed read. For the same reason `launches` must
+    /// come from a complete read (`LaunchesRead.complete`): a retired factory that didn't answer leaves its coins out,
+    /// and a held one would drop from the section.
     public static func heldSellOnly(_ launches: [Launch], balances: [Address: BigUInt]) -> [Launch]? {
         var held: [Launch] = []
         for launch in launches where !launch.listsOnBoard {

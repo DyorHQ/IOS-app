@@ -112,6 +112,58 @@ final class LaunchBoardTests: XCTestCase {
         XCTAssertEqual(LaunchBoard.heldSellOnly([], balances: [:]), [])
     }
 
+    /// The section is decided only from a read every factory answered (`LaunchesRead.complete`): a retired stack that
+    /// fails leaves its coins out of the read (`LaunchpadService.allLaunchesRead` keeps the others' launches, live first
+    /// then each retired stack newest first, and `allLaunches` is the same list), so recomputing the section from the rest
+    /// would drop a held coin of that stack, as LP on 0x10F3. The read names the stack instead.
+    func testTheHolderSectionIsDecidedOnlyFromACompleteRead() async throws {
+        defer { MomentsChainStub.install { _, _ in nil } }
+        let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: V2Fixture.launchpad, logsRPC: MomentsChainStub.rpc())
+        let stacks = BoardChain.factories
+        let lpStack = LaunchpadAddresses.retiredStacks[1]
+        XCTAssertEqual(lpStack.factory, Address(literal: "0x10F34A174d9C393a90aFf94BDED7E1Db185446D7"))
+        let holder: [Address: BigUInt] = Dictionary(uniqueKeysWithValues: stacks.map { (BoardChain.coin($0), BigUInt(1)) })
+
+        // Every factory answers: every launchpad's coin, and the section holds every retired one.
+        MomentsChainStub.install(BoardChain().answer)
+        let whole = try await service.allLaunchesRead(limit: 60)
+        XCTAssertTrue(whole.complete)
+        XCTAssertEqual(whole.unread, [])
+        XCTAssertEqual(whole.launches.map(\.factory), stacks.map(\.factory), "live first, then each retired stack, newest first")
+        XCTAssertEqual(whole.launches.map(\.token), stacks.map(BoardChain.coin))
+        XCTAssertEqual(whole.launches.filter { !$0.listsOnBoard }.map(\.factory), LaunchpadAddresses.retiredFactories, "on the curve: the retired ones are sell-only")
+        let all = try await service.allLaunches(limit: 60)
+        XCTAssertEqual(all, whole.launches, "the plain list is the same read")
+        XCTAssertEqual(LaunchBoard.heldSellOnly(whole.launches.filter { !$0.listsOnBoard }, balances: holder)?.map(\.factory), LaunchpadAddresses.retiredFactories)
+
+        // LP's stack fails: its coin is missing, and the read says so. Recomputed from what came back, the section would
+        // drop the held coin — so nothing is decided from an incomplete read.
+        MomentsChainStub.install(BoardChain(failing: [lpStack.factory]).answer)
+        let partial = try await service.allLaunchesRead(limit: 60)
+        XCTAssertFalse(partial.complete)
+        XCTAssertEqual(partial.unread, [lpStack.factory])
+        XCTAssertEqual(partial.launches.map(\.factory), stacks.map(\.factory).filter { $0 != lpStack.factory }, "the other stacks' launches still list")
+        XCTAssertFalse(partial.launches.contains { $0.token == BoardChain.coin(lpStack) })
+        let dropped = try XCTUnwrap(LaunchBoard.heldSellOnly(partial.launches.filter { !$0.listsOnBoard }, balances: holder))
+        XCTAssertEqual(dropped.map(\.factory), LaunchpadAddresses.retiredFactories.filter { $0 != lpStack.factory }, "what a recompute from the partial read would show")
+        let plain = try await service.allLaunches(limit: 60)
+        XCTAssertEqual(plain, partial.launches)
+
+        // The live factory fails: the retired stacks' launches are still read, and the read names it too.
+        MomentsChainStub.install(BoardChain(failing: [V2Fixture.launchpad.factory]).answer)
+        let noLive = try await service.allLaunchesRead(limit: 60)
+        XCTAssertFalse(noLive.complete)
+        XCTAssertEqual(noLive.unread, [V2Fixture.launchpad.factory])
+        XCTAssertEqual(noLive.launches.map(\.factory), LaunchpadAddresses.retiredFactories)
+
+        // Every retired factory fails too: nothing came back, so the live factory's error is thrown, as before.
+        MomentsChainStub.install(BoardChain(failing: Set(stacks.map(\.factory))).answer)
+        do {
+            let none = try await service.allLaunchesRead(limit: 60)
+            XCTFail("a read nothing answered returned \(none)")
+        } catch {}
+    }
+
     // MARK: The screens
 
     /// The board shows the holder section last, only for the signed-in wallet's coins (cleared on an account change, kept
@@ -131,17 +183,22 @@ final class LaunchBoardTests: XCTestCase {
         XCTAssertTrue(source.contains("private var sellOnly: [Launch] { searched(model.heldSellOnly) }"))
         XCTAssertTrue(source.contains("if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !model.loading {"))
 
-        // The model: cleared on another account before any read, published only for the account it was read for, kept
-        // when the balances can't be read, and decided by `LaunchBoard.heldSellOnly`.
+        // The model: cleared on another account before any read, published only for the account it was read for and
+        // only from a read every factory answered, kept when the balances can't be read, and decided by
+        // `LaunchBoard.heldSellOnly`.
         let model = try XCTUnwrap(source.range(of: "final class LaunchpadModel {"))
         let modelEnd = try XCTUnwrap(source.range(of: "struct LaunchDetailView: View {", range: model.upperBound..<source.endIndex))
         let modelSource = String(source[model.upperBound..<modelEnd.lowerBound])
         let cleared = try XCTUnwrap(modelSource.range(of: "if account != loadedFor {\n            heldSellOnly = []\n            loadedFor = account\n        }"))
-        let read = try XCTUnwrap(modelSource.range(of: "launches = try await env.launchpad.allLaunches(limit: 60)"))
+        let read = try XCTUnwrap(modelSource.range(of: "let fresh = try await env.launchpad.allLaunchesRead(limit: 60)\n            launches = fresh.launches\n            read = fresh"))
         XCTAssertLessThan(cleared.lowerBound, read.lowerBound, "cleared before any read")
-        XCTAssertTrue(modelSource.contains("if let held = await Self.heldSellOnly(env: env, account: account, launches: launches), !Task.isCancelled, account == loadedFor {\n            heldSellOnly = held\n        }"))
-        XCTAssertTrue(modelSource.contains("guard let balances = try? await ERC20.balances(of: tokens, owner: account, rpc: env.rpc, multicall: env.multicall) else { return nil }"))
+        XCTAssertTrue(modelSource.contains("if let read, let held = await Self.heldSellOnly(env: env, account: account, read: read), !Task.isCancelled, account == loadedFor {\n            heldSellOnly = held\n        }"))
+        let complete = try XCTUnwrap(modelSource.range(of: "guard read.complete else { return nil }"))
+        let balances = try XCTUnwrap(modelSource.range(of: "guard let balances = try? await ERC20.balances(of: tokens, owner: account, rpc: env.rpc, multicall: env.multicall) else { return nil }"))
+        XCTAssertLessThan(complete.lowerBound, balances.lowerBound, "an incomplete read reads no balance: the section keeps what it showed")
+        XCTAssertTrue(modelSource.contains("let sellOnly = read.launches.filter { !$0.listsOnBoard }"))
         XCTAssertTrue(modelSource.contains("return LaunchBoard.heldSellOnly(sellOnly, balances: balances)"))
+        XCTAssertFalse(modelSource.contains("allLaunches(limit"), "the board reads through allLaunchesRead, which says which stacks answered")
         XCTAssertEqual(modelSource.components(separatedBy: "heldSellOnly = ").count - 1, 2, "set only when cleared and when read for this account")
 
         // The Explore card: only on the live launchpad, without a search, after the first load; Launch a Coin needs a
@@ -167,5 +224,59 @@ final class LaunchBoardTests: XCTestCase {
         XCTAssertFalse(source.contains("can be sold here, but not bought"))
         XCTAssertFalse(source.contains("CurveRoute.launchTab"))
         XCTAssertFalse(source.contains("struct LaunchRow"))
+    }
+}
+
+/// One coin climbing on each known factory (the live v2 fixture and every retired stack), answered from memory for a
+/// board read: each factory's `launchCount`, `getLaunches` and `getLaunchedToken` (in its own layout), and the reads its
+/// launch is built from. A factory in `failing` answers nothing, as a stack that can't be read; its coin is never asked.
+struct BoardChain: Sendable {
+    /// The factories a live service asks, in order: the live fixture, then each retired stack.
+    static let factories = [V2Fixture.launchpad] + LaunchpadAddresses.retiredStacks
+    var failing: Set<Address> = []
+
+    /// The coin launched on `stack`: one address per stack.
+    static func coin(_ stack: LaunchpadAddresses) -> Address { address(of: stack, tag: 0xd0) }
+    static func curve(_ stack: LaunchpadAddresses) -> Address { address(of: stack, tag: 0xc0) }
+
+    private static func address(of stack: LaunchpadAddresses, tag: UInt8) -> Address {
+        let index = UInt8(factories.firstIndex(of: stack)!)
+        return Address(data: Data(count: 18) + [0xc0 + index, tag])!
+    }
+
+    func answer(_ to: Address, _ data: Data) -> Data? {
+        guard !failing.contains(to) else { return nil }
+        let selector = data.prefix(4)
+        let args = ABIWords(data.dropFirst(4))
+        func is_(_ signature: String) -> Bool { selector == ABI.selector(signature) }
+        func encode(_ values: [ABIValue], _ types: String) -> Data { try! ABI.encode(values, types) }
+        typealias F = LaunchpadABI.Factory
+        typealias T = LaunchpadABI.Token
+        typealias C = LaunchpadABI.Curve
+        if let stack = Self.factories.first(where: { $0.factory == to }) {
+            let legacy = stack.generation.legacyRecord
+            let coin = Self.coin(stack)
+            if is_(F.launchCount) { return encode([.uint(1)], "uint256") }
+            if is_(F.getLaunches) { return encode([.array([.address(coin)])], "address[]") }
+            if is_(F.getLaunchedToken) {
+                let ours = args.address(0) == coin
+                return encode([RetiredCoinChain.record(token: ours ? coin : .zero, curve: ours ? Self.curve(stack) : .zero, phase: .bonding,
+                                                       venue: legacy ? .monday : .uniswapV4, exists: ours, legacy: legacy)],
+                              LaunchpadABI.launchedTokenReturns(legacy: legacy))
+            }
+            return nil
+        }
+        if let stack = Self.factories.first(where: { Self.coin($0) == to }) {
+            if is_(T.name) { return encode([.string("Coin \(stack.generation)")], "string") }
+            if is_(T.symbol) { return encode([.string("C\(stack.generation.rawValue)")], "string") }
+            if is_(T.totalSupply) { return encode([.uint(BigUInt(10).power(27))], "uint256") }
+            if is_(T.getTokenInfo) { return encode([.address(to), .string(""), .string(""), .tuple(Array(repeating: .string(""), count: 5))], "address,string,string,\(LaunchpadABI.socialsTuple)") }
+        }
+        if Self.factories.contains(where: { Self.curve($0) == to }) {
+            if is_(C.price) || is_(C.realQuoteReserve) { return encode([.uint(1_000)], "uint256") }
+            if is_(C.completed) || is_(C.rescued) { return encode([.bool(false)], "bool") }
+            if is_(C.launchedAt) { return encode([.uint(1_789_000_000)], "uint64") }
+        }
+        return nil
     }
 }
