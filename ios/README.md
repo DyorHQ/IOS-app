@@ -30,7 +30,8 @@ ios/
 
 1. Install XcodeGen once: `brew install xcodegen`.
 2. `cp DyorHQ/Config/Secrets.example.xcconfig DyorHQ/Config/Secrets.xcconfig` and fill in the Privy app id and the
-   mobile client id created for bundle id `fun.dyorhq.app` with URL scheme `dyorhq` (see `docs/env-setup.md`).
+   mobile client id created for bundle id `fun.dyorhq.app` with URL scheme `dyorhq` (see
+   `DyorHQ/internal: ios-app/docs/env-setup.md`).
    Without them the app still runs: sign-in shows what is missing and **Watch an Address** works.
 3. `xcodegen generate`, open `DyorHQ.xcodeproj`, pick a simulator or device, run.
 
@@ -83,6 +84,55 @@ The DyorHQ workflow archives `ios/DyorHQ.xcodeproj` on every push to `main`. Tha
 - After changing a package requirement in `project.yml` or `DyorKit/Package.swift`, run `scripts/pin-packages.sh`
   and commit `Package.resolved`; the cloud build fails with an out-of-date resolved file until the pins match.
 
+## Contract addresses and the release gate
+
+The live launchpad and Moments addresses are baked into DyorKit, each stack in one constant:
+`LaunchpadAddresses.monadMainnet` and `MomentsAddresses.monadMainnet`, the v2 contracts deployed on 2026-09-28
+(`contracts/deployments/143.json` and `moments-143.json`; the stacks they replaced are `143-retired-0x6B1C.json` and
+`moments-143-cohort3.json`). A future stack is wired the same way, in one reviewed change: promote its records (with
+`deployBlock`, the factory's creation block, added by hand), fill in the constant from them, and commit the records and
+the Swift together. `V2WiringTests` accepts only all-zero tables (a `// PENDING` marker: Launch and Publish say "not
+live yet", and the retired stacks and Moments cohorts keep serving their coins, claims and links) or fully wired tables
+that match the records.
+
+A build with a pending table must not ship, so before a release:
+
+```bash
+(cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter V2WiringTests)
+(cd DyorKit && DYOR_LIVE_DOCS=1 swift test --filter DocsLinksTests)
+python3 ../scripts/dev/check-launchpad-addresses.py --release
+```
+
+The first and the last fail while either table is pending. The last one also proves the retired Moments cohorts final on chain
+(read-only calls to a public Monad RPC): each factory's `momentCount()` equals its pin
+(`MomentLink.Cohort.finalMomentCount`), and its coins are exactly its entries in `MomentsAddresses.retiredMainnetCoins`.
+Cohort 3's publishing is not paused on chain (owner decision 2026-09-28: the old stacks are retired in the app only),
+which the check reports as a note; a Moment published there after its pin makes it refuse until the pin and the coin
+table take it in (so the app never trades its coin). That moves no name link: a retired cohort's names are frozen at
+`MomentLink.Cohort.namedMomentCount`, so such a Moment shares its id link only. Cohorts 1 and 2 must stay
+paused (their policy pays the retired wallets): either one open refuses. The same reads prove the live stacks as wired,
+so a wrong record promoted with matching Swift still refuses: every module in the two tables has code, each factory's
+getters name the table's modules and the records' owner, governance and guardian (and the Moments policy the table's
+platform and treasury, its link base c4's), and each factory was created at its record's `deployBlock`. The two live
+factories are pinned in the script as well, as the keepers pin them (`LIVE_FACTORIES`), so every run refuses Swift and
+records that agree on another factory; a new stack moves both pins with its records. It also reads
+the public docs' Contracts & Addresses page at the URL Get Help opens ("Verify every contract DyorHQ uses"): it refuses
+until the page lists every address in the two tables with their factories as the current ones, and when the page cannot
+be read, so publish the docs update for a new stack before its archive (`DYOR_LIVE_DOCS=1` runs the same check in
+`DocsLinksTests`).
+It runs in every archive: the DyorHQ target's install-only build phase (so Product › Archive in Xcode is gated too),
+`ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud) and `scripts/testflight.sh`, each refusing the archive.
+`python3 ../scripts/dev/check-launchpad-addresses.py --chain` runs the same chain checks without refusing the pending
+tables, so the pins can be confirmed before v2 is wired.
+
+Once build 16 is on TestFlight, raise `app_config` 'ios'.min_build to 16 (a production Supabase write, the owner's).
+Builds before 16 count cohort 3 as the live cohort: they can still publish there, and they give a name link to a
+cohort 3 Moment that build 16 leaves unnamed, so the same `dyorhq.fun/moments/<name>` could open different Moments on
+the two builds. Below min_build the update gate stops signing and drops Moment links.
+
+A Debug build can point at a v2 deployment on a local fork: `MONAD_RPC_URL` plus the `LAUNCHPAD_*` and `MOMENTS_*` keys
+in `Secrets.xcconfig` (see the example file). Release builds never read them.
+
 ## Design rules
 
 - Apple's system: SF Pro through text styles (Dynamic Type), SF Symbols, system semantic colors, `List`, `Form`,
@@ -100,4 +150,4 @@ The DyorHQ workflow archives `ios/DyorHQ.xcodeproj` on every push to `main`. Tha
   Google credentials configured in the Privy dashboard.
 - The passkey host `accounts.dyorhq.fun` (the constant `Mera.relyingParty`) serving the AASA file for `fun.dyorhq.app`,
   and Associated Domains enabled on that App ID.
-- Launchpad contract addresses after deployment (`LAUNCHPAD_FACTORY` and friends).
+- The v2 launchpad and Moments addresses after deployment, wired into DyorKit (see the release gate above).

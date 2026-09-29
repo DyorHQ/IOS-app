@@ -27,6 +27,7 @@ public enum SupabaseError: LocalizedError {
         switch self {
         case .http(let code, let body):
             if code == 500, body.contains("APP_JWT_SECRET") { return "Sign-in isn't finished on the server yet (APP_JWT_SECRET not set)." }
+            if (500...599).contains(code) { return "DyorHQ's server isn't answering right now (\(code)). Try again in a minute." }
             return "Supabase request failed (\(code))."
         case .notSignedIn: return "Sign in to DyorHQ to continue."
         case .decoding(let what): return "Could not read \(what) from the server."
@@ -37,6 +38,15 @@ public enum SupabaseError: LocalizedError {
             guard let seconds = retryAfter, seconds > 0 else { return "Too many attempts. Please wait a few minutes and try again." }
             return "Too many attempts. Try again in \(max(1, (seconds + 59) / 60)) min."
         }
+    }
+
+    /// Whether `error` only means the backend couldn't be reached or answered with a server error (5xx), as opposed
+    /// to refusing the request: nothing the user typed was judged, so a password is not wrong because of it (GE-6).
+    public static func isOutage(_ error: Error) -> Bool {
+        if case .http(let code, _)? = error as? SupabaseError { return (500...599).contains(code) }
+        guard let url = error as? URLError else { return false }
+        return [.timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet,
+                .dnsLookupFailed, .secureConnectionFailed, .dataNotAllowed, .internationalRoamingOff].contains(url.code)
     }
 }
 
@@ -96,6 +106,12 @@ public actor SupabaseClient {
 
     public func signOut() { current = nil }
 
+    /// Signs out only while the session is the one holding `accessToken`: a sign-out that finishes after a newer
+    /// sign-in has been adopted leaves that one alone (security audit 2026-09-26, RS-6).
+    public func signOut(ifAccessToken accessToken: String) {
+        if current?.accessToken == accessToken { current = nil }
+    }
+
     /// Signs in: asks wallet-auth for a single-use nonce bound to this address, has the wallet sign the exact sign-in
     /// message around it, and exchanges the signature for a session. The server consumes the nonce on success, so a
     /// captured signature can never be replayed. `sign` is the wallet's `signMessage` (EIP-191 personal_sign).
@@ -103,7 +119,9 @@ public actor SupabaseClient {
     /// wallet while this ran checks first, then `restore`s it.
     public func signIn(address: String, adopt: Bool = true, sign: (Data) async throws -> Data) async throws -> SupabaseSession {
         let nonce = try await signInNonce(address: address)
-        let message = Self.signInMessage(address: address, nonce: nonce, issuedAt: Int(Date().timeIntervalSince1970 * 1000))
+        // The message names the wallet with its EIP-55 checksum, whatever case the request carries.
+        let message = Self.signInMessage(address: Address(address)?.checksummed ?? address, nonce: nonce,
+                                         issuedAt: Int(Date().timeIntervalSince1970 * 1000))
         let signature = try await sign(Data(message.utf8)).hexString
         let body = try JSONSerialization.data(withJSONObject: ["address": address, "message": message, "signature": signature])
         let data = try await walletAuth(body)
@@ -114,11 +132,66 @@ public actor SupabaseClient {
         return created
     }
 
-    /// The exact message wallet-auth verifies. Its template match is anchored, so not a byte may differ: `address` as
-    /// sent in the request, the server's nonce, and the signing time in unix milliseconds.
+    /// The exact EIP-4361 (Sign-In with Ethereum) message wallet-auth verifies (security audit 2026-09-26, IOSK-7): bound
+    /// to DyorHQ's domain and to Monad, around the server's nonce, and valid for ten minutes from `issuedAt` (unix
+    /// milliseconds). The server's parse is anchored, so not a byte may differ: `address` is the wallet with its EIP-55
+    /// checksum, lines are separated by a single "\n", and there is no trailing newline.
     public static func signInMessage(address: String, nonce: String, issuedAt: Int) -> String {
-        "DyorHQ Sign-In\n\nWallet: \(address)\nNonce: \(nonce)\nIssued At: \(issuedAt)"
+        [
+            "\(signInDomain) wants you to sign in with your Ethereum account:",
+            address,
+            "",
+            "Sign in to DyorHQ.",
+            "",
+            "URI: https://\(signInDomain)",
+            "Version: 1",
+            "Chain ID: \(signInChainId)",
+            "Nonce: \(nonce)",
+            "Issued At: \(iso8601(millis: issuedAt))",
+            "Expiration Time: \(iso8601(millis: issuedAt + signInLifetimeMillis))",
+        ].joined(separator: "\n")
     }
+
+    /// The sign-in's fixed EIP-4361 fields: DyorHQ's domain, and Monad mainnet's chain id (143), which wallet-auth
+    /// requires whatever RPC this build talks to.
+    static let signInDomain = "dyorhq.fun"
+    static let signInChainId = 143
+    /// How long a signed sign-in stays valid (its Expiration Time); wallet-auth refuses anything longer.
+    static let signInLifetimeMillis = 10 * 60 * 1000
+
+    /// `millis` (unix milliseconds) as ISO-8601 UTC with milliseconds, "2026-09-26T12:34:56.789Z" — exactly what
+    /// JavaScript's `Date.prototype.toISOString` prints, which wallet-auth compares against. Integer arithmetic on the
+    /// milliseconds, so the digits never pick up a floating-point rounding.
+    static func iso8601(millis: Int) -> String {
+        let (seconds, milliseconds) = millis.quotientAndRemainder(dividingBy: 1000)
+        let c = utcCalendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: Date(timeIntervalSince1970: TimeInterval(seconds)))
+        return String(format: "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", c.year ?? 0, c.month ?? 0, c.day ?? 0,
+                      c.hour ?? 0, c.minute ?? 0, c.second ?? 0, milliseconds)
+    }
+
+    /// The unix milliseconds of a timestamp in exactly `iso8601(millis:)`'s form, or nil: anything else, or a date that
+    /// doesn't exist (it must print back unchanged).
+    static func millis(iso8601 text: String) -> Int? {
+        let chars = Array(text.utf8)
+        let separators: [Int: UInt8] = [4: 45, 7: 45, 10: 84, 13: 58, 16: 58, 19: 46, 23: 90] // - - T : : . Z
+        guard chars.count == 24 else { return nil }
+        for (i, byte) in chars.enumerated() {
+            if let separator = separators[i] { guard byte == separator else { return nil } }
+            else if !(48...57).contains(byte) { return nil }
+        }
+        func number(_ from: Int, _ length: Int) -> Int { Int(String(decoding: chars[from..<from + length], as: UTF8.self)) ?? -1 }
+        let components = DateComponents(year: number(0, 4), month: number(5, 2), day: number(8, 2),
+                                        hour: number(11, 2), minute: number(14, 2), second: number(17, 2))
+        guard let date = utcCalendar.date(from: components) else { return nil }
+        let millis = Int(date.timeIntervalSince1970) * 1000 + number(20, 3)
+        return iso8601(millis: millis) == text ? millis : nil
+    }
+
+    private static let utcCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }()
 
     /// A fresh single-use nonce from wallet-auth (32 random bytes as 64 lowercase hex), bound to `address` for 5 minutes.
     private func signInNonce(address: String) async throws -> String {
@@ -169,6 +242,15 @@ public actor SupabaseClient {
         _ = try await send(method: "POST", path: "rest/v1/\(table)", query: query, body: body, prefer: "return=minimal,resolution=merge-duplicates", authed: true)
     }
 
+    /// The minimum supported iOS build (`MinimumBuild`), read with the publishable key alone. Nil when the row is missing
+    /// or malformed; throws on a network or HTTP failure. The caller fails open on both.
+    public func minimumBuild() async throws -> MinimumBuild? {
+        let data = try await send(method: "GET", path: "rest/v1/app_config",
+                                  query: [URLQueryItem(name: "key", value: "eq.ios"), URLQueryItem(name: "select", value: "value")],
+                                  body: nil, prefer: nil, authed: false)
+        return MinimumBuild.parse(data)
+    }
+
     /// Calls a Postgres function through PostgREST RPC with the current session (or the publishable key).
     public func rpc<T: Decodable>(_ function: String, _ arguments: [String: String] = [:], authed: Bool = false) async throws -> T {
         let body = try JSONSerialization.data(withJSONObject: arguments)
@@ -184,27 +266,57 @@ public actor SupabaseClient {
 
     // MARK: Storage
 
-    /// Uploads bytes to a public Storage bucket (upserting) and returns the public URL. Requires a session; RLS on
+    /// Uploads bytes to a public Storage bucket and returns the public URL. Requires a session; RLS on
     /// `storage.objects` decides whether the wallet may write to that path. Only the resulting public URL is stored
-    /// in a row — never the bytes.
+    /// in a row — never the bytes. `upsert: false` for a write-once bucket (launch-media, whose URLs go on-chain):
+    /// an object that already exists is then refused (`isDuplicateUpload`) instead of overwritten.
     @discardableResult
-    public func uploadPublic(bucket: String, path: String, data: Data, contentType: String) async throws -> URL {
+    public func uploadPublic(bucket: String, path: String, data: Data, contentType: String, upsert: Bool = true) async throws -> URL {
+        let request = try storageUpload(bucket: bucket, path: path, contentType: contentType, upsert: upsert)
+        let (respData, response) = try await session.upload(for: request, from: data)
+        return try uploaded(bucket: bucket, path: path, respData, response)
+    }
+
+    /// `uploadPublic`, streaming the body from a file (a picked video) so it is never read into memory whole.
+    @discardableResult
+    public func uploadPublic(bucket: String, path: String, file: URL, contentType: String, upsert: Bool = true) async throws -> URL {
+        let request = try storageUpload(bucket: bucket, path: path, contentType: contentType, upsert: upsert)
+        let (respData, response) = try await session.upload(for: request, fromFile: file)
+        return try uploaded(bucket: bucket, path: path, respData, response)
+    }
+
+    /// The public URL of an object in a public bucket.
+    public nonisolated func publicURL(bucket: String, path: String) -> URL {
+        baseURL.appending(path: "storage/v1/object/public/\(bucket)/\(path)")
+    }
+
+    /// Whether Storage refused an upload sent with `upsert: false` because the object already exists: HTTP 409, or
+    /// the older API's 400 whose body carries statusCode "409" / error "Duplicate".
+    public static func isDuplicateUpload(_ error: Error) -> Bool {
+        guard case .http(let code, let body)? = error as? SupabaseError else { return false }
+        if code == 409 { return true }
+        guard code == 400, let object = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any] else { return false }
+        return (object["statusCode"].map { "\($0)" } == "409") || (object["error"] as? String) == "Duplicate"
+    }
+
+    private func storageUpload(bucket: String, path: String, contentType: String, upsert: Bool) throws -> URLRequest {
         guard let token = currentSession?.accessToken else { throw SupabaseError.notSignedIn }
         var request = URLRequest(url: baseURL.appending(path: "storage/v1/object/\(bucket)/\(path)"))
         request.httpMethod = "POST"
-        request.httpBody = data
         request.setValue(anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        request.setValue("true", forHTTPHeaderField: "x-upsert")
+        request.setValue(upsert ? "true" : "false", forHTTPHeaderField: "x-upsert")
         request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
+        return request
+    }
 
-        let (respData, response) = try await session.data(for: request)
+    private func uploaded(bucket: String, path: String, _ data: Data, _ response: URLResponse) throws -> URL {
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw SupabaseError.http(http.statusCode, String(data: respData, encoding: .utf8) ?? "")
+            throw SupabaseError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
-        return baseURL.appending(path: "storage/v1/object/public/\(bucket)/\(path)")
+        return publicURL(bucket: bucket, path: path)
     }
 
     /// Deletes every object under `prefix` (a folder) in a Storage bucket: lists first, then removes what is there,
@@ -244,13 +356,25 @@ public actor SupabaseClient {
 
     // MARK: Edge Functions
 
+    /// How long the app waits for `pin-media`. The function answers within its own 20 s budget (BUDGET_MS in
+    /// supabase/functions/pin-media/index.ts) and sends nothing before it answers, so this bounds the whole call and
+    /// leaves room for a cold start and the network (security audit 2026-09-26, RW-9).
+    public static let pinMediaTimeout: TimeInterval = 25
+
     /// Pins an already-uploaded public object to IPFS through the `pin-media` Edge Function (Pinata) and returns its
     /// `ipfs://<cid>` URI, for writing on-chain as a Moment's permanent media pointer. Requires a session; throws if
-    /// the function is unavailable or its Pinata secret is not configured (the caller falls back to the https URL).
+    /// the function is unavailable, busy (`rateLimited`) or doesn't answer in `pinMediaTimeout` — the caller tells the
+    /// user and never writes the https URL on-chain in its place on its own (RI-9).
     public func pinToIPFS(bucket: String, path: String) async throws -> String {
         guard currentSession != nil else { throw SupabaseError.notSignedIn }
         let body = try JSONSerialization.data(withJSONObject: ["bucket": bucket, "path": path])
-        let data = try await send(method: "POST", path: "functions/v1/pin-media", query: [], body: body, prefer: nil, authed: true)
+        let data: Data
+        do {
+            data = try await send(method: "POST", path: "functions/v1/pin-media", query: [], body: body, prefer: nil, authed: true,
+                                  timeout: Self.pinMediaTimeout)
+        } catch SupabaseError.http(429, let text) {
+            throw SupabaseError.rateLimited(retryAfter: Self.retryAfter(text))
+        }
         struct Response: Decodable { let uri: String }
         guard let response = try? JSONDecoder().decode(Response.self, from: data), response.uri.hasPrefix("ipfs://") else {
             throw SupabaseError.decoding("the pin-media response")
@@ -362,7 +486,7 @@ public actor SupabaseClient {
     private enum AuthorizationHeader { case standard, bearer(String), none }
 
     private func send(method: String, path: String, query: [URLQueryItem], body: Data?, prefer: String?, authed: Bool,
-                      authorization: AuthorizationHeader = .standard) async throws -> Data {
+                      authorization: AuthorizationHeader = .standard, timeout: TimeInterval = 25) async throws -> Data {
         var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { components.queryItems = query }
         var request = URLRequest(url: components.url!)
@@ -382,13 +506,22 @@ public actor SupabaseClient {
         request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         if let prefer { request.setValue(prefer, forHTTPHeaderField: "Prefer") }
-        request.timeoutInterval = 25
+        request.timeoutInterval = timeout
 
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw SupabaseError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
         return data
+    }
+
+    /// A Postgres `timestamptz` as PostgREST prints it ("2026-09-20T10:00:00.123456+00:00": fractional seconds of any
+    /// length, or none), to the second; nil for anything else.
+    public static func timestamp(_ text: String) -> Date? {
+        let whole = text.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: whole)
     }
 
     /// Exactly 64 lowercase hex characters (32 bytes), as the server's nonces and peppers are.

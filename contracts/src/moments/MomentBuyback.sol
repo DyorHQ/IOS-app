@@ -30,13 +30,17 @@ import {MomentPoolMath} from "./libraries/MomentPoolMath.sol";
 ///         capture at most that 1% move, so it loses money — see test/moments/Buyback.t.sol. Callers may still
 ///         pass `minCoinOut`.
 ///
-///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), MO-2:
+///         Price and balance guards:
 ///         - the round refuses to run (`PriceMoved`) when the pool price is more than `MAX_OPEN_DEVIATION_BPS` away
 ///           from where it stood before the first swap of this block (recorded by the fee hook). A same-block
 ///           sandwich would have to move the price further than that to matter, and cannot; moving it less costs
 ///           more in fees (1% hook + 0.5% LP, each way) than adding liquidity at a price ≤2% off can yield.
 ///         - the pairing top-up is sized against the USDC the locker holds for THIS Moment (per-Moment accounting
 ///           in MomentLocker), not the locker's whole shared USDC balance.
+///         - sec2: a push made in an EARLIER block passes the block-open guard, so the locker caps what one round
+///           adds at 0.5% of the position (`MomentLocker.MAX_INCREASE_BPS`). With this contract's 1% impact cap, one
+///           round hands a cross-block sandwich about 1% of its push, less than the push's fees. Whatever a round does
+///           not add stays held for the Moment and is paired later.
 contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -50,7 +54,7 @@ contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
     /// @dev sqrt(10000/10100)·1e9 and sqrt(10100/10000)·1e9: the sqrt-price factors for a 1% price move.
     uint256 private constant SQRT_DOWN_1E9 = 995037190;
     uint256 private constant SQRT_UP_1E9 = 1004987562;
-    /// @notice v2 (MO-2): the most the price may have moved within the current block before a round runs (2%).
+    /// @notice The most the price may have moved within the current block before a round runs (2%).
     uint256 public constant MAX_OPEN_DEVIATION_BPS = 200;
     /// @dev sqrt(10000/10200)·1e9 and sqrt(10200/10000)·1e9: the sqrt-price bounds of a 2% price move.
     uint256 private constant SQRT_OPEN_DOWN_1E9 = 990147542;
@@ -112,7 +116,7 @@ contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
 
         // 2. Pair: the locker adds everything it holds, so size the USDC top-up for ALL the coin it now holds
         //    (bought + LP-fee coin already folded in) at the post-swap price, net of USDC it already holds for
-        //    THIS Moment (v2, MO-2: other Moments' idle USDC in the shared locker is not ours to pair with).
+        //    THIS Moment (other Moments' idle USDC in the shared locker is not ours to pair with).
         uint256 remaining = r.budget - spent;
         uint256 coinHeld = IMomentLocker(locker).available(momentId, usdcIs0 ? key.currency1 : key.currency0);
         uint256 usdcHeld = IMomentLocker(locker).available(momentId, usdcIs0 ? key.currency0 : key.currency1);
@@ -156,7 +160,7 @@ contract MomentBuyback is IUnlockCallback, ReentrancyGuard {
         return abi.encode(spent, got, sqrtAfter);
     }
 
-    /// @dev v2 (MO-2): reverts `PriceMoved` unless the live price is within `MAX_OPEN_DEVIATION_BPS` of the price
+    /// @dev Reverts `PriceMoved` unless the live price is within `MAX_OPEN_DEVIATION_BPS` of the price
     ///      before the first swap of this block.
     function _checkBlockOpen(PoolKey memory key, uint160 openSqrtP) private view {
         (uint160 sqrtP,,,) = poolManager.getSlot0(key.toId());

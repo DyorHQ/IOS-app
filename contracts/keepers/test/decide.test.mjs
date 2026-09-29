@@ -18,6 +18,9 @@ import {
   bitmapWordsBetween,
   assessMondaySquat,
   decideStuckLaunch,
+  squatSeverity,
+  minHolderSweep,
+  gasWithMargin,
 } from "../lib/decide.mjs";
 
 const NOW = 1_790_000_000n;
@@ -77,6 +80,7 @@ test("MO-2: minOut applies slippage, floors, and rejects silly bps", () => {
 test("MO-2: idle locker USDC above the threshold alerts", () => {
   assert.equal(decideLockerIdle({ lockerUsdc: 10n, alertAbove: 10n }).action, "none");
   assert.equal(decideLockerIdle({ lockerUsdc: 11n, alertAbove: 10n }).action, "alert");
+  assert.match(decideLockerIdle({ lockerUsdc: 11n, alertAbove: 10n, perMoment: true }).reason, /this Moment/);
 });
 
 // ---------------------------------------------------------------- LP-2
@@ -160,4 +164,57 @@ test("LP-1: stuck launch -> graduate, else Monday fallback, else critical alert"
   assert.equal(decideStuckLaunch({ ...base, completed: false, venue: VENUE.Monday }).action, "none");
   assert.equal(decideStuckLaunch({ ...base, rescued: true, venue: VENUE.Monday }).action, "none");
   assert.equal(decideStuckLaunch({ ...base, phase: LAUNCH_PHASE.PoolCreated, venue: VENUE.Monday }).action, "none");
+});
+
+// ---------------------------------------------------------------- sec2 (2026-09-26 ops audit)
+
+test("sec2 LP-2: the holder-sweep floor is twice the gas cost for MON and 0.01 token for an ERC-20", () => {
+  assert.equal(minHolderSweep({ isNative: true, gasLimit: 180_000n, gasPrice: 202_000_000_000n }), 2n * 180_000n * 202_000_000_000n);
+  assert.equal(minHolderSweep({ isNative: true, gasLimit: 180_000n, gasPrice: 0n }), 1n, "no gas price known: any backlog");
+  assert.equal(minHolderSweep({ isNative: false, decimals: 6 }), 10_000n, "1 cent of a dollar stablecoin");
+  assert.equal(minHolderSweep({ isNative: false, decimals: 18 }), 10n ** 16n);
+  assert.equal(decideSweep({ holderFeeSharing: true, isQuote: true, pending: 9_999n, minHolders: 10_000n }).action, "none");
+  assert.equal(decideSweep({ holderFeeSharing: true, isQuote: true, pending: 10_000n, minHolders: 10_000n }).action, "sweep");
+});
+
+test("sec2: sends use the estimate x 1.2, never above the job's cap", () => {
+  assert.equal(gasWithMargin(100_000n, 1_500_000n), 120_000n);
+  assert.equal(gasWithMargin(2_000_000n, 1_500_000n), 1_500_000n);
+});
+
+test("sec2 LP-1: a blocking squat is critical only on a Monday-only pair; the per-tick cost is 30k", () => {
+  const T = 1n << 96n;
+  const squat = (ticks, mondayOnly) => assessMondaySquat({ poolExists: true, sqrtPriceX96: 2n * T, targetSqrtPriceX96: T, ticksToCross: ticks, mondayOnly });
+  assert.equal(squat(1_000, false).estimatedGas, 700_000n + 1_000n * 30_000n);
+  const ordinary = squat(1_500, false);
+  assert.equal(ordinary.level, "blocking");
+  assert.match(ordinary.reason, /graduateFallback/);
+  assert.equal(squatSeverity(ordinary), "warning");
+  const abil = squat(1_500, true);
+  assert.match(abil.reason, /allowV4Fallback/);
+  assert.equal(squatSeverity(abil), "critical");
+  assert.equal(squatSeverity(squat(200, true)), "warning", "heavy");
+  assert.equal(squatSeverity(squat(10, true)), "info", "light");
+});
+
+test("sec2 LP-1: a stuck Monday-only launch names the owner action; once allowed it does not", () => {
+  const base = { phase: LAUNCH_PHASE.NotGraduated, completed: true, rescued: false, stuckSince: NOW, now: NOW, venue: VENUE.Monday, simGraduate: false, simFallback: false };
+  assert.match(decideStuckLaunch({ ...base, mondayOnly: true }).reason, /OWNER calls allowV4Fallback/);
+  assert.doesNotMatch(decideStuckLaunch({ ...base, mondayOnly: true, v4FallbackAllowed: true }).reason, /OWNER/);
+});
+
+test("sec2 LP-1 (v2): a Monday-only launch's freeze is bounded by the public valve", () => {
+  const base = { phase: LAUNCH_PHASE.NotGraduated, completed: true, rescued: false, stuckSince: NOW, venue: VENUE.Monday, simGraduate: false, simFallback: false, mondayOnly: true, valveDelay: DAY };
+  const early = decideStuckLaunch({ ...base, now: NOW + 3600n });
+  assert.equal(early.severity, "critical");
+  assert.match(early.reason, new RegExp(`opens to anyone at ${NOW + DAY}`));
+  const late = decideStuckLaunch({ ...base, now: NOW + DAY });
+  assert.equal(late.severity, "critical");
+  assert.match(late.reason, /past its public fallback time.*fallback fail/);
+  assert.equal(decideStuckLaunch({ ...base, now: NOW + DAY, simFallback: true }).action, "graduateFallback");
+  const T = 1n << 96n;
+  const squat = assessMondaySquat({ poolExists: true, sqrtPriceX96: 2n * T, targetSqrtPriceX96: T, ticksToCross: 1_500, mondayOnly: true, valveDelay: DAY });
+  assert.equal(squat.level, "blocking");
+  assert.equal(squatSeverity(squat), "warning", "a bounded freeze does not page before completion");
+  assert.match(squat.reason, /opens to anyone after 86400s stuck/);
 });

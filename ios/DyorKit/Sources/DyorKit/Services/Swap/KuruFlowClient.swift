@@ -55,11 +55,13 @@ actor KuruFlowClient {
         // account's session. It must pay this account, trade exactly the requested amount of the requested tokens, and
         // enforce at least the minimum the requested slippage allows on the quoted output — the one the sheet shows. A
         // spoofed API that inflated `output` to win the best-price race then only builds a swap that reverts.
+        // The app never asks for an integrator or referral fee either, so a fee tuple with any basis points is a skim the
+        // API slipped in (`KuruFlowSwap.takesNoFee`, the web's `kuruFeeAllowed`; IOST-7).
         let slippage = min(10_000, max(1, req.slippageBps)) // as sent
         guard let swap = KuruFlowSwap(calldata: calldata), (swap.recipient ?? user) == user,
               swap.tokenIn == (req.tokenIn.isNative ? Address.zero : req.tokenIn.address),
               swap.tokenOut == (req.tokenOut.isNative ? Address.zero : req.tokenOut.address),
-              swap.amountIn == req.amountIn, swap.minAmountOut >= SwapMath.minAfterSlippage(amountOut, bps: slippage) else {
+              swap.amountIn == req.amountIn, swap.minAmountOut >= SwapMath.minAfterSlippage(amountOut, bps: slippage), swap.takesNoFee else {
             throw SwapError.venue("Kuru Flow returned an unexpected transaction, so it was blocked for your safety.")
         }
         let minOut = swap.minAmountOut
@@ -153,21 +155,47 @@ actor KuruFlowClient {
 ///
 /// Native MON is the zero address on either side. The entrypoint pulls `amountIn` of `tokenIn` from the caller (or
 /// takes it as `msg.value`), runs `route` through its router, takes any fees, and reverts unless what is left for the
-/// recipient is at least `minAmountOut` — so the minimum holds net of fees, whichever side they come from.
+/// recipient is at least `minAmountOut` — so the minimum holds net of fees, whichever side they come from. Decoded the
+/// same way as the web app's `decodeKuruFlowSwap` (app/lib/swap/kuru.ts).
 public struct KuruFlowSwap: Sendable, Equatable {
     /// The selectors, as found in the contract's dispatcher (no public signature text exists for them).
     public static let payCaller = Data([0xce, 0x1e, 0x70, 0x30])
     public static let payRecipient = Data([0x31, 0x34, 0x3b, 0x21])
 
+    /// The fee tuple `(feeRecipient, feeBps, referrer, referrerFeeBps, feeOnOutput)`.
+    public struct Fee: Sendable, Equatable {
+        public let recipient: Address
+        public let bps: BigUInt
+        public let referrer: Address
+        public let referrerBps: BigUInt
+        public let onOutput: Bool
+
+        public init(recipient: Address, bps: BigUInt, referrer: Address, referrerBps: BigUInt, onOutput: Bool) {
+            self.recipient = recipient
+            self.bps = bps
+            self.referrer = referrer
+            self.referrerBps = referrerBps
+            self.onOutput = onOutput
+        }
+    }
+
     public let tokenOut: Address
     public let minAmountOut: BigUInt
     public let tokenIn: Address
     public let amountIn: BigUInt
+    public let fee: Fee
     /// Who receives the output: nil for the variant that pays `msg.sender`, i.e. the account that signs the call.
     public let recipient: Address?
 
-    /// Nil for any other selector, a short or malformed payload, or an address word with dirty high bytes (which the
-    /// contract would reject anyway).
+    /// Whether the fee tuple is one the wallet signs, as the web's `kuruFeeAllowed` rules (IOST-7): no basis points on
+    /// either side. The app never asks Kuru for an integrator or referral fee (the quote request carries no referrer
+    /// fields), so any is a skim a spoofed or compromised API slipped in; the entrypoint enforces the minimum net of fees,
+    /// so it could take at most the slippage tolerance, but it is refused outright. The recipient and referrer addresses
+    /// are not pinned: at zero basis points they receive nothing.
+    public var takesNoFee: Bool { fee.bps == 0 && fee.referrerBps == 0 }
+
+    /// Nil for any other selector, a short or malformed payload, an address word with dirty high bytes (which the
+    /// contract would reject anyway), or a fee flag that is not a clean bool.
     public init?(calldata: Data) {
         let data = Data(calldata)
         guard data.count >= 4 else { return nil }
@@ -177,11 +205,14 @@ public struct KuruFlowSwap: Sendable, Equatable {
         let args = ABIWords(data.dropFirst(4))
         // Ten head words (four scalars, the five-word fee tuple, the route's offset), plus the recipient.
         guard args.count >= (explicitRecipient ? 11 : 10), let tokenOut = args.address(0), let minOut = args.uint(1),
-              let tokenIn = args.address(2), let amountIn = args.uint(3) else { return nil }
+              let tokenIn = args.address(2), let amountIn = args.uint(3),
+              let feeRecipient = args.address(4), let feeBps = args.uint(5), let referrer = args.address(6), let referrerBps = args.uint(7),
+              let onOutput = args.uint(8), onOutput <= 1 else { return nil }
         self.tokenOut = tokenOut
         minAmountOut = minOut
         self.tokenIn = tokenIn
         self.amountIn = amountIn
+        fee = Fee(recipient: feeRecipient, bps: feeBps, referrer: referrer, referrerBps: referrerBps, onOutput: onOutput == 1)
         if explicitRecipient {
             guard let recipient = args.address(10) else { return nil }
             self.recipient = recipient

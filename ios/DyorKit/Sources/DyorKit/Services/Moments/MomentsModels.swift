@@ -5,7 +5,8 @@ import Foundation
    The clean-room contract set lives in `contracts/src/moments`; these models are the app-facing shape of what
    the contracts expose, ported from the web app's `app/lib/moments/reads.ts` so both clients agree to the wei. */
 
-/// Where the Moments contracts live. The v1.1 set is live on Monad mainnet; `isDeployed` is what every read checks.
+/// Where the Moments contracts live: the v2 set (`monadMainnet`, cohort 4) and the retired v1 cohorts
+/// (`retiredMainnet`); `isDeployed` is what every read checks.
 public struct MomentsAddresses: Sendable, Hashable {
     public var factory: Address
     public var collect: Address
@@ -21,10 +22,16 @@ public struct MomentsAddresses: Sendable, Hashable {
     public var treasury: Address
     /// Block the factory was deployed in: no Moment coin has a Transfer before it, so history scans start here.
     public var deployBlock: UInt64
+    /// The contract source the stack runs. v2-only getters (`termsHash`, `guardian`, the NFT's own link base, the
+    /// locker's `available`…) are read from a `.v2` stack only.
+    public var generation: ContractGeneration
+    /// Why the cohort is retired; nil for the live one.
+    public var retirement: MomentsRetirement?
 
     public init(factory: Address = .zero, collect: Address = .zero, vesting: Address = .zero, graduation: Address = .zero, locker: Address = .zero,
                 hook: Address = .zero, buyback: Address = .zero, usdc: Address = Monad.usdc, permit2: Address = Uniswap.permit2,
-                poolManager: Address = Uniswap.poolManager, platform: Address = .zero, treasury: Address = .zero, deployBlock: UInt64 = 0) {
+                poolManager: Address = Uniswap.poolManager, platform: Address = .zero, treasury: Address = .zero, deployBlock: UInt64 = 0,
+                generation: ContractGeneration = .v1, retirement: MomentsRetirement? = nil) {
         self.factory = factory
         self.collect = collect
         self.vesting = vesting
@@ -38,41 +45,72 @@ public struct MomentsAddresses: Sendable, Hashable {
         self.platform = platform
         self.treasury = treasury
         self.deployBlock = deployBlock
+        self.generation = generation
+        self.retirement = retirement
     }
 
     public var isDeployed: Bool { !factory.isZero && !collect.isZero && !vesting.isZero && !graduation.isZero }
 
     public static let none = MomentsAddresses()
 
-    /// Moments v1.1 on Monad mainnet (chain 143) — cohort 3, `contracts/deployments/moments-143.json`, deployed and
-    /// Sourcify-verified on 2026-09-23 with the rotated wallets: platform = the fees wallet 0x15ED…, treasury = the new
-    /// treasury 0x5aDb… (the beneficiaries snapshotted into every Moment at publish); $2,000-FDV graduation policy in
-    /// the constructor. Governance is the DyorHQ owner wallet. Cohorts 1 (0x6469…C020) and 2 (0xc12B…a581, records
-    /// `moments-143-cohort1.json` / `moments-143-cohort2.json`) paid the retired wallets and are paused.
+    /// The link base the v2 Moments are deployed with (`EXTERNAL_BASE_URI`), `https://dyorhq.fun/moments/c4/`: an NFT's
+    /// `external_url` is this plus its id, which `MomentLink` reads as cohort c4. The base is part of the terms hash, and
+    /// the app refuses to publish on a factory whose `externalBaseURI()` is anything else (`MomentPolicy.canPublish`).
+    public static let expectedExternalBaseURI = "https://\(MomentLink.host)/moments/\(MomentLink.Cohort.c4.rawValue)/"
+
+    // The only place the v2 Moments addresses live. Everything that serves the live cohort derives from this constant
+    // (AppConfig, `MomentLink.Cohort.c4`, the passkey signing policy, swap routing).
+    /// Moments v2 on Monad mainnet (chain 143), cohort 4: deployed 2026-09-28 with governance the Owner Safe 0x6D2A…,
+    /// guardian 0x686C… and the link base `expectedExternalBaseURI`, Sourcify-verified. Every module from
+    /// `contracts/deployments/moments-143.json`, platform and treasury from its policy, and `deployBlock` from the
+    /// factory's creation receipt (added to the record by hand: the deploy script does not write it). `V2WiringTests`
+    /// accepts only all-zero or fully wired, and fails a wired table that differs from the record or a release built
+    /// while it is pending (`DYORHQ_RELEASE_GATE=1`).
     public static let monadMainnet = MomentsAddresses(
-        factory: Address(literal: "0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26"),
-        collect: Address(literal: "0xb53897A4C6280480c267351518D184C2E6591D30"),
-        vesting: Address(literal: "0x05584910ab57d65723eB878D295b3353a4cbb021"),
-        graduation: Address(literal: "0xA2231E39ce7AE4f7d5e56Beae2dD3a8a59F3b9aA"),
-        locker: Address(literal: "0x37C5A2c15d99701CF698B146cdCD1853825Ef455"),
-        hook: Address(literal: "0xD5BFff467FDAe04664357e75bF059986c41260CC"),
-        buyback: Address(literal: "0x3B574312Bb4e1D36C9a1Ba698bf77BbD223ca913"),
+        factory: Address(literal: "0x95eb7F5A88B10D9dF32aC54F48C767927fa80840"),
+        collect: Address(literal: "0xe6beb4A10827a2e50B155B7386b1369d504186Cc"),
+        vesting: Address(literal: "0x6Eb483C1E1Be2b6700AD590ddE326B597a13649A"),
+        graduation: Address(literal: "0x736dD4c4A09Ef41C508bb2175001eA038A3D5152"),
+        locker: Address(literal: "0xe86557E2B44c119B05948c918C9Eb0c1cE5331a0"),
+        hook: Address(literal: "0xDa7042CF42B26Be4d6816C9eeB1B0bee8e3Fe0cc"),
+        buyback: Address(literal: "0xFAf9Ad081d43F6A1b949DB81A2d7145F19845613"),
         usdc: Address(literal: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"),
         permit2: Address(literal: "0x000000000022D473030F116dDEE9F6B43aC78BA3"),
         poolManager: Address(literal: "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e"),
         platform: Address(literal: "0x15ED3bb488231213b141A2f78b62358D52235Cd7"),
         treasury: Address(literal: "0x5aDbDc19831D0f9dbdfBbA6ee3d618DbB9CEA371"),
-        deployBlock: 107_311_600
+        deployBlock: 108_859_966,
+        generation: .v2
     )
 
-    /// Retired Moments cohorts on Monad mainnet, newest first — CLAIM-ONLY. Publishing is paused on both, and every
-    /// Moment in them snapshotted the retired beneficiaries (platform 0xf4D4…, treasury 0x5282… whose key leaked),
-    /// so the app never collects, expires, retries, buys back or trades there: holders claim their vesting and
-    /// creators withdraw their own proceeds and pool fees, through `RetiredMoments` and nothing else. Moment ids
-    /// restart at 1 on every factory, so anything about a retired Moment is keyed by `MomentKey` (factory, id).
-    /// Mirrors `moments-143-cohort2.json` / `moments-143-cohort1.json` (factory getters checked on chain);
+    /// Retired Moments cohorts on Monad mainnet, newest first — CLAIM-ONLY. Publishing is paused on chain on cohorts 1
+    /// and 2; cohort 3 stays open there (owner decision 2026-09-28: retired in the app only). The app never publishes,
+    /// collects, expires, retries, buys back or trades on any of them: holders claim their vesting and creators withdraw
+    /// their own proceeds and pool fees, through `RetiredMoments` and nothing else. Cohorts 1 and 2 snapshotted the
+    /// retired beneficiaries (platform 0xf4D4…, treasury 0x5282… whose key leaked); cohort 3 pays the current fees wallet
+    /// 0x15ED… and treasury 0x5aDb…, and is retired because the v2 contracts replaced it (`retirement` says which).
+    /// Moment ids restart at 1 on every factory, so anything about a retired Moment is keyed by `MomentKey` (factory,
+    /// id). Mirrors `moments-143-cohort3.json`, `moments-143-cohort2.json` and `moments-143-cohort1.json` (factory
+    /// getters checked on chain);
     /// `MomentsRetiredTests` pins the table.
     public static let retiredMainnet: [MomentsAddresses] = [
+        // Cohort 3 (2026-09-23, the $2,000-FDV policy, the rotated wallets): 1 Moment, "Nature". Retired for v2.
+        MomentsAddresses(
+            factory: Address(literal: "0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26"),
+            collect: Address(literal: "0xb53897A4C6280480c267351518D184C2E6591D30"),
+            vesting: Address(literal: "0x05584910ab57d65723eB878D295b3353a4cbb021"),
+            graduation: Address(literal: "0xA2231E39ce7AE4f7d5e56Beae2dD3a8a59F3b9aA"),
+            locker: Address(literal: "0x37C5A2c15d99701CF698B146cdCD1853825Ef455"),
+            hook: Address(literal: "0xD5BFff467FDAe04664357e75bF059986c41260CC"),
+            buyback: Address(literal: "0x3B574312Bb4e1D36C9a1Ba698bf77BbD223ca913"),
+            usdc: Address(literal: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"),
+            permit2: Address(literal: "0x000000000022D473030F116dDEE9F6B43aC78BA3"),
+            poolManager: Address(literal: "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e"),
+            platform: Address(literal: "0x15ED3bb488231213b141A2f78b62358D52235Cd7"),
+            treasury: Address(literal: "0x5aDbDc19831D0f9dbdfBbA6ee3d618DbB9CEA371"),
+            deployBlock: 107_311_600,
+            retirement: .replaced
+        ),
         // Cohort 2 (2026-09-22, the $2,000-FDV policy): 2 Moments.
         MomentsAddresses(
             factory: Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581"),
@@ -87,7 +125,8 @@ public struct MomentsAddresses: Sendable, Hashable {
             poolManager: Address(literal: "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e"),
             platform: Address(literal: "0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48"),
             treasury: Address(literal: "0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045"),
-            deployBlock: 106_984_957
+            deployBlock: 106_984_957,
+            retirement: .retiredWallets
         ),
         // Cohort 1 (2026-09-16, the $10 small-cap policy): 3 Moments; #2 graduated and vests to its holders into 2027.
         MomentsAddresses(
@@ -103,7 +142,8 @@ public struct MomentsAddresses: Sendable, Hashable {
             poolManager: Address(literal: "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e"),
             platform: Address(literal: "0xf4D4baF60e5fcAF6A092b2d6B5509af9f01Cfb48"),
             treasury: Address(literal: "0x5282cC04f2F17Cc296C5aEFa2576C4C0327cf045"),
-            deployBlock: 105_347_754
+            deployBlock: 105_347_754,
+            retirement: .retiredWallets
         ),
     ]
 
@@ -113,9 +153,13 @@ public struct MomentsAddresses: Sendable, Hashable {
     }
 
     /// Every coin the retired cohorts minted, by (factory, id) — read on chain (`getMoment` / `momentIdByCoin`).
-    /// Publishing is paused on both, so the set is final and needs no read: a coin here is never offered a trade in
-    /// the app, even when its cohort cannot be read (one of these pools pays the retired platform wallet).
+    /// The counts are pinned (`MomentLink.Cohort.finalMomentCount`), so the set is final for the app and needs no read
+    /// (cohort 3 is not paused on chain; the release gate checks the set against it, `check-launchpad-addresses.py --release`): a coin
+    /// here is never offered a trade in the app, even when its cohort cannot be read (the app trades no past cohort's coin; cohorts 1 and 2's pools also pay
+    /// the retired platform wallet).
     public static let retiredMainnetCoins: [Address: MomentKey] = [
+        // Cohort 3 ("Nature", still collecting when the cohort was retired)
+        Address(literal: "0x43682FA268A98a87C946d0b933203a8834b391BF"): MomentKey(factory: Address(literal: "0x0FD4aC52bbf387DBB3156805769bFC0c260F7E26"), id: 1),
         // Cohort 2
         Address(literal: "0xC18941ca9fBaa613841c3d31a7Dd1D262a47a2E5"): MomentKey(factory: Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581"), id: 1),
         Address(literal: "0x01D2c48E3cd38804a643E391421289933ed3D4a7"): MomentKey(factory: Address(literal: "0xc12B6b6948185cef75F861c5327702c30CB8a581"), id: 2),
@@ -134,6 +178,14 @@ public struct MomentsAddresses: Sendable, Hashable {
     public var protocolHolders: Set<Address> { [poolManager, locker, vesting, buyback, hook, graduation] }
 }
 
+/// Why a Moments cohort was retired. Either way it is claim-only in the app; the reason is what its pages say.
+public enum MomentsRetirement: Sendable, Hashable {
+    /// Cohorts 1 and 2: every Moment snapshotted the retired beneficiaries (platform 0xf4D4…, treasury 0x5282…).
+    case retiredWallets
+    /// Cohort 3: its Moments pay the current fees and treasury wallets; the v2 contracts replaced it.
+    case replaced
+}
+
 /// `MomentTypes` constants, the same numbers the contracts hard-code.
 public enum MomentsConstants {
     public static let bps = 10_000
@@ -145,6 +197,9 @@ public enum MomentsConstants {
     public static let monthSeconds = 30 * 86_400
     /// A completed Moment whose graduation keeps failing can be wound down this long after the first failure.
     public static let stuckGraceSeconds = 7 * 86_400
+    /// v2: a proposed policy can be applied from `pendingPolicyAt` until this long after it; later it lapses
+    /// (`MomentsFactory.POLICY_APPLY_WINDOW`).
+    public static let policyApplyWindowSeconds = 7 * 86_400
     /// Upper bound on editions per collect.
     public static let maxBatch = 20
     public static let minCollectWindowSeconds = 3_600
@@ -182,7 +237,9 @@ public enum MomentState: Int, Sendable, Hashable, CaseIterable {
     init(raw: BigUInt) { self = MomentState(rawValue: Int(clamping: raw)) ?? .collecting }
 }
 
-/// The factory policy that applies to Moments published from now on (existing Moments keep their snapshot).
+/// The factory policy that applies to Moments published from now on (existing Moments keep their snapshot). On v2 the
+/// policy, the link base and `termsHash()` are read in one multicall, at one block (`MomentsService.policy`), so the
+/// hash a publish carries is the hash of exactly the terms the review screen shows.
 public struct MomentPolicy: Sendable, Hashable {
     public let threshold: BigUInt
     public let minPrice: BigUInt
@@ -197,8 +254,18 @@ public struct MomentPolicy: Sendable, Hashable {
     public let momentCount: Int
     public let publishingPaused: Bool
     public let externalBaseURI: String
+    /// v2: the factory's `termsHash()` = keccak256(abi.encode(policy, externalBaseURI)), what `publish` must carry. Nil on
+    /// a v1 factory, which has none (and on which the app no longer publishes).
+    public let termsHash: Data?
+    /// v2: the guardian key, which can cancel a proposal and pause publishing. Nil on v1.
+    public let guardian: Address?
+    /// v2: the guardian's pause. Governance cannot lift it; publishing is off while it or `publishingPaused` is on.
+    public let guardianPaused: Bool
+    /// A policy proposed and not applied yet, if any (`MomentsFactory.pendingPolicy`).
+    public var pending: PendingMomentPolicy?
 
-    public init(threshold: BigUInt, minPrice: BigUInt, creatorBps: Int, platformBps: Int, reserveBps: Int, maxCreatorAllocBps: Int, expiryCreatorBps: Int, royaltyBps: Int, platform: Address, treasury: Address, momentCount: Int, publishingPaused: Bool, externalBaseURI: String) {
+    public init(threshold: BigUInt, minPrice: BigUInt, creatorBps: Int, platformBps: Int, reserveBps: Int, maxCreatorAllocBps: Int, expiryCreatorBps: Int, royaltyBps: Int, platform: Address, treasury: Address, momentCount: Int, publishingPaused: Bool, externalBaseURI: String,
+                termsHash: Data? = nil, guardian: Address? = nil, guardianPaused: Bool = false) {
         self.threshold = threshold
         self.minPrice = minPrice
         self.creatorBps = creatorBps
@@ -212,7 +279,117 @@ public struct MomentPolicy: Sendable, Hashable {
         self.momentCount = momentCount
         self.publishingPaused = publishingPaused
         self.externalBaseURI = externalBaseURI
+        self.termsHash = termsHash
+        self.guardian = guardian
+        self.guardianPaused = guardianPaused
     }
+
+    /// The hash of the terms held here, computed as the factory computes `termsHash()`.
+    public var localTermsHash: Data { MomentsABI.termsHash(policy: self, base: externalBaseURI) }
+
+    /// Why a publish can't be built on these terms.
+    public enum PublishBlock: Sendable, Hashable {
+        /// Governance paused publishing.
+        case publishingPaused
+        /// The guardian paused publishing (governance cannot lift it).
+        case guardianPaused
+        /// The factory would give the new NFTs a link base other than DyorHQ's v2 one.
+        case unexpectedLinkBase
+        /// No `termsHash()` was read (a v1 factory), or it isn't the hash of the terms read with it.
+        case unverifiedTerms
+
+        public var message: String {
+            switch self {
+            case .publishingPaused: return "Publishing is paused by governance; collecting continues."
+            case .guardianPaused: return "Publishing is paused by the Moments guardian; collecting continues."
+            case .unexpectedLinkBase: return "Publishing is off: the Moments contract would link new Moments somewhere other than dyorhq.fun."
+            case .unverifiedTerms: return "Publishing is off: the Moments terms couldn't be verified."
+            }
+        }
+    }
+
+    /// Nil when a publish may be built on these terms: neither pause is on, the link base is exactly
+    /// `MomentsAddresses.expectedExternalBaseURI`, and the on-chain `termsHash()` is the hash of the terms read with it
+    /// (so the hash a publish carries binds what the screen shows).
+    public var publishBlock: PublishBlock? {
+        if publishingPaused { return .publishingPaused }
+        if guardianPaused { return .guardianPaused }
+        if externalBaseURI != MomentsAddresses.expectedExternalBaseURI { return .unexpectedLinkBase }
+        guard let termsHash, termsHash == localTermsHash else { return .unverifiedTerms }
+        return nil
+    }
+
+    public var canPublish: Bool { publishBlock == nil }
+}
+
+/// A policy governance proposed for Moments published from then on, not applied yet. Once `applicableAt` passes,
+/// anyone can apply it (`applyPolicy` is permissionless) at any moment, also between a creator's review and their
+/// publish landing. On v2 the publish carries the hash of the reviewed terms, so it is then refused (`TermsChanged`)
+/// and the creator reviews again: the terms never change silently. A v2 proposal nobody applied within
+/// `MomentsConstants.policyApplyWindowSeconds` lapses (security audit 2026-09-26, MO-4).
+public struct PendingMomentPolicy: Sendable, Hashable {
+    public let threshold: BigUInt
+    public let minPrice: BigUInt
+    public let creatorBps: Int
+    public let platformBps: Int
+    public let reserveBps: Int
+    public let maxCreatorAllocBps: Int
+    public let expiryCreatorBps: Int
+    public let royaltyBps: Int
+    public let platform: Address
+    public let treasury: Address
+    /// The earliest time it can be applied.
+    public let applicableAt: Date
+    /// v2: the last moment it can be applied (`applicableAt` + `POLICY_APPLY_WINDOW`); after it the proposal has lapsed.
+    /// Nil on v1, where a proposal stays applicable until it is applied or cancelled.
+    public let lapsesAt: Date?
+
+    public init(threshold: BigUInt, minPrice: BigUInt, creatorBps: Int, platformBps: Int, reserveBps: Int, maxCreatorAllocBps: Int, expiryCreatorBps: Int, royaltyBps: Int, platform: Address, treasury: Address, applicableAt: Date, lapsesAt: Date? = nil) {
+        self.threshold = threshold
+        self.minPrice = minPrice
+        self.creatorBps = creatorBps
+        self.platformBps = platformBps
+        self.reserveBps = reserveBps
+        self.maxCreatorAllocBps = maxCreatorAllocBps
+        self.expiryCreatorBps = expiryCreatorBps
+        self.royaltyBps = royaltyBps
+        self.platform = platform
+        self.treasury = treasury
+        self.applicableAt = applicableAt
+        self.lapsesAt = lapsesAt
+    }
+
+    /// The terms a pending policy changes.
+    public enum Field: String, Sendable, CaseIterable {
+        case threshold, minPrice, split, maxCreatorAlloc, royalty, expiryShare, platform, treasury
+    }
+
+    /// Which terms differ from `current`, in `Field` order; empty when the proposal repeats the live policy.
+    public func changes(from current: MomentPolicy) -> [Field] {
+        Field.allCases.filter { field in
+            switch field {
+            case .threshold: return threshold != current.threshold
+            case .minPrice: return minPrice != current.minPrice
+            case .split: return creatorBps != current.creatorBps || platformBps != current.platformBps || reserveBps != current.reserveBps
+            case .maxCreatorAlloc: return maxCreatorAllocBps != current.maxCreatorAllocBps
+            case .royalty: return royaltyBps != current.royaltyBps
+            case .expiryShare: return expiryCreatorBps != current.expiryCreatorBps
+            case .platform: return platform != current.platform
+            case .treasury: return treasury != current.treasury
+            }
+        }
+    }
+
+    /// Whether anyone can apply it at `now`: from `applicableAt` and, on v2, until `lapsesAt` inclusive (`applyPolicy`
+    /// reverts `PolicyLapsed` only once the time is past it).
+    public func isApplicable(at now: Date) -> Bool {
+        guard now >= applicableAt else { return false }
+        if let lapsesAt { return now <= lapsesAt }
+        return true
+    }
+
+    /// Whether it lapsed unapplied (v2 only): nobody can apply it any more, so it changes nothing.
+    public func hasLapsed(at now: Date) -> Bool { lapsesAt.map { now > $0 } ?? false }
 }
 
 /// `MomentTypes.Provenance`: what the NFT records about the moment itself.
@@ -344,8 +521,12 @@ public struct MomentPool: Sendable, Hashable {
     public let reserveSeed: BigUInt
     public let poolCoins: BigUInt
     public let graduatedAt: Int
-    /// Whole USDC per whole coin at the live price.
+    /// Whole USDC per whole coin at the live price: at the opening price when the live one couldn't be read
+    /// (`livePriceRead` false).
     public let usdcPerCoin: Double
+    /// Whether `sqrtPriceX96` and `usdcPerCoin` are the pool's live price. False when that read failed and they stand at
+    /// the opening price: a value that must be current (a wallet's holdings) is then unknown, not that.
+    public let livePriceRead: Bool
     public let creatorFees: BigUInt
     public let platformFees: BigUInt
     public let buybackFees: BigUInt
@@ -353,8 +534,13 @@ public struct MomentPool: Sendable, Hashable {
     public let lastBuyback: Int
     public let buybackInterval: Int
     public let buybackMin: BigUInt
+    /// v2: USDC the locker holds for this Moment (`heldOf(id, USDC)`). A buyback round adds at most 0.5% of the
+    /// position, so the rest waits here for later rounds. Not `available(id, USDC)`: that adds the locker's untracked
+    /// USDC, which every Moment shares and the next add on any Moment takes. Nil on v1, whose locker has no per-Moment
+    /// balance.
+    public let heldForLaterRounds: BigUInt?
 
-    public init(key: PoolKey, poolId: Data, usdcIs0: Bool, sqrtPriceX96: BigUInt, openingSqrtPriceX96: BigUInt, liquidity: BigUInt, seedLiquidity: BigUInt, reserveSeed: BigUInt, poolCoins: BigUInt, graduatedAt: Int, usdcPerCoin: Double, creatorFees: BigUInt, platformFees: BigUInt, buybackFees: BigUInt, buybackCarry: BigUInt, lastBuyback: Int, buybackInterval: Int, buybackMin: BigUInt) {
+    public init(key: PoolKey, poolId: Data, usdcIs0: Bool, sqrtPriceX96: BigUInt, openingSqrtPriceX96: BigUInt, liquidity: BigUInt, seedLiquidity: BigUInt, reserveSeed: BigUInt, poolCoins: BigUInt, graduatedAt: Int, usdcPerCoin: Double, creatorFees: BigUInt, platformFees: BigUInt, buybackFees: BigUInt, buybackCarry: BigUInt, lastBuyback: Int, buybackInterval: Int, buybackMin: BigUInt, heldForLaterRounds: BigUInt? = nil, livePriceRead: Bool = true) {
         self.key = key
         self.poolId = poolId
         self.usdcIs0 = usdcIs0
@@ -366,6 +552,7 @@ public struct MomentPool: Sendable, Hashable {
         self.poolCoins = poolCoins
         self.graduatedAt = graduatedAt
         self.usdcPerCoin = usdcPerCoin
+        self.livePriceRead = livePriceRead
         self.creatorFees = creatorFees
         self.platformFees = platformFees
         self.buybackFees = buybackFees
@@ -373,6 +560,7 @@ public struct MomentPool: Sendable, Hashable {
         self.lastBuyback = lastBuyback
         self.buybackInterval = buybackInterval
         self.buybackMin = buybackMin
+        self.heldForLaterRounds = heldForLaterRounds
     }
 
     /// Fully diluted value in USD at the live price (the whole 100M supply).
@@ -435,6 +623,12 @@ public struct MomentInfo: Sendable, Hashable, Identifiable {
         case .graduationPending: return now >= moment.deadline && ledger.stuckSince > 0 && now >= ledger.stuckSince + MomentsConstants.stuckGraceSeconds
         default: return false
         }
+    }
+    /// Whether its coins can never vest: it expired, or it is still collecting past its deadline (collects are refused
+    /// from then on, so it cannot reach its threshold, and only `expire` is left). A stuck graduation is not: a retry may
+    /// still land it.
+    public func missedGraduation(at now: Int) -> Bool {
+        !graduated && (ledger.state == .expired || (ledger.state == .collecting && now >= moment.deadline))
     }
     /// Whether a permissionless graduation retry makes sense.
     public var isRetriable: Bool { ledger.state == .graduationPending }
@@ -868,6 +1062,16 @@ public enum MomentsMath {
         guard reserveBps > 0, creatorAllocBps < MomentsConstants.bps else { return 0 }
         let reserve = Amount.units(threshold, decimals: MomentsConstants.usdcDecimals)
         return reserve * Double(MomentsConstants.bps + reserveBps) / Double(reserveBps) * Double(MomentsConstants.bps) / Double(MomentsConstants.bps - creatorAllocBps)
+    }
+
+    /// The highest collect price that is ever charged: the gross that completes the reserve, ceil(threshold · 10 000 /
+    /// reserveBps). The first collect at or above it graduates the Moment and is charged only this (`MomentCollect`
+    /// clamps it), so a higher listed price is never paid; the v2 factory refuses one (`PriceTooHigh`). Nil when
+    /// `reserveBps` is not positive.
+    public static func maxCollectPrice(threshold: BigUInt, reserveBps: Int) -> BigUInt? {
+        guard reserveBps > 0 else { return nil }
+        let r = BigUInt(reserveBps)
+        return (threshold * BigUInt(MomentsConstants.bps) + r - 1) / r
     }
 
     /// Whole coins as a display number.

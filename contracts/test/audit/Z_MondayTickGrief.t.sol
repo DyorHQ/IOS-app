@@ -141,7 +141,9 @@ contract Z_MondayTickGriefTest is LaunchpadBase {
 
     function test_fallback_withJustTheReservedGas_succeeds() public {
         address t = _squattedStuckLaunch(1_500, 73);
-        uint256 need = 2 * factory.GRADUATION_GAS() + factory.GRADUATION_GAS() / 32;
+        // sec2: the Monday retry's floor is MONDAY_RETRY_GAS (was GRADUATION_GAS), so a low-gas caller cannot starve a
+        // realignable retry and flip the venue (test/sec2/Sec2Launchpad.t.sol).
+        uint256 need = factory.MONDAY_RETRY_GAS() + factory.GRADUATION_GAS() + factory.GRADUATION_GAS() / 32;
         factory.graduateFallback{gas: need + 50_000}(t); // + the call's own prologue
         assertEq(uint8(factory.getLaunchedToken(t).phase), uint8(Types.Phase.PoolCreated));
     }

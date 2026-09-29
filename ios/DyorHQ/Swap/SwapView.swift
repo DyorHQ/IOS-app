@@ -25,6 +25,7 @@ struct SwapView: View {
                 flipRow
                 receiveSection
                 actionSection
+                curveSection
                 quotesSection
                 activitySection
             }
@@ -43,7 +44,8 @@ struct SwapView: View {
             }
             .keyboardDoneButton()
             .sheet(item: $picking) { side in
-                TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: KnownTokenStore.universe(owner: session.address)) { token in
+                TokenPickerSheet(selected: side == .pay ? model.tokenIn : model.tokenOut, balances: model.balances, universe: KnownTokenStore.universe(owner: session.address),
+                                 unverified: KnownTokenStore.unverified(owner: session.address)) { token in
                     // Remember any token the user picks (a pasted ERC-20 included) so it shows a balance and price in
                     // holdings and the picker from now on, not only after a completed swap.
                     KnownTokenStore.add(token, owner: session.address)
@@ -53,7 +55,7 @@ struct SwapView: View {
             .sheet(item: $reviewing) { review in confirmation(review) }
             .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
             .task(id: session.address) { await model.refreshBalances(env: env, address: session.address) }
-            .task(id: model.quoteKey) { await model.quote(env: env, account: session.address, exactApprovals: session.isPasskeyAccount) }
+            .task(id: model.quoteKey) { await model.quote(env: env, account: session.address) }
             .onChange(of: router.pendingSwap?.tokenOut) { _, _ in applyPending() }
             .onAppear { applyPending() }
         }
@@ -179,7 +181,8 @@ struct SwapView: View {
     /// and the history.
     private var actionSection: some View {
         Section {
-            PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil) { reviewing = model.review }
+            // Disabled while the balance can't cover the input: the title says why (UI-4).
+            PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil || model.insufficient) { reviewing = model.review }
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
         }
@@ -209,6 +212,26 @@ struct SwapView: View {
                 }
                 Spacer()
                 if let usd = model.receiveUSD { Text(usd, format: .currency(code: "USD")) }
+            }
+        }
+    }
+
+    /// Swap's "no venue" state when a side is still on a launchpad's bonding curve (the live launchpad's or a retired
+    /// one's): no venue routes a curve, so rather than a dead end it says where the coin trades and opens its Launch page
+    /// (the Launch tab when its launch couldn't be read), or, when the check failed, offers to check again.
+    @ViewBuilder private var curveSection: some View {
+        if model.amountIn > 0, let curve = model.currentCurve, let notice = curve.route.notice {
+            Section {
+                Label(notice, systemImage: "arrow.up.right.circle").font(.subheadline).foregroundStyle(.secondary)
+                if let title = curve.route.actionTitle(curve.token.symbol) {
+                    Button(title, systemImage: "arrow.up.right.circle") {
+                        if let launch = curve.route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
+                    }
+                } else {
+                    Button("Check Again", systemImage: "arrow.clockwise") { Task { await model.recheckCurve(env: env) } }
+                        .disabled(model.checkingCurve)
+                    Button("Open the Launch Tab", systemImage: "flame") { router.openLaunchTab() }
+                }
             }
         }
     }
@@ -269,7 +292,10 @@ struct SwapView: View {
             HStack(spacing: 12) {
                 TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(token.symbol).font(.headline)
+                    HStack(spacing: 6) {
+                        Text(token.symbol).font(.headline)
+                        if KnownTokenStore.isUnverified(token.address, owner: session.address) { UnverifiedBadge() }
+                    }
                     Text(token.name).font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -284,20 +310,23 @@ struct SwapView: View {
     private func confirmation(_ review: SwapReview) -> some View {
         SwapConfirmation(review: review, onDone: {
             model.amountText = ""
+            Task { await model.refreshBalances(env: env, address: session.address) }
+        }, onCompleted: { hash in
+            // At settlement, not on Done (GL-3). Record the swap so it shows in Swap History and Recent Activity with
+            // its exact legs (including a native MON leg, which an on-chain Transfer scan can't recover): the ones
+            // reviewed and signed.
+            let text = "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals, compact: true)) \(review.tokenIn.symbol) → \(NumberStyle.units(review.quote.amountOut, decimals: review.tokenOut.decimals, compact: true)) \(review.tokenOut.symbol)"
+            let usd = [review.payUSD, review.receiveUSD].compactMap { $0 }.first { $0 > 0 }
+            ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash, usd: usd), owner: session.address)
             // Remember both sides so they show in holdings and the picker even if they aren't curated: the token
             // just acquired, and the one paid with (a partial swap leaves a balance still worth showing).
             KnownTokenStore.add(review.tokenOut, owner: session.address)
             KnownTokenStore.add(review.tokenIn, owner: session.address)
+            // Bought here on purpose: no longer an unverified token that merely arrived in the wallet (IOST-12).
+            KnownTokenStore.markChosen(review.tokenOut.address, owner: session.address)
             if settings.notificationsEnabled, settings.notifyFills {
                 Notifications.swapped(review.amountIn, review.tokenIn, review.quote.amountOut, review.tokenOut)
             }
-            Task { await model.refreshBalances(env: env, address: session.address) }
-        }, onCompleted: { hash in
-            // Record the swap so it shows in Swap History and Recent Activity with its exact legs (including a
-            // native MON leg, which an on-chain Transfer scan can't recover): the ones reviewed and signed.
-            let text = "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals, compact: true)) \(review.tokenIn.symbol) → \(NumberStyle.units(review.quote.amountOut, decimals: review.tokenOut.decimals, compact: true)) \(review.tokenOut.symbol)"
-            let usd = [review.payUSD, review.receiveUSD].compactMap { $0 }.first { $0 > 0 }
-            ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash, usd: usd), owner: session.address)
         })
     }
 
@@ -376,6 +405,13 @@ final class SwapModel {
     private(set) var resultKey: String?
     private(set) var quoting = false
     private(set) var error: String?
+    /// When no venue routes the pair: the side still on a launchpad's bonding curve and where it trades instead
+    /// (`LaunchpadService.curveRoute(among:)`), for the key `curveKey` answers. Nil when no side is on a curve.
+    private(set) var curve: CurveCoinRoute?
+    /// The `quoteKey` that `curve` answers. The curve check runs after that key's quotes are on screen, never holding
+    /// back the "no venue" answer, so for a moment `curve` may still answer an earlier key (kept out of sight).
+    private(set) var curveKey: String?
+    private(set) var checkingCurve = false
 
     var amountIn: BigUInt { Amount.parse(amountText, decimals: tokenIn.decimals) ?? 0 }
     var quoteKey: String { "\(tokenIn.address.hex)-\(tokenOut.address.hex)-\(amountIn)-\(slippageBps)" }
@@ -386,6 +422,8 @@ final class SwapModel {
     var currentResult: QuoteResult? { resultKey == quoteKey ? result : nil }
     /// `error`, when it answers what is on screen now.
     var currentError: String? { resultKey == quoteKey ? error : nil }
+    /// `curve`, when it answers what is on screen now.
+    var currentCurve: CurveCoinRoute? { resultKey == quoteKey && curveKey == quoteKey ? curve : nil }
     var selectedQuote: VenueQuote? {
         guard let result = currentResult, amountIn > 0 else { return nil }
         return result.quotes.first { $0.venue == selectedVenue } ?? result.quotes.first
@@ -401,9 +439,11 @@ final class SwapModel {
         guard let quote = selectedQuote, let price = prices[tokenOut.address] else { return nil }
         return Amount.units(quote.amountOut, decimals: tokenOut.decimals) * price.usd
     }
+    /// The input is more than the wallet holds (a balance that couldn't be read doesn't count).
+    var insufficient: Bool { balances[tokenIn.address].map { amountIn > $0 } ?? false }
     var actionTitle: String {
         if amountIn == 0 { return "Enter an Amount" }
-        if let balance = balances[tokenIn.address], amountIn > balance { return "Insufficient \(tokenIn.symbol)" }
+        if insufficient { return "Insufficient \(tokenIn.symbol)" }
         if SwapEngine.isWrap(tokenIn, tokenOut) { return tokenIn.isNative ? "Wrap MON" : "Unwrap WMON" }
         return "Review Swap"
     }
@@ -423,6 +463,7 @@ final class SwapModel {
         // Re-picking the same token changes nothing: its quotes stay (the running refresh keeps its key).
         guard (tokenIn, tokenOut) != before else { return }
         result = nil
+        curve = nil
         userPickedVenue = false
     }
 
@@ -432,6 +473,7 @@ final class SwapModel {
         swap(&tokenIn, &tokenOut)
         if let carried { amountText = Amount.exact(Amount.roundedDown(carried.amountOut, decimals: tokenIn.decimals), decimals: tokenIn.decimals) }
         result = nil
+        curve = nil
         userPickedVenue = false
     }
 
@@ -473,13 +515,27 @@ final class SwapModel {
         prices = (try? await priceTask) ?? prices
     }
 
+    /// Checks the pair's sides again after the curve check failed (`CurveRoute.unchecked`), for what is on screen now.
+    func recheckCurve(env: AppEnvironment) async {
+        guard currentCurve != nil, !checkingCurve else { return }
+        let key = quoteKey
+        checkingCurve = true
+        defer { checkingCurve = false }
+        let fresh = await env.launchpad.curveRoute(among: [tokenOut, tokenIn])
+        guard key == quoteKey, resultKey == key else { return }
+        curve = fresh
+        curveKey = key
+    }
+
     /// Debounced by the caller's `.task(id:)`: the task is cancelled and restarted on every keystroke.
-    /// `exactApprovals`: a passkey account's plans approve exactly the input (`SwapRequest.exactApprovals`).
-    func quote(env: AppEnvironment, account: Address?, exactApprovals: Bool = false) async {
+    /// `exactApprovals`: every account's plans approve exactly the input (`SwapRequest.exactApprovals`) — an ERC-20
+    /// into Uniswap v4 costs one approval more per swap, and no unlimited Permit2 allowance is left standing (IOST-14).
+    func quote(env: AppEnvironment, account: Address?, exactApprovals: Bool = true) async {
         guard amountIn > 0, tokenIn != tokenOut else {
             result = nil
             resultKey = nil
             error = nil
+            curve = nil
             // A fetch cancelled mid-flight (the amount cleared, or Done after a swap) returns without resetting it.
             quoting = false
             return
@@ -498,6 +554,18 @@ final class SwapModel {
             error = outcome.quotes.isEmpty ? (outcome.errors.values.first ?? "No venue can route this pair right now.") : nil
             if !userPickedVenue || selectedVenue == nil || !outcome.quotes.contains(where: { $0.venue == selectedVenue }) { selectedVenue = outcome.quotes.first?.venue }
             quoting = false
+            if outcome.quotes.isEmpty {
+                // No venue routes the pair, and that answer is already on screen. A side still on a launchpad's curve,
+                // which no venue routes, trades on its Launch page instead (`curveSection`), so the state isn't a dead
+                // end. Checked only now, after the answer shows, so a slow check (it has no venue timeout) never holds
+                // it back; kept only while it still answers what is on screen, as `recheckCurve` does.
+                let onCurve = await env.launchpad.curveRoute(among: [request.tokenOut, request.tokenIn])
+                if Task.isCancelled { return }
+                if key == quoteKey, resultKey == key { curve = onCurve; curveKey = key }
+            } else {
+                curve = nil
+                curveKey = key
+            }
             try? await Task.sleep(for: .seconds(15))
         }
     }
@@ -518,6 +586,8 @@ struct SlippageSheet: View {
                     Text("How far the price may move before your swap settles. Beyond this, it cancels instead of filling worse.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                } footer: {
+                    LearnMoreLink(.slippageAndPriceImpact)
                 }
                 Section("Tolerance") {
                     ForEach(presets, id: \.self) { bps in
@@ -635,6 +705,9 @@ struct TokenPickerSheet: View {
     /// Choosing a swap side (the default): a retired cohort's Moment coin is never offered. Home's search passes false —
     /// it only opens a token's page, which shows such a coin as "Past cohort · trading closed" with no swap.
     var tradableOnly = true
+    /// Tokens found in the wallet rather than chosen (`KnownTokenStore.unverified`): left out of the list, and shown —
+    /// marked — only when a search matches them (security audit 2026-09-26, IOST-12).
+    var unverified: Set<Address> = []
     let onPick: (Token) -> Void
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
@@ -645,7 +718,7 @@ struct TokenPickerSheet: View {
 
     private var tokens: [Token] {
         // A retired cohort's Moment coin is never offered as a swap side: trading it is closed in the app.
-        let base = tradableOnly ? universe.filter(SwapEngine.isTradable) : universe
+        let base = (tradableOnly ? universe.filter(SwapEngine.isTradable) : universe).filter { !unverified.contains($0.address) }
         let filtered = query.isEmpty ? base : base.filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
         // Assets the wallet holds float to the top, keeping the curated order within each group.
         return filtered.enumerated().sorted { a, b in
@@ -655,11 +728,20 @@ struct TokenPickerSheet: View {
         }.map(\.element)
     }
 
+    /// Unverified tokens in the wallet that match the search, in their own marked section.
+    private var unverifiedMatches: [Token] {
+        guard !query.isEmpty else { return [] }
+        return universe.filter { token in
+            unverified.contains(token.address) && token.address != custom?.address && (!tradableOnly || SwapEngine.isTradable(token))
+                && (token.symbol.localizedCaseInsensitiveContains(query) || token.name.localizedCaseInsensitiveContains(query))
+        }
+    }
+
     /// Search hits for tokens not in the popular default list: the Uniswap/Monday venue list (accurate symbols +
     /// logos, matched locally) plus Kuru's directory. Only while searching — the default list stays popular-only.
     private var remoteMatches: [Token] {
         guard !query.isEmpty else { return [] }
-        var seen = Set(tokens.map(\.address))
+        var seen = Set(tokens.map(\.address)).union(unverifiedMatches.map(\.address))
         if let custom { seen.insert(custom.address) }
         let venueHits = VenueTokenStore.all().filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
         var out: [Token] = []
@@ -678,8 +760,17 @@ struct TokenPickerSheet: View {
                 Section {
                     ForEach(tokens) { row($0) }
                 } footer: {
-                    if tokens.isEmpty, custom == nil, remoteMatches.isEmpty {
+                    if tokens.isEmpty, custom == nil, remoteMatches.isEmpty, unverifiedMatches.isEmpty {
                         Text(lookingUp ? "Looking up this token…" : "No token matches. Paste a contract address to add any Monad token.")
+                    }
+                }
+                if !unverifiedMatches.isEmpty {
+                    Section {
+                        ForEach(unverifiedMatches) { row($0) }
+                    } header: {
+                        Text("Unverified — in your wallet")
+                    } footer: {
+                        Text("These arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you trade.")
                     }
                 }
                 if !remoteMatches.isEmpty {
@@ -732,7 +823,10 @@ struct TokenPickerSheet: View {
             HStack(spacing: 12) {
                 TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(token.symbol).font(.headline)
+                    HStack(spacing: 6) {
+                        Text(token.symbol).font(.headline)
+                        if unverified.contains(token.address) { UnverifiedBadge() }
+                    }
                     // Only Home's search lists a retired coin; its page has no swap either.
                     Text(SwapEngine.isTradable(token) ? token.name : "Past cohort · trading closed").font(.footnote).foregroundStyle(.secondary)
                 }

@@ -36,6 +36,8 @@ public actor MomentsService {
         case unknownMoment
         case notCollecting(String)
         case signerRequired
+        /// A publish without the terms hash the review screen read: nothing is built.
+        case termsNotReviewed
 
         public var errorDescription: String? {
             switch self {
@@ -43,27 +45,55 @@ public actor MomentsService {
             case .unknownMoment: return "That Moment does not exist."
             case .notCollecting(let why): return why
             case .signerRequired: return "Sign in with a wallet that can sign to collect."
+            case .termsNotReviewed: return "The Moments terms couldn't be verified, so nothing was published. Review them again."
             }
         }
     }
 
     // MARK: - Policy
 
+    /// The policy, the link base, the counts and any pending proposal in one multicall; on a v2 factory the same
+    /// aggregate also reads `termsHash()`, `guardian()` and `guardianPaused()`, so every term and the hash that binds them
+    /// come from one block. A v1 factory is never asked for them (the calls would revert and fail the whole read).
     public func policy() async throws -> MomentPolicy? {
         guard isDeployed else { return nil }
         let f = addresses.factory
-        let values = try await multicall.readAll([
+        let v2 = addresses.generation >= .v2
+        var calls = [
             MomentsABI.call(f, MomentsABI.Factory.policy, returns: MomentsABI.policyFlat),
             MomentsABI.call(f, MomentsABI.Factory.momentCount, returns: "uint256"),
             MomentsABI.call(f, MomentsABI.Factory.publishingPaused, returns: "bool"),
             MomentsABI.call(f, MomentsABI.Factory.externalBaseURI, returns: "string"),
-        ])
+            MomentsABI.call(f, MomentsABI.Factory.pendingPolicy, returns: MomentsABI.policyFlat),
+            MomentsABI.call(f, MomentsABI.Factory.pendingPolicyAt, returns: "uint64"),
+        ]
+        if v2 {
+            calls += [
+                MomentsABI.call(f, MomentsABI.Factory.termsHash, returns: "bytes32"),
+                MomentsABI.call(f, MomentsABI.Factory.guardian, returns: "address"),
+                MomentsABI.call(f, MomentsABI.Factory.guardianPaused, returns: "bool"),
+            ]
+        }
+        let values = try await multicall.readAll(calls)
         let p = values[0]
-        return MomentPolicy(
+        var policy = MomentPolicy(
             threshold: p[0].uint, minPrice: p[1].uint, creatorBps: MomentsABI.int(p[2]), platformBps: MomentsABI.int(p[3]), reserveBps: MomentsABI.int(p[4]),
             maxCreatorAllocBps: MomentsABI.int(p[5]), expiryCreatorBps: MomentsABI.int(p[6]), royaltyBps: MomentsABI.int(p[7]), platform: p[8].address, treasury: p[9].address,
-            momentCount: MomentsABI.int(values[1][0]), publishingPaused: values[2][0].bool, externalBaseURI: values[3][0].string
+            momentCount: MomentsABI.int(values[1][0]), publishingPaused: values[2][0].bool, externalBaseURI: values[3][0].string,
+            termsHash: v2 ? values[6][0].bytes : nil, guardian: v2 ? values[7][0].address : nil, guardianPaused: v2 ? values[8][0].bool : false
         )
+        // A proposed policy is pending while pendingPolicyAt is set (0 = none): the time it can first be applied.
+        let applicableAt = values[5][0].uint
+        if applicableAt > 0 {
+            let n = values[4]
+            let at = Date(timeIntervalSince1970: TimeInterval(Int(clamping: applicableAt)))
+            policy.pending = PendingMomentPolicy(
+                threshold: n[0].uint, minPrice: n[1].uint, creatorBps: MomentsABI.int(n[2]), platformBps: MomentsABI.int(n[3]), reserveBps: MomentsABI.int(n[4]),
+                maxCreatorAllocBps: MomentsABI.int(n[5]), expiryCreatorBps: MomentsABI.int(n[6]), royaltyBps: MomentsABI.int(n[7]), platform: n[8].address, treasury: n[9].address,
+                applicableAt: at, lapsesAt: v2 ? at.addingTimeInterval(TimeInterval(MomentsConstants.policyApplyWindowSeconds)) : nil
+            )
+        }
+        return policy
     }
 
     // MARK: - Moments
@@ -80,7 +110,9 @@ public actor MomentsService {
         return try await hydrate(moments)
     }
 
-    /// One Moment with the supply identity, or nil when the id is out of range.
+    /// One Moment with the supply identity, or nil when the id is out of range. Its link is `external_url` exactly as
+    /// the NFT reports it: a v2 NFT keeps the base it was published with (`externalBaseURI()` on the NFT), a v1 NFT
+    /// reads its factory's current base, and has no getter of its own.
     public func moment(id: BigUInt) async throws -> MomentDetail? {
         guard isDeployed, id > 0 else { return nil }
         let head = try await multicall.readAll([
@@ -90,10 +122,11 @@ public actor MomentsService {
         let raw = try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint(id)], returns: MomentsABI.momentTuple)])[0][0]
         let m = MomentsABI.moment(id: id, raw, factory: addresses.factory)
         guard let info = try await hydrate([m]).first else { return nil }
+        let baseSource = addresses.generation >= .v2 ? m.nft : addresses.factory
         let extras = try await multicall.readAll([
             MomentsABI.call(addresses.collect, MomentsABI.Collect.supplyCheck, [.uint(id)], returns: "uint256,uint256,uint256,uint256,uint256"),
             MomentsABI.call(m.coin, MomentsABI.Coin.totalSupply, returns: "uint256"),
-            MomentsABI.call(addresses.factory, MomentsABI.Factory.externalBaseURI, returns: "string"),
+            MomentsABI.call(baseSource, MomentsABI.NFT.externalBaseURI, returns: "string"),
         ])
         let s = extras[0]
         let supply = MomentDetail.Supply(entitlements: s[0].uint, creatorAlloc: s[1].uint, remainderPool: s[2].uint, impliedPool: s[3].uint, collects: MomentsABI.int(s[4]))
@@ -107,6 +140,20 @@ public actor MomentsService {
         let raw = try await multicall.read([MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint(id)], returns: MomentsABI.momentTuple)])[0]
         guard case .success(let values) = raw else { return nil }
         return try await hydrate([MomentsABI.moment(id: id, values[0], factory: addresses.factory)]).first
+    }
+
+    /// Fresh `MomentInfo`s for many ids at once: one read of their Moments, then one hydration of them all, in `ids`
+    /// order. An id whose Moment couldn't be read (out of range) is left out; throws when a read fails as a whole.
+    public func infos(ids: [BigUInt]) async throws -> [MomentInfo] {
+        var seen = Set<BigUInt>()
+        let ids = ids.filter { $0 > 0 && seen.insert($0).inserted }
+        guard isDeployed, !ids.isEmpty else { return [] }
+        let raws = try await multicall.read(ids.map { MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint($0)], returns: MomentsABI.momentTuple) })
+        var moments: [Moment] = []
+        for (id, raw) in zip(ids, raws) {
+            if case .success(let values) = raw, let tuple = values.first { moments.append(MomentsABI.moment(id: id, tuple, factory: addresses.factory)) }
+        }
+        return try await hydrate(moments)
     }
 
     /// The Moment id of a coin, 0 when the address is not a Moment coin.
@@ -271,10 +318,16 @@ public actor MomentsService {
 
     // MARK: - Plans (writes)
 
-    public func publishPlan(_ input: MomentPublishInput) -> [TransactionStep] {
+    /// v2 `publish(params, expectedTermsHash)`. `termsHash` is the `MomentPolicy.termsHash` of the terms the review
+    /// screen showed (read with them, at one block), never a fresh read: if the terms change before the publish lands
+    /// (a matured proposal applied, a new link base), the factory refuses it with `TermsChanged` and nothing is
+    /// published. Throws when there is no such hash (a v1 factory, or terms never read) or nothing is deployed.
+    public func publishPlan(_ input: MomentPublishInput, termsHash: Data?) throws -> [TransactionStep] {
+        guard isDeployed, addresses.generation >= .v2 else { throw MomentsError.notDeployed }
+        guard let termsHash, termsHash.count == 32 else { throw MomentsError.termsNotReviewed }
         var salt = [UInt8](repeating: 0, count: 32)
         for i in salt.indices { salt[i] = UInt8.random(in: 0...255) }
-        let data = MomentsABI.calldata(MomentsABI.Factory.publish, [MomentsABI.publishParams(input, salt: Data(salt))])
+        let data = MomentsABI.calldata(MomentsABI.Factory.publish, [MomentsABI.publishParams(input, salt: Data(salt)), .bytes(termsHash)])
         return [.call(TransactionRequest(to: addresses.factory, data: data), label: "Publish \(input.symbol)")]
     }
 
@@ -382,10 +435,12 @@ public actor MomentsService {
         }
     }
 
-    /// Pool state for graduated Moments: the graduation record, locked liquidity, accrued hook fees, buyback state,
-    /// and the live sqrt price read straight from the PoolManager's storage.
+    /// Pool state for graduated Moments: the graduation record, locked liquidity, accrued hook fees, buyback state (on
+    /// v2 also the USDC the locker holds for later rounds), and the live sqrt price read straight from the
+    /// PoolManager's storage.
     private func pools(ids: [BigUInt]) async throws -> [BigUInt: MomentPool] {
         guard !ids.isEmpty else { return [:] }
+        let v2 = addresses.generation >= .v2
         var calls: [ContractCall] = [
             MomentsABI.call(addresses.buyback, MomentsABI.Buyback.minInterval, returns: "uint256"),
             MomentsABI.call(addresses.buyback, MomentsABI.Buyback.minAmount, returns: "uint256"),
@@ -400,32 +455,36 @@ public actor MomentsService {
                 MomentsABI.call(addresses.buyback, MomentsABI.Buyback.carry, [.uint(id)], returns: "uint256"),
                 MomentsABI.call(addresses.buyback, MomentsABI.Buyback.lastRun, [.uint(id)], returns: "uint64"),
             ]
+            if v2 { calls.append(MomentsABI.call(addresses.locker, MomentsABI.Locker.heldOf, [.uint(id), .address(addresses.usdc)], returns: "uint256")) }
         }
         let results = try await multicall.readAll(calls)
         let interval = MomentsABI.int(results[0][0])
         let minAmount = results[1][0].uint
-        let stride = 7
-        var records: [(BigUInt, MomentsABI.GraduationRecord, BigUInt, BigUInt, BigUInt, BigUInt, BigUInt, Int)] = []
+        let stride = v2 ? 8 : 7
+        var records: [(BigUInt, MomentsABI.GraduationRecord, BigUInt, BigUInt, BigUInt, BigUInt, BigUInt, Int, BigUInt?)] = []
         for (i, id) in ids.enumerated() {
             let base = 2 + i * stride
-            records.append((id, MomentsABI.record(results[base][0]), results[base + 1][0].uint, results[base + 2][0].uint, results[base + 3][0].uint, results[base + 4][0].uint, results[base + 5][0].uint, MomentsABI.int(results[base + 6][0])))
+            records.append((id, MomentsABI.record(results[base][0]), results[base + 1][0].uint, results[base + 2][0].uint, results[base + 3][0].uint, results[base + 4][0].uint, results[base + 5][0].uint, MomentsABI.int(results[base + 6][0]),
+                            v2 ? results[base + 7][0].uint : nil))
         }
         // Live prices: one extsload per pool, batched; a failed read falls back to the opening price.
         let priceReads = try? await multicall.read(records.map { MomentsABI.call(addresses.poolManager, MomentsABI.PoolManager.extsload, [.bytes(MomentsABI.slot0(of: $0.1.key.id))], returns: "bytes32") })
         var out: [BigUInt: MomentPool] = [:]
         for (i, entry) in records.enumerated() {
-            let (id, record, liquidity, creator, platform, buyback, carry, lastRun) = entry
+            let (id, record, liquidity, creator, platform, buyback, carry, lastRun, held) = entry
             let key = record.key
             let usdcIs0 = key.currency0 == addresses.usdc
             var sqrtPrice = record.sqrtPriceX96
+            var liveRead = false
             if let priceReads, case .success(let values) = priceReads[i] {
                 let live = BigUInt(values[0].bytes) & ((BigUInt(1) << 160) - 1)
-                if live > 0 { sqrtPrice = live }
+                if live > 0 { sqrtPrice = live; liveRead = true }
             }
             out[id] = MomentPool(
                 key: key, poolId: key.id, usdcIs0: usdcIs0, sqrtPriceX96: sqrtPrice, openingSqrtPriceX96: record.sqrtPriceX96, liquidity: liquidity, seedLiquidity: record.liquidity,
                 reserveSeed: record.reserve, poolCoins: record.poolCoins, graduatedAt: record.at, usdcPerCoin: MomentsMath.usdcPerCoin(sqrtPriceX96: sqrtPrice, usdcIs0: usdcIs0),
-                creatorFees: creator, platformFees: platform, buybackFees: buyback, buybackCarry: carry, lastBuyback: lastRun, buybackInterval: interval, buybackMin: minAmount
+                creatorFees: creator, platformFees: platform, buybackFees: buyback, buybackCarry: carry, lastBuyback: lastRun, buybackInterval: interval, buybackMin: minAmount,
+                heldForLaterRounds: held, livePriceRead: liveRead
             )
         }
         return out

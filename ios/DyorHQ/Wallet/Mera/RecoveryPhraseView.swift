@@ -8,8 +8,8 @@ import UIKit
 /// - Every reveal is a fresh passkey prompt pinned to this account, even while a session is live, and the words must
 ///   derive the address on screen (`MeraSession.revealPhrase`).
 /// - The words are blanked while the screen is recorded, mirrored or AirPlayed, and dropped when the app leaves the
-///   foreground (PrivacyCover covers the snapshot). They hide themselves after a minute, are never stored, and have
-///   no Copy: the phrase belongs on paper.
+///   foreground (PrivacyCover covers the snapshot). They hide themselves after a minute — "Keep Showing" gives another,
+///   and VoiceOver hears twenty seconds' notice first — are never stored, and have no Copy: the phrase belongs on paper.
 /// - "Done" needs three random words confirmed (`Mera.RecoveryPhrase.Quiz`). A wrong answer means revealing again,
 ///   so the choices can't be guessed through.
 struct RecoveryPhraseView: View {
@@ -41,6 +41,8 @@ struct RecoveryPhraseView: View {
     @State private var notice: String?
 
     private var hidesAt: Date? { if case .shown(_, _, let date) = stage { return date } else { return nil } }
+    /// How long before the words hide VoiceOver is told, time enough to choose Keep Showing.
+    private static let warning: TimeInterval = 20
 
     var body: some View {
         List {
@@ -54,12 +56,18 @@ struct RecoveryPhraseView: View {
         .navigationTitle("Recovery Phrase")
         .navigationBarTitleDisplayMode(.inline)
         .background { ScreenCaptureObserver { captured = $0 } }
-        // The words hide themselves a minute after the reveal.
+        // The words hide themselves a minute after the reveal (or the last Keep Showing), with a spoken warning twenty
+        // seconds before for VoiceOver, and a spoken note when they go (AI-11).
         .task(id: hidesAt) {
             guard let hidesAt else { return }
+            let warnAt = hidesAt.addingTimeInterval(-Self.warning)
+            if warnAt.timeIntervalSinceNow > 0 { try? await Task.sleep(for: .seconds(warnAt.timeIntervalSinceNow)) }
+            guard !Task.isCancelled, self.hidesAt == hidesAt else { return }
+            UIAccessibility.post(notification: .announcement, argument: "Your recovery phrase hides in \(Int(Self.warning)) seconds. Choose Keep Showing for more time.")
             try? await Task.sleep(for: .seconds(max(0, hidesAt.timeIntervalSinceNow)))
             guard !Task.isCancelled, self.hidesAt == hidesAt else { return }
-            hide(notice: "Hidden after a minute. Show it again if you haven't finished writing it down.")
+            hide(notice: "Hidden when its time ran out. Show it again if you haven't finished writing it down.")
+            UIAccessibility.post(notification: .announcement, argument: "Recovery phrase hidden.")
         }
         // Leaving the foreground drops the words; PrivacyCover covers the snapshot meanwhile. A passkey prompt makes the
         // scene inactive too, and that isn't leaving.
@@ -88,7 +96,7 @@ struct RecoveryPhraseView: View {
             Text("Recovery Phrase")
         } footer: {
             if let error { InlineError(message: error) }
-            else { Text("Your passkey is this wallet's key. These 24 words are a second way in: they restore the same wallet in MetaMask, Rabby or any wallet that takes a recovery phrase, even without your passkey. Showing them always asks for \(BiometricGate.promptName), and they hide after a minute.") }
+            else { Text("Your passkey is this wallet's key. These 24 words are a second way in: they restore the same wallet in MetaMask, Rabby or any wallet that takes a recovery phrase, even without your passkey. Showing them always asks for \(BiometricGate.promptName), and they hide after a minute unless you keep them showing.") }
         }
     }
 
@@ -121,6 +129,9 @@ struct RecoveryPhraseView: View {
 
         Section {
             Button("I've Written It Down", systemImage: "checkmark") { Haptics.tap(); hide(notice: nil) }
+            Button("Keep Showing", systemImage: "clock.arrow.circlepath") { Haptics.tap(); keepShowing() }
+        } footer: {
+            Text("Keep Showing gives you another minute. Nothing else is asked.")
         }
     }
 
@@ -217,6 +228,12 @@ struct RecoveryPhraseView: View {
                 self.error = describe(error)
             }
         }
+    }
+
+    /// Another full minute on screen from now, for anyone still writing (AI-11).
+    private func keepShowing() {
+        guard case .shown(let words, let quiz, _) = stage else { return }
+        stage = .shown(words: words, quiz: quiz, hidesAt: Date().addingTimeInterval(Mera.RecoveryPhrase.visibleFor))
     }
 
     /// Drops the words from the screen and memory, keeping only the quiz's three.

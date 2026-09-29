@@ -8,8 +8,10 @@ import UniformTypeIdentifiers
 /// Publish a Moment: the photo (uploaded to DyorHQ's media bucket and fingerprinted with keccak-256 on-chain, or a
 /// link you already host), the name and coin ticker, where and when it happened, the collect price, your coin
 /// allocation and how long collecting stays open. Everything is fixed at publish; the preview shows the economics
-/// exactly as the contract will apply them.
+/// exactly as the contract will apply them. The review is bound to what it shows: the publish carries the terms hash read
+/// with the terms on screen, so if they change before it confirms the factory refuses it and nothing is published.
 struct CreateMomentView: View {
+    /// The live policy; the Moments board refreshes it every 20 s.
     let policy: MomentPolicy?
     /// Called after the publish transaction settles; the new Moment is passed when it could be resolved.
     let onPublished: (MomentInfo?) -> Void
@@ -40,7 +42,16 @@ struct CreateMomentView: View {
     /// picker's own write (mediaURI → the pinned ipfs:// CID) is never mistaken for a manual edit and doesn't wipe the
     /// upload's fingerprint / mirror / preview.
     @State private var lastUploadedURI = ""
+    /// Uploaded media whose pin to IPFS failed: publishing waits for a retry, or (a photo) the user's choice of the https
+    /// copy (RI-9).
+    @State private var unpinned: MediaPins?
+    /// The photo goes on-chain as DyorHQ's https copy, by the user's choice, because it could not be pinned.
+    @State private var usesMirror = false
     @State private var showConfirm = false
+    /// The terms and the form as they were when Review was tapped. The sheet shows these and publishes exactly these (the
+    /// hash in the transaction is `reviewedPolicy.termsHash`), never the live `policy`, which can refresh under it.
+    @State private var reviewedPolicy: MomentPolicy?
+    @State private var reviewedInput: MomentPublishInput?
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
     private var symbolValid: Bool { symbol.count >= 2 && symbol.count <= 10 && symbol.allSatisfy { $0.isLetter || $0.isNumber } }
@@ -61,6 +72,10 @@ struct CreateMomentView: View {
     private var priceProblem: String? {
         guard let price, price > 0 else { return "Enter a collect price in USDC." }
         if let policy, price < policy.minPrice { return "The minimum price is \(MomentsFormat.usdc(policy.minPrice))." }
+        // Above the gross that completes the reserve the first collect is charged only that gross.
+        if let policy, let ceiling = MomentsMath.maxCollectPrice(threshold: policy.threshold, reserveBps: policy.reserveBps), price > ceiling {
+            return "The maximum price is \(MomentsFormat.usdc(ceiling)): the first collect at that price completes the reserve, so a higher price would never be charged."
+        }
         return nil
     }
     private var allocProblem: String? {
@@ -70,7 +85,7 @@ struct CreateMomentView: View {
     }
     private var valid: Bool {
         trimmedName.count >= 2 && trimmedName.count <= 48 && symbolValid && !place.trimmingCharacters(in: .whitespaces).isEmpty && place.count <= 64
-            && mediaValid && animationValid && priceProblem == nil && allocProblem == nil && !uploading && policy != nil && policy?.publishingPaused != true
+            && mediaValid && animationValid && priceProblem == nil && allocProblem == nil && !uploading && policy?.canPublish == true
     }
 
     /// The provenance hash: the uploaded bytes' keccak-256 when a photo was chosen, else the hash of the link itself.
@@ -90,6 +105,7 @@ struct CreateMomentView: View {
     var body: some View {
         NavigationStack {
             Form {
+                pendingPolicySection
                 mediaSection
                 Section("Moment") {
                     TextField("Name", text: $name)
@@ -111,13 +127,24 @@ struct CreateMomentView: View {
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Review") { Haptics.tap(); showConfirm = true }.fontWeight(.semibold).disabled(!valid || !session.canSign) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Review") {
+                        Haptics.tap()
+                        // Snapshot what the sheet shows and publishes; the live policy may refresh while it is open.
+                        reviewedPolicy = policy
+                        reviewedInput = input
+                        showConfirm = true
+                    }
+                    .fontWeight(.semibold).disabled(!valid || !session.canSign)
+                }
             }
             .sheet(isPresented: $showConfirm) {
-                if let input, let policy {
+                if let input = reviewedInput, let policy = reviewedPolicy {
                     ConfirmationSheet(
                         title: "Publish \(input.symbol)", confirmTitle: "Publish",
-                        build: { await env.moments.publishPlan(input) },
+                        // The reviewed terms' hash, never a fresh read: if the terms changed since, the factory refuses the
+                        // publish (TermsChanged) before anything is signed, and the creator reviews again.
+                        build: { try await env.moments.publishPlan(input, termsHash: policy.termsHash) },
                         onDone: { dismiss(); onPublished(nil) },
                         onCompleted: { hash in
                             Activity.record(ActivityRecord(kind: .moment, title: "Published \(input.name)", subtitle: "$\(input.symbol) · \(MomentsFormat.usdc(input.price)) per edition", hash: hash, section: "moments"), owner: session.address)
@@ -130,12 +157,25 @@ struct CreateMomentView: View {
                         },
                         intent: .alwaysAsks(.launch)
                     ) {
+                        let days = input.collectWindow / 86_400
                         DetailRow("Moment", "\(input.name) ($\(input.symbol))")
                         DetailRow("Collect price", MomentsFormat.usdc(input.price))
-                        DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: input.creatorAllocBps))) FDV")
+                        DetailRow("Graduates at", "\(MomentsFormat.usdcCents(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: input.creatorAllocBps))) FDV")
                         DetailRow("Your coins", "\(NumberStyle.basisPoints(input.creatorAllocBps)) · \(MomentsFormat.coins(MomentsConstants.supply * BigUInt(input.creatorAllocBps) / BigUInt(MomentsConstants.bps)))")
-                        DetailRow("Window", "\(windowDays) \(windowDays == 1 ? "day" : "days")")
-                        DetailRow("Media", mediaHash == nil ? "link, hashed" : (isVideo ? "video, fingerprinted" : "photo, fingerprinted"))
+                        DetailRow("Window", "\(days) \(days == 1 ? "day" : "days")")
+                        // Every term the publish's terms hash binds, as read with it.
+                        DetailRow("Each collect", "\(NumberStyle.basisPoints(policy.creatorBps)) you · \(NumberStyle.basisPoints(policy.platformBps)) DyorHQ · \(NumberStyle.basisPoints(policy.reserveBps)) reserve")
+                        DetailRow("Minimum price", MomentsFormat.usdc(policy.minPrice))
+                        DetailRow("Most you can keep", NumberStyle.basisPoints(policy.maxCreatorAllocBps))
+                        DetailRow("NFT royalty", NumberStyle.basisPoints(policy.royaltyBps))
+                        DetailRow("If it expires", "\(NumberStyle.basisPoints(policy.expiryCreatorBps)) of the reserve to you, the rest to the treasury")
+                        DetailRow("Platform wallet", policy.platform.short)
+                        DetailRow("Treasury wallet", policy.treasury.short)
+                        DetailRow("Link", policy.externalBaseURI.replacingOccurrences(of: "https://", with: "") + "<id>")
+                        if let pending = policy.pending, !pending.hasLapsed(at: Date()) {
+                            DetailRow("Policy change", pending.isApplicable(at: Date()) ? "if applied first, nothing is published" : "queued", tint: Color.attention)
+                        }
+                        DetailRow("Media", mediaHash == nil ? "link, hashed" : usesMirror ? "photo, fingerprinted · DyorHQ link, not IPFS" : (isVideo ? "video, fingerprinted · IPFS" : "photo, fingerprinted · IPFS"))
                     }
                 }
             }
@@ -144,6 +184,56 @@ struct CreateMomentView: View {
     }
 
     // MARK: Sections
+
+    /// A policy change queued on the contract (security audit 2026-09-26, MO-4). Once it can be applied, anyone may
+    /// apply it at any moment. The publish carries the hash of the terms reviewed here, so if the new terms take effect
+    /// before it confirms, the factory refuses it: nothing is published, and the creator reviews the new terms. They
+    /// never change silently. A proposal nobody applied in time has lapsed and is not shown.
+    @ViewBuilder private var pendingPolicySection: some View {
+        if let policy, let pending = policy.pending, !pending.hasLapsed(at: Date()) {
+            let applicable = pending.isApplicable(at: Date())
+            let window = pending.lapsesAt.map { " until \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""
+            Section {
+                Label(applicable ? "New terms can take effect at any moment" : "New terms are queued", systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
+                Text(applicable
+                     ? "Anyone can apply the queued policy now\(window). If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them."
+                     : "The queued policy can be applied from \(pending.applicableAt.formatted(date: .abbreviated, time: .shortened))\(window). If it's applied before your publish confirms, nothing is published and you review the new terms below.")
+                    .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                ForEach(pending.changes(from: policy), id: \.self) { field in
+                    LabeledContent(Self.title(field), value: Self.change(field, from: policy, to: pending)).font(.footnote)
+                }
+            }
+        }
+    }
+
+    private static func title(_ field: PendingMomentPolicy.Field) -> String {
+        switch field {
+        case .threshold: return "Graduation reserve"
+        case .minPrice: return "Minimum price"
+        case .split: return "Split (you · DyorHQ · reserve)"
+        case .maxCreatorAlloc: return "Most you can keep"
+        case .royalty: return "NFT royalty"
+        case .expiryShare: return "Your share on expiry"
+        case .platform: return "Platform wallet"
+        case .treasury: return "Treasury wallet"
+        }
+    }
+
+    private static func change(_ field: PendingMomentPolicy.Field, from now: MomentPolicy, to next: PendingMomentPolicy) -> String {
+        func bps(_ value: Int) -> String { NumberStyle.basisPoints(value) }
+        switch field {
+        // Exact, unlike the other threshold rows: a change under a cent still reads as a change.
+        case .threshold: return "\(MomentsFormat.usdc(now.threshold)) → \(MomentsFormat.usdc(next.threshold))"
+        case .minPrice: return "\(MomentsFormat.usdc(now.minPrice)) → \(MomentsFormat.usdc(next.minPrice))"
+        case .split: return "\(bps(now.creatorBps)) · \(bps(now.platformBps)) · \(bps(now.reserveBps)) → \(bps(next.creatorBps)) · \(bps(next.platformBps)) · \(bps(next.reserveBps))"
+        case .maxCreatorAlloc: return "\(bps(now.maxCreatorAllocBps)) → \(bps(next.maxCreatorAllocBps))"
+        case .royalty: return "\(bps(now.royaltyBps)) → \(bps(next.royaltyBps))"
+        case .expiryShare: return "\(bps(now.expiryCreatorBps)) → \(bps(next.expiryCreatorBps))"
+        case .platform: return "\(now.platform.short) → \(next.platform.short)"
+        case .treasury: return "\(now.treasury.short) → \(next.treasury.short)"
+        }
+    }
 
     private var mediaSection: some View {
         Section {
@@ -170,7 +260,9 @@ struct CreateMomentView: View {
                     }
                     .disabled(uploading)
                     if uploading {
-                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Uploading…").font(.caption).foregroundStyle(.secondary) }
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text(unpinned == nil && mediaHash == nil ? "Uploading…" : "Pinning to IPFS…").font(.caption).foregroundStyle(.secondary) }
+                    } else if unpinned != nil {
+                        Text("Not pinned to IPFS yet.").font(.caption).foregroundStyle(Color.attention)
                     } else if let imageError {
                         Text(imageError).font(.caption).foregroundStyle(Color.attention)
                     } else if let mediaHash {
@@ -182,11 +274,12 @@ struct CreateMomentView: View {
                 Spacer()
             }
             .padding(.vertical, 4)
+            if let unpinned, !uploading { unpinnedRow(unpinned) }
             TextField("Or paste an image link (ipfs:// or https://)", text: $mediaURI)
                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .onChange(of: mediaURI) { old, new in
                     if new == lastUploadedURI { return } // the picker set this URI — keep its upload, don't treat as an edit
-                    if old != new, mediaHash != nil { mediaHash = nil; isVideo = false; mediaMirror = ""; previewImage = nil }
+                    if old != new, mediaHash != nil { mediaHash = nil; isVideo = false; mediaMirror = ""; previewImage = nil; unpinned = nil; usesMirror = false }
                 }
             TextField("Video link (optional)", text: $animationURI)
                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -198,6 +291,24 @@ struct CreateMomentView: View {
             else if isVideo { Text("The video plays on OpenSea; its cover frame is the NFT image.") }
             else { Text("Shown on OpenSea and in DyorHQ as the NFT.") }
         }
+    }
+
+    /// A pin that failed, said before anything is published: a Moment's media link is permanent once on-chain.
+    private func unpinnedRow(_ pins: MediaPins) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Couldn't pin to IPFS", systemImage: "exclamationmark.triangle.fill").font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
+            if let failure = pins.failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
+            Text(pins.video == nil
+                 ? "Your photo is uploaded, but not on IPFS, where a Moment's media stays available without DyorHQ. Try again, or publish with DyorHQ's link to it instead: that link is permanent on-chain, and DyorHQ only shows it while it still matches your photo's fingerprint."
+                 : "Your video is uploaded, but a video Moment needs both the video and its cover frame on IPFS before it can be published. Try again in a minute.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 16) {
+                Button("Try Again") { Task { await retryPin() } }.buttonStyle(.borderless).fontWeight(.semibold)
+                if pins.video == nil { Button("Use DyorHQ's Link") { useMirror() }.buttonStyle(.borderless) }
+            }
+            .font(.subheadline)
+        }
+        .padding(.vertical, 4)
     }
 
     private var economicsSection: some View {
@@ -227,10 +338,12 @@ struct CreateMomentView: View {
                     let reservePerCollect = price * BigUInt(policy.reserveBps) / BigUInt(MomentsConstants.bps)
                     let collects = reservePerCollect > 0 ? (policy.threshold + reservePerCollect - 1) / reservePerCollect : 0
                     let fdv = MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps ?? maxAllocBps)
-                    Text("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdc(policy.threshold)) reserve, and the coin graduates at a \(MomentsFormat.fdv(fdv)) FDV. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
+                    Text("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdcCents(policy.threshold)) reserve, and the coin graduates at a \(MomentsFormat.fdv(fdv)) FDV. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
                 } else if policy == nil {
                     Text("Loading the current policy…")
                 }
+                if let block = policy?.publishBlock { Text(block.message).foregroundStyle(Color.attention) }
+                LearnMoreLink(.publishAMoment)
             }
         }
     }
@@ -241,7 +354,7 @@ struct CreateMomentView: View {
                 let creatorCoins = MomentsConstants.supply * BigUInt(allocBps) / BigUInt(MomentsConstants.bps)
                 DetailRows {
                     DetailRow("Collect price", MomentsFormat.usdc(price))
-                    DetailRow("Graduates at", "\(MomentsFormat.usdc(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps))) FDV")
+                    DetailRow("Graduates at", "\(MomentsFormat.usdcCents(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps))) FDV")
                     DetailRow("Each collect", "\(NumberStyle.basisPoints(policy.reserveBps)) reserve · \(NumberStyle.basisPoints(policy.creatorBps)) you · \(NumberStyle.basisPoints(policy.platformBps)) DyorHQ")
                     DetailRow("Your coins", "\(MomentsFormat.coins(creatorCoins)) (\(NumberStyle.basisPoints(allocBps)))")
                     DetailRow("Collectors + pool", "\(MomentsFormat.coins(MomentsConstants.supply - creatorCoins)) at one price")
@@ -260,6 +373,11 @@ struct CreateMomentView: View {
     private func upload(_ item: PhotosPickerItem) async {
         uploading = true; imageError = nil
         defer { uploading = false; photoItem = nil }
+        // A new pick replaces the last one, pinned or not — its preview too, so a pick that then fails to read never
+        // leaves the old photo (or a video's play badge) standing in for media the form no longer has. `lastUploadedURI`
+        // goes first, so clearing the link below is not read as a manual edit.
+        lastUploadedURI = ""; mediaURI = ""; animationURI = ""; mediaHash = nil; mediaMirror = ""; unpinned = nil; usesMirror = false
+        previewImage = nil; isVideo = false
         do {
             if !social.isSignedIn { await social.signIn(session: session) }
             guard social.isSignedIn else { imageError = "Connect DyorHQ Social to upload a photo, or paste a link instead."; return }
@@ -267,8 +385,10 @@ struct CreateMomentView: View {
                 // A video: the file itself is the NFT's animation and is fingerprinted; a frame from it is the image.
                 guard let movie = try await item.loadTransferable(type: MovieFile.self) else { imageError = "That video could not be read."; return }
                 defer { try? FileManager.default.removeItem(at: movie.url) }
-                let data = try Data(contentsOf: movie.url)
-                guard data.count <= 50 * 1024 * 1024 else { imageError = "Videos up to 50 MB."; return }
+                // The size comes from the file system, before anything is read: a long 4K clip is gigabytes, and
+                // reading it just to refuse it would exhaust memory (security audit 2026-09-26, RI-5). The file is then
+                // hashed a chunk at a time and uploaded straight from disk.
+                guard let size = try movie.url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 50 * 1024 * 1024 else { imageError = "Videos up to 50 MB."; return }
                 guard let posterImage = try await MovieFile.coverFrame(url: movie.url) else { imageError = "Could not read a frame from that video."; return }
                 previewImage = posterImage; isVideo = true // show the video's poster frame immediately, before the pin
                 guard let poster = posterImage.avatarJPEG(maxDimension: 2048, quality: 0.9) else { imageError = "Could not read a frame from that video."; return }
@@ -276,35 +396,83 @@ struct CreateMomentView: View {
                 let isMP4 = type.conforms(to: .mpeg4Movie)
                 // The video's hash is the provenance hash; its poster is filed under that same hash so the app can
                 // find the poster mirror again from on-chain data (MomentsMath.mirrorURL).
-                let videoHash = Keccak.hash256(data)
-                let posterPin = try await social.uploadAndPinMomentMedia(poster, contentType: "image/jpeg", fileExtension: "jpg", name: MomentsMath.mediaName(hash: videoHash))
-                let videoPin = try await social.uploadAndPinMomentMedia(data, contentType: isMP4 ? "video/mp4" : "video/quicktime", fileExtension: isMP4 ? "mp4" : "mov")
-                mediaURI = posterPin.onchain
-                lastUploadedURI = posterPin.onchain
-                animationURI = videoPin.onchain
-                mediaMirror = posterPin.mirror.absoluteString
+                let movieURL = movie.url
+                let videoHash = try await Task.detached(priority: .userInitiated) { try Keccak.hash256(file: movieURL) }.value
+                let posterUpload = try await social.uploadMomentMedia(poster, contentType: "image/jpeg", fileExtension: "jpg", name: MomentsMath.mediaName(hash: videoHash))
+                let videoUpload = try await social.uploadMomentMedia(file: movie.url, hash: videoHash, contentType: isMP4 ? "video/mp4" : "video/quicktime", fileExtension: isMP4 ? "mp4" : "mov")
+                mediaMirror = posterUpload.mirror.absoluteString
                 mediaHash = videoHash
-                isVideo = true
+                await pin(MediaPins(image: posterUpload, video: videoUpload))
             } else {
                 guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data), let jpeg = image.avatarJPEG(maxDimension: 4096, quality: 0.92) else {
                     imageError = "That photo could not be read."
                     return
                 }
                 previewImage = image; isVideo = false // show the picked photo immediately, before the pin returns
-                let uploaded = try await social.uploadAndPinMomentMedia(jpeg, contentType: "image/jpeg", fileExtension: "jpg")
-                mediaURI = uploaded.onchain
-                lastUploadedURI = uploaded.onchain
-                mediaMirror = uploaded.mirror.absoluteString
-                animationURI = ""
+                let photoUpload = try await social.uploadMomentMedia(jpeg, contentType: "image/jpeg", fileExtension: "jpg")
+                mediaMirror = photoUpload.mirror.absoluteString
                 mediaHash = Keccak.hash256(jpeg)
+                await pin(MediaPins(image: photoUpload, video: nil))
             }
-            Haptics.success()
+            if unpinned == nil { Haptics.success() }
         } catch {
+            previewImage = nil; isVideo = false; mediaHash = nil; mediaMirror = ""
             imageError = describe(error)
         }
     }
+
+    /// Pins whatever of `pins` isn't pinned yet. The form takes the media only once all of it is on IPFS; a failure
+    /// is kept in `unpinned`, with the reason, for the user to retry — nothing falls back to the https mirror on its
+    /// own (security audit 2026-09-26, RI-9).
+    private func pin(_ pins: MediaPins) async {
+        var pins = pins
+        do {
+            if pins.imageURI == nil { pins.imageURI = try await social.pinMomentMedia(pins.image) }
+            if let video = pins.video, pins.videoURI == nil { pins.videoURI = try await social.pinMomentMedia(video) }
+        } catch {
+            pins.failure = describe(error)
+            unpinned = pins
+            Haptics.warning()
+            return
+        }
+        guard let imageURI = pins.imageURI else { return }
+        unpinned = nil
+        lastUploadedURI = imageURI
+        mediaURI = imageURI
+        animationURI = pins.videoURI ?? ""
+    }
+
+    private func retryPin() async {
+        guard let pins = unpinned else { return }
+        uploading = true
+        defer { uploading = false }
+        await pin(pins)
+        if unpinned == nil { Haptics.success() }
+    }
+
+    /// A photo whose pin failed, published with DyorHQ's https copy instead — only when the user chooses it. The app
+    /// shows that copy only while its bytes still match the on-chain fingerprint (`MomentMediaLoader.imageSources`).
+    /// Not offered for a video: its cover frame can't be checked against the video's fingerprint.
+    private func useMirror() {
+        guard let pins = unpinned, pins.video == nil else { return }
+        unpinned = nil
+        usesMirror = true
+        lastUploadedURI = pins.image.mirror.absoluteString
+        mediaURI = pins.image.mirror.absoluteString
+        animationURI = ""
+    }
 }
 
+/// Uploaded Moment media and how far pinning it to IPFS got: the image (a photo, or a video's cover frame) and, for a
+/// video, the video itself.
+private struct MediaPins {
+    let image: SocialSession.MomentUpload
+    let video: SocialSession.MomentUpload?
+    var imageURI: String?
+    var videoURI: String?
+    /// Why the last attempt failed.
+    var failure: String?
+}
 
 /// A video picked from the library, copied to a temporary file so it can be read, hashed, uploaded and sampled.
 struct MovieFile: Transferable {

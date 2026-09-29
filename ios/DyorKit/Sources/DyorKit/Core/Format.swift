@@ -70,6 +70,29 @@ public enum Amount {
         return grouped(Substring(s), by: dots > 0 ? "." : ",")
     }
 
+    /// A typed or pasted perps price, size or trigger as a finite number, or nil. The token-amount rules (`decimalPoint`)
+    /// with one change, because for a price a smaller reading is not the safe side: a lone "," followed by exactly three
+    /// digits after a 1-3 digit whole part that doesn't start with 0 ("66,000") is thousands grouping when the locale
+    /// groups with "," (en_US), so a price pasted from a chart isn't read 1000x too low. Where "," is the decimal separator
+    /// (de_DE, fr_FR) it stays the decimal point ("1,234" is 1.234), and "0,5" is one half everywhere. A lone "." is
+    /// always the decimal point, since the app's own writers emit POSIX "." ("65432.125"). ASCII digits and separators
+    /// only: no signs, "inf", "nan" or exponents.
+    public static func fieldNumber(_ input: String, groupingSeparator: String? = Locale.current.groupingSeparator) -> Double? {
+        let s = input.trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty, s.allSatisfy({ $0 == "." || $0 == "," || ($0.isASCII && $0.isNumber) }) else { return nil }
+        var normalized: String
+        if groupingSeparator == ",", !s.contains("."), s.filter({ $0 == "," }).count == 1, let comma = s.firstIndex(of: ","),
+           (1...3).contains(s.distance(from: s.startIndex, to: comma)), s.first != "0",
+           s.distance(from: comma, to: s.endIndex) == 4 {
+            normalized = s.replacingOccurrences(of: ",", with: "")
+        } else {
+            guard let point = decimalPoint(s) else { return nil }
+            normalized = point
+        }
+        guard normalized != "." else { return nil }
+        return Double(normalized).flatMap { $0.isFinite ? $0 : nil }
+    }
+
     /// A share of a balance for an amount field (25 / 50 / 75 %, a native Max after its fee): rounded DOWN to
     /// `significantDigits` significant digits, keeping every whole digit, so it never exceeds the exact share and reads
     /// "0.559465" rather than eighteen decimals. Only fraction digits are dropped. A full ERC-20 balance should stay exact
@@ -100,7 +123,9 @@ public enum NumberStyle {
     private static let subscripts = Array("₀₁₂₃₄₅₆₇₈₉")
 
     /// Balances and prices: compact suffixes for large values (1.2M), trailing zeros trimmed, and
-    /// leading-zero notation (0.0₆42) for dust prices so tiny tokens stay readable.
+    /// leading-zero notation (0.0₆42) for dust prices so tiny tokens stay readable. A `maximumFractionDigits` above the
+    /// defaults (6 below 1, 4 significant for dust) is honored there too, so a value on a market's price/lot grid shows
+    /// in full.
     public static func number(_ value: Double, compact: Bool = false, maximumFractionDigits: Int? = nil) -> String {
         guard value.isFinite else { return "—" }
         let magnitude = abs(value)
@@ -119,13 +144,13 @@ public enum NumberStyle {
             return sign + (formatter.string(from: NSNumber(value: magnitude)) ?? String(magnitude))
         }
         if magnitude >= 1 { return sign + trim(String(format: "%.\(maximumFractionDigits ?? 4)f", magnitude)) }
-        if magnitude >= 1e-4 { return sign + trim(String(format: "%.6f", magnitude)) }
+        if magnitude >= 1e-4 { return sign + trim(String(format: "%.\(max(6, maximumFractionDigits ?? 6))f", magnitude)) }
         // 0.000000042 → 0.0₇42
         let text = String(format: "%.20f", magnitude)
         guard let dot = text.firstIndex(of: ".") else { return sign + String(magnitude) }
         let fraction = text[text.index(after: dot)...]
         let zeros = fraction.prefix { $0 == "0" }.count
-        var significant = String(fraction.dropFirst(zeros).prefix(4))
+        var significant = String(fraction.dropFirst(zeros).prefix(max(4, (maximumFractionDigits ?? 0) - zeros)))
         while significant.count > 1, significant.hasSuffix("0") { significant.removeLast() }
         return "\(sign)0.0\(String(zeros).map { subscripts[Int(String($0))!] }.map(String.init).joined())\(significant)"
     }

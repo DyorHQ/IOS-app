@@ -19,26 +19,40 @@ struct NewsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if model.articles.isEmpty {
-                    if model.loading {
-                        ProgressView("Loading headlines…").controlSize(.large)
-                    } else {
-                        ContentUnavailableView("No Headlines", systemImage: "newspaper", description: Text(model.error ?? "The news feeds could not be reached. Pull to try again."))
-                    }
+                // The full-screen spinner is for the first load only. Once the list is on screen it stays there while a
+                // refresh runs: swapping out the list a pull started would cancel that pull's reload (UI-6).
+                if model.articles.isEmpty, model.loading, model.error == nil {
+                    ProgressView("Loading headlines…").controlSize(.large)
                 } else {
+                    // A list even when empty, so the empty state can be pulled to refresh as it says (UI-6).
                     List {
-                        Section {
-                            ForEach(shown) { item in
-                                Button { Haptics.tap(); article = item } label: { NewsRow(article: item) }
-                                    .buttonStyle(.plain)
-                                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                        if model.articles.isEmpty {
+                            ContentUnavailableView {
+                                Label("No Headlines", systemImage: "newspaper")
+                            } description: {
+                                Text(model.error ?? "The news feeds could not be reached.")
+                            } actions: {
+                                if model.loading {
+                                    ProgressView()
+                                } else {
+                                    Button("Try Again") { Haptics.tap(); Task { await model.load(env: env, force: true) } }
+                                }
                             }
-                        } header: {
-                            sourceChips
-                                .textCase(nil)
-                                .listRowInsets(EdgeInsets())
-                        } footer: {
-                            Text("Headlines come straight from each publisher's feed.").font(.caption)
+                            .listRowBackground(Color.clear)
+                        } else {
+                            Section {
+                                ForEach(shown) { item in
+                                    Button { Haptics.tap(); article = item } label: { NewsRow(article: item) }
+                                        .buttonStyle(.plain)
+                                        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                                }
+                            } header: {
+                                sourceChips
+                                    .textCase(nil)
+                                    .listRowInsets(EdgeInsets())
+                            } footer: {
+                                Text("Headlines come straight from each publisher's feed.").font(.caption)
+                            }
                         }
                     }
                     .listStyle(.insetGrouped)
@@ -107,9 +121,7 @@ private struct NewsRow: View {
             }
             Spacer(minLength: 0)
             if let image = article.imageURL {
-                AsyncImage(url: image) { phase in
-                    if let img = phase.image { img.resizable().scaledToFill() } else { Color(.tertiarySystemFill) }
-                }
+                RemoteImage(url: image, pointSize: 72) { _ in Color(.tertiarySystemFill) }
                 .frame(width: 72, height: 72)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
@@ -147,8 +159,10 @@ final class NewsModel {
         loading = articles.isEmpty
         defer { loading = false }
         let latest = await env.news.latest(limit: 150, force: force)
+        // Cut short (the page closed): an empty or partial answer, not what the feeds said.
+        guard !Task.isCancelled else { return }
         if latest.isEmpty {
-            if articles.isEmpty { error = "The news feeds could not be reached. Check your connection and pull to refresh." }
+            if articles.isEmpty { error = "The news feeds could not be reached. Check your connection, then pull down or tap Try Again." }
         } else {
             articles = latest
             error = nil

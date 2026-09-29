@@ -46,7 +46,11 @@ public struct NFTAsset: Identifiable, Hashable, Sendable {
     public var openSeaURL: URL { OpenSea.item(contract: contract, tokenId: tokenId) }
 }
 
-/// ERC-721 metadata (an on-chain `data:` document or a fetched https / ipfs one), reduced to what the app shows.
+/// ERC-721 metadata, reduced to what the app shows. Anyone can airdrop an NFT to a wallet, and its `tokenURI` and
+/// image point wherever its contract says — a tracking server that learns the wallet's IP, or an endless or oversized
+/// response (security audit 2026-09-26, IOST-12). So only content-addressed storage is ever fetched: an on-chain
+/// `data:` document, IPFS (through `ipfsGateway`, whatever gateway the URI names) and Arweave. Anything else is not
+/// fetched at all, and documents are read up to `maxDocumentBytes`.
 public struct NFTMetadata: Sendable {
     public var name: String?
     public var image: URL?
@@ -58,35 +62,63 @@ public struct NFTMetadata: Sendable {
         self.animation = animation
     }
 
-    public static func resolve(tokenURI: String, session: URLSession = .shared) async -> NFTMetadata? {
+    /// The gateway every IPFS path is read through.
+    public static let ipfsGateway = "https://ipfs.io/ipfs/"
+    /// The most bytes read for one metadata document.
+    public static let maxDocumentBytes = 512 * 1024
+    private static let session = RemoteMedia.makeSession()
+
+    public static func resolve(tokenURI: String, session: URLSession? = nil) async -> NFTMetadata? {
         let uri = tokenURI.trimmingCharacters(in: .whitespacesAndNewlines)
         var document: Data?
         if uri.lowercased().hasPrefix("data:"), let comma = uri.firstIndex(of: ",") {
+            guard uri.utf8.count <= maxDocumentBytes * 2 else { return nil }
             let payload = String(uri[uri.index(after: comma)...])
             document = uri[..<comma].lowercased().contains(";base64") ? Data(base64Encoded: payload) : payload.removingPercentEncoding.map { Data($0.utf8) }
         } else if let url = gatewayURL(uri) {
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 15
-            if let (body, response) = try? await session.data(for: request),
-               (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true, body.count <= 512 * 1024 {
-                document = body
-            }
+            document = try? await RemoteMedia.fetch(url, session: session ?? Self.session, maxBytes: maxDocumentBytes)
         }
-        guard let document, let object = try? JSONSerialization.jsonObject(with: document) as? [String: Any] else { return nil }
+        guard let document, document.count <= maxDocumentBytes,
+              let object = try? JSONSerialization.jsonObject(with: document) as? [String: Any] else { return nil }
         let image = (object["image"] as? String) ?? (object["image_url"] as? String)
-        return NFTMetadata(name: object["name"] as? String, image: image.flatMap(gatewayURL), animation: (object["animation_url"] as? String).flatMap(gatewayURL))
+        let name = (object["name"] as? String).map { String($0.prefix(120)) }
+        return NFTMetadata(name: name, image: image.flatMap(gatewayURL), animation: (object["animation_url"] as? String).flatMap(gatewayURL))
     }
 
-    /// `ipfs://` and `ar://` through public gateways; `https://` as is.
+    /// Where the app may read `uri` from, or nil when it points anywhere else: `ipfs://…`, and an https IPFS gateway
+    /// link in either form (`https://<any host>/ipfs/<cid>/…`, `https://<cid>.ipfs.<host>/…`), through `ipfsGateway`;
+    /// `ar://…` and `https://arweave.net/…` through arweave.net.
     public static func gatewayURL(_ uri: String) -> URL? {
         let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
         if lower.hasPrefix("ipfs://") {
             let path = trimmed.dropFirst("ipfs://".count).replacingOccurrences(of: "ipfs/", with: "", options: [.anchored])
-            return URL(string: "https://ipfs.io/ipfs/\(path)")
+            return ipfs(String(path))
         }
-        if lower.hasPrefix("ar://") { return URL(string: "https://arweave.net/\(trimmed.dropFirst(5))") }
-        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return nil }
-        return url
+        if lower.hasPrefix("ar://") { return arweave(String(trimmed.dropFirst("ar://".count))) }
+        guard let components = URLComponents(string: trimmed), components.scheme?.lowercased() == "https",
+              let host = components.host?.lowercased(), components.user == nil, components.password == nil else { return nil }
+        let path = components.percentEncodedPath
+        if host == "arweave.net" { return arweave(String(path.dropFirst())) }
+        // Path form: /ipfs/<cid>[/…] on any gateway.
+        if path.lowercased().hasPrefix("/ipfs/") { return ipfs(String(path.dropFirst("/ipfs/".count))) }
+        // Subdomain form: <cid>.ipfs.<gateway>/[…].
+        let labels = host.split(separator: ".")
+        if labels.count >= 3, labels[1] == "ipfs" { return ipfs(String(labels[0]) + path) }
+        return nil
+    }
+
+    /// A CID (optionally followed by a path inside it) through `ipfsGateway`, or nil when it isn't one.
+    private static func ipfs(_ cidAndPath: String) -> URL? {
+        let cid = cidAndPath.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        guard (2...128).contains(cid.count), cid.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { return nil }
+        return URL(string: ipfsGateway + cidAndPath)
+    }
+
+    /// An Arweave transaction id (optionally followed by a path) through arweave.net, or nil when it isn't one.
+    private static func arweave(_ idAndPath: String) -> URL? {
+        let id = idAndPath.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        guard (32...64).contains(id.count), id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else { return nil }
+        return URL(string: "https://arweave.net/" + idAndPath)
     }
 }

@@ -5,6 +5,7 @@ import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
+import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {
     Types,
@@ -28,6 +29,15 @@ contract LaunchpadFactory {
     /// @dev Gas reserved for the automatic graduation. Without a floor, gas estimation settles on a limit where the
     ///      completing buy succeeds while the caught inner call runs out of gas, leaving every launch "stuck".
     uint256 public constant GRADUATION_GAS = 2_000_000;
+    /// @dev v2 (sec2): the least gas `graduateFallback` gives its Monday retry. A caller sending little gas could
+    ///      otherwise starve a retry that more gas would have finished, and so move a realignable launch to Uniswap v4.
+    ///      It is a floor, not the retry's whole budget: a squat that needs more than this to realign stays on Monday
+    ///      only if the caller sends more (keepers and apps send ~29.9M). It is not higher so that the fallback stays
+    ///      callable under Monad's 30M per-transaction cap with room for calldata and smart-wallet overhead.
+    uint256 public constant MONDAY_RETRY_GAS = 20_000_000;
+    /// @dev v2 (sec2): how long a launch quoted in a Monday-only asset must have been stuck before anyone (not only the
+    ///      owner) may take the Uniswap v4 fallback, so a dust-tick squat cannot freeze its holders until the owner acts.
+    uint256 public constant MONDAY_ONLY_FALLBACK_DELAY = 1 days;
     address private constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     IPoolManager public immutable poolManager;
@@ -43,6 +53,9 @@ contract LaunchpadFactory {
     address public holderFeeSharing;
     address public router;
     address public launchDeployer;
+    /// @notice v2 (sec2): true once the modules can never change again — set by `sealModules` (the deploy script's
+    ///         last wiring step) or by the first launch, whichever comes first.
+    bool public modulesSealed;
 
     uint256 public launchFee; // native, paid on every launch
     address public protocolFeeRecipient;
@@ -63,6 +76,9 @@ contract LaunchpadFactory {
     mapping(address => uint256) public stuckSince;
     /// @dev Owner permission for a stuck launch quoted in a Monday-only asset to graduate on Uniswap v4 instead.
     mapping(address => bool) public v4FallbackAllowed;
+    /// @dev v2 (sec2, LP-6): whether a launch's quote asset was Monday-only when it launched. The fallback rule reads
+    ///      this snapshot, so flagging a pair later never takes the fallback away from launches made before.
+    mapping(address => bool) public launchMondayOnly;
 
     struct Proposal {
         address newRecipient;
@@ -76,6 +92,7 @@ contract LaunchpadFactory {
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event ModulesSet(address hook, address executor, address locker, address escrow, address sharing, address router, address deployer);
     event MondayExecutorSet(address executor);
+    event ModulesSealed();
     event PairMondayOnlySet(address indexed pairToken, bool mondayOnly);
     event LaunchFeeSet(uint256 fee);
     event FeePolicySet(address recipient, uint16 protocolShareBps);
@@ -126,6 +143,7 @@ contract LaunchpadFactory {
     error FallbackNotAvailable();
     error ZeroAddress();
     error InvalidEconomics();
+    error InvalidTickSpacing();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -134,6 +152,7 @@ contract LaunchpadFactory {
 
     constructor(IPoolManager _poolManager, address _protocolFeeRecipient, uint256 _launchFee, uint16 _protocolFeeShareBps, uint16 _maxCreatorTaxBps) {
         if (_protocolFeeShareBps > 10_000 || _maxCreatorTaxBps > 10_000) revert InvalidBps();
+        if (_protocolFeeRecipient == address(0)) revert ZeroAddress(); // v2 (sec2, LP-6): fees pushed to 0 are burned
         poolManager = _poolManager;
         owner = msg.sender;
         protocolFeeRecipient = _protocolFeeRecipient;
@@ -162,12 +181,14 @@ contract LaunchpadFactory {
     /// @notice Wires the modules. ALL of them — hook, graduation executor, locker, escrow, sharing, router and
     ///         deployer — are frozen once the first launch exists, so no module (including the graduation executor
     ///         that custodies swept reserves during graduation) can be swapped for a malicious one afterwards.
+    ///         v2 (sec2): also frozen by `sealModules`, which the deploy script calls as its last wiring step, so there
+    ///         is no window before the first launch in which the owner key could swap one in unnoticed.
     function setModules(address _hook, address _executor, address _locker, address _escrow, address _sharing, address _router, address _deployer)
         external
         onlyOwner
     {
         if (
-            _allTokens.length != 0
+            modulesSealed
                 && (
                     _hook != hook || _executor != graduationExecutor || _locker != locker || _escrow != escrow
                         || _sharing != holderFeeSharing || _router != router || _deployer != launchDeployer
@@ -188,9 +209,20 @@ contract LaunchpadFactory {
     ///         module), so it cannot be swapped for a malicious executor that would seize a Monday graduation's
     ///         swept reserves. Must therefore be configured at deploy time for Monday/aBIL launches to work.
     function setMondayExecutor(address _mondayExecutor) external onlyOwner {
-        if (_allTokens.length != 0 && _mondayExecutor != mondayExecutor) revert ModulesLocked();
+        if (modulesSealed && _mondayExecutor != mondayExecutor) revert ModulesLocked();
         mondayExecutor = _mondayExecutor;
         emit MondayExecutorSet(_mondayExecutor);
+    }
+
+    /// @notice v2 (sec2): freezes every module (including the Monday executor) for good, before any launch exists.
+    function sealModules() external onlyOwner {
+        if (hook == address(0) || graduationExecutor == address(0) || locker == address(0) || escrow == address(0) || holderFeeSharing == address(0) || launchDeployer == address(0)) revert ModulesNotSet();
+        _seal();
+    }
+
+    function _seal() internal {
+        modulesSealed = true;
+        emit ModulesSealed();
     }
 
     function setLaunchFee(uint256 fee) external onlyOwner {
@@ -203,6 +235,7 @@ contract LaunchpadFactory {
     ///         created from now on; existing curves and pools keep the split their creator signed up for.
     function setFeePolicy(address recipient, uint16 protocolShareBps) external onlyOwner {
         if (protocolShareBps > 10_000) revert InvalidBps();
+        if (recipient == address(0)) revert ZeroAddress(); // v2 (sec2, LP-6): FeeEscrow's push to 0 would burn native fees
         protocolFeeRecipient = recipient;
         protocolFeeShareBps = protocolShareBps;
         emit FeePolicySet(recipient, protocolShareBps);
@@ -238,6 +271,9 @@ contract LaunchpadFactory {
         for (uint256 i = 0; i < config.snipeTaxSchedule.length; i++) {
             if (config.snipeTaxSchedule[i] > 10_000) revert InvalidBps();
         }
+        // v2 (sec2, LP-6): a spacing the v4 PoolManager refuses (or 0, which divides by zero in minUsableTick) would make
+        // every graduation on this template fail, and every such launch sit stuck until the 7-day rescue.
+        if (config.tickSpacing < TickMath.MIN_TICK_SPACING || config.tickSpacing > TickMath.MAX_TICK_SPACING) revert InvalidTickSpacing();
         _configs.push(config);
         id = _configs.length - 1;
         emit LaunchConfigAdded(id);
@@ -257,7 +293,8 @@ contract LaunchpadFactory {
     }
 
     /// @notice Marks a quote asset as Monday-only (used for the RWA quote asset aBIL). Launches quoted in it must
-    ///         graduate on Monday Trade; choosing Uniswap v4 reverts with `PairRequiresMonday`.
+    ///         graduate on Monday Trade; choosing Uniswap v4 reverts with `PairRequiresMonday`. v2 (sec2, LP-6): only
+    ///         launches made from now on are affected (`launchMondayOnly` is snapshotted at launch).
     function setPairMondayOnly(address pairToken, bool mondayOnly) external onlyOwner {
         pairMondayOnly[pairToken] = mondayOnly;
         emit PairMondayOnlySet(pairToken, mondayOnly);
@@ -399,6 +436,8 @@ contract LaunchpadFactory {
         });
         _allTokens.push(token);
         curveToToken[curve] = token;
+        if (!modulesSealed) _seal(); // the first launch freezes the wiring, as it always has
+        if (pairMondayOnly[pairToken]) launchMondayOnly[token] = true;
         if (msg.value > 0) IFeeEscrow(escrow).credit{value: msg.value}(protocolFeeRecipient);
         emit TokenLaunched(token, curve, deployer, pairToken, launchConfigId, econ.graduationThreshold);
     }
@@ -426,22 +465,23 @@ contract LaunchpadFactory {
     ///         squatted its Monday pool at a price the executor could not realign (see MondayGraduationExecutor).
     ///         Anyone may graduate it on Uniswap v4 instead, right away, so a squatter can never force holders into
     ///         the 7-day rescue lock-up. Monday-only quote assets (aBIL) keep their rule unless the owner has
-    ///         explicitly allowed the fallback for that launch with `allowV4Fallback`.
+    ///         explicitly allowed the fallback for that launch with `allowV4Fallback`, or (v2, sec2) the launch has
+    ///         been stuck for `MONDAY_ONLY_FALLBACK_DELAY`.
     ///
-    ///         v2 (NOT deployed — see contracts/CHANGELOG-v2.md), LP-1: a full `GRADUATION_GAS` budget (+1/32) is
+    ///         v2 (NOT deployed — see DyorHQ/internal: ios-app/contracts/CHANGELOG-v2.md), LP-1: a full `GRADUATION_GAS` budget (+1/32) is
     ///         reserved for the Uniswap v4 graduation before the Monday retry runs, and the call must carry at least
-    ///         that reserve plus `GRADUATION_GAS` for the retry. Before, the retry was forwarded
-    ///         63/64 of all gas, so a squatted Monday pool full of dust-liquidity ticks (every tick crossed by the
-    ///         realign swap costs gas) could burn it and leave the v4 path starving on the last 1/64.
+    ///         that reserve plus `MONDAY_RETRY_GAS` for the retry. v1 forwarded 63/64 of all gas to the retry, so how
+    ///         much was left for v4 depended on the caller's gas and on call depth.
     function graduateFallback(address token) external {
-        // Both budgets are reserved up front; the 1/32 margin covers EIP-150's 63/64 rule on the capped retry.
-        if (gasleft() < 2 * GRADUATION_GAS + GRADUATION_GAS / 32) revert InsufficientGasForGraduation();
-        // The creator's venue is honoured whenever it works within the automatic graduation's gas budget: if the
-        // Monday graduation succeeds now (e.g. the squat was realignable, or an earlier attempt merely hit a
-        // transient failure), that is the result. The retry gets all the gas above the reserved v4 budget (at least
-        // `GRADUATION_GAS`), so a caller who brings more gas lets a heavy-but-realignable Monday pool still graduate on
-        // Monday. Only a Monday path that still reverts with that gas falls back to Uniswap v4, and the reserve is
-        // never spent by the retry, so a squatted pool can no longer starve the fallback.
+        // Both budgets are reserved up front; the 1/32 margin covers EIP-150's 63/64 rule on the capped retry. The
+        // retry floor is well above the automatic 2M budget, so sending little gas can no longer move a squat that the
+        // floor realigns. A squat that needs more than the floor keeps its Monday venue only when the caller sends more
+        // (the retry gets everything above the v4 reserve); at the minimum it falls back to Uniswap v4.
+        if (gasleft() < MONDAY_RETRY_GAS + GRADUATION_GAS + GRADUATION_GAS / 32) revert InsufficientGasForGraduation();
+        // The creator's venue is honoured whenever the Monday graduation works now (e.g. the squat was realignable, or
+        // an earlier attempt merely hit a transient failure). The retry gets all the gas above the reserved v4 budget
+        // (at least `MONDAY_RETRY_GAS`); only a Monday path that still reverts falls back to Uniswap v4, and the
+        // reserve is never spent by the retry, so a squatted pool can never starve the fallback.
         try this.graduate{gas: gasleft() - (GRADUATION_GAS + GRADUATION_GAS / 32)}(token) {
             return;
         } catch {}
@@ -465,7 +505,11 @@ contract LaunchpadFactory {
         bool useMonday = launch.graduationVenue == Types.GraduationVenue.Monday;
         if (fallbackToV4) {
             if (!useMonday || stuckSince[token] == 0) revert FallbackNotAvailable();
-            if (pairMondayOnly[launch.pairToken] && !v4FallbackAllowed[token]) revert PairRequiresMonday();
+            // v2 (sec2): the launch-time snapshot (LP-6), and a public valve once the launch has been stuck for a day.
+            if (
+                launchMondayOnly[token] && !v4FallbackAllowed[token]
+                    && block.timestamp < stuckSince[token] + MONDAY_ONLY_FALLBACK_DELAY
+            ) revert PairRequiresMonday();
             launch.graduationVenue = Types.GraduationVenue.UniswapV4;
             useMonday = false;
             emit GraduationVenueFallback(token);

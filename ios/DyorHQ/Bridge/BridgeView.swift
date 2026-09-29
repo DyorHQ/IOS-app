@@ -20,7 +20,10 @@ struct BridgeView: View {
 
     init(env: AppEnvironment) { _model = State(initialValue: BridgeModel(env: env)) }
 
-    var body: some View {
+    // A Moment link waits while this review is on screen (RootView's link gate).
+    var body: some View { reviewContent.holdsMomentLinks() }
+
+    @ViewBuilder private var reviewContent: some View {
         NavigationStack {
             Group {
                 #if DEBUG && targetEnvironment(simulator)
@@ -136,9 +139,13 @@ struct BridgeView: View {
                 .disabled(!primaryEnabled)
                 .padding(.top, 2)
 
-                Text("Powered by Aurora Intents · cross-chain settlement handled for you.")
-                    .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity)
-                    .padding(.top, 2)
+                VStack(spacing: 4) {
+                    Text("Powered by Aurora Intents · cross-chain settlement handled for you.")
+                        .foregroundStyle(.secondary)
+                    LearnMoreLink(.bridge)
+                }
+                .font(.caption2).frame(maxWidth: .infinity)
+                .padding(.top, 2)
             }
             .padding()
         }
@@ -282,6 +289,8 @@ struct BridgeView: View {
                 Divider()
                 summaryRow("Minimum received", model.minReceivedText ?? "—")
                 summaryRow("Total fee", model.feeText ?? "—")
+                // The source chain's own network fee for the deposit, which the bridge's fee doesn't include (IOST-1).
+                if let fee = model.networkFee { summaryRow("Max network fee", fee.summary) }
                 summaryRow("Slippage", model.slippageText)
                 if let secs = quote.timeEstimate, secs > 0 { summaryRow("Estimated time", "≈ \(Int(secs))s") }
                 summaryRow("Route", "\(model.fromChain.name) → \(model.toChain.name)")

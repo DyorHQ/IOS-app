@@ -10,11 +10,12 @@ import UIKit
 final class AppSettings {
     var appearance: AppearanceMode { didSet { store(appearance.rawValue, "settings.appearance"); appearance.apply() } }
     var notificationsEnabled: Bool { didSet { store(notificationsEnabled, "settings.notifications") } }
-    /// Notify on fills and liquidations (a preference; delivery needs the system permission).
+    /// Notify on completed swaps and on order fills the app sees while it runs (a preference; delivery needs the system
+    /// permission).
     var notifyFills: Bool { didSet { store(notifyFills, "settings.notifyFills") } }
     var notifyPriceAlerts: Bool { didSet { store(notifyPriceAlerts, "settings.notifyPrice") } }
     /// Require Face ID / Touch ID before signing a transaction — a device-side second factor for a self-custodial
-    /// wallet, enforced in the confirmation sheet.
+    /// wallet, enforced in the confirmation sheet. On by default for a new install (`appLockDefault`).
     var requireBiometrics: Bool { didSet { store(requireBiometrics, "settings.biometrics") } }
     /// Default leverage the perps ticket opens on.
     var defaultLeverage: Double { didSet { store(defaultLeverage, "settings.leverage") } }
@@ -29,7 +30,7 @@ final class AppSettings {
         notificationsEnabled = defaults.object(forKey: "settings.notifications") as? Bool ?? true
         notifyFills = defaults.object(forKey: "settings.notifyFills") as? Bool ?? true
         notifyPriceAlerts = defaults.object(forKey: "settings.notifyPrice") as? Bool ?? false
-        requireBiometrics = defaults.object(forKey: "settings.biometrics") as? Bool ?? false
+        requireBiometrics = defaults.object(forKey: "settings.biometrics") as? Bool ?? Self.appLockDefault(defaults)
         defaultLeverage = defaults.object(forKey: "settings.leverage") as? Double ?? TradingDefaults.leverage
         slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? TradingDefaults.slippageBps
     }
@@ -42,6 +43,20 @@ final class AppSettings {
     }
 
     private func store(_ value: Any, _ key: String) { defaults.set(value, forKey: key); AppSettings.onChange?() }
+
+    /// App Lock where no choice was ever saved (security audit 2026-09-26, IOSK-4), decided once and saved so it never
+    /// flips later: ON for a new install on a device that can verify its owner, so a phone picked up unlocked can't sign
+    /// without Face ID or the passcode. An install from before this default — told apart by what earlier runs left in
+    /// UserDefaults — keeps the OFF it has always had. A device with no passcode starts OFF too: App Lock fails closed
+    /// there, and it would block every signature until one is set.
+    private static func appLockDefault(_ defaults: UserDefaults) -> Bool {
+        let earlierRun = ["settings.", "session.", "mera.", "localWallet.", "venueTokens.", "activityLog.", "notifications.",
+                          "knownTokens.", "priceAlerts.", "bridge.", "perp."]
+        let isEarlierInstall = defaults.dictionaryRepresentation().keys.contains { key in earlierRun.contains { key.hasPrefix($0) } }
+        let on = !isEarlierInstall && BiometricGate.canAuthenticateOwner
+        defaults.set(on, forKey: "settings.biometrics")
+        return on
+    }
 
     /// Mirrors settings to the backend (installed by the app environment).
     nonisolated(unsafe) static var onChange: (() -> Void)?
@@ -113,15 +128,31 @@ enum BiometricGate {
     /// Verifies the device owner before a sensitive action: Face ID / Touch ID, falling back to the device passcode
     /// (after a biometric lockout, or when no biometrics are enrolled). FAILS CLOSED — if the owner can't be verified
     /// at all (no passcode set) or verification fails, it returns false and the action must not proceed.
+    @MainActor
     static func authenticate(reason: String) async -> Bool {
         let context = LAContext()
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else { return false }
+        BiometricPrompt.shared.showing += 1
+        defer { BiometricPrompt.shared.showing -= 1 }
         return await withCheckedContinuation { continuation in
             context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, _ in
                 continuation.resume(returning: success)
             }
         }
     }
+
+    /// Whether an `authenticate` prompt is on screen: its system UI makes the scene `.inactive`, and the privacy cover
+    /// stays off behind it (RootView), as it does behind a passkey prompt. Observable.
+    @MainActor
+    static var isPrompting: Bool { BiometricPrompt.shared.showing > 0 }
+}
+
+/// The `BiometricGate` prompts on screen, observed through `BiometricGate.isPrompting`.
+@Observable
+@MainActor
+final class BiometricPrompt {
+    static let shared = BiometricPrompt()
+    fileprivate(set) var showing = 0
 }
 
 /// Light / Dark / System, the same three choices Apple's own apps offer.

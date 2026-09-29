@@ -12,14 +12,19 @@ const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "out");
 
 const MAP = {
   momentsFactoryAbi: "MomentsFactory",
+  momentsFactoryV2Abi: "MomentsFactory",
   momentCollectAbi: "MomentCollect",
   momentGraduationAbi: "MomentGraduation",
   momentFeeHookAbi: "MomentFeeHook",
   momentBuybackAbi: "MomentBuyback",
+  momentLockerV2Abi: "MomentLocker",
   launchpadFactoryAbi: "LaunchpadFactory",
   bondingCurveAbi: "BondingCurve",
   mondayExecutorAbi: "MondayGraduationExecutor",
   memeHookAbi: "MemeHook",
+  memeHookV2Abi: "MemeHook",
+  launchpadFactoryV2Abi: "LaunchpadFactory",
+  mondayFeeVaultAbi: "MondayFeeVault",
 };
 
 // Flatten a param list to canonical types (tuples expanded) so struct/field names don't matter.

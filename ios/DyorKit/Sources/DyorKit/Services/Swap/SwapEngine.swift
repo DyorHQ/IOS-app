@@ -8,6 +8,7 @@ public actor SwapEngine {
     public static let quoteTimeout: TimeInterval = 20
 
     public let rpc: RPCClient
+    private let multicall: Multicall
     private let kuru: KuruFlowClient
     private let uniswap: UniswapVenue
     private let monday: MondayVenue
@@ -18,6 +19,7 @@ public actor SwapEngine {
     public init(rpc: RPCClient, session: URLSession = .shared, launchpadFactories: [Address] = [], moments: MomentsAddresses? = nil) {
         self.rpc = rpc
         let multicall = Multicall(rpc: rpc)
+        self.multicall = multicall
         let v3 = V3Router(multicall: multicall)
         kuru = KuruFlowClient(session: session)
         uniswap = UniswapVenue(multicall: multicall, v3: v3, launchpadFactories: launchpadFactories, moments: moments)
@@ -29,19 +31,20 @@ public actor SwapEngine {
     }
 
     /// Every venue's answer, best output first, with a readable reason for each venue that gave none. A pair with a
-    /// retired cohort's Moment coin on either side gets no quote from any venue, and no venue is even asked.
+    /// retired cohort's Moment coin on either side gets no quote from any venue, and no venue is even asked; nor does a
+    /// buy of a coin still on a retired launchpad's curve (`buyRefusal`).
     public func quotes(for request: SwapRequest) async -> QuoteResult {
         if let closed = Self.tradingClosed(request.tokenIn, request.tokenOut) {
-            let reason = SwapMath.describe(closed)
-            return QuoteResult(errors: Dictionary(uniqueKeysWithValues: Self.quoteVenues.map { ($0, reason) }))
+            return Self.refusedEverywhere(closed)
         }
         guard Self.isQuotable(request) else { return QuoteResult() }
         if Self.isWrap(request.tokenIn, request.tokenOut) { return QuoteResult(quotes: [Self.wrapQuote(request)]) }
+        if let refused = await buyRefusal(request.tokenOut) { return Self.refusedEverywhere(refused) }
         var outcomes: [Venue: Result<VenueQuote?, Error>] = [:]
         await withTaskGroup(of: (Venue, Result<VenueQuote?, Error>).self) { group in
             for venue in Self.quoteVenues {
                 group.addTask {
-                    do { return (venue, .success(try await self.quote(venue, for: request))) } catch { return (venue, .failure(error)) }
+                    do { return (venue, .success(try await self.ask(venue, for: request))) } catch { return (venue, .failure(error)) }
                 }
             }
             for await (venue, outcome) in group { outcomes[venue] = outcome }
@@ -58,14 +61,21 @@ public actor SwapEngine {
         return QuoteResult(quotes: Self.rank(quotes), errors: errors)
     }
 
-    /// One venue's quote, or nil when it has no route. Throws with a readable message on failure or timeout, and
-    /// `SwapError.tradingClosed` — before any venue is asked — when a retired cohort's Moment coin is on either side.
+    /// One venue's quote, or nil when it has no route. Throws with a readable message on failure or timeout, and —
+    /// before any venue is asked — `SwapError.tradingClosed` when a retired cohort's Moment coin is on either side, and
+    /// `buyRefusal`'s answer when the coin bought is still on a retired launchpad's curve.
     public func quote(_ venue: Venue, for request: SwapRequest) async throws -> VenueQuote? {
         if let closed = Self.tradingClosed(request.tokenIn, request.tokenOut) { throw closed }
         guard Self.isQuotable(request) else { return nil }
         if Self.isWrap(request.tokenIn, request.tokenOut) { return venue == .wrap ? Self.wrapQuote(request) : nil }
         if venue == .wrap { return nil }
-        return try await Self.withTimeout(Self.quoteTimeout, venue: venue) {
+        if let refused = await buyRefusal(request.tokenOut) { throw refused }
+        return try await ask(venue, for: request)
+    }
+
+    /// One venue's quote once the engine's checks passed, within `quoteTimeout`.
+    private func ask(_ venue: Venue, for request: SwapRequest) async throws -> VenueQuote? {
+        try await Self.withTimeout(Self.quoteTimeout, venue: venue) {
             switch venue {
             case .kuru: return try await self.kuru.quote(request)
             case .uniswap: return try await self.uniswap.quote(request)
@@ -77,7 +87,8 @@ public actor SwapEngine {
 
     // MARK: Past-cohort Moment coins
 
-    /// The retired Moments cohorts' pool hooks: a route through one pays the retired platform wallet.
+    /// The retired Moments cohorts' pool hooks. The app trades no past cohort's pool (on cohorts 1 and 2 a route through
+    /// one also pays the retired platform wallet).
     static let retiredHooks = Set(MomentsAddresses.retiredMainnet.map(\.hook))
 
     /// Whether `token` may be traded in the app at all: false for a retired cohort's Moment coin, on every venue.
@@ -120,7 +131,35 @@ public actor SwapEngine {
         }
     }
 
+    // MARK: Retired launchpads' coins
+
+    /// Why `token` may not be bought, or nil when it may. A coin still on a retired launchpad's curve (bonding, migrating
+    /// or refund mode) is sell-only (owner decision 2026-09-28): its holders sell, nobody buys, so a buy of it gets
+    /// `SwapError.retiredLaunchpad` and no venue is asked. Read on-chain from every retired factory's record
+    /// (`RetiredLaunchpad.sellOnlyCoins`); a coin that graduated into a pool trades both ways, and selling one is never
+    /// checked. The app's own tokens (`Token.core`) and MON are no launchpad coin and need no read. A read that fails
+    /// refuses too (`SwapError.launchpadUnchecked`): nothing could rule the coin out.
+    public func buyRefusal(_ token: Token) async -> SwapError? {
+        guard Self.mayBeLaunchCoin(token) else { return nil }
+        do {
+            return try await RetiredLaunchpad.sellOnlyCoins([token.address], multicall: multicall).contains(token.address) ? .retiredLaunchpad(token.address) : nil
+        } catch {
+            return .launchpadUnchecked
+        }
+    }
+
+    /// Whether `token` could be a launchpad coin at all: not MON, and none of the app's own tokens.
+    nonisolated static func mayBeLaunchCoin(_ token: Token) -> Bool {
+        !token.isNative && Token.core(token.address) == nil
+    }
+
     // MARK: Helpers
+
+    /// No quote, with `error`'s reason under every venue.
+    private static func refusedEverywhere(_ error: SwapError) -> QuoteResult {
+        let reason = SwapMath.describe(error)
+        return QuoteResult(errors: Dictionary(uniqueKeysWithValues: quoteVenues.map { ($0, reason) }))
+    }
 
     private static func isQuotable(_ request: SwapRequest) -> Bool {
         request.tokenIn.address != request.tokenOut.address && request.amountIn > 0

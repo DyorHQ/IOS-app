@@ -28,32 +28,33 @@ final class BridgeModel {
     private var didLoadBalances = false
 
     private(set) var quote: AuroraQuote?
+    /// The most the deposit's network fee can come to on the source chain at today's fees, once the quote names the
+    /// deposit address (IOST-1). The deposit is signed there against a public RPC, within `NetworkFeeLimits`.
+    private(set) var networkFee: TransactionSender.FeePreview?
     private(set) var quoting = false
     private(set) var quoteError: String?
     private var quoteTask: Task<Void, Never>?
 
     enum Phase: Equatable { case idle, signing, submitting, bridging(AuroraSwapStatus), done(String), settling(String), failed(String) }
-    private(set) var phase: Phase = .idle
-    /// Invalidates a running poll when the user starts over, so a stale poll can't overwrite a fresh state.
-    private var pollGeneration = 0
-    // The bridge in flight, captured at signing time for the completion record + notification — so a record always
-    // describes the bridge that was actually sent, even if the form is somehow changed while a poll is still running.
-    private var pendingHash: String?
-    private var pendingUsd: Double?
-    private var pendingInSymbol: String?
-    private var pendingOutSymbol: String?
-    private var pendingFromName: String?
-    private var pendingToName: String?
-    private var pendingAmountText: String?
-    // For confirming arrival by the destination balance itself — intent bridges often credit the funds before Aurora's
-    // status indexer reports SUCCESS, so the poll also watches the destination token's balance climb past its baseline.
-    private var pendingToToken: AuroraToken?
-    private var pendingDestChain: EVMChain?
-    private var pendingDestBaseline: BigUInt?
-    private var pendingMinOut: BigUInt?
-    /// The block-explorer URL the "View" link opens on a completed bridge — the source deposit tx as soon as it's
-    /// signed, upgraded to the destination arrival tx once Aurora reports it, so the user can verify it on-chain.
-    private(set) var completedTxURL: URL?
+    /// Signing and submitting, and failures before a deposit was sent. Once one is sent, `phase` follows the app-wide
+    /// `BridgeTracker`, which keeps tracking it after this screen closes or the app is killed (GL-5).
+    private var localPhase: Phase = .idle
+    /// The deposit this screen sent and shows (its source transaction hash).
+    private var trackedHash: String?
+    var phase: Phase {
+        guard let trackedHash, let status = env.bridgeTracker.status[trackedHash] else { return localPhase }
+        switch status {
+        case .bridging(let stage): return .bridging(stage)
+        case .arrived(let out): return .done(out)
+        case .unverified(let message), .settling(let message): return .settling(message)
+        case .refunded(let message), .failed(let message): return .failed(message)
+        }
+    }
+    /// The source deposit's explorer link, as soon as it's signed.
+    private var sourceTxURL: URL?
+    /// The block-explorer URL the "View" link opens: the source deposit tx as soon as it's signed, upgraded to the
+    /// destination arrival tx once Aurora reports it, so the user can verify it on-chain.
+    var completedTxURL: URL? { trackedHash.flatMap { env.bridgeTracker.arrivalURL[$0] } ?? sourceTxURL }
 
     init(env: AppEnvironment) {
         self.env = env
@@ -291,7 +292,7 @@ final class BridgeModel {
 
     func getQuote() async {
         guard let from = fromToken, let to = toToken, let owner = env.session.address, let amount = amountRaw else { return }
-        quoting = true; quoteError = nil; defer { quoting = false }
+        quoting = true; quoteError = nil
         await ensureBackendSession()
         do {
             quote = try await env.aurora.quote(
@@ -300,10 +301,27 @@ final class BridgeModel {
         } catch {
             quote = nil
             quoteError = humanize(describe(error))
+            quoting = false
+            return
         }
+        quoting = false
+        await loadNetworkFee()
     }
 
-    private func resetQuote() { quoteTask?.cancel(); quote = nil; quoteError = nil }
+    /// Prices the deposit the quote asks for on the source chain (`networkFee`), shown on the review card beside the
+    /// bridge's own fee.
+    private func loadNetworkFee() async {
+        networkFee = nil
+        guard let quote, let deposit = quote.depositAddress.flatMap(Address.init), let from = fromToken, let owner = env.session.address,
+              let amount = BigUInt(quote.amountIn), let request = try? Self.depositRequest(from, to: deposit, amount: amount) else { return }
+        let chain = fromChain
+        let fee = await env.sender(for: chain).feePreview([.call(request, label: "Deposit")], from: owner)
+        // A new quote or source meanwhile: this fee isn't for it.
+        guard self.quote?.depositAddress == quote.depositAddress, fromChain == chain else { return }
+        networkFee = fee
+    }
+
+    private func resetQuote() { quoteTask?.cancel(); quote = nil; quoteError = nil; networkFee = nil }
 
     /// Aurora returns some validation errors with raw smallest-unit amounts (e.g. "…try at least 150000"). Reformat
     /// any standalone large integer in an amount error into human units of the source token, so the user reads
@@ -372,180 +390,111 @@ final class BridgeModel {
 
     func execute() async {
         // A passkey account's bridge always asks (MERA-PLAN §3): one Face ID when the deposit is signed.
-        guard let wallet = env.session.wallet(for: MeraSession.Action(.alwaysAsks(.bridge))) else { phase = .failed("Sign in to bridge."); return }
+        guard let wallet = env.session.wallet(for: MeraSession.Action(.alwaysAsks(.bridge))) else { localPhase = .failed("Sign in to bridge."); return }
         guard let from = fromToken, let amount = amountRaw, let quote, let deposit = quote.depositAddress, let depositAddr = Address(deposit) else {
-            phase = .failed("Get a quote first."); return
+            localPhase = .failed("Get a quote first."); return
         }
         if env.settings.appLockApplies(to: env.session.account), !(await BiometricGate.authenticate(reason: "Confirm bridge")) { return }
-        phase = .signing
-        completedTxURL = nil
+        localPhase = .signing
+        trackedHash = nil
+        sourceTxURL = nil
         // The quote is EXACT_INPUT for the amount the user typed, delivered back to the user's own address. Refuse to
         // sign anything else — a quote whose input amount, recipient or refund address differs from the request. This
         // catches a buggy or mismatched quote; it cannot prove the deposit address is Aurora's, because the request
         // echo arrives in the same response as that address: the address is trusted to Aurora and the aurora-proxy
         // Edge Function, and the review card shows it before the user confirms (security audit 2026-09-26, IOST-3).
         guard let quotedIn = BigUInt(quote.amountIn), quotedIn == amount else {
-            phase = .failed("The bridge quote didn't match the amount you entered, so nothing was sent. Get a new quote.")
+            localPhase = .failed("The bridge quote didn't match the amount you entered, so nothing was sent. Get a new quote.")
             return
         }
         guard let owner = env.session.address, let to = toToken,
               quote.request?.matches(amount: amount, originAsset: from.assetId, destinationAsset: to.assetId, owner: owner) == true else {
-            phase = .failed("The bridge quote didn't match your request (amount, tokens or your address), so nothing was sent. Get a new quote.")
+            localPhase = .failed("The bridge quote didn't match your request (amount, tokens or your address), so nothing was sent. Get a new quote.")
             return
         }
         let sendAmount = quotedIn
+        let sourceChain = fromChain
+        let destChain = toChain
+        // A lock or an app switch while the deposit is signed and sent suspends this: ask for the time iOS grants, so the
+        // deposit is broadcast, recorded and persisted, and Aurora told (GL-5).
+        let background = BackgroundTime("Bridge")
+        defer { background.end() }
         do {
-            let request: TransactionRequest
-            if from.isNative {
-                request = TransactionRequest(to: depositAddr, value: sendAmount)
-            } else if let contract = from.contractAddress.flatMap(Address.init) {
-                request = TransactionRequest(to: contract, data: try ERC20.transferCalldata(to: depositAddr, amount: sendAmount))
-            } else { phase = .failed("This source token can't be bridged."); return }
+            guard let request = try Self.depositRequest(from, to: depositAddr, amount: sendAmount) else {
+                localPhase = .failed("This source token can't be bridged."); return
+            }
 
-            pendingHash = nil
-            pendingUsd = quote.amountOutUsd.flatMap(Double.init) ?? quote.amountInUsd.flatMap(Double.init)
-            pendingInSymbol = from.symbol
-            pendingOutSymbol = toToken?.symbol
-            pendingFromName = fromChain.name
-            pendingToName = toChain.name
-            pendingAmountText = amountText
-            // Snapshot the destination balance now, before any credit, so the poll can confirm the arrival on-chain even
-            // if Aurora's status lags. Uses the balance already loaded for the picker — no extra call on the send path.
-            pendingToToken = toToken
-            pendingDestChain = toChain
-            pendingMinOut = quote.minAmountOut.flatMap { BigUInt($0) }
-            pendingDestBaseline = toToken.flatMap { balances[$0.assetId] } ?? 0
-            let hash = try await env.sender(for: fromChain).send(request, from: wallet)
-            pendingHash = hash.hexString
-            completedTxURL = fromChain.explorerTx(hash.hexString) // source deposit tx — a verifiable link straight away
-            phase = .submitting
-            _ = try? await env.aurora.submitDeposit(txHash: hash.hexString, depositAddress: deposit, memo: quote.depositMemo)
-            // Bridge fee (USD) = the value the route consumed: input value − output value, when the quote priced both.
+            // The destination balance, asked for before signing (RI-3): the baseline an arrival is measured from. Asked
+            // before the deposit exists, it can't include this bridge's credit, which takes the deposit confirming and the
+            // bridge settling. Never the picker's cached balance, which can be missing or from before an earlier bridge
+            // landed; a read that fails leaves no baseline, and the arrival is then never inferred from the balance. It
+            // is recorded when it answers, after the deposit is persisted: a slow destination RPC never holds that up.
+            // Another bridge to the same asset unsettled now rules the balance out for both (`PendingBridge.overlapped`).
+            let balancer = env.chainBalances
+            let baselineRead = Task { await balancer.balances(owner: owner, chain: destChain, tokens: [to])[to.assetId] }
+            let overlapping = BridgeTracker.pending(owner: owner).contains { $0.destToken.assetId == to.assetId }
+            let hash: Data
+            do {
+                hash = try await env.sender(for: sourceChain).send(request, from: wallet)
+            } catch TransactionError.possiblySent(let possible) {
+                // No endpoint said it took the deposit, but it may be live: track it rather than invite a second one.
+                hash = possible
+            } catch {
+                baselineRead.cancel()
+                throw error
+            }
+            trackedHash = hash.hexString
+            sourceTxURL = sourceChain.explorerTx(hash.hexString) // source deposit tx — a verifiable link straight away
+            // Recorded and persisted the moment it is sent, before anything else can go wrong (GL-5): the funds have left
+            // the source chain.
             let bridgeFeeUsd: Double? = {
                 guard let inUsd = quote.amountInUsd.flatMap(Double.init), let outUsd = quote.amountOutUsd.flatMap(Double.init) else { return nil }
                 return max(0, inUsd - outUsd)
             }()
+            let usd = quote.amountOutUsd.flatMap(Double.init) ?? quote.amountInUsd.flatMap(Double.init)
             ActivityLog.record(ActivityRecord(
-                kind: .bridge, title: "Bridge \(from.symbol) → \(toToken?.symbol ?? "")",
-                subtitle: "\(amountText) \(from.symbol) · \(fromChain.name) → \(toChain.name)",
-                hash: hash, section: "bridge", usd: pendingUsd, feeUsd: bridgeFeeUsd), owner: env.session.address)
-            pollGeneration += 1
-            await poll(deposit: deposit, memo: quote.depositMemo, generation: pollGeneration)
-        } catch where env.session.isPasskeyAccount && isUserCancellation(error) {
-            phase = .failed(TransactionRun.notSent)
-        } catch {
-            phase = .failed(describe(error))
-        }
-    }
-
-    private func poll(deposit: String, memo: String?, generation: Int) async {
-        var consecutiveFailures = 0
-        for _ in 0..<150 {
-            guard generation == pollGeneration else { return } // the user started over — stop touching phase
-            do {
-                let state = try await env.aurora.status(depositAddress: deposit, depositMemo: memo)
-                guard generation == pollGeneration else { return } // the user started over while this was in flight
-                consecutiveFailures = 0
-                // Once Aurora surfaces the destination-chain settlement tx, upgrade the "View" link from the source
-                // deposit to the arrival tx — that's the on-chain proof the funds actually landed.
-                if let ref = state.swapDetails?.destinationChainTxHashes?.last {
-                    completedTxURL = ref.explorerUrl.flatMap(URL.init(string:)) ?? pendingDestChain?.explorerTx(ref.hash) ?? completedTxURL
-                }
-                switch state.status {
-                case .success:
-                    let out = state.swapDetails?.amountOutFormatted.map { "\($0) \(pendingOutSymbol ?? toToken?.symbol ?? "")" } ?? expectedOut ?? ""
-                    recordCompletion(usd: state.swapDetails?.amountOutUsd.flatMap(Double.init))
-                    resetQuote() // the deposit address is consumed — a new bridge must re-quote
-                    phase = .done(out)
-                    Task { await loadBalances(force: true) } // balances changed — refresh across chains
-                    return
-                case .refunded:
-                    resetQuote()
-                    // Correct the optimistic source-send row (same hash → replaces it) and tell the user, so the feed
-                    // and notifications never leave a failed bridge looking like it succeeded.
-                    correctBridge(title: "Bridge refunded", detail: "\(pendingInSymbol ?? "Funds") returned on \(fromChain.name)")
-                    phase = .failed("Bridge refunded — \(state.swapDetails?.refundReason ?? "the swap couldn't complete"). Your funds were returned on \(fromChain.name).")
-                    return
-                case .failed:
-                    resetQuote()
-                    correctBridge(title: "Bridge failed", detail: state.swapDetails?.refundReason ?? "The bridge could not complete on \(toChain.name)")
-                    phase = .failed(state.swapDetails?.refundReason ?? "The bridge failed.")
-                    return
-                default:
-                    // Aurora still says "in progress", but the funds may already be on the destination — confirm by the
-                    // balance itself so the screen doesn't spin forever after the credit has actually landed.
-                    if await finishIfCredited(generation: generation) { return }
-                    phase = .bridging(state.status)
-                }
-            } catch {
-                guard generation == pollGeneration else { return } // started over during the failed request
-                // Aurora's status read failed, but the credit may still have landed — check the balance before deciding.
-                if await finishIfCredited(generation: generation) { return }
-                // Don't stall silently: after several straight failures, tell the user it's still settling (and it's
-                // recorded in Activity) rather than spinning forever on a status we can't read.
-                consecutiveFailures += 1
-                if consecutiveFailures >= 4 {
-                    phase = .settling("Still settling — this can take a minute. It'll appear in your balance and Activity once it lands.")
-                }
+                kind: .bridge, title: "Bridge \(from.symbol) → \(to.symbol)",
+                subtitle: "\(amountText) \(from.symbol) · \(sourceChain.name) → \(destChain.name)",
+                hash: hash, section: "bridge", usd: usd, feeUsd: bridgeFeeUsd), owner: owner)
+            let tracker = env.bridgeTracker
+            tracker.track(PendingBridge(
+                hash: hash.hexString, owner: owner, depositAddress: deposit, memo: quote.depositMemo,
+                fromChainId: sourceChain.auroraId, toChainId: destChain.auroraId, fromName: sourceChain.name, toName: destChain.name,
+                inSymbol: from.symbol, amountText: amountText, destToken: to, baseline: nil,
+                minOut: quote.minAmountOut.flatMap { BigUInt($0) }, usd: usd, sentAt: Date(), overlapped: overlapping))
+            Task {
+                let baseline = await baselineRead.value
+                tracker.setBaseline(baseline, for: hash.hexString, owner: owner)
             }
-            try? await Task.sleep(for: .seconds(4))
+            localPhase = .submitting
+            _ = try? await env.aurora.submitDeposit(txHash: hash.hexString, depositAddress: deposit, memo: quote.depositMemo)
+            // The deposit address is consumed: `reset` re-quotes before another bridge can be sent (`canBridge`).
+            localPhase = .bridging(.pendingDeposit)
+        } catch where env.session.isPasskeyAccount && isUserCancellation(error) {
+            localPhase = .failed(TransactionRun.notSent)
+        } catch {
+            localPhase = .failed(describe(error))
         }
-        guard generation == pollGeneration else { return }
-        // Past the polling window and still not terminal: the deposit is on its way; hand it off to Activity/balances.
-        phase = .settling("Taking longer than usual — your funds are on their way. This will show in your balance and Activity when it lands.")
     }
 
-    /// If the destination token's balance has climbed past its pre-bridge baseline by (about) the promised minimum, the
-    /// funds have landed — finish the bridge even when Aurora's status indexer hasn't caught up yet. Returns whether it
-    /// finished, so the caller stops polling.
-    private func finishIfCredited(generation: Int) async -> Bool {
-        guard let owner = env.session.address, let token = pendingToToken, let chain = pendingDestChain,
-              let baseline = pendingDestBaseline, let minOut = pendingMinOut, minOut > 0 else { return false }
-        let bals = await env.chainBalances.balances(owner: owner, chain: chain, tokens: [token])
-        guard generation == pollGeneration else { return false } // the user started over while this read was in flight
-        guard let now = bals[token.assetId], now > baseline else { return false }
-        let credited = now - baseline
-        // Require (about) the guaranteed minimum output to have arrived — a small tolerance for rounding, but enough
-        // that unrelated dust can never trip a false "arrived".
-        guard credited * 100 >= minOut * 95 else { return false }
-        recordCompletion(usd: pendingUsd)
-        resetQuote()
-        phase = .done("\(NumberStyle.units(credited, decimals: token.decimals)) \(token.symbol)")
-        Task { await loadBalances(force: true) }
-        return true
-    }
-
-    /// Persist a completed bridge (for Portfolio volume) and post the completion notification. Idempotent per tx hash.
-    /// Uses the route/amount captured at signing time, never the live form, so the record can't be corrupted by a
-    /// later selection.
-    private func recordCompletion(usd: Double?) {
-        let value = usd ?? pendingUsd ?? 0
-        let from = pendingFromName ?? fromChain.name
-        let to = pendingToName ?? toChain.name
-        if let hash = pendingHash {
-            BridgeStore.record(BridgeRecord(id: hash, usd: value, fromChain: from, toChain: to,
-                                            inSymbol: pendingInSymbol ?? "", outSymbol: pendingOutSymbol ?? "", time: Date()),
-                               owner: env.session.address)
-        }
-        Notifications.bridge(amount: "\(pendingAmountText ?? amountText) \(pendingInSymbol ?? "")", from: from, to: to)
-    }
-
-    /// Replaces the optimistic source-send activity row (matched by the same source-tx hash) with a terminal-failure
-    /// row and notifies — so a refunded or failed bridge is corrected in Recent Activity, the backend mirror, and
-    /// platform volume (usd cleared) instead of lingering as a success.
-    private func correctBridge(title: String, detail: String) {
-        let hash = pendingHash.flatMap { Data(hex: $0) }
-        Activity.record(ActivityRecord(kind: .bridge, title: title, subtitle: detail, hash: hash, section: "bridge"), owner: env.session.address)
+    /// The source-chain deposit: `amount` of `token` to Aurora's deposit address — a plain transfer of the native coin,
+    /// or the token's `transfer`. Nil for a token with neither.
+    private static func depositRequest(_ token: AuroraToken, to deposit: Address, amount: BigUInt) throws -> TransactionRequest? {
+        if token.isNative { return TransactionRequest(to: deposit, value: amount) }
+        guard let contract = token.contractAddress.flatMap(Address.init) else { return nil }
+        return TransactionRequest(to: contract, data: try ERC20.transferCalldata(to: deposit, amount: amount))
     }
 
     /// Return to a clean state to start another bridge, keeping the entered amount and re-quoting it (so a
-    /// pre-broadcast failure like "no gas" can be retried without retyping).
+    /// pre-broadcast failure like "no gas" can be retried without retyping). A deposit already sent stays tracked by
+    /// `BridgeTracker`; balances are read again, since it may have moved them.
     func reset() {
-        pollGeneration += 1 // stop any poll still running from the previous bridge
-        phase = .idle
-        completedTxURL = nil
+        trackedHash = nil
+        sourceTxURL = nil
+        localPhase = .idle
         resetQuote()
         if amountRaw != nil { refreshQuoteSoon() }
+        Task { await loadBalances(force: true) }
     }
 }
 

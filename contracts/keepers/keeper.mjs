@@ -1,25 +1,31 @@
 #!/usr/bin/env node
-// DyorHQ keepers for the LIVE (immutable, v1) Launchpad and Moments contracts on Monad. Dry run by default: reads
+// DyorHQ keepers for the deployed (immutable) Launchpad and Moments contracts on Monad. Dry run by default: reads
 // chain state, simulates each permissionless call and prints the exact `cast send` it would run. `--send` executes
 // them through Foundry `cast` with a keystore / Foundry account / Ledger — never a raw private key.
 //
 //   node contracts/keepers/keeper.mjs <job...> [options]
-//   jobs: moments-graduation (MO-1) | buybacks (MO-2) | sweeps (LP-2) | launchpad-graduation (LP-1) | all
+//   jobs: moments-graduation (MO-1) | buybacks (MO-2) | sweeps (LP-2) | launchpad-graduation (LP-1) | governance | all
 //
 // Exit codes: 0 = nothing needs a human, 2 = alert(s) raised, 1 = the keeper failed. See keepers/README.md.
 import { parseArgs } from "node:util";
-import { createPublicClient, http } from "viem";
-import { momentsCohorts, launchpads } from "./lib/deployments.mjs";
+import { createPublicClient, http, formatEther, parseEther } from "viem";
+import { momentsCohorts, launchpads, pinMismatches } from "./lib/deployments.mjs";
 import { makeSender, assertNoKeyEnv } from "./lib/send.mjs";
 import { makeReporter, postWebhook, loadState, saveState, EXIT } from "./lib/report.mjs";
-import { momentsGraduationJob, buybacksJob, sweepsJob, launchpadGraduationJob } from "./lib/jobs.mjs";
+import { redact, rpcLabel } from "./lib/redact.mjs";
+import { momentsGraduationJob, buybacksJob, sweepsJob, launchpadGraduationJob, governanceJob } from "./lib/jobs.mjs";
 
-const JOBS = ["moments-graduation", "buybacks", "sweeps", "launchpad-graduation"];
+const JOBS = ["moments-graduation", "buybacks", "sweeps", "launchpad-graduation", "governance"];
+// The metadata base the live Moments cohort (v2, cohort 4) was deployed with: part of its terms hash, and what the app
+// reads as cohort c4 in a Moment's link.
+const LIVE_EXTERNAL_BASE_URI = "https://dyorhq.fun/moments/c4/";
 
 const { values: o, positionals } = parseArgs({
   allowPositionals: true,
   options: {
-    "rpc-url": { type: "string", default: process.env.MONAD_RPC_URL || "https://rpc.monad.xyz" },
+    // rpc3 served every read of a full run on 2026-09-27; rpc1 rate-limited a single run after ~20 reads, and
+    // rpc.monad.xyz caps eth_getLogs at 100 blocks (the scans adapt to that).
+    "rpc-url": { type: "string", default: process.env.MONAD_RPC_URL || "https://rpc3.monad.xyz" },
     send: { type: "boolean", default: false },
     keystore: { type: "string" },
     "password-file": { type: "string" },
@@ -36,7 +42,9 @@ const { values: o, positionals } = parseArgs({
     "locker-idle-alert": { type: "string", default: "50000000" },
     "min-sweep-other": { type: "string" },
     "logs-lookback": { type: "string", default: "0" },
+    "logs-chunk": { type: "string", default: "100" },
     "watch-progress-bps": { type: "string", default: "0" },
+    "min-balance": { type: "string", default: "2" },
     "only-live": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
@@ -47,12 +55,16 @@ if (o.help || positionals.length === 0) {
   process.exit(o.help ? 0 : 1);
 }
 
+// Nothing printed, logged or posted may carry the RPC or webhook URL (either can embed an API key).
+const scrub = (s) => redact(s, [o["rpc-url"], o.webhook]);
+const log = (s) => console.log(scrub(s));
+
 async function main() {
   assertNoKeyEnv(); // even in dry-run: a key in the environment is a mistake worth stopping on
   const jobs = positionals.includes("all") ? JOBS : positionals;
   for (const j of jobs) if (!JOBS.includes(j)) throw new Error(`unknown job ${j}`);
 
-  const client = createPublicClient({ transport: http(o["rpc-url"]) });
+  const client = createPublicClient({ transport: http(o["rpc-url"], { retryCount: 3, retryDelay: 500 }) });
   const signer = o.keystore
     ? { keystore: o.keystore, passwordFile: o["password-file"] }
     : o.account
@@ -62,24 +74,58 @@ async function main() {
         : o.unlocked
           ? { unlocked: o.unlocked }
           : {};
-  const sender = makeSender({ send: o.send, rpcUrl: o["rpc-url"], signer, allowUnlocked: o["allow-unlocked"] });
-  const reporter = makeReporter();
+  const sender = makeSender({ send: o.send, rpcUrl: o["rpc-url"], signer, allowUnlocked: o["allow-unlocked"], log });
+  const reporter = makeReporter({ log: console.log, scrub });
   const state = loadState(o["state-file"]);
+  // Missing, unreadable or wrong-chain LIVE records throw here: the run fails loudly instead of skipping them.
   let cohorts = momentsCohorts(o.deployments);
   let pads = launchpads(o.deployments);
+  const liveLaunchpad = pads.find((p) => p.live);
+  const liveCohort = cohorts.find((c) => c.live);
   if (o["only-live"]) {
-    cohorts = cohorts.filter((c) => c.label.includes("live"));
-    pads = pads.filter((p) => p.label.includes("live"));
+    cohorts = cohorts.filter((c) => c.live);
+    pads = pads.filter((p) => p.live);
   }
   const common = { client, sender, reporter, state, simAccount: o["sim-from"] || undefined };
+  const logsLookback = BigInt(o["logs-lookback"]);
+  const logsChunk = BigInt(o["logs-chunk"]);
 
-  console.log(`keeper: ${jobs.join(", ")} · ${o.send ? "SEND" : "dry-run"} · rpc ${o["rpc-url"]}`);
+  console.log(`keeper: ${jobs.join(", ")} · ${o.send ? "SEND" : "dry-run"} · rpc ${rpcLabel(o["rpc-url"])}`);
+  for (const m of pinMismatches({ cohorts: [liveCohort], pads: [liveLaunchpad] })) {
+    reporter.alert({ job: "records", target: m.file, severity: "critical", reason: `live record names factory ${m.recorded} but the keeper pins ${m.pinned}: a deploy script or a hand edit replaced the record` });
+  }
+  for (const r of [liveLaunchpad, liveCohort]) {
+    // An RPC error here is left to the jobs (they alert on every failed read); only a definite "no code" alerts.
+    const code = await client.getCode({ address: r.factory }).catch(() => null);
+    if (code !== null && (!code || code === "0x")) reporter.alert({ job: "records", target: r.file, severity: "critical", reason: `no contract code at the recorded factory ${r.factory} on this RPC` });
+  }
+  if (o["sim-from"]) {
+    const bal = await client.getBalance({ address: o["sim-from"] }).catch(() => undefined);
+    if (bal !== undefined && bal < parseEther(o["min-balance"])) {
+      reporter.alert({ job: "keeper", target: o["sim-from"], severity: "warning", reason: `keeper balance ${formatEther(bal)} MON is below --min-balance ${o["min-balance"]} MON: graduation retries may stop` });
+    }
+  }
   for (const job of jobs) {
     console.log(`== ${job}`);
-    if (job === "moments-graduation") await momentsGraduationJob({ ...common, cohorts, logsLookback: BigInt(o["logs-lookback"]) });
-    if (job === "buybacks") await buybacksJob({ ...common, cohorts, slippageBps: BigInt(o["slippage-bps"]), lockerIdleAlert: BigInt(o["locker-idle-alert"]) });
-    if (job === "sweeps") await sweepsJob({ ...common, launchpads: pads, minOther: o["min-sweep-other"] ? BigInt(o["min-sweep-other"]) : undefined });
-    if (job === "launchpad-graduation") await launchpadGraduationJob({ ...common, launchpads: pads, watchProgressBps: BigInt(o["watch-progress-bps"]) });
+    try {
+      if (job === "moments-graduation") await momentsGraduationJob({ ...common, cohorts, logsLookback, logsChunk });
+      if (job === "buybacks") await buybacksJob({ ...common, cohorts, slippageBps: BigInt(o["slippage-bps"]), lockerIdleAlert: BigInt(o["locker-idle-alert"]) });
+      if (job === "sweeps") await sweepsJob({ ...common, launchpads: pads, minOther: o["min-sweep-other"] ? BigInt(o["min-sweep-other"]) : undefined });
+      if (job === "launchpad-graduation") await launchpadGraduationJob({ ...common, launchpads: pads, watchProgressBps: BigInt(o["watch-progress-bps"]) });
+      if (job === "governance") {
+        const expected = {
+          owner: liveLaunchpad.owner,
+          treasury: liveLaunchpad.treasury,
+          feesRecipient: liveLaunchpad.feesRecipient,
+          momentsGovernance: liveCohort.governance,
+          externalBaseURI: LIVE_EXTERNAL_BASE_URI,
+        };
+        await governanceJob({ ...common, launchpads: pads, cohorts, expected, logsLookback, logsChunk });
+      }
+    } catch (e) {
+      // A job-level failure (e.g. the RPC is down) is reported and the next job still runs.
+      reporter.alert({ job, target: "job", severity: "critical", reason: `job failed: ${e?.shortMessage || e?.message || e}` });
+    }
   }
   saveState(o["state-file"], state);
   const serious = reporter.alerts.filter((a) => a.severity !== "info");
@@ -91,7 +137,7 @@ async function main() {
 main().then(
   (code) => process.exit(code),
   (e) => {
-    console.error(`keeper failed: ${e?.stack || e}`);
+    console.error(`keeper failed: ${scrub(e?.stack || e)}`);
     process.exit(EXIT.ERROR);
   },
 );

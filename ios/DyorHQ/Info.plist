@@ -32,11 +32,11 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>13</string>
+	<string>16</string>
 	<key>FeeEscrow</key>
-	<string>$(FEE_ESCROW)</string>
+	<string>$(DYOR_DEBUG_FEE_ESCROW)</string>
 	<key>HolderFeeSharing</key>
-	<string>$(HOLDER_FEE_SHARING)</string>
+	<string>$(DYOR_DEBUG_HOLDER_FEE_SHARING)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationQueriesSchemes</key>
@@ -44,15 +44,33 @@
 		<string>https</string>
 	</array>
 	<key>LaunchRouter</key>
-	<string>$(LAUNCH_ROUTER)</string>
+	<string>$(DYOR_DEBUG_LAUNCH_ROUTER)</string>
 	<key>LaunchpadFactory</key>
-	<string>$(LAUNCHPAD_FACTORY)</string>
+	<string>$(DYOR_DEBUG_LAUNCHPAD_FACTORY)</string>
 	<key>MemeHook</key>
-	<string>$(MEME_HOOK)</string>
+	<string>$(DYOR_DEBUG_MEME_HOOK)</string>
+	<key>MomentsBuyback</key>
+	<string>$(DYOR_DEBUG_MOMENTS_BUYBACK)</string>
+	<key>MomentsCollect</key>
+	<string>$(DYOR_DEBUG_MOMENTS_COLLECT)</string>
+	<key>MomentsDeployBlock</key>
+	<string>$(DYOR_DEBUG_MOMENTS_DEPLOY_BLOCK)</string>
+	<key>MomentsFactory</key>
+	<string>$(DYOR_DEBUG_MOMENTS_FACTORY)</string>
+	<key>MomentsGraduation</key>
+	<string>$(DYOR_DEBUG_MOMENTS_GRADUATION)</string>
+	<key>MomentsHook</key>
+	<string>$(DYOR_DEBUG_MOMENTS_HOOK)</string>
+	<key>MomentsLocker</key>
+	<string>$(DYOR_DEBUG_MOMENTS_LOCKER)</string>
+	<key>MomentsPlatform</key>
+	<string>$(DYOR_DEBUG_MOMENTS_PLATFORM)</string>
+	<key>MomentsTreasury</key>
+	<string>$(DYOR_DEBUG_MOMENTS_TREASURY)</string>
+	<key>MomentsVesting</key>
+	<string>$(DYOR_DEBUG_MOMENTS_VESTING)</string>
 	<key>MonadRPCURL</key>
 	<string>$(DYOR_DEBUG_RPC_OVERRIDE)</string>
-	<key>NSCameraUsageDescription</key>
-	<string>DyorHQ uses the camera to scan wallet addresses and QR codes.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>DyorHQ uses Face ID to unlock your wallet on this device.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

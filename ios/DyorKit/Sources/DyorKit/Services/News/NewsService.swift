@@ -45,38 +45,58 @@ public actor NewsService {
 
     public let sources: [NewsSource]
     private let session: URLSession
-    private var cache: (at: Date, articles: [NewsArticle])?
+    private let now: @Sendable () -> Date
+    /// Each feed's last good answer, and when it came.
+    private var feeds: [NewsSource: (at: Date, articles: [NewsArticle])] = [:]
+    /// How long a feed's answer is served from memory.
+    public static let freshFor: TimeInterval = 120
 
-    public init(sources: [NewsSource] = NewsService.defaultSources, session: URLSession = .shared) {
+    public init(sources: [NewsSource] = NewsService.defaultSources, session: URLSession = .shared, now: @escaping @Sendable () -> Date = { Date() }) {
         self.sources = sources
         self.session = session
+        self.now = now
     }
 
     /// The latest headlines across every source, newest first. Feeds are fetched concurrently; one failing feed
-    /// never hides the others. Results are cached for two minutes.
+    /// never hides the others. Each feed's answer is kept for two minutes and only the others are asked again: a feed
+    /// that failed (or a cancellation cut short) is never kept, so it is asked on the next call instead of its gap being
+    /// served as fresh (security audit 2026-09-26, RS-10), and a feed that keeps failing — one behind bot protection
+    /// answering 403 — costs its own request, not a refetch of every feed.
     public func latest(limit: Int = 120, force: Bool = false) async -> [NewsArticle] {
-        if !force, let cache, Date().timeIntervalSince(cache.at) < 120 { return Array(cache.articles.prefix(limit)) }
-        let articles = await withTaskGroup(of: [NewsArticle].self) { group in
-            for source in sources {
-                group.addTask { await self.fetch(source) }
+        let asked = now()
+        var answered: [NewsSource: [NewsArticle]] = [:]
+        var stale: [NewsSource] = []
+        for source in sources {
+            if !force, let kept = feeds[source], asked.timeIntervalSince(kept.at) < Self.freshFor { answered[source] = kept.articles } else { stale.append(source) }
+        }
+        if !stale.isEmpty {
+            let fetched = await withTaskGroup(of: (NewsSource, [NewsArticle]?).self) { group in
+                for source in stale {
+                    group.addTask { (source, await self.fetch(source)) }
+                }
+                var all: [(NewsSource, [NewsArticle]?)] = []
+                for await result in group { all.append(result) }
+                return all
             }
-            var all: [NewsArticle] = []
-            for await batch in group { all.append(contentsOf: batch) }
-            return all
+            let cutShort = Task.isCancelled
+            for case let (source, articles?) in fetched {
+                answered[source] = articles
+                if !cutShort { feeds[source] = (asked, articles) }
+            }
         }
         var seen = Set<String>()
-        let merged = articles
+        let merged = sources.flatMap { answered[$0] ?? [] }
             .filter { seen.insert($0.id).inserted }
             .sorted { ($0.published ?? .distantPast) > ($1.published ?? .distantPast) }
-        cache = (Date(), merged)
         return Array(merged.prefix(limit))
     }
 
-    private func fetch(_ source: NewsSource) async -> [NewsArticle] {
+    /// One feed's articles, or nil when it couldn't be read.
+    private func fetch(_ source: NewsSource) async -> [NewsArticle]? {
         var request = URLRequest(url: source.feed)
         request.timeoutInterval = 15
         request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
-        guard let (data, response) = try? await session.data(for: request), (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true else { return [] }
+        guard let (data, response) = try? await session.data(for: request), (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true else { return nil }
         return RSSParser.parse(data, source: source.name)
     }
 }

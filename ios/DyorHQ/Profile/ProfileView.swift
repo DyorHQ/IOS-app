@@ -89,7 +89,9 @@ struct ProfileView: View {
                             .navigationTitle("Support")
                             .navigationBarTitleDisplayMode(.inline)
                     } label: { SettingsRow("Support", symbol: "questionmark.circle", tint: .accent) }
+                    Link(destination: SupportLinks.helpCenter) { SettingsRow("Help Center", symbol: "book", tint: .accent) }
                     Link(destination: SupportLinks.terms) { SettingsRow("Terms of Use", symbol: "doc.text", tint: .accent) }
+                    Link(destination: SupportLinks.privacy) { SettingsRow("Privacy Policy", symbol: "hand.raised", tint: .accent) }
                 }
 
                 Section("Network") {
@@ -143,9 +145,13 @@ struct ProfileView: View {
             .sheet(isPresented: $showDeleteAccount) { DeleteAccountView() }
             .confirmationDialog(session.canSign ? "Sign out of DyorHQ?" : "Stop watching this address?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button(session.canSign ? "Sign Out" : "Stop Watching", role: .destructive) {
-                    signingOut = true
                     let address = session.address
                     Task { @MainActor in
+                        // Signing out can delete the only copy of an imported key, so with App Lock on it asks for the
+                        // device owner first, like key export (audit F5).
+                        if session.canSign, settings.appLockApplies(to: session.account),
+                           !(await BiometricGate.authenticate(reason: "Sign out of DyorHQ")) { return }
+                        signingOut = true
                         // The Perpl trading key on this device is a delegate for this wallet: it goes with the session.
                         if let address { perplTrading.forget(address: address) }
                         await session.signOut()
@@ -246,6 +252,7 @@ struct ReceiveSheet: View {
                 }
                 VStack(spacing: 8) {
                     Text(address.checksummed)
+                        .speechSpellsOutCharacters()
                         .font(.footnote.monospaced())
                         .multilineTextAlignment(.center)
                         .textSelection(.enabled)
@@ -275,99 +282,488 @@ struct ReceiveSheet: View {
     }
 }
 
-/// Send MON or an ERC-20 to another address.
+/// Send MON or any token the wallet holds to another address.
 struct SendSheet: View {
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
-    @State private var token: Token = .mon
+    /// The asset to send, as the list showed it when it was chosen, Unverified mark included: the highest-value one the
+    /// wallet holds once the list is read (`WalletHoldings.selection`), then the user's pick. Nil before that, when every
+    /// held token is Unverified, and when a new read no longer holds it: the user picks.
+    @State private var choice: HeldToken?
+    /// Every token the wallet holds, ranked: the Portfolio's list (`WalletTokens`).
+    @State private var assets: AssetList = .loading
+    /// Retry bumps it, to read the list again.
+    @State private var attempt = 0
+    /// The list the form shows: the wallet and attempt it was read for, marked while the wallet's history is still read.
+    /// Available and Max are read again for each (`balanceReadKey`).
+    @State private var assetsKey: String?
+    /// The read of the list for a wallet and attempt (`readAssets`), on a task of its own: coming back from the token
+    /// list shows the form again, which restarts its tasks, and the read goes on, or stands, rather than starting over.
+    /// Cancelled when the sheet closes.
+    @State private var assetsRead: (id: String, task: Task<Void, Never>)?
+    /// The symbol of a pick a new read no longer held: it was cleared, with the amount, and the user picks again.
+    @State private var droppedChoice: String?
     @State private var recipient = ""
     @State private var amount = ""
     @State private var balance: BigUInt?
-    @State private var showConfirm = false
+    /// The token `balance` is for.
+    @State private var balanceToken: Address?
+    /// What the review shows and signs, frozen when Review is tapped (RT-7): a Max that lands late or an edit behind
+    /// the sheet can't change the amount signed after it was shown.
+    @State private var review: SendReview?
+    /// The pasted text hidden characters were removed from (GR-4), while it is still what the field holds.
+    @State private var cleanedPaste: String?
+    /// Whether the recipient has contract code (GR-3): nil until read, or when it couldn't be read.
+    @State private var recipientIsContract: Bool?
+    @State private var recipientCheckFailed = false
+    /// The recipient whose check finished (`checkRecipient`): coming back from the token list neither checks it again
+    /// nor clears the acknowledgement given for it.
+    @State private var checkedRecipient: Address?
+    /// Sending to a contract (or to an address that couldn't be checked) takes this acknowledgement.
+    @State private var sendToContract = false
 
+    private var token: Token? { choice?.token }
+    /// Which read of the list the form wants: this wallet's, the `attempt`th.
+    private var assetsReadKey: String { "\(session.address?.hex ?? "")#\(attempt)" }
+    /// Which balance Available and Max want: the chosen token's, after the list's latest read.
+    private var balanceReadKey: String { "\(token?.address.hex ?? "")#\(assetsKey ?? "")" }
+    /// What was typed or pasted, without surrounding whitespace or invisible characters (GR-4).
+    private var recipientText: String { Address.cleanedInput(recipient).text }
     /// Nil for a mixed-case address whose EIP-55 checksum is wrong: a mistyped character must never become the recipient.
-    private var recipientAddress: Address? { Address.hasValidChecksum(recipient) ? Address(recipient) : nil }
-    private var rawAmount: BigUInt? { Amount.parse(amount, decimals: token.decimals) }
+    private var recipientAddress: Address? { Address.inputProblem(recipientText) == nil ? Address(recipientText) : nil }
+    private var rawAmount: BigUInt? { token.flatMap { Amount.parse(amount, decimals: $0.decimals) } }
+
+    /// Why this can't be sent, in words: nil when it can. Nothing is said about a field still empty.
+    private var problem: String? {
+        if let issue = Address.inputProblem(recipientText) { return issue }
+        if let to = recipientAddress {
+            if to.isZero { return "That's the zero address: anything sent there is lost for good." }
+            // Tokens sent to their own contract are stuck there: almost no token can send them back (GR-3).
+            if let token, !token.isNative, to == token.address { return "That's the \(token.symbol) token contract itself. Tokens sent to it are almost always lost for good." }
+        }
+        if let rawAmount, let balance, let token, rawAmount > balance {
+            return "More than your \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)."
+        }
+        return nil
+    }
+
+    /// A contract recipient, or one whose code couldn't be read, needs the acknowledgement.
+    private var needsContractAcknowledgement: Bool { recipientIsContract == true || recipientCheckFailed }
+
     private var valid: Bool {
-        guard let recipientAddress, !recipientAddress.isZero, let rawAmount, rawAmount > 0 else { return false }
-        if let balance { return rawAmount <= balance }
-        return true
+        // Only a pick from the list as read: while it is read again, or when that read failed, there is nothing to send.
+        guard case .loaded = assets, choice != nil else { return false }
+        guard problem == nil, let recipientAddress, !recipientAddress.isZero, let rawAmount, rawAmount > 0 else { return false }
+        guard recipientIsContract != nil || recipientCheckFailed else { return false } // still checking
+        return !needsContractAcknowledgement || sendToContract
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("To") {
+                Section {
                     TextField("Address", text: $recipient)
                         .font(.body.monospaced())
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    Button("Paste", systemImage: "doc.on.clipboard") { recipient = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? recipient }
+                    Button("Paste", systemImage: "doc.on.clipboard") {
+                        guard let pasted = UIPasteboard.general.string else { return }
+                        let cleaned = Address.cleanedInput(pasted)
+                        recipient = cleaned.text
+                        cleanedPaste = cleaned.removedInvisible ? cleaned.text : nil
+                    }
+                    if needsContractAcknowledgement {
+                        Toggle(recipientIsContract == true ? "Send to this contract anyway" : "Send without that check", isOn: $sendToContract)
+                            .tint(Color.attention)
+                    }
+                } header: {
+                    Text("To")
+                } footer: {
+                    if let cleanedPaste, cleanedPaste == recipient { Text("Hidden characters were removed from the pasted address. Check it matches the source.") }
+                    if let to = recipientAddress, to == session.address { Text("That's your own address.") }
+                    if recipientIsContract == true {
+                        Text("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts \(token?.symbol ?? "this token").")
+                    } else if recipientCheckFailed {
+                        Text("Couldn't check whether this address is a contract. Check it before sending.")
+                    }
                 }
                 Section {
-                    Picker("Token", selection: $token) {
-                        ForEach(Token.core.filter { !$0.symbol.hasPrefix("W") || $0.symbol == "WETH" }) { Text($0.symbol).tag($0) }
-                    }
+                    assetRow
                     AmountField(title: "Amount", text: $amount, token: token) { useMax() }
+                        .disabled(token == nil)
                 } header: {
                     Text("Amount")
                 } footer: {
-                    if let balance { Text("Available: \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)") }
-                    if !recipient.isEmpty, recipientAddress == nil {
-                        Text(Address(recipient) == nil
-                             ? "Enter a 42-character address starting with 0x."
-                             : "This address's capital letters don't match its checksum, so it may contain a typo. Copy it again from the source.")
-                    }
+                    if let problem { Text(problem).foregroundStyle(Color.attention) }
+                    else if let balance, let token { Text("Available: \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)") }
                 }
             }
             .navigationTitle("Send")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Review") { showConfirm = true }.disabled(!valid) }
-            }
-            .task(id: token) {
-                guard let address = session.address else { return }
-                balance = try? await ERC20.balances(of: [token], owner: address, rpc: env.rpc, multicall: env.multicall)[token.address]
-            }
-            .sheet(isPresented: $showConfirm) {
-                if let to = recipientAddress, let raw = rawAmount {
-                    ConfirmationSheet(title: "Send \(token.symbol)", confirmTitle: "Send", build: { [.call(transfer(to: to, amount: raw), label: "Send \(token.symbol)")] }, onDone: { dismiss() },
-                                      onCompleted: { hash in
-                        // A send out of the wallet is a withdrawal in the journey. USD is exact for the USD stables the
-                        // send picker offers; left unknown otherwise rather than guessed.
-                        let stable = ["USDC", "USDT0", "USDT", "AUSD", "USDe", "USD1", "mUSD"].contains(token.symbol)
-                        Activity.record(ActivityRecord(kind: .withdraw, title: "Sent \(token.symbol)",
-                            subtitle: "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol) → \(to.short)",
-                            hash: hash, section: "wallet", usd: stable ? Amount.units(raw, decimals: token.decimals) : nil), owner: session.address)
-                    }, intent: .alwaysAsks(.send)) {
-                        DetailRow("To", to.checksummed) // in full: this review is the last check before funds leave
-                        DetailRow("Amount", "\(NumberStyle.units(raw, decimals: token.decimals)) \(token.symbol)")
-                        DetailRow("Network", "Monad")
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Review") {
+                        guard valid, let choice, let to = recipientAddress, let raw = rawAmount else { return }
+                        review = SendReview(asset: choice, to: to, amount: raw, toContract: recipientIsContract == true)
                     }
+                    .disabled(!valid)
                 }
             }
+            .task(id: assetsReadKey) { loadAssets(assetsReadKey) }
+            .task(id: balanceReadKey) {
+                // Available and Max are always the chosen token's, read fresh: never another token's balance. Read again
+                // for each new read of the list (Retry), which also sets the balance it read; coming back from the token
+                // list runs this again. The balance already read for the same token stays until the new one lands.
+                if balanceToken != token?.address { balance = nil; balanceToken = nil }
+                guard let token, let address = session.address else { return }
+                let fresh = try? await ERC20.balances(of: [token], owner: address, rpc: env.rpc, multicall: env.multicall)[token.address]
+                guard !Task.isCancelled, token == self.token, let fresh else { return }
+                balance = fresh
+                balanceToken = token.address
+            }
+            .task(id: recipientAddress) { await checkRecipient() }
+            .sheet(item: $review) { review in
+                let owner = session.address
+                let rpc = env.rpc
+                ConfirmationSheet(title: "Send \(review.token.symbol)", confirmTitle: "Send", build: {
+                    // A send the chain would refuse (a token that blocks it, a contract that won't take MON) is named
+                    // here and Send stays off: nothing that must fail is signed.
+                    if let owner, let refusal = await TokenTransfer.refusal(review.token, to: review.to, amount: review.amount, from: owner, rpc: rpc) {
+                        throw TransactionError.rejected(refusal)
+                    }
+                    let request = try review.request()
+                    return [.call(request, label: "Send \(review.token.symbol)")]
+                }, onDone: { dismiss() }, onCompleted: { hash in
+                    // A send out of the wallet is a withdrawal in the journey. USD is exact for the curated dollar
+                    // stables, matched by contract address — a token that only calls itself "USDC" is not dollars —
+                    // and left unknown otherwise rather than guessed.
+                    Activity.record(ActivityRecord(kind: .withdraw, title: "Sent \(review.token.symbol)",
+                        subtitle: "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol) → \(review.to.short)",
+                        hash: hash, section: "wallet", usd: WalletHoldings.stableUSD(review.token, amount: review.amount)), owner: session.address)
+                }, intent: .alwaysAsks(.send)) {
+                    DetailRow("To", review.to.checksummed, spellsOut: true) // in full: this review is the last check before funds leave
+                    if review.toContract { DetailRow("Recipient", "A contract, not a wallet", tint: .attention) }
+                    DetailRow("Amount", "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol)")
+                    // In full, like the recipient: a look-alike's contract can be made to match a short form.
+                    if !review.token.isNative { DetailRow("Token contract", review.token.address.checksummed, spellsOut: true) }
+                    if let listed = review.imitates { DetailRow("Token", "Not the \(listed.symbol) DyorHQ lists", tint: .attention) }
+                    if review.unverified { DetailRow("Token", "Unverified: sent to you, not chosen here", tint: .attention) }
+                    DetailRow("Network", "Monad")
+                }
+            }
+        }
+        .onDisappear { assetsRead?.task.cancel() }
+    }
+
+    /// The token to send, as a row that opens the list of everything the wallet holds; while the list is read, a
+    /// progress row; a read that failed says so with Retry, never as an empty wallet.
+    @ViewBuilder private var assetRow: some View {
+        switch assets {
+        case .loading:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Reading your wallet…").foregroundStyle(.secondary)
+            }
+        case .failed:
+            VStack(alignment: .leading, spacing: 8) {
+                InlineError(message: "Your balances couldn't be read. Check your connection and try again.")
+                Button("Retry", systemImage: "arrow.clockwise") { attempt += 1 }
+            }
+        case .loaded(let held, let complete, _, let readingHistory) where held.isEmpty:
+            if readingHistory {
+                // Nothing among MON, the curated tokens and the stored ones: the history may hold more.
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Reading your wallet…").foregroundStyle(.secondary)
+                }
+            } else if complete {
+                Text("This wallet holds no tokens on Monad, so there's nothing to send.").foregroundStyle(.secondary)
+            } else {
+                readNotice("No tokens found, but part of your wallet couldn't be read, so some may be missing.")
+            }
+        case .loaded(let held, let complete, let pricesFailed, let readingHistory):
+            NavigationLink {
+                SendAssetPicker(assets: held, selected: choice?.id, readingHistory: readingHistory) { choice = $0; droppedChoice = nil }
+            } label: {
+                if let choice { SendAssetRow(asset: choice) } else { Text("Choose a token") }
+            }
+            if let droppedChoice, choice == nil {
+                Text("Your wallet no longer holds the \(droppedChoice) you picked. Choose a token.").font(.footnote).foregroundStyle(Color.attention)
+            }
+            if readingHistory {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Reading your wallet's history. Tokens found there will be added.").font(.footnote).foregroundStyle(.secondary)
+                }
+            } else if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }
+        }
+    }
+
+    /// What part of the read failed, in words: nil when all of it was read. A curated token no pool prices is no
+    /// failure: its row reads "No price", and the top priced token is picked as usual.
+    private static func readGap(complete: Bool, pricesFailed: Bool) -> String? {
+        switch (complete, pricesFailed) {
+        case (true, false): return nil
+        case (true, true): return "Some prices couldn't be read, so values are missing and no token was picked for you."
+        case (false, false): return "Part of your wallet couldn't be read, so a token may be missing from the list."
+        case (false, true): return "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no token was picked for you."
+        }
+    }
+
+    /// What a read that came back partly empty-handed left out, with Retry: never passed off as all the wallet holds.
+    private func readNotice(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(text).font(.footnote).foregroundStyle(.secondary)
+            Button("Retry", systemImage: "arrow.clockwise") { attempt += 1 }
+        }
+    }
+
+    /// Starts reading the list for `key` (`readAssets`), unless that read is done or still going: coming back from the
+    /// token list runs this again, and the list read for this key stands, with the pick made from it.
+    private func loadAssets(_ key: String) {
+        if assetsKey == key { return }
+        if let running = assetsRead, running.id == key, !running.task.isCancelled { return }
+        assetsRead?.task.cancel()
+        let env = env
+        let session = session
+        assetsRead = (key, Task { await readAssets(key, env: env, session: session) })
+    }
+
+    /// Reads every token the wallet holds, as the Portfolio does (`WalletTokens`), in two steps, so Send never waits on
+    /// the wallet's whole history to offer MON: first MON, the curated tokens and every token stored for the wallet,
+    /// listed at once with nothing preselected, while the history is read alongside; then the tokens the history shows
+    /// join the list, ranked again, and a token is preselected (`show`).
+    private func readAssets(_ key: String, env: AppEnvironment, session: Session) async {
+        guard let address = session.address else {
+            assets = .loaded([], complete: true, pricesFailed: false)
+            choice = nil
+            assetsKey = key
+            return
+        }
+        assets = .loading
+        async let history = WalletTokens.history(env: env, address: address)
+        let first: WalletTokens.Read
+        do {
+            first = try await WalletTokens.read(env: env, address: address, history: nil)
+        } catch {
+            guard !Task.isCancelled else { return }
+            assets = .failed
+            assetsKey = key
+            return
+        }
+        let firstRanked = await WalletTokens.ranked(first, env: env)
+        guard !Task.isCancelled, address == session.address else { return }
+        show(firstRanked, complete: first.complete, readingHistory: true)
+        assetsKey = key + "#first"
+        let scan = await history
+        let read = try? await WalletTokens.read(env: env, address: address, history: scan)
+        var ranked: WalletTokens.Ranked?
+        if let read { ranked = await WalletTokens.ranked(read, env: env) }
+        guard !Task.isCancelled, address == session.address else { return }
+        if let read, let ranked {
+            show(ranked, complete: read.complete, readingHistory: false)
+        } else {
+            // No balance could be read this time: the first list stands, said to be incomplete.
+            show(firstRanked, complete: false, readingHistory: false)
+        }
+        assetsKey = key
+    }
+
+    /// Shows a list as read. While the wallet's history is still read (`readingHistory`) the list may yet grow, so
+    /// nothing is preselected from it: a pick it holds stays, with this read's balance, and a pick it doesn't hold yet
+    /// (one the history found, before Retry) waits for the history. Once the history is in, a pick is kept while the
+    /// wallet still holds it, and cleared with the amount once it doesn't, never swapped for another asset; with none,
+    /// the default is picked (`WalletHoldings.selection`).
+    private func show(_ ranked: WalletTokens.Ranked, complete: Bool, readingHistory: Bool) {
+        assets = .loaded(ranked.tokens, complete: complete, pricesFailed: ranked.pricesFailed, readingHistory: readingHistory)
+        if readingHistory {
+            guard let current = choice else { return }
+            let fresh = ranked.tokens.first { $0.id == current.id }
+            choice = fresh ?? current
+            // Available and Max start from the balance this read found; for a pick only the history holds, the balance
+            // task reads it for this read.
+            balance = fresh?.balance
+            balanceToken = fresh?.id
+            return
+        }
+        // Without every price that exists the list isn't wholly ranked by value: nothing is preselected from it. A curated
+        // token no pool prices is no gap: it ranks after the priced ones, and the top priced token is picked.
+        let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked.tokens, pricesRead: !ranked.pricesFailed)
+        if let previous = choice, kept == nil {
+            droppedChoice = previous.token.symbol
+            amount = ""
+        }
+        choice = kept
+        // Available and Max start from the balance this read found, never one an earlier read found; the balance
+        // task reads it again for this read.
+        balance = kept?.balance
+        balanceToken = kept?.id
+    }
+
+    /// Reads whether the recipient has code. An EIP-7702-delegated account (Monad accounts can carry a `0xef0100`
+    /// delegation) is still a wallet its key controls, so only other code counts as a contract. A check that finished
+    /// for this address stands: coming back from the token list runs this again, and must not clear the acknowledgement.
+    private func checkRecipient() async {
+        let to = recipientAddress
+        if let to, to == checkedRecipient { return }
+        recipientIsContract = nil
+        recipientCheckFailed = false
+        sendToContract = false
+        checkedRecipient = nil
+        guard let to, !to.isZero else { return }
+        do {
+            let code = try await env.rpc.code(at: to)
+            guard !Task.isCancelled, to == recipientAddress else { return }
+            recipientIsContract = !code.isEmpty && !(code.count == 23 && code.prefix(3) == Data([0xef, 0x01, 0x00]))
+            checkedRecipient = to
+        } catch {
+            guard !Task.isCancelled, to == recipientAddress else { return }
+            recipientCheckFailed = true
+            checkedRecipient = to
         }
     }
 
     /// The whole balance; for MON, less the send's network fee (MERA-PLAN §5), estimated for the recipient once one is
     /// entered.
     private func useMax() {
-        guard let balance else { return }
+        guard let token, let balance else { return }
         guard token.isNative else { amount = Amount.exact(balance, decimals: token.decimals); return }
         let native = token
         let like = recipientAddress.map { TransactionRequest(to: $0, value: 1) }
         Task {
             let max = await env.sender.maxValue(balance: balance, like: like, from: session.address, budget: NetworkFeeReserve.transferGasLimit)
-            guard token == native, self.balance == balance else { return }
+            // The token or balance changed, or the review opened, while the fee was read: that Max no longer applies.
+            guard self.token == native, self.balance == balance, review == nil else { return }
             amount = Amount.exact(max, decimals: native.decimals)
         }
     }
+}
 
-    private func transfer(to: Address, amount: BigUInt) -> TransactionRequest {
-        if token.isNative { return TransactionRequest(to: to, value: amount) }
-        return TransactionRequest(to: token.address, data: (try? ERC20.transferCalldata(to: to, amount: amount)) ?? Data())
+/// A send as the review sheet shows and signs it, frozen when Review is tapped.
+private struct SendReview: Identifiable {
+    let id = UUID()
+    let token: Token
+    let to: Address
+    let amount: BigUInt
+    var toContract = false
+    /// The token reached the wallet without being chosen here (`HeldToken.unverified`), as the list marked it when it
+    /// was picked.
+    var unverified = false
+    /// The curated token this one carries the name of (`HeldToken.imitates`).
+    var imitates: Token?
+
+    init(asset: HeldToken, to: Address, amount: BigUInt, toContract: Bool = false) {
+        token = asset.token
+        self.to = to
+        self.amount = amount
+        self.toContract = toContract
+        unverified = asset.unverified
+        imitates = asset.imitates
+    }
+
+    func request() throws -> TransactionRequest { try TokenTransfer.request(token, to: to, amount: amount) }
+}
+
+/// The Send sheet's token list as last read.
+private enum AssetList: Equatable {
+    case loading
+    /// The read failed: shown as a failure with Retry, never as an empty wallet.
+    case failed
+    /// `complete`: false when part of the wallet's history couldn't be read, so a token may be missing (`WalletTokens.Read`).
+    /// `pricesFailed`: values are missing and the order is by amount (`WalletTokens.Ranked`). `readingHistory`: MON, the
+    /// curated tokens and the stored ones, while the wallet's history is still read; the tokens it shows are added when it
+    /// is.
+    case loaded([HeldToken], complete: Bool, pricesFailed: Bool, readingHistory: Bool = false)
+}
+
+/// Every token the wallet holds, highest dollar value first (`WalletHoldings.ranked`), searchable by symbol, name or
+/// pasted address. Unverified tokens are listed where their value puts them, marked.
+private struct SendAssetPicker: View {
+    let assets: [HeldToken]
+    let selected: Address?
+    /// The wallet's history is still read: more tokens may be added.
+    let readingHistory: Bool
+    let onPick: (HeldToken) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    var body: some View {
+        let shown = WalletHoldings.matching(assets, query: query)
+        List {
+            Section {
+                ForEach(shown) { asset in
+                    Button {
+                        Haptics.selection()
+                        onPick(asset)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 8) {
+                            SendAssetRow(asset: asset)
+                            if asset.id == selected { Image(systemName: "checkmark").foregroundStyle(Color.accentColor).accessibilityLabel("Selected") }
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                }
+            } footer: {
+                VStack(alignment: .leading, spacing: 8) {
+                    if readingHistory { Text("Still reading your wallet's history, so more tokens may be added.") }
+                    if shown.isEmpty {
+                        Text("No token in this wallet matches.")
+                    } else if shown.contains(where: \.unverified) {
+                        Text("Unverified tokens arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you send.")
+                    } else if shown.contains(where: { $0.imitates != nil }) {
+                        Text("Some tokens here carry the name of a token DyorHQ lists but are other contracts. Check the contract before you send.")
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .searchable(text: $query, prompt: "Symbol, name or address")
+        .navigationTitle("Choose a Token")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// One held token: logo, symbol (marked when Unverified), name, balance and dollar value — or "No price". A token that
+/// could pass for another — Unverified, carrying a listed token's name, or with a symbol that isn't plain text (an
+/// invisible character, a letter from another script) — also shows its contract.
+private struct SendAssetRow: View {
+    let asset: HeldToken
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // A shipped logo only for the curated token itself, and no image at all for one carrying a listed token's name
+            // (its own could be the real one's artwork): a monogram.
+            TokenLogo(symbol: asset.token.symbol, url: asset.imitates == nil ? asset.token.logoURL : nil, size: 32, bundled: Token.core(asset.token.address) != nil)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(asset.token.symbol).font(.headline).lineLimit(1)
+                    if asset.unverified { UnverifiedBadge() }
+                }
+                // So a look-alike's name is never all there is to go on.
+                Text(subtitle).font(.footnote).foregroundStyle(asset.imitates == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.attention)).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(NumberStyle.units(asset.balance, decimals: asset.token.decimals, compact: true)).monospacedDigit()
+                Text(valueText).font(.footnote).foregroundStyle(asset.value == nil ? HierarchicalShapeStyle.tertiary : .secondary).monospacedDigit()
+            }
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+
+    private var subtitle: String {
+        if let listed = asset.imitates { return "Not the \(listed.symbol) DyorHQ lists · \(asset.token.address.short)" }
+        return asset.unverified || !asset.plainSymbol ? "\(asset.token.name) · \(asset.token.address.short)" : asset.token.name
+    }
+
+    private var valueText: String {
+        guard let value = asset.value else { return "No price" }
+        if value > 0, value < 0.01 { return "< $0.01" }
+        return value.formatted(.currency(code: "USD").precision(.fractionLength(0...2)))
     }
 }
 

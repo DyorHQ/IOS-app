@@ -41,8 +41,9 @@ contract PermitForkTest is Test {
         graduation = new MockGraduation(factory, collect, vesting);
         vm.prank(gov);
         factory.setModules(address(collect), address(vesting), address(graduation), makeAddr("locker"), makeAddr("hook"), makeAddr("buyback"));
+        bytes32 terms = factory.termsHash();
         vm.prank(makeAddr("creator"));
-        (id,,) = factory.publish(MomentsFactory.PublishParams({name: "Fork Moment", symbol: "FORK", provenance: MomentTypes.Provenance("ipfs://x", keccak256("x"), "Accra", 1_780_000_000, ""), price: 1_000_000, creatorAllocBps: 1_000, collectWindow: 30 days, salt: bytes32(0)}));
+        (id,,) = factory.publish(MomentsFactory.PublishParams({name: "Fork Moment", symbol: "FORK", provenance: MomentTypes.Provenance("ipfs://x", keccak256("x"), "Accra", 1_780_000_000, ""), price: 1_000_000, creatorAllocBps: 1_000, collectWindow: 30 days, salt: bytes32(0)}), terms);
         deal(USDC, alice, 100_000_000); // $100
         vm.prank(alice);
         IERC20(USDC).approve(PERMIT2, type(uint256).max);

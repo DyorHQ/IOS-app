@@ -1,3 +1,4 @@
+import BigInt
 import DyorKit
 import Foundation
 import Observation
@@ -11,6 +12,8 @@ final class TransactionRun {
 
     private(set) var phase: Phase = .idle
     private(set) var events: [TransactionEvent] = []
+    /// The step this run last saw confirmed: superseded once the next one is sent (`record`).
+    @ObservationIgnored private var lastConfirmed: Data?
 
     var isRunning: Bool { phase == .running }
     /// Whether any step of this run reached the network. `start` replays a plan from its first step, so a run that
@@ -34,20 +37,51 @@ final class TransactionRun {
             return
         }
         let passkey = session.isPasskeyAccount
+        let owner = session.address
+        let mera = session.mera
         phase = .running
         events = []
+        lastConfirmed = nil
+        // An approved plan keeps a passkey account's session until its last step, even if the app leaves the
+        // foreground meanwhile (GL-1): its later steps never ask for the passkey again.
+        mera.beginAction()
         Task {
+            // A lock or an app switch mid-plan suspends it: ask for the time iOS grants so the step in flight can still
+            // broadcast and see its receipt (GL-2).
+            let background = BackgroundTime("Transaction")
+            defer { background.end(); mera.endAction() }
             do {
                 let hash = try await sender.run(steps, from: wallet) { event in
-                    Task { @MainActor in self.events.append(event) }
+                    Task { @MainActor in self.record(event, owner: owner) }
                 }
                 phase = .done(hash)
             } catch where passkey && isUserCancellation(error) {
                 // A passkey prompt the person dismissed: say plainly what did and didn't happen.
                 phase = .failed(sentSomething ? "Stopped at \(BiometricGate.promptName). Only the steps above were sent." : Self.notSent)
             } catch {
+                if let failure = error as? TransactionError, case .reverted(let hash) = failure { PendingActivity.reverted(hash, owner: owner) }
+                // A step sent but not seen confirmed keeps its hash (the View link above, and a pending row in Recent
+                // Activity that the next foreground re-checks): "Sent — confirmation not seen yet".
                 phase = .failed(describe(error))
             }
+        }
+    }
+
+    /// Each sent step is a pending Activity row (`PendingActivity`), so a plan that fails or is killed after a broadcast
+    /// never loses the transaction. Seen confirmed, the row says so and stays: an earlier step's goes when the next step is
+    /// sent, and the last one's is replaced by the caller's own record of the action (same hash) — or stays, when the
+    /// sheet is gone before it records (GL-2).
+    private func record(_ event: TransactionEvent, owner: Address?) {
+        events.append(event)
+        switch event {
+        case .sent(let label, let hash):
+            if let previous = lastConfirmed { PendingActivity.superseded(previous, owner: owner) }
+            lastConfirmed = nil
+            PendingActivity.sent(hash, label: label, owner: owner)
+        case .confirmed(_, let hash):
+            PendingActivity.confirmed(hash, owner: owner)
+            lastConfirmed = hash
+        case .preparing: break
         }
     }
 
@@ -65,6 +99,41 @@ final class TransactionRun {
     func reset() {
         phase = .idle
         events = []
+        lastConfirmed = nil
+    }
+}
+
+/// The background time iOS grants an app that leaves the foreground (about 30 s), held while a plan runs. Ends when
+/// the run does, or when the time is up — after `onExpire`, when given.
+@MainActor
+final class BackgroundTime {
+    private var id: UIBackgroundTaskIdentifier = .invalid
+
+    init(_ name: String, onExpire: (@MainActor () -> Void)? = nil) {
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            MainActor.assumeIsolated {
+                let held = self // `onExpire` may drop the last other reference; the task must still be handed back
+                onExpire?()
+                held?.end()
+            }
+        }
+    }
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+}
+
+extension TransactionSender.FeePreview {
+    /// "Up to 0.061 MON", plus any steps that can only be priced once an earlier one lands (a swap after its approval).
+    var summary: String {
+        let symbol = NetworkFeeLimits.nativeSymbol(chainId: chainId)
+        let more = unestimated == 1 ? "1 more step" : "\(unestimated) more steps"
+        if unestimated == 0 { return "Up to \(NumberStyle.units(maxFee, decimals: 18)) \(symbol)" }
+        if maxFee == 0 { return "Priced as each step is signed" }
+        return "Up to \(NumberStyle.units(maxFee, decimals: 18)) \(symbol) + \(more)"
     }
 }
 
@@ -75,8 +144,11 @@ struct ConfirmationSheet<Details: View>: View {
     let title: String
     let confirmTitle: String
     var build: () async throws -> [TransactionStep]
+    /// The caller's cleanup (clear the form, reload) once the plan settled: on Done, or when the settled sheet is
+    /// swiped away.
     let onDone: () -> Void
-    /// Fired with the settled transaction hash when the sheet finishes, for callers that log the action or record it.
+    /// Fired once with the settled transaction hash the moment the plan settles, for callers that log the action or
+    /// record it — not on Done, so a swipe-dismiss or an OS kill on the Done screen can't lose it (GL-3).
     var onCompleted: ((Data) -> Void)? = nil
     /// When set, the confirmed step's "View" control calls this with the tx hash instead of opening the block
     /// explorer — the launch flow uses it to route to the in-app coin page.
@@ -98,6 +170,13 @@ struct ConfirmationSheet<Details: View>: View {
     /// or ends, so expiry changes the badge and the button in place — no pop-up, and nothing typed is lost.
     @State private var assessment: MeraSession.Assessment?
     @State private var approving = false
+    /// `onCompleted` fired / `onDone` ran: each once per sheet.
+    @State private var completed = false
+    @State private var cleanedUp = false
+    /// The most the plan's network fees can come to at today's fees, read once the plan is built (IOST-1).
+    @State private var fee: TransactionSender.FeePreview?
+    /// Who the plan's exact approvals take a standing unlimited allowance away from, read once the plan is built (IOST-14).
+    @State private var replacedUnlimited: [String] = []
 
     private var confirmLabel: String {
         session.isPasskeyAccount && assessment?.needsFaceID == true ? "Confirm with \(BiometricGate.promptName)" : confirmTitle
@@ -107,6 +186,25 @@ struct ConfirmationSheet<Details: View>: View {
         NavigationStack {
             List {
                 Section { details }
+                if !unlimitedApprovals.isEmpty, !run.isDone {
+                    Section {
+                        ForEach(unlimitedApprovals, id: \.self) { DetailRow("Approval", "Unlimited approval to \($0)", tint: .attention) }
+                    }
+                }
+                if !replacedUnlimited.isEmpty, !run.isDone {
+                    Section {
+                        ForEach(replacedUnlimited, id: \.self) { DetailRow("Approval", "Replaces your unlimited approval to \($0)") }
+                    } footer: {
+                        Text("An earlier approval lets it spend any amount. This plan approves exactly what it needs instead.")
+                    }
+                }
+                if let fee, !run.isDone {
+                    Section {
+                        DetailRow("Max network fee", fee.summary)
+                    } footer: {
+                        Text("The most the network can charge. Each transaction's fee is checked again before it's signed, and refused if it's unusually high.")
+                    }
+                }
                 if session.isPasskeyAccount, !preparing, buildError == nil, !run.isRunning, !run.isDone, let assessment {
                     Section { SessionScopeBadge(assessment: assessment) }
                 }
@@ -161,10 +259,18 @@ struct ConfirmationSheet<Details: View>: View {
                 .frame(maxWidth: .infinity)
                 .background(.bar)
             }
-            // Also once done: swiping away a settled sheet skipped `finish()`, so the action was never recorded and the
-            // form kept its amount. Done (or the toolbar button) records and clears it.
-            .interactiveDismissDisabled(run.isRunning || run.isDone)
+            // Only while running. A settled sheet may be swiped away: the action was recorded when it settled, and
+            // `onDisappear` runs the cleanup Done would have.
+            .interactiveDismissDisabled(run.isRunning)
         }
+        .onChange(of: run.doneHash) { _, hash in
+            guard let hash, !completed else { return }
+            completed = true
+            onCompleted?(hash)
+        }
+        .onDisappear { cleanUp() }
+        // A Moment link never tears a review down, running or not (RootView's link gate).
+        .holdsMomentLinks()
         .presentationDetents([.medium, .large])
         // Opaque on purpose: the list fades under the footer, and a translucent sheet would show the presenting
         // screen's dark primary button through that fade.
@@ -173,8 +279,37 @@ struct ConfirmationSheet<Details: View>: View {
         .task {
             do { steps = try await build() } catch { buildError = describe(error) }
             preparing = false
+            if buildError == nil, let address = session.address {
+                fee = await env.sender.feePreview(steps, from: address)
+                replacedUnlimited = await env.sender.unlimitedAllowancesReplaced(by: steps, owner: address).map(Self.spenderName)
+            }
         }
         .task(id: scopeKey) { await reassess() }
+    }
+
+    /// Who the plan approves for an effectively unlimited amount (IOST-14). The app's own plans approve exact amounts;
+    /// this keeps one that doesn't from being signed unseen.
+    private var unlimitedApprovals: [String] {
+        steps.compactMap { step in
+            switch step.kind {
+            case .approve(_, let spender, let amount), .permit2Approve(_, let spender, let amount, _):
+                return amount >= TransactionSender.unlimitedAllowance ? Self.spenderName(spender) : nil
+            case .call:
+                return nil
+            }
+        }
+    }
+
+    static func spenderName(_ spender: Address) -> String {
+        switch spender {
+        case Uniswap.permit2: return "Permit2"
+        case Uniswap.universalRouter: return "the Uniswap Universal Router"
+        case Uniswap.swapRouter02: return "Uniswap SwapRouter02"
+        case MondayTrade.swapRouter: return "Monday Trade"
+        case Kuru.entrypoint: return "Kuru Flow"
+        case Perpl.exchange: return "the Perpl Exchange"
+        default: return spender.short
+        }
     }
 
     /// Changes whenever the badge could: the plan arrives, or the passkey session opens, ends or is replaced.
@@ -191,7 +326,11 @@ struct ConfirmationSheet<Details: View>: View {
     /// the tap, approving this plan; then the plan. A passkey account whose badge said "No Face ID needed" signs in its
     /// session, and the wallet still checks every transaction: one that fails asks for Face ID right there.
     private func confirm() async {
-        if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm \(confirmTitle)")) { return }
+        if settings.appLockApplies(to: session.account) {
+            // App Lock fails closed. Without a device passcode nothing can confirm the owner: say so, not a dead button.
+            guard BiometricGate.canAuthenticateOwner else { run.fail("App Lock needs a device passcode. Set one in iOS Settings, then try again."); return }
+            guard await BiometricGate.authenticate(reason: "Confirm \(confirmTitle)") else { return }
+        }
         guard session.isPasskeyAccount else {
             run.start(steps, session: session, sender: env.sender)
             return
@@ -213,15 +352,17 @@ struct ConfirmationSheet<Details: View>: View {
         run.start(steps, session: session, sender: env.sender, action: action)
     }
 
-    /// Dismiss and, when the plan settled, notify the caller. `onCompleted` runs BEFORE `onDone` on purpose:
-    /// callers clear their input in `onDone`, and `onCompleted` reads that live input to record the action, so it
-    /// must see the amount before it is cleared.
+    /// Dismiss and, when the plan settled, run the caller's cleanup. `onCompleted` already ran at settlement, before
+    /// this on purpose: callers clear their input in `onDone`, and `onCompleted` reads that live input to record the
+    /// action, so it must see the amount before it is cleared.
     private func finish() {
-        let hash = run.doneHash
         dismiss()
-        if run.isDone {
-            if let hash { onCompleted?(hash) }
-            onDone()
-        }
+        cleanUp()
+    }
+
+    private func cleanUp() {
+        guard run.isDone, !cleanedUp else { return }
+        cleanedUp = true
+        onDone()
     }
 }

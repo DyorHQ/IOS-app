@@ -50,11 +50,28 @@ next-env.d.ts
 # example env is safe to commit
 !.env.example
 
-# secrets and signing material that must never be committed (security audit 2026-09-26)
+# secrets and signing material that must never be committed (scripts/dev/forbidden-paths.sh and .leakguard enforce it)
 .dev.vars
 .dev.vars.*
 *.p8
 *.p12
+*.pfx
+*.key
 *.mobileprovision
+*.provisionprofile
 *.keystore
+*.jks
+*.kdbx
+Secrets.xcconfig
+
+# local AI-session settings and notes
 .claude/settings.local.json
+.claude/*.local.*
+CLAUDE.local.md
+
+# archives and exports: they embed every value the build saw
+*.xcarchive/
+*.ipa
+
+# deployment and tool logs
+*.log

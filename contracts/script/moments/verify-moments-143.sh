@@ -5,7 +5,7 @@
 # Run from contracts/ after `forge script script/moments/Deploy.s.sol:DeployMoments … --broadcast`.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-J=deployments/moments-143.json
+J=${RECORD:-deployments/moments-143.json} # RECORD=deployments/pending-moments-143.json right after a broadcast
 addr() { python3 -c "import json; print(json.load(open('$J'))['$1'])"; }
 V="--chain 143 --verifier sourcify --verifier-url https://sourcify-api-monad.blockvision.org/ --watch"
 verify() {

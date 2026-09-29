@@ -56,6 +56,7 @@ contract BuybackTest is MomentsMarketBase {
         assertGe(accrued, buyback.MIN_AMOUNT(), "enough accrued for a round");
         uint128 liq0 = _lockerPositionLiquidity(id, key);
         uint256 pmCoin0 = coin.balanceOf(address(manager));
+        uint256 lockerCoin0 = coin.balanceOf(address(locker));
         uint256 price0 = _coinPriceX18();
         uint256 callerUsdc = usdc.balanceOf(carol);
 
@@ -74,10 +75,12 @@ contract BuybackTest is MomentsMarketBase {
         assertEq(buyback.carry(id), r.carried);
         assertEq(usdc.balanceOf(address(buyback)), r.carried, "buyback holds only the carry");
         assertEq(coin.balanceOf(address(buyback)), 0, "never holds coin");
-        // The bought coin is back in the pool as liquidity, minus the position's integer rounding (< sqrtP/2^96 wei,
-        // i.e. a few gwei of coin), which stays locked in the locker.
-        assertGe(coin.balanceOf(address(manager)) + 1e10, pmCoin0, "bought coin is back in the pool as liquidity");
-        assertTrue(coin.balanceOf(address(locker)) <= 1e12 || usdc.balanceOf(address(locker)) <= 2, "the limiting side is fully paired; only the other side can wait in the locker");
+        // v2 (sec2, MO-2): one round grows the position by at most MAX_INCREASE_BPS. The bought coin is either back in
+        // the pool as liquidity or held for this Moment in the locker (to be added by later rounds): it only ever moves
+        // between the PoolManager and the locker.
+        assertLe(r.liquidityAdded, uint256(liq0) * locker.MAX_INCREASE_BPS() / BPS, "the add is capped");
+        assertEq(coin.balanceOf(address(manager)) + coin.balanceOf(address(locker)), pmCoin0 + lockerCoin0, "bought coin stays in the pool or the locker");
+        assertEq(coin.balanceOf(address(locker)), locker.heldOf(id, usdcIs0 ? key.currency1 : key.currency0), "and whatever the locker holds is this Moment's");
         assertEq(usdc.balanceOf(carol), callerUsdc, "caller gets nothing");
         // bounded impact: coin price moved up, but by at most ~1%
         uint256 price1 = _coinPriceX18();

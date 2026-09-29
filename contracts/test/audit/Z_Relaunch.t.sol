@@ -51,9 +51,10 @@ interface IOldFactoryConfig {
 }
 
 /// The 2026-09-23 relaunch with the rotated wallets (treasury 0x5aDb…, fees 0x15ED…), end to end on a Monad fork:
-/// the NEW stack recorded in deployments/143.json is checked field by field and exercised through every venue and
-/// quote asset, and the three RETIRED factories + their Monday fee vaults are checked to be closed to new launches
-/// and to pay nothing more to the leaked treasury 0x5282… or the old fees wallet 0xf4D4….
+/// the NEW stack recorded in deployments/143-retired-0x6B1C.json (factory 0x6B1C…, retired in the app by v2 on
+/// 2026-09-28 and still open on chain; Z_LiveDeployment.t.sol runs the live record) is checked field by field and
+/// exercised through every venue and quote asset, and the three RETIRED factories + their Monday fee vaults are checked
+/// to be closed to new launches and to pay nothing more to the leaked treasury 0x5282… or the old fees wallet 0xf4D4….
 ///
 ///   Rehearsal (anvil fork after the relaunch script ran against it):
 ///     RELAUNCH_RPC=http://127.0.0.1:8545 forge test --code-size-limit 100000000 --match-path test/audit/Z_Relaunch.t.sol -vv
@@ -109,7 +110,7 @@ contract RelaunchTest is Test {
 
     function setUp() public {
         vm.createSelectFork(vm.envOr("RELAUNCH_RPC", string("monad")));
-        json = vm.readFile("deployments/143.json");
+        json = vm.readFile("deployments/143-retired-0x6B1C.json");
         factory = LaunchpadFactory(vm.parseJsonAddress(json, ".factory"));
         sharing = HolderFeeSharing(vm.parseJsonAddress(json, ".holderFeeSharing"));
         hook = MemeHook(payable(vm.parseJsonAddress(json, ".hook")));
@@ -123,7 +124,7 @@ contract RelaunchTest is Test {
 
     function test_new_stack_is_the_relaunch_not_a_retired_one() public view {
         address[3] memory old = _oldFactories();
-        for (uint256 i = 0; i < old.length; i++) assertTrue(address(factory) != old[i], "deployments/143.json still names a retired factory");
+        for (uint256 i = 0; i < old.length; i++) assertTrue(address(factory) != old[i], "the relaunch record names a factory it retired");
         assertGt(address(factory).code.length, 0, "no code at the new factory");
         assertEq(vm.parseJsonUint(json, ".chainId"), 143);
         assertEq(vm.parseJsonAddress(json, ".owner"), GOVERNANCE);

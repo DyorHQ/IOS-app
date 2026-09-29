@@ -250,10 +250,17 @@ final class PerplTests: XCTestCase {
             XCTAssertEqual(m.status, Int(expected["status"].number!))
             XCTAssertEqual(m.basePricePNS, BigUInt(expected["basePricePNS"].string!)!)
             XCTAssertEqual(m.numOrders, Int(expected["numOrders"].string!)!)
-            XCTAssertGreaterThan(m.initMarginFraction, 0)
-            XCTAssertLessThan(m.initMarginFraction, 1)
-            XCTAssertGreaterThan(m.maintMarginFraction, 0)
-            XCTAssertLessThan(m.maintMarginFraction, 1)
+            // Only market 10 has a margin read in the fixture; the others are unknown, never guessed.
+            if let initial = m.initMarginFraction, let maintenance = m.maintMarginFraction {
+                XCTAssertGreaterThan(initial, 0)
+                XCTAssertLessThan(initial, 1)
+                XCTAssertGreaterThan(maintenance, 0)
+                XCTAssertLessThan(maintenance, 1)
+            } else {
+                XCTAssertNotEqual(id, 10)
+                XCTAssertNil(m.initMarginFraction)
+                XCTAssertNil(m.maintMarginFraction)
+            }
         }
         XCTAssertEqual(market(1).symbol, "BTC")
         XCTAssertEqual(market(10).symbol, "MON")
@@ -265,17 +272,21 @@ final class PerplTests: XCTestCase {
         let mon = market(10)
         XCTAssertEqual(mon.initMarginFraction, 100 / values[0])
         XCTAssertEqual(mon.maintMarginFraction, 100 / values[1])
-        XCTAssertEqual(mon.initMarginFraction, 0.1, accuracy: 1e-12)
-        XCTAssertEqual(mon.maintMarginFraction, 0.05, accuracy: 1e-12)
-        // Without a margin read the web app's defaults apply.
+        XCTAssertEqual(mon.initMarginFraction!, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(mon.maintMarginFraction!, 0.05, accuracy: 1e-12)
+        // Without a margin read the fractions are unknown, never a guessed 10% / 5% (which would understate the risk
+        // on the 10% maintenance markets), so no liquidation price is computed.
         let btc = market(1)
-        XCTAssertEqual(btc.initMarginFraction, 0.1)
-        XCTAssertEqual(btc.maintMarginFraction, 0.05)
-        // A zero divisor also falls back rather than dividing by zero.
+        XCTAssertNil(btc.initMarginFraction)
+        XCTAssertNil(btc.maintMarginFraction)
+        XCTAssertEqual(btc.maxLeverage, 1)
+        XCTAssertNil(PerplService.liquidationPrice(side: .long, entry: 100, size: 2, margin: 20, premium: 0, maintenanceFraction: btc.maintMarginFraction))
+        XCTAssertNil(PerplService.liquidationPrice(side: .long, entry: 100, size: 2, margin: 20, premium: 0, maintenanceFraction: 0))
+        // A zero divisor is unknown too, rather than dividing by zero.
         let info = try! ABI.decode(hex(f["chain"]["perpetualInfo"]["10"]["data"].string!), PerplExchange.Returns.perpetualInfo)[0]
         let zero = PerplExchange.market(id: 10, info: info, margins: [.uint(0), .uint(0), .uint(0), .uint(0), .uint(0), .uint(0)])
-        XCTAssertEqual(zero.initMarginFraction, 0.1)
-        XCTAssertEqual(zero.maintMarginFraction, 0.05)
+        XCTAssertNil(zero.initMarginFraction)
+        XCTAssertNil(zero.maintMarginFraction)
     }
 
     func testMarketsThroughMulticall() async throws {
@@ -283,11 +294,12 @@ final class PerplTests: XCTestCase {
         let markets = try await makeService().markets()
         XCTAssertEqual(markets.map(\.id), marketIds)
         XCTAssertEqual(markets.map(\.symbol).prefix(3), ["BTC", "MON", "ETH"])
-        XCTAssertEqual(markets[1].initMarginFraction, 0.1, accuracy: 1e-12)
-        XCTAssertEqual(markets[1].maintMarginFraction, 0.05, accuracy: 1e-12)
-        XCTAssertEqual(markets[0].initMarginFraction, 0.1, "margin read failed inside aggregate3, default applies")
-        XCTAssertEqual(PerplMockTransport.aggregateSizes.sorted(), [6, 6], "one multicall for infos, one for margins")
-        XCTAssertEqual(PerplMockTransport.unknownCalls.count, 5, "only the five missing margin reads were unknown")
+        XCTAssertEqual(markets[1].initMarginFraction!, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(markets[1].maintMarginFraction!, 0.05, accuracy: 1e-12)
+        XCTAssertNil(markets[0].maintMarginFraction, "margin read failed inside aggregate3: unknown, not a guess")
+        XCTAssertEqual(PerplService.markets.map(\.id), [1, 10, 20, 31, 40, 50, 60, 70, 80, 90], "every live Perpl market")
+        XCTAssertEqual(PerplMockTransport.aggregateSizes.sorted(), [10, 10], "one multicall for infos, one for margins")
+        XCTAssertEqual(PerplMockTransport.unknownCalls.count, 13, "the fixture has no reads for 60-90 and margins only for 10")
 
         // A subset keeps the requested order, and an unknown market is simply left out.
         let subset = try await makeService().markets(ids: [50, 999, 1])
@@ -305,9 +317,11 @@ final class PerplTests: XCTestCase {
         let alsoNone = try await service.account(exchange)
         XCTAssertNil(alsoNone)
 
-        // Any revert means "no account"; other RPC failures still surface.
-        XCTAssertTrue(PerplExchange.isAccountNotFound(RPCError(code: -32000, message: "execution reverted")))
-        XCTAssertTrue(PerplExchange.isAccountNotFound(RPCError(code: 3, message: "execution reverted", data: "0x")))
+        // Only Perpl's AccountNotFound revert means "no account" (RI-4); any other revert or failure surfaces as an error.
+        XCTAssertTrue(PerplExchange.isAccountNotFound(RPCError(code: -32000, message: "execution reverted", data: "0x03A0E277" + String(repeating: "0", count: 64))))
+        XCTAssertFalse(PerplExchange.isAccountNotFound(RPCError(code: -32000, message: "execution reverted")))
+        XCTAssertFalse(PerplExchange.isAccountNotFound(RPCError(code: 3, message: "execution reverted", data: "0x")))
+        XCTAssertFalse(PerplExchange.isAccountNotFound(RPCError(code: 3, message: "execution reverted", data: "0x08c379a0" + String(repeating: "0", count: 64))))
         XCTAssertFalse(PerplExchange.isAccountNotFound(RPCError(code: -32005, message: "rate limited")))
     }
 
@@ -400,12 +414,31 @@ final class PerplTests: XCTestCase {
         let empty = PerplExchange.position(perp: mon, values: position(type: 0, lot: 0, price: 26000, deposit: 100_000_000, premium: 0, markPNS: 26191))
         XCTAssertNil(empty)
 
-        // Through the service: one real (empty) slot, one synthetic position, one unknown market.
+        // Through the service: one real (empty) slot, one synthetic position, one market the list doesn't hold.
         install(PerplExchange.Signature.getPosition, [.uint(10), .uint(4638)], returning: position(type: 0, lot: 42036, price: 26000, deposit: 100_000_000, premium: -1_000_000, markPNS: 26191), types: PerplExchange.Returns.position)
         install(PerplExchange.Signature.getPosition, [.uint(999), .uint(4638)], returning: position(type: 0, lot: 5, price: 1, deposit: 1, premium: 0, markPNS: 1), types: PerplExchange.Returns.position)
         let account = PerpAccount(accountId: 4638, balance: 0, locked: 0, frozen: false, positionPerpIds: [1, 10, 999])
+        // 999's market can't be read: an error, never a list that silently leaves the position out.
+        do {
+            _ = try await service.positions(account, markets: markets)
+            XCTFail("a position in an unreadable market was dropped")
+        } catch {}
+        // Once its market reads (MON's info stands in), the position is decoded with it and shown.
+        let monInfo = try! ABI.decode(hex(f["chain"]["perpetualInfo"]["10"]["data"].string!), PerplExchange.Returns.perpetualInfo)
+        install(PerplExchange.Signature.getPerpetualInfo, [.uint(999)], returning: monInfo, types: PerplExchange.Returns.perpetualInfo)
+        // The slot on market 1 can't be read (nothing answers getPosition for it): an error, never a silent drop.
+        do {
+            _ = try await service.positions(account, markets: markets)
+            XCTFail("a position slot that failed to read was dropped")
+        } catch PerplError.malformedResponse(let what) {
+            XCTAssertEqual(what, "position 1")
+        }
+        // Once it reads as an empty slot (zero lot), it is skipped: not a position.
+        install(PerplExchange.Signature.getPosition, [.uint(1), .uint(4638)], returning: position(type: 0, lot: 0, price: 0, deposit: 0, premium: 0, markPNS: 0), types: PerplExchange.Returns.position)
         let positions = try await service.positions(account, markets: markets)
-        XCTAssertEqual(positions, [long!])
+        XCTAssertEqual(positions.map(\.perpId), [10, 999])
+        XCTAssertEqual(positions.first, long!)
+        XCTAssertNil(positions.last?.liquidation, "no margin read for 999: unknown, not guessed")
     }
 
     func testLiquidationPriceMatchesTypeScript() {

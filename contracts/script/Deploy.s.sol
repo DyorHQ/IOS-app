@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {Script, console2} from "forge-std/Script.sol";
+import {console2} from "forge-std/Script.sol";
+import {MainnetGuard} from "./lib/MainnetGuard.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {LaunchpadFactory} from "../src/LaunchpadFactory.sol";
@@ -19,7 +20,8 @@ import {Types, ILaunchpadFactory} from "../src/interfaces/ILaunchpad.sol";
 import {HookAddress} from "../src/libraries/HookAddress.sol";
 
 /// @notice Deploys the whole launchpad on Monad mainnet against the canonical Uniswap v4 PoolManager.
-///         The broadcasting key becomes the owner of the factory (and therefore of all policy).
+///         The broadcasting key becomes the owner of the factory (and therefore of all policy); with OWNER set to
+///         another address (a Safe) ownership is handed to it (two-step: OWNER must call acceptOwnership()).
 ///
 ///         Both graduation venues are wired: the Uniswap v4 executor (default) and the Monday Trade executor.
 ///         A creator picks the venue per launch; aBIL-quoted launches are forced to Monday.
@@ -28,23 +30,38 @@ import {HookAddress} from "../src/libraries/HookAddress.sol";
 ///         so graduationThreshold = phantomQuote * (sqrt(10) - 1) and ~31.6% of supply is reserved for the pool).
 ///         Volatile/RWA quote prices (MON, aBIL) are supplied as USD*1e8 env vars; USDC/AUSD are pinned to $1.
 ///
+///         On Monad mainnet (chain 143) nothing money-related has a default (security audit 2026-09-26, LP-7):
+///         PROTOCOL_FEE_RECIPIENT, FEES, LAUNCH_FEE_WEI, MON_USD_E8 and ABIL_USD_E8 must be set, the money roles must
+///         be distinct from each other and from the deployer, and the prices must fall in a sane band. The last wiring
+///         step seals the modules, so no module can be swapped before the first launch. Use script/deploy-v2.sh, which
+///         adds live price checks, record handling and the signer rules, rather than calling this directly.
+///
 ///         Dry run:   forge script script/Deploy.s.sol:Deploy --rpc-url monad
-///         Deploy:    forge script script/Deploy.s.sol:Deploy --rpc-url monad --broadcast --private-key $OWNER_KEY
-contract Deploy is Script {
+///         Deploy:    script/deploy-v2.sh   (or: forge script ... --broadcast --ledger | --account <keystore>)
+contract Deploy is MainnetGuard {
     uint160 internal constant HOOK_FLAGS = Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
         | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
 
     /// @dev graduationThreshold = phantomQuote * (sqrt(10) - 1). sqrt(10) - 1 = 2.16227766..., scaled by 1e8.
     ///      This yields graduation FDV = 10x launch FDV (i.e. $2,000 -> $20,000).
     uint256 internal constant GRAD_MULT_E8 = 216_227_766;
+    /// @dev Sanity bands for the USD*1e8 prices on mainnet (the same bands as script/relaunch/prices.py): a forgotten
+    ///      override ($1) or a decimals slip falls outside them.
+    uint256 internal constant MON_USD_E8_MIN = 500_000; // $0.005
+    uint256 internal constant MON_USD_E8_MAX = 20_000_000; // $0.20
+    uint256 internal constant ABIL_USD_E8_MIN = 5_000_000_000; // $50
+    uint256 internal constant ABIL_USD_E8_MAX = 15_000_000_000; // $150
 
     function run() external {
+        _refuseRawKeyOnMainnet();
+        bool mainnet = block.chainid == MONAD_MAINNET;
         address poolManager = vm.envOr("POOL_MANAGER", address(0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e));
-        address protocolFeeRecipient = vm.envOr("PROTOCOL_FEE_RECIPIENT", msg.sender);
-        // Distinct from owner and treasury: Monday LP swap fees harvest here. If unset, Monday LP mints to LaunchLocker
-        // and those fees cannot be collected.
-        address feesRecipient = vm.envOr("FEES", address(0));
-        uint256 launchFee = vm.envOr("LAUNCH_FEE_WEI", uint256(1 ether));
+        address protocolFeeRecipient = _addr("PROTOCOL_FEE_RECIPIENT", msg.sender);
+        // Distinct from owner and treasury: Monday LP swap fees harvest here. If unset (never on mainnet), Monday LP
+        // mints to LaunchLocker and those fees cannot be collected.
+        address feesRecipient = _addr("FEES", address(0));
+        address finalOwner = vm.envOr("OWNER", msg.sender);
+        uint256 launchFee = _uint("LAUNCH_FEE_WEI", 1 ether);
         uint16 protocolShareBps = uint16(vm.envOr("PROTOCOL_FEE_SHARE_BPS", uint256(5000)));
         uint16 maxCreatorTaxBps = uint16(vm.envOr("MAX_CREATOR_TAX_BPS", uint256(1000)));
         uint256 supply = vm.envOr("SUPPLY", uint256(1_000_000_000e18));
@@ -63,11 +80,20 @@ contract Deploy is Script {
         address usdc = vm.envOr("USDC", address(0x754704Bc059F8C67012fEd69BC8A327a5aafb603));
         address ausd = vm.envOr("AUSD", address(0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a));
         address abil = vm.envOr("ABIL", address(0x4FC5B9f8933597D3ecf84d0611687E1Dc8DD576f));
-        // USD price * 1e8 for the non-$1 assets. Override with live prices before a real deploy.
-        uint256 monPriceE8 = vm.envOr("MON_USD_E8", uint256(1e8)); // TODO: set to the live MON price * 1e8
-        uint256 abilPriceE8 = vm.envOr("ABIL_USD_E8", uint256(1e8)); // TODO: set to the live aBIL price * 1e8
+        // USD price * 1e8 for the non-$1 assets: required on mainnet (script/relaunch/prices.py reads live ones).
+        uint256 monPriceE8 = _uint("MON_USD_E8", 1e8);
+        uint256 abilPriceE8 = _uint("ABIL_USD_E8", 1e8);
 
         require(poolManager.code.length > 0, "PoolManager has no code on this chain");
+        if (mainnet) {
+            require(monPriceE8 >= MON_USD_E8_MIN && monPriceE8 <= MON_USD_E8_MAX, "MON_USD_E8 outside the sanity band");
+            require(abilPriceE8 >= ABIL_USD_E8_MIN && abilPriceE8 <= ABIL_USD_E8_MAX, "ABIL_USD_E8 outside the sanity band");
+            require(
+                protocolFeeRecipient != msg.sender && feesRecipient != msg.sender && protocolFeeRecipient != feesRecipient
+                    && protocolFeeRecipient != finalOwner && feesRecipient != finalOwner,
+                "treasury, fees and owner/deployer must be distinct"
+            );
+        }
 
         vm.startBroadcast();
         LaunchpadFactory factory = new LaunchpadFactory(IPoolManager(poolManager), protocolFeeRecipient, launchFee, protocolShareBps, maxCreatorTaxBps);
@@ -90,7 +116,7 @@ contract Deploy is Script {
         address feeVault = address(0);
         if (feesRecipient != address(0)) {
             require(feesRecipient != msg.sender && feesRecipient != protocolFeeRecipient && protocolFeeRecipient != msg.sender, "roles must be distinct");
-            MondayFeeVault vault = new MondayFeeVault(msg.sender, feesRecipient);
+            MondayFeeVault vault = new MondayFeeVault(finalOwner, feesRecipient);
             feeVault = address(vault);
             mondayPositionOwner = feeVault;
         }
@@ -115,11 +141,14 @@ contract Deploy is Script {
         _setPair(factory, usdc, 6, 1e8, launchFdvUsd, false); // USDC ($1)
         _setPair(factory, ausd, 6, 1e8, launchFdvUsd, false); // AUSD ($1)
         _setPair(factory, abil, 18, abilPriceE8, launchFdvUsd, true); // aBIL (RWA, Monday-only)
+        // Last wiring step (security audit 2026-09-26): freeze every module now, not at the first launch.
+        factory.sealModules();
+        if (finalOwner != msg.sender) factory.transferOwnership(finalOwner);
         vm.stopBroadcast();
 
         string memory json = "deployment";
         vm.serializeUint(json, "chainId", block.chainid);
-        vm.serializeAddress(json, "owner", msg.sender);
+        vm.serializeAddress(json, "owner", finalOwner);
         vm.serializeAddress(json, "poolManager", poolManager);
         vm.serializeAddress(json, "factory", address(factory));
         vm.serializeAddress(json, "escrow", address(escrow));
@@ -135,7 +164,7 @@ contract Deploy is Script {
         vm.serializeAddress(json, "feesRecipient", feesRecipient);
         string memory out = vm.serializeAddress(json, "launchDeployer", address(launchDeployer));
         vm.createDir("deployments", true);
-        string memory path = string.concat("deployments/", vm.toString(block.chainid), ".json");
+        string memory path = _recordPath(string.concat(vm.toString(block.chainid), ".json"));
         vm.writeJson(out, path);
         console2.log("factory", address(factory));
         console2.log("hook", address(hook));

@@ -28,7 +28,7 @@ final class MonadReserveTests: XCTestCase {
 
     private func sender(chainId: Int = Monad.chainId, spacingTimeout: Duration = .seconds(5)) -> TransactionSender {
         var sender = TransactionSender(rpc: RPCClient(url: URL(string: "https://primary.test")!, session: RPCStub.session()), chainId: chainId)
-        sender.timing = .init(blockPoll: .milliseconds(5), spacingTimeout: spacingTimeout, fundingRetry: .milliseconds(5))
+        sender.timing = .init(blockPoll: .milliseconds(5), spacingTimeout: spacingTimeout, fundingRetry: .milliseconds(5), resendBackoff: .milliseconds(1))
         return sender
     }
 

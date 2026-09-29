@@ -23,13 +23,20 @@ import {MomentNFT} from "../../../src/moments/MomentNFT.sol";
 import {MockUSDC} from "../mocks/MockUSDC.sol";
 import {MockPermit2} from "../mocks/MockPermit2.sol";
 
-/// Smoke test of the LIVE Monad mainnet deployment (deployments/moments-143.json — cohort 3, the 2026-09-23 relaunch
-/// with the rotated wallets: factory 0x0FD4…7E26, platform 0x15ED…, treasury 0x5aDb…): nothing of ours is redeployed;
-/// the whole $2,000-FDV lifecycle (threshold 771.428571 USDC: 10 collects of $100 + a clamped terminal one) runs
-/// through the deployed factory / collect / vesting / graduation / locker / hook / buyback against the real
-/// PoolManager, USDC, Permit2 and Universal Router, on a fresh fork. Relaunch.t.sol checks the same stack against
-/// the retired cohorts and the old wallets.
+/// Smoke test of the LIVE Monad mainnet deployment (deployments/moments-143.json — v2, cohort 4, deployed 2026-09-28:
+/// factory 0x95eb…0840, governed by the Owner Safe 0x6D2A…, guardian 0x686C…, platform 0x15ED…, treasury 0x5aDb…):
+/// nothing of ours is redeployed; the whole $2,000-FDV lifecycle (threshold 771.428571 USDC: 10 collects of $100 + a
+/// clamped terminal one) runs through the deployed factory / collect / vesting / graduation / locker / hook / buyback
+/// against the real PoolManager, USDC, Permit2 and Universal Router, on a fresh fork. The addresses come from the
+/// record, so this follows whatever stack the app is wired to. Cohort3DeploymentTest below runs the same on cohort 3
+/// (deployments/moments-143-cohort3.json: the 2026-09-23 relaunch, factory 0x0FD4…7E26, retired in the app by v2 and
+/// still open on chain).
 ///   forge test --code-size-limit 100000000 --match-path test/moments/fork/LiveDeployment.t.sol -vv
+/// Cohort 3 runs the v1 factory, whose publish takes no terms hash (v2 adds it: sec2, MO-4).
+interface IMomentsFactoryV1Publish {
+    function publish(MomentsFactory.PublishParams calldata p) external returns (uint256 momentId, address coin, address nft);
+}
+
 contract LiveDeploymentTest is MomentsForkBase {
     using PoolIdLibrary for PoolKey;
 
@@ -40,9 +47,28 @@ contract LiveDeploymentTest is MomentsForkBase {
     address liveTreasury;
     uint256 liveThreshold;
 
+    /// The deployment record under test.
+    function _record() internal pure virtual returns (string memory) {
+        return "deployments/moments-143.json";
+    }
+
+    /// Who governs it: the Owner Safe (2-of-3) since v2.
+    function _governance() internal pure virtual returns (address) {
+        return 0x6D2A4D821e57b2B918B97CF575D81738bc16C100;
+    }
+
+    /// v2's guardian, link base and terms, bound into every publish (sec2, MO-4).
+    function _assertTerms(string memory json) internal view virtual {
+        assertEq(factory.guardian(), vm.parseJsonAddress(json, ".guardian"));
+        assertEq(factory.guardian(), 0x686C7A2886608082e698E0062EA3E4C408d43845, "the recorded guardian");
+        assertFalse(factory.guardianPaused());
+        assertEq(factory.externalBaseURI(), "https://dyorhq.fun/moments/c4/", "c4 link base");
+        assertEq(factory.termsHash(), 0x3d9ff80b17a4f23544485081f1d595532c4f1d7932b3deea682e0b1e1fb2fa03, "the terms the app shows");
+    }
+
     function setUp() public override {
         vm.createSelectFork("monad");
-        string memory json = vm.readFile("deployments/moments-143.json");
+        string memory json = vm.readFile(_record());
         factory = MomentsFactory(vm.parseJsonAddress(json, ".factory"));
         collect = MomentCollect(vm.parseJsonAddress(json, ".collect"));
         vesting = MomentVesting(vm.parseJsonAddress(json, ".vesting"));
@@ -71,7 +97,8 @@ contract LiveDeploymentTest is MomentsForkBase {
 
     function test_live_wiring_and_policy() public view {
         assertEq(factory.governance(), liveGovernance);
-        assertEq(factory.governance(), 0xCf7A9f1DE835a691f969B76e6eb4842BFaA7Fe10, "owner governs");
+        assertEq(factory.governance(), _governance(), "owner governs");
+        _assertTerms(vm.readFile(_record()));
         assertEq(factory.pendingGovernance(), address(0));
         assertTrue(factory.modulesSet());
         assertEq(factory.collect(), address(collect));
@@ -84,7 +111,7 @@ contract LiveDeploymentTest is MomentsForkBase {
         assertEq(factory.pendingPolicyAt(), 0);
         (uint256 threshold, uint256 minPrice, uint16 cBps, uint16 pBps, uint16 rBps, uint16 maxAlloc, uint16 expBps, uint16 royBps, address plat, address treas) = factory.policy();
         assertEq(threshold, liveThreshold);
-        assertEq(threshold, 771_428_571, "cohort 3: $2,000 FDV at the default 10% creator allocation");
+        assertEq(threshold, 771_428_571, "$2,000 FDV at the default 10% creator allocation");
         assertEq(minPrice, 100_000);
         assertEq(cBps, 2_000);
         assertEq(pBps, 500);
@@ -120,7 +147,7 @@ contract LiveDeploymentTest is MomentsForkBase {
     }
 
     /// Publishes through the LIVE factory, so the coin address (and therefore the currency ordering) comes from the
-    /// deployed v1 creation code, not from a local prediction: v1.1 changed the coin bytecode.
+    /// deployed creation code, not from a local prediction: v1.1 changed the coin bytecode.
     function test_live_lifecycle_through_the_deployed_contracts() public {
         uint256 nextId = factory.momentCount() + 1;
         (uint256 id, MomentCoin coin, MomentNFT nft) = _publish(creator, COLLECT_PRICE, MAX_ALLOC_BPS, 1001);
@@ -179,6 +206,9 @@ contract LiveDeploymentTest is MomentsForkBase {
             _buyExactIn(bob, r.key, usdcIs0, 10_000_000);
             _sellExactIn(bob, r.key, usdcIs0, coin.balanceOf(bob) - c0);
         }
+        // v2 (MO-2): the round runs in a later block than the burst, like a keeper's; within the burst's block its
+        // drift trips the block-open price guard. Cohort 3's v1 module has no guard, and a new block changes nothing.
+        vm.roll(vm.getBlockNumber() + 1);
         uint128 liq0 = _lockerPositionLiquidity(id, r.key);
         MomentBuyback.Round memory round = buyback.execute(id, 0);
         assertGt(round.liquidityAdded, 0);
@@ -197,5 +227,25 @@ contract LiveDeploymentTest is MomentsForkBase {
         collect.withdrawTreasury(id2);
         assertEq(usdc.balanceOf(liveTreasury) - t0, 450_000, "live treasury received 30% of the expired reserve");
         _assertSupply(id2);
+    }
+}
+
+/// The same smoke on cohort 3, the 2026-09-23 relaunch (retired in the app by v2, still open on chain): owner-governed,
+/// v1 publish without a terms hash, no guardian.
+contract Cohort3DeploymentTest is LiveDeploymentTest {
+    function _record() internal pure override returns (string memory) {
+        return "deployments/moments-143-cohort3.json";
+    }
+
+    function _governance() internal pure override returns (address) {
+        return 0xCf7A9f1DE835a691f969B76e6eb4842BFaA7Fe10;
+    }
+
+    function _assertTerms(string memory) internal view override {}
+
+    function _publish(address who, uint256 price, uint16 allocBps, uint256 seed) internal override returns (uint256 id, MomentCoin coin, MomentNFT nft) {
+        vm.prank(who);
+        (uint256 i, address c, address n) = IMomentsFactoryV1Publish(address(factory)).publish(_params(price, allocBps, seed));
+        return (i, MomentCoin(c), MomentNFT(n));
     }
 }

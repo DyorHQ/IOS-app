@@ -256,7 +256,7 @@ private struct PositionRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            LaunchArtwork(symbol: position.launch.symbol, logo: position.launch.logo)
+            LaunchArtwork(symbol: position.launch.symbol, logo: position.launch.logo, pointSize: 36)
                 .frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(position.launch.symbol).font(.subheadline.weight(.semibold))
@@ -287,7 +287,7 @@ private struct CreatedRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            LaunchArtwork(symbol: item.launch.symbol, logo: item.launch.logo)
+            LaunchArtwork(symbol: item.launch.symbol, logo: item.launch.logo, pointSize: 36)
                 .frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -448,7 +448,8 @@ final class LaunchpadProfileModel {
     }
 
     func load(env: AppEnvironment, address: Address?) async {
-        guard let address, env.config.launchpad.isDeployed else { positions = []; created = []; escrows = []; activity = []; return }
+        // The retired stacks keep serving the wallet's coins and fees while the live (v2) stack is pending.
+        guard let address else { positions = []; created = []; escrows = []; activity = []; return }
         loading = true
         defer { loading = false }
 
@@ -492,7 +493,7 @@ final class LaunchpadProfileModel {
             for (i, stack) in stacks {
                 group.addTask {
                     let balances = (try? await env.launchpad.escrowBalances(account: address, pairTokens: pairs[stack.escrow] ?? [], escrow: stack.escrow)) ?? EscrowBalances(native: 0, tokens: [:])
-                    return (i, EscrowHolding(escrow: stack.escrow, retired: i > 0, balances: balances))
+                    return (i, EscrowHolding(escrow: stack.escrow, retired: LaunchpadAddresses.retiredStack(for: stack.factory) != nil, balances: balances))
                 }
             }
             var out: [(Int, EscrowHolding)] = []

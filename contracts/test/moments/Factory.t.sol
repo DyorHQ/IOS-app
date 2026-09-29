@@ -10,9 +10,10 @@ import {MomentNFT} from "../../src/moments/MomentNFT.sol";
 contract FactoryTest is MomentsBase {
     function test_modules_wired_once_and_publish_needs_them() public {
         MomentsFactory fresh = new MomentsFactory(gov, _policy(THRESHOLD));
+        bytes32 terms = fresh.termsHash();
         vm.prank(creator);
         vm.expectRevert(MomentsFactory.ModulesNotSet.selector);
-        fresh.publish(_params(PRICE, 0, 1));
+        fresh.publish(_params(PRICE, 0, 1), terms);
         vm.prank(alice);
         vm.expectRevert(MomentsFactory.NotGovernance.selector);
         fresh.setModules(address(1), address(2), address(3), address(4), address(5), address(6));
@@ -34,12 +35,13 @@ contract FactoryTest is MomentsBase {
     }
 
     function test_publish_validates_and_snapshots() public {
+        bytes32 terms = factory.termsHash();
         vm.prank(creator);
         vm.expectRevert(MomentsFactory.PriceTooLow.selector);
-        factory.publish(_params(MIN_PRICE - 1, 0, 1));
+        factory.publish(_params(MIN_PRICE - 1, 0, 1), terms);
         vm.prank(creator);
         vm.expectRevert(MomentsFactory.AllocTooHigh.selector);
-        factory.publish(_params(PRICE, MAX_ALLOC_BPS + 1, 1));
+        factory.publish(_params(PRICE, MAX_ALLOC_BPS + 1, 1), terms);
 
         (uint256 id, MomentCoin coin, MomentNFT nft) = _publish(creator, PRICE, 700, 1);
         assertEq(id, 1, "ids are 1-based");
@@ -94,11 +96,12 @@ contract FactoryTest is MomentsBase {
         );
         address predictedNft = vm.computeCreate2Address(
             salt,
-            keccak256(abi.encodePacked(type(MomentNFT).creationCode, abi.encode(nextId, p.name, p.symbol, creator, address(collect), address(graduation), ROYALTY_BPS, p.provenance))),
+            keccak256(abi.encodePacked(type(MomentNFT).creationCode, abi.encode(nextId, p.name, p.symbol, creator, address(collect), address(graduation), ROYALTY_BPS, p.provenance, factory.externalBaseURI()))),
             address(factory)
         );
+        bytes32 terms = factory.termsHash();
         vm.prank(creator);
-        (uint256 id, address coin, address nft) = factory.publish(p);
+        (uint256 id, address coin, address nft) = factory.publish(p, terms);
         assertEq(id, nextId);
         assertEq(coin, predictedCoin, "coin address predictable ahead of publish (pool key can be precomputed)");
         assertEq(nft, predictedNft);
@@ -179,9 +182,10 @@ contract FactoryTest is MomentsBase {
     function test_publishing_pause_and_governance_handoff() public {
         vm.prank(gov);
         factory.setPublishingPaused(true);
+        bytes32 terms = factory.termsHash();
         vm.prank(creator);
         vm.expectRevert(MomentsFactory.Paused.selector);
-        factory.publish(_params(PRICE, 0, 1));
+        factory.publish(_params(PRICE, 0, 1), terms);
         vm.prank(gov);
         factory.setPublishingPaused(false);
         _publish(creator, PRICE, 0, 1);

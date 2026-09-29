@@ -182,6 +182,32 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(Amount.parse("1.2.3", decimals: 6))
     }
 
+    /// Perps prices, sizes and triggers (audit F4): a pasted "66,000" is 66000 in en_US, never 66, while the decimal
+    /// comma still works where the locale uses it and "0,5" is one half everywhere.
+    func testFieldNumberCommaGrouping() {
+        let enUS = ",", deDE = ".", frFR = "\u{202F}"
+        XCTAssertEqual(Amount.fieldNumber("66,000", groupingSeparator: enUS), 66_000)
+        XCTAssertEqual(Amount.fieldNumber("1,234", groupingSeparator: enUS), 1_234)
+        XCTAssertEqual(Amount.fieldNumber("999,999", groupingSeparator: enUS), 999_999)
+        XCTAssertEqual(Amount.fieldNumber("0,5", groupingSeparator: enUS), 0.5)
+        XCTAssertEqual(Amount.fieldNumber("0,500", groupingSeparator: enUS), 0.5, "a 0 whole part is never grouped")
+        XCTAssertEqual(Amount.fieldNumber("1,25", groupingSeparator: enUS), 1.25)
+        XCTAssertEqual(Amount.fieldNumber("1,2345", groupingSeparator: enUS), 1.2345)
+        XCTAssertEqual(Amount.fieldNumber("66,000.5", groupingSeparator: enUS), 66_000.5)
+        XCTAssertEqual(Amount.fieldNumber("1,234,567", groupingSeparator: enUS), 1_234_567)
+        XCTAssertEqual(Amount.fieldNumber(" 66,000 ", groupingSeparator: enUS), 66_000)
+        XCTAssertEqual(Amount.fieldNumber("65432.125", groupingSeparator: enUS), 65_432.125, "the app's own writers emit POSIX")
+        XCTAssertEqual(Amount.fieldNumber("65432.125", groupingSeparator: deDE), 65_432.125, "a lone dot is always decimal")
+        XCTAssertEqual(Amount.fieldNumber("1,234", groupingSeparator: deDE), 1.234)
+        XCTAssertEqual(Amount.fieldNumber("1,234", groupingSeparator: frFR), 1.234)
+        XCTAssertEqual(Amount.fieldNumber("0,5", groupingSeparator: deDE), 0.5)
+        XCTAssertEqual(Amount.fieldNumber("1.234,5", groupingSeparator: deDE), 1_234.5)
+        XCTAssertEqual(Amount.fieldNumber("1,234", groupingSeparator: nil), 1.234)
+        for bad in ["", ".", ",", "1,,5", "-1", "1e5", "inf", "nan", "1 000", "0,500,000", "１"] {
+            XCTAssertNil(Amount.fieldNumber(bad, groupingSeparator: enUS), bad)
+        }
+    }
+
     /// A decimal comma (what the decimal pad types in much of Europe and Latin America) is a decimal point, never a
     /// thousands separator to delete: "0,5" must not become 5. Same vectors as the web app's parseAmount.
     func testAmountParseDecimalComma() {
@@ -242,8 +268,52 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(NumberStyle.number(0.00012), "0.00012")
         XCTAssertEqual(NumberStyle.number(0.000000042), "0.0₇42")
         XCTAssertEqual(NumberStyle.number(-3), "−3")
+        // A market's price/lot precision shows the value in full (the review rows of a perp order).
+        XCTAssertEqual(NumberStyle.number(1.23456, maximumFractionDigits: 5), "1.23456")
+        XCTAssertEqual(NumberStyle.number(95_000.1, maximumFractionDigits: 1), "95,000.1")
+        XCTAssertEqual(NumberStyle.number(0.12345678, maximumFractionDigits: 8), "0.12345678")
+        XCTAssertEqual(NumberStyle.number(0.12345678, maximumFractionDigits: 2), "0.123457")
+        XCTAssertEqual(NumberStyle.number(0.0000123456, maximumFractionDigits: 10), "0.0₄123456")
+        XCTAssertEqual(NumberStyle.number(0.000000042, maximumFractionDigits: 2), "0.0₇42")
         XCTAssertEqual(NumberStyle.percent(1.234), "+1.23%")
         XCTAssertEqual(NumberStyle.percent(-0.5), "−0.50%")
         XCTAssertEqual(NumberStyle.basisPoints(30), "0.3%")
+    }
+}
+
+/// Recipient text as people paste it (security audit 2026-09-26, GR-4): invisible characters and surrounding
+/// whitespace are removed, and what is still wrong is named precisely.
+final class AddressInputTests: XCTestCase {
+    private let plain = "0x2222222222222222222222222222222222222222"
+    private let checksummed = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+
+    func testCleaningRemovesInvisibleCharactersAndSurroundingWhitespace() {
+        let dirty = "\u{FEFF} \n" + String(plain.prefix(10)) + "\u{200B}\u{202E}" + String(plain.dropFirst(10)) + "\u{2066}\u{00AD}\t "
+        let cleaned = Address.cleanedInput(dirty)
+        XCTAssertEqual(cleaned.text, plain)
+        XCTAssertTrue(cleaned.removedInvisible)
+        XCTAssertNil(Address.inputProblem(cleaned.text))
+        XCTAssertEqual(Address(cleaned.text), Address(plain))
+
+        let clean = Address.cleanedInput("  \(checksummed)\n")
+        XCTAssertEqual(clean.text, checksummed)
+        XCTAssertFalse(clean.removedInvisible, "whitespace isn't reported as hidden characters")
+    }
+
+    func testProblemsAreNamedPrecisely() {
+        XCTAssertNil(Address.inputProblem(""))
+        XCTAssertNil(Address.inputProblem(plain))
+        XCTAssertNil(Address.inputProblem(checksummed))
+        XCTAssertEqual(Address.inputProblem("2222222222222222222222222222222222222222"), "An address starts with 0x.")
+        XCTAssertEqual(Address.inputProblem("0x2222 2222222222222222222222222222222222"), "This address has a space or line break inside it. Copy it again from the source.")
+        XCTAssertEqual(Address.inputProblem("0x222222222222222222222222222222222222222g"), "“g” can't be part of an address: it uses only 0–9 and a–f.")
+        XCTAssertEqual(Address.inputProblem("0x22222"), "An address has 40 characters after 0x; this one has 5.")
+        XCTAssertEqual(Address.inputProblem(plain + "22"), "An address has 40 characters after 0x; this one has 42.")
+        // EIP-55's own mixed-case example, then the same with one letter's case flipped.
+        XCTAssertNil(Address.inputProblem("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"))
+        XCTAssertEqual(Address.inputProblem("0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"),
+                       "This address's capital letters don't match its checksum, so it may contain a typo. Copy it again from the source.")
+        // A full-width digit or an other-script letter that looks like hex is named, not waved through.
+        XCTAssertEqual(Address.inputProblem("0x２222222222222222222222222222222222222222"), "“２” can't be part of an address: it uses only 0–9 and a–f.")
     }
 }

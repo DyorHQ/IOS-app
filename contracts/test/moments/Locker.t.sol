@@ -93,15 +93,21 @@ contract LockerTest is MomentsMarketBase {
         assertEq(k.fee, 5_000, "0.5% LP fee accrues to the locked position");
     }
 
-    function test_lp_fees_compound_into_the_locked_position() public {
+    function _roundTrips(uint256 n, uint256 usdcIn) internal {
         _approveCoin(coin, bob);
-        uint128 before = _lockerPositionLiquidity(id, key);
         // round trips: the 0.5% LP fee is charged on the input of each leg (USDC on buys, coin on sells)
-        for (uint256 i = 0; i < 5; i++) {
+        for (uint256 i = 0; i < n; i++) {
             uint256 c0 = coin.balanceOf(bob);
-            _buyExactIn(bob, key, true, 5_000_000);
+            _buyExactIn(bob, key, true, usdcIn);
             _sellExactIn(bob, key, true, coin.balanceOf(bob) - c0);
         }
+    }
+
+    /// v2 (sec2, MO-2): one increase adds at most MAX_INCREASE_BPS of the position, so this fold's fees stay under it
+    /// (five $1 round trips on the $7.50 test pool); `test_lp_fees_above_the_cap_fold_over_several_increases` covers more.
+    function test_lp_fees_compound_into_the_locked_position() public {
+        uint128 before = _lockerPositionLiquidity(id, key);
+        _roundTrips(5, 1_000_000);
         assertEq(_lockerPositionLiquidity(id, key), before, "fees accrue as fee growth, not as liquidity, until folded");
         uint256 pmUsdc = usdc.balanceOf(address(manager));
         uint256 pmCoin = coin.balanceOf(address(manager));
@@ -119,9 +125,32 @@ contract LockerTest is MomentsMarketBase {
         assertEq(usdc.balanceOf(address(manager)) + usdc.balanceOf(address(locker)), pmUsdc + lockerUsdc0, "USDC conserved");
         assertEq(coin.balanceOf(address(manager)) + coin.balanceOf(address(locker)), pmCoin + lockerCoin0, "coin conserved");
         assertTrue(usdc.balanceOf(address(locker)) <= 2 || coin.balanceOf(address(locker)) <= 1e12, "one side fully paired");
+        assertLt(added, uint256(before) * locker.MAX_INCREASE_BPS() / BPS, "under the cap: all of it was folded");
         // folding again right away finds (almost) nothing
         vm.prank(address(buyback));
         (uint128 again,,) = locker.increase(id);
         assertLt(uint256(again) * 1_000, uint256(added), "second fold is dust-only");
+    }
+
+    /// Fees worth more than MAX_INCREASE_BPS of the position: each increase adds exactly the cap, and the rest stays
+    /// held for this Moment (never another Moment's, never outside {PoolManager, locker}) until later increases.
+    function test_lp_fees_above_the_cap_fold_over_several_increases() public {
+        uint128 before = _lockerPositionLiquidity(id, key);
+        _roundTrips(5, 5_000_000);
+        uint256 usdcTotal = usdc.balanceOf(address(manager)) + usdc.balanceOf(address(locker));
+        uint256 coinTotal = coin.balanceOf(address(manager)) + coin.balanceOf(address(locker));
+        vm.prank(address(buyback));
+        (uint128 added,,) = locker.increase(id);
+        assertEq(added, uint256(before) * locker.MAX_INCREASE_BPS() / BPS, "the first fold is capped");
+        assertGt(locker.heldOf(id, key.currency0), 2, "USDC held for the Moment");
+        assertGt(locker.heldOf(id, key.currency1), 1e12, "and coin");
+        assertEq(usdc.balanceOf(address(manager)) + usdc.balanceOf(address(locker)), usdcTotal, "USDC conserved");
+        assertEq(coin.balanceOf(address(manager)) + coin.balanceOf(address(locker)), coinTotal, "coin conserved");
+        assertEq(usdc.balanceOf(address(locker)), locker.heldOf(id, key.currency0), "all of it is this Moment's");
+        vm.prank(address(buyback));
+        (uint128 next,,) = locker.increase(id);
+        assertGt(next, 0, "the next fold adds more of it");
+        assertLe(next, uint256(before + added) * locker.MAX_INCREASE_BPS() / BPS, "at most a cap at a time");
+        assertEq(_lockerPositionLiquidity(id, key), before + added + next);
     }
 }

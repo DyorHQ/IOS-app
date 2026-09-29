@@ -72,22 +72,34 @@ final class MeraTests: XCTestCase {
         XCTAssertEqual(key.publicKey.rawRepresentation.count, 32)
     }
 
-    /// The rpId is a constant, and the app's associated-domains entitlement names exactly that host — with no
-    /// `?mode=developer`, which never associates in a distribution build.
+    /// The rpId is a constant, and the app's associated-domains entitlement names exactly that host for passkeys and
+    /// exactly the Moment link host for universal links — nothing else, and no `?mode=developer`, which never
+    /// associates in a distribution build. The two stay apart: applinks never on the passkey host (its pages would be
+    /// creator content on the rpId origin), webcredentials never on the link host.
     func testRelyingPartyMatchesTheEntitlement() throws {
         XCTAssertEqual(Mera.relyingParty, "accounts.dyorhq.fun")
+        XCTAssertEqual(MomentLink.host, "dyorhq.fun")
         var ios = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
         guard let spec = try? String(contentsOf: ios.appendingPathComponent("project.yml"), encoding: .utf8) else {
             throw XCTSkip("ios/project.yml is not in this checkout")
         }
         let settings = spec.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
-        XCTAssertEqual(settings.filter { $0.contains("com.apple.developer.associated-domains") }.map { $0.trimmingCharacters(in: .whitespaces) },
-                       ["com.apple.developer.associated-domains: [\"webcredentials:\(Mera.relyingParty)\"]"])
+        let lines = settings.filter { $0.contains("com.apple.developer.associated-domains") }
+        XCTAssertEqual(lines.count, 1)
+        // The whole bracketed list, item by item, so nothing extra can hide in it (single-quoted or bare YAML items).
+        let line = String(lines.first ?? "")
+        let list = line.drop { $0 != "[" }.dropFirst().prefix { $0 != "]" }
+        let items = list.split(separator: ",").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \"'")) }
+        XCTAssertTrue(line.trimmingCharacters(in: .whitespaces).hasSuffix("]"))
+        XCTAssertEqual(items, ["webcredentials:\(Mera.relyingParty)", "applinks:\(MomentLink.host)"])
         XCTAssertFalse(settings.contains { $0.contains("mode=developer") })
         // XcodeGen writes the entitlements file from project.yml; the checked-in copy must be regenerated to match.
         let entitlements = try String(contentsOf: ios.appendingPathComponent("DyorHQ/DyorHQ.entitlements"), encoding: .utf8)
         XCTAssertTrue(entitlements.contains("<string>webcredentials:\(Mera.relyingParty)</string>"))
+        XCTAssertTrue(entitlements.contains("<string>applinks:\(MomentLink.host)</string>"))
+        XCTAssertEqual(entitlements.components(separatedBy: "<string>webcredentials:").count, 2)
+        XCTAssertEqual(entitlements.components(separatedBy: "<string>applinks:").count, 2)
         XCTAssertFalse(entitlements.contains("mode=developer"))
     }
 

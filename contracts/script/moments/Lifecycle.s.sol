@@ -24,16 +24,23 @@ interface IPermit2Allowance {
     function approve(address token, address spender, uint160 amount, uint48 expiration) external;
 }
 
+/// The deployed (v1) cohorts' publish, which predates the terms hash that v2 binds publish to (sec2, MO-4).
+interface IMomentsFactoryV1Publish {
+    function publish(MomentsFactory.PublishParams calldata p) external returns (uint256 momentId, address coin, address nft);
+}
+
 /// @notice FORK-ONLY rehearsal of the $10 lifecycle, for app development against `anvil --fork-url monad`
 ///         (chain id 143 on the fork too). It is NOT a mainnet procedure: the live lifecycle is exercised through
-///         the DyorHQ app by ordinary, low-value wallets (see docs/moments-mainnet-runbook.md). Never run this with
+///         the DyorHQ app by ordinary, low-value wallets (see
+///         DyorHQ/internal: ios-app/docs/moments-mainnet-runbook.md). Never run this with
 ///         a real key: it publishes, collects and trades from whatever key broadcasts it. The `FORK_REHEARSAL=1`
 ///         guard exists so a mainnet RPC + real key cannot run it by accident.
 ///
 ///           anvil --fork-url https://rpc.monad.xyz --chain-id 143   # in another shell
-///           export FORK_REHEARSAL=1 RPC=http://127.0.0.1:8545 KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80  # anvil #0
-///           forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url $RPC --broadcast --private-key $KEY --sig "publish()"
-///           MOMENT_ID=1 forge script ... --sig "collectUntilGraduated()"   # fund the anvil account with USDC first (anvil_setStorageAt / deal)
+///           cast wallet new ~/.foundry/keystores fork-rehearsal   # once: a fresh key used only on forks
+///           export FORK_REHEARSAL=1 RPC=http://127.0.0.1:8545
+///           forge script script/moments/Lifecycle.s.sol:MomentsLifecycle --rpc-url $RPC --broadcast --account fork-rehearsal --sig "publish()"
+///           MOMENT_ID=1 forge script ... --sig "collectUntilGraduated()"   # fund that account with MON and USDC first (anvil_setBalance / anvil_setStorageAt)
 ///           MOMENT_ID=1 forge script ... --sig "trade()"                   # $1 buy through the real Universal Router
 ///           MOMENT_ID=1 forge script ... --sig "claim()" | "withdraw()" | "buyback()" | "status()"
 contract MomentsLifecycle is Script {
@@ -94,8 +101,11 @@ contract MomentsLifecycle is Script {
             collectWindow: uint32(vm.envOr("COLLECT_WINDOW", uint256(30 days))),
             salt: bytes32(vm.envOr("SALT", uint256(1)))
         });
+        // A v2 factory binds publish to the terms it shows (termsHash); the deployed v1 cohorts have neither.
+        (bool v2, bytes memory terms) = address(factory).staticcall(abi.encodeCall(MomentsFactory.termsHash, ()));
         vm.startBroadcast();
-        (uint256 id, address coin, address nft) = factory.publish(p);
+        (uint256 id, address coin, address nft) =
+            v2 ? factory.publish(p, abi.decode(terms, (bytes32))) : IMomentsFactoryV1Publish(address(factory)).publish(p);
         vm.stopBroadcast();
         console2.log("momentId", id);
         console2.log("coin", coin);

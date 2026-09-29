@@ -29,7 +29,7 @@ struct PortfolioView: View {
                         heroCard
                         breakdownCard
                         ForEach(PortfolioModel.Section.allCases) { section in sectionCard(section) }
-                        AssetsCard(model: assets)
+                        AssetsCard(model: assets) { Task { await assets.load(env: env, address: session.address, force: true) } }
                         PastCohortsCard(model: pastMoments)
                         activityCard
                     }
@@ -108,6 +108,8 @@ struct PortfolioView: View {
             }
             if model.loading, model.hasLoaded {
                 HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Refreshing…").font(.caption2).foregroundStyle(.tertiary) }
+            } else if let error = model.error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(Color.attention)
             } else if let updated = model.updatedAt {
                 Text("Updated \(updated, style: .relative) ago").font(.caption2).foregroundStyle(.tertiary)
             }

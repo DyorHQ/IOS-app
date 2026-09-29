@@ -4,8 +4,10 @@ import Foundation
 /// Reads markets, accounts, positions and orders from Perpl's Exchange contract and builds the transaction
 /// plans the app runs with `TransactionSender`. Mirrors app/lib/perps/perpl.ts in the web repository.
 public actor PerplService {
-    /// The markets the app lists, in display order. Symbols are the app's; the contract's own symbol (for
-    /// example `SOL_v2`) is what `PerpMarket.symbol` carries.
+    /// The markets the app lists, in display order: every live market on the Exchange (id 30, the old SOL, is
+    /// retired). Symbols are the app's; the contract's own symbol (for example `SOL_v2`) is what `PerpMarket.symbol`
+    /// carries, and price / lot decimals are read from `getPerpetualInfo` (LIT 5/1, VVV 4/2, TAO 3/3, PUMP 6/0 on
+    /// 2026-09-27). A position in a market missing here is still read (`positions`).
     public static let markets: [(id: Int, symbol: String, name: String)] = [
         (1, "BTC", "Bitcoin"),
         (10, "MON", "Monad"),
@@ -13,6 +15,10 @@ public actor PerplService {
         (31, "SOL", "Solana"),
         (40, "HYPE", "Hyperliquid"),
         (50, "ZEC", "Zcash"),
+        (60, "LIT", "Lighter"),
+        (70, "VVV", "Venice"),
+        (80, "TAO", "Bittensor"),
+        (90, "PUMP", "Pump.fun"),
     ]
 
     /// Perpl's public REST API. `Perpl.api` (api.perpl.xyz) has no DNS record; the web app proxies
@@ -36,7 +42,7 @@ public actor PerplService {
     // MARK: Reads
 
     /// Markets in the order of `ids`; markets the contract fails to report are left out, and a market whose
-    /// margin read fails gets Perpl's usual 10% / 5% requirements.
+    /// margin read fails has unknown (nil) margin fractions, never a guessed 10% / 5%.
     public func markets(ids: [Int]? = nil) async throws -> [PerpMarket] {
         let ids = ids ?? Self.markets.map(\.id)
         async let infoReads = multicall.read(ids.map { PerplExchange.read(PerplExchange.Signature.getPerpetualInfo, [.uint($0)], returns: PerplExchange.Returns.perpetualInfo) })
@@ -66,13 +72,31 @@ public actor PerplService {
         return PerplExchange.account(values[0])
     }
 
+    /// Every open position of the account. A position in a market `markets` doesn't hold (one Perpl added after this
+    /// build) is read with that market's own on-chain info, never dropped; if that market can't be read, this throws
+    /// rather than return a list that looks complete.
     public func positions(_ account: PerpAccount, markets: [PerpMarket]) async throws -> [PerpPosition] {
         if account.positionPerpIds.isEmpty { return [] }
+        let listed = Set(markets.map(\.id))
+        let unlisted = account.positionPerpIds.filter { !listed.contains($0) }
+        var markets = markets
+        if !unlisted.isEmpty {
+            let extra = try await self.markets(ids: unlisted)
+            guard Set(extra.map(\.id)).isSuperset(of: unlisted) else {
+                throw PerplError.malformedResponse("a position in a market")
+            }
+            markets += extra
+        }
         let calls = account.positionPerpIds.map { PerplExchange.read(PerplExchange.Signature.getPosition, [.uint($0), .uint(account.accountId)], returns: PerplExchange.Returns.position) }
         let results = try await multicall.read(calls)
         var out: [PerpPosition] = []
         for (perpId, result) in zip(account.positionPerpIds, results) {
-            guard case .success(let values) = result, let perp = markets.first(where: { $0.id == perpId }), let position = PerplExchange.position(perp: perp, values: values) else { continue }
+            // A slot that can't be read is an error, never a list that silently leaves the position out; only a
+            // successful read of an empty slot (zero lot) is skipped.
+            guard case .success(let values) = result, let perp = markets.first(where: { $0.id == perpId }) else {
+                throw PerplError.malformedResponse("position \(perpId)")
+            }
+            guard let position = PerplExchange.position(perp: perp, values: values) else { continue }
             out.append(position)
         }
         return out
@@ -278,8 +302,8 @@ public actor PerplService {
     // MARK: Pure helpers
 
     /// Price at which the position's equity would fall to the maintenance requirement; nil for an empty
-    /// position, never below zero.
-    public nonisolated static func liquidationPrice(side: PositionSide, entry: Double, size: Double, margin: Double, premium: Double, maintenanceFraction: Double) -> Double? {
+    /// position or an unknown maintenance fraction (the margin read failed), never below zero.
+    public nonisolated static func liquidationPrice(side: PositionSide, entry: Double, size: Double, margin: Double, premium: Double, maintenanceFraction: Double?) -> Double? {
         PerplExchange.liquidationPrice(side: side, entry: entry, size: size, margin: margin, premium: premium, maintenanceFraction: maintenanceFraction)
     }
 

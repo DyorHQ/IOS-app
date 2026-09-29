@@ -88,7 +88,9 @@ public final class PerplFeed {
     private let session: URLSession
     private var generation = 0
     private var tradeSeq = 0
-    private var lastHeartbeat: Int?
+    /// The last heartbeat sequence number seen on the CURRENT socket (internal for tests). Each socket numbers its
+    /// own heartbeats, so a reconnect starts over.
+    private(set) var lastHeartbeat: Int?
     private var retry = 0
     /// When the last frame of any kind arrived. `connected` is derived from this, not from socket errors: a healthy
     /// feed streams book, tape and a heartbeat every second, so *silence* is the true "not live" signal — it stays
@@ -142,6 +144,9 @@ public final class PerplFeed {
         task?.cancel(with: .goingAway, reason: nil)
         guard let market else { return }
         lastRestartAt = Date()
+        // The new socket's first heartbeat must not be compared with the old socket's last one: that reads as a gap
+        // and forces a second subscribe right after this one.
+        lastHeartbeat = nil
         let task = session.webSocketTask(with: wsURL)
         self.task = task
         task.resume()
@@ -220,7 +225,8 @@ public final class PerplFeed {
 
     // MARK: Decoding
 
-    private func handle(_ data: Data) {
+    /// Internal (not private) so tests can replay recorded frames.
+    func handle(_ data: Data) {
         guard let market, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let mt = obj["mt"] as? Int else { return }
         let priceScale = pow(10.0, Double(market.priceDecimals))
         let sizeScale = pow(10.0, Double(market.lotDecimals))
@@ -231,7 +237,10 @@ public final class PerplFeed {
         case 16: // L2 delta
             book.bids = apply(delta: obj["bid"], to: book.bids, priceScale, sizeScale, descending: true)
             book.asks = apply(delta: obj["ask"], to: book.asks, priceScale, sizeScale, descending: false)
-        case 17, 18: // trades snapshot / update
+        case 17: // trades snapshot — replaces the tape. Every (re)subscribe sends one, and prepending it to the tape
+                 // already shown doubled every recent trade after each reconnect.
+            trades = Array(tradeList(obj["d"], priceScale, sizeScale).prefix(60))
+        case 18: // trades update — newest first, ahead of what is already shown
             let incoming = tradeList(obj["d"], priceScale, sizeScale)
             trades = Array((incoming + trades).prefix(60))
         case 9: // market-state (all markets)

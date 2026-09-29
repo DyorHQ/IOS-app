@@ -35,9 +35,16 @@ public actor LaunchpadService {
 
     public var isDeployed: Bool { addresses.isDeployed }
 
-    /// The live stack followed by every retired one (skipping a retired stack the build is configured to as live).
+    /// The live stack followed by every retired one (skipping a retired stack the build is configured to as live). A
+    /// live stack that is not deployed yet (v2 pending) is left out, so the list is the retired stacks alone and
+    /// nothing is ever read from address 0.
     public var stacks: [LaunchpadAddresses] {
-        [addresses] + LaunchpadAddresses.retiredStacks.filter { $0.factory != addresses.factory }
+        (addresses.isDeployed ? [addresses] : []) + retiredStacks
+    }
+
+    /// Every retired stack, newest first; they keep serving their launches whether or not the live one is deployed.
+    public var retiredStacks: [LaunchpadAddresses] {
+        LaunchpadAddresses.retiredStacks.filter { $0.factory != addresses.factory }
     }
 
     /// The stack whose factory is `factory`: the live one (also for `.zero`), a retired one, or — for a factory the
@@ -84,11 +91,14 @@ public actor LaunchpadService {
     // MARK: - Reads
 
     /// Factory policy, launch template 0 and the economics of native MON plus `extraPairTokens` (the ERC-20
-    /// pairs the owner approved). Nil until the contracts are deployed.
-    public func protocolInfo(extraPairTokens: [Address] = []) async throws -> ProtocolInfo? {
+    /// pairs the owner approved), and what decides whether Launch is offered (`ProtocolInfo.launchBlocker`): on v2 the
+    /// sealed flag and the module wiring, and `canLaunch(account)` when an account is given. Nil until the contracts
+    /// are deployed.
+    public func protocolInfo(extraPairTokens: [Address] = [], account: Address? = nil) async throws -> ProtocolInfo? {
         guard addresses.isDeployed else { return nil }
         let factory = addresses.factory
         typealias F = LaunchpadABI.Factory
+        let checksModules = addresses.generation.hasV2Getters
         let policy = try await multicall.readAll([
             LaunchpadABI.call(factory, F.launchFee, returns: "uint256"),
             LaunchpadABI.call(factory, F.launchConfigCount, returns: "uint256"),
@@ -96,7 +106,14 @@ public actor LaunchpadService {
             LaunchpadABI.call(factory, F.whitelistEnabled, returns: "bool"),
             LaunchpadABI.call(factory, F.getLaunchFeePolicy, returns: "(address,uint16)"),
             LaunchpadABI.call(factory, F.launchCount, returns: "uint256"),
-        ])
+        ] + (checksModules ? moduleCalls(factory) : []) + (account.map { [LaunchpadABI.call(factory, F.canLaunch, [.address($0)], returns: "bool")] } ?? []))
+        var index = 6
+        func next() -> [ABIValue] {
+            defer { index += 1 }
+            return policy[index]
+        }
+        let wiring = checksModules ? Self.wiring(sealed: next(), modules: (0..<8).map { _ in next() }) : nil
+        let accountCanLaunch = account == nil ? nil : next()[0].bool
         let configId: BigUInt = 0
         let hasConfig = policy[1][0].uint > 0
         let pairTokens = [Address.zero] + extraPairTokens
@@ -105,17 +122,22 @@ public actor LaunchpadService {
         // the Monday graduation venue (and disable the picker) for aBIL, matching the factory's `PairRequiresMonday`.
         let econCalls = pairTokens.map { LaunchpadABI.call(factory, F.pairTokenEconomics, [.address($0)], returns: "uint256,uint256,uint8,bool") }
         let mondayOnlyCalls = pairTokens.map { LaunchpadABI.call(factory, F.pairMondayOnly, [.address($0)], returns: "bool") }
-        let calls = configCalls + econCalls + mondayOnlyCalls
+        // The terms hash for each pair, in the same multicall (one block) as the terms the screen shows, so a launch
+        // can be bound to exactly what was shown (IOST-2).
+        let hashCalls = pairTokens.map { LaunchpadABI.call(factory, F.previewLaunchEconomics, [.uint(configId), .address($0)], returns: "bytes32") }
+        let calls = configCalls + econCalls + mondayOnlyCalls + hashCalls
         async let economics = multicall.readAll(calls)
         async let infos = pairInfos(pairTokens)
         let (results, pairs) = try await (economics, infos)
         let config = hasConfig ? LaunchpadABI.LaunchConfig(results[0][0]) : nil
         let offset = hasConfig ? 1 : 0
         let mondayOffset = offset + pairTokens.count
+        let hashOffset = mondayOffset + pairTokens.count
         let pairEconomics = pairTokens.enumerated().map { i, token in
             let values = results[offset + i]
             let mondayOnly = results[mondayOffset + i][0].bool
-            return PairEconomics(pair: pairs[token] ?? .mon, phantomQuote: values[0].uint, graduationThreshold: values[1].uint, approved: values[3].bool, mondayOnly: mondayOnly)
+            return PairEconomics(pair: pairs[token] ?? .mon, phantomQuote: values[0].uint, graduationThreshold: values[1].uint, approved: values[3].bool,
+                                 mondayOnly: mondayOnly, economicsHash: results[hashOffset + i][0].bytes)
         }
         return ProtocolInfo(
             launchFee: policy[0][0].uint,
@@ -129,8 +151,44 @@ public actor LaunchpadService {
             whitelistEnabled: policy[3][0].bool,
             protocolFeeShareBps: LaunchpadABI.int(policy[4][0][1]),
             launchCount: LaunchpadABI.int(policy[5][0]),
-            pairs: pairEconomics
+            pairs: pairEconomics,
+            modulesSealed: wiring?.sealed,
+            moduleMismatches: wiring?.modules.mismatches(addresses) ?? [],
+            accountCanLaunch: accountCanLaunch
         )
+    }
+
+    /// `modulesSealed()` and the eight module getters, in `wiring(sealed:modules:)`'s order. v2 only.
+    private func moduleCalls(_ factory: Address) -> [ContractCall] {
+        typealias F = LaunchpadABI.Factory
+        return [LaunchpadABI.call(factory, F.modulesSealed, returns: "bool")]
+            + [F.hook, F.router, F.escrow, F.holderFeeSharing, F.locker, F.graduationExecutor, F.mondayExecutor, F.launchDeployer].map { LaunchpadABI.call(factory, $0, returns: "address") }
+    }
+
+    private static func wiring(sealed: [ABIValue], modules m: [[ABIValue]]) -> (sealed: Bool, modules: LaunchpadModules) {
+        (sealed[0].bool, LaunchpadModules(hook: m[0][0].address, router: m[1][0].address, escrow: m[2][0].address, holderFeeSharing: m[3][0].address,
+                                          locker: m[4][0].address, graduationExecutor: m[5][0].address, mondayExecutor: m[6][0].address, launchDeployer: m[7][0].address))
+    }
+
+    /// Whether the factory would refuse `account`'s launch with template `configId` right now (`LaunchBlocker`), read
+    /// fresh: v2's sealed flag and module wiring, the template's switch and the whitelist.
+    public func launchBlocker(account: Address, configId: BigUInt = 0) async throws -> LaunchBlocker? {
+        guard addresses.isDeployed else { throw LaunchpadError.notDeployed }
+        let factory = addresses.factory
+        typealias F = LaunchpadABI.Factory
+        let checksModules = addresses.generation.hasV2Getters
+        // Tolerant read: a template id past the end reverts, which means "no such template".
+        let r = try await multicall.read([
+            LaunchpadABI.call(factory, F.whitelistEnabled, returns: "bool"),
+            LaunchpadABI.call(factory, F.canLaunch, [.address(account)], returns: "bool"),
+            LaunchpadABI.call(factory, F.getLaunchConfig, [.uint(configId)], returns: LaunchpadABI.launchConfigTuple),
+        ] + (checksModules ? moduleCalls(factory) : []))
+        func value(_ i: Int) throws -> [ABIValue] { try r[i].get() }
+        let config = try? value(2)
+        let wiring = checksModules ? Self.wiring(sealed: try value(3), modules: try (4..<12).map(value)) : nil
+        return LaunchBlocker.check(modulesSealed: wiring?.sealed, moduleMismatches: wiring?.modules.mismatches(addresses) ?? [],
+                                   configEnabled: config.map { LaunchpadABI.LaunchConfig($0[0]).enabled } ?? false,
+                                   whitelistEnabled: try value(0)[0].bool, accountCanLaunch: try value(1)[0].bool)
     }
 
     /// The newest `limit` launches, newest first. Empty until the contracts are deployed.
@@ -142,7 +200,7 @@ public actor LaunchpadService {
     /// Launches recorded by a specific factory — the live one or a retired one whose history still counts.
     public func launches(limit: Int = 48, factory: Address) async throws -> [Launch] {
         guard !factory.isZero, limit > 0 else { return [] }
-        let legacy = stack(for: factory).legacyRecord
+        let legacy = stack(for: factory).generation.legacyRecord
         let total = LaunchpadABI.int(try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.launchCount, returns: "uint256")])[0][0])
         guard total > 0 else { return [] }
         let offset = max(0, total - limit)
@@ -155,11 +213,11 @@ public actor LaunchpadService {
 
     /// The newest `limit` launches of the live factory followed by those of each retired factory (newest stack
     /// first), so the whole list stays newest first. A factory that fails to answer is left out rather than failing
-    /// the others; the live factory's error is only thrown when no retired launch came back either.
+    /// the others; the live factory's error is only thrown when no retired launch came back either. While the live
+    /// stack is not deployed (v2 pending) the list is the retired stacks' launches alone.
     public func allLaunches(limit: Int = 48) async throws -> [Launch] {
-        guard addresses.isDeployed else { return [] }
-        let retiredStacks = Array(stacks.dropFirst())
-        async let live = launches(limit: limit, factory: addresses.factory)
+        let retiredStacks = self.retiredStacks
+        async let live: [Launch] = addresses.isDeployed ? launches(limit: limit, factory: addresses.factory) : []
         let retired = await withTaskGroup(of: (Int, [Launch]).self) { group in
             for (i, stack) in retiredStacks.enumerated() {
                 group.addTask { (i, (try? await self.launches(limit: limit, factory: stack.factory)) ?? []) }
@@ -177,15 +235,16 @@ public actor LaunchpadService {
     }
 
     /// One launch with its curve state, or nil when `token` was not launched on `factory` (the live factory when
-    /// nil) or nothing is deployed. Every read goes to that factory's own stack.
+    /// nil) or that stack is not deployed. Every read goes to that factory's own stack.
     public func launch(token: Address, factory: Address? = nil) async throws -> LaunchDetail? {
-        guard addresses.isDeployed else { return nil }
         let stack = stack(for: factory ?? addresses.factory)
+        guard stack.isDeployed else { return nil }
         let factory = stack.factory
         typealias F = LaunchpadABI.Factory
         typealias C = LaunchpadABI.Curve
-        let tuple = try await multicall.readAll([LaunchpadABI.call(factory, F.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: stack.legacyRecord))])[0][0]
-        let record = LaunchpadABI.LaunchRecord(tuple, legacy: stack.legacyRecord)
+        let legacy = stack.generation.legacyRecord
+        let tuple = try await multicall.readAll([LaunchpadABI.call(factory, F.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy))])[0][0]
+        let record = LaunchpadABI.LaunchRecord(tuple, legacy: legacy)
         guard record.exists, let info = try await hydrate([record], factory: factory).first else { return nil }
         let curve = record.curve
         // Like the web app, "graduated" here includes refund mode: the pool key is reported for both.
@@ -206,12 +265,38 @@ public actor LaunchpadService {
             calls.append(LaunchpadABI.call(stack.hook, LaunchpadABI.Hook.pendingFees, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
             calls.append(LaunchpadABI.call(stack.hook, LaunchpadABI.Hook.pendingCreatorTax, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
         }
+        // v2 hooks keep DyorHQ's cut apart once the holders' cut is forwarded in the swap. A v1 hook has no such getter:
+        // the call reverts and would fail the whole read.
+        let readsProtocolFees = readsHook && stack.generation.hasV2Getters
+        if readsProtocolFees {
+            calls.append(LaunchpadABI.call(stack.hook, LaunchpadABI.Hook.pendingProtocolFees, [.bytes(record.poolId), .address(record.pairToken)], returns: "uint256"))
+        }
         // The pre-audit sharing contracts have no `queuedRewards`; the call reverts and would fail the whole read.
-        let readsQueue = info.holderFeeSharing && !stack.holderFeeSharing.isZero && stack.hasQueuedRewards
+        let readsQueue = info.holderFeeSharing && !stack.holderFeeSharing.isZero && stack.generation.hasQueuedRewards
         if readsQueue {
             calls.append(LaunchpadABI.call(stack.holderFeeSharing, LaunchpadABI.Sharing.queuedRewards, [.address(token)], returns: "uint256,uint256"))
         }
+        // v2, a Monday launch whose curve completed but that hasn't graduated (stuck): its fallback rule, from the
+        // launch-time Monday-only snapshot, the owner's allowance and the delay (the first and last exist on v2 only).
+        let readsFallback = stack.generation.hasV2Getters && record.graduationVenue == .monday && record.phase == .bonding && info.completed && !info.rescued
+        if readsFallback {
+            calls += [
+                LaunchpadABI.call(factory, F.launchMondayOnly, [.address(token)], returns: "bool"),
+                LaunchpadABI.call(factory, F.v4FallbackAllowed, [.address(token)], returns: "bool"),
+                LaunchpadABI.call(factory, F.mondayOnlyFallbackDelay, returns: "uint256"),
+            ]
+        }
         let r = try await multicall.readAll(calls)
+        var index = 9
+        func next() -> [ABIValue] {
+            defer { index += 1 }
+            return r[index]
+        }
+        let pendingFees = readsHook ? next()[0].uint : 0
+        let pendingTax = readsHook ? next()[0].uint : 0
+        let protocolFees = readsProtocolFees ? next()[0].uint : 0
+        let queued = readsQueue ? next()[0].uint : 0
+        let rule = readsFallback ? GraduationFallbackRule(mondayOnly: next()[0].bool, allowed: next()[0].bool, delay: LaunchpadABI.int(next()[0])) : nil
         return LaunchDetail(
             launch: info,
             feeBps: LaunchpadABI.int(r[0][0]),
@@ -224,9 +309,11 @@ public actor LaunchpadService {
             swept: r[6][0].bool,
             stuckSince: LaunchpadABI.int(r[7][0]),
             poolKey: graduated ? LaunchpadABI.poolKey(r[8][0]) : nil,
-            hookPendingFees: readsHook ? r[9][0].uint : 0,
-            hookPendingTax: readsHook ? r[10][0].uint : 0,
-            queuedRewards: readsQueue ? r[readsHook ? 11 : 9][0].uint : 0
+            hookPendingFees: pendingFees,
+            hookPendingTax: pendingTax,
+            queuedRewards: queued,
+            hookPendingProtocolFees: protocolFees,
+            fallbackRule: rule
         )
     }
 
@@ -290,11 +377,12 @@ public actor LaunchpadService {
         return try ABI.decode(raw, "bool")[0].bool
     }
 
-    /// The token a launch transaction created, read from its `TokenLaunched` event. Nil while pending or when
-    /// the transaction emitted no launch.
+    /// The token a launch transaction created, read from the live factory's `TokenLaunched` event. Nil while pending,
+    /// when the transaction emitted no launch, or while the live stack is not deployed: an event from any other
+    /// emitter (a lookalike in the same transaction) is never taken for the launch.
     public func launchResult(transaction hash: Data) async throws -> LaunchResult? {
-        guard let logs = try await rpc.transactionLogs(hash) else { return nil }
-        for log in logs where log.topics.first == LaunchpadABI.Events.launchedTopic && (addresses.factory.isZero || log.address == addresses.factory) {
+        guard addresses.isDeployed, let logs = try await rpc.transactionLogs(hash) else { return nil }
+        for log in logs where log.topics.first == LaunchpadABI.Events.launchedTopic && log.address == addresses.factory {
             if let event = LaunchpadABI.launched(log) { return LaunchResult(token: event.token, curve: event.curve, deployer: event.deployer) }
         }
         return nil
@@ -304,7 +392,7 @@ public actor LaunchpadService {
 
     /// Token metadata and live curve state for a page of records from `factory`, in one multicall (plus one
     /// PoolManager read for graduated launches, and one metadata read for pair assets not seen before).
-    private func hydrate(_ records: [LaunchpadABI.LaunchRecord], factory: Address) async throws -> [Launch] {
+    func hydrate(_ records: [LaunchpadABI.LaunchRecord], factory: Address) async throws -> [Launch] {
         guard !records.isEmpty else { return [] }
         typealias T = LaunchpadABI.Token
         typealias C = LaunchpadABI.Curve
@@ -324,6 +412,7 @@ public actor LaunchpadService {
             ]
         }
         let stride = 9
+        let generation = stack(for: factory).generation
         let results = try await multicall.readAll(calls)
         let livePrices = await poolPrices(for: records)
         return records.enumerated().map { i, r in
@@ -348,7 +437,8 @@ public actor LaunchpadService {
                 supply: supply,
                 marketCap: LaunchpadMath.marketCap(price: price, supply: supply),
                 progressBps: LaunchpadMath.progressBps(phase: r.phase, realQuoteReserve: realQuoteReserve, sweptQuote: r.sweptQuote, threshold: r.graduationThreshold),
-                factory: factory
+                factory: factory,
+                generation: generation
             )
         }
     }
@@ -383,23 +473,32 @@ public actor LaunchpadService {
     public func knownCurve(token: Address) async -> Address? {
         let stacks = stacks.filter(\.isDeployed)
         guard !token.isZero, !stacks.isEmpty else { return nil }
-        let calls = stacks.map { LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.legacyRecord)) }
+        let calls = stacks.map { LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.generation.legacyRecord)) }
         guard let results = try? await multicall.read(calls) else { return nil }
         return Self.knownCurve(stacks: stacks, records: results)
     }
 
     /// Pure half of `knownCurve`: the first stack whose `getLaunchedToken` record exists and names a curve.
     static func knownCurve(stacks: [LaunchpadAddresses], records: [Result<[ABIValue], Error>]) -> Address? {
+        firstRecord(stacks: stacks, records: records)?.record.curve
+    }
+
+    /// The first of `stacks` whose `getLaunchedToken` answer (`records`, one per stack, in order) exists and names a
+    /// curve; a stack that failed to answer is skipped.
+    static func firstRecord(stacks: [LaunchpadAddresses], records: [Result<[ABIValue], Error>]) -> (stack: LaunchpadAddresses, record: LaunchpadABI.LaunchRecord)? {
         for (stack, result) in zip(stacks, records) {
             guard case .success(let values) = result, let tuple = values.first else { continue }
-            let record = LaunchpadABI.LaunchRecord(tuple, legacy: stack.legacyRecord)
-            if record.exists, !record.curve.isZero { return record.curve }
+            let record = LaunchpadABI.LaunchRecord(tuple, legacy: stack.generation.legacyRecord)
+            if record.exists, !record.curve.isZero { return (stack, record) }
         }
         return nil
     }
 
-    /// Approve the pair asset for the curve when it is an ERC-20, then `buy`. Native MON rides on `value`.
-    public func buyPlan(launch: Launch, quoteIn: BigUInt, minTokensOut: BigUInt, recipient: Address) -> [TransactionStep] {
+    /// Approve the pair asset for the curve when it is an ERC-20, then `buy`. Native MON rides on `value`. Refused for a
+    /// launch on a retired launchpad, whatever its phase (`LaunchpadError.retiredLaunchpad`): those curves take sells
+    /// only (owner decision 2026-09-28), so nothing is built, not even the approval.
+    public func buyPlan(launch: Launch, quoteIn: BigUInt, minTokensOut: BigUInt, recipient: Address) throws -> [TransactionStep] {
+        guard !launch.isRetiredLaunchpad else { throw LaunchpadError.retiredLaunchpad }
         var steps: [TransactionStep] = []
         if !launch.pair.isNative {
             steps.append(.approve(token: launch.pairToken, spender: launch.curve, amount: quoteIn, label: "Approve \(launch.pair.symbol)"))
@@ -409,7 +508,7 @@ public actor LaunchpadService {
         return steps
     }
 
-    /// Approve the token for the curve, then `sell`.
+    /// Approve the token for the curve, then `sell`. Open on every stack: a retired launchpad's holders can always sell.
     public func sellPlan(launch: Launch, tokensIn: BigUInt, minQuoteOut: BigUInt, recipient: Address) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Curve.sell, [.uint(tokensIn), .uint(minQuoteOut), .address(recipient)])
         return [
@@ -420,8 +519,10 @@ public actor LaunchpadService {
 
     /// `launchToken` on the factory, or `launchAndBuy` on the router when `initialBuy` is set (approving the
     /// pair asset for the router first when it is an ERC-20). `launchFee` is paid in MON on top of a native
-    /// developer buy. `from` receives the developer buy.
-    public func launchPlan(_ input: LaunchInput, launchFee: BigUInt, from: Address) -> [TransactionStep] {
+    /// developer buy. `from` receives the developer buy. A developer buy is a curve buy, so it is refused when the stack
+    /// is a retired one (`LaunchpadError.retiredLaunchpad`), whatever the build is pointed at.
+    public func launchPlan(_ input: LaunchInput, launchFee: BigUInt, from: Address) throws -> [TransactionStep] {
+        if input.initialBuy > 0, LaunchpadAddresses.isRetired(addresses.factory) { throw LaunchpadError.retiredLaunchpad }
         let params = LaunchpadABI.tokenParams(input)
         let exemptions: ABIValue = .array(input.exemptions.map { .address($0) })
         let label = "Launch $\(input.symbol)"
@@ -444,15 +545,29 @@ public actor LaunchpadService {
     /// needs what the form collected. `expectedLaunchFee` is the fee the screen showed: the factory's owner can change
     /// `launchFee` at any time with no cap, and the transaction must pay exactly the current one, so a fee that moved
     /// since the screen loaded is refused rather than signed unseen (security audit 2026-09-26, IOST-2).
-    public func launchPlan(_ input: LaunchInput, from: Address, expectedLaunchFee: BigUInt? = nil) async throws -> [TransactionStep] {
+    /// `expectedEconomics` is the terms hash read with the terms the screen showed (`PairEconomics.economicsHash`): the
+    /// launch carries it, so the factory itself rejects terms changed after it was read, and a change seen here is
+    /// refused before anything is signed. Without it the hash is read now, which binds nothing the screen showed.
+    public func launchPlan(_ input: LaunchInput, from: Address, expectedLaunchFee: BigUInt? = nil, expectedEconomics: Data? = nil) async throws -> [TransactionStep] {
         guard addresses.isDeployed else { throw LaunchpadError.notDeployed }
+        if input.initialBuy > 0, LaunchpadAddresses.isRetired(addresses.factory) { throw LaunchpadError.retiredLaunchpad }
         async let fee = multicall.readAll([LaunchpadABI.call(addresses.factory, LaunchpadABI.Factory.launchFee, returns: "uint256")])
         async let economics = previewLaunchEconomics(configId: input.configId, pairToken: input.pairToken)
+        async let blocker = launchBlocker(account: from, configId: input.configId)
+        // Refused before any step is built: a developer buy's approval would otherwise be signed (and paid for) first.
+        if let blocker = try await blocker { throw LaunchpadError.launchBlocked(blocker) }
         var filled = input
-        filled.expectedEconomics = try await economics
+        filled.expectedEconomics = try Self.boundEconomics(shown: expectedEconomics, current: try await economics)
         let launchFee = try await fee[0][0].uint
         if let expectedLaunchFee, launchFee != expectedLaunchFee { throw LaunchpadError.launchFeeChanged(launchFee) }
-        return launchPlan(filled, launchFee: launchFee, from: from)
+        return try launchPlan(filled, launchFee: launchFee, from: from)
+    }
+
+    /// The terms hash a launch carries: the one shown when there is one, refused when the factory's current one differs.
+    static func boundEconomics(shown: Data?, current: Data) throws -> Data {
+        guard let shown else { return current }
+        guard shown == current else { throw LaunchpadError.termsChanged }
+        return shown
     }
 
     /// `HolderFeeSharing.claim(token)` on the launch's own stack: the caller's share of the fees routed to holders.
@@ -485,7 +600,7 @@ public actor LaunchpadService {
     /// by pair asset rather than by coin.
     public func escrowBalances(account: Address, pairTokens: [Address], escrow: Address? = nil) async throws -> EscrowBalances {
         let escrow = escrow ?? addresses.escrow
-        guard addresses.isDeployed, !escrow.isZero else { return EscrowBalances(native: 0, tokens: [:]) }
+        guard !escrow.isZero else { return EscrowBalances(native: 0, tokens: [:]) }
         let tokens = Array(Set(pairTokens.filter { !$0.isZero }))
         var calls: [ContractCall] = [LaunchpadABI.call(escrow, LaunchpadABI.Escrow.balanceOf, [.address(account)], returns: "uint256")]
         for token in tokens { calls.append(LaunchpadABI.call(escrow, LaunchpadABI.Escrow.balanceOfToken, [.address(account), .address(token)], returns: "uint256")) }
@@ -508,21 +623,22 @@ public actor LaunchpadService {
         return steps
     }
 
-    /// `LaunchpadFactory.graduate(token)` on the launch's own factory: retries a stuck migration. Anyone may call it.
+    /// `LaunchpadFactory.graduate(token)` on the launch's own factory: retries a stuck migration. Anyone may call it, on
+    /// any stack, retired ones included.
+    /// Its gas is estimated like any other step (and held to the app's network-fee cap): on v2 plain `graduate` has no
+    /// gas floor and can only graduate on the creator's venue or revert, so the estimate never decides the venue.
     public func graduatePlan(launch: Launch) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduate, [.address(launch.token)])
         return [.call(TransactionRequest(to: stack(for: launch).factory, data: data), label: "Graduate")]
     }
 
-    /// `LaunchpadFactory.graduateFallback(token)`, the audit's rescue for a stuck Monday graduation: it retries the
-    /// creator's venue first and, only if Monday still fails, graduates on Uniswap v4 right away (no rescue delay).
-    /// Anyone may call it; a Monday-only quote asset needs the owner's `allowV4Fallback` first. Empty for a launch
-    /// whose factory predates it (the pre-audit retired stacks).
-    public func graduateFallbackPlan(launch: Launch) -> [TransactionStep] {
-        let stack = stack(for: launch)
-        guard stack.hasGraduateFallback else { return [] }
-        let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduateFallback, [.address(launch.token)])
-        return [.call(TransactionRequest(to: stack.factory, data: data), label: "Graduate on Uniswap v4")]
+    /// `LaunchpadFactory.graduateFallback(token)` — retry the creator's venue, then graduate a stuck Monday launch on
+    /// Uniswap v4 — is never sent from the app, on any stack (owner decision 2026-09-28): DyorHQ's keepers send it with
+    /// the gas it needs (v2's reverts below 22,062,500 gas, over the app's 15M network-fee cap; the keepers give it about
+    /// 29.9M). Always refused with `LaunchpadError.graduateFallbackByKeepers`, so nothing is built for any launch; Retry
+    /// Graduation (`graduatePlan`) stays.
+    public func graduateFallbackPlan(launch: Launch) throws -> [TransactionStep] {
+        throw LaunchpadError.graduateFallbackByKeepers
     }
 
     /// `MemeHook.sweepPoolFees(poolId, currency)` on the launch's own hook: pays out the fees the hook collected for
@@ -557,6 +673,24 @@ public extension LaunchpadMath {
     /// `price × supply / 1e18`: market cap in quote wei.
     static func marketCap(price: BigUInt, supply: BigUInt) -> BigUInt {
         price * supply / BigUInt(10).power(18)
+    }
+
+    /// Launches by market cap, largest first, across pair assets: each cap in whole pair units (6 decimals for USDC and
+    /// AUSD, 18 for MON and aBIL) times its pair asset's USD price (`pairUSD`, by pair token; MON under the zero
+    /// address), so a 50,000 USDC coin ranks above a 1 MON one although its raw amount is smaller. A launch whose pair has
+    /// no price yet ranks after every priced one, by its cap in whole pair units. Ties keep the given order.
+    static func byMarketCap(_ launches: [Launch], pairUSD: [Address: Double]) -> [Launch] {
+        let keyed = launches.enumerated().map { index, launch -> (index: Int, launch: Launch, priced: Bool, value: Double) in
+            let units = Amount.units(launch.marketCap, decimals: launch.pair.decimals)
+            if let usd = pairUSD[launch.pairToken], usd > 0 { return (index, launch, true, units * usd) }
+            return (index, launch, false, units)
+        }
+        return keyed.sorted { a, b in
+            if a.priced != b.priced { return a.priced }
+            if a.value != b.value { return a.value > b.value }
+            return a.index < b.index
+        }
+        .map(\.launch)
     }
 
     /// Progress to graduation in basis points: 10 000 once graduated, else raised / threshold with the raise

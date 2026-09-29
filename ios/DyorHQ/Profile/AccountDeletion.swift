@@ -11,20 +11,26 @@ enum AccountDeletion {
     enum Failure: LocalizedError {
         case backendSignInNeeded(String)
         case privyNotConfigured
+        /// An Email & Password account's email sign-in at Privy couldn't be deleted; nothing was deleted yet (SB-7).
+        case emailSignInNotDeleted(String)
 
         var errorDescription: String? {
             switch self {
             case .backendSignInNeeded(let why):
                 return "The server verifies it is your wallet before deleting anything, and that sign-in didn't complete: \(why)"
             case .privyNotConfigured:
-                return "Your DyorHQ data was deleted, but the sign-in account (Privy) could not be: deletion isn't enabled on the server yet. Contact support to finish, or try again later."
+                return "Your DyorHQ data was deleted and this iPhone is signed out, but the sign-in account (Privy) could not be: deletion isn't enabled on the server yet. Contact support to finish."
+            case .emailSignInNotDeleted(let why):
+                return "Nothing was deleted: removing the email sign-in DyorHQ created at Privy didn't work (\(why)). Try again in a few minutes, or contact \(SupportLinks.supportEmail)."
             }
         }
     }
 
     /// Runs the whole deletion. Server data first (authorized by the wallet's own signature), then the Privy
-    /// account, then this device. Throws before touching the device when a server step fails, so a retry is safe.
-    /// A passkey account goes through `deletePasskeyAccount`, which also removes the passkey.
+    /// account, then this device. A failure before the server data is deleted throws with nothing changed, so a retry
+    /// is safe. Once it is deleted, this device signs out whatever happens next, so no later launch can recreate the
+    /// profile (security audit 2026-09-26, RI-8); a Privy account that couldn't be deleted is reported afterwards
+    /// (`Session.deletionNotice`). A passkey account goes through `deletePasskeyAccount`, which also removes the passkey.
     @MainActor
     static func run(session: Session, social: SocialSession, env: AppEnvironment) async throws {
         guard let account = session.account else { return }
@@ -33,16 +39,28 @@ enum AccountDeletion {
             return
         }
         let wallet = account.address.checksummed.lowercased()
+        var notice: String?
 
         if account.canSign {
+            // Profile work still running — a stored token's restore, a sign-in's follow-up — is waited out before and
+            // after the sign-in, so a late upsert can't recreate a row deleted below (RS-8).
+            await social.settle()
             if !social.isSignedIn { await social.signIn(session: session) }
             guard social.isSignedIn else { throw Failure.backendSignInNeeded(social.error ?? "the signature was cancelled") }
+            await social.settle()
+            // A Privy login's token, fetched fresh before anything is deleted: delete-account takes only one issued in
+            // the last 15 minutes, and a failure here leaves everything as it was.
+            let privyToken = try await session.privyAccessToken(fresh: true)
+            if account.method == .emailPassword { notice = try await deleteEmailSignIn(social: social) }
             try await deleteServerRows(wallet: wallet, social: social)
-            if let token = try await session.privyAccessToken() {
+            if let privyToken {
                 do {
-                    _ = try await social.client.invoke(function: "delete-account", bearer: token)
+                    _ = try await social.client.invoke(function: "delete-account", bearer: privyToken)
                 } catch SupabaseError.http(let code, let body) where code == 500 && body.contains("PRIVY_APP_SECRET") {
-                    throw Failure.privyNotConfigured
+                    notice = Failure.privyNotConfigured.localizedDescription
+                } catch {
+                    let method = account.method.title
+                    notice = "Your DyorHQ data was deleted and this iPhone is signed out, but your \(method) sign-in account at Privy wasn't deleted (\(describe(error))). To finish, sign in with \(method) again and delete the account once more, or contact \(SupportLinks.supportEmail)."
                 }
             }
             social.signOut()
@@ -51,6 +69,39 @@ enum AccountDeletion {
         env.perplTrading.forget(address: account.address)
         NotificationHub.shared.clear()
         await session.eraseLocalData()
+        session.deletionNotice = notice
+    }
+
+    /// An Email & Password account's email sign-in at Privy (SB-7): its sign-up verified the email with a Privy one-time
+    /// code, which created a Privy user, and the app keeps no Privy session to delete it with. delete-account deletes it
+    /// by the email this wallet is bound to, authorised by the wallet's own backend session, so this runs before the
+    /// binding is deleted. The server keeps the Privy user when it is also another way into DyorHQ. A failure of the
+    /// request (the session, a limit, an outage) stops the deletion with nothing deleted. Two answers go on with it:
+    /// no binding for this wallet (409) — the email was moved to another wallet (a reset, a sign-up elsewhere, Replace
+    /// Wallet), whose Privy user this wallet must not delete, or a retry after the binding went — and a server without
+    /// Privy deletion set up, which is reported afterwards like the Privy-login path (the returned notice). A
+    /// delete-account from before this path (it reads every bearer as a Privy token and refuses it) can't do it at all,
+    /// so it is skipped there, as before.
+    @MainActor
+    private static func deleteEmailSignIn(social: SocialSession) async throws -> String? {
+        guard let token = await social.client.currentSession?.accessToken else { throw SupabaseError.notSignedIn }
+        do {
+            _ = try await social.client.invoke(function: "delete-account", bearer: token, body: Data(#"{"method":"email-password"}"#.utf8))
+        } catch SupabaseError.http(401, let body) where body.contains("invalid Privy access token") {
+            return nil // the delete-account from before this path
+        } catch SupabaseError.http(409, let body) where serverError(body) == "no email binding" {
+            return nil
+        } catch SupabaseError.http(500, let body) where body.contains("PRIVY_APP_SECRET") {
+            return Failure.privyNotConfigured.localizedDescription
+        } catch SupabaseError.http(let code, let body) {
+            throw Failure.emailSignInNotDeleted(serverError(body) ?? "error \(code)")
+        }
+        return nil
+    }
+
+    /// The `error` field of an Edge Function's JSON answer.
+    private static func serverError(_ body: String) -> String? {
+        (try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])?["error"] as? String
     }
 
     /// A passkey (Mera) account's deletion, which removes the passkey too (MERA-PLAN §8), in the order
@@ -115,17 +166,19 @@ enum AccountDeletion {
         try await deleteServerRows(wallet: wallet, social: social)
     }
 
-    /// The wallet's server data, in this order, for every account type.
+    /// The wallet's server data, in this order, for every account type. The profile row goes last, so once it is gone
+    /// every row is (RI-8): a failure before it leaves the profile, and a retry deletes the rest again (each delete of a
+    /// row already gone is a no-op, and the email sign-in step reads the missing binding as nothing to delete).
     @MainActor
     private static func deleteServerRows(wallet: String, social: SocialSession) async throws {
         try await social.client.deleteObjects(bucket: "avatars", prefix: wallet)
-        // The profile row is the root: every other table references it with ON DELETE CASCADE.
-        try await social.client.delete("profiles", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
         // The email → wallet binding has NO FK to profiles, so it doesn't cascade. Delete it explicitly: an
         // email+password wallet is deterministic, so leaving the binding would let the same credentials log back
         // in through the gate (email_account_matches) after "deletion". Owner-scoped DELETE (migration 17) only
         // touches this wallet's own row; other account types simply have no row here.
         try await social.client.delete("email_accounts", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
+        // The profile row is the root: every other table references it with ON DELETE CASCADE.
+        try await social.client.delete("profiles", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
     }
 }
 
@@ -140,6 +193,8 @@ struct DeleteAccountView: View {
     @Environment(Session.self) private var session
     @Environment(SocialSession.self) private var social
     @Environment(AppEnvironment.self) private var env
+    @Environment(AppSettings.self) private var settings
+    @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
     @State private var acknowledged = false
     @State private var confirmation = ""
@@ -169,12 +224,16 @@ struct DeleteAccountView: View {
                     Label("Alerts, watchlists and referral codes", systemImage: "bell.badge")
                     Label("Notification history and this device's push registration", systemImage: "iphone")
                     if isPrivy { Label("Your \(method.title) sign-in account at Privy, including its embedded wallet", systemImage: "key") }
+                    if method == .emailPassword { Label("The Privy account that verified your email, unless it's also another way into DyorHQ", systemImage: "key") }
                     if isPasskey { Label("Your passkey: DyorHQ asks your passkey app to remove it", systemImage: "person.badge.key") }
                     Label("Every key, session and cache stored on this device", systemImage: "trash")
                 } header: {
                     Text("What is deleted")
                 } footer: {
-                    Text("Transactions, tokens and Moments you created stay on the Monad blockchain — nothing can remove them — and images you published for coins or Moments stay online because those tokens point to them.")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Transactions, tokens and Moments you created stay on the Monad blockchain — nothing can remove them — and images you published for coins or Moments stay online because those tokens point to them.")
+                        LearnMoreLink(.exportSignOutDelete)
+                    }
                 }
 
                 if method == .apple {
@@ -196,7 +255,7 @@ struct DeleteAccountView: View {
                         case .imported:
                             Text("This wallet's private key is removed from this device. Keep its recovery phrase or key somewhere safe; it is the only way back to the funds.")
                         case .emailPassword:
-                            Text("This wallet is recreated from your email and password. Removing it deletes the device copy; keep your email and password — there is no reset, and they are the only way back to the funds.")
+                            Text("This wallet is recreated from your email and password. Removing it deletes the device copy; keep your email and password, the only way back to the funds. A password reset can't bring them back: it creates a new, empty wallet.")
                         case .meraPasskey, .watchOnly:
                             EmptyView()
                         }
@@ -237,6 +296,7 @@ struct DeleteAccountView: View {
     @ViewBuilder private func passkeySections(_ address: Address) -> some View {
         Section {
             Text(address.checksummed)
+                .speechSpellsOutCharacters()
                 .font(.footnote.monospaced())
                 .textSelection(.enabled)
                 .padding(.vertical, 2)
@@ -285,21 +345,68 @@ struct DeleteAccountView: View {
     }
 
     private func deleteAccount() async {
+        // Deleting destroys a Privy embedded wallet or the only copy of an imported key, so with App Lock on it asks
+        // for the device owner first, like key export (audit F5). A passkey account's own ceremony already asks.
+        if !isPasskey, session.canSign, settings.appLockApplies(to: session.account),
+           !(await BiometricGate.authenticate(reason: "Delete your DyorHQ account")) { return }
         deleting = true
         error = nil
-        do {
-            if isPasskey, let address = session.address {
-                try await AccountDeletion.deletePasskeyAccount(shown: address, session: session, social: social, env: env)
-            } else {
-                try await AccountDeletion.run(session: session, social: social, env: env)
+        // A Moment link waits until the deletion ends: delivering one closes Profile, and this screen with it.
+        await router.holdingLinks {
+            do {
+                if isPasskey, let address = session.address {
+                    try await AccountDeletion.deletePasskeyAccount(shown: address, session: session, social: social, env: env)
+                } else {
+                    try await AccountDeletion.run(session: session, social: social, env: env)
+                }
+                dismiss()
+            } catch where isUserCancellation(error) {
+                // The passkey prompt was closed: nothing was deleted, and the form stays as it was.
+            } catch {
+                self.error = describe(error)
             }
-            dismiss()
-        } catch where isUserCancellation(error) {
-            // The passkey prompt was closed: nothing was deleted, and the form stays as it was.
-        } catch {
-            self.error = describe(error)
         }
         deleting = false
+    }
+}
+
+/// Shown in place of onboarding (RootView) after a deletion that finished on this device but left something to do
+/// (`Session.deletionNotice`, RI-8): the Privy account that couldn't be deleted, and how to finish.
+struct DeletionNoticeView: View {
+    let message: String
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 48, weight: .semibold))
+                            .foregroundStyle(Color.attention)
+                            .accessibilityHidden(true)
+                        Text("Account deleted, one step left")
+                            .font(.title2.weight(.bold))
+                            .multilineTextAlignment(.center)
+                        Text(message)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                }
+
+                Section {
+                    PrimaryButton(title: "Done", systemImage: "checkmark") { onClose() }
+                }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Delete Account")
+            .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }
 
