@@ -39,17 +39,25 @@ public enum ERC20 {
     /// Resolves symbol/name/decimals for many tokens at once, batching the reads through the multicall (50 tokens =
     /// 150 reads per round trip). Drops only tokens with no readable symbol; name/decimals fall back like `metadata`.
     public static func metadataBatch(_ addresses: [Address], multicall: Multicall) async -> [Token] {
+        await metadataReport(addresses, multicall: multicall).tokens
+    }
+
+    /// `metadataBatch`, saying which tokens weren't read at all (`unread`): those in a read the node or the connection
+    /// didn't answer, so nothing is known of them. A token with no readable symbol isn't unread: it is dropped, as
+    /// `metadata` drops it.
+    public static func metadataReport(_ addresses: [Address], multicall: Multicall) async -> (tokens: [Token], unread: [Address]) {
         var out: [Token] = []
+        var unread: [Address] = []
         var index = 0
         while index < addresses.count {
             let batch = Array(addresses[index ..< min(index + 50, addresses.count)])
             index += batch.count
             guard let calls = try? batch.flatMap({ try [symbol($0), name($0), decimals($0)] }),
-                  let results = try? await multicall.read(calls) else { continue }
+                  let results = try? await multicall.read(calls) else { unread += batch; continue }
             for (offset, address) in batch.enumerated() {
                 let base = offset * 3
-                guard base + 2 < results.count, case .success(let s) = results[base],
-                      let sym = s.first.flatMap(\.stringOrNil), !sym.isEmpty else { continue }
+                guard base + 2 < results.count else { unread.append(address); continue }
+                guard case .success(let s) = results[base], let sym = s.first.flatMap(\.stringOrNil), !sym.isEmpty else { continue }
                 var name = sym
                 if case .success(let n) = results[base + 1], let value = n.first.flatMap(\.stringOrNil), !value.isEmpty { name = value }
                 var decimals = 18
@@ -57,7 +65,7 @@ public enum ERC20 {
                 out.append(Token(address: address, symbol: sym, name: name, decimals: decimals))
             }
         }
-        return out
+        return (out, unread)
     }
 
     /// Balances, and which couldn't be read (`balanceReport`).

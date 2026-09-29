@@ -736,6 +736,10 @@ struct TokenPickerSheet: View {
         }
     }
 
+    /// Whether a search may miss a token because the venue list is still being read (`AppEnvironment.venueListCatchingUp`).
+    /// Said only while searching: the default list is popular-only and never waits for it.
+    private var venueListCatchingUp: Bool { !query.isEmpty && env.venueListCatchingUp }
+
     /// Search hits for tokens not in the popular default list: the Uniswap/Monday venue list (accurate symbols +
     /// logos, matched locally) plus Kuru's directory. Only while searching — the default list stays popular-only.
     private var remoteMatches: [Token] {
@@ -772,8 +776,14 @@ struct TokenPickerSheet: View {
                         Text("These arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you trade.")
                     }
                 }
-                if !remoteMatches.isEmpty {
-                    Section("More Monad tokens") { ForEach(remoteMatches) { row($0) } }
+                if !remoteMatches.isEmpty || venueListCatchingUp {
+                    Section {
+                        ForEach(remoteMatches) { row($0) }
+                    } header: {
+                        if !remoteMatches.isEmpty { Text("More Monad tokens") }
+                    } footer: {
+                        if venueListCatchingUp { Text("Monad's token list is still loading, so a token may be missing for now.") }
+                    }
                 }
             }
             .listStyle(.insetGrouped)

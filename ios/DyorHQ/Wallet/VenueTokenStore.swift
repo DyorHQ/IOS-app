@@ -7,7 +7,12 @@ import Foundation
 enum VenueTokenStore {
     private static let key = "venueTokens.v1"
     private static let stampKey = "venueTokens.v1.updatedAt"
-    private static let blockKey = "venueTokens.v1.lastBlock"
+    /// The checkpoint (`VenueTokensService.refresh`). Build 16's, `venueTokens.v1.lastBlock`, moved on past ranges its
+    /// scan had left unread, so this one starts at 0: every install reads the whole history once more, in the background,
+    /// keeping its list and adding what the gaps hid. Build 16's is left as it was, for a reinstall of build 16, and
+    /// what build 16 writes there never counts here. Not a `venueTokens.` key: a key with that prefix marks an install as
+    /// earlier than App Lock's default (`AppSettings`), which no new key may do.
+    private static let blockKey = "venueScan.v2.lastBlock"
     private static let ttl: TimeInterval = 86_400
 
     static func all() -> [Token] {
@@ -15,7 +20,8 @@ enum VenueTokenStore {
         return (try? JSONDecoder().decode([Token].self, from: data)) ?? []
     }
 
-    /// The last chain block scanned, so the next refresh only reads the new tail (0 = never scanned → full history).
+    /// The last block every venue has been read up to in full, so the next refresh only reads on from there (0 = never
+    /// read → full history).
     static func lastBlock() -> UInt64 { UInt64(UserDefaults.standard.string(forKey: blockKey) ?? "") ?? 0 }
 
     /// True when the cache is older than a day, so the caller scans the new tail.

@@ -32,6 +32,9 @@ final class AppEnvironment {
     let nftDiscovery: WalletNFTDiscovery
     let kuruTokens: KuruTokenListClient
     let venueTokens: VenueTokensService
+    /// Whether the venue token list is still short of the chain head: read from genesis (a fresh install, or the read
+    /// build 17 makes once more), or stopped short by a gap. The swap picker says so while a search may miss a token.
+    private(set) var venueListCatchingUp = false
     let session: Session
     /// Aurora Intents cross-chain bridge (Home "Bridge") + the multi-chain balance reader behind it.
     let aurora: AuroraIntents
@@ -92,9 +95,10 @@ final class AppEnvironment {
         walletDiscovery = WalletTokenDiscovery(logsRPC: RPCClient(url: logsURL), multicall: multicall)
         nftDiscovery = WalletNFTDiscovery(logsRPC: RPCClient(url: logsURL), multicall: multicall)
         kuruTokens = KuruTokenListClient()
-        // The venue-wide pool scan (from genesis, no wallet filter) runs on rpc3 so it never crowds out the wallet's
-        // own history scans on rpc1, which answer a whole history in one call.
-        venueTokens = VenueTokensService(logsRPC: RPCClient(url: URL(string: "https://rpc3.monad.xyz")!), multicall: multicall)
+        // The venue-wide pool scan (from genesis, no wallet filter) reads rpc1 in 100,000-block ranges, two at a time for
+        // each venue, so it never crowds out the wallet's own history scans there. rpc3 answers 1,000 blocks a range:
+        // about 330,000 requests from genesis, where rpc1 takes about 3,300.
+        venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
         session = Session(config: config, backend: social)
         // A passkey session's scope check trusts only the configured Moments cohorts — v2 (collects, once deployed), then
         // cohorts 3, 2 and 1 (claims and creator withdrawals) — and signs a launchpad trade only against the curve a
@@ -137,28 +141,19 @@ final class AppEnvironment {
 
     /// Builds/refreshes the global venue token list (Uniswap + Monday Trade). The first run scans the FULL history
     /// from genesis in checkpointed segments (rpc1 serves old logs even though it prunes old state), so progress
-    /// survives the app backgrounding; later runs resume from the checkpoint and only read the new tail. Each new
-    /// token is enriched with its accurate Kuru logo and appended to the cache the swap picker browses.
+    /// survives the app backgrounding; later runs resume from the checkpoint and only read the new tail. The checkpoint
+    /// moves past a segment only once it was read in full; a segment read in part is read again next time
+    /// (`VenueTokensService.refresh`). Each new token is enriched with its accurate Kuru logo and appended to the cache
+    /// the swap picker browses. Runs after `AppSettings` has decided App Lock, so what the store writes can't turn it off.
     func refreshVenueTokens() async {
-        let head = await venueTokens.head()
-        let start = VenueTokenStore.lastBlock()
-        guard head > 0, start < head else { return }
-        let logos = await kuruTokens.logos()
-        let segment: UInt64 = 5_000_000
-        var from = start
-        while from <= head, !Task.isCancelled {
-            let to = min(from + segment, head)
-            let existing = VenueTokenStore.all()
-            let exclude = Set(Token.core.map(\.address)).union(existing.map(\.address))
-            let found = await venueTokens.tokens(fromBlock: from, toBlock: to, exclude: exclude)
-            let enriched = found.map { token -> Token in
-                guard token.logoURL == nil, let logo = logos[token.address] else { return token }
-                return Token(address: token.address, symbol: token.symbol, name: token.name, decimals: token.decimals, logoURL: logo, isLaunchpad: token.isLaunchpad)
-            }
-            // Advance the checkpoint every segment — even an empty one — so an interruption never re-scans it.
-            VenueTokenStore.save(existing + enriched, lastBlock: to)
-            if to >= head { break }
-            from = to + 1
+        let checkpoint = VenueTokenStore.lastBlock()
+        venueListCatchingUp = checkpoint == 0
+        let read = await venueTokens.refresh(tokens: VenueTokenStore.all(), checkpoint: checkpoint,
+                                             logos: { [kuruTokens] in await kuruTokens.logos() }) { progress in
+            VenueTokenStore.save(progress.tokens, lastBlock: progress.checkpoint)
+            await MainActor.run { self.venueListCatchingUp = !progress.complete }
         }
+        // Nothing read (the head couldn't be read): the list is as it was, and so is what the picker says.
+        if let read { venueListCatchingUp = !read.complete }
     }
 }
