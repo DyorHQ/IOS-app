@@ -18,7 +18,8 @@ import Foundation
    `.unchecked`: the screen says so and offers a way on (check again, or the Launch tab), never a dead end. */
 
 /// A launch named by its coin and the factory that recorded it, for a screen that couldn't read the launch itself: its
-/// Launch page reads it from that factory's own stack (`LaunchpadService.launch(_:)`), and only from a DyorHQ one.
+/// Launch page reads it from that factory's own stack (`LaunchpadService.launch(_:)`), or from the DyorHQ stack that has
+/// the coin on its curve when the named factory doesn't record it, and only ever from a DyorHQ one.
 public struct LaunchReference: Sendable, Hashable {
     public let token: Address
     public let factory: Address
@@ -238,14 +239,20 @@ public extension LaunchpadService {
         return CurveHoldings(factories: found.mapValues(\.stack.factory), phases: found.mapValues(\.record.phase), launches: launches)
     }
 
-    /// The launch `reference` names (`CurveRoute.launchUnread`), read from its factory's own stack; nil when that factory
-    /// is none of this service's stacks (the live one once deployed, or a retired one), which is never asked, or when it
-    /// recorded no such coin. A reference only points: the launch shown is always the one that factory records for that
-    /// coin. Throws when the read fails.
+    /// The launch `reference` names (`CurveRoute.launchUnread`), read from its factory's own stack. A reference only
+    /// points: when its factory is none of this service's stacks (the live one once deployed, or a retired one), which is
+    /// never asked, or records no such coin, the coin is looked for on every stack's curve (one read, `curveRecords`) and
+    /// read from the stack that recorded it, so the launch shown is always the one its own factory records. Nil when no
+    /// stack has the coin on its curve. Throws when a read fails.
     func launch(_ reference: LaunchReference) async throws -> LaunchDetail? {
-        guard !reference.factory.isZero, stacks.contains(where: { $0.factory == reference.factory }) else { return nil }
-        guard let detail = try await launch(token: reference.token, factory: reference.factory),
-              detail.launch.token == reference.token, detail.launch.factory == reference.factory else { return nil }
+        let stacks = self.stacks
+        if !reference.factory.isZero, stacks.contains(where: { $0.factory == reference.factory }),
+           let detail = try await launch(token: reference.token, factory: reference.factory), detail.launch.token == reference.token, detail.launch.factory == reference.factory {
+            return detail
+        }
+        guard let hit = try await LaunchpadCurve.curveRecords([reference.token], stacks: stacks, multicall: multicall)[reference.token],
+              let detail = try await launch(token: reference.token, factory: hit.stack.factory),
+              detail.launch.token == reference.token, detail.launch.factory == hit.stack.factory else { return nil }
         return detail
     }
 

@@ -25,9 +25,9 @@ final class AssetsModel {
     /// Held coins still on a launchpad's bonding curve, the live launchpad's or a retired one's, with their launches
     /// (`LaunchpadService.curveHoldings`): no Swap venue routes a curve, so such a coin's row opens its Launch page, where
     /// its curve trades (Buy and Sell on the live launchpad, Sell only on a retired one), as Home's token page does. A
-    /// coin whose launch couldn't be read opens the Launch tab. Known before the token list shows, so such a coin never
-    /// gets a Swap row; a failed check keeps the coins already known, and the rest open Swap, whose "no venue" state
-    /// checks again and points to the Launch page.
+    /// coin whose launch couldn't be read opens its page by reference, which reads it. Known before the token list
+    /// shows, so such a coin never gets a Swap row; a failed check keeps the coins already known, and the rest open Swap,
+    /// whose "no venue" state checks again and points to the Launch page.
     private(set) var curve: CurveHoldings = .none
     /// Prices couldn't all be read (`WalletTokens.Ranked.pricesFailed`): some tokens are unpriced, so the holdings total
     /// would be a part passed off as the whole. It isn't shown, and the card says why.

@@ -317,8 +317,9 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
 
     /// No route relies on the board: every coin still on a curve, on the live launchpad or a retired one, in every state
     /// before graduation, opens its page from its launch or, when that couldn't be read, by reference, which reads it from
-    /// the stack that recorded it. A reference names only a DyorHQ launchpad: another factory, or the live one while it is
-    /// pending, is never asked, and a factory that records no such coin opens nothing ("Not a DyorHQ launch"). The Router
+    /// the stack that recorded it. A reference only points: a factory it names that records no such coin, or that the app
+    /// doesn't serve (another factory, address 0, the live one while it is pending: never asked), is answered by whichever
+    /// served stack has the coin on its curve, and no stack having it opens nothing ("Not a DyorHQ launch"). The Router
     /// and the Launch tab deliver the reference; the board is built from the coins it lists (`Launch.listsOnBoard`).
     func testEveryUnreadCurveCoinOpensItsPageByReference() async throws {
         let service = service()
@@ -348,7 +349,24 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
                 XCTAssertEqual(Set(MomentsChainStub.calls().map(\.to)).subtracting([stack.factory, stack.hook, chain.coin, chain.curve]), [],
                                "\(label): only that stack's factory and hook, the coin and its curve are asked")
 
-                // A factory that records no such coin: nothing opens.
+                // A reference naming the wrong factory — another stack the app serves (the next one here), one it
+                // doesn't, or address 0 — still opens the launch the coin's own factory records: the named stack (when
+                // served) answers no such coin, one read asks every served stack for the coin's record, and the one that
+                // has it on its curve is read. A factory the app doesn't serve is never asked. (One state per stack: the
+                // record's phase plays no part.)
+                let next = allFactories[(allFactories.firstIndex(of: stack.factory)! + 1) % allFactories.count]
+                let wrongFactories = state.name == "climbing" ? [next, Address(literal: "0x00000000000000000000000000000000000f00d0"), .zero] : []
+                for wrong in wrongFactories {
+                    MomentsChainStub.install(chain.answer)
+                    let resolved = try await service.launch(LaunchReference(token: chain.coin, factory: wrong))
+                    XCTAssertEqual(resolved?.launch, launch, "\(label), named \(wrong.short)")
+                    let asked = Set(MomentsChainStub.calls().map(\.to))
+                    XCTAssertEqual(asked.subtracting(allFactories + [stack.hook, chain.coin, chain.curve]), [], "\(label), named \(wrong.short)")
+                    XCTAssertTrue(asked.isSuperset(of: allFactories), "\(label), named \(wrong.short): every served stack is asked for the record")
+                }
+
+                // A factory that records no such coin, and no stack with it on its curve: nothing opens.
+                MomentsChainStub.install(chain.answer)
                 let unknownCoin = try await service.launch(LaunchReference(token: Address(literal: "0x00000000000000000000000000000000000c0bad"), factory: stack.factory))
                 XCTAssertNil(unknownCoin, label)
 
@@ -361,16 +379,25 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
             }
         }
 
-        // A factory that is no DyorHQ launchpad, address 0, or the live one while it is pending: never asked.
-        MomentsChainStub.install { _, _ in nil }
-        let coin = CurveCoinChain(stack: V2Fixture.launchpad, phase: .bonding).coin
-        for factory in [Address(literal: "0x00000000000000000000000000000000000f00d0"), .zero] {
-            let opened = try await service.launch(LaunchReference(token: coin, factory: factory))
-            XCTAssertNil(opened, factory.short)
-        }
-        let pending = try await self.service(pending: true).launch(LaunchReference(token: coin, factory: V2Fixture.launchpad.factory))
+        // The live launchpad while it is pending, named by a reference to a coin on its curve: neither it nor address 0
+        // is asked; the served (retired) stacks are, and none has the coin, so nothing opens.
+        let live = CurveCoinChain(stack: V2Fixture.launchpad, phase: .bonding, pageReads: true)
+        MomentsChainStub.install(live.answer)
+        let pending = try await self.service(pending: true).launch(LaunchReference(token: live.coin, factory: V2Fixture.launchpad.factory))
         XCTAssertNil(pending)
-        XCTAssertTrue(MomentsChainStub.calls().isEmpty, "nothing was asked of a factory the app doesn't serve")
+        XCTAssertEqual(Set(MomentsChainStub.calls().map(\.to)), Set(LaunchpadAddresses.retiredFactories), "only the served stacks are asked for the record")
+
+        // With no stack answering, a reference naming a factory the app doesn't serve can't be ruled out either: the read
+        // throws (Try Again), and the named factory and address 0 are still never asked.
+        MomentsChainStub.install { _, _ in nil }
+        let stranger = Address(literal: "0x00000000000000000000000000000000000f00d0")
+        for factory in [stranger, .zero] {
+            do {
+                let opened = try await service.launch(LaunchReference(token: live.coin, factory: factory))
+                XCTFail("\(factory.short): an unread chain opened \(String(describing: opened))")
+            } catch {}
+        }
+        XCTAssertEqual(Set(MomentsChainStub.calls().map(\.to)), Set(allFactories), "nothing was asked of a factory the app doesn't serve")
 
         var app = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
