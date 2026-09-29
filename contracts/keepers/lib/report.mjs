@@ -1,32 +1,42 @@
-// Alerts and run state. Alerts always go to stdout; with KEEPER_WEBHOOK_URL set they are also POSTed as JSON
-// (Slack/Discord-compatible `text` field plus structured `alerts`). The process exit code tells a scheduler what
-// happened: 0 = nothing needs a human, 2 = at least one alert, 1 = the keeper itself failed.
+// Alerts and run state. Alerts always go to stdout; with a webhook they are also posted, deduplicated (notify.mjs).
+// The process exit code tells a scheduler what happened: 0 = nothing needs a human, 2 = at least one alert, 1 = the
+// keeper itself failed (including: its alerts could not be delivered).
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { basename, dirname } from "node:path";
 
 export const EXIT = Object.freeze({ OK: 0, ERROR: 1, ALERT: 2 });
 
 /** `scrub` is applied to every alert reason before it is stored, printed or posted (see redact.mjs): an RPC error can
-    quote the endpoint URL, and with it an API key. */
+    quote the endpoint URL, and with it an API key.
+    Every alert gets a `key` for the notifier (the call site's stable one, else job:target); `once` marks a one-off
+    event. `hold(key)` says a condition still stands without raising it again (a throttled one); `incomplete` names the
+    jobs that could not check everything this run, whose alerts therefore cannot count as resolved. */
 export function makeReporter({ log = console.log, scrub = (s) => s } = {}) {
   const alerts = [];
   const actions = [];
+  const holds = new Set();
+  const incomplete = new Set();
   return {
     alerts,
     actions,
+    holds,
+    incomplete,
+    hold: (k) => holds.add(k),
     info: (msg) => log(scrub(`  ${msg}`)),
     action: (a) => {
       actions.push(a);
       log(scrub(`ACTION ${a.job} ${a.target}: ${a.what}`));
     },
     alert: (a) => {
-      const clean = { ...a, reason: scrub(a.reason) };
+      const clean = { ...a, key: a.key ?? `${a.job}:${a.target}`, reason: scrub(a.reason) };
       alerts.push(clean);
       log(`ALERT [${clean.severity}] ${clean.job} ${clean.target}: ${clean.reason}`);
     },
   };
 }
 
+/** The pre-build-17 single POST (`{text, alerts}`), kept for callers outside the keeper run; the run posts through
+    notify.mjs. */
 export async function postWebhook(url, alerts, { fetchImpl = globalThis.fetch, prefix = "" } = {}) {
   if (!url || alerts.length === 0) return;
   const text = alerts.map((a) => `[${a.severity}] ${a.job} ${a.target}: ${a.reason}`).join("\n");

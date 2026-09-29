@@ -159,15 +159,14 @@ test("E5 through a run: every read failing at the RPC posts ONE 'RPC degraded' a
     fetchImpl: async (url, init) => (posts.push(JSON.parse(init.body)), { ok: true, status: 204 }),
   };
   const o = parseKeeperArgs(["moments-graduation", "buybacks", "--webhook", "https://hooks.example/x", "--state-file", stateFile], {});
-  const severities = [];
+  // K3 dedup on top: run 1 posts the warning, run 2 has nothing new to say, run 3 posts the escalation to critical.
+  const perRun = [];
   for (let run = 1; run <= 3; run++) {
     posts.length = 0;
     assert.equal(await runKeeper(o, deps), EXIT.ALERT);
-    assert.equal(posts.length, 1);
-    assert.deepEqual(posts[0].alerts.map((x) => x.target), ["rpc"], JSON.stringify(posts[0].alerts));
-    severities.push(posts[0].alerts[0].severity);
+    perRun.push(posts.flatMap((p) => p.alerts.map((x) => `${x.kind} ${x.severity} ${x.target}`)));
   }
-  assert.deepEqual(severities, ["warning", "warning", "critical"], "critical after 3 runs in a row (state file counter)");
+  assert.deepEqual(perRun, [["new warning rpc"], [], ["escalated critical rpc"]], "one alert, critical after 3 runs in a row (state file counter)");
   assert.match(posts[0].alerts[0].reason, /RPC degraded: \d+ read\(s\) failed after retries and fallback \(https:\/\/rpc3\.monad\.xyz failed 12, served 0; https:\/\/rpc4\.monad\.xyz failed 12, served 0\); skipped this run: 143\.json, moments-143\.json, moments-graduation \(the whole job\), buybacks \(the whole job\)/);
   assert.equal(lines.filter((l) => /^ALERT \[critical\] .*HTTP request failed/.test(l)).length, 12, "each skipped item is still in the log (4 per run)");
   assert.ok(!lines.join("\n").includes("FAKE_KEY_123") && !JSON.stringify(posts).includes("FAKE_KEY_123"), "the keyed URL in viem's error never leaks");

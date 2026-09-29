@@ -1,13 +1,15 @@
 // Command-line options of keeper.mjs, parsed into one plain object that lib/run.mjs takes (so a whole run can be
 // tested without a process). Usage errors throw; nothing here reads the network or a key.
 import { parseArgs } from "node:util";
+import { parseEther } from "viem";
 import { DEFAULT_RPC_URLS } from "./rpc.mjs";
 import { DEFAULT_LOGS_CHUNK, DEFAULT_LOGS_MAX_BLOCKS } from "./cursor.mjs";
+import { REPEAT_DEFAULTS } from "./notify.mjs";
 
 export const JOBS = ["moments-graduation", "buybacks", "sweeps", "launchpad-graduation", "governance"];
 export const ROLES = ["keeper", "watchdog"];
 
-export const USAGE = `usage: node contracts/keepers/keeper.mjs <${JOBS.join("|")}|all>... [--send --keystore FILE|--account NAME|--ledger] [--rpc-url URL]... [--logs-cursor [--logs-from N]] [--role keeper|watchdog] [--max-runtime S]
+export const USAGE = `usage: node contracts/keepers/keeper.mjs <${JOBS.join("|")}|all>... [--send --keystore FILE|--account NAME|--ledger] [--rpc-url URL]... [--logs-cursor [--logs-from N]] [--webhook-file FILE] [--max-spend-per-day MON] [--role keeper|watchdog] [--max-runtime S]
 see contracts/keepers/README.md`;
 
 function blockNumber(name, v, { min = 0n } = {}) {
@@ -15,6 +17,26 @@ function blockNumber(name, v, { min = 0n } = {}) {
   const s = String(v).replace(/[_,]/g, "");
   if (!/^\d+$/.test(s) || BigInt(s) < min) throw new Error(`--${name} must be a whole number${min > 0n ? ` of at least ${min}` : ""}, got ${JSON.stringify(v)}`);
   return BigInt(s);
+}
+
+/** Seconds, or a number with s / m / h / d. */
+function duration(name, v) {
+  const m = /^(\d+(?:\.\d+)?)([smhd]?)$/.exec(String(v).trim());
+  const n = m ? Number(m[1]) * { "": 1, s: 1, m: 60, h: 3_600, d: 86_400 }[m[2]] : NaN;
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`--${name} must be a duration such as 3600, 90m or 12h, got ${JSON.stringify(v)}`);
+  return n;
+}
+
+function mon(name, v) {
+  if (v === undefined) return undefined;
+  let wei;
+  try {
+    wei = parseEther(String(v));
+  } catch {
+    wei = -1n;
+  }
+  if (wei <= 0n) throw new Error(`--${name} must be a positive amount of MON, got ${JSON.stringify(v)}`);
+  return wei;
 }
 
 function positiveNumber(name, v) {
@@ -46,7 +68,12 @@ export function parseKeeperArgs(argv, env = process.env) {
       "allow-unlocked": { type: "boolean", default: false },
       "sim-from": { type: "string", default: env.KEEPER_ADDRESS },
       "state-file": { type: "string", default: env.KEEPER_STATE_FILE },
-      webhook: { type: "string", default: env.KEEPER_WEBHOOK_URL },
+      // The webhook URL is a token: prefer --webhook-file (a 0600 file or a systemd credential) to argv or the env.
+      webhook: { type: "string" },
+      "webhook-file": { type: "string", default: env.KEEPER_WEBHOOK_FILE },
+      "repeat-critical": { type: "string", default: String(REPEAT_DEFAULTS.critical) },
+      "repeat-warning": { type: "string", default: String(REPEAT_DEFAULTS.warning) },
+      "max-spend-per-day": { type: "string" },
       deployments: { type: "string" },
       "slippage-bps": { type: "string", default: "50" },
       "locker-idle-alert": { type: "string", default: "50000000" },
@@ -70,6 +97,7 @@ export function parseKeeperArgs(argv, env = process.env) {
   // The watchdog is a second, key-less pair of eyes (another host, another RPC): it must never be able to send, or two
   // hosts could spend from one key.
   if (o.role === "watchdog" && o.send) throw new Error("--role watchdog never sends: drop --send");
+  if (o.webhook && o["webhook-file"]) throw new Error("give --webhook or --webhook-file, not both");
   const signer = o.keystore
     ? { keystore: o.keystore, passwordFile: o["password-file"] }
     : o.account
@@ -90,7 +118,11 @@ export function parseKeeperArgs(argv, env = process.env) {
     allowUnlocked: o["allow-unlocked"],
     simFrom: o["sim-from"] || undefined,
     stateFile: o["state-file"] || undefined,
-    webhook: o.webhook || undefined,
+    webhook: o.webhook || (o["webhook-file"] ? undefined : env.KEEPER_WEBHOOK_URL) || undefined,
+    webhookFile: o["webhook-file"] || undefined,
+    telegramChatId: env.KEEPER_TELEGRAM_CHAT_ID || undefined,
+    repeat: { critical: duration("repeat-critical", o["repeat-critical"]), warning: duration("repeat-warning", o["repeat-warning"]) },
+    maxSpendPerDay: mon("max-spend-per-day", o["max-spend-per-day"]),
     deployments: o.deployments,
     slippageBps: BigInt(o["slippage-bps"]),
     lockerIdleAlert: BigInt(o["locker-idle-alert"]),
