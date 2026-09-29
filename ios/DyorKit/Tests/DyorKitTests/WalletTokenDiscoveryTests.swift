@@ -132,7 +132,8 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     }
 
     /// The app's one read of the wallet's tokens (`WalletTokens`, behind the Portfolio's Assets and the Send list) leaves
-    /// collections out and carries whether the scan was complete; the Send list says when it wasn't, with Retry.
+    /// collections out and carries whether the scan was complete; the Send list and the Portfolio say when it wasn't, with
+    /// Retry.
     func testTheWalletsTokenListLeavesCollectionsOutAndSaysWhenItIsIncomplete() throws {
         var app = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
@@ -148,6 +149,18 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         XCTAssertTrue(profile.contains("show(ranked, complete: read.complete, readingHistory: false)"))
         XCTAssertTrue(profile.contains("if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }"))
         XCTAssertTrue(profile.contains("readNotice(\"No tokens found, but part of your wallet couldn't be read"), "an incomplete empty read is never \"nothing to send\"")
+        // The Portfolio says it too, with Retry, rather than present a part of the wallet as all of it: an empty read that
+        // couldn't be read is never "No tokens in this wallet yet".
+        let assets = try String(contentsOf: app.appendingPathComponent("Portfolio/AssetsModel.swift"), encoding: .utf8)
+        XCTAssertTrue(assets.contains("complete = read?.complete ?? false"))
+        XCTAssertTrue(assets.contains("balancesUnread = read == nil"))
+        XCTAssertTrue(assets.contains("case (false, false): return \"Part of your wallet couldn't be read, so a token may be missing from the list and the total.\""))
+        XCTAssertTrue(assets.contains("case (false, _) where tokens.isEmpty: return \"No tokens found, but part of your wallet couldn't be read, so some may be missing.\""))
+        XCTAssertTrue(assets.contains("if kind == .assets, !model.loading, let gap = model.readGap {"))
+        XCTAssertTrue(assets.contains("Button(\"Retry\", systemImage: \"arrow.clockwise\", action: retry)"))
+        XCTAssertTrue(assets.contains("if kind == .assets, model.tokens.isEmpty, model.loading || model.readGap == nil {"))
+        let portfolio = try String(contentsOf: app.appendingPathComponent("Portfolio/PortfolioView.swift"), encoding: .utf8)
+        XCTAssertTrue(portfolio.contains("AssetsCard(model: assets) { Task { await assets.load(env: env, address: session.address, force: true) } }"))
     }
 
     func testAFailedCheckKeepsEveryToken() async {

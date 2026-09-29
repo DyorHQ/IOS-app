@@ -35,6 +35,13 @@ final class AssetsModel {
     /// The curated tokens held that no pool prices (`WalletTokens.Ranked.unpriced`): they simply have no price, so the
     /// total is of the priced assets, and the card names what it leaves out.
     private(set) var unpriced: [Token] = []
+    /// False when part of the wallet couldn't be read (`WalletTokens.Read.complete`: its history, read fail-fast, or a
+    /// balance): a token it holds may be missing, which the card says, with Retry, rather than pass the list off as
+    /// everything the wallet holds.
+    private(set) var complete = true
+    /// No balance could be read at all (`WalletTokens.read` threw): the list is empty for that, not because the wallet
+    /// holds nothing.
+    private(set) var balancesUnread = false
     private(set) var loading = false
     private(set) var loadedFor: Address?
 
@@ -43,8 +50,21 @@ final class AssetsModel {
     /// The holdings total is shown: every price that exists was read, and something is priced.
     var showsTotal: Bool { !pricesFailed && totalValue > 0 }
 
+    /// What part of the read failed, in words, as the Send sheet says it: nil when all of it was read. Nothing about
+    /// prices when there is nothing to value.
+    var readGap: String? {
+        if balancesUnread { return "Your balances couldn't be read. Check your connection and try again." }
+        switch (complete, pricesFailed) {
+        case (true, false): return nil
+        case (true, true): return tokens.isEmpty ? nil : "Some prices couldn't be read, so values are missing and no total is shown."
+        case (false, _) where tokens.isEmpty: return "No tokens found, but part of your wallet couldn't be read, so some may be missing."
+        case (false, false): return "Part of your wallet couldn't be read, so a token may be missing from the list and the total."
+        case (false, true): return "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no total is shown."
+        }
+    }
+
     func load(env: AppEnvironment, address: Address?, force: Bool) async {
-        guard let address else { tokens = []; nfts = []; loadedFor = nil; return }
+        guard let address else { tokens = []; nfts = []; complete = true; balancesUnread = false; loadedFor = nil; return }
         if !force, loadedFor == address { return }
         loading = true
         defer { loading = false }
@@ -53,7 +73,8 @@ final class AssetsModel {
         async let momentsTask = env.moments.moments(limit: 200)
         async let retiredTask = PastMomentsModel.allMoments(env: env)
 
-        // The token part is the Send sheet's too (`WalletTokens`). Balances that couldn't be read list nothing, as before.
+        // The token part is the Send sheet's too (`WalletTokens`). Balances that couldn't be read list nothing, as before,
+        // and the card says so, as it says when only part of the wallet couldn't be read.
         let read = try? await WalletTokens.read(env: env, address: address)
         var ranked: [TokenAsset] = []
         var found: CurveHoldings?
@@ -78,6 +99,8 @@ final class AssetsModel {
         if let found { curve = found }
         pricesFailed = failed
         unpriced = unpricedHeld
+        complete = read?.complete ?? false
+        balancesUnread = read == nil
         tokens = ranked
 
         let moments = (try? await momentsTask) ?? []
@@ -92,6 +115,8 @@ final class AssetsModel {
 /// opens on OpenSea.
 struct AssetsCard: View {
     let model: AssetsModel
+    /// Reads the holdings again, after a read that failed in part.
+    let retry: () -> Void
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -121,15 +146,19 @@ struct AssetsCard: View {
             }
             .pickerStyle(.segmented)
 
-            if kind == .assets, model.pricesFailed, !model.loading, !model.tokens.isEmpty {
-                Text("Some prices couldn't be read, so values are missing and no total is shown. Pull down to try again.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            } else if kind == .assets, model.showsTotal, !model.unpriced.isEmpty, !model.loading {
+            if kind == .assets, !model.loading, let gap = model.readGap {
+                // A read that failed in part is said, with Retry, never passed off as all the wallet holds.
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(gap).font(.footnote).foregroundStyle(.secondary)
+                    Button("Retry", systemImage: "arrow.clockwise", action: retry).font(.footnote.weight(.medium))
+                }
+            }
+            if kind == .assets, model.showsTotal, !model.unpriced.isEmpty, !model.loading {
                 // A token no pool prices is no failure: the total is of the rest, and says what it leaves out.
                 Text("Doesn't include \(WalletHoldings.symbolList(model.unpriced)): no price found.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            if kind == .assets, model.tokens.isEmpty {
+            if kind == .assets, model.tokens.isEmpty, model.loading || model.readGap == nil {
                 Text(model.loading ? "Reading the wallet…" : "No tokens in this wallet yet.").font(.subheadline).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
             }
