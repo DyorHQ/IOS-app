@@ -90,8 +90,8 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         XCTAssertTrue(source.contains("let scan = await env.walletDiscovery.scan(wallet: address, known: known, wholeHistory: true)"))
         XCTAssertTrue(source.contains("complete: scan.complete)"))
         let profile = try String(contentsOf: app.appendingPathComponent("Profile/ProfileView.swift"), encoding: .utf8)
-        XCTAssertTrue(profile.contains("assets = .loaded(ranked, complete: read.complete)"))
-        XCTAssertTrue(profile.contains("if !complete { readNotice("))
+        XCTAssertTrue(profile.contains("assets = .loaded(ranked.tokens, complete: read.complete, pricesFailed: ranked.pricesFailed)"))
+        XCTAssertTrue(profile.contains("if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }"))
         XCTAssertTrue(profile.contains("readNotice(\"No tokens found, but part of your wallet's history couldn't be read"), "an incomplete empty read is never \"nothing to send\"")
     }
 

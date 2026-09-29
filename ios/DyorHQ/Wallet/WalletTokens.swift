@@ -34,10 +34,25 @@ enum WalletTokens {
         return Read(tokens: held.filter { !collections.contains($0.address) }, balances: balances, unverified: unverified, complete: scan.complete)
     }
 
+    /// `read`'s tokens, valued and ranked.
+    struct Ranked {
+        let tokens: [HeldToken]
+        /// The price read failed: only the tokens priced by definition (USDC, AUSD at $1) have a value, the rest are
+        /// unpriced, and the order is by amount rather than value — a list says so, and a send preselects nothing.
+        let pricesFailed: Bool
+    }
+
     /// `read`'s tokens valued at their pools' prices and ranked. Prices that can't be read leave tokens unpriced, never
-    /// hidden.
-    static func ranked(_ read: Read, env: AppEnvironment) async -> [HeldToken] {
-        let prices = (try? await env.prices.prices(for: read.tokens)) ?? [:]
-        return WalletHoldings.ranked(read.tokens, balances: read.balances, prices: prices.mapValues(\.usd), unverified: read.unverified)
+    /// hidden, and say so (`Ranked.pricesFailed`).
+    static func ranked(_ read: Read, env: AppEnvironment) async -> Ranked {
+        let prices: [Address: PriceInfo]
+        var failed = false
+        do {
+            prices = try await env.prices.prices(for: read.tokens)
+        } catch {
+            prices = PriceService.definedPrices(for: read.tokens)
+            failed = true
+        }
+        return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: prices.mapValues(\.usd), unverified: read.unverified), pricesFailed: failed)
     }
 }

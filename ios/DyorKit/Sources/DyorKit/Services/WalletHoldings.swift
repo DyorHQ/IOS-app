@@ -72,16 +72,18 @@ public enum WalletHoldings {
 
     /// The asset a send starts on: the highest-ranked one the user chose. Never an Unverified token — a fake "USDC"
     /// with a seeded pool can outrank everything — so when every held token is Unverified, or nothing is held, there is
-    /// none and the user picks.
-    public static func defaultChoice(_ ranked: [HeldToken]) -> HeldToken? {
-        ranked.first { !$0.unverified }
+    /// none and the user picks. None either when the prices couldn't be read (`pricesRead` false): the ranking is then
+    /// by amount, not value, and the token with the most units is not the one worth the most.
+    public static func defaultChoice(_ ranked: [HeldToken], pricesRead: Bool = true) -> HeldToken? {
+        guard pricesRead else { return nil }
+        return ranked.first { !$0.unverified }
     }
 
     /// After the list is read: with nothing chosen yet, the default choice; with a choice, that token while the wallet
     /// still holds it, and none once it doesn't — the user picks again, rather than a send switching to another asset
     /// under an amount already typed.
-    public static func selection(keeping current: Address?, in ranked: [HeldToken]) -> HeldToken? {
-        guard let current else { return defaultChoice(ranked) }
+    public static func selection(keeping current: Address?, in ranked: [HeldToken], pricesRead: Bool = true) -> HeldToken? {
+        guard let current else { return defaultChoice(ranked, pricesRead: pricesRead) }
         return ranked.first { $0.id == current }
     }
 

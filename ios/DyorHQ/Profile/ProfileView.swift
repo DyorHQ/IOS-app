@@ -462,13 +462,13 @@ struct SendSheet: View {
                 InlineError(message: "Your balances couldn't be read. Check your connection and try again.")
                 Button("Retry", systemImage: "arrow.clockwise") { attempt += 1 }
             }
-        case .loaded(let held, let complete) where held.isEmpty:
+        case .loaded(let held, let complete, _) where held.isEmpty:
             if complete {
                 Text("This wallet holds no tokens on Monad, so there's nothing to send.").foregroundStyle(.secondary)
             } else {
                 readNotice("No tokens found, but part of your wallet's history couldn't be read, so some may be missing.")
             }
-        case .loaded(let held, let complete):
+        case .loaded(let held, let complete, let pricesFailed):
             NavigationLink {
                 SendAssetPicker(assets: held, selected: choice?.id) { choice = $0; droppedChoice = nil }
             } label: {
@@ -477,7 +477,17 @@ struct SendSheet: View {
             if let droppedChoice, choice == nil {
                 Text("Your wallet no longer holds the \(droppedChoice) you picked. Choose a token.").font(.footnote).foregroundStyle(Color.attention)
             }
-            if !complete { readNotice("Part of your wallet's history couldn't be read, so a token may be missing from the list.") }
+            if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }
+        }
+    }
+
+    /// What part of the read failed, in words: nil when all of it was read.
+    private static func readGap(complete: Bool, pricesFailed: Bool) -> String? {
+        switch (complete, pricesFailed) {
+        case (true, false): return nil
+        case (true, true): return "Prices couldn't be read, so values are missing and no token was picked for you."
+        case (false, false): return "Part of your wallet's history couldn't be read, so a token may be missing from the list."
+        case (false, true): return "Prices and part of your wallet's history couldn't be read, so values and tokens may be missing, and no token was picked for you."
         }
     }
 
@@ -495,7 +505,7 @@ struct SendSheet: View {
     private func loadAssets(_ key: String) async {
         guard key != assetsKey else { return }
         guard let address = session.address else {
-            assets = .loaded([], complete: true)
+            assets = .loaded([], complete: true, pricesFailed: false)
             choice = nil
             assetsKey = key
             return
@@ -505,8 +515,9 @@ struct SendSheet: View {
             let read = try await WalletTokens.read(env: env, address: address)
             let ranked = await WalletTokens.ranked(read, env: env)
             guard !Task.isCancelled, address == session.address else { return }
-            assets = .loaded(ranked, complete: read.complete)
-            let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked)
+            assets = .loaded(ranked.tokens, complete: read.complete, pricesFailed: ranked.pricesFailed)
+            // Without prices the list is ranked by amount: nothing is preselected from it.
+            let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked.tokens, pricesRead: !ranked.pricesFailed)
             if let previous = choice, kept == nil {
                 droppedChoice = previous.token.symbol
                 amount = ""
@@ -587,7 +598,8 @@ private enum AssetList: Equatable {
     /// The read failed: shown as a failure with Retry, never as an empty wallet.
     case failed
     /// `complete`: false when part of the wallet's history couldn't be read, so a token may be missing (`WalletTokens.Read`).
-    case loaded([HeldToken], complete: Bool)
+    /// `pricesFailed`: values are missing and the order is by amount (`WalletTokens.Ranked`).
+    case loaded([HeldToken], complete: Bool, pricesFailed: Bool)
 }
 
 /// Every token the wallet holds, highest dollar value first (`WalletHoldings.ranked`), searchable by symbol, name or

@@ -99,6 +99,22 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertNil(WalletHoldings.defaultChoice(onlySent), "but the user picks one")
     }
 
+    /// A price read that fails leaves only the prices known by definition (USDC and AUSD at $1): the list is then ranked
+    /// by amount, so a send preselects nothing rather than the token with the most units.
+    func testAFailedPriceReadPreselectsNothing() {
+        let universe = [Token.mon, Token.usdc, meme]
+        let balances: [Address: BigUInt] = [Monad.native: units(20, .mon), Monad.usdc: units(500, .usdc), meme.address: units(1_000_000, meme)]
+        let defined = PriceService.definedPrices(for: universe).mapValues(\.usd)
+        XCTAssertEqual(defined, [Monad.usdc: 1], "USDC at $1 without a read; MON and MEME need one")
+        XCTAssertEqual(PriceService.definedPrices(for: [Token.ausd, fakeUSDC]).mapValues(\.usd), [Monad.ausd: 1], "a token named USDC is not priced by definition")
+        let ranked = WalletHoldings.ranked(universe, balances: balances, prices: defined, unverified: [])
+        XCTAssertEqual(ranked.map(\.token.symbol), ["USDC", "MEME", "MON"], "USDC valued; the rest unpriced, by amount")
+        XCTAssertEqual(WalletHoldings.defaultChoice(ranked)?.token.symbol, "USDC", "(with prices read, the top chosen token)")
+        XCTAssertNil(WalletHoldings.defaultChoice(ranked, pricesRead: false))
+        XCTAssertNil(WalletHoldings.selection(keeping: nil, in: ranked, pricesRead: false), "nothing picked for the user")
+        XCTAssertEqual(WalletHoldings.selection(keeping: meme.address, in: ranked, pricesRead: false)?.id, meme.address, "the user's own pick stays")
+    }
+
     func testEmptyWallet() {
         let ranked = WalletHoldings.ranked([Token.mon, Token.usdc], balances: [Monad.native: 0, Monad.usdc: 0], prices: [Monad.native: 0.03], unverified: [])
         XCTAssertTrue(ranked.isEmpty)
@@ -148,10 +164,10 @@ final class WalletHoldingsTests: XCTestCase {
         let send = String(profile[start.upperBound..<end.lowerBound])
         for source in [assets, send] {
             XCTAssertTrue(source.contains("WalletTokens.read(env: env, address: address)"))
-            XCTAssertTrue(source.contains("WalletTokens.ranked(read, env: env)"))
+            XCTAssertTrue(source.contains("WalletTokens.ranked(read, env: env"))
             XCTAssertFalse(source.contains("heldTokens("), "no screen reads the wallet's tokens its own way")
         }
-        XCTAssertTrue(send.contains("let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked"))
+        XCTAssertTrue(send.contains("let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked.tokens, pricesRead: !ranked.pricesFailed)"))
         XCTAssertTrue(send.contains("usd: WalletHoldings.stableUSD(review.token, amount: review.amount)"))
         // Coming back from the token list restarts the form's tasks: the list is read once per wallet and attempt, a
         // finished recipient check stands, and Review takes only a pick from the list as read, with its Unverified mark.

@@ -50,7 +50,7 @@ final class AssetsModel {
         let held = read?.tokens ?? []
         async let curveTask = try? env.launchpad.curveHoldings(held)
         var ranked: [TokenAsset] = []
-        if let read { ranked = await WalletTokens.ranked(read, env: env) }
+        if let read { ranked = await WalletTokens.ranked(read, env: env).tokens }
         // Known before the token list shows, so a retired Moment coin or a coin on a curve is never offered a swap in between.
         for info in await retiredTask {
             retiredByCoin[info.moment.coin] = info
