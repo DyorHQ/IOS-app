@@ -107,7 +107,9 @@ The first and the last fail while either table is pending. The last one also pro
 (read-only calls to a public Monad RPC): each factory's `momentCount()` equals its pin
 (`MomentLink.Cohort.finalMomentCount`), and its coins are exactly its entries in `MomentsAddresses.retiredMainnetCoins`.
 Cohort 3's publishing is not paused on chain (owner decision 2026-09-28: the old stacks are retired in the app only),
-which the check reports as a note; a Moment published there after its pin makes it refuse. Cohorts 1 and 2 must stay
+which the check reports as a note; a Moment published there after its pin makes it refuse until the pin and the coin
+table take it in (so the app never trades its coin). That moves no name link: a retired cohort's names are frozen at
+`MomentLink.Cohort.namedMomentCount`, so such a Moment shares its id link only. Cohorts 1 and 2 must stay
 paused (their policy pays the retired wallets): either one open refuses. The same reads prove the live stacks as wired,
 so a wrong record promoted with matching Swift still refuses: every module in the two tables has code, each factory's
 getters name the table's modules and the records' owner, governance and guardian (and the Moments policy the table's
@@ -119,6 +121,11 @@ It runs in every archive: the DyorHQ target's install-only build phase (so Produ
 `ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud) and `scripts/testflight.sh`, each refusing the archive.
 `python3 ../scripts/dev/check-launchpad-addresses.py --chain` runs the same chain checks without refusing the pending
 tables, so the pins can be confirmed before v2 is wired.
+
+Once build 16 is on TestFlight, raise `app_config` 'ios'.min_build to 16 (a production Supabase write, the owner's).
+Builds before 16 count cohort 3 as the live cohort: they can still publish there, and they give a name link to a
+cohort 3 Moment that build 16 leaves unnamed, so the same `dyorhq.fun/moments/<name>` could open different Moments on
+the two builds. Below min_build the update gate stops signing and drops Moment links.
 
 A Debug build can point at a v2 deployment on a local fork: `MONAD_RPC_URL` plus the `LAUNCHPAD_*` and `MOMENTS_*` keys
 in `Secrets.xcconfig` (see the example file). Release builds never read them.

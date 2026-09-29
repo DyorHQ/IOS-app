@@ -5,7 +5,8 @@ import Foundation
 ///
 /// The link carries the Moment's name: `https://dyorhq.fun/moments/bitcoin-diva`. Names aren't unique, so the first
 /// Moment published under a name gets it plain and later ones `-2`, `-3`… (`MomentSlug`). Names and the publish order
-/// are fixed on chain, so a link never starts pointing at another Moment. `dyorhq.fun/moments/*` is a universal link:
+/// are fixed on chain, and a retired cohort's named Moments are frozen (`Cohort.namedMomentCount`), so a link never
+/// starts pointing at another Moment. `dyorhq.fun/moments/*` is a universal link:
 /// with the app installed it opens the Moment in the app, anywhere else the website's Moments page. The Moments' own
 /// id form is read too — the NFTs' on-chain `external_url`: `https://dyorhq.fun/moments/c1/<id>` and `…/c2/<id>` for
 /// cohorts 1 and 2, the bare `…/moments/<id>` for cohort 3, and `…/moments/c4/<id>` for the v2 Moments — and so is the
@@ -77,17 +78,31 @@ public struct MomentLink: Hashable, Identifiable, Sendable, CustomStringConverti
         /// The cohorts whose factory is known, in publish order.
         public static var wired: [Cohort] { allCases.filter(\.isWired) }
 
-        /// A retired cohort's final Moment count. Only this pin makes the counts final from the app's point of view:
-        /// the directory never reads a retired cohort's `momentCount`, so a Moment published there later could never
-        /// shift a later cohort's names. Publishing is paused on chain on cohorts 1 and 2 but not on cohort 3 (owner
-        /// decision 2026-09-28: the old stacks are retired in the app only), where builds before 16 can still publish.
-        /// The release gate proves every pin on chain before an archive ships
+        /// A retired cohort's final Moment count: every coin it minted is in `MomentsAddresses.retiredMainnetCoins`
+        /// (never traded in the app). Publishing is paused on chain on cohorts 1 and 2 but not on cohort 3 (owner
+        /// decision 2026-09-28: the old stacks are retired in the app only), where builds before 16, or anyone calling
+        /// the factory, can still publish. The release gate proves every pin on chain before an archive ships
         /// (`scripts/dev/check-launchpad-addresses.py --release`, also `--chain` by hand): cohorts 1 and 2 paused,
         /// `momentCount()` equal to the pin, and every coin in `MomentsAddresses.retiredMainnetCoins`. Cohort 3's is 1
         /// ("Nature", read at block 108,778,342): a Moment published there later makes the gate refuse until this pin
-        /// and the coin table include it, and a raised pin puts its name ahead of every c4 Moment's (`MomentSlug`).
-        /// Nil for c4, which is counted live.
+        /// and the coin table include it. Raising it moves no name: names stop at `namedMomentCount`. Nil for c4,
+        /// which is counted live.
         public var finalMomentCount: Int? {
+            switch self {
+            case .c1: return 3
+            case .c2: return 2
+            case .c3: return 1
+            case .c4: return nil
+            }
+        }
+
+        /// How many of a retired cohort's Moments have a name: the ones it had when c4 went live (build 16). Frozen, whatever
+        /// `finalMomentCount` becomes. A Moment published on the open cohort 3 after that (a build before 16, or a direct
+        /// call to its factory) gets its id link only (`…/moments/<id>`), never a name, so it can never take a name
+        /// ahead of a c4 Moment's, and raising the pin to take in its coin changes no link. The directory reads a retired
+        /// cohort's names up to this count and never counts it on chain. Nil for c4, whose Moments are named as they
+        /// are counted.
+        public var namedMomentCount: Int? {
             switch self {
             case .c1: return 3
             case .c2: return 2
@@ -243,8 +258,8 @@ public enum MomentSlug {
         return out
     }
 
-    /// Gives every Moment its slug, in publish order (`names` must be every Moment, oldest first: cohort by cohort in
-    /// `MomentLink.Cohort` order, ids ascending). The first Moment with a base gets it plain; a later one gets the first
+    /// Gives every Moment its slug, in publish order (`names` must be every named Moment, oldest first: cohort by cohort
+    /// in `MomentLink.Cohort` order, ids ascending; a retired cohort's up to `Cohort.namedMomentCount`). The first Moment with a base gets it plain; a later one gets the first
     /// free "<base>-2", "<base>-3"… Each slug depends only on the Moments before it, so publishing more never changes
     /// an existing one.
     public static func assign(_ names: [(key: MomentKey, name: String)]) -> [MomentKey: String] {
@@ -320,8 +335,8 @@ public enum MomentLinkGate {
 }
 
 /// Every Moment's name, read from the chain in publish order, turned into link slugs (`MomentSlug.assign`). A retired
-/// cohort is read once, up to its pinned final count (`Cohort.finalMomentCount`) and never counted; the live cohort is
-/// re-counted when a lookup needs newer Moments. A cohort with no factory (c4 while v2 is pending) is left out: a
+/// cohort is read once, up to its frozen named count (`Cohort.namedMomentCount`) and never counted, so a Moment
+/// published there later gets no name; the live cohort is re-counted when a lookup needs newer Moments. A cohort with no factory (c4 while v2 is pending) is left out: a
 /// Multicall3 call to address 0 returns no data, and that one failed decode would fail every lookup. Nothing is kept
 /// across launches, and a read that fails anywhere fails the whole lookup: a missing name would shift the slugs after it.
 public actor MomentDirectory {
@@ -377,20 +392,20 @@ public actor MomentDirectory {
 
     private func readNewNames(force: Bool) async throws {
         let now = Date()
-        // Every cohort that may have grown: a retired cohort once (to its pinned count), the live one when stale.
+        // Every cohort that may have grown: a retired cohort once (to its named count), the live one when stale.
         let stale = cohorts.filter { cohort in
             guard let at = counted[cohort] else { return true }
-            return cohort.finalMomentCount == nil && (force || now.timeIntervalSince(at) > liveTTL)
+            return cohort.namedMomentCount == nil && (force || now.timeIntervalSince(at) > liveTTL)
         }
         guard !stale.isEmpty else { return }
-        // Only a cohort without a pinned count is counted on chain.
-        let live = stale.filter { $0.finalMomentCount == nil }
+        // Only a cohort without a named count is counted on chain.
+        let live = stale.filter { $0.namedMomentCount == nil }
         let liveCounts = live.isEmpty ? [] : try await multicall.readAll(live.map { MomentsABI.call($0.factory, MomentsABI.Factory.momentCount, returns: "uint256") })
         var counts: [MomentLink.Cohort: BigUInt] = [:]
         for (cohort, value) in zip(live, liveCounts) { counts[cohort] = value[0].uint }
         var wanted: [(cohort: MomentLink.Cohort, id: BigUInt)] = []
         for cohort in stale {
-            let count = cohort.finalMomentCount.map { BigUInt($0) } ?? counts[cohort] ?? 0
+            let count = cohort.namedMomentCount.map { BigUInt($0) } ?? counts[cohort] ?? 0
             let have = BigUInt(names[cohort]?.count ?? 0)
             if count > have { for id in (have + 1)...count { wanted.append((cohort, id)) } }
         }

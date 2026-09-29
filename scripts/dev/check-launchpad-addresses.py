@@ -21,6 +21,9 @@ unreachable RPC. Cohort 3 alone need not be paused on chain: it stays open (owne
 are retired in the app only, and builds before 16 can still publish there), so its publishingPaused() is read and
 reported as a note, and its count is proven again by every release. Cohorts 1 and 2 must stay paused (their policy
 pays the retired wallets): an open one refuses. `--chain` runs the same checks by hand; `--release` includes them.
+Names do not follow the pins: MomentLink.Cohort.namedMomentCount freezes how many of each retired cohort's Moments have a
+name link (NAMED_MOMENTS here, never changed), so raising a pin for a Moment published later takes in its coin and
+moves no link. Every run checks the Swift still says NAMED_MOMENTS, and no more than the pin.
 
 The same reads prove the live stacks, once wired, so a wrong record promoted with Swift that matches it (the simulated
 dryrun-143.json, a fork rehearsal's, another deployment's) still refuses: every module in DyorKit's two tables has code;
@@ -172,6 +175,9 @@ POLICY_WORDS = 10  # MomentTypes.Policy, all static: (threshold, minPrice, 6 × 
 MOMENT_WORDS = 17  # MomentTypes.Moment, all static: (creator, platform, treasury, coin, nft, …); the coin is word 3
 # How many Moments past a pin are read, to name their coins, when a cohort has grown.
 PAST_PIN = 20
+# MomentLink.Cohort.namedMomentCount: the retired cohorts' named Moments when c4 went live (build 16). Frozen: a changed
+# count would move every name link after it.
+NAMED_MOMENTS = {"c1": 3, "c2": 2, "c3": 1}
 # The docs page Get Help's Contracts & Addresses row opens (DyorKit's DocsLinks.contractsAndAddresses, pinned by
 # RetiredCohortGateTests); GitBook serves each page as Markdown at its URL plus ".md".
 DOCS_CONTRACTS_PAGE = "https://dyorhq.gitbook.io/docs/resources/contracts-and-addresses"
@@ -195,6 +201,14 @@ def retired_tables():
             problems.append(f"{where}.{c} is counted live but has a factory literal (the live factory lives only in MomentsAddresses.monadMainnet)")
     if {f for _, f, _ in cohorts} != RETIRED_MOMENTS_FACTORIES:
         problems.append(f"{where}'s pinned cohorts are not exactly this script's RETIRED_MOMENTS_FACTORIES")
+    named_body = re.search(r'var namedMomentCount: Int\? \{(.*?)\n        \}', link, re.S)
+    named = {c: int(n) for c, n in re.findall(r'case \.(c\d+): return (\d+)\b', named_body.group(1))} if named_body else {}
+    if named != NAMED_MOMENTS:
+        problems.append(f"{where}.namedMomentCount is {named or 'unreadable'}, not the frozen {NAMED_MOMENTS}: a retired cohort's "
+                        "names never change, or every later Moment's name link moves")
+    for c, _, pin in cohorts:
+        if named.get(c, 0) > pin:
+            problems.append(f"{where}.{c} names {named[c]} Moments but finalMomentCount pins {pin}")
 
     models = open(os.path.join(ROOT, MOMENTS_MODELS)).read()
     body = re.search(r'static let retiredMainnetCoins: \[Address: MomentKey\] = \[(.*?)\n    \]', models, re.S)
@@ -291,8 +305,8 @@ def check_retired_on_chain(cohorts, coins, call):
         if count != pin:
             problems.append(f"{where}: momentCount() is {count} on chain but MomentLink.Cohort.{c}.finalMomentCount pins {pin}: "
                             "a Moment was published there after the pin. Pin the new count and add every new coin to "
-                            "MomentsAddresses.retiredMainnetCoins (a new name in a retired cohort comes before every later "
-                            "cohort's in MomentSlug's order, so check that no later Moment's link changes)")
+                            "MomentsAddresses.retiredMainnetCoins, so the app never trades it (the new Moment gets its id "
+                            "link only: namedMomentCount stays, and no name link changes)")
         table = {coin: i for coin, (f, i) in coins.items() if f == factory}
         for coin, i in sorted(on_chain.items(), key=lambda kv: kv[1]):
             if table.get(coin) != i:
