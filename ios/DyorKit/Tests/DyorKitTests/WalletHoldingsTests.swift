@@ -289,6 +289,13 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(send.contains(".task(id: balanceReadKey)"))
         XCTAssertTrue(send.contains("private var balanceReadKey: String { \"\\(token?.address.hex ?? \"\")#\\(assetsKey ?? \"\")\" }"))
         XCTAssertTrue(send.contains("balance = kept?.balance"))
+        // The wallet's own coins are recorded as chosen, so Home marks them as the lists do; a launch records its coin.
+        XCTAssertTrue(tokens.contains("let ownCoins = WalletHoldings.ownCoins(owner: read.owner, launches: own.launches, staked: own.staked)"))
+        XCTAssertTrue(tokens.contains("KnownTokenStore.markChosen(token.address, owner: read.owner)"))
+        let create = try XCTUnwrap(launchpad.range(of: "title: \"Launch \\(symbol)\", confirmTitle: \"Launch \\(symbol)\""))
+        let launched = String(launchpad[create.upperBound...].prefix(2_500))
+        XCTAssertTrue(launched.contains("result.deployer == owner"))
+        XCTAssertTrue(launched.contains("KnownTokenStore.markChosen(result.token, owner: owner)"))
         XCTAssertFalse(send.contains("portfolioPrecedes"), "the Send list ranks by value, unpriced last")
         XCTAssertFalse(send.contains("Token.core.filter"), "no fixed short list")
         XCTAssertFalse(send.contains("\"USDC\", \"USDT0\""), "dollars are never decided by symbol")

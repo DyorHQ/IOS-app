@@ -67,7 +67,7 @@ enum WalletTokens {
     /// live price in its pair asset, a Moment coin at its pool's live USDC price — which no pool the price finder looks
     /// for gives them. Prices that can't be read leave tokens unpriced, never hidden, and say so (`Ranked.pricesFailed`).
     /// A DyorHQ coin the wallet launched, or whose Moment it collected or created, is its own, not Unverified
-    /// (`WalletHoldings.unverified`).
+    /// (`WalletHoldings.unverified`), and is recorded as chosen, so Home, which marks what the token store marks, agrees.
     static func ranked(_ read: Read, env: AppEnvironment, by order: (HeldToken, HeldToken) -> Bool = WalletHoldings.precedes) async -> Ranked {
         async let coins = appCoins(read, env: env)
         // The launchpad's pair assets too (MON, USDC, AUSD, aBIL), whether held or not: a launch coin's price is in one.
@@ -84,6 +84,11 @@ enum WalletTokens {
         let own = await coins
         let valued = WalletHoldings.pricing(prices.mapValues(\.usd), launches: own.launches, moments: own.momentPrices)
         let unverified = WalletHoldings.unverified(read.unverified, owner: read.owner, launches: own.launches, staked: own.staked)
+        let ownCoins = WalletHoldings.ownCoins(owner: read.owner, launches: own.launches, staked: own.staked)
+        for token in read.tokens where ownCoins.contains(token.address) {
+            KnownTokenStore.add(token, owner: read.owner)
+            KnownTokenStore.markChosen(token.address, owner: read.owner)
+        }
         return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: valued, unverified: unverified, by: order),
                       pricesFailed: failed || !own.complete, curve: own.curve)
     }

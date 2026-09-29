@@ -977,6 +977,20 @@ struct CreateLaunchView: View {
                         onDone: { dismiss(); onLaunched() },
                         onCompleted: { hash in
                             Activity.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
+                            // Launched here, so chosen here: its coin is never shown as Unverified, on Home either (whose
+                            // discovery would otherwise store it as merely found in the wallet's history). The coin is the
+                            // one the live factory's event names for this wallet, never one a caller supplied.
+                            let owner = session.address
+                            let launchpad = env.launchpad
+                            let multicall = env.multicall
+                            let launched = input
+                            Task { @MainActor in
+                                guard let owner, let result = (try? await launchpad.launchResult(transaction: hash)) ?? nil, result.deployer == owner else { return }
+                                let read = (try? await ERC20.metadata(result.token, multicall: multicall)) ?? nil
+                                let symbol = read?.symbol ?? launched.symbol
+                                KnownTokenStore.add(Token(address: result.token, symbol: symbol, name: read?.name ?? (launched.name.isEmpty ? symbol : launched.name), decimals: 18, isLaunchpad: true), owner: owner)
+                                KnownTokenStore.markChosen(result.token, owner: owner)
+                            }
                         },
                         onView: { hash in
                             // Route to the coin's in-app page instead of the block explorer (the explorer link lives
