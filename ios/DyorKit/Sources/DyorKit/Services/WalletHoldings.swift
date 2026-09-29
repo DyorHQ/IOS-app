@@ -107,6 +107,22 @@ public enum WalletHoldings {
         }
     }
 
+    /// `prices` (USD per whole token, from the pool finder) with DyorHQ's own coins valued as the app values them
+    /// everywhere else (Home, the Portfolio's history), which the pool finder can't: a launch coin (`launches`, found by
+    /// its factory's record) at its launch's price — its curve's, or its pool's once graduated — in its pair asset, times
+    /// that asset's dollar price in `prices`; a Moment coin (`moments`) at its pool's USDC price. Such a coin is never
+    /// valued at a price another pool quotes for it: without the app's own value (a pair asset with no price, a Moment
+    /// with no pool read) it is unpriced.
+    public static func pricing(_ prices: [Address: Double], launches: [Address: Launch], moments: [Address: Double?]) -> [Address: Double] {
+        var out = prices
+        for (coin, launch) in launches {
+            let pair = launch.pair.isNative ? prices[Monad.native] : prices[launch.pairToken]
+            out[coin] = pair.map { LaunchpadService.priceNumber(launch) * $0 }
+        }
+        for (coin, usdcPerCoin) in moments { out[coin] = usdcPerCoin }
+        return out
+    }
+
     /// The curated dollar stables, by contract address. A token is one of them only by its address: anyone can deploy a
     /// token called "USDC".
     public static let dollarStables: Set<Address> = Set(Token.core.filter { ["USDC", "USDT0", "AUSD", "USDe", "USD1", "mUSD"].contains($0.symbol) }.map(\.address))

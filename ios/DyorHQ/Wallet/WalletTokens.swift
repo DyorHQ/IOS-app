@@ -38,22 +38,73 @@ enum WalletTokens {
     /// `read`'s tokens, valued and ranked.
     struct Ranked {
         let tokens: [HeldToken]
-        /// The price read failed: only the tokens priced by definition (USDC, AUSD at $1) have a value, the rest are
-        /// unpriced, and the order is by amount rather than value — a list says so, and a send preselects nothing.
+        /// The price read failed: the pool finder's prices are missing (USDC and AUSD keep their $1), so most tokens are
+        /// unpriced and ranked by amount rather than value — a list says so, and a send preselects nothing.
         let pricesFailed: Bool
     }
 
-    /// `read`'s tokens valued at their pools' prices and ranked by `order` (the Send list's unless another is given).
-    /// Prices that can't be read leave tokens unpriced, never hidden, and say so (`Ranked.pricesFailed`).
+    /// `read`'s tokens valued and ranked by `order` (the Send list's unless another is given): at their pools' prices,
+    /// and DyorHQ's own coins as the app values them everywhere else (`WalletHoldings.pricing`) — a launch coin at its
+    /// curve's or pool's price in its pair asset, a Moment coin at its pool's USDC price — which no pool the price finder
+    /// looks for gives them. Prices that can't be read leave tokens unpriced, never hidden, and say so
+    /// (`Ranked.pricesFailed`).
     static func ranked(_ read: Read, env: AppEnvironment, by order: (HeldToken, HeldToken) -> Bool = WalletHoldings.precedes) async -> Ranked {
+        async let coins = appCoins(read, env: env)
+        // The launchpad's pair assets too (MON, USDC, AUSD, aBIL), whether held or not: a launch coin's price is in one.
+        var seen = Set<Address>()
+        let priced = (read.tokens + [Token.mon] + Token.core.filter { Token.launchpadPairAssets.contains($0.address) }).filter { seen.insert($0.address).inserted }
         let prices: [Address: PriceInfo]
         var failed = false
         do {
-            prices = try await env.prices.prices(for: read.tokens)
+            prices = try await env.prices.prices(for: priced)
         } catch {
-            prices = PriceService.definedPrices(for: read.tokens)
+            prices = PriceService.definedPrices(for: priced)
             failed = true
         }
-        return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: prices.mapValues(\.usd), unverified: read.unverified, by: order), pricesFailed: failed)
+        let own = await coins
+        let valued = WalletHoldings.pricing(prices.mapValues(\.usd), launches: own.launches, moments: own.moments.mapValues { $0.pool?.usdcPerCoin })
+        return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: valued, unverified: read.unverified, by: order), pricesFailed: failed)
+    }
+
+    /// DyorHQ's own coins among a read's tokens, as their factories record them.
+    struct AppCoins {
+        /// Launch coins, with their launches: any launchpad, live or retired, in any phase.
+        var launches: [Address: Launch] = [:]
+        /// Moment coins, with their Moments: the live cohort's or a retired one's.
+        var moments: [Address: MomentInfo] = [:]
+    }
+
+    /// Which of `read`'s tokens DyorHQ's contracts made. MON and the curated tokens are never asked; a coin whose record
+    /// or Moment couldn't be read is left out, and then valued like any other token.
+    private static func appCoins(_ read: Read, env: AppEnvironment) async -> AppCoins {
+        let candidates = read.tokens.filter { !$0.isNative && Token.core($0.address) == nil }
+        guard !candidates.isEmpty else { return AppCoins() }
+        let launchpad = env.launchpad
+        async let launches = (try? await launchpad.recordedLaunches(candidates)) ?? [:]
+        async let moments = momentCoins(candidates.map(\.address), env: env)
+        return AppCoins(launches: await launches, moments: await moments)
+    }
+
+    /// The Moments whose coins are among `coins`: the live cohort's, by its factory's `momentIdByCoin`, and the retired
+    /// cohorts', from their fixed list (`MomentsAddresses.retiredMainnetCoins`). A Moment is kept only when it names the
+    /// coin it was found for.
+    private static func momentCoins(_ coins: [Address], env: AppEnvironment) async -> [Address: MomentInfo] {
+        let live = env.moments
+        let ids = (try? await live.momentIds(coins: coins)) ?? [:]
+        var reads: [(coin: Address, read: @Sendable () async -> MomentInfo?)] = []
+        for coin in coins {
+            if let id = ids[coin] {
+                reads.append((coin, { try? await live.info(id: id) }))
+            } else if let key = MomentsAddresses.retiredMainnetCoins[coin], let cohort = env.retiredMoments(for: key.factory) {
+                reads.append((coin, { try? await cohort.info(id: key.id) }))
+            }
+        }
+        guard !reads.isEmpty else { return [:] }
+        return await withTaskGroup(of: (Address, MomentInfo?).self) { group in
+            for (coin, read) in reads { group.addTask { (coin, await read()) } }
+            var out: [Address: MomentInfo] = [:]
+            for await (coin, info) in group { if let info, info.moment.coin == coin { out[coin] = info } }
+            return out
+        }
     }
 }
