@@ -239,6 +239,10 @@ final class WalletHoldingsTests: XCTestCase {
         let settled = String(launchpad[buy.upperBound..<bought.lowerBound])
         XCTAssertTrue(settled.contains("KnownTokenStore.add(token, owner: session.address)"))
         XCTAssertTrue(settled.contains("KnownTokenStore.markChosen(launch.token, owner: session.address)"))
+        // A failed price read hides the Portfolio's total and says so, as the Send sheet does.
+        XCTAssertTrue(assets.contains("failed = result.pricesFailed"))
+        XCTAssertTrue(assets.contains("else if kind == .assets, !model.pricesFailed, model.totalValue > 0 {"))
+        XCTAssertTrue(assets.contains("if kind == .assets, model.pricesFailed, !model.loading, !model.tokens.isEmpty {"))
         XCTAssertFalse(send.contains("portfolioPrecedes"), "the Send list ranks by value, unpriced last")
         XCTAssertFalse(send.contains("Token.core.filter"), "no fixed short list")
         XCTAssertFalse(send.contains("\"USDC\", \"USDT0\""), "dollars are never decided by symbol")

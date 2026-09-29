@@ -29,6 +29,9 @@ final class AssetsModel {
     /// gets a Swap row; a failed check keeps the coins already known, and the rest open Swap, whose "no venue" state
     /// checks again and points to the Launch page.
     private(set) var curve: CurveHoldings = .none
+    /// Prices couldn't all be read (`WalletTokens.Ranked.pricesFailed`): some tokens are unpriced, so the holdings total
+    /// would be a part passed off as the whole. It isn't shown, and the card says why.
+    private(set) var pricesFailed = false
     private(set) var loading = false
     private(set) var loadedFor: Address?
 
@@ -48,12 +51,14 @@ final class AssetsModel {
         let read = try? await WalletTokens.read(env: env, address: address)
         var ranked: [TokenAsset] = []
         var found: CurveHoldings?
+        var failed = false
         // The Portfolio keeps the order it has always had; the Send sheet ranks the same tokens its own way. The coins on a
         // curve come from the same read that valued them: the launchpads are asked once.
         if let read {
             let result = await WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes)
             ranked = result.tokens
             found = result.curve
+            failed = result.pricesFailed
         }
         // As the list marks them: the DyorHQ coins the wallet launched or collected are its own, not Unverified.
         unverified = read == nil ? KnownTokenStore.unverified(owner: address) : Set(ranked.filter(\.unverified).map(\.id))
@@ -63,6 +68,7 @@ final class AssetsModel {
             retiredByNFT[info.moment.nft] = info
         }
         if let found { curve = found }
+        pricesFailed = failed
         tokens = ranked
 
         let moments = (try? await momentsTask) ?? []
@@ -97,7 +103,7 @@ struct AssetsCard: View {
                 Text("My Holdings").font(.headline)
                 Spacer()
                 if model.loading { ProgressView().controlSize(.mini) }
-                else if kind == .assets, model.totalValue > 0 { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
+                else if kind == .assets, !model.pricesFailed, model.totalValue > 0 { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
                 else if kind == .nfts, !model.nfts.isEmpty { Text("\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
 
@@ -106,6 +112,10 @@ struct AssetsCard: View {
             }
             .pickerStyle(.segmented)
 
+            if kind == .assets, model.pricesFailed, !model.loading, !model.tokens.isEmpty {
+                Text("Some prices couldn't be read, so values are missing and no total is shown. Pull down to try again.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             if kind == .assets, model.tokens.isEmpty {
                 Text(model.loading ? "Reading the wallet…" : "No tokens in this wallet yet.").font(.subheadline).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
