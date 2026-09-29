@@ -50,6 +50,9 @@ struct LaunchpadView: View {
             .refreshable { await model.load(env: env, account: session.address) }
             // Restarts with the wallet: whether it may launch is part of what the create screen is given.
             .task(id: session.address) { await model.poll(env: env, account: session.address) }
+            // Another account can take over in place (a Privy session adopted over a watch-only one, say) without the
+            // tabs being rebuilt: the pages over the board were the previous account's, so they go.
+            .onChange(of: session.address) { _, _ in path = [] }
             .overlay { if firstLoad { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showCreate) { CreateLaunchView(protocolInfo: model.protocolInfo) { Task { await model.load(env: env, account: session.address) } } }
             .sheet(isPresented: $showProfile) { LaunchpadProfileView() }
@@ -71,9 +74,10 @@ struct LaunchpadView: View {
         }
     }
 
-    /// Pushes `page`, unless it is already on top.
+    /// Pushes `page`, unless its coin's page is already on top: a launch read elsewhere (Home's copy differs in every live
+    /// field) or a reference to the same coin is the same page, never a second one over it.
     private func open(_ page: LaunchPage) {
-        if path.last != page { path.append(page) }
+        if path.last?.token != page.token { path.append(page) }
     }
 
     private var board: some View {
@@ -249,6 +253,14 @@ struct LaunchpadView: View {
 enum LaunchPage: Hashable {
     case launch(Launch)
     case reference(LaunchReference)
+
+    /// The coin whose page it is, however it was opened: one page per coin on the stack.
+    var token: Address {
+        switch self {
+        case .launch(let launch): return launch.token
+        case .reference(let reference): return reference.token
+        }
+    }
 }
 
 enum LaunchSort: String, CaseIterable, Identifiable {

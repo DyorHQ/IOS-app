@@ -423,7 +423,8 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         let start = try XCTUnwrap(source.range(of: "struct LaunchpadView: View {"))
         let end = try XCTUnwrap(source.range(of: "enum LaunchSort", range: start.upperBound..<source.endIndex))
         let board = String(source[start.upperBound..<end.lowerBound])
-        XCTAssertTrue(source.contains("enum LaunchPage: Hashable {\n    case launch(Launch)\n    case reference(LaunchReference)\n}"))
+        XCTAssertTrue(source.contains("enum LaunchPage: Hashable {\n    case launch(Launch)\n    case reference(LaunchReference)\n"))
+        XCTAssertTrue(source.contains("    var token: Address {\n        switch self {\n        case .launch(let launch): return launch.token\n        case .reference(let reference): return reference.token\n        }\n    }"), "a page is its coin's, however it was opened")
         XCTAssertTrue(board.contains("@State private var path: [LaunchPage] = []"))
         XCTAssertTrue(board.contains(".navigationDestination(for: LaunchPage.self) { page in\n                switch page {\n                case .launch(let launch): LaunchDetailView(launch: launch)\n                case .reference(let reference): LaunchReferenceView(reference: reference)\n                }\n            }"))
         XCTAssertFalse(board.contains("navigationDestination(item:"))
@@ -434,7 +435,12 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         XCTAssertTrue(board.contains(".onChange(of: router.pendingLaunchReference) { _, reference in\n                guard let reference else { return }\n                open(.reference(reference))\n                router.pendingLaunchReference = nil"))
         XCTAssertTrue(board.contains("if let launch = router.pendingLaunch { path = [.launch(launch)]; router.pendingLaunch = nil }"), "delivered on appear too")
         XCTAssertTrue(board.contains("if let reference = router.pendingLaunchReference { path = [.reference(reference)]; router.pendingLaunchReference = nil }"), "delivered on appear too")
-        XCTAssertTrue(board.contains("private func open(_ page: LaunchPage) {\n        if path.last != page { path.append(page) }\n    }"), "pushed once: the page on top is never pushed again")
+        XCTAssertTrue(board.contains("private func open(_ page: LaunchPage) {\n        if path.last?.token != page.token { path.append(page) }\n    }"),
+                      "pushed once per coin: Home's copy of a launch, or a reference to it, never stacks a second page over the coin's")
+        XCTAssertFalse(board.contains("path.last != page"))
+        // An account that takes over in place (Session.adopt, watch) doesn't rebuild the tabs: the previous account's
+        // pages go with it.
+        XCTAssertTrue(board.contains(".onChange(of: session.address) { _, _ in path = [] }"))
         let loader = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchReferenceView.swift"), encoding: .utf8)
         XCTAssertTrue(loader.contains("try await env.launchpad.launch(reference)"))
         XCTAssertTrue(loader.contains("LaunchDetailView(launch: launch)"))
