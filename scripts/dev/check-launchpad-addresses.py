@@ -22,8 +22,17 @@ are retired in the app only, and builds before 16 can still publish there), so i
 reported as a note, and its count is proven again by every release. Cohorts 1 and 2 must stay paused (their policy
 pays the retired wallets): an open one refuses. `--chain` runs the same checks by hand; `--release` includes them.
 
-`--chain-fixture FILE` is for DyorKit's RetiredCohortGateTests only: the retired-cohort checks alone, against canned
-eth_call answers instead of the chain. It is refused together with `--release`.
+The same reads prove the live stacks, once wired, so a wrong record promoted with Swift that matches it (the simulated
+dryrun-143.json, a fork rehearsal's, another deployment's) still refuses: every module in DyorKit's two tables has code;
+the launchpad factory's hook(), escrow(), holderFeeSharing() and router() are the table's, its owner() is 143.json's and
+modulesSealed() is true; the Moments factory's collect(), vesting(), graduation(), locker(), feeHook() and buyback() are
+the table's, externalBaseURI() is the c4 link base, policy() pays the table's platform and treasury, and governance()
+and guardian() are moments-143.json's; and each factory has no code at its record's deployBlock − 1 and has it at
+deployBlock.
+
+`--chain-fixture FILE` is for DyorKit's RetiredCohortGateTests only: the chain checks alone (the retired cohorts, and the
+live stacks when wired), against canned eth_call and eth_getCode answers instead of the chain. It is refused together
+with `--release`.
 
 Local config values are compared, never printed: a problem there names the key only.
 """
@@ -128,13 +137,32 @@ def state(values, where):
 # The retired Moments cohorts: MomentLink.Cohort's pins and MomentsAddresses.retiredMainnetCoins.
 MOMENT_LINK = "ios/DyorKit/Sources/DyorKit/Services/Moments/MomentLink.swift"
 MOMENTS_MODELS = "ios/DyorKit/Sources/DyorKit/Services/Moments/MomentsModels.swift"
-# Keyless public Monad RPCs (DyorKit's Monad.publicRPCs), tried in order. Only eth_blockNumber and eth_call are sent.
+# Keyless public Monad RPCs (DyorKit's Monad.publicRPCs), tried in order. Only eth_blockNumber, eth_call and eth_getCode
+# are sent.
 PUBLIC_RPCS = ["https://rpc1.monad.xyz", "https://rpc.monad.xyz"]
-SELECTORS = {  # pinned in DyorKit's MomentsTests
+SELECTORS = {  # pinned in DyorKit's MomentsTests; RetiredCohortGateTests' fixture encodes every one with DyorKit's ABI
     "publishingPaused()": "0x788ab4ac",
     "momentCount()": "0xc895d059",
     "getMoment(uint256)": "0x557a2d20",
+    # the live stacks' getters
+    "owner()": "0x8da5cb5b",
+    "modulesSealed()": "0x99571f57",
+    "hook()": "0x7f5a7c7b",
+    "escrow()": "0xe2fdcc17",
+    "holderFeeSharing()": "0x3f81cafc",
+    "router()": "0xf887ea40",
+    "collect()": "0xe5225381",
+    "vesting()": "0x44c63eec",
+    "graduation()": "0xda4c9e00",
+    "locker()": "0xd7b96d4e",
+    "feeHook()": "0xf11f4461",
+    "buyback()": "0xf8ec6911",
+    "policy()": "0x0505c8c9",
+    "externalBaseURI()": "0xae8d070b",
+    "governance()": "0x5aa6e675",
+    "guardian()": "0x452a9320",
 }
+POLICY_WORDS = 10  # MomentTypes.Policy, all static: (threshold, minPrice, 6 × bps, platform, treasury)
 MOMENT_WORDS = 17  # MomentTypes.Moment, all static: (creator, platform, treasury, coin, nft, …); the coin is word 3
 # How many Moments past a pin are read, to name their coins, when a cohort has grown.
 PAST_PIN = 20
@@ -195,21 +223,27 @@ def rpc(method, params):
     raise RuntimeError("; ".join(errors))
 
 def chain_reader():
-    """(block, call): eth_calls pinned to one block, so every answer describes the same chain state. A few blocks
-    (~2 s) behind the head, so a fallback RPC that lags slightly still serves it."""
+    """(block, call, code): eth_calls pinned to one block, so every answer describes the same chain state, and the code
+    at an address (at that block, or at the block given). A few blocks (~2 s) behind the head, so a fallback RPC that
+    lags slightly still serves it."""
     block = int(rpc("eth_blockNumber", []), 16) - 5
-    return block, lambda to, data: rpc("eth_call", [{"to": to, "data": data}, hex(block)])
+    return (block, lambda to, data: rpc("eth_call", [{"to": to, "data": data}, hex(block)]),
+            lambda address, at=None: rpc("eth_getCode", [address, hex(block if at is None else at)]))
 
 def fixture_reader(path):
-    """(block, call) answering from a test's canned eth_calls: {"block": N, "calls": {"<to>:<calldata>": "0x…"}}."""
+    """(block, call, code) answering from a test's canned answers: {"block": N, "calls": {"<to>:<calldata>": "0x…"},
+    "code": {"<address>@<block>": "0x…"}}."""
     fixture = json.load(open(path))
+    block = fixture.get("block", 0)
     calls = {k.lower(): v for k, v in fixture.get("calls", {}).items()}
-    def call(to, data):
-        answer = calls.get(f"{to}:{data}".lower())
-        if not isinstance(answer, str):
+    codes = {k.lower(): v for k, v in fixture.get("code", {}).items()}
+    def answer(table, key):
+        found = table.get(key.lower())
+        if not isinstance(found, str):
             raise RuntimeError("no answer in the fixture")
-        return answer
-    return fixture.get("block", 0), call
+        return found
+    return (block, lambda to, data: answer(calls, f"{to}:{data}"),
+            lambda address, at=None: answer(codes, f"{address}@{block if at is None else at}"))
 
 def words(answer, count, what):
     data = bytes.fromhex(answer[2:] if answer.startswith("0x") else answer)
@@ -259,6 +293,113 @@ def check_retired_on_chain(cohorts, coins, call):
                 problems.append(f"{where}: MomentsAddresses.retiredMainnetCoins names {coin} as #{i}, which the chain does not")
     return open_cohorts
 
+def address_of(answer, what):
+    word = words(answer, 1, what)[0]
+    if word >> 160:
+        raise ValueError(f"{what} returned no address")
+    return f"0x{word:040x}"
+
+def string_of(answer, what):
+    """An ABI-encoded `string` return value."""
+    data = bytes.fromhex(answer[2:] if answer.startswith("0x") else answer)
+    offset = int.from_bytes(data[:32], "big") if len(data) >= 64 else None
+    length = int.from_bytes(data[offset:offset + 32], "big") if offset is not None and offset + 32 <= len(data) else None
+    if length is None or offset + 32 + length > len(data):
+        raise ValueError(f"{what} returned {len(data)} bytes, not an ABI string")
+    return data[offset + 32:offset + 32 + length].decode("utf-8")
+
+def has_code(answer):
+    return answer.strip().lower() not in ("", "0x")
+
+def link_base():
+    """MomentsAddresses.expectedExternalBaseURI, `https://<MomentLink.host>/moments/<Cohort.c4.rawValue>/`."""
+    link = open(os.path.join(ROOT, MOMENT_LINK)).read()
+    host = re.search(r'public static let host = "([a-z0-9.-]+)"', link)
+    c4 = re.search(r'\bc4 = "([a-z0-9]+)"', link)
+    if not host or not c4:
+        problems.append(f"{MOMENT_LINK}: MomentLink.host or Cohort.c4's path segment could not be read")
+        return None
+    return f"https://{host.group(1)}/moments/{c4.group(1)}/"
+
+def check_live_on_chain(call, code):
+    """The live stacks as the chain has them (see the docstring): each factory's getters name the modules in DyorKit's
+    tables and the record's owner, every module has code, and each factory was created at its record's deployBlock."""
+    lp, mf = launchpad["factory"], moments["factory"]
+    lp_where, mf_where = f"live launchpad factory {lp}", f"live Moments factory {mf}"
+    swift_lp, swift_m = "LaunchpadAddresses.monadMainnet", "MomentsAddresses.monadMainnet"
+
+    def read(where, contract, getter, decode):
+        try:
+            return decode(call(contract, SELECTORS[getter]), getter)
+        except Exception as e:  # noqa: BLE001 — unreadable is not proven live
+            problems.append(f"{where}: {getter} could not be read on chain ({type(e).__name__}: {str(e)[:160]}); "
+                            "the live stacks must be proven before a release")
+            return None
+
+    # Every module the app calls has code (the platform and treasury are wallets); a factory without any is not read.
+    modules = [(swift_lp, field, address) for field, address in launchpad.items()]
+    modules += [(swift_m, field, address) for field, address in moments.items() if field not in ("platform", "treasury")]
+    missing = set()
+    for where, field, address in modules:
+        try:
+            if not has_code(code(address)):
+                problems.append(f"{where}.{field} {address} has no code on chain")
+                missing.add(address)
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"{where}.{field} {address}: its code could not be read on chain ({type(e).__name__}); refusing")
+            missing.add(address)
+
+    expected = [  # (where, contract, getter, value, whose)
+        (lp_where, lp, "hook()", launchpad["hook"], swift_lp),
+        (lp_where, lp, "escrow()", launchpad["escrow"], swift_lp),
+        (lp_where, lp, "holderFeeSharing()", launchpad["holderFeeSharing"], swift_lp),
+        (lp_where, lp, "router()", launchpad["router"], swift_lp),
+        (lp_where, lp, "owner()", str(record.get("owner", "")).lower(), "143.json"),
+        (mf_where, mf, "collect()", moments["collect"], swift_m),
+        (mf_where, mf, "vesting()", moments["vesting"], swift_m),
+        (mf_where, mf, "graduation()", moments["graduation"], swift_m),
+        (mf_where, mf, "locker()", moments["locker"], swift_m),
+        (mf_where, mf, "feeHook()", moments["hook"], swift_m),
+        (mf_where, mf, "buyback()", moments["buyback"], swift_m),
+        (mf_where, mf, "governance()", str(moments_record.get("governance", "")).lower(), "moments-143.json"),
+        (mf_where, mf, "guardian()", str(moments_record.get("guardian", "")).lower(), "moments-143.json"),
+    ]
+    for where, contract, getter, want, whose in expected:
+        got = None if contract in missing else read(where, contract, getter, address_of)
+        if got is not None and got != want:
+            problems.append(f"{where}: {getter} is {got} on chain, but {whose} says {want or 'nothing'}")
+    if lp not in missing:
+        sealed = read(lp_where, lp, "modulesSealed()", lambda answer, what: words(answer, 1, what)[0])
+        if sealed is not None and sealed != 1:
+            problems.append(f"{lp_where}: modulesSealed() is not true on chain, so its modules can still be replaced")
+    if mf not in missing:
+        policy = read(mf_where, mf, "policy()", lambda answer, what: words(answer, POLICY_WORDS, what))
+        if policy is not None:
+            for name, word in (("platform", policy[8]), ("treasury", policy[9])):
+                if f"0x{word:040x}" != moments[name]:
+                    problems.append(f"{mf_where}: policy() pays {name} 0x{word:040x}, but {swift_m} says {moments[name]} "
+                                    "(the app refuses to publish there)")
+        base, want_base = read(mf_where, mf, "externalBaseURI()", string_of), link_base()
+        if base is not None and want_base is not None and base != want_base:
+            problems.append(f"{mf_where}: externalBaseURI() is {base!r} on chain, but the c4 link base is {want_base!r}")
+
+    # Each factory was created at its record's deployBlock: no code one block before, code at it.
+    for where, factory, deploy_block, whose in ((lp_where, lp, record.get("deployBlock"), "143.json"),
+                                                (mf_where, mf, moments_record.get("deployBlock"), "moments-143.json")):
+        if factory in missing:
+            continue
+        if not isinstance(deploy_block, int) or deploy_block <= 0:
+            problems.append(f"contracts/deployments/{whose} has no deployBlock")
+            continue
+        try:
+            before, at = has_code(code(factory, deploy_block - 1)), has_code(code(factory, deploy_block))
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"{where}: its code around {whose}'s deployBlock could not be read on chain ({type(e).__name__}); refusing")
+            continue
+        if before or not at:
+            problems.append(f"{where}: {whose}'s deployBlock {deploy_block} is not the block that created it "
+                            f"(code at {deploy_block - 1}: {'yes' if before else 'no'}; at {deploy_block}: {'yes' if at else 'no'})")
+
 def report(ok_line):
     for note in notes:
         print(f"note: {note}")
@@ -266,15 +407,6 @@ def report(ok_line):
         print("Launchpad / Moments check failed:\n  " + "\n  ".join(problems))
         sys.exit(1)
     print(ok_line)
-
-if FIXTURE:
-    # Tests only: the retired-cohort checks alone, against canned answers (never with --release; see the docstring).
-    cohorts, coins = retired_tables()
-    block, call = fixture_reader(FIXTURE)
-    open_cohorts = check_retired_on_chain(cohorts, coins, call)
-    report(f"OK: retired Moments cohorts at their pins at fixture block {block} ({', '.join(f'{c} {pin}' for c, _, pin in cohorts)})"
-           + (f"; publishing open on {', '.join(open_cohorts)}" if open_cohorts else ""))
-    sys.exit(0)
 
 # DyorKit's launchpad constant
 where = "DyorKit LaunchpadAddresses.monadMainnet"
@@ -321,17 +453,33 @@ if RELEASE:
         if st != "wired":
             problems.append(f"REFUSING TO SHIP: DyorKit {name} (v2) is {st.upper()}; wire the v2 addresses first")
 
-# The retired Moments cohorts: the pins and the coin table always; the chain with --chain / --release.
+# The retired Moments cohorts: the pins and the coin table always; the chain with --chain / --release, and the live
+# stacks on chain with them once both are wired.
 retired_cohorts, retired_coins = retired_tables()
 chain_block = None
 open_cohorts = []
-if CHAIN:
+live_checked = False
+reader = None
+if FIXTURE:
+    reader = fixture_reader(FIXTURE)
+elif CHAIN:
     try:
-        chain_block, call = chain_reader()
+        reader = chain_reader()
     except Exception as e:  # noqa: BLE001
-        problems.append(f"no public Monad RPC answered ({str(e)[:200]}), so the retired Moments cohorts cannot be proven final; refusing")
-    else:
-        open_cohorts = check_retired_on_chain(retired_cohorts, retired_coins, call)
+        problems.append(f"no public Monad RPC answered ({str(e)[:200]}), so the retired Moments cohorts and the live stacks cannot be proven; refusing")
+if reader:
+    chain_block, call, code = reader
+    open_cohorts = check_retired_on_chain(retired_cohorts, retired_coins, call)
+    if launchpad_state == moments_state == "wired":
+        check_live_on_chain(call, code)
+        live_checked = True
+
+if FIXTURE:
+    # Tests only: the chain checks against canned answers (never with --release, and no local config; see the docstring).
+    report(f"OK: retired Moments cohorts at their pins at fixture block {chain_block} ({', '.join(f'{c} {pin}' for c, _, pin in retired_cohorts)})"
+           + (f"; publishing open on {', '.join(open_cohorts)}" if open_cohorts else "")
+           + ("; live stacks as wired" if live_checked else ""))
+    sys.exit(0)
 
 # Local overrides, when present. An xcconfig/env that sets the keys must set them to the current deployment
 # (or point at a fork on purpose — then this script is expected to complain).
@@ -389,4 +537,5 @@ report(f"OK: DyorKit ({summary})"
        + (", Secrets.xcconfig" if active else ", Secrets.xcconfig (no override)")
        + "".join(f", {name}" for name in envs)
        + f"; live records: factory {record['factory']}, Moments factory {moments_record['factory']}"
+       + (" (on chain as wired)" if live_checked else "")
        + retired)

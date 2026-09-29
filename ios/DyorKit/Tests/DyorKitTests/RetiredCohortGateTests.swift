@@ -12,10 +12,19 @@ import XCTest
 /// alone need not be paused: it stays open on chain (owner decision 2026-09-28, retired in the app only), which the gate
 /// reports as a note while its count still equals its pin. Cohorts 1 and 2 must stay paused.
 ///
-/// Here the script runs against canned eth_call answers built from the compiled constants (its `--chain-fixture` mode,
-/// which it refuses together with `--release`): the chain as it is passes, so the script reads the sources the way the
-/// app compiles them, and each way a cohort can drift from its pin refuses.
+/// The same reads prove the live stacks once wired: every module in `LaunchpadAddresses.monadMainnet` and
+/// `MomentsAddresses.monadMainnet` has code, each factory's getters name those modules and the records' owner,
+/// governance and guardian, and each factory was created at its record's `deployBlock`, so a wrong record promoted with
+/// Swift that matches it (a simulated or rehearsal deployment, another stack) still refuses.
+///
+/// Here the script runs against canned eth_call and eth_getCode answers built from the compiled constants (its
+/// `--chain-fixture` mode, which it refuses together with `--release`): the chain as it is passes, so the script reads the
+/// sources the way the app compiles them, and each way a cohort can drift from its pin, or a live stack from its table,
+/// refuses.
 final class RetiredCohortGateTests: XCTestCase {
+    /// The fixture's block, after both v2 deployments.
+    static let block: UInt64 = 108_895_597
+
     /// One retired factory as the chain reports it: `coins[i]` is Moment #(i + 1)'s coin.
     struct ChainCohort {
         let cohort: MomentLink.Cohort
@@ -42,7 +51,54 @@ final class RetiredCohortGateTests: XCTestCase {
         }
     }
 
-    static func fixture(_ cohorts: [ChainCohort]) throws -> Data {
+    /// The live stacks as the chain reports them: each factory getter's ABI-encoded answer, and the code at an address
+    /// by block ("0x" for none). `wired()` is the chain as DyorKit's tables and the committed records say. Getters are
+    /// keyed by signature and encoded with DyorKit's ABI, so a selector the script pins wrong finds no answer.
+    struct LiveChain {
+        /// `"<contract>:<signature>"` → the answer; a key left out is a getter the RPC cannot serve.
+        var getters: [String: Data] = [:]
+        /// `"<address>@<block>"` → the code there.
+        var code: [String: String] = [:]
+
+        static func getter(_ contract: Address, _ signature: String) -> String { "\(contract.hex):\(signature)" }
+        static func code(_ address: Address, at block: UInt64 = RetiredCohortGateTests.block) -> String { "\(address.hex)@\(block)" }
+
+        static func wired() throws -> LiveChain {
+            let l = LaunchpadAddresses.monadMainnet
+            let m = MomentsAddresses.monadMainnet
+            let launchpadRecord = try LaunchpadDeploymentTests.deploymentRecord("143.json")
+            let momentsRecord = try LaunchpadDeploymentTests.deploymentRecord("moments-143.json")
+            func recorded(_ record: [String: Any], _ key: String) throws -> Address {
+                try XCTUnwrap(Address(try XCTUnwrap(record[key] as? String, "\(key) is missing from the record")), key)
+            }
+            var chain = LiveChain()
+            let addresses: [(Address, String, Address)] = [
+                (l.factory, "hook()", l.hook), (l.factory, "escrow()", l.escrow), (l.factory, "holderFeeSharing()", l.holderFeeSharing),
+                (l.factory, "router()", l.router), (l.factory, "owner()", try recorded(launchpadRecord, "owner")),
+                (m.factory, "collect()", m.collect), (m.factory, "vesting()", m.vesting), (m.factory, "graduation()", m.graduation),
+                (m.factory, "locker()", m.locker), (m.factory, "feeHook()", m.hook), (m.factory, "buyback()", m.buyback),
+                (m.factory, "governance()", try recorded(momentsRecord, "governance")), (m.factory, MomentsABI.Factory.guardian, try recorded(momentsRecord, "guardian")),
+            ]
+            for (contract, signature, value) in addresses { chain.getters[getter(contract, signature)] = try ABI.encode([.address(value)], "address") }
+            chain.getters[getter(l.factory, "modulesSealed()")] = try ABI.encode([.bool(true)], "bool")
+            chain.getters[getter(m.factory, MomentsABI.Factory.policy)] = try ABI.encode(
+                [.uint(771_428_571), .uint(100_000), .uint(2_000), .uint(500), .uint(7_500), .uint(1_000), .uint(7_000), .uint(500), .address(m.platform), .address(m.treasury)],
+                MomentsABI.policyFlat)
+            chain.getters[getter(m.factory, MomentsABI.Factory.externalBaseURI)] = try ABI.encode([.string(MomentsAddresses.expectedExternalBaseURI)], "string")
+            for address in [l.factory, l.router, l.escrow, l.holderFeeSharing, l.hook, m.factory, m.collect, m.vesting, m.graduation, m.locker, m.hook, m.buyback] {
+                chain.code[code(address)] = "0x6080"
+            }
+            let launchpadBlock = UInt64(try XCTUnwrap(launchpadRecord["deployBlock"] as? Int, "143.json has no deployBlock"))
+            for (factory, created) in [(l.factory, launchpadBlock), (m.factory, m.deployBlock)] {
+                chain.code[code(factory, at: created - 1)] = "0x"
+                chain.code[code(factory, at: created)] = "0x6080"
+            }
+            return chain
+        }
+    }
+
+    static func fixture(_ cohorts: [ChainCohort], live: LiveChain? = nil) throws -> Data {
+        let live = try live ?? LiveChain.wired()
         var calls: [String: String] = [:]
         for c in cohorts {
             let factory = c.cohort.factory
@@ -59,7 +115,11 @@ final class RetiredCohortGateTests: XCTestCase {
                 put(MomentsABI.Factory.getMoment, [.uint(BigUInt(i + 1))], try ABI.encode([.tuple(moment)], MomentsABI.momentTuple))
             }
         }
-        return try JSONSerialization.data(withJSONObject: ["block": 108_778_342, "calls": calls], options: [.sortedKeys])
+        for (key, answer) in live.getters {
+            let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
+            calls["\(parts[0]):\(MomentsABI.calldata(parts[1]).hexString)"] = answer.hexString
+        }
+        return try JSONSerialization.data(withJSONObject: ["block": Self.block, "calls": calls, "code": live.code], options: [.sortedKeys])
     }
 
     /// The checker at the repo root, or a skip when this checkout has no scripts.
@@ -86,9 +146,9 @@ final class RetiredCohortGateTests: XCTestCase {
         return (process.terminationStatus, output)
     }
 
-    private func check(_ cohorts: [ChainCohort]) throws -> (status: Int32, output: String) {
+    private func check(_ cohorts: [ChainCohort], live: LiveChain? = nil) throws -> (status: Int32, output: String) {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("retired-cohorts-\(UUID().uuidString).json")
-        try Self.fixture(cohorts).write(to: file)
+        try Self.fixture(cohorts, live: live).write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
         return try run(["--chain-fixture", file.path])
     }
@@ -108,7 +168,7 @@ final class RetiredCohortGateTests: XCTestCase {
         XCTAssertEqual(status, 0, output)
         // The pins it read from the sources are the compiled ones.
         let pins = MomentLink.Cohort.allCases.compactMap { c in c.finalMomentCount.map { "\(c) \($0)" } }.joined(separator: ", ")
-        XCTAssertTrue(output.contains("OK: retired Moments cohorts at their pins at fixture block 108778342 (\(pins))\n"), output)
+        XCTAssertTrue(output.contains("OK: retired Moments cohorts at their pins at fixture block \(Self.block) (\(pins)); live stacks as wired\n"), output)
         XCTAssertFalse(output.contains("note:"), output)
     }
 
@@ -118,7 +178,7 @@ final class RetiredCohortGateTests: XCTestCase {
         let (status, output) = try check(Self.current())
         XCTAssertEqual(status, 0, output)
         XCTAssertTrue(output.contains("note: Moments cohort c3 (\(MomentLink.Cohort.c3.factory.hex)): publishing is open on chain"), output)
-        XCTAssertTrue(output.contains("; publishing open on c3\n"), output)
+        XCTAssertTrue(output.contains("; publishing open on c3; live stacks as wired\n"), output)
         XCTAssertFalse(output.contains("cohort c1"), output)
         XCTAssertFalse(output.contains("check failed"), output)
     }
@@ -158,6 +218,69 @@ final class RetiredCohortGateTests: XCTestCase {
         let (status, output) = try check(replacing(.c1) { $0.unreadable = [MomentsABI.Factory.momentCount] })
         XCTAssertEqual(status, 1, output)
         XCTAssertTrue(output.contains("Moments cohort c1 (\(MomentLink.Cohort.c1.factory.hex)) could not be read on chain"), output)
+    }
+
+    // MARK: The live stacks
+
+    private func checkLive(_ change: (inout LiveChain) throws -> Void) throws -> (status: Int32, output: String) {
+        var live = try LiveChain.wired()
+        try change(&live)
+        return try check(Self.current(), live: live)
+    }
+
+    /// A promoted record (with Swift that matches it) whose factory has no code on Monad, like the simulated
+    /// `dryrun-143.json`: refused, once, without reading its getters.
+    func testALiveFactoryWithoutCodeRefuses() throws {
+        let l = LaunchpadAddresses.monadMainnet
+        let (status, output) = try checkLive { $0.code[LiveChain.code(l.factory)] = "0x" }
+        XCTAssertEqual(status, 1, output)
+        XCTAssertTrue(output.contains("LaunchpadAddresses.monadMainnet.factory \(l.factory.hex) has no code on chain"), output)
+        XCTAssertFalse(output.contains("hook() could not be read"), output)
+    }
+
+    /// A module the table names that is not the factory's (another stack's collect), and an owner other than the record's.
+    func testAGetterNamingAnotherContractRefuses() throws {
+        let m = MomentsAddresses.monadMainnet
+        let l = LaunchpadAddresses.monadMainnet
+        let other = MomentsAddresses.retiredMainnet[0].collect
+        let stranger = Address(literal: "0x00000000000000000000000000000000000c0301")
+        let (status, output) = try checkLive {
+            $0.getters[LiveChain.getter(m.factory, "collect()")] = try ABI.encode([.address(other)], "address")
+            $0.getters[LiveChain.getter(l.factory, "owner()")] = try ABI.encode([.address(stranger)], "address")
+        }
+        XCTAssertEqual(status, 1, output)
+        XCTAssertTrue(output.contains("live Moments factory \(m.factory.hex): collect() is \(other.hex) on chain, but MomentsAddresses.monadMainnet says \(m.collect.hex)"), output)
+        XCTAssertTrue(output.contains("live launchpad factory \(l.factory.hex): owner() is \(stranger.hex) on chain, but 143.json says"), output)
+    }
+
+    /// Unsealed modules, a policy paying another platform, and a link base other than c4's each refuse.
+    func testTheFactoriesTermsMustMatchTheTables() throws {
+        let m = MomentsAddresses.monadMainnet
+        let l = LaunchpadAddresses.monadMainnet
+        let (status, output) = try checkLive {
+            $0.getters[LiveChain.getter(l.factory, "modulesSealed()")] = try ABI.encode([.bool(false)], "bool")
+            $0.getters[LiveChain.getter(m.factory, MomentsABI.Factory.policy)] = try ABI.encode(
+                [.uint(771_428_571), .uint(100_000), .uint(2_000), .uint(500), .uint(7_500), .uint(1_000), .uint(7_000), .uint(500), .address(m.treasury), .address(m.treasury)],
+                MomentsABI.policyFlat)
+            $0.getters[LiveChain.getter(m.factory, MomentsABI.Factory.externalBaseURI)] = try ABI.encode([.string("https://dyorhq.fun/moments/")], "string")
+        }
+        XCTAssertEqual(status, 1, output)
+        XCTAssertTrue(output.contains("modulesSealed() is not true on chain"), output)
+        XCTAssertTrue(output.contains("policy() pays platform \(m.treasury.hex), but MomentsAddresses.monadMainnet says \(m.platform.hex)"), output)
+        XCTAssertTrue(output.contains("externalBaseURI() is 'https://dyorhq.fun/moments/' on chain, but the c4 link base is '\(MomentsAddresses.expectedExternalBaseURI)'"), output)
+    }
+
+    /// A deployBlock that is not the factory's creation block (code already one block before it) refuses, and so does a
+    /// getter the RPC cannot serve.
+    func testTheDeployBlockAndEveryReadAreProven() throws {
+        let m = MomentsAddresses.monadMainnet
+        let (status, output) = try checkLive {
+            $0.code[LiveChain.code(m.factory, at: m.deployBlock - 1)] = "0x6080"
+            $0.getters[LiveChain.getter(m.factory, "buyback()")] = nil
+        }
+        XCTAssertEqual(status, 1, output)
+        XCTAssertTrue(output.contains("moments-143.json's deployBlock \(m.deployBlock) is not the block that created it (code at \(m.deployBlock - 1): yes; at \(m.deployBlock): yes)"), output)
+        XCTAssertTrue(output.contains("live Moments factory \(m.factory.hex): buyback() could not be read on chain"), output)
     }
 
     /// Canned answers never stand in for the chain in a release, and a mistyped flag never runs a lesser check.
