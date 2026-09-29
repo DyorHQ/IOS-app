@@ -137,6 +137,46 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.selection(keeping: fakeUSDC.address, in: onlyLookAlike)?.id, fakeUSDC.address, "and keeps their pick")
     }
 
+    /// A name that only reads as a curated one is marked as well: invisible characters (zero-width space and joiner, soft
+    /// hyphen, byte-order mark), letters from another script drawn like Latin ones (Cyrillic "С", Greek "Ο"), mathematical
+    /// letters, digits drawn like letters ("M0N", "USDl" for USD1) and text a direction override turns around. A name that
+    /// merely differs ("USDL", "USDC.e") is its own. Whatever its name, a token whose symbol isn't plain ASCII is never
+    /// preselected: it can read as a symbol it isn't.
+    func testANameThatOnlyReadsAsACuratedOneIsMarkedAndNeverTheDefault() {
+        func token(_ symbol: String, _ name: String = "Something") -> Token { Token(address: spam.address, symbol: symbol, name: name, decimals: 6) }
+        let usdcLike = ["US\u{200B}DC", "U\u{00AD}SDC", "\u{FEFF}USDC", "USDC\u{200D}", "USD\u{0421}", "usd\u{0441}", "\u{202E}CDSU", "U\u{2060}S\u{2063}DC",
+                        "USDC\u{FE0F}", "\u{1D414}\u{1D412}\u{1D403}\u{1D402}", "U S\u{00A0}D C"]
+        for symbol in usdcLike {
+            XCTAssertEqual(WalletHoldings.imitated(by: token(symbol)), .usdc, symbol.unicodeScalars.map { String(format: "%04X", $0.value) }.joined(separator: " "))
+        }
+        XCTAssertEqual(WalletHoldings.imitated(by: token("M0N")), .mon, "zero for O")
+        XCTAssertEqual(WalletHoldings.imitated(by: token("USDl")), Token.core.first { $0.symbol == "USD1" }, "l for 1")
+        XCTAssertEqual(WalletHoldings.imitated(by: token("X", "\u{039C}\u{03BF}nad")), .mon, "a Greek name drawn as \"Monad\"")
+        XCTAssertNil(WalletHoldings.imitated(by: token("USDL")), "L is not 1")
+        XCTAssertNil(WalletHoldings.imitated(by: token("USDC.e", "USD Coin")))
+        XCTAssertNil(WalletHoldings.imitated(by: token("\u{0414}\u{041E}\u{0413}")), "Cyrillic that reads as no curated name")
+        XCTAssertNil(WalletHoldings.imitated(by: token("", "")))
+
+        XCTAssertTrue(WalletHoldings.isPlain("USDC.e"))
+        XCTAssertTrue(WalletHoldings.isPlain("MEME COIN"))
+        XCTAssertFalse(WalletHoldings.isPlain(""))
+        XCTAssertFalse(WalletHoldings.isPlain("MEME\u{200B}"))
+        XCTAssertFalse(WalletHoldings.isPlain("\u{041C}EME"))
+        // The user's own pick, worth the most, named in Cyrillic: listed first, never preselected; the next plain one is.
+        let cyrillic = Token(address: spam.address, symbol: "\u{041C}\u{0415}\u{041C}\u{0415}", name: "Meme", decimals: 18)
+        let ranked = WalletHoldings.ranked([Token.mon, cyrillic, meme], balances: [Monad.native: units(10, .mon), cyrillic.address: units(1_000, cyrillic), meme.address: units(1, meme)],
+                                           prices: [Monad.native: 0.03, cyrillic.address: 1, meme.address: 1], unverified: [])
+        XCTAssertEqual(ranked.map(\.id), [cyrillic.address, meme.address, Monad.native])
+        XCTAssertFalse(ranked[0].plainSymbol)
+        XCTAssertTrue(ranked.first { $0.token == .mon }?.plainSymbol == true)
+        XCTAssertEqual(WalletHoldings.defaultChoice(ranked)?.id, meme.address)
+        // A look-alike the user chose, worth the most, with a zero-width space: marked and never the default.
+        let hidden = Token(address: fakeUSDC.address, symbol: "US\u{200B}DC", name: "USD Coin", decimals: 6)
+        let withHidden = WalletHoldings.ranked([Token.usdc, hidden], balances: [Monad.usdc: 1_000_000, hidden.address: 1_000_000_000_000], prices: [Monad.usdc: 1, hidden.address: 1], unverified: [])
+        XCTAssertEqual(withHidden.first?.imitates, .usdc)
+        XCTAssertEqual(WalletHoldings.defaultChoice(withHidden)?.id, Monad.usdc)
+    }
+
     func testDefaultChoiceSkipsUnverifiedAndIsNoneWhenNothingIsChosen() {
         let onlySent = WalletHoldings.ranked([spam, fakeUSDC], balances: [spam.address: 1, fakeUSDC.address: 1], prices: [:], unverified: [spam.address, fakeUSDC.address])
         XCTAssertEqual(onlySent.count, 2, "still listed")
@@ -243,6 +283,8 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(assets.contains("failed = result.pricesFailed"))
         XCTAssertTrue(assets.contains("else if kind == .assets, !model.pricesFailed, model.totalValue > 0 {"))
         XCTAssertTrue(assets.contains("if kind == .assets, model.pricesFailed, !model.loading, !model.tokens.isEmpty {"))
+        // A token whose symbol isn't plain shows its contract in the list.
+        XCTAssertTrue(send.contains("return asset.unverified || !asset.plainSymbol ?"))
         XCTAssertFalse(send.contains("portfolioPrecedes"), "the Send list ranks by value, unpriced last")
         XCTAssertFalse(send.contains("Token.core.filter"), "no fixed short list")
         XCTAssertFalse(send.contains("\"USDC\", \"USDT0\""), "dollars are never decided by symbol")

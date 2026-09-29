@@ -651,7 +651,8 @@ private struct SendAssetPicker: View {
 }
 
 /// One held token: logo, symbol (marked when Unverified), name, balance and dollar value — or "No price". A token that
-/// could pass for another — Unverified, or carrying a listed token's name — also shows its contract.
+/// could pass for another — Unverified, carrying a listed token's name, or with a symbol that isn't plain text (an
+/// invisible character, a letter from another script) — also shows its contract.
 private struct SendAssetRow: View {
     let asset: HeldToken
 
@@ -680,7 +681,7 @@ private struct SendAssetRow: View {
 
     private var subtitle: String {
         if let listed = asset.imitates { return "Not the \(listed.symbol) DyorHQ lists · \(asset.token.address.short)" }
-        return asset.unverified ? "\(asset.token.name) · \(asset.token.address.short)" : asset.token.name
+        return asset.unverified || !asset.plainSymbol ? "\(asset.token.name) · \(asset.token.address.short)" : asset.token.name
     }
 
     private var valueText: String {

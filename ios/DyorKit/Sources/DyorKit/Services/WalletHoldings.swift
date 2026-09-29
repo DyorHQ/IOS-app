@@ -24,6 +24,9 @@ public struct HeldToken: Hashable, Sendable, Identifiable {
     /// The curated token this one could pass for, by its symbol or name (`WalletHoldings.imitated(by:)`); nil for the
     /// curated tokens and anything named otherwise.
     public var imitates: Token? { WalletHoldings.imitated(by: token) }
+    /// Its symbol is plain printable ASCII (`WalletHoldings.isPlain`), as MON's and every curated token's is: one with any
+    /// other character — invisible, direction-changing, a letter from another script — can read as a symbol it isn't.
+    public var plainSymbol: Bool { token.isNative || Token.core(token.address) != nil || WalletHoldings.isPlain(token.symbol) }
     /// Whole tokens held.
     public var units: Double { Amount.units(balance, decimals: token.decimals) }
     /// Dollar value: nil when the price is unknown, never $0 in its place.
@@ -82,12 +85,13 @@ public enum WalletHoldings {
 
     /// The asset a send starts on: the highest-ranked one the user chose. Never an Unverified token — a fake "USDC"
     /// with a seeded pool can outrank everything — nor one carrying a curated token's name (`imitates`), even one the
-    /// user tapped in Swap: it may be a look-alike, and a send must never start on it unasked. So when every held token
-    /// is one of those, or nothing is held, there is none and the user picks. None either when the prices couldn't be read (`pricesRead` false): the ranking is then
-    /// by amount, not value, and the token with the most units is not the one worth the most.
+    /// user tapped in Swap, nor one whose symbol isn't plain (`plainSymbol`): it may be a look-alike, and a send must
+    /// never start on it unasked. So when every held token is one of those, or nothing is held, there is none and the
+    /// user picks. None either when the prices couldn't be read (`pricesRead` false): the ranking is then by amount, not
+    /// value, and the token with the most units is not the one worth the most.
     public static func defaultChoice(_ ranked: [HeldToken], pricesRead: Bool = true) -> HeldToken? {
         guard pricesRead else { return nil }
-        return ranked.first { !$0.unverified && $0.imitates == nil }
+        return ranked.first { !$0.unverified && $0.imitates == nil && $0.plainSymbol }
     }
 
     /// After the list is read: with nothing chosen yet, the default choice; with a choice, that token while the wallet
@@ -149,19 +153,82 @@ public enum WalletHoldings {
         unverified.subtracting(ownCoins(owner: owner, launches: launches, staked: staked))
     }
 
-    /// The curated token `token` could pass for: `token` is not curated, yet its symbol or name is a curated token's
-    /// symbol or name, ignoring case, accents, width and spaces — a second "USDC", a "Monad" that isn't MON. Being
-    /// chosen proves nothing here: tapping a search result in Swap stores a token as chosen. Nil for MON, the curated
-    /// tokens and every other name.
+    /// The curated token `token` could pass for: `token` is not curated, yet its symbol or name reads as a curated
+    /// token's symbol or name (`readings`) — a second "USDC", a "Monad" that isn't MON, a "USDC" with a zero-width space
+    /// or a Cyrillic "С" in it, a "M0N". Being chosen proves nothing here: tapping a search result in Swap stores a token
+    /// as chosen. Nil for MON, the curated tokens and every other name.
     public static func imitated(by token: Token) -> Token? {
         guard !token.isNative, Token.core(token.address) == nil else { return nil }
-        let names = [folded(token.symbol), folded(token.name)].filter { !$0.isEmpty }
-        return Token.core.first { curated in names.contains(folded(curated.symbol)) || names.contains(folded(curated.name)) }
+        let own = Set([token.symbol, token.name].flatMap(readings))
+        guard !own.isEmpty else { return nil }
+        return curatedReadings.first { !own.isDisjoint(with: $0.readings) }?.token
     }
 
-    static func folded(_ text: String) -> String {
-        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil).filter { !$0.isWhitespace }
+    /// Each curated token with the readings of its symbol and name, worked out once.
+    private static let curatedReadings: [(token: Token, readings: Set<String>)] = Token.core.map { ($0, Set([$0.symbol, $0.name].flatMap(readings))) }
+
+    /// The ways `text` reads to the eye, for `imitated(by:)`: `visible(text)` ignoring case (tagged "a"), and with the
+    /// digits and letters that pass for one another made one — 0 as O; 1, I and | as l — keeping case (tagged "b"), so
+    /// "USDL" stays apart from "USD1". Text with a direction-changing character is read backwards too: an override can
+    /// show "CDSU" as "USDC". Empty text has no reading.
+    static func readings(_ text: String) -> [String] {
+        let base = visible(text)
+        guard !base.isEmpty else { return [] }
+        var forms = [base]
+        if text.unicodeScalars.contains(where: { bidiControls.contains($0.value) }) { forms.append(String(base.reversed())) }
+        return forms.flatMap { form in
+            ["a:" + form.lowercased(), "b:" + String(String.UnicodeScalarView(form.unicodeScalars.map { lookAlikeDigits[$0] ?? $0 }))]
+        }
     }
+
+    /// `text` as it shows: compatibility forms (full-width and mathematical letters) as their plain letters; invisible,
+    /// format and direction characters (zero-width spaces and joiners, soft hyphen, byte-order mark, overrides), control
+    /// characters, combining marks and spaces removed; letters from other scripts that look like Latin ones (Cyrillic
+    /// "С", Greek "Ο") as those Latin letters; accents and width ignored. Case is kept (`readings` decides on it).
+    static func visible(_ text: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in text.precomposedStringWithCompatibilityMapping.unicodeScalars {
+            let properties = scalar.properties
+            switch properties.generalCategory {
+            case .format, .control, .nonspacingMark, .enclosingMark, .spaceSeparator, .lineSeparator, .paragraphSeparator: continue
+            default: break
+            }
+            if properties.isWhitespace || properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) { continue }
+            scalars.append(lookAlikeLetters[scalar] ?? scalar)
+        }
+        return String(scalars).folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil).filter { !$0.isWhitespace }
+    }
+
+    /// Whether `text` is plain printable ASCII — letters, digits, punctuation and spaces — and not empty.
+    public static func isPlain(_ text: String) -> Bool {
+        !text.isEmpty && text.unicodeScalars.allSatisfy { (0x20...0x7E).contains($0.value) }
+    }
+
+    /// U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069: they change the order text shows in.
+    private static let bidiControls: Set<UInt32> = Set([0x061C, 0x200E, 0x200F] + Array(0x202A...0x202E) + Array(0x2066...0x2069))
+
+    /// Cyrillic and Greek letters drawn like Latin ones (Unicode's confusables, the unambiguous ones), case for case.
+    private static let lookAlikeLetters: [Unicode.Scalar: Unicode.Scalar] = {
+        let pairs: [(UInt32, Character)] = [
+            // Cyrillic capitals, then small letters.
+            (0x0410, "A"), (0x0412, "B"), (0x0415, "E"), (0x041A, "K"), (0x041C, "M"), (0x041D, "H"), (0x041E, "O"), (0x0420, "P"),
+            (0x0421, "C"), (0x0422, "T"), (0x0425, "X"), (0x0423, "Y"), (0x04AE, "Y"), (0x0405, "S"), (0x0406, "I"), (0x0408, "J"), (0x0417, "3"),
+            (0x0430, "a"), (0x0435, "e"), (0x043E, "o"), (0x0440, "p"), (0x0441, "c"), (0x0443, "y"), (0x0445, "x"), (0x0455, "s"),
+            (0x0456, "i"), (0x0458, "j"), (0x04BB, "h"), (0x0501, "d"), (0x051B, "q"), (0x051D, "w"), (0x04AF, "y"),
+            // Greek capitals, then small letters.
+            (0x0391, "A"), (0x0392, "B"), (0x0395, "E"), (0x0396, "Z"), (0x0397, "H"), (0x0399, "I"), (0x039A, "K"), (0x039C, "M"),
+            (0x039D, "N"), (0x039F, "O"), (0x03A1, "P"), (0x03A4, "T"), (0x03A5, "Y"), (0x03A7, "X"),
+            (0x03BF, "o"), (0x03BD, "v"), (0x03C1, "p"), (0x03B9, "i"), (0x03C5, "u"), (0x03C7, "x"), (0x03B1, "a"),
+            // Latin letters from other blocks: dotless i, small capital I, script g.
+            (0x0131, "i"), (0x026A, "I"), (0x0261, "g"),
+        ]
+        var map: [Unicode.Scalar: Unicode.Scalar] = [:]
+        for (code, latin) in pairs { if let scalar = Unicode.Scalar(code) { map[scalar] = latin.unicodeScalars.first! } }
+        return map
+    }()
+
+    /// Digits and letters drawn alike in most fonts: 0 as O; 1, I and | as l.
+    private static let lookAlikeDigits: [Unicode.Scalar: Unicode.Scalar] = ["0": "O", "1": "l", "I": "l", "|": "l"]
 
     /// The curated dollar stables, by contract address. A token is one of them only by its address: anyone can deploy a
     /// token called "USDC".
