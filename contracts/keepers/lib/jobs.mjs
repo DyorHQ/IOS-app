@@ -6,6 +6,12 @@
 // Robustness rules (2026-09-26 ops audit): one failing read never ends a run. Every cohort, launchpad and item is
 // isolated (`guard`): a failure becomes a critical alert and the job moves on, so a rate limit on one read cannot
 // starve the items after it. Log scans run after every retry and adapt their range to the RPC's cap.
+//
+// Build 17, K2: an RPC failure (HTTP error, timeout, rate limit) is never mistaken for a chain answer. A simulation or
+// an optional read that fails that way skips the item for this run instead of being read as "reverts" (which could
+// send the v4 fallback of a launch whose Monday graduation works) or as "function missing"; such alerts are marked
+// `rpc` and the run collapses them into one "RPC degraded" warning (rpc.mjs). With --logs-cursor the scans start
+// where the previous run stopped (cursor.mjs).
 import {
   momentsFactoryAbi,
   momentsFactoryV1Abi,
@@ -49,6 +55,8 @@ import {
 import { formatEther } from "viem";
 import { MinedRevert, SendStatusUnknown } from "./send.mjs";
 import { nowSeconds, recordSpend } from "./budget.mjs";
+import { isTransportError } from "./rpc.mjs";
+import { DEFAULT_LOGS_CHUNK, DEFAULT_LOGS_MAX_BLOCKS, planScan, readCursor, writeCursor } from "./cursor.mjs";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 /** Gas for a Monday graduate / graduateFallback: just under Monad's 30M per-transaction cap. Monad bills the limit
@@ -61,30 +69,35 @@ function errText(e) {
   return (e?.shortMessage || e?.message || String(e)).split("\n")[0];
 }
 
+/** A simulation: `ok: false` when the chain says the call reverts. An RPC failure throws (the item is skipped). */
 async function simulate(client, req) {
   try {
     const r = await client.simulateContract(req);
     return { ok: true, result: r.result };
   } catch (e) {
+    if (isTransportError(e)) throw e;
     return { ok: false, error: errText(e) };
   }
 }
 
-/** A read whose failure is expected on some deployments (a function the live or legacy bytecode lacks). */
+/** A read whose failure is expected on some deployments (a function the live or legacy bytecode lacks). An RPC failure
+    is not that, and throws. */
 async function readOr(client, req, fallback) {
   try {
     return await client.readContract(req);
-  } catch {
+  } catch (e) {
+    if (isTransportError(e)) throw e;
     return fallback;
   }
 }
 
-/** Runs one unit of work (a cohort, a launchpad, a Moment, a launch); a failure is a critical alert, not the end. */
+/** Runs one unit of work (a cohort, a launchpad, a Moment, a launch); a failure is a critical alert, not the end. An
+    RPC failure is marked `rpc`: the run collapses those into one "RPC degraded" alert. */
 async function guard(reporter, job, target, fn) {
   try {
     await fn();
   } catch (e) {
-    reporter.alert({ job, target, severity: "critical", reason: `could not be checked (read failed): ${errText(e)}` });
+    reporter.alert({ job, target, severity: "critical", reason: `could not be checked (read failed): ${errText(e)}`, ...(isTransportError(e) ? { rpc: true } : {}) });
   }
 }
 
@@ -146,11 +159,12 @@ async function now(client) {
 }
 
 /**
- * eth_getLogs over [from, to] in chunks of at most `chunk` blocks. An RPC that caps the range (rpc.monad.xyz answers
- * more than 100 blocks with -32614 "eth_getLogs is limited to a 100 range") makes the chunk halve and retry, down to
- * one block; any other error is thrown.
+ * eth_getLogs over [from, to] in chunks of at most `chunk` blocks, each an inclusive span (end = start + chunk - 1:
+ * rpc3 and rpc4 accept 1,000 blocks that way and refuse 1,001 with -32062 / -32614). An RPC that caps the range
+ * (rpc.monad.xyz answers more than 100 blocks with -32614 "eth_getLogs is limited to a 100 range") makes the chunk
+ * halve and retry, down to one block; an RPC failure (rate limit, timeout) or any other error is thrown.
  */
-export async function getLogsChunked(client, { from, to, chunk = 100n, ...filter }) {
+export async function getLogsChunked(client, { from, to, chunk = DEFAULT_LOGS_CHUNK, ...filter }) {
   const out = [];
   let size = chunk > 0n ? chunk : 1n;
   for (let start = from; start <= to; ) {
@@ -160,7 +174,7 @@ export async function getLogsChunked(client, { from, to, chunk = 100n, ...filter
       start = end + 1n;
     } catch (e) {
       const text = `${e?.shortMessage ?? ""} ${e?.details ?? ""} ${e?.message ?? ""}`;
-      if (size > 1n && /range|limit|too many|exceed/i.test(text)) {
+      if (size > 1n && !isTransportError(e) && /range|limit|too many|exceed/i.test(text)) {
         size /= 2n;
         continue;
       }
@@ -170,9 +184,59 @@ export async function getLogsChunked(client, { from, to, chunk = 100n, ...filter
   return out;
 }
 
-async function lookbackRange(client, lookback) {
+/** The log-scan options of a job (see cursor.mjs); scanning is on with a lookback, a cursor or a start block. */
+function logOptions({ logsLookback = 0n, logsChunk = DEFAULT_LOGS_CHUNK, logsCursor = false, logsFrom, logsMaxBlocks = DEFAULT_LOGS_MAX_BLOCKS, logsUntil, logsNow = Date.now }) {
+  return {
+    lookback: logsLookback,
+    chunk: logsChunk > 0n ? logsChunk : 1n,
+    cursor: logsCursor,
+    from: logsFrom,
+    maxBlocks: logsMaxBlocks,
+    until: logsUntil,
+    now: logsNow,
+    enabled: logsCursor || logsFrom !== undefined || logsLookback > 0n,
+  };
+}
+
+/** The share of the scan time left that scan `i` of `n` (run one after another) may use, so a long catch-up of the first
+    scan never starves the others. */
+function shareOf(logs, i, n) {
+  if (logs.until === undefined) return logs;
+  const left = logs.until - logs.now();
+  return { ...logs, until: left > 0 ? logs.now() + left / (n - i) : logs.until };
+}
+
+/**
+ * One log scan. Ad hoc (no cursor): [head - lookback, head] in one go, all or nothing. With a cursor: from just after
+ * the cursor, chunk by chunk; after each chunk its logs are handed to `onLogs` and only then the cursor moves to the
+ * chunk's last block, so no block is ever skipped. A scan that stops before the head (the --logs-max-blocks cap, or
+ * `until`: the share of --max-runtime scans may use) raises a "scan behind" warning and the next run continues.
+ */
+async function scanLogs({ client, reporter, state, job, scanId, label, logs, fetchRange, onLogs }) {
   const head = await client.getBlockNumber();
-  return { from: head > lookback ? head - lookback : 0n, to: head };
+  const plan = planScan({ cursor: logs.cursor ? readCursor(state, scanId) : undefined, head, from: logs.from, lookback: logs.lookback, maxBlocks: logs.maxBlocks, useCursor: logs.cursor });
+  if (!plan || plan.empty) return;
+  if (!logs.cursor) {
+    onLogs(await fetchRange(plan.from, plan.to));
+    return;
+  }
+  let done = plan.from - 1n;
+  let outOfTime = false;
+  while (done < plan.to) {
+    if (logs.until !== undefined && logs.now() >= logs.until) {
+      outOfTime = true;
+      break;
+    }
+    const start = done + 1n;
+    const end = start + logs.chunk - 1n < plan.to ? start + logs.chunk - 1n : plan.to;
+    onLogs(await fetchRange(start, end));
+    done = end;
+    writeCursor(state, scanId, done);
+  }
+  if (head > done) {
+    const why = outOfTime ? "it used its share of --max-runtime" : `at most --logs-max-blocks ${logs.maxBlocks} per run`;
+    reporter.alert({ job, target: label, severity: "warning", key: `logs:behind:${scanId}`, reason: `log scan is ${head - done} blocks behind the head (scanned through block ${done}, head ${head}; ${why}): it catches up over the next runs` });
+  }
 }
 
 // ------------------------------------------------------------------------------------------------ MO-1
@@ -214,7 +278,8 @@ async function retryMoment({ client, c, id, t, sender, reporter, state, simAccou
  * reports GraduationFailed events. The retries of ALL cohorts run before any log scan: the scan is only an alerting
  * aid, and an RPC that refuses a log range must never keep a later cohort's retry from being sent.
  */
-export async function momentsGraduationJob({ client, cohorts, sender, reporter, state, simAccount = DEFAULT_SIM_ACCOUNT, logsLookback = 0n, logsChunk = 100n, gasLimit = 5_000_000n }) {
+export async function momentsGraduationJob({ client, cohorts, sender, reporter, state, simAccount = DEFAULT_SIM_ACCOUNT, gasLimit = 5_000_000n, ...logArgs }) {
+  const logs = logOptions(logArgs);
   const t = await now(client);
   for (const c of cohorts) {
     await guard(reporter, "moments-graduation", c.label, async () => {
@@ -225,15 +290,27 @@ export async function momentsGraduationJob({ client, cohorts, sender, reporter, 
       }
     });
   }
-  if (logsLookback <= 0n) return;
-  for (const c of cohorts) {
-    await guard(reporter, "moments-graduation", `${c.label} (GraduationFailed log scan)`, async () => {
-      const range = await lookbackRange(client, logsLookback);
-      const logs = await getLogsChunked(client, { address: c.collect, event: momentCollectAbi.find((x) => x.name === "GraduationFailed"), ...range, chunk: logsChunk });
-      for (const l of logs) {
-        reporter.alert({ job: "moments-graduation", target: `${c.label} moment #${l.args.momentId}`, severity: "warning", reason: `GraduationFailed emitted in block ${l.blockNumber} (tx ${l.transactionHash})` });
-      }
-    });
+  if (!logs.enabled) return;
+  const event = momentCollectAbi.find((x) => x.name === "GraduationFailed");
+  for (const [i, c] of cohorts.entries()) {
+    const label = `${c.label} (GraduationFailed log scan)`;
+    await guard(reporter, "moments-graduation", label, () =>
+      scanLogs({
+        client,
+        reporter,
+        state,
+        job: "moments-graduation",
+        scanId: `mo1:GraduationFailed:${c.collect.toLowerCase()}`,
+        label,
+        logs: shareOf(logs, i, cohorts.length),
+        fetchRange: (from, to) => getLogsChunked(client, { address: c.collect, event, from, to, chunk: logs.chunk }),
+        onLogs: (found) => {
+          for (const l of found) {
+            reporter.alert({ job: "moments-graduation", target: `${c.label} moment #${l.args.momentId}`, severity: "warning", reason: `GraduationFailed emitted in block ${l.blockNumber} (tx ${l.transactionHash})` });
+          }
+        },
+      }),
+    );
   }
 }
 
@@ -558,7 +635,8 @@ function throttled(state, key, t, fn) {
  * (`openOnChain`, deployments.mjs) or a retired launchpad left unfrozen (0x6B1C) is reported, not alerted; treasury and
  * fee recipients are the live ones everywhere.
  */
-export async function governanceJob({ client, launchpads, cohorts, reporter, state, expected, logsLookback = 0n, logsChunk = 100n }) {
+export async function governanceJob({ client, launchpads, cohorts, reporter, state, expected, ...logArgs }) {
+  const logs = logOptions(logArgs);
   const t = await now(client);
   const job = "governance";
   const critical = (target, reason) => reporter.alert({ job, target, severity: "critical", reason });
@@ -631,18 +709,29 @@ export async function governanceJob({ client, launchpads, cohorts, reporter, sta
       }
     });
   }
-  if (logsLookback <= 0n) return;
-  await guard(reporter, job, "governance event scan", async () => {
-    const range = await lookbackRange(client, logsLookback);
-    const scans = [
-      [launchpads.map((l) => l.factory), events([launchpadFactoryAbi, launchpadFactoryV2Abi], LAUNCHPAD_GOV_EVENTS)],
-      [launchpads.map((l) => l.feeVault).filter((a) => a && !eqAddr(a, ZERO)), events([mondayFeeVaultAbi], VAULT_GOV_EVENTS)],
-      [cohorts.map((c) => c.factory), events([momentsFactoryAbi, momentsFactoryV1Abi, momentsFactoryV2Abi], MOMENTS_GOV_EVENTS)],
-    ];
-    for (const [address, evs] of scans) {
-      if (address.length === 0) continue;
-      const logs = await getLogsChunked(client, { address, events: evs, ...range, chunk: logsChunk });
-      for (const l of logs) critical(l.address, `governance event ${l.eventName} in block ${l.blockNumber} (tx ${l.transactionHash})${eventDetail(l)}`);
-    }
-  });
+  if (!logs.enabled) return;
+  // One scan (and one cursor) per contract kind, so each keeps its own progress.
+  const scans = [
+    ["launchpads", launchpads.map((l) => l.factory), events([launchpadFactoryAbi, launchpadFactoryV2Abi], LAUNCHPAD_GOV_EVENTS)],
+    ["fee vaults", launchpads.map((l) => l.feeVault).filter((a) => a && !eqAddr(a, ZERO)), events([mondayFeeVaultAbi], VAULT_GOV_EVENTS)],
+    ["moments", cohorts.map((c) => c.factory), events([momentsFactoryAbi, momentsFactoryV1Abi, momentsFactoryV2Abi], MOMENTS_GOV_EVENTS)],
+  ].filter(([, address]) => address.length > 0);
+  for (const [i, [kind, address, evs]] of scans.entries()) {
+    const label = `governance event scan (${kind})`;
+    await guard(reporter, job, label, () =>
+      scanLogs({
+        client,
+        reporter,
+        state,
+        job,
+        scanId: `gov:${kind.replace(" ", "-")}`,
+        label,
+        logs: shareOf(logs, i, scans.length),
+        fetchRange: (from, to) => getLogsChunked(client, { address, events: evs, from, to, chunk: logs.chunk }),
+        onLogs: (found) => {
+          for (const l of found) critical(l.address, `governance event ${l.eventName} in block ${l.blockNumber} (tx ${l.transactionHash})${eventDetail(l)}`);
+        },
+      }),
+    );
+  }
 }

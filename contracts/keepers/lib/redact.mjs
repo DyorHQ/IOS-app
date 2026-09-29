@@ -23,9 +23,14 @@ export function rpcLabel(url) {
   }
 }
 
-/** Replaces every `secrets` entry by `[redacted]`, then every http(s)/ws(s) URL left in `text` by its label. */
+/** Replaces every `secrets` entry (a configured URL by its label, anything else by `[redacted]`), then every
+    http(s)/ws(s) URL left in `text` by its label. */
 export function redact(text, secrets = []) {
   let s = String(text);
-  for (const secret of secrets) if (secret) s = s.split(String(secret)).join("[redacted]");
+  for (const secret of secrets) {
+    if (!secret) continue;
+    const str = String(secret);
+    s = s.split(str).join(/^(?:https?|wss?):\/\//i.test(str) ? rpcLabel(str) : "[redacted]");
+  }
   return s.replace(/\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi, (m) => rpcLabel(m));
 }

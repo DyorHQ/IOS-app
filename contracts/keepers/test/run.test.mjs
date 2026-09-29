@@ -85,6 +85,7 @@ function world({ client = chain(), signer = SIGNER, sends = [], posts = [], line
       makeClient: () => client,
       makeSenderFn: fakeSender(sends),
       signerAddressFn: () => signer,
+      pickRpc: async (urls) => ({ url: urls[0], healthy: true }),
       fetchImpl: async (url, init) => (posts.push({ url, body: JSON.parse(init.body) }), { ok: true, status: 204 }),
     },
   };
@@ -148,9 +149,10 @@ test("E7: a dry run checks the balance of --sim-from when given, and reads none 
 
 test("the run header names the RPC by its origin only, and the sending address", async () => {
   const w = world();
-  await runKeeper(opts(["moments-graduation", "--only-live"], { rpcUrl: "https://monad.example/v2/FAKE_KEY_123", send: true, signer: { account: "k" } }), w.deps);
+  const keyed = "https://monad.example/v2/FAKE_KEY_123";
+  await runKeeper(opts(["moments-graduation", "--only-live", "--rpc-url", keyed, "--rpc-url", "https://rpc4.monad.xyz"], { send: true, signer: { account: "k" } }), w.deps);
   const header = w.lines.find((l) => l.startsWith("keeper:"));
-  assert.equal(header, `keeper: moments-graduation · SEND · rpc https://monad.example/… · from ${SIGNER}`);
+  assert.equal(header, `keeper: moments-graduation · SEND · rpc https://monad.example/… → https://rpc4.monad.xyz · cast via https://monad.example/… · from ${SIGNER}`);
   assert.ok(!w.lines.join("\n").includes("FAKE_KEY_123"));
 });
 

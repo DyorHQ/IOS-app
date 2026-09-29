@@ -1,33 +1,40 @@
 // One keeper run, from parsed options (lib/options.mjs) to an exit code. keeper.mjs is only the command-line wrapper,
 // so every rule here is tested with a mocked chain, sender and webhook (test/run.test.mjs).
 //
+// Build 17, K2 ("scans see every block"): reads fall back across the --rpc-url list, cast sends through the first one
+// that answers as chain 143, and the run's RPC read failures become one "RPC degraded" alert (critical after 3 runs in
+// a row) instead of one critical per item. The log scans take their cursor options from here, and may use half of
+// --max-runtime.
+//
 // Build 17, K1 ("sends are honest"):
 //  - E7: in send mode the sending address is derived from the signer itself; a different --sim-from refuses the run,
 //    and the balance check always runs for the address that pays.
 //  - E6: the state file is loaded and written atomically; a corrupt one is a warning, moved aside.
 //  - E9: the run has a deadline (--max-runtime): past it the run stops sending, saves its state, raises a critical
 //    alert and exits 1. A watchdog (--role watchdog) never sends and marks every post.
-import { createPublicClient, http, formatEther, parseEther } from "viem";
+import { formatEther, parseEther } from "viem";
 import { momentsCohorts, launchpads, pinMismatches } from "./deployments.mjs";
 import { makeSender, assertNoKeyEnv, signerAddress } from "./send.mjs";
 import { makeReporter, postWebhook, loadState, saveState, EXIT } from "./report.mjs";
 import { redact, rpcLabel } from "./redact.mjs";
 import { momentsGraduationJob, buybacksJob, sweepsJob, launchpadGraduationJob, governanceJob } from "./jobs.mjs";
+import { makeRpcClient, firstHealthy, isTransportError, rpcDegradedAlert } from "./rpc.mjs";
 
 // The metadata base the live Moments cohort (v2, cohort 4) was deployed with: part of its terms hash, and what the app
 // reads as cohort c4 in a Moment's link.
 export const LIVE_EXTERNAL_BASE_URI = "https://dyorhq.fun/moments/c4/";
 
 function defaultClient(o) {
-  return createPublicClient({ transport: http(o.rpcUrl, { retryCount: 3, retryDelay: 500 }) });
+  return makeRpcClient(o.rpcUrls);
 }
 
 const errText = (e) => (e?.shortMessage || e?.message || String(e)).split("\n")[0];
 const eqAddr = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 
 /**
- * Runs the keeper. `deps` replaces the outside world in tests: `log`, `env`, `makeClient(o)`, `makeSenderFn`,
- * `signerAddressFn`, `fetchImpl` and `now` (ms). Resolves to an exit code (EXIT); throws when the keeper itself
+ * Runs the keeper. `deps` replaces the outside world in tests: `log`, `env`, `makeClient(o)` (a viem-like client, or
+ * `{ client, stats }`), `makeSenderFn`, `signerAddressFn`, `pickRpc(urls)` (the URL cast sends through), `fetchImpl`
+ * and `now` (ms). Resolves to an exit code (EXIT); throws when the keeper itself
  * cannot run (the caller exits 1).
  */
 export async function runKeeper(o, deps = {}) {
@@ -40,14 +47,19 @@ export async function runKeeper(o, deps = {}) {
     fetchImpl = globalThis.fetch,
     now = Date.now,
   } = deps;
+  const pickRpc = deps.pickRpc ?? ((urls) => firstHealthy(urls, { fetchImpl }));
+  const rpcUrls = o.rpcUrls ?? [o.rpcUrl];
+  const startedAt = now();
   // Nothing printed, logged or posted may carry the RPC or webhook URL (either can embed an API key).
-  const scrub = (s) => redact(s, [o.rpcUrl, o.webhook]);
+  const scrub = (s) => redact(s, [...rpcUrls, o.webhook]);
   const say = (s) => log(scrub(s));
   if (o.role === "watchdog" && o.send) throw new Error("--role watchdog never sends: drop --send");
   assertNoKeyEnv(env); // even in dry-run: a key in the environment is a mistake worth stopping on
   const prefix = o.role === "watchdog" ? "[watchdog] " : "";
   const reporter = makeReporter({ log, scrub });
-  const run = { state: undefined, stopped: false, current: "setup" };
+  const run = { state: undefined, stopped: false, current: "setup", rpcStats: {} };
+  // A read of the keeper's own (not a job's) that failed: an RPC failure is counted for the "RPC degraded" alert.
+  const keeperReadFailed = (target, what, e) => reporter.alert({ job: "keeper", target, severity: "critical", reason: `${what}: ${errText(e)}`, ...(isTransportError(e) ? { rpc: true } : {}) });
 
   const work = async () => {
     run.state = loadState(o.stateFile, {
@@ -55,8 +67,17 @@ export async function runKeeper(o, deps = {}) {
       onProblem: (why) => reporter.alert({ job: "keeper", target: "state file", severity: "warning", reason: why }),
     });
     const state = run.state;
-    const client = makeClient(o);
-    const inner = makeSenderFn({ send: o.send, rpcUrl: o.rpcUrl, signer: o.signer, allowUnlocked: o.allowUnlocked, log: say });
+    const made = makeClient({ ...o, rpcUrls });
+    const client = made?.client ?? made;
+    run.rpcStats = made?.stats ?? {};
+    // cast takes one URL: the first endpoint that answers as Monad (reads fall back on their own).
+    let castRpc = rpcUrls[0];
+    if (o.send) {
+      const pick = await pickRpc(rpcUrls);
+      castRpc = pick.url;
+      if (!pick.healthy) reporter.info(`no RPC answered as chain 143; cast sends through ${rpcLabel(castRpc)}`);
+    }
+    const inner = makeSenderFn({ send: o.send, rpcUrl: castRpc, signer: o.signer, allowUnlocked: o.allowUnlocked, log: say });
     // Once the deadline has passed nothing more is sent, even if a job is still awaiting a read.
     const sender = {
       ...inner,
@@ -83,15 +104,29 @@ export async function runKeeper(o, deps = {}) {
       pads = pads.filter((p) => p.live);
     }
     const common = { client, sender, reporter, state, simAccount: simFrom };
+    const logArgs = {
+      logsLookback: o.logsLookback,
+      logsChunk: o.logsChunk,
+      logsCursor: o.logsCursor,
+      logsFrom: o.logsFrom,
+      logsMaxBlocks: o.logsMaxBlocks,
+      // Scans stop starting new chunks at half the deadline, so a long catch-up never overruns the run.
+      logsUntil: startedAt + (o.maxRuntime * 1000) / 2,
+      logsNow: now,
+    };
 
-    log(`keeper: ${o.jobs.join(", ")} · ${o.send ? "SEND" : "dry-run"}${o.role === "watchdog" ? " · watchdog" : ""} · rpc ${rpcLabel(o.rpcUrl)}${simFrom ? ` · from ${simFrom}` : ""}`);
+    log(`keeper: ${o.jobs.join(", ")} · ${o.send ? "SEND" : "dry-run"}${o.role === "watchdog" ? " · watchdog" : ""} · rpc ${rpcUrls.map(rpcLabel).join(" → ")}${o.send ? ` · cast via ${rpcLabel(castRpc)}` : ""}${simFrom ? ` · from ${simFrom}` : ""}`);
     run.current = "records";
     for (const m of pinMismatches({ cohorts: [liveCohort], pads: [liveLaunchpad] })) {
       reporter.alert({ job: "records", target: m.file, severity: "critical", reason: `live record names factory ${m.recorded} but the keeper pins ${m.pinned}: a deploy script or a hand edit replaced the record` });
     }
     for (const r of [liveLaunchpad, liveCohort]) {
-      // An RPC error here is left to the jobs (they alert on every failed read); only a definite "no code" alerts.
-      const code = await client.getCode({ address: r.factory }).catch(() => null);
+      // Only a definite "no code" alerts; an RPC failure counts toward "RPC degraded", any other error is left to the
+      // jobs (they alert on every failed read).
+      const code = await client.getCode({ address: r.factory }).catch((e) => {
+        if (isTransportError(e)) keeperReadFailed(r.file, "the factory's code could not be read", e);
+        return null;
+      });
       if (code !== null && (!code || code === "0x")) reporter.alert({ job: "records", target: r.file, severity: "critical", reason: `no contract code at the recorded factory ${r.factory} on this RPC` });
     }
     if (simFrom) {
@@ -100,7 +135,8 @@ export async function runKeeper(o, deps = {}) {
       try {
         bal = await client.getBalance({ address: simFrom });
       } catch (e) {
-        reporter.alert({ job: "keeper", target: simFrom, severity: "warning", reason: `the keeper balance could not be read: ${errText(e)}` });
+        if (isTransportError(e)) keeperReadFailed(simFrom, "the keeper balance could not be read", e);
+        else reporter.alert({ job: "keeper", target: simFrom, severity: "warning", reason: `the keeper balance could not be read: ${errText(e)}` });
       }
       if (bal !== undefined) {
         reporter.info(`keeper ${simFrom}: ${formatEther(bal)} MON`);
@@ -114,7 +150,7 @@ export async function runKeeper(o, deps = {}) {
       run.current = job;
       log(`== ${job}`);
       try {
-        if (job === "moments-graduation") await momentsGraduationJob({ ...common, cohorts, logsLookback: o.logsLookback, logsChunk: o.logsChunk });
+        if (job === "moments-graduation") await momentsGraduationJob({ ...common, cohorts, ...logArgs });
         if (job === "buybacks") await buybacksJob({ ...common, cohorts, slippageBps: o.slippageBps, lockerIdleAlert: o.lockerIdleAlert });
         if (job === "sweeps") await sweepsJob({ ...common, launchpads: pads, minOther: o.minSweepOther });
         if (job === "launchpad-graduation") await launchpadGraduationJob({ ...common, launchpads: pads, watchProgressBps: o.watchProgressBps });
@@ -126,11 +162,11 @@ export async function runKeeper(o, deps = {}) {
             momentsGovernance: liveCohort.governance,
             externalBaseURI: LIVE_EXTERNAL_BASE_URI,
           };
-          await governanceJob({ ...common, launchpads: pads, cohorts, expected, logsLookback: o.logsLookback, logsChunk: o.logsChunk });
+          await governanceJob({ ...common, launchpads: pads, cohorts, expected, ...logArgs });
         }
       } catch (e) {
         // A job-level failure (e.g. the RPC is down) is reported and the next job still runs.
-        reporter.alert({ job, target: "job", severity: "critical", reason: `job failed: ${e?.shortMessage || e?.message || e}` });
+        reporter.alert({ job, target: "job", severity: "critical", reason: `job failed: ${e?.shortMessage || e?.message || e}`, ...(isTransportError(e) ? { rpc: true } : {}) });
       }
     }
     return common.sender;
@@ -152,9 +188,15 @@ export async function runKeeper(o, deps = {}) {
     run.stopped = true;
     reporter.alert({ job: "keeper", target: "run", severity: "critical", reason: `the run exceeded --max-runtime ${o.maxRuntime}s during ${run.current} and was stopped before it finished: check the RPC and the host` });
   }
+  // E5: the items an RPC failure skipped stay on stdout one by one, but are posted as a single alert.
+  const rpcFailed = reporter.alerts.filter((a) => a.rpc);
+  const skipped = rpcFailed.map((a) => (a.target === "job" ? `${a.job} (the whole job)` : a.target));
+  const degraded = rpcDegradedAlert(run.state ?? {}, { failures: rpcFailed.length, skipped, stats: run.rpcStats });
+  if (degraded) reporter.alert(degraded);
+  for (const [label, s] of Object.entries(run.rpcStats)) if (s.failed) reporter.info(`rpc ${label} failed ${s.failed}, served ${s.served}`);
   if (run.state) saveState(o.stateFile, run.state);
   const serious = reporter.alerts.filter((a) => a.severity !== "info");
-  await postWebhook(o.webhook, serious, { fetchImpl, prefix });
+  await postWebhook(o.webhook, serious.filter((a) => !a.rpc), { fetchImpl, prefix });
   log(`done: ${reporter.actions.length} action(s), ${reporter.alerts.length} alert(s) (${serious.length} warning/critical)`);
   if (outcome === "overrun") return EXIT.ERROR;
   return serious.length ? EXIT.ALERT : EXIT.OK;
