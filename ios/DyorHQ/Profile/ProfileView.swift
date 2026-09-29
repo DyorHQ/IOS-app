@@ -487,9 +487,9 @@ struct SendSheet: View {
     private static func readGap(complete: Bool, pricesFailed: Bool) -> String? {
         switch (complete, pricesFailed) {
         case (true, false): return nil
-        case (true, true): return "Prices couldn't be read, so values are missing and no token was picked for you."
+        case (true, true): return "Some prices couldn't be read, so values are missing and no token was picked for you."
         case (false, false): return "Part of your wallet couldn't be read, so a token may be missing from the list."
-        case (false, true): return "Prices and part of your wallet couldn't be read, so values and tokens may be missing, and no token was picked for you."
+        case (false, true): return "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no token was picked for you."
         }
     }
 

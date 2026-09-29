@@ -111,28 +111,35 @@ public enum WalletHoldings {
         }
     }
 
-    /// `prices` (USD per whole token, from the pool finder) with DyorHQ's own coins valued as the app values them
-    /// everywhere else (Home, the Portfolio's history), which the pool finder can't: a launch coin (`launches`, found by
-    /// its factory's record) at its launch's price — its curve's, or its pool's once graduated — in its pair asset, times
-    /// that asset's dollar price in `prices`; a Moment coin (`moments`) at its pool's USDC price. Such a coin is never
-    /// valued at a price another pool quotes for it: without the app's own value (a pair asset with no price, a Moment
-    /// with no pool read) it is unpriced.
-    public static func pricing(_ prices: [Address: Double], launches: [Address: Launch], moments: [Address: Double?]) -> [Address: Double] {
+    /// `prices` (USD per whole token, from the pool finder) with DyorHQ's own coins valued as the app values them, which
+    /// the pool finder can't: a launch coin (`launches`, found by its factory's record) at its live price in its pair
+    /// asset (`HeldLaunches.pairPerCoin`: its curve's, or its pool's once graduated) times that asset's dollar price in
+    /// `prices`; a Moment coin (`moments`) at its pool's USDC price. Such a coin is never valued at a price another pool
+    /// quotes for it: without the app's own value (a launch or price that couldn't be read, a pair asset with no price, a
+    /// Moment with no pool read) it is unpriced.
+    public static func pricing(_ prices: [Address: Double], launches: HeldLaunches, moments: [Address: Double?]) -> [Address: Double] {
         var out = prices
-        for (coin, launch) in launches {
-            let pair = launch.pair.isNative ? prices[Monad.native] : prices[launch.pairToken]
-            out[coin] = pair.map { LaunchpadService.priceNumber(launch) * $0 }
+        for (coin, pair) in launches.pairAssets {
+            // MON's price is under its address, 0 — the pair asset a native launch records.
+            let usd = launches.pairPerCoin[coin].flatMap { perCoin in prices[pair].map { perCoin * $0 } }
+            out[coin] = usd.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         }
         for (coin, usdcPerCoin) in moments { out[coin] = usdcPerCoin }
         return out
     }
 
-    /// `unverified` without the DyorHQ coins that are `owner`'s own: a launch coin it launched (its factory records the
-    /// wallet as deployer — the factory's caller, or the launch router's, never an argument) and a Moment coin whose Moment
-    /// it collected or created (`staked`: a stake in the Moment's vesting). The factories name each coin by its address,
-    /// so no look-alike passes for one; a coin that was only sent to the wallet stays Unverified.
-    public static func unverified(_ unverified: Set<Address>, owner: Address, launches: [Address: Launch], staked: Set<Address>) -> Set<Address> {
-        unverified.subtracting(launches.filter { $0.value.deployer == owner }.keys).subtracting(staked)
+    /// The DyorHQ coins that are `owner`'s own: a launch coin it launched (its factory records the wallet as deployer —
+    /// the factory's caller, or the launch router's, never an argument) and a Moment coin whose Moment it collected or
+    /// created (`staked`: a stake in the Moment's vesting). The factories name each coin by its address, so no look-alike
+    /// passes for one; a coin that was only sent to the wallet is not its own.
+    public static func ownCoins(owner: Address, launches: HeldLaunches, staked: Set<Address>) -> Set<Address> {
+        Set(launches.deployers.filter { $0.value == owner }.keys).union(staked)
+    }
+
+    /// `unverified` without the DyorHQ coins that are `owner`'s own (`ownCoins`): a coin that was only sent to the wallet
+    /// stays Unverified.
+    public static func unverified(_ unverified: Set<Address>, owner: Address, launches: HeldLaunches, staked: Set<Address>) -> Set<Address> {
+        unverified.subtracting(ownCoins(owner: owner, launches: launches, staked: staked))
     }
 
     /// The curated token `token` could pass for: `token` is not curated, yet its symbol or name is a curated token's

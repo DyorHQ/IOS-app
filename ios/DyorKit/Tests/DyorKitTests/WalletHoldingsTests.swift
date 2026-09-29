@@ -226,10 +226,8 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(send.contains("DetailRow(\"Token contract\", review.token.address.checksummed, spellsOut: true)"))
         XCTAssertTrue(send.contains("if let listed = review.imitates { DetailRow(\"Token\", \"Not the \\(listed.symbol) DyorHQ lists\", tint: .attention) }"))
         XCTAssertTrue(assets.contains("WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes)"), "the Portfolio keeps its order")
-        // Both lists value DyorHQ's own coins the app's way.
+        // Both lists value DyorHQ's own coins the app's way (`AppCoinValueTests`).
         let tokens = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
-        XCTAssertTrue(tokens.contains("(try? await launchpad.recordedLaunches(candidates)) ?? [:]"))
-        XCTAssertTrue(tokens.contains("WalletHoldings.pricing(prices.mapValues(\\.usd), launches: own.launches, moments: own.moments.mapValues { $0.pool?.usdcPerCoin })"))
         XCTAssertTrue(tokens.contains("prices: valued, unverified:"))
         // The wallet's own launches and Moments aren't Unverified, in both lists; a curve buy records its coin as chosen.
         XCTAssertTrue(tokens.contains("let unverified = WalletHoldings.unverified(read.unverified, owner: read.owner, launches: own.launches, staked: own.staked)"))
@@ -313,9 +311,9 @@ final class TokenTransferTests: XCTestCase {
     }
 }
 
-/// DyorHQ's own coins are valued as the app values them everywhere else, not left unpriced below priced dust: a launch
-/// coin at its launch's price in its pair asset, a Moment coin at its pool's USDC price (`WalletHoldings.pricing`), from
-/// the launch each held coin's factory recorded (`LaunchpadService.recordedLaunches`).
+/// DyorHQ's own coins are valued as the app values them, not left unpriced below priced dust: a launch coin at its live
+/// price in its pair asset, a Moment coin at its pool's price (`WalletHoldings.pricing`), from the launch each held
+/// coin's factory recorded (`LaunchpadService.heldLaunches`).
 final class AppCoinValuationTests: XCTestCase {
     private let launchCoin = Token(address: Address(literal: "0x00000000000000000000000000000000000c1001"), symbol: "GRAD", name: "Graduated", decimals: 18, isLaunchpad: true)
     private let monCoin = Token(address: Address(literal: "0x00000000000000000000000000000000000c1002"), symbol: "CURVE", name: "On a curve", decimals: 18, isLaunchpad: true)
@@ -347,28 +345,43 @@ final class AppCoinValuationTests: XCTestCase {
         let unvalued = WalletHoldings.ranked(universe, balances: balances, prices: pools, unverified: [])
         XCTAssertEqual(unvalued.map(\.token.symbol), ["MON", "GRAD", "NATURE"], "the pool finder alone: both coins unpriced, below MON")
 
-        // 0.0002 USDC per coin (the pair's 6 decimals); the Moment's pool at $0.02.
-        let launches = [launchCoin.address: launch(launchCoin, pair: usdcPair, price: 200)]
+        // 0.0002 USDC per coin, live; the Moment's pool at $0.02.
+        let launches = held([launchCoin.address: launch(launchCoin, pair: usdcPair, price: 200)], prices: [launchCoin.address: 0.0002])
         let priced = WalletHoldings.pricing(pools.merging([Monad.usdc: 1]) { a, _ in a }, launches: launches, moments: [momentCoin.address: 0.02])
         let ranked = WalletHoldings.ranked(universe, balances: balances, prices: priced, unverified: [])
         XCTAssertEqual(ranked.map(\.token.symbol), ["GRAD", "NATURE", "MON"])
         XCTAssertEqual(ranked[0].value ?? 0, 400, accuracy: 1e-6)
         XCTAssertEqual(ranked[1].value ?? 0, 30, accuracy: 1e-9)
         XCTAssertEqual(WalletHoldings.defaultChoice(ranked)?.token, launchCoin, "the highest-value asset is the default")
-        XCTAssertEqual(LaunchpadService.priceNumber(launches[launchCoin.address]!) * 1, priced[launchCoin.address], "Home's formula: the launch price times the pair's dollar price")
+        XCTAssertEqual(try XCTUnwrap(priced[launchCoin.address]), 0.0002, accuracy: 1e-15, "the live price in the pair, times the pair's dollar price")
+    }
+
+    /// `launches` as `heldLaunches` reads them: each recorded by the live factory, with its record's deployer and pair, and
+    /// `prices` as the live prices read.
+    private func held(_ launches: [Address: Launch], prices: [Address: Double]) -> HeldLaunches {
+        HeldLaunches(factories: launches.mapValues { _ in V2Fixture.launchpad.factory }, phases: launches.mapValues(\.phase), deployers: launches.mapValues(\.deployer),
+                     pairAssets: launches.mapValues(\.pairToken), launches: launches, pairPerCoin: prices)
     }
 
     func testAnAppCoinIsNeverValuedAtAnotherPoolsPrice() {
         // A MON-paired launch coin: valued through MON's price, never at the price some other pool quotes for it.
         let curve = launch(monCoin, pair: .mon, price: BigUInt(2) * BigUInt(10).power(14), phase: .bonding)
+        let launches = held([monCoin.address: curve], prices: [monCoin.address: 0.0002])
         let priced = WalletHoldings.pricing([Monad.native: 0.03, monCoin.address: 99, momentCoin.address: 99, unreadMoment.address: 99, Monad.usdc: 1],
-                                            launches: [monCoin.address: curve], moments: [momentCoin.address: 0.02, unreadMoment.address: nil])
+                                            launches: launches, moments: [momentCoin.address: 0.02, unreadMoment.address: nil])
         XCTAssertEqual(priced[monCoin.address] ?? 0, 0.0002 * 0.03, accuracy: 1e-15)
         XCTAssertEqual(priced[momentCoin.address], 0.02)
         XCTAssertNil(priced[unreadMoment.address], "a Moment whose pool wasn't read is unpriced, not the other pool's 99")
         XCTAssertEqual(priced[Monad.usdc], 1, "every other token keeps its price")
-        let noMON = WalletHoldings.pricing([monCoin.address: 99], launches: [monCoin.address: curve], moments: [:])
+        let noMON = WalletHoldings.pricing([monCoin.address: 99], launches: launches, moments: [:])
         XCTAssertNil(noMON[monCoin.address], "no price for the pair asset: unpriced")
+        // Recorded, but its launch or live price couldn't be read: unpriced, never the other pool's 99 nor $0.
+        let unread = HeldLaunches(factories: [monCoin.address: V2Fixture.launchpad.factory], phases: [monCoin.address: .bonding], deployers: [monCoin.address: .zero],
+                                  pairAssets: [monCoin.address: .zero], launches: [:], pairPerCoin: [:])
+        XCTAssertFalse(unread.complete)
+        XCTAssertNil(WalletHoldings.pricing([Monad.native: 0.03, monCoin.address: 99], launches: unread, moments: [:])[monCoin.address])
+        let zero = held([monCoin.address: curve], prices: [monCoin.address: 0])
+        XCTAssertNil(WalletHoldings.pricing([Monad.native: 0.03], launches: zero, moments: [:])[monCoin.address], "a zero price is no price")
     }
 
     /// A DyorHQ coin the wallet launched, or whose Moment it collected or created, is its own and not Unverified; the same
@@ -386,37 +399,43 @@ final class AppCoinValuationTests: XCTestCase {
                           completed: false, rescued: false, launchedAt: 0, supply: 0, marketCap: 0, progressBps: 0)
         }
         let marked: Set<Address> = [monCoin.address, airdropped.address, momentCoin.address, unreadMoment.address, spam]
-        let launches = [monCoin.address: launched(monCoin, by: owner), airdropped.address: launched(airdropped, by: stranger)]
+        let launches = held([monCoin.address: launched(monCoin, by: owner), airdropped.address: launched(airdropped, by: stranger)], prices: [:])
         let result = WalletHoldings.unverified(marked, owner: owner, launches: launches, staked: [momentCoin.address])
         XCTAssertEqual(result, [airdropped.address, unreadMoment.address, spam],
                        "its own launch and its collected Moment are its own; another's launch, a Moment it has no stake in and anything else stay marked")
         XCTAssertTrue(WalletHoldings.unverified([], owner: owner, launches: launches, staked: [momentCoin.address]).isEmpty)
+        XCTAssertEqual(WalletHoldings.ownCoins(owner: owner, launches: launches, staked: [momentCoin.address]), [monCoin.address, momentCoin.address])
+        // The deployer comes from the factory's record: a launch whose launch read failed is still the wallet's own.
+        let recordOnly = HeldLaunches(factories: [monCoin.address: V2Fixture.launchpad.factory], phases: [monCoin.address: .bonding], deployers: [monCoin.address: owner],
+                                      pairAssets: [monCoin.address: .zero], launches: [:], pairPerCoin: [:])
+        XCTAssertEqual(WalletHoldings.unverified(marked, owner: owner, launches: recordOnly, staked: []), marked.subtracting([monCoin.address]))
     }
 
-    /// A held coin's launch, found in any phase from its factory's record and read with its price; MON, the curated
-    /// tokens and coins no factory recorded are left out, and a read that fails throws.
-    func testRecordedLaunchesFindHeldCoinsInAnyPhase() async throws {
+    /// A held coin's launch, found in any phase from its factory's record, on the live launchpad or a retired one; MON,
+    /// the curated tokens and coins no factory recorded are left out, and a read that fails throws. (This fixture answers
+    /// no live price: the coin is recorded and read, and unpriced.)
+    func testHeldLaunchesFindHeldCoinsInAnyPhase() async throws {
         let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: V2Fixture.launchpad, logsRPC: MomentsChainStub.rpc())
         let stranger = Token(address: Address(literal: "0x00000000000000000000000000000000000c0300"), symbol: "NEW", name: "New coin", decimals: 18)
-        for phase in [LaunchPhase.bonding, .graduated, .refund] {
-            let chain = CurveCoinChain(stack: V2Fixture.launchpad, phase: phase, rescued: phase == .refund)
-            let coin = Token(address: chain.coin, symbol: "OLD", name: "Old coin", decimals: 18, isLaunchpad: true)
-            MomentsChainStub.install(chain.answer)
-            let found = try await service.recordedLaunches([.mon, .usdc, coin, stranger, coin])
-            XCTAssertEqual(Array(found.keys), [chain.coin], "\(phase)")
-            let launch = try XCTUnwrap(found[chain.coin])
-            XCTAssertEqual(launch.phase, phase)
-            XCTAssertEqual(launch.price, 1_000, "\(phase): the curve's price (no pool read in this fixture)")
-            XCTAssertEqual(launch.factory, V2Fixture.launchpad.factory)
-            let asked = Set(MomentsChainStub.batches().first?.map(\.to) ?? [])
-            XCTAssertEqual(asked, Set(CurveCoinChain.factories.map(\.factory)), "\(phase): the coin and the stranger, asked of every factory; MON and USDC never")
+        for stack in [V2Fixture.launchpad] + LaunchpadAddresses.retiredStacks {
+            for phase in [LaunchPhase.bonding, .graduated, .refund] {
+                let chain = CurveCoinChain(stack: stack, phase: phase, rescued: phase == .refund)
+                let coin = Token(address: chain.coin, symbol: "OLD", name: "Old coin", decimals: 18, isLaunchpad: true)
+                let label = "\(stack.factory.short) \(phase)"
+                MomentsChainStub.install(chain.answer)
+                let found = try await service.heldLaunches([.mon, .usdc, coin, stranger, coin])
+                XCTAssertEqual(Array(found.factories.keys), [chain.coin], label)
+                XCTAssertEqual(found.factories[chain.coin], stack.factory, label)
+                XCTAssertEqual(found.phases[chain.coin], phase, label)
+                let launch = try XCTUnwrap(found.launches[chain.coin], label)
+                XCTAssertEqual(launch.phase, phase, label)
+                XCTAssertEqual(launch.factory, stack.factory, label)
+                XCTAssertNil(found.pairPerCoin[chain.coin], "\(label): no live price answered")
+                XCTAssertFalse(found.complete, label)
+                XCTAssertEqual(found.curve.coins, phase == .graduated ? [] : [chain.coin], label)
+                let asked = Set(MomentsChainStub.batches().first?.map(\.to) ?? [])
+                XCTAssertEqual(asked, Set(CurveCoinChain.factories.map(\.factory)), "\(label): the coin and the stranger, asked of every factory; MON and USDC never")
+            }
         }
-        MomentsChainStub.install({ _, _ in nil }, refusing: ["eth_call"])
-        do {
-            _ = try await service.recordedLaunches([Token(address: Address(literal: "0x00000000000000000000000000000000000c02d0"), symbol: "OLD", name: "Old", decimals: 18)])
-            XCTFail("a read that failed must throw, not answer \"no launch\"")
-        } catch {}
-        let none = try await service.recordedLaunches([.mon, .usdc])
-        XCTAssertTrue(none.isEmpty)
     }
 }

@@ -52,17 +52,22 @@ enum WalletTokens {
     /// `read`'s tokens, valued and ranked.
     struct Ranked {
         let tokens: [HeldToken]
-        /// The price read failed: the pool finder's prices are missing (USDC and AUSD keep their $1), so most tokens are
-        /// unpriced and ranked by amount rather than value — a list says so, and a send preselects nothing.
+        /// Prices couldn't all be read: the pool finder's read failed (USDC and AUSD keep their $1, most tokens are
+        /// unpriced and ranked by amount rather than value), or a DyorHQ launch coin's own value couldn't be read (its
+        /// launch or its live price: `AppCoins.complete`), so it is unpriced. A list says so, and a send preselects
+        /// nothing.
         let pricesFailed: Bool
+        /// The held coins still on a launchpad's curve, from the same read that valued them (`HeldLaunches.curve`); nil when
+        /// the launchpads couldn't be asked.
+        let curve: CurveHoldings?
     }
 
     /// `read`'s tokens valued and ranked by `order` (the Send list's unless another is given): at their pools' prices,
-    /// and DyorHQ's own coins as the app values them everywhere else (`WalletHoldings.pricing`) — a launch coin at its
-    /// curve's or pool's price in its pair asset, a Moment coin at its pool's USDC price — which no pool the price finder
-    /// looks for gives them. Prices that can't be read leave tokens unpriced, never hidden, and say so
-    /// (`Ranked.pricesFailed`). A DyorHQ coin the wallet launched, or whose Moment it collected or created, is its own,
-    /// not Unverified (`WalletHoldings.unverified`).
+    /// and DyorHQ's own coins as the app values them (`WalletHoldings.pricing`) — a launch coin at its curve's or pool's
+    /// live price in its pair asset, a Moment coin at its pool's USDC price — which no pool the price finder looks for
+    /// gives them. Prices that can't be read leave tokens unpriced, never hidden, and say so (`Ranked.pricesFailed`).
+    /// A DyorHQ coin the wallet launched, or whose Moment it collected or created, is its own, not Unverified
+    /// (`WalletHoldings.unverified`).
     static func ranked(_ read: Read, env: AppEnvironment, by order: (HeldToken, HeldToken) -> Bool = WalletHoldings.precedes) async -> Ranked {
         async let coins = appCoins(read, env: env)
         // The launchpad's pair assets too (MON, USDC, AUSD, aBIL), whether held or not: a launch coin's price is in one.
@@ -79,29 +84,37 @@ enum WalletTokens {
         let own = await coins
         let valued = WalletHoldings.pricing(prices.mapValues(\.usd), launches: own.launches, moments: own.moments.mapValues { $0.pool?.usdcPerCoin })
         let unverified = WalletHoldings.unverified(read.unverified, owner: read.owner, launches: own.launches, staked: own.staked)
-        return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: valued, unverified: unverified, by: order), pricesFailed: failed)
+        return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: valued, unverified: unverified, by: order),
+                      pricesFailed: failed || !own.complete, curve: own.curve)
     }
 
     /// DyorHQ's own coins among a read's tokens, as their factories record them.
     struct AppCoins {
-        /// Launch coins, with their launches: any launchpad, live or retired, in any phase.
-        var launches: [Address: Launch] = [:]
+        /// Launch coins: any launchpad, live or retired, in any phase, with their launches and live prices.
+        var launches: HeldLaunches = .none
         /// Moment coins, with their Moments: the live cohort's or a retired one's.
         var moments: [Address: MomentInfo] = [:]
         /// The Moment coins whose Moment this wallet collected or created.
         var staked: Set<Address> = []
+        /// Every launch coin among the tokens could be told apart and valued: false when the launchpads' records, a
+        /// factory's launches or a launch's live price couldn't be read.
+        var complete = true
+        /// The held coins still on a launchpad's curve; nil when the launchpads couldn't be asked.
+        var curve: CurveHoldings? = CurveHoldings.none
     }
 
-    /// Which of `read`'s tokens DyorHQ's contracts made. MON and the curated tokens are never asked; a coin whose record
-    /// or Moment couldn't be read is left out, and then valued like any other token.
+    /// Which of `read`'s tokens DyorHQ's contracts made, and their values. MON and the curated tokens are never asked. A
+    /// launch coin whose launch or live price couldn't be read is unpriced, never valued by another pool, and the read
+    /// says it is incomplete; a coin whose Moment couldn't be read is left out, and then valued like any other token.
     private static func appCoins(_ read: Read, env: AppEnvironment) async -> AppCoins {
         let candidates = read.tokens.filter { !$0.isNative && Token.core($0.address) == nil }
         guard !candidates.isEmpty else { return AppCoins() }
         let launchpad = env.launchpad
-        async let launches = (try? await launchpad.recordedLaunches(candidates)) ?? [:]
+        async let launches = try? await launchpad.heldLaunches(candidates)
         async let moments = momentCoins(candidates.map(\.address), owner: read.owner, env: env)
-        let found = await moments
-        return AppCoins(launches: await launches, moments: found.moments, staked: found.staked)
+        let found = await launches
+        let coins = await moments
+        return AppCoins(launches: found ?? .none, moments: coins.moments, staked: coins.staked, complete: found?.complete ?? false, curve: found?.curve)
     }
 
     /// The Moments whose coins are among `coins`: the live cohort's, by its factory's `momentIdByCoin`, and the retired
