@@ -322,6 +322,8 @@ struct SendSheet: View {
     private var token: Token? { choice?.token }
     /// Which read of the list the form wants: this wallet's, the `attempt`th.
     private var assetsReadKey: String { "\(session.address?.hex ?? "")#\(attempt)" }
+    /// Which balance Available and Max want: the chosen token's, after the list's latest read.
+    private var balanceReadKey: String { "\(token?.address.hex ?? "")#\(assetsKey ?? "")" }
     /// What was typed or pasted, without surrounding whitespace or invisible characters (GR-4).
     private var recipientText: String { Address.cleanedInput(recipient).text }
     /// Nil for a mixed-case address whose EIP-55 checksum is wrong: a mistyped character must never become the recipient.
@@ -406,10 +408,10 @@ struct SendSheet: View {
                 }
             }
             .task(id: assetsReadKey) { await loadAssets(assetsReadKey) }
-            .task(id: token) {
-                // Available and Max are always the chosen token's, read fresh: never another token's balance. Coming back
-                // from the token list runs this again; the balance already read for the same token stays until the new
-                // one lands.
+            .task(id: balanceReadKey) {
+                // Available and Max are always the chosen token's, read fresh: never another token's balance. Read again
+                // for each new read of the list (Retry), which also sets the balance it read; coming back from the token
+                // list runs this again. The balance already read for the same token stays until the new one lands.
                 if balanceToken != token?.address { balance = nil; balanceToken = nil }
                 guard let token, let address = session.address else { return }
                 let fresh = try? await ERC20.balances(of: [token], owner: address, rpc: env.rpc, multicall: env.multicall)[token.address]
@@ -525,6 +527,10 @@ struct SendSheet: View {
                 amount = ""
             }
             choice = kept
+            // Available and Max start from the balance this read found, never one an earlier read found; the balance
+            // task reads it again for this read.
+            balance = kept?.balance
+            balanceToken = kept?.id
             assetsKey = key
         } catch {
             guard !Task.isCancelled else { return }

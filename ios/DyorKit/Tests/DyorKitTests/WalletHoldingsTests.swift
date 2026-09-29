@@ -285,6 +285,10 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(assets.contains("if kind == .assets, model.pricesFailed, !model.loading, !model.tokens.isEmpty {"))
         // A token whose symbol isn't plain shows its contract in the list.
         XCTAssertTrue(send.contains("return asset.unverified || !asset.plainSymbol ?"))
+        // After a new read of the list (Retry), Available and Max are the kept pick's balance from that read, then read again.
+        XCTAssertTrue(send.contains(".task(id: balanceReadKey)"))
+        XCTAssertTrue(send.contains("private var balanceReadKey: String { \"\\(token?.address.hex ?? \"\")#\\(assetsKey ?? \"\")\" }"))
+        XCTAssertTrue(send.contains("balance = kept?.balance"))
         XCTAssertFalse(send.contains("portfolioPrecedes"), "the Send list ranks by value, unpriced last")
         XCTAssertFalse(send.contains("Token.core.filter"), "no fixed short list")
         XCTAssertFalse(send.contains("\"USDC\", \"USDT0\""), "dollars are never decided by symbol")
