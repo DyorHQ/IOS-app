@@ -223,6 +223,15 @@ public enum LaunchBoard {
         }
         return held.sorted { $0.launchedAt > $1.launchedAt }
     }
+
+    /// What "Your Sell-Only Coins" says of `coins`: they sell on their page and can't be bought, and, when one of them
+    /// takes no sell now (`Launch.curveSellsOpen`: its graduation is pending, or it migrates), that a coin waiting to
+    /// graduate can't be sold until it does.
+    public static func sellOnlySubtitle(_ coins: [Launch]) -> String {
+        coins.allSatisfy(\.curveSellsOpen)
+            ? "From retired launchpads: sell them on their page. They can't be bought."
+            : "From retired launchpads: sell them on their page. They can't be bought, and a coin waiting to graduate can't be sold until it does."
+    }
 }
 
 /// `Types.GraduationVenue` in the contracts: where a completed curve graduates. The creator chooses at launch;
@@ -533,6 +542,10 @@ public struct Launch: Identifiable, Hashable, Sendable {
 
     /// The coin page's status line: "Graduation pending" for a completed curve waiting to graduate, else the phase.
     public var statusTitle: String { awaitsGraduation ? "Graduation pending" : phase.title }
+
+    /// A sell-only coin's badge on its card: "Sell only" while its curve takes a sell, else what it waits for
+    /// (`statusTitle`: "Graduation pending" or "Migrating"), when nothing trades until it graduates.
+    public var sellOnlyBadge: String { curveSellsOpen ? "Sell only" : statusTitle }
 }
 
 /// Everything the token page needs beyond the list row.

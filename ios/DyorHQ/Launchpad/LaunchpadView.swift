@@ -100,7 +100,7 @@ struct LaunchpadView: View {
                     // doesn't list, so the Launch tab is never a dead end for their holders.
                     if !sellOnly.isEmpty {
                         section(title: "Your Sell-Only Coins", count: sellOnly.count,
-                                subtitle: "From retired launchpads: sell them on their page. They can't be bought.", coins: sellOnly)
+                                subtitle: LaunchBoard.sellOnlySubtitle(sellOnly), coins: sellOnly)
                     }
                 }
             }
@@ -312,8 +312,9 @@ struct LaunchCard: View {
 
     @ViewBuilder private var badge: some View {
         if launch.isSellOnly {
-            // Only under Your Sell-Only Coins: the public board lists none.
-            Text("Sell only")
+            // Only under Your Sell-Only Coins: the public board lists none. A stuck or migrating one is badged with what
+            // it waits for: nothing trades until it graduates.
+            Text(launch.sellOnlyBadge)
                 .font(.caption2.weight(.bold))
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(.ultraThinMaterial, in: Capsule())

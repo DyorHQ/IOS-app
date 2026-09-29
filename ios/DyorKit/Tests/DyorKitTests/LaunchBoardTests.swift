@@ -112,6 +112,40 @@ final class LaunchBoardTests: XCTestCase {
         XCTAssertEqual(LaunchBoard.heldSellOnly([], balances: [:]), [])
     }
 
+    /// A sell-only coin's badge says "Sell only" only while its curve takes a sell: a retired coin whose graduation is
+    /// pending, or that migrates, is badged with what it waits for instead, and the section's subtitle then says a coin
+    /// waiting to graduate can't be sold until it does.
+    func testASellOnlyCoinThatTakesNoSellSaysWhatItWaitsFor() {
+        let plain = "From retired launchpads: sell them on their page. They can't be bought."
+        let waiting = "From retired launchpads: sell them on their page. They can't be bought, and a coin waiting to graduate can't be sold until it does."
+        for stack in LaunchpadAddresses.retiredStacks {
+            for state in Self.states where state.phase != .graduated {
+                let launch = Self.launch("OLD", token: Self.coin, factory: stack.factory, phase: state.phase, completed: state.completed, rescued: state.rescued)
+                let label = "\(stack.factory.short) \(state.name)"
+                XCTAssertTrue(launch.isSellOnly, label)
+                XCTAssertEqual(launch.sellOnlyBadge == "Sell only", launch.curveSellsOpen, label)
+                switch state.name {
+                case "climbing", "refund":
+                    XCTAssertEqual(launch.sellOnlyBadge, "Sell only", label)
+                    XCTAssertEqual(LaunchBoard.sellOnlySubtitle([launch]), plain, label)
+                case "stuck":
+                    XCTAssertEqual(launch.sellOnlyBadge, "Graduation pending", label)
+                    XCTAssertEqual(LaunchBoard.sellOnlySubtitle([launch]), waiting, label)
+                default:
+                    XCTAssertEqual(state.name, "migrating", label)
+                    XCTAssertEqual(launch.sellOnlyBadge, "Migrating", label)
+                    XCTAssertEqual(LaunchBoard.sellOnlySubtitle([launch]), waiting, label)
+                }
+            }
+        }
+        // Mainnet's holder section (LP alone, climbing) says the plain thing; a stuck coin beside it adds the clause.
+        let lp = Self.mainnet[0]
+        XCTAssertEqual(lp.symbol, "LP")
+        XCTAssertEqual(LaunchBoard.sellOnlySubtitle([lp]), plain)
+        XCTAssertEqual(LaunchBoard.sellOnlySubtitle([lp, Self.launch("STUCK", token: Self.coin, factory: lp.factory, completed: true)]), waiting)
+        XCTAssertEqual(LaunchBoard.sellOnlySubtitle([]), plain)
+    }
+
     /// The section is decided only from a read every factory answered (`LaunchesRead.complete`): a retired stack that
     /// fails leaves its coins out of the read (`LaunchpadService.allLaunchesRead` keeps the others' launches, live first
     /// then each retired stack newest first, and `allLaunches` is the same list), so recomputing the section from the rest
@@ -217,7 +251,12 @@ final class LaunchBoardTests: XCTestCase {
         XCTAssertTrue(source.contains("if launch.isSellOnly { Text(\"Retired launchpad\")"))
         XCTAssertTrue(source.contains("Text(launch.isSellOnly ? \"\\(launch.statusTitle) · Retired launchpad\" : launch.statusTitle)"))
         XCTAssertFalse(source.contains("if launch.isRetiredLaunchpad { Text(\"Retired launchpad\")"))
-        XCTAssertTrue(source.contains("if launch.isSellOnly {\n            // Only under Your Sell-Only Coins: the public board lists none.\n            Text(\"Sell only\")"))
+        // The badge and the section's subtitle follow whether the curve takes a sell (`Launch.sellOnlyBadge`,
+        // `LaunchBoard.sellOnlySubtitle`): never "Sell only" on a coin nobody can sell.
+        XCTAssertTrue(source.contains("if launch.isSellOnly {\n            // Only under Your Sell-Only Coins: the public board lists none. A stuck or migrating one is badged with what\n            // it waits for: nothing trades until it graduates.\n            Text(launch.sellOnlyBadge)"))
+        XCTAssertFalse(source.contains("Text(\"Sell only\")"))
+        XCTAssertTrue(source.contains("subtitle: LaunchBoard.sellOnlySubtitle(sellOnly), coins: sellOnly)"))
+        XCTAssertFalse(source.contains("sell them on their page"), "the subtitle's words live in DyorKit, with the rule")
 
         // No copy sends anyone to the board for a hidden coin, and the unused list row is gone.
         XCTAssertTrue(source.contains("Label(\"New launches open soon.\", systemImage: \"clock\")"))
