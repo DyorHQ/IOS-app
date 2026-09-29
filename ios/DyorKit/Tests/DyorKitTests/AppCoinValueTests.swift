@@ -116,7 +116,8 @@ final class AppCoinValueTests: XCTestCase {
         XCTAssertTrue(found.launches.isEmpty)
         XCTAssertNil(found.pairPerCoin[chain.coin])
         XCTAssertFalse(found.complete)
-        XCTAssertEqual(found.curve.route(chain.coin), .launchTab(retired: false, phase: .bonding), "still routed to its curve, from its record")
+        XCTAssertEqual(found.curve.route(chain.coin), .launchUnread(LaunchReference(token: chain.coin, factory: V2Fixture.launchpad.factory), retired: false, phase: .bonding),
+                       "still routed to its curve, from its record: its page opens by reference")
         XCTAssertNil(WalletHoldings.pricing([Monad.native: 0.03, chain.coin: 5], launches: found, moments: [:])[chain.coin])
     }
 

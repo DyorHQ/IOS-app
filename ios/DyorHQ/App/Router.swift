@@ -51,6 +51,9 @@ final class Router {
     var pendingPerpMarket: Int?
     /// A launch to open on the Launch tab's detail page, set from another tab or the post-launch "View" action.
     var pendingLaunch: Launch?
+    /// A launch to open by reference on the Launch tab, when the screen that sent it couldn't read the launch itself
+    /// (`CurveRoute.launchUnread`): the tab pushes `LaunchReferenceView`, which reads it.
+    var pendingLaunchReference: LaunchReference?
     /// A Moment to open on the Moments tab's detail page.
     var pendingMoment: MomentInfo?
     /// A Moment link that arrived (a universal link or `dyorhq://`) and hasn't been opened yet. It waits here, on the
@@ -110,14 +113,33 @@ final class Router {
         tab = .trade
     }
 
+    /// Opens `launch`'s page on the Launch tab. The last request wins: a reference still waiting is dropped.
     func openLaunch(_ launch: Launch) {
+        pendingLaunchReference = nil
         pendingLaunch = launch
         tab = .launch
     }
 
-    /// Opens the Launch tab's board: where a coin still on a launchpad's curve is listed when its own launch couldn't be
-    /// read (`CurveRoute.launchTab`), in its phase's section (`LaunchPhase.boardSection`: refund mode and migrating
-    /// included), so the screen that found it isn't a dead end.
+    /// Opens a launch's page by reference, for a coin whose launch couldn't be read: the page reads it. The last request
+    /// wins: a launch still waiting is dropped.
+    func openLaunch(_ reference: LaunchReference) {
+        pendingLaunch = nil
+        pendingLaunchReference = reference
+        tab = .launch
+    }
+
+    /// Opens the Launch page of a coin on a launchpad's curve, where it trades: from its launch, or by reference when its
+    /// launch couldn't be read. Never the board, which doesn't list a retired launchpad's sell-only coin.
+    func openLaunchPage(for route: CurveRoute) {
+        switch route {
+        case .launchPage(let launch): openLaunch(launch)
+        case .launchUnread(let reference, _, _): openLaunch(reference)
+        case .swap, .unchecked: openLaunchTab()
+        }
+    }
+
+    /// Opens the Launch tab's board: Swap's way on when its curve check failed (`CurveRoute.unchecked`). The board lists
+    /// the live launchpad's coins, and a retired one's holder finds theirs under "Your Sell-Only Coins".
     func openLaunchTab() {
         tab = .launch
     }

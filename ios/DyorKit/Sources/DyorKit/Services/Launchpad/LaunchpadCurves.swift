@@ -12,8 +12,22 @@ import Foundation
 
    One Multicall3 read asks every known factory (`LaunchpadService.stacks`: the live one once deployed, then each retired
    one) for each coin's `getLaunchedToken` record, in that factory's own layout. While v2 is pending (address 0) the live
-   stack is left out, so nothing is ever asked of address 0. A check that fails is `.unchecked`: the screen says so and
-   offers a way on (check again, or the Launch tab), never a dead end. */
+   stack is left out, so nothing is ever asked of address 0. A coin on a curve whose launch couldn't be read opens its
+   page by reference (`.launchUnread`, `LaunchReference`), which reads it again: the board may not list it (a retired
+   launchpad's sell-only coin, `Launch.listsOnBoard`), so no route ever depends on it. A check that fails is
+   `.unchecked`: the screen says so and offers a way on (check again, or the Launch tab), never a dead end. */
+
+/// A launch named by its coin and the factory that recorded it, for a screen that couldn't read the launch itself: its
+/// Launch page reads it from that factory's own stack (`LaunchpadService.launch(_:)`), and only from a DyorHQ one.
+public struct LaunchReference: Sendable, Hashable {
+    public let token: Address
+    public let factory: Address
+
+    public init(token: Address, factory: Address) {
+        self.token = token
+        self.factory = factory
+    }
+}
 
 /// Where a held coin trades: Swap, or its Launch page while it is still on a launchpad's bonding curve.
 public enum CurveRoute: Sendable, Hashable {
@@ -22,9 +36,8 @@ public enum CurveRoute: Sendable, Hashable {
     /// Its Launch page, where its curve trades: Buy and Sell on the live launchpad, Sell only on a retired one.
     case launchPage(Launch)
     /// On a launchpad's curve (a retired one's when `retired`: sell-only), in `phase` (its factory's record), but its
-    /// launch couldn't be read: the Launch tab lists it, in that phase's section (`LaunchPhase.boardSection`: in refund
-    /// mode or migrating too).
-    case launchTab(retired: Bool, phase: LaunchPhase)
+    /// launch couldn't be read: its Launch page opens by reference and reads it again.
+    case launchUnread(LaunchReference, retired: Bool, phase: LaunchPhase)
     /// Whether it is on a curve couldn't be checked. Swap stays offered, with a way to check again.
     case unchecked
 
@@ -34,10 +47,16 @@ public enum CurveRoute: Sendable, Hashable {
         return nil
     }
 
+    /// The launch whose page the coin opens by reference, when it couldn't be read.
+    public var reference: LaunchReference? {
+        if case .launchUnread(let reference, _, _) = self { return reference }
+        return nil
+    }
+
     /// Still on a launchpad's curve: never Swap.
     public var isOnCurve: Bool {
         switch self {
-        case .launchPage, .launchTab: return true
+        case .launchPage, .launchUnread: return true
         case .swap, .unchecked: return false
         }
     }
@@ -51,7 +70,7 @@ public enum CurveRoute: Sendable, Hashable {
             if launch.curveBuysOpen { return LaunchpadCurve.tradeOnLaunchPage }
             if launch.curveSellsOpen { return LaunchpadCurve.refundOnLaunchPage }
             return LaunchpadCurve.graduationPending
-        case .launchTab(let retired, let phase):
+        case .launchUnread(_, let retired, let phase):
             switch phase {
             case .refund: return LaunchpadCurve.refundLaunchUnread
             case .migrating: return LaunchpadCurve.migratingLaunchUnread
@@ -68,11 +87,11 @@ public enum CurveRoute: Sendable, Hashable {
         case .launchPage(let launch):
             if launch.curveBuysOpen { return "Buy or sell on its Launch page" }
             return launch.curveSellsOpen ? "Sell on its Launch page" : "Graduation pending · Launch page"
-        case .launchTab(let retired, let phase):
+        case .launchUnread(_, let retired, let phase):
             switch phase {
-            case .refund: return "Sell it back from its page on the Launch tab"
-            case .migrating: return "Migrating · Launch tab"
-            case .bonding, .graduated: return retired ? "Sell it from its page on the Launch tab" : "Trade it from its page on the Launch tab"
+            case .refund: return "Sell it back on its Launch page"
+            case .migrating: return "Migrating · Launch page"
+            case .bonding, .graduated: return retired ? "Sell on its Launch page" : "Trade on its Launch page"
             }
         }
     }
@@ -84,7 +103,7 @@ public enum CurveRoute: Sendable, Hashable {
         case .launchPage(let launch):
             if launch.curveBuysOpen { return "Trade \(symbol) on its Launch page" }
             return launch.curveSellsOpen ? "Sell \(symbol) on its Launch page" : "Open \(symbol)'s Launch page"
-        case .launchTab: return "Find \(symbol) on the Launch tab"
+        case .launchUnread: return "Open \(symbol)'s Launch page"
         }
     }
 }
@@ -105,8 +124,7 @@ public struct CurveCoinRoute: Sendable, Hashable {
 public struct CurveHoldings: Sendable, Hashable {
     /// Each such coin, with the factory that recorded it: the live one or a retired one.
     public let factories: [Address: Address]
-    /// Each such coin's phase in that factory's record: which section of the Launch tab lists a coin whose launch
-    /// couldn't be read (`LaunchPhase.boardSection`).
+    /// Each such coin's phase in that factory's record: what a screen says of a coin whose launch couldn't be read.
     public let phases: [Address: LaunchPhase]
     /// Their launches, by coin, for a screen to open their Launch page. A coin whose launch couldn't be read has none.
     public let launches: [Address: Launch]
@@ -122,12 +140,12 @@ public struct CurveHoldings: Sendable, Hashable {
     /// The coins: Swap can't trade them, so a screen never offers it for one.
     public var coins: Set<Address> { Set(factories.keys) }
 
-    /// Where `token` trades: while it is on a curve, its Launch page (the Launch tab, which lists it in its phase's
-    /// section, when its launch couldn't be read); otherwise Swap.
+    /// Where `token` trades: while it is on a curve, its Launch page (by reference to the factory that recorded it, when
+    /// its launch couldn't be read); otherwise Swap.
     public func route(_ token: Address) -> CurveRoute {
         guard let factory = factories[token] else { return .swap }
         if let launch = launches[token] { return .launchPage(launch) }
-        return .launchTab(retired: LaunchpadAddresses.isRetired(factory), phase: phases[token] ?? .bonding)
+        return .launchUnread(LaunchReference(token: token, factory: factory), retired: LaunchpadAddresses.isRetired(factory), phase: phases[token] ?? .bonding)
     }
 }
 
@@ -139,17 +157,16 @@ public enum LaunchpadCurve {
     public static let refundOnLaunchPage = "This coin's launch is in refund mode: sell it back into its curve on its Launch page, at the curve's price with no fees."
     /// A coin on the live launchpad whose full curve waits to graduate, or is migrating.
     public static let graduationPending = "This coin's curve is full and its graduation is pending: it can't be traded until it graduates, and then it trades on Swap."
-    /// A coin on the live launchpad's curve whose launch couldn't be read.
-    public static let launchUnread = "This coin is still on its launchpad's bonding curve, which Swap can't route, and its launch couldn't be read just now: find it on the Launch tab."
+    /// A coin on the live launchpad's curve whose launch couldn't be read: its page reads it again.
+    public static let launchUnread = "This coin is still on its launchpad's bonding curve, which Swap can't route: trade it on its Launch page. Its launch couldn't be read just now; its page will try again."
     /// A coin on a retired launchpad's curve whose launch couldn't be read.
-    public static let retiredLaunchUnread = "This coin's launchpad is retired: you can sell it from its page on the Launch tab, but not buy. Its launch couldn't be read just now."
-    /// A coin in refund mode, on the live launchpad or a retired one, whose launch couldn't be read: the Launch tab lists
-    /// it under Refund & Migrating.
-    public static let refundLaunchUnread = "This coin's launch is in refund mode: sell it back into its curve from its page on the Launch tab, where it's listed under Refund & Migrating. Its launch couldn't be read just now."
+    public static let retiredLaunchUnread = "This coin's launchpad is retired: you can sell it on its Launch page, but not buy. Its launch couldn't be read just now; its page will try again."
+    /// A coin in refund mode, on the live launchpad or a retired one, whose launch couldn't be read.
+    public static let refundLaunchUnread = "This coin's launch is in refund mode: sell it back into its curve on its Launch page. Its launch couldn't be read just now; its page will try again."
     /// A migrating coin, on the live launchpad or a retired one, whose launch couldn't be read.
-    public static let migratingLaunchUnread = "This coin is migrating from its bonding curve to its pool: it can't be traded until it graduates, and then it trades on Swap. Its page is on the Launch tab, under Refund & Migrating; its launch couldn't be read just now."
-    /// The check itself failed.
-    public static let unchecked = "DyorHQ couldn't check whether this coin is still on a launchpad's bonding curve just now. If it is, it trades on its Launch page, not on Swap: check again in a moment, or find it on the Launch tab."
+    public static let migratingLaunchUnread = "This coin is migrating from its bonding curve to its pool: it can't be traded until it graduates, and then it trades on Swap. Its launch couldn't be read just now; its page will try again."
+    /// The check itself failed. It names no Launch tab: the board doesn't list a retired launchpad's sell-only coin.
+    public static let unchecked = "DyorHQ couldn't check whether this coin is still on a launchpad's bonding curve just now. If it is, it trades on its Launch page, not on Swap: check again in a moment."
 
     /// A coin's record from the first stack that recorded it, while the coin is still on that stack's curve.
     struct CurveRecord: Sendable {
@@ -201,8 +218,8 @@ public extension LaunchpadService {
     /// a retired one's, each with its launch, so a list of holdings (the Portfolio) opens a coin's Launch page, where its
     /// curve trades, instead of Swap, which routes no curve. One aggregate asks every known factory (`stacks`) for each
     /// coin's record (MON and the app's own tokens are never asked); then each stack's coins are read as launches in one
-    /// read per stack, from those records. A stack whose launch read fails leaves its coins without a launch (the Launch
-    /// tab). Throws when the aggregate fails: then no coin could be ruled in or out.
+    /// read per stack, from those records. A stack whose launch read fails leaves its coins without a launch (their page
+    /// opens by reference). Throws when the aggregate fails: then no coin could be ruled in or out.
     func curveHoldings(_ holdings: [Token]) async throws -> CurveHoldings {
         var seen = Set<Address>()
         let candidates = holdings.filter { SwapEngine.mayBeLaunchCoin($0) && seen.insert($0.address).inserted }.map(\.address)
@@ -219,6 +236,17 @@ public extension LaunchpadService {
             for await list in group { for launch in list { launches[launch.token] = launch } }
         }
         return CurveHoldings(factories: found.mapValues(\.stack.factory), phases: found.mapValues(\.record.phase), launches: launches)
+    }
+
+    /// The launch `reference` names (`CurveRoute.launchUnread`), read from its factory's own stack; nil when that factory
+    /// is none of this service's stacks (the live one once deployed, or a retired one), which is never asked, or when it
+    /// recorded no such coin. A reference only points: the launch shown is always the one that factory records for that
+    /// coin. Throws when the read fails.
+    func launch(_ reference: LaunchReference) async throws -> LaunchDetail? {
+        guard !reference.factory.isZero, stacks.contains(where: { $0.factory == reference.factory }) else { return nil }
+        guard let detail = try await launch(token: reference.token, factory: reference.factory),
+              detail.launch.token == reference.token, detail.launch.factory == reference.factory else { return nil }
+        return detail
     }
 
     /// Where one coin trades, for a screen that knows only the coin (Home's token page): its Launch page while it is on a

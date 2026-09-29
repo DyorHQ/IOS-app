@@ -181,9 +181,9 @@ struct AssetsCard: View {
                             tokenRow(asset, note: "Past cohort · trading closed")
                         } else if route.isOnCurve {
                             // Never Swap: no venue routes a coin still on a launchpad's curve, live or retired. It trades
-                            // on its curve, from its Launch page, where Home sends it too; unread, the Launch tab lists it.
+                            // on its curve, from its Launch page, where Home sends it too; by reference when unread.
                             Button {
-                                if let launch = route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
+                                router.openLaunchPage(for: route)
                                 dismiss()
                             } label: {
                                 tokenRow(asset, note: route.rowNote, unverified: model.unverified.contains(asset.token.address))
