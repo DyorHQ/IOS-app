@@ -9,10 +9,13 @@ import DyorKit
 @MainActor
 enum WalletTokens {
     struct Read {
+        /// The wallet read.
+        let owner: Address
         /// The tokens held (balance above zero), in universe order. Never an NFT collection.
         let tokens: [Token]
         let balances: [Address: BigUInt]
-        /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12).
+        /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12),
+        /// except the DyorHQ coins that turn out to be its own (`ranked`).
         let unverified: Set<Address>
         /// False when part of the wallet's history couldn't be read (`WalletTokenDiscovery.Scan`): a token it received
         /// outside the app may be missing, which a list says rather than passing `tokens` off as everything.
@@ -32,7 +35,7 @@ enum WalletTokens {
         // Earlier builds' discovery stored NFT collections as tokens (their `balanceOf` counts editions): left out, as
         // discovery now leaves them out. An edition can't be sent as a token, and it shows under NFTs.
         let collections = await env.walletDiscovery.collections(among: held)
-        return Read(tokens: held.filter { !collections.contains($0.address) }, balances: balances, unverified: unverified, complete: scan.complete)
+        return Read(owner: address, tokens: held.filter { !collections.contains($0.address) }, balances: balances, unverified: unverified, complete: scan.complete)
     }
 
     /// `read`'s tokens, valued and ranked.
@@ -47,7 +50,8 @@ enum WalletTokens {
     /// and DyorHQ's own coins as the app values them everywhere else (`WalletHoldings.pricing`) — a launch coin at its
     /// curve's or pool's price in its pair asset, a Moment coin at its pool's USDC price — which no pool the price finder
     /// looks for gives them. Prices that can't be read leave tokens unpriced, never hidden, and say so
-    /// (`Ranked.pricesFailed`).
+    /// (`Ranked.pricesFailed`). A DyorHQ coin the wallet launched, or whose Moment it collected or created, is its own,
+    /// not Unverified (`WalletHoldings.unverified`).
     static func ranked(_ read: Read, env: AppEnvironment, by order: (HeldToken, HeldToken) -> Bool = WalletHoldings.precedes) async -> Ranked {
         async let coins = appCoins(read, env: env)
         // The launchpad's pair assets too (MON, USDC, AUSD, aBIL), whether held or not: a launch coin's price is in one.
@@ -63,7 +67,8 @@ enum WalletTokens {
         }
         let own = await coins
         let valued = WalletHoldings.pricing(prices.mapValues(\.usd), launches: own.launches, moments: own.moments.mapValues { $0.pool?.usdcPerCoin })
-        return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: valued, unverified: read.unverified, by: order), pricesFailed: failed)
+        let unverified = WalletHoldings.unverified(read.unverified, owner: read.owner, launches: own.launches, staked: own.staked)
+        return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: valued, unverified: unverified, by: order), pricesFailed: failed)
     }
 
     /// DyorHQ's own coins among a read's tokens, as their factories record them.
@@ -72,6 +77,8 @@ enum WalletTokens {
         var launches: [Address: Launch] = [:]
         /// Moment coins, with their Moments: the live cohort's or a retired one's.
         var moments: [Address: MomentInfo] = [:]
+        /// The Moment coins whose Moment this wallet collected or created.
+        var staked: Set<Address> = []
     }
 
     /// Which of `read`'s tokens DyorHQ's contracts made. MON and the curated tokens are never asked; a coin whose record
@@ -81,14 +88,16 @@ enum WalletTokens {
         guard !candidates.isEmpty else { return AppCoins() }
         let launchpad = env.launchpad
         async let launches = (try? await launchpad.recordedLaunches(candidates)) ?? [:]
-        async let moments = momentCoins(candidates.map(\.address), env: env)
-        return AppCoins(launches: await launches, moments: await moments)
+        async let moments = momentCoins(candidates.map(\.address), owner: read.owner, env: env)
+        let found = await moments
+        return AppCoins(launches: await launches, moments: found.moments, staked: found.staked)
     }
 
     /// The Moments whose coins are among `coins`: the live cohort's, by its factory's `momentIdByCoin`, and the retired
     /// cohorts', from their fixed list (`MomentsAddresses.retiredMainnetCoins`). A Moment is kept only when it names the
-    /// coin it was found for.
-    private static func momentCoins(_ coins: [Address], env: AppEnvironment) async -> [Address: MomentInfo] {
+    /// coin it was found for. `staked`: those whose Moment `owner` collected or created, from each cohort's vesting; a
+    /// cohort whose stakes can't be read stakes nothing, and its coins stay as marked.
+    private static func momentCoins(_ coins: [Address], owner: Address, env: AppEnvironment) async -> (moments: [Address: MomentInfo], staked: Set<Address>) {
         let live = env.moments
         let ids = (try? await live.momentIds(coins: coins)) ?? [:]
         var reads: [(coin: Address, read: @Sendable () async -> MomentInfo?)] = []
@@ -99,12 +108,23 @@ enum WalletTokens {
                 reads.append((coin, { try? await cohort.info(id: key.id) }))
             }
         }
-        guard !reads.isEmpty else { return [:] }
-        return await withTaskGroup(of: (Address, MomentInfo?).self) { group in
+        guard !reads.isEmpty else { return ([:], []) }
+        let moments = await withTaskGroup(of: (Address, MomentInfo?).self) { group in
             for (coin, read) in reads { group.addTask { (coin, await read()) } }
             var out: [Address: MomentInfo] = [:]
             for await (coin, info) in group { if let info, info.moment.coin == coin { out[coin] = info } }
             return out
         }
+        // Each cohort's portfolio rows, in one read per cohort: the account's collects, plus a creator's allocation.
+        var rows: [MomentPortfolioRow] = []
+        let infos = Array(moments.values)
+        let liveInfos = infos.filter { $0.moment.factory == env.config.moments.factory }
+        if !liveInfos.isEmpty, let portfolio = try? await live.portfolio(account: owner, moments: liveInfos) { rows += portfolio.rows }
+        for cohort in env.retiredMoments {
+            let own = infos.filter { $0.moment.factory == cohort.factory }
+            if !own.isEmpty, let positions = try? await cohort.positions(account: owner, moments: own) { rows += positions.map(\.row) }
+        }
+        let staked = Set(rows.filter { $0.isCreator || $0.entitlement > 0 }.map(\.moment.moment.coin)).intersection(moments.keys)
+        return (moments, staked)
     }
 }

@@ -202,6 +202,16 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(tokens.contains("(try? await launchpad.recordedLaunches(candidates)) ?? [:]"))
         XCTAssertTrue(tokens.contains("WalletHoldings.pricing(prices.mapValues(\\.usd), launches: own.launches, moments: own.moments.mapValues { $0.pool?.usdcPerCoin })"))
         XCTAssertTrue(tokens.contains("prices: valued, unverified:"))
+        // The wallet's own launches and Moments aren't Unverified, in both lists; a curve buy records its coin as chosen.
+        XCTAssertTrue(tokens.contains("let unverified = WalletHoldings.unverified(read.unverified, owner: read.owner, launches: own.launches, staked: own.staked)"))
+        XCTAssertTrue(tokens.contains("rows.filter { $0.isCreator || $0.entitlement > 0 }"))
+        XCTAssertTrue(assets.contains("Set(ranked.filter(\\.unverified).map(\\.id))"))
+        let launchpad = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadView.swift"), encoding: .utf8)
+        let buy = try XCTUnwrap(launchpad.range(of: "ConfirmationSheet(title: \"Buy \\(launch.symbol)\""))
+        let bought = try XCTUnwrap(launchpad.range(of: "Activity.record(ActivityRecord(kind: .buy", range: buy.upperBound..<launchpad.endIndex))
+        let settled = String(launchpad[buy.upperBound..<bought.lowerBound])
+        XCTAssertTrue(settled.contains("KnownTokenStore.add(token, owner: session.address)"))
+        XCTAssertTrue(settled.contains("KnownTokenStore.markChosen(launch.token, owner: session.address)"))
         XCTAssertFalse(send.contains("portfolioPrecedes"), "the Send list ranks by value, unpriced last")
         XCTAssertFalse(send.contains("Token.core.filter"), "no fixed short list")
         XCTAssertFalse(send.contains("\"USDC\", \"USDT0\""), "dollars are never decided by symbol")
@@ -330,6 +340,28 @@ final class AppCoinValuationTests: XCTestCase {
         XCTAssertEqual(priced[Monad.usdc], 1, "every other token keeps its price")
         let noMON = WalletHoldings.pricing([monCoin.address: 99], launches: [monCoin.address: curve], moments: [:])
         XCTAssertNil(noMON[monCoin.address], "no price for the pair asset: unpriced")
+    }
+
+    /// A DyorHQ coin the wallet launched, or whose Moment it collected or created, is its own and not Unverified; the same
+    /// kinds of coin merely sent to it stay Unverified.
+    func testTheWalletsOwnCoinsAreNotUnverified() {
+        let owner = Address(literal: "0x7777777777777777777777777777777777777777")
+        let stranger = Address(literal: "0x8888888888888888888888888888888888888888")
+        let airdropped = Token(address: Address(literal: "0x00000000000000000000000000000000000c1005"), symbol: "GIFT", name: "Gift", decimals: 18, isLaunchpad: true)
+        let spam = Address(literal: "0x00000000000000000000000000000000000c1006")
+        func launched(_ token: Token, by deployer: Address) -> Launch {
+            let l = launch(token, pair: .mon, price: 1)
+            return Launch(token: l.token, curve: l.curve, deployer: deployer, creatorFeeRecipient: deployer, pairToken: l.pairToken, graduationThreshold: 0, creatorTaxBps: 0,
+                          poolFeeBps: 100, tickSpacing: 60, holderFeeSharing: false, graduationVenue: .uniswapV4, phase: .bonding, sweptQuote: 0, sweptTokens: 0, sweptAt: 0,
+                          poolId: Data(count: 32), name: token.name, symbol: token.symbol, logo: "", description: "", socials: .none, pair: .mon, price: 1, realQuoteReserve: 0,
+                          completed: false, rescued: false, launchedAt: 0, supply: 0, marketCap: 0, progressBps: 0)
+        }
+        let marked: Set<Address> = [monCoin.address, airdropped.address, momentCoin.address, unreadMoment.address, spam]
+        let launches = [monCoin.address: launched(monCoin, by: owner), airdropped.address: launched(airdropped, by: stranger)]
+        let result = WalletHoldings.unverified(marked, owner: owner, launches: launches, staked: [momentCoin.address])
+        XCTAssertEqual(result, [airdropped.address, unreadMoment.address, spam],
+                       "its own launch and its collected Moment are its own; another's launch, a Moment it has no stake in and anything else stay marked")
+        XCTAssertTrue(WalletHoldings.unverified([], owner: owner, launches: launches, staked: [momentCoin.address]).isEmpty)
     }
 
     /// A held coin's launch, found in any phase from its factory's record and read with its price; MON, the curated

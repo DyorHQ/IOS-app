@@ -123,6 +123,14 @@ public enum WalletHoldings {
         return out
     }
 
+    /// `unverified` without the DyorHQ coins that are `owner`'s own: a launch coin it launched (its factory records the
+    /// wallet as deployer — the factory's caller, or the launch router's, never an argument) and a Moment coin whose Moment
+    /// it collected or created (`staked`: a stake in the Moment's vesting). The factories name each coin by its address,
+    /// so no look-alike passes for one; a coin that was only sent to the wallet stays Unverified.
+    public static func unverified(_ unverified: Set<Address>, owner: Address, launches: [Address: Launch], staked: Set<Address>) -> Set<Address> {
+        unverified.subtracting(launches.filter { $0.value.deployer == owner }.keys).subtracting(staked)
+    }
+
     /// The curated dollar stables, by contract address. A token is one of them only by its address: anyone can deploy a
     /// token called "USDC".
     public static let dollarStables: Set<Address> = Set(Token.core.filter { ["USDC", "USDT0", "AUSD", "USDe", "USD1", "mUSD"].contains($0.symbol) }.map(\.address))

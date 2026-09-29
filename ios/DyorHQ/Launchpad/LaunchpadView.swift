@@ -740,6 +740,9 @@ struct LaunchDetailView: View {
         if let address = session.address {
             if side == .buy, buysOpen, let q = buyQuote {
                 ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { try await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
+                    // Bought here, so chosen here: never shown as Unverified, as a swap into a token isn't.
+                    KnownTokenStore.add(token, owner: session.address)
+                    KnownTokenStore.markChosen(launch.token, owner: session.address)
                     Activity.record(ActivityRecord(kind: .buy, title: "Bought \(launch.symbol)", subtitle: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }, intent: .launchpadBuy(token: launch.token, pay: .init(token: launch.pairToken, amount: rawAmount), usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 })) {
                     DetailRow("You pay", "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")

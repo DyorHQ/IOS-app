@@ -46,12 +46,13 @@ final class AssetsModel {
 
         // The token part is the Send sheet's too (`WalletTokens`). Balances that couldn't be read list nothing, as before.
         let read = try? await WalletTokens.read(env: env, address: address)
-        unverified = read?.unverified ?? KnownTokenStore.unverified(owner: address)
         let held = read?.tokens ?? []
         async let curveTask = try? env.launchpad.curveHoldings(held)
         var ranked: [TokenAsset] = []
         // The Portfolio keeps the order it has always had; the Send sheet ranks the same tokens its own way.
         if let read { ranked = await WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes).tokens }
+        // As the list marks them: the DyorHQ coins the wallet launched or collected are its own, not Unverified.
+        unverified = read == nil ? KnownTokenStore.unverified(owner: address) : Set(ranked.filter(\.unverified).map(\.id))
         // Known before the token list shows, so a retired Moment coin or a coin on a curve is never offered a swap in between.
         for info in await retiredTask {
             retiredByCoin[info.moment.coin] = info
