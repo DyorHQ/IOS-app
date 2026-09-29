@@ -87,15 +87,15 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertEqual(secondSaves.map(\.complete), [false, true])
     }
 
-    /// On an endpoint that answers 1,000 blocks a range, as rpc3 does, every venue is read in full and says so (a 5M-block
-    /// segment: `LogScanTests.testAnEndpointThatAnswers1000BlocksReadsA5MBlockSegmentWithNoGap`).
+    /// On an endpoint that answers 1,000 blocks a request, as rpc3 does, every venue is read in full and says so (a
+    /// 5M-block segment: `LogScanTests.testAnEndpointThatAnswers1000BlocksReadsA5MBlockSegmentWithNoGap`).
     func testAnEndpointThatAnswers1000BlocksReadsEveryVenueInFull() async {
         installMetadata()
         let pools = [pool(3, at: 100_000_500), pool(4, at: 100_070_000), pool(5, at: 100_130_001), pool(6, at: 100_199_999)]
-        LogsStub.install(head: 105_000_000, logs: pools) { range in
+        LogsStub.install(head: 105_000_000, logs: pools, batchSpan: 1_000) { range in
             range.span > 1_000 ? .error(code: -32062, message: "Block range is too large") : nil
         }
-        let scan = await service(LogsStub.rpc3, concurrency: 100).tokens(fromBlock: 100_000_000, toBlock: 100_199_999)
+        let scan = await service(LogsStub.rpc3).tokens(fromBlock: 100_000_000, toBlock: 100_199_999)
         XCTAssertTrue(scan.complete)
         XCTAssertFalse(scan.capped)
         XCTAssertEqual(Set(scan.tokens.map(\.symbol)), ["T3", "T4", "T5", "T6"])

@@ -204,13 +204,14 @@ public extension RPCClient {
     /// The widest block range each of Monad's public endpoints answers per `eth_getLogs` request, measured read-only on
     /// 2026-09-29: rpc1 has no range cap (it answered 10M blocks in a second; its cap is 10K logs an answer, and it names
     /// a range that fits); rpc3 answers 1,000 blocks, `fromBlock` and `toBlock` both counted, and refuses 1,001 ("Block
-    /// range is too large", -32062); rpc4 is served by nodes that answer 100,000 and nodes that refuse 1,001 ("limited to
-    /// a 1,000 range", -32614 in an HTTP 413), so 1,000 is what every one of them answers; rpc.monad.xyz answers 100 and
-    /// refuses 500. A local fork has no cap; 50,000 keeps its answers quick. A range sized over the cap is refused and
-    /// split (`chunkedLogsReport`), one request a split, and a scan may split only so often (`LogScanLimits`): rpc3 sized
-    /// at 100,000, as build 16 sized it, needs about 6,350 splits for 5M blocks, so a wide scan spent them all and left
-    /// the rest as gaps. Every caller here filters by a specific address or the viewer's own wallet, so a wide range
-    /// returns a small result set. Matches on the URL text rather than the host, like the web app's `CHUNK`.
+    /// range is too large", -32062), counting every range in a request together (`logBatchSpan`); rpc4 is served by
+    /// nodes that answer 100,000 and nodes that refuse 1,001 ("limited to a 1,000 range", -32614 in an HTTP 413), so 1,000
+    /// is what every one of them answers; rpc.monad.xyz answers 100 and refuses 500. A local fork has no cap; 50,000 keeps
+    /// its answers quick. A range sized over the cap is refused and split (`chunkedLogsReport`), one request a split, and
+    /// a scan may split only so often (`LogScanLimits`): rpc3 sized at 100,000, as build 16 sized it, needs about 6,350
+    /// splits for 5M blocks, so a wide scan spent them all and left the rest as gaps. Every caller here filters by a
+    /// specific address or the viewer's own wallet, so a wide range returns a small result set. Matches on the URL text
+    /// rather than the host, like the web app's `CHUNK`.
     static func logChunkSize(for url: URL) -> UInt64 {
         let text = url.absoluteString
         if text.contains("127.0.0.1") || text.contains("localhost") { return 50_000 }
@@ -221,6 +222,17 @@ public extension RPCClient {
 
     /// The chunk size for this endpoint; see `logChunkSize(for:)`.
     nonisolated var logChunkSize: UInt64 { Self.logChunkSize(for: url) }
+
+    /// The most blocks one request may ask across all its `eth_getLogs` ranges, where an endpoint counts them together:
+    /// rpc3 answers a batch's ranges while they add up to 1,000 blocks and refuses every range past that (-32062), however
+    /// small, so there a round trip asks one 1,000-block range (`chunkedLogsReport`). Nil where each range counts on its
+    /// own, as on rpc1, rpc4 and rpc.monad.xyz (measured 2026-09-29).
+    static func logBatchSpan(for url: URL) -> UInt64? {
+        url.absoluteString.contains("rpc3") ? 1_000 : nil
+    }
+
+    /// This endpoint's budget for one request; see `logBatchSpan(for:)`.
+    nonisolated var logBatchSpan: UInt64? { Self.logBatchSpan(for: url) }
 
     nonisolated var isLocal: Bool {
         let host = url.host() ?? ""
@@ -257,7 +269,8 @@ public extension RPCClient {
     }
 
     /// Fetches logs over `[fromBlock, toBlock]` by splitting the window into ranges the endpoint accepts and
-    /// sending `concurrency` ranges per round trip. A range that fails is read again in smaller parts, as build 15 read it
+    /// sending `concurrency` ranges per round trip (fewer where the endpoint counts a request's ranges together,
+    /// `logBatchSpan`). A range that fails is read again in smaller parts, as build 15 read it
     /// (`LogScanMode.patient`); what still can't be read leaves a gap rather than failing the whole window, exactly as the
     /// web app's `chunkedLogs` does, and the caller gets everything that could be read.
     func chunkedLogs(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6) async -> [Log] {
@@ -315,8 +328,10 @@ public extension RPCClient {
         var complete = true
         var next = 0
         var unanswered = 0
+        // Ranges a round trip asks: `concurrency`, or as many as fit the endpoint's budget for one request.
+        let perTrip = max(1, logBatchSpan.map { min(concurrency, Int(clamping: $0 / chunk)) } ?? concurrency)
         while next < ranges.count, !Task.isCancelled, !scan.down {
-            let slice = Array(ranges[next..<min(next + max(1, concurrency), ranges.count)])
+            let slice = Array(ranges[next..<min(next + perTrip, ranges.count)])
             next += slice.count
             var answered = false
             let answers = await rangeAnswers(slice, scan: &scan)

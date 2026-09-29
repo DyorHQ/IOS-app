@@ -241,25 +241,25 @@ final class LogScanTests: XCTestCase {
         XCTAssertTrue(logs.contains("mode: LogScanMode = .patient) async -> (logs: [Log], complete: Bool)"))
     }
 
-    /// The finding (build 17): rpc3 answers 1,000 blocks a range and refuses 1,001, yet ranges were sized at 100,000 for
-    /// it, as for rpc1. Each refused range is split, a request a split, and a scan splits at most 4,096 times: a 5M-block
-    /// segment of the venue scan needed about 6,350, so part of every segment was left unread, and never read again.
-    /// Sized at 1,000, the same endpoint reads the segment in full, no range refused.
+    /// The finding (build 17): rpc3 answers 1,000 blocks a request, however many ranges it holds, and refuses the rest,
+    /// yet ranges were sized at 100,000 for it, as for rpc1. Each refused range is split, a request a split, and a scan
+    /// splits at most 4,096 times: a 5M-block segment of the venue scan needed about 6,350, so part of every segment was
+    /// left unread, and never read again. Sized at 1,000, one a request, the same endpoint reads the segment in full, no
+    /// range refused.
     func testAnEndpointThatAnswers1000BlocksReadsA5MBlockSegmentWithNoGap() async {
         let blocks: [UInt64] = [100_000_000, 100_000_999, 100_001_000, 101_234_567, 102_500_000, 104_999_999]
         let rule: LogsStub.Rule = { range in range.span > 1_000 ? .error(code: -32062, message: "Block range is too large") : nil }
-        LogsStub.install(head: 105_000_000, logs: blocks.map(transfer), rule: rule)
-        // 100 ranges a round trip only makes the test quicker; the ranges asked are the same.
-        let report = await LogsStub.rpc(url: LogsStub.rpc3).chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 100_000_000, toBlock: 104_999_999,
-                                                                              concurrency: 100)
+        LogsStub.install(head: 105_000_000, logs: blocks.map(transfer), batchSpan: 1_000, rule: rule)
+        let report = await LogsStub.rpc(url: LogsStub.rpc3).chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 100_000_000, toBlock: 104_999_999)
         XCTAssertTrue(report.complete)
         XCTAssertEqual(report.logs.map(\.blockNumber), blocks)
         XCTAssertEqual(LogsStub.queries().count, 5_000)
+        XCTAssertEqual(LogsStub.requests(), 5_000, "one range a request, the default six a round trip notwithstanding")
         XCTAssertTrue(LogsStub.queries().allSatisfy { $0.span == 1_000 }, "every range answered as asked")
 
         // Build 16's range against the same endpoint: 127 splits and 255 requests for 100,000 blocks, so 6,350 splits for
         // the segment's 50 ranges, past what a scan may make.
-        LogsStub.install(head: 105_000_000, logs: blocks.map(transfer), rule: rule)
+        LogsStub.install(head: 105_000_000, logs: blocks.map(transfer), batchSpan: 1_000, rule: rule)
         let build16 = await LogsStub.rpc(url: LogsStub.rpc3).chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 100_000_000, toBlock: 100_099_999,
                                                                               chunkSize: 100_000)
         XCTAssertTrue(build16.complete)
@@ -267,11 +267,33 @@ final class LogScanTests: XCTestCase {
         XCTAssertGreaterThan(50 * (LogsStub.queries().count - 1) / 2, LogScanLimits().splits)
     }
 
-    /// Ranges are sized to what each endpoint answers, as measured on 2026-09-29 (rpc4: what every node behind it answers).
+    /// rpc3 counts a request's ranges together, so a round trip there asks one 1,000-block range: six in one would have
+    /// five refused and split, five splits for every 6,000 blocks, and a 5M-block window past the scan's splits again.
+    /// Every other endpoint still asks `concurrency` ranges a round trip.
+    func testARequestOnRpc3AsksOneRange() async {
+        LogsStub.install(head: 20_000, batchSpan: 1_000) { _ in nil }
+        let rpc3 = await LogsStub.rpc(url: LogsStub.rpc3).chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 11_999)
+        XCTAssertTrue(rpc3.complete)
+        XCTAssertEqual(LogsStub.queries().count, 12, "no range refused, so none split")
+        XCTAssertEqual(LogsStub.requests(), 12)
+
+        LogsStub.install(head: 2_000_000) { _ in nil }
+        let rpc1 = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 1_199_999)
+        XCTAssertTrue(rpc1.complete)
+        XCTAssertEqual(LogsStub.queries().count, 12)
+        XCTAssertEqual(LogsStub.requests(), 2, "six ranges a round trip, as before")
+    }
+
+    /// Ranges are sized to what each endpoint answers, as measured on 2026-09-29 (rpc4: what every node behind it answers),
+    /// and only rpc3 counts a request's ranges together.
     func testRangesAreSizedToWhatEachEndpointAnswers() {
-        let sizes: [(String, UInt64)] = [("https://rpc1.monad.xyz", 100_000), ("https://rpc3.monad.xyz", 1_000), ("https://rpc4.monad.xyz", 1_000),
-                                         ("https://rpc.monad.xyz", 100), ("http://127.0.0.1:8545", 50_000), ("http://localhost:8545", 50_000)]
-        for (url, size) in sizes { XCTAssertEqual(RPCClient.logChunkSize(for: URL(string: url)!), size, url) }
+        let sizes: [(String, UInt64, UInt64?)] = [("https://rpc1.monad.xyz", 100_000, nil), ("https://rpc3.monad.xyz", 1_000, 1_000),
+                                                  ("https://rpc4.monad.xyz", 1_000, nil), ("https://rpc.monad.xyz", 100, nil),
+                                                  ("http://127.0.0.1:8545", 50_000, nil), ("http://localhost:8545", 50_000, nil)]
+        for (url, size, batch) in sizes {
+            XCTAssertEqual(RPCClient.logChunkSize(for: URL(string: url)!), size, url)
+            XCTAssertEqual(RPCClient.logBatchSpan(for: URL(string: url)!), batch, url)
+        }
     }
 
     func testTheRangeASizeRefusalNamesIsReadOnlyWhenItFits() {
@@ -311,8 +333,10 @@ final class LogScanTests: XCTestCase {
 }
 
 /// An `eth_getLogs` endpoint answered from memory, named like rpc1 so ranges are 100,000 blocks (`rpc(url: rpc3)` names
-/// it like rpc3: 1,000 blocks): the chain head is `head`, every range asked is recorded (`queries()`), and `rule` refuses
-/// a range (an error, or no answer to the whole request) or lets it be answered from `logs`.
+/// it like rpc3: 1,000 blocks): the chain head is `head`, every range asked is recorded (`queries()`), every request
+/// counted (`requests()`), and `rule` refuses a range (an error, or no answer to the whole request) or lets it be answered
+/// from `logs`. With `batchSpan`, a request's ranges share that many blocks, as on rpc3: a range past what the ranges
+/// before it in the request used is refused for its size.
 final class LogsStub: URLProtocol {
     struct Range: Hashable, Sendable {
         let from: UInt64
@@ -342,13 +366,23 @@ final class LogsStub: URLProtocol {
     nonisolated(unsafe) private static var chainLogs: [Log] = []
     nonisolated(unsafe) private static var rule: Rule = { _ in nil }
     nonisolated(unsafe) private static var asked: [Range] = []
+    nonisolated(unsafe) private static var batchSpan: UInt64?
+    nonisolated(unsafe) private static var requestCount = 0
 
-    static func install(head: UInt64, logs: [Log] = [], rule: @escaping Rule) {
+    static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, rule: @escaping Rule) {
         lock.lock(); defer { lock.unlock() }
         self.head = head
         chainLogs = logs
+        self.batchSpan = batchSpan
         self.rule = rule
         asked = []
+        requestCount = 0
+    }
+
+    /// How many requests were made.
+    static func requests() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return requestCount
     }
 
     /// Every range asked, in order.
@@ -370,8 +404,10 @@ final class LogsStub: URLProtocol {
     override func startLoading() {
         let decoded = (try? JSONDecoder().decode(JSON.self, from: Self.body(request))) ?? .null
         let calls = decoded.array ?? [decoded]
+        Self.lock.lock(); Self.requestCount += 1; Self.lock.unlock()
         // Every call is recorded, even in a request that is to get no answer.
-        let answers = calls.map(Self.reply)
+        var spent: UInt64 = 0
+        let answers = calls.map { Self.reply($0, spent: &spent) }
         let replies = answers.compactMap { $0 }
         guard replies.count == answers.count else {
             client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
@@ -384,14 +420,15 @@ final class LogsStub: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    /// The answer to one call; nil when the request is to get no answer at all.
-    private static func reply(_ call: JSON) -> JSON? {
+    /// The answer to one call; nil when the request is to get no answer at all. `spent`: the blocks the ranges answered
+    /// before it in the same request used (`batchSpan`).
+    private static func reply(_ call: JSON, spent: inout UInt64) -> JSON? {
         let id = call["id"]
         func result(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
         func error(_ code: Int, _ message: String) -> JSON {
             .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(Double(code)), "message": .string(message)])])
         }
-        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; lock.unlock()
+        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; let budget = batchSpan; lock.unlock()
         switch call["method"].string {
         case "eth_getBlockByNumber":
             return result(.object(["number": .string(BigUInt(head).hexQuantity), "timestamp": .string(BigUInt(1_790_000_000).hexQuantity)]))
@@ -401,6 +438,10 @@ final class LogsStub: URLProtocol {
             let to = filter["toBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? head
             let range = Range(from: from, to: to)
             lock.lock(); asked.append(range); lock.unlock()
+            if let budget {
+                guard spent + range.span <= budget else { return error(-32062, "Block range is too large") }
+                spent += range.span
+            }
             switch rule(range) {
             case .error(let code, let message)?: return error(code, message)
             case .noAnswer?: return nil

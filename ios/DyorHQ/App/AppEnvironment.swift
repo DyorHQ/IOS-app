@@ -96,8 +96,8 @@ final class AppEnvironment {
         nftDiscovery = WalletNFTDiscovery(logsRPC: RPCClient(url: logsURL), multicall: multicall)
         kuruTokens = KuruTokenListClient()
         // The venue-wide pool scan (from genesis, no wallet filter) reads rpc1 in 100,000-block ranges, two at a time for
-        // each venue, so it never crowds out the wallet's own history scans there. rpc3 answers 1,000 blocks a range:
-        // about 330,000 requests from genesis, where rpc1 takes about 3,300.
+        // each venue, so it never crowds out the wallet's own history scans there. rpc3 answers 1,000 blocks a request:
+        // about 330,000 requests from genesis, where rpc1 takes about 1,700 (3,300 ranges).
         venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
         session = Session(config: config, backend: social)
         // A passkey session's scope check trusts only the configured Moments cohorts — v2 (collects, once deployed), then
