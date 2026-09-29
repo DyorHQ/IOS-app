@@ -32,15 +32,16 @@ final class V2ForkTests: V2ForkCase {
         return try XCTUnwrap(detail)
     }
 
-    /// A Moment on the small-threshold stack, priced at the reserve-completing gross and collected once by `collector`
-    /// through the app's collect plan: that collect is terminal and graduates the Moment in the same transaction.
+    /// A Moment on the small-threshold stack (on the shipped deployment, which has none, the c4 stack at the owner's
+    /// threshold), priced at the reserve-completing gross and collected once by `collector` through the app's collect
+    /// plan: that collect is terminal and graduates the Moment in the same transaction.
     private func graduatedMoment() async throws -> (fork: ForkMoments, creator: ForkWallet, collector: ForkWallet, info: MomentInfo, quote: CollectQuote) {
-        let fork = try smallMoments()
+        let fork = try shipped ? moments() : smallMoments()
         let terms = try await policy(fork)
-        XCTAssertEqual(terms.threshold, 10 * Self.usdcUnit, "the small-threshold stack")
+        XCTAssertEqual(terms.threshold, shipped ? 771_428_571 : 10 * Self.usdcUnit, shipped ? "the owner's threshold" : "the small-threshold stack")
         let ceiling = try XCTUnwrap(MomentsMath.maxCollectPrice(threshold: terms.threshold, reserveBps: terms.reserveBps))
         let creator = try await wallet()
-        let collector = try await wallet(usdc: 1_000 * Self.usdcUnit)
+        let collector = try await wallet(usdc: ceiling + 1_000 * Self.usdcUnit)
         let moment = try await publish(fork, input("Fork graduate", price: ceiling), by: creator)
         let quote = try await fork.service.quote(id: moment.info.id, quantity: 1)
         XCTAssertTrue(quote.terminal, "one collect at the ceiling completes the reserve")
@@ -205,6 +206,9 @@ final class V2ForkTests: V2ForkCase {
         let (fork, creator, _, info, _) = try await graduatedMoment()
         let id = info.id
         let trader = try await wallet(usdc: 2_000 * Self.usdcUnit)
+        // Half the threshold moves the pool's price well over 2%: 5 USDC on the small-threshold stack.
+        let terms = try await policy(fork)
+        let moveAmount = terms.threshold / 2
 
         // A round trip of 200 USDC: 1% of the USDC side to the hook each way, half of it for buybacks (≥ 1 USDC).
         try await swap(fork, info, buy: true, amount: 200 * Self.usdcUnit, trader)
@@ -226,7 +230,7 @@ final class V2ForkTests: V2ForkCase {
 
         let keeper = try await wallet()
         // A >2% move in this block: a buyback simulated in it is refused (PriceMoved), and nothing is signed.
-        try await swap(fork, info, buy: true, amount: 5 * Self.usdcUnit, trader)
+        try await swap(fork, info, buy: true, amount: moveAmount, trader)
         let moved = await refusal(await fork.service.buybackPlan(momentId: id, minCoinOut: 0), keeper)
         XCTAssertEqual(moved, sentence("PriceMoved"))
         XCTAssertEqual(keeper.signatures, 0)
@@ -234,7 +238,7 @@ final class V2ForkTests: V2ForkCase {
         // The same move and a buyback in ONE block on chain: the swap first (the higher tip), then the round, both
         // pending until the block is mined. The contract's guard reverts the round; raw sends, as no app plan can see
         // a pending swap.
-        let move = try await swapPlan(fork, info, buy: true, amount: 5 * Self.usdcUnit, trader)
+        let move = try await swapPlan(fork, info, buy: true, amount: moveAmount, trader)
         for step in move.dropLast() where try await sender.request(for: step, owner: trader.address) != nil { try await run([step], trader) }
         let roundPlan = await fork.service.buybackPlan(momentId: id, minCoinOut: 0)
         let round = try XCTUnwrap(roundPlan.first?.request)

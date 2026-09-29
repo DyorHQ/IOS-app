@@ -20,7 +20,7 @@ final class MeraV2ForkTests: V2ForkCase {
     /// Collecting, claiming and a creator's withdrawals sign without asking; publishing always asks (launching or
     /// creating, whatever the sheet declares); a collect above what the sheet shows asks; the retired cohorts' claims and
     /// withdrawals stay prompt-free and their collects are on no list. The shipped table, pending, trusts nothing of the
-    /// fork's.
+    /// fork's; wired to this deployment (`DYOR_V2_FORK_RECORDS=shipped`), it trusts the same plans.
     func testThePasskeyScopeOnPlansBuiltAgainstTheFork() async throws {
         let fork = try moments()
         let contracts = Policy.Contracts(moments: fork.addresses)
@@ -78,10 +78,15 @@ final class MeraV2ForkTests: V2ForkCase {
         // The platform's withdrawal is not a creator's: it asks.
         XCTAssertEqual(review(platform, .momentsWithdraw, as: creator.address, contracts: contracts), .ask(.notAllowlisted))
 
-        // The shipped table while v2 is pending trusts none of the fork's contracts.
+        // The shipped table while v2 is pending trusts none of the fork's contracts; once it is this deployment, the
+        // same plans sign without asking.
         if !MomentsAddresses.monadMainnet.isDeployed {
             XCTAssertEqual(review(collect, intent, as: collector.address, contracts: .monadMainnet), .ask(.approval(.spender)))
             XCTAssertEqual(review(claim, .momentsClaim, as: collector.address, contracts: .monadMainnet), .ask(.notAllowlisted))
+        } else if fork.addresses == MomentsAddresses.monadMainnet {
+            XCTAssertEqual(review(collect, intent, as: collector.address, contracts: .monadMainnet), .allowed)
+            XCTAssertEqual(review(claim, .momentsClaim, as: collector.address, contracts: .monadMainnet), .allowed)
+            XCTAssertEqual(review(proceeds, .momentsWithdraw, as: creator.address, contracts: .monadMainnet), .allowed)
         }
     }
 }

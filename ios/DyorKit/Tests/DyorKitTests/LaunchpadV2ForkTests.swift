@@ -6,8 +6,9 @@ import XCTest
 /// The launchpad v2 against a real v2 deployment on a LOCAL anvil fork of Monad (`V2ForkCase` says how to run it), through
 /// the plans DyorKit builds and `TransactionSender`, the path the app takes: the wiring and gate reads, launches on all
 /// four pairs, curve trades against the quotes' floors, holder rewards, a Uniswap v4 graduation and a swap through the
-/// v2 hook, the sweep, and a stuck Monday launch whose fallback only the keepers send. The owner is impersonated on the
-/// fork only, and the Monday executor's code is swapped out on the fork only to make one graduation fail.
+/// v2 hook, the sweep, a stuck Monday launch whose fallback only the keepers send, and a retired launchpad's coin, which
+/// sells and is never bought. The owner is impersonated on the fork only, and the Monday executor's code is swapped out
+/// on the fork only to make one graduation fail.
 final class LaunchpadV2ForkTests: V2ForkCase {
     private func info(_ fork: ForkLaunchpad, _ wallet: Address) async throws -> ProtocolInfo {
         let read = try await fork.service.protocolInfo(extraPairTokens: Token.launchpadPairAssets, account: wallet)
@@ -55,7 +56,10 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         XCTAssertEqual(terms.moduleMismatches, [])
         XCTAssertEqual(terms.accountCanLaunch, true)
         XCTAssertNil(terms.launchBlocker)
+        XCTAssertTrue(terms.configEnabled, "launch config 0")
+        XCTAssertFalse(terms.whitelistEnabled)
         XCTAssertEqual(terms.launchFee, 5 * Self.mon)
+        XCTAssertEqual(terms.protocolFeeShareBps, 5_000)
         XCTAssertEqual(Set(terms.pairs.filter(\.approved).map(\.pair.address)), Set([Address.zero] + Token.launchpadPairAssets), "MON, USDC, AUSD and aBIL")
         XCTAssertEqual(terms.pairs.filter(\.mondayOnly).map(\.pair.address), [Token.abil.address])
         let constants = try await Multicall(rpc: rpc).readAll([
@@ -74,17 +78,21 @@ final class LaunchpadV2ForkTests: V2ForkCase {
 
     // MARK: Launch and trade on every pair
 
-    /// A launch on each approved pair, through the app's plans: MON without a developer buy, USDC with one (approve the
-    /// router, then `launchAndBuy`), AUSD, and aBIL, which the create screen forces to Monday Trade. On each the app buys
-    /// and sells on the curve against its quotes' 99% floors (so ERC-20 transfers of AUSD and aBIL go through the curve
-    /// without `UnsupportedQuoteToken`), and one block later claims the holder rewards those trades queued.
+    /// A launch on each approved pair, through the app's plans: MON and USDC each with and without a developer buy (on
+    /// USDC: approve the router, then `launchAndBuy`), AUSD, and aBIL, which the create screen forces to Monday Trade.
+    /// Each new coin's route is its Launch page, where its curve trades both ways. On each the app buys and sells on the
+    /// curve against its quotes' 99% floors (so ERC-20 transfers of AUSD and aBIL go through the curve without
+    /// `UnsupportedQuoteToken`), and one block later claims the holder rewards those trades queued.
     func testEveryPairLaunchesTradesAndPaysHolders() async throws {
         let fork = try launchpad()
         let wallet = try await richWallet(usdc: 100 * Self.usdcUnit, ausd: 100 * Self.usdcUnit, abil: 2 * Self.mon)
         let terms = try await info(fork, wallet.address)
+        let start = try await latest().number
         let cases: [(symbol: String, pair: Address, developerBuy: BigUInt, buy: BigUInt)] = [
             ("FMON", .zero, 0, 50 * Self.mon),
+            ("FMONB", .zero, 10 * Self.mon, 50 * Self.mon),
             ("FUSD", Monad.usdc, 10 * Self.usdcUnit, 20 * Self.usdcUnit),
+            ("FUSDN", Monad.usdc, 0, 20 * Self.usdcUnit),
             ("FAUSD", Monad.ausd, 0, 20 * Self.usdcUnit),
             ("FRWA", Token.abil.address, 0, Self.mon / 2),
         ]
@@ -109,6 +117,16 @@ final class LaunchpadV2ForkTests: V2ForkCase {
             launches.append(launch)
             let launched = try await balance(launch.token, wallet.address)
             XCTAssertEqual(launched > 0, c.developerBuy > 0, "\(c.symbol): the developer buy lands in the deployer's wallet")
+
+            // Home's token page and the Portfolio open its Launch page, where it buys and sells; Swap refuses nothing.
+            let coin = Token(address: launch.token, symbol: launch.symbol, name: launch.name, decimals: 18, isLaunchpad: true)
+            let route = await fork.service.curveRoute(for: coin)
+            XCTAssertEqual(route.launch?.token, launch.token, c.symbol)
+            XCTAssertEqual(route.launch?.curveBuysOpen, true, c.symbol)
+            XCTAssertEqual(route.notice, LaunchpadCurve.tradeOnLaunchPage, c.symbol)
+            XCTAssertEqual(route.actionTitle(c.symbol), "Trade \(c.symbol) on its Launch page")
+            let swapRefusal = await SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: fork.addresses)).buyRefusal(coin)
+            XCTAssertNil(swapRefusal, c.symbol)
 
             // Buy against the quote's floor.
             let buyQuote = try await fork.service.quoteBuy(curve: launch.curve, quoteIn: c.buy, recipient: wallet.address)
@@ -135,17 +153,15 @@ final class LaunchpadV2ForkTests: V2ForkCase {
             XCTAssertEqual(claimed.pendingRewards, 0, c.symbol)
         }
         let after = try await info(fork, wallet.address)
-        XCTAssertEqual(after.launchCount, cases.count)
+        XCTAssertEqual(after.launchCount, terms.launchCount + cases.count)
 
         // The feed and the wallet's history decode the v2 events: every launch, the wallet's fills and its claims.
-        let deployment = try XCTUnwrap(try record("pending-143.json"))
-        let deployBlock = try XCTUnwrap((deployment["deployBlock"] as? NSNumber)?.uint64Value, "deployBlock")
-        let lookback = try await latest().number - deployBlock + 1
+        let lookback = try await latest().number - start + 1
         let feed = try await fork.service.activity(limit: 100, lookbackBlocks: lookback, launches: launches)
         let launched = Set(feed.compactMap { item -> Address? in if case .launch(let token, _, _) = item.kind { return token }; return nil })
         XCTAssertEqual(launched, Set(launches.map(\.token)))
         let traded = feed.filter { if case .trade = $0.kind { return true }; return false }
-        XCTAssertEqual(traded.count, 2 * cases.count + 1, "a buy and a sell on each curve, and the developer buy")
+        XCTAssertEqual(traded.count, 2 * cases.count + cases.filter { $0.developerBuy > 0 }.count, "a buy and a sell on each curve, and each developer buy")
         let history = await fork.service.walletHistory(wallet: wallet.address, lookbackBlocks: lookback, curves: Set(launches.map(\.curve)))
         XCTAssertEqual(history.fills.filter(\.isBuy).count, cases.count)
         XCTAssertEqual(history.fills.filter { !$0.isBuy }.count, cases.count)
@@ -348,5 +364,62 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         XCTAssertEqual(done.launch.phase, .graduated)
         XCTAssertEqual(done.launch.graduationVenue, .monday)
         XCTAssertEqual(done.stuckSince, 0)
+    }
+
+    // MARK: Retired launchpads
+
+    /// A MON coin still on a retired launchpad's curve, as mainnet has it (the newest `allLaunches` lists): the app builds
+    /// no buy of it, not even through Swap, a passkey account refuses a curve buy built by hand on what the chain says of
+    /// the curve, and its route is its Launch page, where it sells through the app's plan. The coins sold come from a raw
+    /// curve buy on the fork only: on chain the retired curves still take buys, and only the app refuses them.
+    func testARetiredLaunchpadsCurveCoinSellsButIsNeverBought() async throws {
+        let fork = try launchpad()
+        let wallet = try await wallet()
+        let all = try await fork.service.allLaunches()
+        guard let retired = all.first(where: { $0.isSellOnly && $0.curveSellsOpen && $0.pair.isNative }) else {
+            throw XCTSkip("no MON coin on a retired launchpad's curve takes sells on this fork")
+        }
+        XCTAssertTrue(LaunchpadAddresses.isRetired(retired.factory))
+        XCTAssertNotEqual(retired.factory, fork.addresses.factory)
+        XCTAssertFalse(retired.curveBuysOpen)
+        do {
+            _ = try await fork.service.buyPlan(launch: retired, quoteIn: Self.mon, minTokensOut: 0, recipient: wallet.address)
+            XCTFail("the app builds no buy on a retired launchpad's curve")
+        } catch {
+            XCTAssertEqual(error as? LaunchpadError, .retiredLaunchpad)
+        }
+
+        // Swap asks no venue to quote buying it.
+        let coin = Token(address: retired.token, symbol: retired.symbol, name: retired.name, decimals: 18, isLaunchpad: true)
+        let engine = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: fork.addresses))
+        let refusal = await engine.buyRefusal(coin)
+        XCTAssertEqual(refusal, .retiredLaunchpad(retired.token))
+        let quotes = await engine.quotes(for: SwapRequest(tokenIn: .mon, tokenOut: coin, amountIn: Self.mon, slippageBps: 100, account: wallet.address))
+        XCTAssertTrue(quotes.quotes.isEmpty)
+        XCTAssertEqual(Set(quotes.errors.values), [SwapMath.describe(SwapError.retiredLaunchpad(retired.token))])
+
+        // Its route: the Launch page, to sell.
+        let route = await fork.service.curveRoute(for: coin)
+        XCTAssertEqual(route.launch?.token, retired.token)
+        XCTAssertEqual(route.notice, RetiredLaunchpad.sellOnLaunchPage)
+        XCTAssertEqual(route.actionTitle(retired.symbol), "Sell \(retired.symbol) on its Launch page")
+
+        // A curve buy built by hand: a passkey account refuses it, whatever the sheet declared.
+        let data = LaunchpadABI.calldata(LaunchpadABI.Curve.buy, [.uint(Self.mon), .uint(0), .address(wallet.address)])
+        let buy = TransactionStep.call(TransactionRequest(to: retired.curve, data: data, value: Self.mon), label: "Buy (test only)")
+        let call = try XCTUnwrap(Mera.SigningPolicy.Call(step: buy, from: wallet.address))
+        let curves = await fork.service.retiredCurves(among: Mera.SigningPolicy.curveCandidates([call]))
+        XCTAssertEqual(curves, .known([retired.curve: retired.token]))
+        XCTAssertEqual(Mera.SigningPolicy.refusal(call, intent: .ask, account: wallet.address, retiredCurves: curves), .retiredLaunchpad)
+
+        // The sell, through the app's plan against its quote's floor.
+        try await sendAs(wallet.address, to: retired.curve, data: data, value: Self.mon)
+        let held = try await balance(retired.token, wallet.address)
+        XCTAssertGreaterThan(held, 0)
+        let quote = try await fork.service.quoteSell(curve: retired.curve, tokensIn: held)
+        XCTAssertGreaterThan(quote.quoteOut, 0)
+        try await run(await fork.service.sellPlan(launch: retired, tokensIn: held, minQuoteOut: quote.quoteOut * 99 / 100, recipient: wallet.address), wallet)
+        let left = try await balance(retired.token, wallet.address)
+        XCTAssertEqual(left, 0)
     }
 }

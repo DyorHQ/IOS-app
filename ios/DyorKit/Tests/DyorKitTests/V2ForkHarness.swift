@@ -18,6 +18,11 @@ import XCTest
 ///                                                           and a GUARDIAN
 ///                           pending-moments-small-143.json  optional: a second Moments stack with THRESHOLD_USDC=10000000,
 ///                                                           whose Moments graduate for 13.34 USDC (those tests skip without it)
+///                         or `shipped`: the deployment the app ships with, on a fork of mainnet as it stands, with no
+///                         deploy and no Debug override: `LaunchpadAddresses.monadMainnet` and `MomentsAddresses.monadMainnet`
+///                         themselves, the roles and deploy blocks from the committed `contracts/deployments/143.json` and
+///                         `moments-143.json` (checked equal to the tables). Mainnet has no small-threshold stack, so a
+///                         Moment graduates at the owner's threshold there, and c4 is the shipped cohort, not a rehearsal.
 ///
 ///   cd ios/DyorKit && DYOR_V2_FORK_RPC=http://127.0.0.1:8651 DYOR_V2_FORK_RECORDS=<folder> swift test --filter V2ForkTests
 ///
@@ -28,6 +33,8 @@ import XCTest
 class V2ForkCase: XCTestCase {
     private(set) var rpc: RPCClient!
     private var folder: URL!
+    /// `DYOR_V2_FORK_RECORDS=shipped`: the deployment the app ships with, not a fork deploy's.
+    private(set) var shipped = false
     private var snapshot: JSON?
 
     var sender: TransactionSender { TransactionSender(rpc: rpc) }
@@ -50,6 +57,7 @@ class V2ForkCase: XCTestCase {
         let chain = try await rpc.call("eth_chainId")
         guard chain.string.flatMap({ BigUInt(hexQuantity: $0) }) == 143 else { throw XCTSkip("DYOR_V2_FORK_RPC is not a fork of Monad mainnet (chain 143)") }
         self.rpc = rpc
+        shipped = folder == "shipped"
         self.folder = URL(fileURLWithPath: folder)
         snapshot = try await rpc.call("evm_snapshot")
     }
@@ -66,8 +74,13 @@ class V2ForkCase: XCTestCase {
 
     // MARK: Records
 
-    /// A record from DYOR_V2_FORK_RECORDS, or nil when the folder has none by that name.
+    /// The committed mainnet record each fork deploy record stands for when `shipped`.
+    static let shippedRecords = ["pending-143.json": "143.json", "pending-moments-143.json": "moments-143.json"]
+
+    /// A record from DYOR_V2_FORK_RECORDS, or nil when the folder has none by that name. When `shipped`, the committed
+    /// mainnet record in its place (`shippedRecords`); there is none for the small-threshold stack.
     func record(_ name: String) throws -> [String: Any]? {
+        if shipped { return try Self.shippedRecords[name].map(LaunchpadDeploymentTests.deploymentRecord) }
         guard let data = try? Data(contentsOf: folder.appendingPathComponent(name)) else { return nil }
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any], name)
     }
@@ -85,16 +98,21 @@ class V2ForkCase: XCTestCase {
         var service: MomentsService { MomentsService(rpc: rpc, addresses: addresses) }
     }
 
-    /// The Moments deployment in `name` (the c4 one by default); the test is skipped when the folder has none.
+    /// The Moments deployment in `name` (the c4 one by default); the test is skipped when the folder has none. When
+    /// `shipped`, `MomentsAddresses.monadMainnet` itself.
     func moments(_ name: String = "pending-moments-143.json") throws -> ForkMoments {
         guard let record = try record(name) else { throw XCTSkip("no \(name) in DYOR_V2_FORK_RECORDS") }
         func address(_ key: String) throws -> Address { try Self.address(record, key) }
-        let addresses = MomentsAddresses(
+        var addresses = MomentsAddresses(
             factory: try address("factory"), collect: try address("collect"), vesting: try address("vesting"), graduation: try address("graduation"),
             locker: try address("locker"), hook: try address("hook"), buyback: try address("buyback"), usdc: try address("usdc"), permit2: try address("permit2"),
             poolManager: try address("poolManager"), platform: try address("platform"), treasury: try address("treasury"),
             deployBlock: try XCTUnwrap((record["deployBlock"] as? NSNumber)?.uint64Value, "deployBlock"), generation: .v2
         )
+        if shipped {
+            XCTAssertEqual(addresses, MomentsAddresses.monadMainnet, "moments-143.json is the table the app ships")
+            addresses = .monadMainnet
+        }
         return ForkMoments(addresses: addresses, governance: try address("governance"), guardian: try address("guardian"), rpc: rpc)
     }
 
@@ -111,11 +129,17 @@ class V2ForkCase: XCTestCase {
         var service: LaunchpadService { LaunchpadService(rpc: rpc, addresses: addresses, logsRPC: rpc) }
     }
 
+    /// The launchpad deployment; the test is skipped when the folder has none. When `shipped`,
+    /// `LaunchpadAddresses.monadMainnet` itself.
     func launchpad() throws -> ForkLaunchpad {
         guard let record = try record("pending-143.json") else { throw XCTSkip("no v2 launchpad record (pending-143.json) in DYOR_V2_FORK_RECORDS") }
         func address(_ key: String) throws -> Address { try Self.address(record, key) }
-        let addresses = LaunchpadAddresses(factory: try address("factory"), router: try address("launchAndBuyRouter"), escrow: try address("escrow"),
+        var addresses = LaunchpadAddresses(factory: try address("factory"), router: try address("launchAndBuyRouter"), escrow: try address("escrow"),
                                            holderFeeSharing: try address("holderFeeSharing"), hook: try address("hook"), poolManager: try address("poolManager"), generation: .v2)
+        if shipped {
+            XCTAssertEqual(addresses, LaunchpadAddresses.monadMainnet, "143.json is the table the app ships")
+            addresses = .monadMainnet
+        }
         return ForkLaunchpad(addresses: addresses, owner: try address("owner"), mondayExecutor: try address("mondayExecutor"), treasury: try address("treasury"), rpc: rpc)
     }
 

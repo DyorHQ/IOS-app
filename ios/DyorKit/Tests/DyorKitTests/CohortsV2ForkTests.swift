@@ -5,7 +5,7 @@ import XCTest
 
 /// The retired cohorts next to a real v2 deployment on a LOCAL anvil fork of Monad (`V2ForkCase` says how to run it):
 /// cohort 3 (0x0FD4…, "Nature") read and served claim-only by `RetiredMoments` as it stands on mainnet, and the share
-/// links across c1–c3 and a fork v2 cohort named c4 (a Debug fork rehearsal, `MomentLink.Cohort.rehearse`).
+/// links across c1–c3 and c4: a fork v2 cohort (a Debug fork rehearsal, `MomentLink.Cohort.rehearse`) or the shipped one.
 final class CohortsV2ForkTests: V2ForkCase {
     static let cohort3 = MomentsAddresses.retiredMainnet[0]
     static let natureCoin = Address(literal: "0x43682FA268A98a87C946d0b933203a8834b391BF")
@@ -87,13 +87,15 @@ final class CohortsV2ForkTests: V2ForkCase {
         XCTAssertEqual(settled.first?.creatorWithdrawable ?? 0, 0, "nothing left to withdraw")
     }
 
-    /// Links across every cohort with a fork v2 deployment as c4 (a Debug fork rehearsal): every existing name keeps its
-    /// Moment (read from mainnet state through the fork), a c4 Moment named "Nature" is `nature-2`, the c4 id form is the
-    /// NFT's own `external_url` and parses back to it, and the bare id form stays cohort 3's.
+    /// Links across every cohort with a fork v2 deployment as c4 (a Debug fork rehearsal), or the shipped c4 itself:
+    /// every existing name keeps its Moment (read from mainnet state through the fork), a c4 Moment named "Nature" is
+    /// `nature-2` (while c4 has no other), the c4 id form is the NFT's own `external_url` and parses back to it, and the
+    /// bare id form stays cohort 3's.
     func testLinksNameTheRetiredMomentsAndTheForkCohort() async throws {
         let fork = try moments()
-        MomentLink.Cohort.rehearse(liveFactory: fork.addresses.factory)
-        defer { MomentLink.Cohort.rehearse(liveFactory: nil) }
+        // The shipped deployment is c4 as it is; a fork deploy is c4 only in a rehearsal.
+        if !shipped { MomentLink.Cohort.rehearse(liveFactory: fork.addresses.factory) }
+        defer { if !shipped { MomentLink.Cohort.rehearse(liveFactory: nil) } }
         XCTAssertEqual(MomentLink.Cohort.c4.factory, fork.addresses.factory)
 
         let creator = try await wallet()
