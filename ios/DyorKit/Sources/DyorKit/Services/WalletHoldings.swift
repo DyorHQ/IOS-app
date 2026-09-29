@@ -251,12 +251,21 @@ public enum WalletHoldings {
 
     /// The curated tokens among `tokens`, MON included, with no usable price in `prices`, in `tokens` order: cbBTC, LBTC,
     /// ezETH, rETH and aprMON have no pool the price finder looks for, and any curated token's price read can fail on its
-    /// own. Their value is missing, never $0: a list holding one says so, preselects nothing and shows no total, as a
-    /// part passed off as the whole.
+    /// own. Their value is missing, never $0.
     public static func unpricedCurated(_ tokens: [Token], prices: [Address: Double]) -> [Token] {
         tokens.filter { token in
             Token.core(token.address) != nil && !(prices[token.address].map { $0.isFinite && $0 > 0 } ?? false)
         }
+    }
+
+    /// `unpricedCurated`, split by why. `noPool`: those the price finder found no pool for (`PriceService.withoutPool`:
+    /// cbBTC, LBTC, ezETH, rETH, aprMON), which simply have no price. A list names them and leaves them out of its total,
+    /// and a send still starts on the top priced token, so holding any amount of one — a speck anyone can send included —
+    /// changes nothing else. `unread`: those whose price read failed (MON's included), whose price is unknown. A list
+    /// says so, shows no total and preselects nothing, as when the whole price read fails.
+    public static func unpricedCurated(_ tokens: [Token], prices: [Address: Double], noPool: Set<Address>) -> (noPool: [Token], unread: [Token]) {
+        let unpriced = unpricedCurated(tokens, prices: prices)
+        return (unpriced.filter { noPool.contains($0.address) }, unpriced.filter { !noPool.contains($0.address) })
     }
 
     /// Symbols as a list in words: "cbBTC", "cbBTC and LBTC", "cbBTC, LBTC and rETH".

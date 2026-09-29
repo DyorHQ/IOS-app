@@ -34,6 +34,18 @@ final class PoolLookupCacheTests: XCTestCase {
         XCTAssertFalse(cache.needsLookup(token, now: start.addingTimeInterval(cache.hitTTL + 1)))
     }
 
+    /// Only a lookup that completed says a token has no pool: one never looked up, or found, has one or may.
+    func testATokenHasNoPoolOnlyAfterALookupFoundNone() {
+        var cache = PoolLookupCache<String>()
+        XCTAssertFalse(cache.hasNoPool(token), "never looked up")
+        cache.noPool(token, now: start)
+        XCTAssertTrue(cache.hasNoPool(token))
+        XCTAssertTrue(cache.needsLookup(token, now: start.addingTimeInterval(cache.missTTL)))
+        XCTAssertTrue(cache.hasNoPool(token), "due a lookup, but until one completes the last one stands")
+        cache.found(token, "new-pool", now: start.addingTimeInterval(cache.missTTL))
+        XCTAssertFalse(cache.hasNoPool(token))
+    }
+
     func testFindingAPoolClearsAMiss() {
         var cache = PoolLookupCache<String>()
         cache.noPool(token, now: start)

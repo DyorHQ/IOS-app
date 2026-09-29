@@ -32,15 +32,16 @@ final class AssetsModel {
     /// Prices couldn't all be read (`WalletTokens.Ranked.pricesFailed`): some tokens are unpriced, so the holdings total
     /// would be a part passed off as the whole. It isn't shown, and the card says why.
     private(set) var pricesFailed = false
-    /// The curated tokens held with no price (`WalletTokens.Ranked.unpriced`): their value is missing, so no total is
-    /// shown either, and the card names them.
+    /// The curated tokens held that no pool prices (`WalletTokens.Ranked.unpriced`): they simply have no price, so the
+    /// total is of the priced assets, and the card names what it leaves out.
     private(set) var unpriced: [Token] = []
     private(set) var loading = false
     private(set) var loadedFor: Address?
 
+    /// The priced assets' dollar value: a token with no price adds nothing.
     var totalValue: Double { tokens.compactMap(\.value).reduce(0, +) }
-    /// A value is missing (`pricesFailed`, `unpriced`): the total of the rest isn't shown.
-    var valuesMissing: Bool { pricesFailed || !unpriced.isEmpty }
+    /// The holdings total is shown: every price that exists was read, and something is priced.
+    var showsTotal: Bool { !pricesFailed && totalValue > 0 }
 
     func load(env: AppEnvironment, address: Address?, force: Bool) async {
         guard let address else { tokens = []; nfts = []; loadedFor = nil; return }
@@ -111,7 +112,7 @@ struct AssetsCard: View {
                 Text("My Holdings").font(.headline)
                 Spacer()
                 if model.loading { ProgressView().controlSize(.mini) }
-                else if kind == .assets, !model.valuesMissing, model.totalValue > 0 { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
+                else if kind == .assets, model.showsTotal { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
                 else if kind == .nfts, !model.nfts.isEmpty { Text("\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
 
@@ -123,8 +124,9 @@ struct AssetsCard: View {
             if kind == .assets, model.pricesFailed, !model.loading, !model.tokens.isEmpty {
                 Text("Some prices couldn't be read, so values are missing and no total is shown. Pull down to try again.")
                     .font(.footnote).foregroundStyle(.secondary)
-            } else if kind == .assets, !model.unpriced.isEmpty, !model.loading, !model.tokens.isEmpty {
-                Text("No price was found for \(WalletHoldings.symbolList(model.unpriced)), so no total is shown.")
+            } else if kind == .assets, model.showsTotal, !model.unpriced.isEmpty, !model.loading {
+                // A token no pool prices is no failure: the total is of the rest, and says what it leaves out.
+                Text("Doesn't include \(WalletHoldings.symbolList(model.unpriced)): no price found.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if kind == .assets, model.tokens.isEmpty {

@@ -471,7 +471,7 @@ struct SendSheet: View {
                 InlineError(message: "Your balances couldn't be read. Check your connection and try again.")
                 Button("Retry", systemImage: "arrow.clockwise") { attempt += 1 }
             }
-        case .loaded(let held, let complete, _, _, let readingHistory) where held.isEmpty:
+        case .loaded(let held, let complete, _, let readingHistory) where held.isEmpty:
             if readingHistory {
                 // Nothing among MON, the curated tokens and the stored ones: the history may hold more.
                 HStack(spacing: 8) {
@@ -483,7 +483,7 @@ struct SendSheet: View {
             } else {
                 readNotice("No tokens found, but part of your wallet couldn't be read, so some may be missing.")
             }
-        case .loaded(let held, let complete, let pricesFailed, let unpriced, let readingHistory):
+        case .loaded(let held, let complete, let pricesFailed, let readingHistory):
             NavigationLink {
                 SendAssetPicker(assets: held, selected: choice?.id, readingHistory: readingHistory) { choice = $0; droppedChoice = nil }
             } label: {
@@ -497,20 +497,17 @@ struct SendSheet: View {
                     ProgressView().controlSize(.small)
                     Text("Reading your wallet's history. Tokens found there will be added.").font(.footnote).foregroundStyle(.secondary)
                 }
-            } else if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed, unpriced: unpriced) { readNotice(gap) }
+            } else if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }
         }
     }
 
-    /// What part of the read failed, or which curated tokens have no price, in words: nil when all of it was read and
-    /// valued.
-    private static func readGap(complete: Bool, pricesFailed: Bool, unpriced: [Token]) -> String? {
-        let noPrice = unpriced.isEmpty ? nil : "No price was found for \(WalletHoldings.symbolList(unpriced)), so no token was picked for you."
+    /// What part of the read failed, in words: nil when all of it was read. A curated token no pool prices is no
+    /// failure: its row reads "No price", and the top priced token is picked as usual.
+    private static func readGap(complete: Bool, pricesFailed: Bool) -> String? {
         switch (complete, pricesFailed) {
-        case (true, false): return noPrice
+        case (true, false): return nil
         case (true, true): return "Some prices couldn't be read, so values are missing and no token was picked for you."
-        case (false, false):
-            let gap = "Part of your wallet couldn't be read, so a token may be missing from the list."
-            return noPrice.map { gap + " " + $0 } ?? gap
+        case (false, false): return "Part of your wallet couldn't be read, so a token may be missing from the list."
         case (false, true): return "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no token was picked for you."
         }
     }
@@ -540,7 +537,7 @@ struct SendSheet: View {
     /// join the list, ranked again, and a token is preselected (`show`).
     private func readAssets(_ key: String, env: AppEnvironment, session: Session) async {
         guard let address = session.address else {
-            assets = .loaded([], complete: true, pricesFailed: false, unpriced: [])
+            assets = .loaded([], complete: true, pricesFailed: false)
             choice = nil
             assetsKey = key
             return
@@ -580,7 +577,7 @@ struct SendSheet: View {
     /// wallet still holds it, and cleared with the amount once it doesn't, never swapped for another asset; with none,
     /// the default is picked (`WalletHoldings.selection`).
     private func show(_ ranked: WalletTokens.Ranked, complete: Bool, readingHistory: Bool) {
-        assets = .loaded(ranked.tokens, complete: complete, pricesFailed: ranked.pricesFailed, unpriced: ranked.unpriced, readingHistory: readingHistory)
+        assets = .loaded(ranked.tokens, complete: complete, pricesFailed: ranked.pricesFailed, readingHistory: readingHistory)
         if readingHistory {
             guard let current = choice else { return }
             let fresh = ranked.tokens.first { $0.id == current.id }
@@ -591,8 +588,9 @@ struct SendSheet: View {
             balanceToken = fresh?.id
             return
         }
-        // Without every price the list isn't wholly ranked by value: nothing is preselected from it.
-        let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked.tokens, pricesRead: !ranked.valuesMissing)
+        // Without every price that exists the list isn't wholly ranked by value: nothing is preselected from it. A curated
+        // token no pool prices is no gap: it ranks after the priced ones, and the top priced token is picked.
+        let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked.tokens, pricesRead: !ranked.pricesFailed)
         if let previous = choice, kept == nil {
             droppedChoice = previous.token.symbol
             amount = ""
@@ -674,10 +672,10 @@ private enum AssetList: Equatable {
     /// The read failed: shown as a failure with Retry, never as an empty wallet.
     case failed
     /// `complete`: false when part of the wallet's history couldn't be read, so a token may be missing (`WalletTokens.Read`).
-    /// `pricesFailed`: values are missing and the order is by amount; `unpriced`: the curated tokens held with no price
-    /// (`WalletTokens.Ranked`). `readingHistory`: MON, the curated tokens and the stored ones, while the wallet's history
-    /// is still read; the tokens it shows are added when it is.
-    case loaded([HeldToken], complete: Bool, pricesFailed: Bool, unpriced: [Token], readingHistory: Bool = false)
+    /// `pricesFailed`: values are missing and the order is by amount (`WalletTokens.Ranked`). `readingHistory`: MON, the
+    /// curated tokens and the stored ones, while the wallet's history is still read; the tokens it shows are added when it
+    /// is.
+    case loaded([HeldToken], complete: Bool, pricesFailed: Bool, readingHistory: Bool = false)
 }
 
 /// Every token the wallet holds, highest dollar value first (`WalletHoldings.ranked`), searchable by symbol, name or

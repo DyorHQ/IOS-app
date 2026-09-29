@@ -175,7 +175,7 @@ final class AppCoinValueTests: XCTestCase {
         XCTAssertTrue(tokens.contains("async let launches = try? await launchpad.heldLaunches(candidates)"))
         XCTAssertTrue(tokens.contains("complete: (found?.complete ?? false) && coins.complete, curve: found?.curve)"))
         XCTAssertTrue(tokens.contains("let valued = WalletHoldings.pricing(pooled, launches: own.launches, moments: own.momentPrices)"))
-        XCTAssertTrue(tokens.contains("pricesFailed: failed || !own.complete, unpriced:"))
+        XCTAssertTrue(tokens.contains("pricesFailed: failed || !own.complete || !unpriced.unread.isEmpty, unpriced:"))
         XCTAssertTrue(tokens.contains("try? await live.infos(ids: Array(liveIds.values))"))
         XCTAssertTrue(tokens.contains("let price = WalletHoldings.momentPrice(info)"))
         XCTAssertFalse(tokens.contains("live.info(id:"), "never one round trip per Moment")

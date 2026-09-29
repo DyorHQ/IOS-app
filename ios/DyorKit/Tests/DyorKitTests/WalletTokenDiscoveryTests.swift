@@ -144,9 +144,9 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         XCTAssertTrue(source.contains("return await env.walletDiscovery.scan(wallet: address, known: known, wholeHistory: true)"))
         XCTAssertTrue(source.contains("complete: (scan?.complete ?? true) && balancesComplete)"))
         let profile = try String(contentsOf: app.appendingPathComponent("Profile/ProfileView.swift"), encoding: .utf8)
-        XCTAssertTrue(profile.contains("assets = .loaded(ranked.tokens, complete: complete, pricesFailed: ranked.pricesFailed, unpriced: ranked.unpriced, readingHistory: readingHistory)"))
+        XCTAssertTrue(profile.contains("assets = .loaded(ranked.tokens, complete: complete, pricesFailed: ranked.pricesFailed, readingHistory: readingHistory)"))
         XCTAssertTrue(profile.contains("show(ranked, complete: read.complete, readingHistory: false)"))
-        XCTAssertTrue(profile.contains("if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed, unpriced: unpriced) { readNotice(gap) }"))
+        XCTAssertTrue(profile.contains("if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }"))
         XCTAssertTrue(profile.contains("readNotice(\"No tokens found, but part of your wallet couldn't be read"), "an incomplete empty read is never \"nothing to send\"")
     }
 

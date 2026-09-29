@@ -42,11 +42,15 @@ final class PriceLookupOutageTests: XCTestCase {
         PriceChainStub.failLiquidity = true
         let during = try await prices.prices(for: [Self.token])
         XCTAssertNil(during[Self.token.address], "no pool known yet")
+        let unknown = await prices.withoutPool([Self.token])
+        XCTAssertTrue(unknown.isEmpty, "its price is unknown, not absent: a list says a read failed")
 
         // The chain answers again: the very next read finds the pool, with no miss to wait out.
         PriceChainStub.failLiquidity = false
         let after = try await prices.prices(for: [Self.token])
         XCTAssertEqual(try XCTUnwrap(after[Self.token.address]?.usd), 1, accuracy: 1e-9)
+        let priced = await prices.withoutPool([Self.token])
+        XCTAssertTrue(priced.isEmpty)
     }
 
     func testACompleteLookupWithNoLiquidityIsAMiss() async throws {
@@ -55,6 +59,9 @@ final class PriceLookupOutageTests: XCTestCase {
         PriceChainStub.emptyPool = true
         let none = try await prices.prices(for: [Self.token])
         XCTAssertNil(none[Self.token.address])
+        // It simply has no price: a list names it and totals the rest, as no failure.
+        let noPool = await prices.withoutPool([Self.token, .mon])
+        XCTAssertEqual(noPool, [Self.token.address], "a token never looked up is not among them")
         // Remembered for a while: no lookup until the miss expires.
         let lookups = PriceChainStub.getPoolCalls
         _ = try await prices.prices(for: [Self.token])

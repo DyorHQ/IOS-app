@@ -202,7 +202,8 @@ final class WalletHoldingsTests: XCTestCase {
     /// Curated tokens no pool the price finder looks for prices (read on mainnet 2026-09-29: USDe, USD1, mUSD, cbBTC, LBTC,
     /// ezETH, rETH and aprMON have no Uniswap v3, Monday Trade or Nad.fun pool with liquidity against USDC, AUSD or WMON).
     /// The stables among them are dollars, so 500 mUSD leads 10 MON; the others are named, never ranked as worthless in
-    /// silence, and nothing is preselected while one is held.
+    /// silence. Having no price is no failure: a send still starts on the top priced token. Only a curated token whose
+    /// price read failed stops that.
     func testCuratedTokensWithNoPoolAreDollarsOrNamed() throws {
         func core(_ symbol: String) throws -> Token { try XCTUnwrap(Token.core.first { $0.symbol == symbol }) }
         let musd = try core("mUSD"), usde = try core("USDe"), usd1 = try core("USD1"), usdt0 = try core("USDT0"), cbbtc = try core("cbBTC")
@@ -225,21 +226,48 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.stablesAtPar([:], tokens: [usde, usd1]), [usde.address: 1, usd1.address: 1])
         XCTAssertTrue(WalletHoldings.stablesAtPar([:], tokens: [fakeUSDC, meme, cbbtc]).isEmpty, "only the stables' own contracts are dollars")
 
-        // cbBTC has no price: it is named, and nothing is preselected, though mUSD leads.
+        // cbBTC has no pool: it is named, ranked after every priced token, and mUSD, the top priced one, is preselected.
         let withBTC = wallet + [cbbtc, meme]
         let heldBTC = balances.merging([cbbtc.address: units(0.01, cbbtc), meme.address: units(1_000, meme)]) { a, _ in a }
         let valued = WalletHoldings.stablesAtPar(pools.merging([meme.address: 0.001]) { a, _ in a }, tokens: withBTC)
         let list = WalletHoldings.ranked(withBTC, balances: heldBTC, prices: valued, unverified: [])
         XCTAssertEqual(list.map(\.token.symbol), ["mUSD", "MEME", "MON", "cbBTC"])
-        let unpriced = WalletHoldings.unpricedCurated(list.map(\.token), prices: valued)
-        XCTAssertEqual(unpriced, [cbbtc], "a curated token with no price is named; a token of anyone's with none is not")
-        XCTAssertNil(WalletHoldings.selection(keeping: nil, in: list, pricesRead: unpriced.isEmpty))
+        XCTAssertEqual(WalletHoldings.unpricedCurated(list.map(\.token), prices: valued), [cbbtc], "a curated token with no price is named; a token of anyone's with none is not")
+        let noPool = WalletHoldings.unpricedCurated(list.map(\.token), prices: valued, noPool: [cbbtc.address])
+        XCTAssertEqual(noPool.noPool, [cbbtc])
+        XCTAssertTrue(noPool.unread.isEmpty, "no pool is no failure")
+        XCTAssertEqual(WalletHoldings.selection(keeping: nil, in: list, pricesRead: noPool.unread.isEmpty)?.token, musd)
+        XCTAssertEqual(list.compactMap(\.value).reduce(0, +), 501.27, accuracy: 1e-9, "the total is of the priced assets")
+        // Its price read failed instead (no lookup found it missing): unknown, not absent, and nothing is preselected.
+        let unread = WalletHoldings.unpricedCurated(list.map(\.token), prices: valued, noPool: [])
+        XCTAssertEqual(unread.unread, [cbbtc])
+        XCTAssertTrue(unread.noPool.isEmpty)
+        XCTAssertNil(WalletHoldings.selection(keeping: nil, in: list, pricesRead: unread.unread.isEmpty))
         XCTAssertEqual(WalletHoldings.unpricedCurated([Token.mon, meme], prices: [:]), [Token.mon], "MON's own price read can fail too")
+        XCTAssertEqual(WalletHoldings.unpricedCurated([Token.mon, meme], prices: [:], noPool: []).unread, [Token.mon])
         XCTAssertEqual(WalletHoldings.unpricedCurated([Token.mon], prices: [Monad.native: 0]), [Token.mon], "a zero price is no price")
+        XCTAssertTrue(WalletHoldings.unpricedCurated([meme], prices: [:], noPool: [meme.address]).noPool.isEmpty, "only curated tokens are named")
 
         XCTAssertEqual(WalletHoldings.symbolList([cbbtc]), "cbBTC")
         XCTAssertEqual(WalletHoldings.symbolList([cbbtc, try core("LBTC")]), "cbBTC and LBTC")
         XCTAssertEqual(WalletHoldings.symbolList([cbbtc, try core("LBTC"), try core("rETH")]), "cbBTC, LBTC and rETH")
+    }
+
+    /// Dust never switches behaviour: a speck (1 wei) of a curated token no pool prices, which anyone can send to any
+    /// wallet, leaves the order, the token a send starts on and the total as they were. It is only named.
+    func testASpeckOfATokenWithNoPriceChangesNothing() throws {
+        let aprmon = try XCTUnwrap(Token.core.first { $0.symbol == "aprMON" })
+        let prices: [Address: Double] = [Monad.native: 0.03, Monad.usdc: 1]
+        let balances: [Address: BigUInt] = [Monad.native: units(1_000, .mon), Monad.usdc: units(5, .usdc)]
+        let clean = WalletHoldings.ranked([Token.mon, Token.usdc], balances: balances, prices: prices, unverified: [])
+        let dusted = WalletHoldings.ranked([Token.mon, Token.usdc, aprmon], balances: balances.merging([aprmon.address: 1]) { a, _ in a }, prices: prices, unverified: [])
+        let split = WalletHoldings.unpricedCurated(dusted.map(\.token), prices: prices, noPool: [aprmon.address])
+        XCTAssertEqual(split.noPool, [aprmon], "named")
+        XCTAssertTrue(split.unread.isEmpty, "no failure")
+        XCTAssertEqual(dusted.map(\.token.symbol), ["MON", "USDC", "aprMON"], "after every priced token")
+        XCTAssertEqual(WalletHoldings.selection(keeping: nil, in: dusted, pricesRead: split.unread.isEmpty)?.token, .mon)
+        XCTAssertEqual(WalletHoldings.selection(keeping: nil, in: clean)?.token, .mon)
+        XCTAssertEqual(dusted.compactMap(\.value).reduce(0, +), clean.compactMap(\.value).reduce(0, +), accuracy: 1e-9)
     }
 
     func testEmptyWallet() {
@@ -308,7 +336,7 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertLessThan(shown.distance(from: shown.startIndex, to: partial.lowerBound), shown.distance(from: shown.startIndex, to: selection.lowerBound),
                           "nothing is preselected while the history is read")
         XCTAssertTrue(shown[partial.upperBound..<selection.lowerBound].contains("return"))
-        XCTAssertTrue(send.contains("let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked.tokens, pricesRead: !ranked.valuesMissing)"))
+        XCTAssertTrue(send.contains("let kept = WalletHoldings.selection(keeping: choice?.id, in: ranked.tokens, pricesRead: !ranked.pricesFailed)"))
         XCTAssertTrue(send.contains("usd: WalletHoldings.stableUSD(review.token, amount: review.amount)"))
         // Coming back from the token list restarts the form's tasks: the list is read once per wallet and attempt, a
         // finished recipient check stands, and Review takes only a pick from the list as read, with its Unverified mark.
@@ -338,17 +366,25 @@ final class WalletHoldingsTests: XCTestCase {
         let settled = String(launchpad[buy.upperBound..<bought.lowerBound])
         XCTAssertTrue(settled.contains("KnownTokenStore.add(token, owner: session.address)"))
         XCTAssertTrue(settled.contains("KnownTokenStore.markChosen(launch.token, owner: session.address)"))
-        // A failed price read, or a curated token with no price, hides the Portfolio's total and says so, as the Send sheet
-        // does.
+        // A failed price read — the whole of it, a curated token's own, or a DyorHQ coin's value — hides the Portfolio's
+        // total and says so, and a send preselects nothing. A curated token no pool prices is no failure: the Portfolio totals
+        // the priced assets and names what it leaves out, and a send starts on the top priced token, whatever amount of it
+        // is held.
         XCTAssertTrue(assets.contains("failed = result.pricesFailed"))
         XCTAssertTrue(assets.contains("unpricedHeld = result.unpriced"))
-        XCTAssertTrue(assets.contains("var valuesMissing: Bool { pricesFailed || !unpriced.isEmpty }"))
-        XCTAssertTrue(assets.contains("else if kind == .assets, !model.valuesMissing, model.totalValue > 0 {"))
+        XCTAssertTrue(assets.contains("var showsTotal: Bool { !pricesFailed && totalValue > 0 }"))
+        XCTAssertTrue(assets.contains("else if kind == .assets, model.showsTotal {"))
         XCTAssertTrue(assets.contains("if kind == .assets, model.pricesFailed, !model.loading, !model.tokens.isEmpty {"))
-        XCTAssertTrue(assets.contains("} else if kind == .assets, !model.unpriced.isEmpty, !model.loading, !model.tokens.isEmpty {"))
+        XCTAssertTrue(assets.contains("} else if kind == .assets, model.showsTotal, !model.unpriced.isEmpty, !model.loading {"))
+        XCTAssertTrue(assets.contains("Text(\"Doesn't include \\(WalletHoldings.symbolList(model.unpriced)): no price found.\")"))
+        XCTAssertFalse(assets.contains("valuesMissing"))
         XCTAssertTrue(tokens.contains("let pooled = WalletHoldings.stablesAtPar(prices.mapValues(\\.usd), tokens: read.tokens)"))
-        XCTAssertTrue(tokens.contains("unpriced: WalletHoldings.unpricedCurated(read.tokens, prices: valued)"))
-        XCTAssertTrue(send.contains("let noPrice = unpriced.isEmpty ? nil : \"No price was found for \\(WalletHoldings.symbolList(unpriced)), so no token was picked for you.\""))
+        XCTAssertTrue(tokens.contains("noPool = await env.prices.withoutPool(read.tokens)"))
+        XCTAssertTrue(tokens.contains("let unpriced = WalletHoldings.unpricedCurated(read.tokens, prices: valued, noPool: noPool)"))
+        XCTAssertTrue(tokens.contains("pricesFailed: failed || !own.complete || !unpriced.unread.isEmpty, unpriced: unpriced.noPool,"))
+        XCTAssertFalse(tokens.contains("valuesMissing"))
+        XCTAssertFalse(send.contains("No price was found"), "no pool is no gap in the Send list: the row reads No price")
+        XCTAssertTrue(send.contains("guard let value = asset.value else { return \"No price\" }"))
         // A token whose symbol isn't plain shows its contract in the list.
         XCTAssertTrue(send.contains("return asset.unverified || !asset.plainSymbol ?"))
         // After a new read of the list (Retry), Available and Max are the kept pick's balance from that read, then read again.

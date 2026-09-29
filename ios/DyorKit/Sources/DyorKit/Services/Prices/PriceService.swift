@@ -103,6 +103,14 @@ public actor PriceService {
         return map
     }
 
+    /// Which of `tokens` have no pool the price finder looks for: its last lookup of each that read every pool it asks
+    /// about found none with liquidity (`PoolLookupCache.hasNoPool`). Such a token simply has no price. A token
+    /// `prices(for:)` gave no price that isn't among them had a read fail — its lookup, or its price — so its price is
+    /// unknown, not absent.
+    public func withoutPool(_ tokens: [Token]) -> Set<Address> {
+        Set(tokens.map(\.address).filter { pools.hasNoPool($0) })
+    }
+
     /// The prices `prices(for:)` gives without reading the chain: USDC and AUSD at $1, by definition. What a list can
     /// still show when the price read fails, exactly as a read that worked would show it.
     public static func definedPrices(for tokens: [Token]) -> [Address: PriceInfo] {
@@ -377,6 +385,10 @@ struct PoolLookupCache<Source: Sendable>: Sendable {
 
     /// The pool last found for `token`, however old.
     func source(_ token: Address) -> Source? { hits[token]?.source }
+
+    /// Whether the last lookup of `token` that completed found no pool, however old: false for a token never looked up,
+    /// or only by lookups whose reads failed.
+    func hasNoPool(_ token: Address) -> Bool { hits[token] == nil && misses[token] != nil }
 
     mutating func found(_ token: Address, _ source: Source, now: Date) {
         hits[token] = (source, now)
