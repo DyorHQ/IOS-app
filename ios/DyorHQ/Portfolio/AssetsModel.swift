@@ -32,10 +32,15 @@ final class AssetsModel {
     /// Prices couldn't all be read (`WalletTokens.Ranked.pricesFailed`): some tokens are unpriced, so the holdings total
     /// would be a part passed off as the whole. It isn't shown, and the card says why.
     private(set) var pricesFailed = false
+    /// The curated tokens held with no price (`WalletTokens.Ranked.unpriced`): their value is missing, so no total is
+    /// shown either, and the card names them.
+    private(set) var unpriced: [Token] = []
     private(set) var loading = false
     private(set) var loadedFor: Address?
 
     var totalValue: Double { tokens.compactMap(\.value).reduce(0, +) }
+    /// A value is missing (`pricesFailed`, `unpriced`): the total of the rest isn't shown.
+    var valuesMissing: Bool { pricesFailed || !unpriced.isEmpty }
 
     func load(env: AppEnvironment, address: Address?, force: Bool) async {
         guard let address else { tokens = []; nfts = []; loadedFor = nil; return }
@@ -52,6 +57,7 @@ final class AssetsModel {
         var ranked: [TokenAsset] = []
         var found: CurveHoldings?
         var failed = false
+        var unpricedHeld: [Token] = []
         // The Portfolio keeps the order it has always had; the Send sheet ranks the same tokens its own way. The coins on a
         // curve come from the same read that valued them: the launchpads are asked once.
         if let read {
@@ -59,6 +65,7 @@ final class AssetsModel {
             ranked = result.tokens
             found = result.curve
             failed = result.pricesFailed
+            unpricedHeld = result.unpriced
         }
         // As the list marks them: the DyorHQ coins the wallet launched or collected are its own, not Unverified.
         unverified = read == nil ? KnownTokenStore.unverified(owner: address) : Set(ranked.filter(\.unverified).map(\.id))
@@ -69,6 +76,7 @@ final class AssetsModel {
         }
         if let found { curve = found }
         pricesFailed = failed
+        unpriced = unpricedHeld
         tokens = ranked
 
         let moments = (try? await momentsTask) ?? []
@@ -103,7 +111,7 @@ struct AssetsCard: View {
                 Text("My Holdings").font(.headline)
                 Spacer()
                 if model.loading { ProgressView().controlSize(.mini) }
-                else if kind == .assets, !model.pricesFailed, model.totalValue > 0 { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
+                else if kind == .assets, !model.valuesMissing, model.totalValue > 0 { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
                 else if kind == .nfts, !model.nfts.isEmpty { Text("\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
 
@@ -114,6 +122,9 @@ struct AssetsCard: View {
 
             if kind == .assets, model.pricesFailed, !model.loading, !model.tokens.isEmpty {
                 Text("Some prices couldn't be read, so values are missing and no total is shown. Pull down to try again.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else if kind == .assets, !model.unpriced.isEmpty, !model.loading, !model.tokens.isEmpty {
+                Text("No price was found for \(WalletHoldings.symbolList(model.unpriced)), so no total is shown.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if kind == .assets, model.tokens.isEmpty {

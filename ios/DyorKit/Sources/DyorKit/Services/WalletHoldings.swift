@@ -239,4 +239,30 @@ public enum WalletHoldings {
     public static func stableUSD(_ token: Token, amount: BigUInt) -> Double? {
         dollarStables.contains(token.address) ? Amount.units(amount, decimals: token.decimals) : nil
     }
+
+    /// `prices` with each of `tokens` that is a curated dollar stable (`dollarStables`, by address) and has no price at
+    /// $1, as the price finder values USDC and AUSD: USDe, USD1 and mUSD have no pool it looks for, and each is a dollar.
+    /// A stable a pool prices keeps that price.
+    public static func stablesAtPar(_ prices: [Address: Double], tokens: [Token]) -> [Address: Double] {
+        var out = prices
+        for token in tokens where dollarStables.contains(token.address) && out[token.address] == nil { out[token.address] = 1 }
+        return out
+    }
+
+    /// The curated tokens among `tokens`, MON included, with no usable price in `prices`, in `tokens` order: cbBTC, LBTC,
+    /// ezETH, rETH and aprMON have no pool the price finder looks for, and any curated token's price read can fail on its
+    /// own. Their value is missing, never $0: a list holding one says so, preselects nothing and shows no total, as a
+    /// part passed off as the whole.
+    public static func unpricedCurated(_ tokens: [Token], prices: [Address: Double]) -> [Token] {
+        tokens.filter { token in
+            Token.core(token.address) != nil && !(prices[token.address].map { $0.isFinite && $0 > 0 } ?? false)
+        }
+    }
+
+    /// Symbols as a list in words: "cbBTC", "cbBTC and LBTC", "cbBTC, LBTC and rETH".
+    public static func symbolList(_ tokens: [Token]) -> String {
+        let symbols = tokens.map(\.symbol)
+        guard let last = symbols.last else { return "" }
+        return symbols.count == 1 ? last : symbols.dropLast().joined(separator: ", ") + " and " + last
+    }
 }
