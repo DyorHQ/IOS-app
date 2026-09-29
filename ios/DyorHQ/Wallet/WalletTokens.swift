@@ -17,26 +17,37 @@ enum WalletTokens {
         /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12),
         /// except the DyorHQ coins that turn out to be its own (`ranked`).
         let unverified: Set<Address>
-        /// False when part of the wallet's history couldn't be read (`WalletTokenDiscovery.Scan`): a token it received
-        /// outside the app may be missing, which a list says rather than passing `tokens` off as everything.
+        /// False when part of the wallet's history (`WalletTokenDiscovery.Scan`) or of its balances couldn't be read: a
+        /// token it holds may be missing, which a list says rather than passing `tokens` off as everything.
         let complete: Bool
     }
 
-    /// The tokens `address` holds, with their balances. Throws when the balances can't be read, so a failed read is
-    /// never taken for an empty wallet.
+    /// The tokens `address` holds, with their balances (`ERC20.balanceReport`: MON on its own, the curated tokens in a read
+    /// of their own, every other token in bounded reads, so no third-party contract can keep MON or a curated token from
+    /// being read, nor break the whole list). Throws when no balance could be read at all, so a failed read is never
+    /// taken for an empty wallet; a part that couldn't be read leaves the list incomplete (`Read.complete`), with a token
+    /// whose balance read failed left out as it always was when it is one only stored here, and said when it is MON, a
+    /// curated token or one the history just found.
     static func read(env: AppEnvironment, address: Address) async throws -> Read {
         var universe = KnownTokenStore.universe(owner: address)
         let known = Set(universe.map(\.address))
         let scan = await env.walletDiscovery.scan(wallet: address, known: known, wholeHistory: true)
         universe += scan.tokens
         let unverified = KnownTokenStore.unverified(owner: address).union(scan.tokens.map(\.address))
-        let balances = try await ERC20.balances(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)
-        let held = WalletHoldings.held(universe, balances: balances)
+        let report = await ERC20.balanceReport(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)
+        if report.balances.isEmpty, !report.unread.isEmpty || !report.failed.isEmpty { throw BalancesUnread() }
+        let mustRead = Set([Monad.native] + Token.core.map(\.address) + scan.tokens.map(\.address))
+        let balancesComplete = report.unread.isEmpty && report.failed.isDisjoint(with: mustRead)
+        let held = WalletHoldings.held(universe, balances: report.balances)
         // Earlier builds' discovery stored NFT collections as tokens (their `balanceOf` counts editions): left out, as
         // discovery now leaves them out. An edition can't be sent as a token, and it shows under NFTs.
         let collections = await env.walletDiscovery.collections(among: held)
-        return Read(owner: address, tokens: held.filter { !collections.contains($0.address) }, balances: balances, unverified: unverified, complete: scan.complete)
+        return Read(owner: address, tokens: held.filter { !collections.contains($0.address) }, balances: report.balances, unverified: unverified,
+                    complete: scan.complete && balancesComplete)
     }
+
+    /// No balance could be read.
+    struct BalancesUnread: Error {}
 
     /// `read`'s tokens, valued and ranked.
     struct Ranked {

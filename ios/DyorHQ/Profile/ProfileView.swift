@@ -468,7 +468,7 @@ struct SendSheet: View {
             if complete {
                 Text("This wallet holds no tokens on Monad, so there's nothing to send.").foregroundStyle(.secondary)
             } else {
-                readNotice("No tokens found, but part of your wallet's history couldn't be read, so some may be missing.")
+                readNotice("No tokens found, but part of your wallet couldn't be read, so some may be missing.")
             }
         case .loaded(let held, let complete, let pricesFailed):
             NavigationLink {
@@ -488,8 +488,8 @@ struct SendSheet: View {
         switch (complete, pricesFailed) {
         case (true, false): return nil
         case (true, true): return "Prices couldn't be read, so values are missing and no token was picked for you."
-        case (false, false): return "Part of your wallet's history couldn't be read, so a token may be missing from the list."
-        case (false, true): return "Prices and part of your wallet's history couldn't be read, so values and tokens may be missing, and no token was picked for you."
+        case (false, false): return "Part of your wallet couldn't be read, so a token may be missing from the list."
+        case (false, true): return "Prices and part of your wallet couldn't be read, so values and tokens may be missing, and no token was picked for you."
         }
     }
 
