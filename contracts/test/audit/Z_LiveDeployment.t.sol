@@ -18,10 +18,11 @@ import {IMondayV3Factory, IMondayV3Pool} from "../../src/interfaces/IMondayV3.so
 import {IERC20} from "../../src/interfaces/IERC20.sol";
 import {Types} from "../../src/interfaces/ILaunchpad.sol";
 
-/// Smoke test of the LIVE launchpad on a Monad mainnet fork — the stack recorded in deployments/143.json (the
-/// 2026-09-23 relaunch with the rotated wallets: factory 0x6B1C…59dB, treasury 0x5aDb…, fees 0x15ED…): the real
+/// Smoke test of the LIVE launchpad on a Monad mainnet fork — the stack recorded in deployments/143.json (v2, deployed
+/// 2026-09-28: factory 0x3B1f…0b5b, owned by the Owner Safe 0x6D2A…, treasury 0x5aDb…, fees 0x15ED…): the real
 /// factory, curve, hook, executors, Monday pools, fee vault and the real aBIL token — end to end, exactly as users
-/// will hit it. The addresses come from the record, so this follows whatever stack the apps are wired to.
+/// will hit it. The addresses come from the record, so this follows whatever stack the apps are wired to. The stack it
+/// replaced, 0x6B1C…, is Z_Relaunch.t.sol's.
 ///   forge test --code-size-limit 100000000 --match-path test/audit/Z_LiveDeployment.t.sol -vv
 contract LiveDeploymentTest is Test {
     using PoolIdLibrary for PoolKey;
@@ -31,6 +32,7 @@ contract LiveDeploymentTest is Test {
     MemeHook hook;
     MondayFeeVault vault;
     address treasury;
+    string json;
     IPoolManager constant PM = IPoolManager(0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e);
     IMondayV3Factory constant MONDAY = IMondayV3Factory(0xC1e98D0A2a58fB8aBd10ccc30a58efff4080Aa21);
     address constant WMON = 0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A;
@@ -42,7 +44,7 @@ contract LiveDeploymentTest is Test {
 
     function setUp() public {
         vm.createSelectFork("monad");
-        string memory json = vm.readFile("deployments/143.json");
+        json = vm.readFile("deployments/143.json");
         factory = LaunchpadFactory(vm.parseJsonAddress(json, ".factory"));
         sharing = HolderFeeSharing(vm.parseJsonAddress(json, ".holderFeeSharing"));
         hook = MemeHook(payable(vm.parseJsonAddress(json, ".hook")));
@@ -72,6 +74,25 @@ contract LiveDeploymentTest is Test {
             vm.prank(who);
             curve.buy{value: 50_000 ether}(50_000 ether, 0, who);
         }
+    }
+
+    function test_live_wiring_and_owner() public view {
+        address owner = vm.parseJsonAddress(json, ".owner");
+        assertEq(owner, 0x6D2A4D821e57b2B918B97CF575D81738bc16C100, "the Owner Safe (2-of-3)");
+        assertEq(factory.owner(), owner, "the Safe owns the factory");
+        assertEq(factory.pendingOwner(), address(0));
+        assertTrue(factory.modulesSealed(), "no module can be swapped");
+        assertEq(factory.hook(), address(hook));
+        assertEq(factory.holderFeeSharing(), address(sharing));
+        assertEq(factory.escrow(), vm.parseJsonAddress(json, ".escrow"));
+        assertEq(factory.router(), vm.parseJsonAddress(json, ".launchAndBuyRouter"));
+        assertEq(factory.graduationExecutor(), vm.parseJsonAddress(json, ".graduationExecutor"));
+        assertEq(factory.mondayExecutor(), vm.parseJsonAddress(json, ".mondayExecutor"));
+        assertEq(factory.protocolFeeRecipient(), treasury, "protocol fees go to the treasury");
+        assertEq(factory.protocolFeeShareBps(), 5000);
+        assertFalse(factory.whitelistEnabled(), "open to every creator");
+        assertEq(vault.owner(), owner, "the Safe owns the Monday fee vault");
+        assertEq(vault.lpFeeRecipient(), vm.parseJsonAddress(json, ".feesRecipient"));
     }
 
     function test_live_monday_native_launch_graduates_into_vault_position() public {
@@ -122,8 +143,11 @@ contract LiveDeploymentTest is Test {
         assertTrue(hook.launches(l.poolId).registered);
         assertEq(hook.launches(l.poolId).protocolShareBps, 5000, "hook carries the pinned split");
 
-        // Buy through the REAL PoolManager with a test router: the hook charges 1% in MON.
+        // Buy through the REAL PoolManager with a test router: the hook charges the 1% fee and the 5% creator tax in
+        // MON. With holder fee sharing, the holders' cut (half the fee, and the tax) is queued for them in the same
+        // swap and the protocol's half waits in the hook for the sweep (LP-2).
         PoolSwapTest router = new PoolSwapTest(PM);
+        (uint256 queued0,) = sharing.queuedRewards(t);
         vm.prank(carol);
         router.swap{value: 1_000 ether}(
             key,
@@ -132,8 +156,13 @@ contract LiveDeploymentTest is Test {
             ""
         );
         assertGt(LaunchToken(t).balanceOf(carol), 0, "carol bought from the graduated pool");
-        assertEq(hook.pendingFees(key.toId(), Currency.wrap(address(0))), 10 ether, "1% hook fee on 1,000 MON");
+        assertEq(hook.pendingProtocolFees(key.toId(), Currency.wrap(address(0))), 5 ether, "the protocol's half of the 1% fee on 1,000 MON");
+        assertEq(hook.pendingFees(key.toId(), Currency.wrap(address(0))), 0, "no holder backlog in the hook");
+        assertEq(hook.pendingCreatorTax(key.toId(), Currency.wrap(address(0))), 0);
+        (uint256 queued1,) = sharing.queuedRewards(t);
+        assertEq(queued1 - queued0, 55 ether, "the holders' half of the fee and the 5% tax, queued in the swap");
         hook.sweepPoolFees(l.poolId, Currency.wrap(address(0)));
+        assertEq(hook.pendingProtocolFees(key.toId(), Currency.wrap(address(0))), 0, "the sweep pays the protocol");
         vm.roll(block.number + 1);
         assertGt(sharing.pendingRewards(t, alice), 0, "holders receive pool fees a block later");
     }
