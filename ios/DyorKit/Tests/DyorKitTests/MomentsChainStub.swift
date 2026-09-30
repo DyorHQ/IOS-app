@@ -24,6 +24,7 @@ final class MomentsChainStub: URLProtocol {
     nonisolated(unsafe) private static var refused: Set<String> = []
     nonisolated(unsafe) private static var breaking: Set<Address> = []
     nonisolated(unsafe) private static var breakingSelectors: Set<Data> = []
+    nonisolated(unsafe) private static var starving: Set<Address> = []
     nonisolated(unsafe) private static var nativeBalances: [Address: BigUInt] = [:]
 
     struct Call: Hashable, CustomStringConvertible {
@@ -41,10 +42,12 @@ final class MomentsChainStub: URLProtocol {
     /// `refusing`: JSON-RPC methods the node answers with an error (not a throttle, so nothing retries), as a node that
     /// can't serve them. `breaking`: contracts that make any `eth_call` reaching them fail as a whole, out of gas — as a
     /// token whose return bomb exhausts a Multicall3 aggregate does, taking every other call in it down too.
-    /// `breakingSelectors` do the same for any call with one of those selectors, whatever it reaches. `native`: what
-    /// `eth_getBalance` answers for each account (any other account reverts).
+    /// `breakingSelectors` do the same for any call with one of those selectors, whatever it reaches. `starving`: contracts
+    /// that burn the gas of the aggregate they are in, which still answers: their sub-call and every one after it fail, as
+    /// Multicall3 reports a sub-call starved of gas (`(false, 0x)`). `native`: what `eth_getBalance` answers for each
+    /// account (any other account reverts).
     static func install(_ answer: @escaping Answer, logs: [Log] = [], receipts: [Data: [Log]] = [:], refusing: Set<String> = [], breaking: Set<Address> = [],
-                        breakingSelectors: Set<Data> = [], native: [Address: BigUInt] = [:]) {
+                        breakingSelectors: Set<Data> = [], starving: Set<Address> = [], native: [Address: BigUInt] = [:]) {
         lock.lock(); defer { lock.unlock() }
         self.answer = answer
         asked = []
@@ -54,6 +57,7 @@ final class MomentsChainStub: URLProtocol {
         refused = refusing
         self.breaking = breaking
         self.breakingSelectors = breakingSelectors
+        self.starving = starving
         nativeBalances = native
     }
 
@@ -126,15 +130,17 @@ final class MomentsChainStub: URLProtocol {
         }
         guard call["method"].string == "eth_call", let tx = call["params"].array?.first,
               let to = tx["to"].string.flatMap(Address.init), let data = tx["data"].string.flatMap({ Data(hex: $0) }) else { return reverted }
-        lock.lock(); let answer = self.answer; let breaking = self.breaking; let breakingSelectors = self.breakingSelectors; lock.unlock()
+        lock.lock(); let answer = self.answer; let breaking = self.breaking; let breakingSelectors = self.breakingSelectors; let starving = self.starving; lock.unlock()
         let outOfGas: JSON = .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(-32000), "message": .string("out of gas")])])
         if to == Multicall.address, let inner = try? ABI.decode(data.dropFirst(4), "(address,bool,bytes)[]")[0].elements {
             var batch: [Call] = []
             var out: [ABIValue] = []
+            var starved = false
             for item in inner {
                 let target = item[0].address, calldata = item[2].bytes
                 batch.append(Call(to: target, selector: calldata.prefix(4).hexString))
-                let returned = answer(target, calldata)
+                starved = starved || starving.contains(target)
+                let returned = starved ? nil : answer(target, calldata)
                 out.append(.tuple([.bool(returned != nil), .bytes(returned ?? Data())]))
             }
             record(batch)

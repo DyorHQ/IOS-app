@@ -42,30 +42,55 @@ public enum ERC20 {
         await metadataReport(addresses, multicall: multicall).tokens
     }
 
-    /// `metadataBatch`, saying which tokens weren't read at all (`unread`): those in a read the node or the connection
-    /// didn't answer, so nothing is known of them. A token with no readable symbol isn't unread: it is dropped, as
-    /// `metadata` drops it.
+    /// `metadataBatch`, saying which tokens weren't read at all (`unread`): those whose read got no answer (the connection,
+    /// or a throttle that outlasted the client's retries), so nothing is known of them. Tokens are read 50 a read, so no one
+    /// token can keep the others from being read: a read the node refuses as a whole (one token's return bomb makes the
+    /// aggregate run out of gas) and a token whose symbol can't be read in its read (it has none, it reverts, or a token
+    /// before it starved it of gas, which Multicall3 reports as a failed call) are read again, each token on its own, a
+    /// few at a time. A token whose symbol still can't be read on its own is dropped, as `metadata` drops it: never unread.
     public static func metadataReport(_ addresses: [Address], multicall: Multicall) async -> (tokens: [Token], unread: [Address]) {
-        var out: [Token] = []
-        var unread: [Address] = []
+        var found: [Address: Token] = [:]
+        var unread = Set<Address>()
+        var alone: [Address] = []
         var index = 0
         while index < addresses.count {
             let batch = Array(addresses[index ..< min(index + 50, addresses.count)])
             index += batch.count
-            guard let calls = try? batch.flatMap({ try [symbol($0), name($0), decimals($0)] }),
-                  let results = try? await multicall.read(calls) else { unread += batch; continue }
-            for (offset, address) in batch.enumerated() {
-                let base = offset * 3
-                guard base + 2 < results.count else { unread.append(address); continue }
-                guard case .success(let s) = results[base], let sym = s.first.flatMap(\.stringOrNil), !sym.isEmpty else { continue }
-                var name = sym
-                if case .success(let n) = results[base + 1], let value = n.first.flatMap(\.stringOrNil), !value.isEmpty { name = value }
-                var decimals = 18
-                if case .success(let d) = results[base + 2], let value = d.first.flatMap(\.uintOrNil), value <= 36 { decimals = Int(value) }
-                out.append(Token(address: address, symbol: sym, name: name, decimals: decimals))
+            switch await captured({ try await multicall.read(try batch.flatMap { try [symbol($0), name($0), decimals($0)] }) }) {
+            case .success(let results):
+                for (offset, address) in batch.enumerated() {
+                    if let token = token(address, results.dropFirst(offset * 3).prefix(3)) { found[address] = token } else { alone.append(address) }
+                }
+            case .failure(let error):
+                if isCallError(error) { alone += batch } else { unread.formUnion(batch) }
             }
         }
-        return (out, unread)
+        for start in stride(from: 0, to: alone.count, by: 5) {
+            await withTaskGroup(of: (address: Address, outcome: Result<[Result<[ABIValue], Error>], Error>).self) { tasks in
+                for address in alone[start ..< min(start + 5, alone.count)] {
+                    tasks.addTask { (address, await captured { try await multicall.read([try symbol(address), try name(address), try decimals(address)]) }) }
+                }
+                for await (address, outcome) in tasks {
+                    switch outcome {
+                    case .success(let results): found[address] = token(address, results[...])
+                    case .failure(let error): if !isCallError(error) { unread.insert(address) }
+                    }
+                }
+            }
+        }
+        return (addresses.compactMap { found[$0] }, addresses.filter(unread.contains))
+    }
+
+    /// One token from its symbol, name and decimals reads, in that order: nil when the symbol isn't a readable string. The
+    /// name falls back to the symbol and the decimals to 18, as `metadata` has them.
+    private static func token(_ address: Address, _ reads: ArraySlice<Result<[ABIValue], Error>>) -> Token? {
+        let reads = Array(reads)
+        guard reads.count == 3, case .success(let s) = reads[0], let symbol = s.first.flatMap(\.stringOrNil), !symbol.isEmpty else { return nil }
+        var name = symbol
+        if case .success(let n) = reads[1], let value = n.first.flatMap(\.stringOrNil), !value.isEmpty { name = value }
+        var decimals = 18
+        if case .success(let d) = reads[2], let value = d.first.flatMap(\.uintOrNil), value <= 36 { decimals = Int(value) }
+        return Token(address: address, symbol: symbol, name: name, decimals: decimals)
     }
 
     /// Balances, and which couldn't be read (`balanceReport`).

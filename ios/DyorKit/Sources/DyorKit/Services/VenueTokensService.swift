@@ -37,7 +37,8 @@ public struct VenueTokensService: Sendable {
         /// Whether more tokens gained a pool than the read's `limit`: the first are here, and a read of the same window
         /// that excludes them, and `dropped`, brings the rest.
         public var capped: Bool
-        /// Addresses read with no readable symbol, left out as `ERC20.metadata` leaves them out.
+        /// Addresses with no readable symbol, read on their own (`ERC20.metadataReport`), left out as `ERC20.metadata`
+        /// leaves them out.
         public var dropped: [Address]
 
         public init(tokens: [Token], complete: Bool, capped: Bool = false, dropped: [Address] = []) {

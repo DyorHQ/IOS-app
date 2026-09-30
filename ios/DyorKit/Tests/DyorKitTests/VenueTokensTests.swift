@@ -32,14 +32,14 @@ final class VenueTokensTests: XCTestCase {
     }
 
     /// Every token answers its symbol ("T" and its number), name and 18 decimals; `breaking` tokens take down any
-    /// metadata read that reaches them (`MomentsChainStub`).
-    private func installMetadata(breaking: Set<Address> = []) {
+    /// metadata read that reaches them, and `starving` ones starve every call after theirs in the read (`MomentsChainStub`).
+    private func installMetadata(breaking: Set<Address> = [], starving: Set<Address> = []) {
         MomentsChainStub.install({ to, data in
             let selector = data.prefix(4)
             if selector == ABI.selector("symbol()") || selector == ABI.selector("name()") { return try! ABI.encode([.string("T\(to.data.last ?? 0)")], "string") }
             if selector == ABI.selector("decimals()") { return try! ABI.encode([.uint(18)], "uint8") }
             return nil
-        }, breaking: breaking)
+        }, breaking: breaking, starving: starving)
     }
 
     /// The service on the stubs. `concurrency` only makes a test quicker: it changes how many ranges share a round trip,
@@ -149,14 +149,51 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertEqual(checkpoints, [0, 1_000], "the checkpoint waits for the read that leaves the dropped out")
     }
 
+    /// The finding: a token that takes its read down (a return bomb, or a symbol that burns the gas) made the other 49
+    /// tokens of its read unread, so the segment was never read in full and the checkpoint never moved again. Its read is
+    /// now read again token by token: the others are found, the token at fault alone is dropped, and the segment is read
+    /// in full.
+    func testATokenThatBreaksItsReadCostsOnlyItself() async throws {
+        installMetadata(breaking: [token(2)])
+        LogsStub.install(head: 1_000, logs: [pool(1, at: 10), pool(2, at: 20), pool(3, at: 30)]) { _ in nil }
+        let scan = await service().tokens(fromBlock: 0, toBlock: 1_000)
+        XCTAssertTrue(scan.complete)
+        XCTAssertEqual(scan.tokens.map(\.symbol), ["T3", "T1"])
+        XCTAssertEqual(scan.dropped, [token(2)])
+        let refreshed = await service().refresh(tokens: [], checkpoint: 0, logos: { [:] }) { _ in }
+        let read = try XCTUnwrap(refreshed)
+        XCTAssertEqual(read.checkpoint, 1_000, "the checkpoint moves on")
+        XCTAssertEqual(read.tokens.map(\.symbol), ["T3", "T1"])
+    }
+
+    /// The finding: a token starved of gas by a token before it in the same read (Multicall3 reports it as a failed call,
+    /// as it does a token with no symbol) was dropped, and the checkpoint moved past its pool for good. A token whose
+    /// symbol can't be read in its read is read again on its own: only one that still can't be read is dropped.
+    func testATokenStarvedOfGasInItsReadIsFoundOnItsOwn() async throws {
+        let (burner, victim) = (token(9), token(8))
+        installMetadata(starving: [burner])
+        // The burner's v3 pool is read first (Uniswap v3 and Monday Trade, newest first, then v4), so T1 on Monday Trade
+        // and the victim on v4 come after it in the read.
+        LogsStub.install(head: 1_000, logs: [pool(1, at: 10), pool(8, at: 20), pool(9, at: 30)]) { _ in nil }
+        let scan = await service().tokens(fromBlock: 0, toBlock: 1_000)
+        XCTAssertTrue(scan.complete)
+        XCTAssertEqual(scan.tokens.map(\.symbol), ["T1", "T8"])
+        XCTAssertEqual(scan.dropped, [burner], "the burner, read on its own, still has no symbol")
+        let direct = await ERC20.metadataReport([burner, victim, token(1)], multicall: Multicall(rpc: MomentsChainStub.rpc()))
+        XCTAssertEqual(direct.tokens.map(\.address), [victim, token(1)])
+        XCTAssertTrue(direct.unread.isEmpty)
+    }
+
     /// A token whose metadata read got no answer isn't dropped for good: the read is incomplete, so the checkpoint stays
     /// and the segment is read again next time. One with no readable symbol is dropped, as it always was.
     func testAMetadataReadWithNoAnswerLeavesTheSegmentToBeReadAgain() async throws {
-        installMetadata(breaking: [token(2)])
+        // The node answers no `eth_call` ("header not found"): nothing is known of either token.
+        MomentsChainStub.install({ _, _ in nil }, refusing: ["eth_call"])
         LogsStub.install(head: 1_000, logs: [pool(1, at: 10), pool(2, at: 20)]) { _ in nil }
         let scan = await service().tokens(fromBlock: 0, toBlock: 1_000)
-        XCTAssertFalse(scan.complete, "T2 took the read down")
+        XCTAssertFalse(scan.complete, "no answer")
         XCTAssertTrue(scan.tokens.isEmpty)
+        XCTAssertTrue(scan.dropped.isEmpty, "unread, not dropped")
         let saves = Saves()
         let refreshed = await service().refresh(tokens: [], checkpoint: 0, logos: { [:] }) { await saves.record($0) }
         let read = try XCTUnwrap(refreshed)
