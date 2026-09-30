@@ -25,6 +25,9 @@ struct HomeView: View {
     @State private var showTransfer = false
     @State private var showSearch = false
     @State private var searchTarget: MarketRow?
+    /// The Top Tokens rank column: 16 pt at the default text size, grown with the rank's footnote text so a digit never
+    /// shows as "…" at the accessibility sizes. The dividers are inset by it too (`TokenListRow.textInset`).
+    @ScaledMetric(relativeTo: .footnote) private var rankWidth: CGFloat = 16
 
     var body: some View {
         NavigationStack {
@@ -242,9 +245,9 @@ struct HomeView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(tokens.prefix(6).enumerated()), id: \.element.id) { index, row in
-                        NavigationLink(value: row) { TokenListRow(rank: index + 1, row: row) }
+                        NavigationLink(value: row) { TokenListRow(rank: index + 1, row: row, rankWidth: rankWidth) }
                             .buttonStyle(.plain)
-                        if index < min(5, tokens.count - 1) { Divider().padding(.leading, 74) } // under the text: rank 16 + 12 + logo 34 + 12
+                        if index < min(5, tokens.count - 1) { Divider().padding(.leading, TokenListRow.textInset(rankWidth: rankWidth)) }
                     }
                 }
             }
@@ -417,11 +420,19 @@ struct AllocationDonut: View {
 private struct TokenListRow: View {
     let rank: Int
     let row: MarketRow
+    /// The rank column's width (`HomeView.rankWidth`).
+    let rankWidth: CGFloat
+
+    private static let spacing: CGFloat = 12
+    private static let logoSize: CGFloat = 34
+
+    /// Where the row's text starts, for the divider under it: rank, gap, logo, gap (74 pt at the default text size).
+    static func textInset(rankWidth: CGFloat) -> CGFloat { rankWidth + spacing + logoSize + spacing }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Text("\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: 16, alignment: .center)
-            TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: 34)
+        HStack(spacing: Self.spacing) {
+            Text("\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: rankWidth, alignment: .center)
+            TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: Self.logoSize)
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.token.symbol).font(.subheadline.weight(.semibold))
                 Text(row.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
