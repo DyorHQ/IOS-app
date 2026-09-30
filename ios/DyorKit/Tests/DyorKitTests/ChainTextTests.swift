@@ -4,8 +4,9 @@ import XCTest
 
 /// Text read from the chain is whatever bytes its writer chose: a launch's name, symbol, logo, description and links are
 /// its creator's, a Moment's coin name, symbol and provenance too, and so is any token's or collection's text. Bytes that
-/// aren't valid UTF-8 read as U+FFFD (`ABI.StringDecoding.lossy`), and a list never fails, or loses its other items, for
-/// one item it can't read. Text is written here as `bytes`, whose ABI layout is `string`'s.
+/// aren't valid UTF-8 read as U+FFFD (`ABI.StringDecoding.lossy`), and a list never fails, or loses an item, for text it
+/// can't read: the item shows stand-ins (`ChainText.unreadable`). A protocol value that can't be read fails the read
+/// (`ChainListUnread`), never shortens the list. Text is written here as `bytes`, whose ABI layout is `string`'s.
 final class ChainTextTests: XCTestCase {
     /// Ill-formed UTF-8: a lone continuation byte, overlong encodings, truncated sequences, a UTF-16 surrogate, a code
     /// point past U+10FFFF, and bytes that never occur in UTF-8.
@@ -103,16 +104,16 @@ final class ChainTextTests: XCTestCase {
 
     // MARK: Launchpad
 
-    func testALaunchWithIllFormedTextListsAndOneThatCantBeReadIsLeftOut() async throws {
+    func testALaunchWithIllFormedTextListsAndOneWhoseTextCantBeReadShowsStandIns() async throws {
         typealias C = TextLaunchpadChain
-        MomentsChainStub.install { C().answer($0, $1) }
+        MomentsChainStub.install { C(failing: .text).answer($0, $1) }
         let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: C.live)
 
         let launches = try await service.launches()
-        XCTAssertEqual(launches.map(\.token), [C.poisoned, C.plain], "newest first; only the launch whose reads fail is left out")
+        XCTAssertEqual(launches.map(\.token), [C.broken, C.poisoned, C.plain], "newest first; every launch the factory lists")
         let plain = try XCTUnwrap(launches.last)
         XCTAssertEqual([plain.name, plain.symbol, plain.logo, plain.description, plain.socials.website], ["Plain Coin", "PLAIN", "https://example.com/plain.png", "Plain", "https://example.com"])
-        let poisoned = try XCTUnwrap(launches.first)
+        let poisoned = launches[1]
         let fields = [poisoned.name, poisoned.symbol, poisoned.logo, poisoned.description,
                       poisoned.socials.twitter, poisoned.socials.telegram, poisoned.socials.discord, poisoned.socials.website, poisoned.socials.farcaster]
         XCTAssertEqual(fields.count, C.poisonedText.count)
@@ -120,52 +121,111 @@ final class ChainTextTests: XCTestCase {
             XCTAssertTrue(Self.isReplaced(field), "\(raw.hexString) read as \(field.debugDescription)")
         }
         XCTAssertEqual(poisoned.price, 1_000, "the numbers of a launch with ill-formed text are read as usual")
+        let unreadable = try XCTUnwrap(launches.first)
+        XCTAssertEqual([unreadable.name, unreadable.symbol], [ChainText.unreadable, ChainText.unreadable])
+        XCTAssertEqual([unreadable.logo, unreadable.description, unreadable.socials.website], ["", "", ""])
+        XCTAssertEqual(unreadable.price, 1_000, "the numbers of a launch whose text can't be read are read as usual")
 
         let all = try await service.allLaunches()
-        XCTAssertEqual(all.map(\.token), [C.poisoned, C.plain])
+        XCTAssertEqual(all.map(\.token), [C.broken, C.poisoned, C.plain])
         let detail = try await service.launch(token: C.poisoned)
         XCTAssertEqual(detail?.launch.name, poisoned.name)
-        let brokenDetail = try await service.launch(token: C.broken)
-        XCTAssertNil(brokenDetail)
+        let unreadableDetail = try await service.launch(token: C.broken)
+        XCTAssertEqual(unreadableDetail?.launch.name, ChainText.unreadable)
 
-        // Home's and the Portfolio's launch holdings: the unreadable coin stays recorded, without a launch; the others keep theirs.
+        // Home's and the Portfolio's launch holdings: every coin is read as its launch.
         let wallet = C.tokens.map { Token(address: $0, symbol: "?", name: "?", decimals: 18) }
         let held = try await service.heldLaunches(wallet)
         XCTAssertEqual(Set(held.factories.keys), Set(C.tokens))
-        XCTAssertEqual(Set(held.launches.keys), [C.plain, C.poisoned])
+        XCTAssertEqual(Set(held.launches.keys), Set(C.tokens))
         XCTAssertEqual(held.launches[C.poisoned]?.symbol, poisoned.symbol)
-        XCTAssertFalse(held.complete)
+        XCTAssertTrue(held.complete)
         let curve = try await service.curveHoldings(wallet)
-        XCTAssertEqual(Set(curve.launches.keys), [C.plain, C.poisoned])
+        XCTAssertEqual(Set(curve.launches.keys), Set(C.tokens))
+    }
+
+    /// A launch whose curve refuses `price()`: the read didn't happen, so the board and the coin's page throw (Retry),
+    /// never a shorter board or "not found"; the holdings keep the coins recorded and say they aren't complete.
+    func testALaunchWhoseProtocolReadFailsFailsTheReadNotTheList() async throws {
+        typealias C = TextLaunchpadChain
+        MomentsChainStub.install { C(failing: .price).answer($0, $1) }
+        let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: C.live)
+        do {
+            let listed = try await service.launches()
+            XCTFail("listed \(listed.map(\.token))")
+        } catch {
+            XCTAssertEqual(error as? ChainListUnread, ChainListUnread("A launch"))
+        }
+        do {
+            let page = try await service.launch(token: C.broken)
+            XCTFail("the page read as \(String(describing: page))")
+        } catch {
+            XCTAssertEqual(error as? ChainListUnread, ChainListUnread("A launch"))
+        }
+        let plain = try await service.launch(token: C.plain)
+        XCTAssertEqual(plain?.launch.name, "Plain Coin")
+        let wallet = C.tokens.map { Token(address: $0, symbol: "?", name: "?", decimals: 18) }
+        let held = try await service.heldLaunches(wallet)
+        XCTAssertEqual(Set(held.factories.keys), Set(C.tokens), "every coin stays recorded")
+        XCTAssertFalse(held.complete)
     }
 
     // MARK: Moments
 
-    func testAMomentWithIllFormedTextListsAndOneThatCantBeReadIsLeftOut() async throws {
+    func testAMomentWithIllFormedTextListsAndOneWhoseTextCantBeReadShowsStandIns() async throws {
         typealias C = TextMomentsChain
-        MomentsChainStub.install { C().answer($0, $1) }
+        MomentsChainStub.install { C(failing: .text).answer($0, $1) }
         let service = MomentsService(rpc: MomentsChainStub.rpc(), addresses: C.stack.addresses)
 
         let moments = try await service.moments()
-        XCTAssertEqual(moments.map(\.id), [2, 1], "newest first; only the Moment whose reads fail is left out")
+        XCTAssertEqual(moments.map(\.id), [3, 2, 1], "newest first; every Moment the cohort counts")
         XCTAssertEqual(moments.last?.name, "Plain")
-        let poisoned = try XCTUnwrap(moments.first)
+        let poisoned = moments[1]
         for field in [poisoned.name, poisoned.symbol, poisoned.provenance.mediaURI, poisoned.provenance.place, poisoned.provenance.animationURI] {
             XCTAssertTrue(Self.isReplaced(field), field.debugDescription)
         }
+        let unreadable = try XCTUnwrap(moments.first)
+        XCTAssertEqual([unreadable.name, unreadable.symbol], [ChainText.unreadable, ChainText.unreadable])
+        XCTAssertEqual([unreadable.provenance.mediaURI, unreadable.provenance.place], ["", ""])
+        XCTAssertEqual(unreadable.editions, 1, "the numbers of a Moment whose text can't be read are read as usual")
         let infos = try await service.infos(ids: [1, 2, 3])
-        XCTAssertEqual(infos.map(\.id), [1, 2])
-        let broken = try await service.info(id: 3)
-        XCTAssertNil(broken)
+        XCTAssertEqual(infos.map(\.id), [1, 2, 3])
+        let opened = try await service.info(id: 3)
+        XCTAssertEqual(opened?.name, ChainText.unreadable)
+        let past = try await service.info(id: 4)
+        XCTAssertNil(past, "an id past the count is no Moment")
 
         let portfolio = try await service.portfolio(account: C.collector)
         XCTAssertEqual(portfolio.rows.map(\.moment.id), [2])
         XCTAssertEqual(portfolio.rows.first?.moment.name, poisoned.name)
+    }
+
+    /// A Moment whose ledger read fails: the read didn't happen, so the feed, the wallet's Moments and the Moment's page
+    /// throw (Retry), never a shorter list or "no Moment"; name links still read, since names are all they need.
+    func testAMomentWhoseProtocolReadFailsFailsTheReadNotTheList() async throws {
+        typealias C = TextMomentsChain
+        MomentsChainStub.install { C(failing: .ledger).answer($0, $1) }
+        let service = MomentsService(rpc: MomentsChainStub.rpc(), addresses: C.stack.addresses)
+        let reads: [(String, () async throws -> Void)] = [
+            ("moments()", { _ = try await service.moments() }), ("infos(ids:)", { _ = try await service.infos(ids: [1, 2, 3]) }),
+            ("info(id: 3)", { _ = try await service.info(id: 3) }), ("moment(id: 3)", { _ = try await service.moment(id: 3) }),
+            ("portfolio", { _ = try await service.portfolio(account: C.collector) }),
+        ]
+        for (label, read) in reads {
+            do {
+                try await read()
+                XCTFail("\(label) answered")
+            } catch {
+                XCTAssertEqual(error as? ChainListUnread, ChainListUnread("A Moment"), label)
+            }
+        }
+        let plain = try await service.info(id: 1)
+        XCTAssertEqual(plain?.name, "Plain")
 
         // Name links: the ill-formed name has a slug like any other, and the Moments after it keep theirs.
         let directory = MomentDirectory(rpc: MomentsChainStub.rpc(), cohorts: [.c4])
-        let plain = try await directory.key(for: "plain")
-        XCTAssertEqual(plain, MomentKey(factory: C.stack.addresses.factory, id: 1))
+        let first = try await directory.key(for: "plain")
+        XCTAssertEqual(first, MomentKey(factory: C.stack.addresses.factory, id: 1))
         let link = try await directory.link(for: MomentKey(factory: C.stack.addresses.factory, id: 2))
         XCTAssertEqual(link?.url.absoluteString, "https://dyorhq.fun/moments/a-z")
         let after = try await directory.key(for: "broken")
@@ -193,8 +253,11 @@ final class ChainTextTests: XCTestCase {
 }
 
 /// Three launches on the v2 fixture launchpad, oldest first: a plain one, one whose every text field is ill-formed, and
-/// one whose curve's `price()` reverts. Every retired stack answers that it launched none of them.
+/// `broken`, whose token refuses its name, symbol and token info (`.text`) or whose curve refuses `price()` (`.price`).
+/// Every retired stack answers that it launched none of them.
 struct TextLaunchpadChain: Sendable {
+    enum Failing: Sendable { case text, price }
+    var failing: Failing
     static let live = V2Fixture.launchpad
     static let plain = Address(literal: "0x0000000000000000000000000000000000a1a100")
     static let poisoned = Address(literal: "0x0000000000000000000000000000000000a1a200")
@@ -237,6 +300,7 @@ struct TextLaunchpadChain: Sendable {
         }
         for token in Self.tokens {
             if to == token {
+                if token == Self.broken, failing == .text, is_(T.name) || is_(T.symbol) || is_(T.getTokenInfo) { return nil }
                 let text: [Data] = token == Self.poisoned ? Self.poisonedText
                     : ["Plain Coin", "PLAIN", "https://example.com/plain.png", "Plain", "", "", "", "https://example.com", ""].map { Data($0.utf8) }
                 if is_(T.name) { return ChainTextTests.stringReturn(text[0]) }
@@ -247,7 +311,7 @@ struct TextLaunchpadChain: Sendable {
                 if is_(T.totalSupply) { return encode([.uint(BigUInt(10).power(27))], "uint256") }
             }
             if to == Self.curve(token) {
-                if is_(C.price) { return token == Self.broken ? nil : encode([.uint(1_000)], "uint256") }
+                if is_(C.price) { return token == Self.broken && failing == .price ? nil : encode([.uint(1_000)], "uint256") }
                 if is_(C.realQuoteReserve) || is_(C.sellableTokens) || is_(C.phantomQuote) || is_(C.reservedTokens) { return encode([.uint(1_000)], "uint256") }
                 if is_(C.completed) || is_(C.rescued) || is_(C.swept) { return encode([.bool(false)], "bool") }
                 if is_(C.launchedAt) { return encode([.uint(1_789_000_000)], "uint64") }
@@ -261,9 +325,12 @@ struct TextLaunchpadChain: Sendable {
 }
 
 /// Three Moments on the shipped c4 cohort's addresses (`FakeMomentsStack`): "Plain"; one whose coin name and symbol and
-/// every provenance text are ill-formed ("A", ill-formed bytes, "Z"); and "Broken", whose ledger read reverts.
-/// `collector` holds the second one's coin.
+/// every provenance text are ill-formed ("A", ill-formed bytes, "Z"); and "Broken", whose coin refuses its name and
+/// symbol and whose NFT its provenance (`.text`), or whose ledger read reverts (`.ledger`). `collector` holds the second
+/// one's coin.
 struct TextMomentsChain: Sendable {
+    enum Failing: Sendable { case text, ledger }
+    var failing: Failing
     static let stack = FakeMomentsStack(addresses: .monadMainnet, policy: V2Fixture.policy(), factoryBase: MomentsAddresses.expectedExternalBaseURI,
                                         nftBase: MomentsAddresses.expectedExternalBaseURI, names: ["Plain", "Poisoned", "Broken"])
     static let collector = Address(literal: "0x00000000000000000000000000000000000c0113")
@@ -282,7 +349,9 @@ struct TextMomentsChain: Sendable {
             let texts = [[0xc0, 0xaf], [0xe2, 0x82], [0xed, 0xa0, 0x80]].map { ChainTextTests.text($0) }
             return encode([.tuple([.bytes(texts[0]), .bytes(Data(count: 32)), .bytes(texts[1]), .uint(0), .bytes(texts[2])])], "(bytes,bytes32,bytes,uint64,bytes)")
         }
-        if to == s.addresses.collect, is_(MomentsABI.Collect.ledger), args.uint(0) == 3 { return nil }
+        if failing == .ledger, to == s.addresses.collect, is_(MomentsABI.Collect.ledger), args.uint(0) == 3 { return nil }
+        if failing == .text, to == s.coin(3), is_(MomentsABI.Coin.name) || is_(MomentsABI.Coin.symbol) { return nil }
+        if failing == .text, to == s.nft(3), is_(MomentsABI.NFT.provenance) { return nil }
         // The portfolio's reads: nothing vested or claimed anywhere; the collector holds the second Moment's coin.
         if to == s.addresses.vesting, is_(MomentsABI.Vesting.entitlement) || is_(MomentsABI.Vesting.claimed) || is_(MomentsABI.Vesting.creatorClaimed) {
             return encode([.uint(0)], "uint256")
