@@ -228,32 +228,41 @@ public enum ABI {
 
     // MARK: Decoding
 
-    public static func decode(_ data: Data, _ types: [ABIType]) throws -> [ABIValue] {
-        try decodeTuple(data, types, base: 0)
+    /// How `string` values are decoded. A string on chain holds whatever bytes its writer chose — a coin's name is its
+    /// creator's — so by default (`lossy`) bytes that aren't valid UTF-8 read as U+FFFD and the value still decodes: one
+    /// coin's name can't fail a read of many. `strict` throws `ABIError.invalidUTF8` instead, for a string whose exact
+    /// bytes matter (hashed or compared). Valid UTF-8 decodes the same either way.
+    public enum StringDecoding: Sendable {
+        case lossy
+        case strict
     }
 
-    public static func decode(_ data: Data, _ signature: String) throws -> [ABIValue] {
-        try decode(data, try ABIType.parseList(signature))
+    public static func decode(_ data: Data, _ types: [ABIType], strings: StringDecoding = .lossy) throws -> [ABIValue] {
+        try decodeTuple(data, types, base: 0, strings: strings)
     }
 
-    private static func decodeTuple(_ data: Data, _ types: [ABIType], base: Int) throws -> [ABIValue] {
+    public static func decode(_ data: Data, _ signature: String, strings: StringDecoding = .lossy) throws -> [ABIValue] {
+        try decode(data, try ABIType.parseList(signature), strings: strings)
+    }
+
+    private static func decodeTuple(_ data: Data, _ types: [ABIType], base: Int, strings: StringDecoding) throws -> [ABIValue] {
         var values: [ABIValue] = []
         var cursor = base
         for type in types {
             if type.isDynamic {
                 let offset = try readWord(data, at: cursor)
                 guard offset < BigUInt(data.count) else { throw ABIError.invalidOffset }
-                values.append(try decodeValue(data, type, at: base + Int(offset)))
+                values.append(try decodeValue(data, type, at: base + Int(offset), strings: strings))
                 cursor += 32
             } else {
-                values.append(try decodeValue(data, type, at: cursor))
+                values.append(try decodeValue(data, type, at: cursor, strings: strings))
                 cursor += type.headSize
             }
         }
         return values
     }
 
-    private static func decodeValue(_ data: Data, _ type: ABIType, at position: Int) throws -> ABIValue {
+    private static func decodeValue(_ data: Data, _ type: ABIType, at position: Int, strings: StringDecoding) throws -> ABIValue {
         switch type {
         case .uint:
             return .uint(try readWord(data, at: position))
@@ -273,16 +282,19 @@ public enum ABI {
             return .bytes(try slice(data, position + 32, length))
         case .string:
             let length = try readLength(data, at: position)
-            guard let s = String(data: try slice(data, position + 32, length), encoding: .utf8) else { throw ABIError.invalidUTF8 }
-            return .string(s)
+            let bytes = try slice(data, position + 32, length)
+            if let s = String(data: bytes, encoding: .utf8) { return .string(s) }
+            guard strings == .lossy else { throw ABIError.invalidUTF8 }
+            // Each ill-formed sequence becomes U+FFFD (Unicode's maximal-subpart rule); the text around it is kept.
+            return .string(String(decoding: bytes, as: UTF8.self))
         case .array(let inner):
             let count = try readLength(data, at: position)
             guard count <= data.count / 32 else { throw ABIError.truncated }
-            return .array(try decodeTuple(data, Array(repeating: inner, count: count), base: position + 32))
+            return .array(try decodeTuple(data, Array(repeating: inner, count: count), base: position + 32, strings: strings))
         case .fixedArray(let inner, let n):
-            return .array(try decodeTuple(data, Array(repeating: inner, count: n), base: position))
+            return .array(try decodeTuple(data, Array(repeating: inner, count: n), base: position, strings: strings))
         case .tuple(let parts):
-            return .tuple(try decodeTuple(data, parts, base: position))
+            return .tuple(try decodeTuple(data, parts, base: position, strings: strings))
         }
     }
 

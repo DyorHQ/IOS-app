@@ -63,7 +63,8 @@ public actor MomentsService {
             MomentsABI.call(f, MomentsABI.Factory.policy, returns: MomentsABI.policyFlat),
             MomentsABI.call(f, MomentsABI.Factory.momentCount, returns: "uint256"),
             MomentsABI.call(f, MomentsABI.Factory.publishingPaused, returns: "bool"),
-            MomentsABI.call(f, MomentsABI.Factory.externalBaseURI, returns: "string"),
+            // Strict: the base is compared with DyorHQ's and hashed into `termsHash()` (`MomentPolicy.publishBlock`).
+            MomentsABI.call(f, MomentsABI.Factory.externalBaseURI, returns: "string", strings: .strict),
             MomentsABI.call(f, MomentsABI.Factory.pendingPolicy, returns: MomentsABI.policyFlat),
             MomentsABI.call(f, MomentsABI.Factory.pendingPolicyAt, returns: "uint64"),
         ]
@@ -98,19 +99,17 @@ public actor MomentsService {
 
     // MARK: - Moments
 
-    /// The newest Moments first.
+    /// The newest Moments first. A Moment that can't be read is left out, never the list (`hydrate`).
     public func moments(limit: Int = 48) async throws -> [MomentInfo] {
         guard isDeployed, limit > 0 else { return [] }
         let total = MomentsABI.int(try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.momentCount, returns: "uint256")])[0][0])
         guard total > 0 else { return [] }
         let first = max(1, total - limit + 1)
         let ids = stride(from: total, through: first, by: -1).map { BigUInt($0) }
-        let raws = try await multicall.readAll(ids.map { MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint($0)], returns: MomentsABI.momentTuple) })
-        let moments = zip(ids, raws).map { MomentsABI.moment(id: $0, $1[0], factory: addresses.factory) }
-        return try await hydrate(moments)
+        return try await hydrate(try await records(ids))
     }
 
-    /// One Moment with the supply identity, or nil when the id is out of range. Its link is `external_url` exactly as
+    /// One Moment with the supply identity, or nil when the id is out of range or the Moment can't be read. Its link is `external_url` exactly as
     /// the NFT reports it: a v2 NFT keeps the base it was published with (`externalBaseURI()` on the NFT), a v1 NFT
     /// reads its factory's current base, and has no getter of its own.
     public func moment(id: BigUInt) async throws -> MomentDetail? {
@@ -134,7 +133,7 @@ public actor MomentsService {
         return MomentDetail(info: info, supply: supply, coinTotalSupply: extras[1][0].uint, externalURL: base.isEmpty ? "" : base + String(id))
     }
 
-    /// A refreshed `MomentInfo` for an id (the detail page polls this).
+    /// A refreshed `MomentInfo` for an id (the detail page polls this); nil when it can't be read.
     public func info(id: BigUInt) async throws -> MomentInfo? {
         guard isDeployed, id > 0 else { return nil }
         let raw = try await multicall.read([MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint(id)], returns: MomentsABI.momentTuple)])[0]
@@ -148,12 +147,18 @@ public actor MomentsService {
         var seen = Set<BigUInt>()
         let ids = ids.filter { $0 > 0 && seen.insert($0).inserted }
         guard isDeployed, !ids.isEmpty else { return [] }
+        return try await hydrate(try await records(ids))
+    }
+
+    /// The Moments of `ids`, in `ids` order, in one read. An id whose Moment couldn't be read is left out, never the
+    /// others; throws when the read fails as a whole.
+    private func records(_ ids: [BigUInt]) async throws -> [Moment] {
         let raws = try await multicall.read(ids.map { MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint($0)], returns: MomentsABI.momentTuple) })
         var moments: [Moment] = []
         for (id, raw) in zip(ids, raws) {
             if case .success(let values) = raw, let tuple = values.first { moments.append(MomentsABI.moment(id: id, tuple, factory: addresses.factory)) }
         }
-        return try await hydrate(moments)
+        return moments
     }
 
     /// The Moment id of a coin, 0 when the address is not a Moment coin.
@@ -400,7 +405,9 @@ public actor MomentsService {
     // MARK: - Hydration
 
     /// Ledger, NFT and coin metadata, entitlements and graduation for a page of Moments in one multicall, then the
-    /// pool state of the graduated ones.
+    /// pool state of the graduated ones. A Moment any of whose reads failed is left out, never the page: its name,
+    /// symbol and provenance are its creator's, and one Moment can't take the others down with it. Throws when a read
+    /// fails as a whole.
     private func hydrate(_ moments: [Moment]) async throws -> [MomentInfo] {
         guard !moments.isEmpty else { return [] }
         var calls: [ContractCall] = []
@@ -416,13 +423,13 @@ public actor MomentsService {
                 MomentsABI.call(addresses.graduation, MomentsABI.Graduation.isGraduated, [.uint(m.id)], returns: "bool"),
             ]
         }
-        let results = try await multicall.readAll(calls)
+        let results = try await multicall.read(calls)
         let stride = 8
         var partial: [(Moment, MomentLedger, Int, Bool, MomentProvenance, String, String, BigUInt, Bool)] = []
         for (i, m) in moments.enumerated() {
-            let base = i * stride
-            partial.append((m, MomentsABI.ledger(results[base][0]), MomentsABI.int(results[base + 1][0]), results[base + 2][0].bool, MomentsABI.provenance(results[base + 3][0]),
-                            results[base + 4][0].string, results[base + 5][0].string, results[base + 6][0].uint, results[base + 7][0].bool))
+            guard let r = try? results[i * stride ..< (i + 1) * stride].map({ try $0.get() }) else { continue }
+            partial.append((m, MomentsABI.ledger(r[0][0]), MomentsABI.int(r[1][0]), r[2][0].bool, MomentsABI.provenance(r[3][0]),
+                            r[4][0].string, r[5][0].string, r[6][0].uint, r[7][0].bool))
         }
         let graduatedIds = partial.filter { $0.8 }.map { $0.0.id }
         let pools = try await self.pools(ids: graduatedIds)

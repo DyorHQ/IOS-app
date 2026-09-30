@@ -12,7 +12,7 @@ public struct HeldLaunches: Sendable, Hashable {
     public let deployers: [Address: Address]
     /// Each recorded coin's pair asset, from its record: native MON as address 0.
     public let pairAssets: [Address: Address]
-    /// Their launches, by coin. A coin whose factory's launches couldn't be read has none.
+    /// Their launches, by coin. A coin whose launch, or whose factory's launches, couldn't be read has none.
     public let launches: [Address: Launch]
     /// Each coin's live price in whole pair-asset units per whole coin, to a Double's precision: its curve's reserves while
     /// it is on the curve, its pool's sqrt price once graduated. `Launch.price` can't stand in for it: it counts whole
@@ -51,7 +51,8 @@ public extension LaunchpadService {
     /// never asked. One aggregate asks every factory for every coin's record; then each factory's coins are read as
     /// launches in one read per factory, and every coin's live price in one more read. Throws when the aggregate fails or
     /// any answer in it is missing: a coin could then be missed, so nothing is ruled in or out. A factory whose launches
-    /// can't be read leaves its coins without a launch or price, still recorded (`HeldLaunches.complete` is false).
+    /// can't be read leaves its coins without a launch or price, still recorded (`HeldLaunches.complete` is false), and a
+    /// coin whose own launch can't be read (`hydrate`) only itself.
     func heldLaunches(_ tokens: [Token]) async throws -> HeldLaunches {
         var seen = Set<Address>()
         let coins = tokens.filter { SwapEngine.mayBeLaunchCoin($0) && seen.insert($0.address).inserted }.map(\.address)

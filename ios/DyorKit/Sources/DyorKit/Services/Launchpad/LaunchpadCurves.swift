@@ -202,7 +202,8 @@ public extension LaunchpadService {
     /// curve trades, instead of Swap, which routes no curve. One aggregate asks every known factory (`stacks`) for each
     /// coin's record (MON and the app's own tokens are never asked); then each stack's coins are read as launches in one
     /// read per stack, from those records. A stack whose launch read fails leaves its coins without a launch (the Launch
-    /// tab). Throws when the aggregate fails: then no coin could be ruled in or out.
+    /// tab), and a coin whose own launch can't be read (`hydrate`) only itself. Throws when the aggregate fails: then no
+    /// coin could be ruled in or out.
     func curveHoldings(_ holdings: [Token]) async throws -> CurveHoldings {
         var seen = Set<Address>()
         let candidates = holdings.filter { SwapEngine.mayBeLaunchCoin($0) && seen.insert($0.address).inserted }.map(\.address)

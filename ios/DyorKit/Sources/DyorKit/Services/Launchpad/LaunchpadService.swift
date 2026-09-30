@@ -197,7 +197,8 @@ public actor LaunchpadService {
         return try await launches(limit: limit, factory: addresses.factory)
     }
 
-    /// Launches recorded by a specific factory — the live one or a retired one whose history still counts.
+    /// Launches recorded by a specific factory — the live one or a retired one whose history still counts. A launch that
+    /// can't be read is left out, never the list (`hydrate`).
     public func launches(limit: Int = 48, factory: Address) async throws -> [Launch] {
         guard !factory.isZero, limit > 0 else { return [] }
         let legacy = stack(for: factory).generation.legacyRecord
@@ -206,8 +207,8 @@ public actor LaunchpadService {
         let offset = max(0, total - limit)
         let page = try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunches, [.uint(offset), .uint(total - offset)], returns: "address[]")])[0][0].elements.map(\.address)
         guard !page.isEmpty else { return [] }
-        let records = try await multicall.readAll(page.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)) })
-            .map { LaunchpadABI.LaunchRecord($0[0], legacy: legacy) }
+        let records = try await multicall.read(page.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)) })
+            .compactMap { result in (try? result.get())?.first.map { LaunchpadABI.LaunchRecord($0, legacy: legacy) } }
         return try await hydrate(records, factory: factory).reversed()
     }
 
@@ -235,7 +236,7 @@ public actor LaunchpadService {
     }
 
     /// One launch with its curve state, or nil when `token` was not launched on `factory` (the live factory when
-    /// nil) or that stack is not deployed. Every read goes to that factory's own stack.
+    /// nil), that stack is not deployed, or the launch can't be read (`hydrate`). Every read goes to that factory's own stack.
     public func launch(token: Address, factory: Address? = nil) async throws -> LaunchDetail? {
         let stack = stack(for: factory ?? addresses.factory)
         guard stack.isDeployed else { return nil }
@@ -391,7 +392,9 @@ public actor LaunchpadService {
     // MARK: - Hydration
 
     /// Token metadata and live curve state for a page of records from `factory`, in one multicall (plus one
-    /// PoolManager read for graduated launches, and one metadata read for pair assets not seen before).
+    /// PoolManager read for graduated launches, and one metadata read for pair assets not seen before). A launch any of
+    /// whose reads failed is left out, never the page: its name, symbol, logo, description and links are its creator's,
+    /// and one coin can't take the others down with it. Throws when a read fails as a whole.
     func hydrate(_ records: [LaunchpadABI.LaunchRecord], factory: Address) async throws -> [Launch] {
         guard !records.isEmpty else { return [] }
         typealias T = LaunchpadABI.Token
@@ -413,27 +416,27 @@ public actor LaunchpadService {
         }
         let stride = 9
         let generation = stack(for: factory).generation
-        let results = try await multicall.readAll(calls)
+        let results = try await multicall.read(calls)
         let livePrices = await poolPrices(for: records)
-        return records.enumerated().map { i, r in
-            let base = i * stride
-            let info = LaunchpadABI.TokenInfo(results[base + 2])
-            let curvePrice = results[base + 3][0].uint
-            let realQuoteReserve = results[base + 4][0].uint
-            let supply = results[base + 8][0].uint
+        return records.enumerated().compactMap { i, r in
+            guard let values = try? results[i * stride ..< (i + 1) * stride].map({ try $0.get() }) else { return nil }
+            let info = LaunchpadABI.TokenInfo(values[2])
+            let curvePrice = values[3][0].uint
+            let realQuoteReserve = values[4][0].uint
+            let supply = values[8][0].uint
             let graduated = r.phase == .graduated
             let price = livePrices[r.token] ?? curvePrice
             return Launch(
                 token: r.token, curve: r.curve, deployer: r.deployer, creatorFeeRecipient: r.creatorFeeRecipient, pairToken: r.pairToken,
                 graduationThreshold: r.graduationThreshold, creatorTaxBps: r.creatorTaxBps, poolFeeBps: r.poolFeeBps, tickSpacing: r.tickSpacing,
                 holderFeeSharing: r.holderFeeSharing, graduationVenue: r.graduationVenue, phase: r.phase, sweptQuote: r.sweptQuote, sweptTokens: r.sweptTokens, sweptAt: r.sweptAt, poolId: r.poolId,
-                name: results[base][0].string, symbol: results[base + 1][0].string, logo: info.logo, description: info.description, socials: info.socials,
+                name: values[0][0].string, symbol: values[1][0].string, logo: info.logo, description: info.description, socials: info.socials,
                 pair: pairs[r.pairToken] ?? .mon,
                 price: price,
                 realQuoteReserve: graduated ? r.sweptQuote : realQuoteReserve,
-                completed: results[base + 5][0].bool,
-                rescued: results[base + 6][0].bool,
-                launchedAt: LaunchpadABI.int(results[base + 7][0]),
+                completed: values[5][0].bool,
+                rescued: values[6][0].bool,
+                launchedAt: LaunchpadABI.int(values[7][0]),
                 supply: supply,
                 marketCap: LaunchpadMath.marketCap(price: price, supply: supply),
                 progressBps: LaunchpadMath.progressBps(phase: r.phase, realQuoteReserve: realQuoteReserve, sweptQuote: r.sweptQuote, threshold: r.graduationThreshold),
