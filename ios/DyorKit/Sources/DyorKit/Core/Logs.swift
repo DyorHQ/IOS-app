@@ -498,15 +498,22 @@ public extension RPCClient {
     /// whole got no answer. Paced, those throttled are asked again after a pause while they are throttled, until the
     /// scan finds the endpoint down (`LogScanMode.paced`); a request with no answer at all after a throttle is the
     /// throttle still (a rate limiter drops connections as well as answering 429). Those throttled still after
-    /// `LogScanLimits.throttleWaits` waits are `.throttled`, while the scan's `throttleSplits` last.
+    /// `LogScanLimits.throttleWaits` waits are `.throttled` — only a range the scan can halve, as many as its
+    /// `throttleSplits` — and the rest are waited out until the outage.
     private func batchAnswers(_ filters: [LogFilter], scan: inout LogScan) async -> [LogsAnswer] {
         var (answers, throttled, _) = await ask(filters)
         scan.record(answers)
         var inARow = 0
+        var gaveUp = false
         while scan.mode == .paced, !throttled.isEmpty, !scan.down, !Task.isCancelled {
-            if inARow >= scan.limits.throttleWaits, scan.throttleSplits > 0 {
-                for i in throttled { answers[i] = .throttled }
-                break
+            if !gaveUp, inARow >= scan.limits.throttleWaits, scan.throttleSplits > 0 {
+                // A range `LogScan.divide` can't halve (no wider than the floor, or the splits spent) would be a gap.
+                let floor: UInt64 = isLocal ? 5_000 : 100
+                let halved = Array(throttled.filter { scan.halvesFailures(filters[$0], floor: floor) }.prefix(scan.throttleSplits))
+                for i in halved { answers[i] = .throttled }
+                throttled.removeAll { halved.contains($0) }
+                gaveUp = true
+                if throttled.isEmpty { break }
             }
             inARow += 1
             try? await Task.sleep(for: .seconds(scan.throttlePause(after: inARow)))

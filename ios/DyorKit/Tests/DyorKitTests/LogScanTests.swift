@@ -475,6 +475,31 @@ final class LogScanTests: XCTestCase {
         XCTAssertFalse([500, 502, 504].contains(where: RPCClient.isThrottle(status:)))
     }
 
+    /// The V1 last check's finding (L1): paced, every range still throttled after the waits was given up to be halved,
+    /// even one `LogScan.divide` can't halve (no wider than the floor), which was then a gap, and so was a second range
+    /// in the same request once the scan's one split was spent. Only a range that can be halved, as many as the scan's
+    /// splits, is given up; the rest are waited out, as the limits say.
+    func testAPacedScanWaitsOutAThrottledRangeItCantHalve() async {
+        let blocks: [UInt64] = [50, 150, 250, 350, 450, 550, 650, 750, 850, 950]
+        let limits = LogScanLimits(outage: 30, pause: 0, maxPause: 0, throttlePause: 0.05, maxThrottlePause: 0.1)
+        let scenarios: [(String, UInt64, Int, [UInt64])] = [
+            ("a 100-block range (the floor), throttled for 4 asks", 100, 1, [550]),
+            ("two 200-block ranges in one request, both throttled for 4 asks", 200, 2, [150, 350]),
+        ]
+        for (name, chunk, concurrency, throttledBlocks) in scenarios {
+            // The client asks five times (its own retries) per ask of the scan: throttled for the scan's first four asks.
+            let asked = RangeAsks()
+            LogsStub.install(head: 1_000, logs: blocks.map(transfer)) { range in
+                guard throttledBlocks.contains(where: range.contains) else { return nil }
+                return asked.next(range) <= 20 ? .error(code: -32005, message: "rate limit exceeded") : nil
+            }
+            let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 999, chunkSize: chunk,
+                                                                 concurrency: concurrency, mode: .paced, limits: limits)
+            XCTAssertTrue(report.complete, name)
+            XCTAssertEqual(report.logs.map(\.blockNumber), blocks, "\(name): nothing lost")
+        }
+    }
+
     /// The re-review's finding (from before V1): rpc1 refuses a range past the head of the node answering it (its nodes
     /// can be a few blocks apart, the head read from one and the logs from another) with "block range extends beyond
     /// current head block", and `refusesSize` took that for a size refusal: the range was split, 59 requests for a
@@ -793,5 +818,17 @@ final class LogsStub: URLProtocol {
             data.append(buffer, count: n)
         }
         return data
+    }
+}
+
+/// How many times each range was asked, for a stub rule (which may run on any thread).
+private final class RangeAsks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var asks: [LogsStub.Range: Int] = [:]
+
+    func next(_ range: LogsStub.Range) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        asks[range, default: 0] += 1
+        return asks[range]!
     }
 }
