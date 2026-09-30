@@ -34,14 +34,16 @@ public final class VenueTokenList {
     /// Whether the store has been read.
     public private(set) var isLoaded = false
 
-    /// Whether a search may miss a token because the list is short of the chain: never read yet (a fresh install, or the
-    /// read build 17 makes once more), or short of what the last run read towards (`VenueTokensService.target`: a refill
-    /// under way, or a run that ended short, read on at the next return to the app). The swap picker says so. Before a
-    /// run has read the head, only a list never read counts; after `stop()`, nothing reads on, so nothing is said.
+    /// Whether a search may miss a token because the list is short of the chain: the store still being read by the first
+    /// run, or the list short of what the last run read towards (`VenueTokensService.target`: a fresh install, the read
+    /// build 17 makes once more, a refill under way, or a run that ended short, read on at the next return to the app).
+    /// Before a run has read the head (offline, or the endpoint down), short of a block the chain is known to have passed
+    /// (`VenueTokensService.knownHeight`), so a list an earlier launch left half-built says so too. The swap picker says
+    /// so. After `stop()`, nothing reads on, so nothing is said.
     public var isCatchingUp: Bool {
-        guard isLoaded, !isStopped else { return false }
-        guard let head else { return checkpoint == 0 }
-        return checkpoint < VenueTokensService.target(head: head)
+        guard !isStopped else { return false }
+        guard isLoaded else { return isRefreshing }
+        return checkpoint < VenueTokensService.target(head: head ?? VenueTokensService.knownHeight)
     }
 
     @ObservationIgnored private let service: VenueTokensService

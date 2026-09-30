@@ -32,6 +32,10 @@ public struct VenueTokensService: Sendable {
     /// the checkpoint never passes a block that isn't final or that the node answering hasn't reached.
     public static let headMargin: UInt64 = 100
 
+    /// A block Monad mainnet had passed when this build was made (its head was 109,160,032 on 2026-09-30): a list read to
+    /// short of it is short of the chain, when no run could read the head (`VenueTokenList.isCatchingUp`).
+    public static let knownHeight: UInt64 = 109_000_000
+
     /// Requests a refresh may make to read metadata again past each batch's first read (`ERC20.metadataReport`): a token
     /// whose symbol can't be read in its read, the first read on its own, the others once more together, then one by one.
     /// A real token that fails costs one. Addresses anyone can put in a Uniswap v4 pool (`initialize` takes any pair) cost

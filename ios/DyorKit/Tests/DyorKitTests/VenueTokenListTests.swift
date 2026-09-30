@@ -145,6 +145,32 @@ final class VenueTokenListTests: XCTestCase {
         XCTAssertFalse(partWay.isCatchingUp, "read to the head")
     }
 
+    /// The re-review's finding: "still loading" was missing while the first run read the store (a search then finds
+    /// nothing, and said nothing), and for a list an earlier launch left half-built, relaunched offline (no head read, and
+    /// a checkpoint above 0). Before the head is read, the list is compared with a block the chain is known to have passed.
+    func testCatchingUpWhileTheStoreIsReadAndOfflineForAHalfBuiltList() async {
+        VenueFixture.installMetadata()
+        LogsStub.install(head: 0) { _ in nil }
+        let service = VenueTokensService(logsRPC: LogsStub.rpc(), multicall: Multicall(rpc: MomentsChainStub.rpc()))
+        let slow = VenueTokenList(service: service, logos: { [:] }, read: {
+            Thread.sleep(forTimeInterval: 0.3)
+            return VenueTokenList.Stored(list: nil, checkpoint: 0)
+        }, write: { _, _ in })
+        XCTAssertFalse(slow.isCatchingUp, "nothing reads yet")
+        slow.refresh()
+        XCTAssertFalse(slow.isLoaded)
+        XCTAssertTrue(slow.isCatchingUp, "the store is being read")
+        await slow.finished()
+
+        for (checkpoint, short) in [(UInt64(49_999_999), true), (VenueTokensService.target(head: VenueTokensService.knownHeight), false)] {
+            let offline = MemoryStore(list: [VenueFixture.token(1, symbol: "T1")], checkpoint: checkpoint).list()
+            offline.refresh()
+            await offline.finished()
+            XCTAssertNil(offline.head, "the head couldn't be read")
+            XCTAssertEqual(offline.isCatchingUp, short, "checkpoint \(checkpoint)")
+        }
+    }
+
     /// A list saved but unreadable (or missing) while the checkpoint is above 0 is read again from genesis: its
     /// checkpoint would skip every token it held. A readable list's long symbols and names are capped as a new read's are.
     func testAListThatCantBeReadBackIsReadAgainFromGenesis() async throws {
