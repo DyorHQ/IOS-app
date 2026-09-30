@@ -35,7 +35,7 @@ final class VenueTokenListTests: XCTestCase {
         list.refresh()
         await list.finished()
         XCTAssertEqual(list.tokens.map(\.symbol), ["T50", "T1", "T3", "T4"])
-        XCTAssertEqual(store.writes.map(\.checkpoint), [4_999_999, 9_999_999, 12_000_000])
+        XCTAssertEqual(store.writes.map(\.checkpoint), [4_999_999, 9_999_999, 11_999_900])
         XCTAssertEqual(store.reads, 1, "the store is read once")
         // Build 16 reads what is saved: a JSON array of `Token`.
         let saved = try JSONDecoder().decode([Token].self, from: try XCTUnwrap(store.data))
@@ -74,7 +74,7 @@ final class VenueTokenListTests: XCTestCase {
         list.resume()
         await list.finished()
         XCTAssertEqual(list.shortRuns, 0)
-        XCTAssertEqual(list.checkpoint, 12_000_000)
+        XCTAssertEqual(list.checkpoint, 11_999_900)
         XCTAssertEqual(list.tokens.map(\.symbol), ["T1", "T4"])
 
         clock.advance(3_600)
@@ -141,8 +141,31 @@ final class VenueTokenListTests: XCTestCase {
         gap.set(false)
         partWay.refresh()
         await partWay.finished()
-        XCTAssertEqual(partWay.checkpoint, 60_000_000)
+        XCTAssertEqual(partWay.checkpoint, 59_999_900)
         XCTAssertFalse(partWay.isCatchingUp, "read to the head")
+    }
+
+    /// A list saved but unreadable (or missing) while the checkpoint is above 0 is read again from genesis: its
+    /// checkpoint would skip every token it held. A readable list's long symbols and names are capped as a new read's are.
+    func testAListThatCantBeReadBackIsReadAgainFromGenesis() async throws {
+        VenueFixture.installMetadata()
+        for data in [Data("not a list".utf8), nil] {
+            LogsStub.install(head: 60_000_000, logs: [VenueFixture.pool(1, at: 1_000_000), VenueFixture.pool(4, at: 51_000_000)]) { _ in nil }
+            let store = MemoryStore(data: data, checkpoint: 49_999_999)
+            let list = store.list()
+            list.refresh()
+            await list.finished()
+            XCTAssertEqual(LogsStub.queries().map(\.from).min(), 0, "read from genesis")
+            XCTAssertEqual(list.tokens.map(\.symbol), ["T1", "T4"])
+            XCTAssertEqual(store.writes.first?.checkpoint, 4_999_999, "the store starts over too")
+            XCTAssertEqual(list.checkpoint, 59_999_900)
+        }
+
+        let long = Token(address: VenueFixture.address(9), symbol: String(repeating: "S", count: 500), name: String(repeating: "N", count: 500), decimals: 18)
+        let decoded = VenueTokenList.decode(.init(list: try JSONEncoder().encode([long]), checkpoint: 7))
+        XCTAssertEqual(decoded.checkpoint, 7)
+        XCTAssertEqual(decoded.tokens.map(\.symbol.count), [32])
+        XCTAssertEqual(decoded.tokens.map(\.name.count), [64])
     }
 
     func testOneRunAtATime() async {

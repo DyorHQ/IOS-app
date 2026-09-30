@@ -81,11 +81,11 @@ final class VenueTokensTests: XCTestCase {
         let secondRead = await service().refresh(tokens: first.tokens, checkpoint: first.checkpoint, logos: { [:] }) { await saves.record($0) }
         let second = try XCTUnwrap(secondRead)
         XCTAssertEqual(second.tokens.map(\.symbol), ["T1", "T6", "T3", "T4"], "the gap's token found, none twice")
-        XCTAssertEqual(second.checkpoint, 12_000_000)
+        XCTAssertEqual(second.checkpoint, 11_999_900, "100 blocks behind the head (`headMargin`)")
         XCTAssertTrue(second.complete)
         XCTAssertEqual(LogsStub.queries().map(\.from).min(), 5_000_000, "read again from the segment read in part")
         let secondSaves = await saves.all.dropFirst(firstSaves.count)
-        XCTAssertEqual(secondSaves.map(\.checkpoint), [9_999_999, 12_000_000])
+        XCTAssertEqual(secondSaves.map(\.checkpoint), [9_999_999, 11_999_900])
         XCTAssertEqual(secondSaves.map(\.complete), [false, true])
     }
 
@@ -147,10 +147,10 @@ final class VenueTokensTests: XCTestCase {
         let refreshed = await service().refresh(tokens: [], checkpoint: 0, logos: { [:] }, limit: 2) { await saves.record($0) }
         let read = try XCTUnwrap(refreshed)
         XCTAssertEqual(read.tokens.map(\.symbol), ["T4", "T3", "T1"])
-        XCTAssertEqual(read.checkpoint, 1_000)
+        XCTAssertEqual(read.checkpoint, 900)
         let saved = await saves.all
         XCTAssertEqual(saved.map(\.symbols), [["T4", "T3"], ["T4", "T3", "T1"]])
-        XCTAssertEqual(saved.map(\.checkpoint), [0, 1_000], "the checkpoint waits for the second read")
+        XCTAssertEqual(saved.map(\.checkpoint), [0, 900], "the checkpoint waits for the second read")
     }
 
     /// A segment whose newest tokens have no readable symbol still reads the rest: the re-read leaves out what the read
@@ -171,9 +171,9 @@ final class VenueTokensTests: XCTestCase {
         let refreshed = await service().refresh(tokens: [], checkpoint: 0, logos: { [:] }, limit: 2) { await saves.record($0) }
         let read = try XCTUnwrap(refreshed)
         XCTAssertEqual(read.tokens.map(\.symbol), ["T1"])
-        XCTAssertEqual(read.checkpoint, 1_000)
+        XCTAssertEqual(read.checkpoint, 900)
         let checkpoints = await saves.all.map(\.checkpoint)
-        XCTAssertEqual(checkpoints, [0, 1_000], "the checkpoint waits for the read that leaves the dropped out")
+        XCTAssertEqual(checkpoints, [0, 900], "the checkpoint waits for the read that leaves the dropped out")
     }
 
     /// The finding: a token that takes its read down (a return bomb, or a symbol that burns the gas) made the other 49
@@ -189,7 +189,7 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertEqual(scan.dropped, [token(2)])
         let refreshed = await service().refresh(tokens: [], checkpoint: 0, logos: { [:] }) { _ in }
         let read = try XCTUnwrap(refreshed)
-        XCTAssertEqual(read.checkpoint, 1_000, "the checkpoint moves on")
+        XCTAssertEqual(read.checkpoint, 900, "the checkpoint moves on")
         XCTAssertEqual(read.tokens.map(\.symbol), ["T3", "T1"])
     }
 
@@ -237,6 +237,51 @@ final class VenueTokensTests: XCTestCase {
         let readable = await service().tokens(fromBlock: 0, toBlock: 1_000)
         XCTAssertTrue(readable.complete, "a token with no symbol is dropped, not unread")
         XCTAssertEqual(readable.tokens.map(\.symbol), ["T1"])
+    }
+
+    /// The checkpoint stays `headMargin` (100 blocks) behind the head: the head comes from one rpc1 node and the logs from
+    /// another, which refuses a range past its own head ("block range extends beyond current head block", probed live),
+    /// and the newest blocks may not be final. A node a few blocks behind no longer leaves the newest segment a gap, and
+    /// a pool in the last 100 blocks is read by the next run.
+    func testTheCheckpointStaysBehindTheHead() async throws {
+        installMetadata()
+        let head: UInt64 = 10_000_000
+        let pools = [pool(1, at: 1_000_000), pool(3, at: head - 150), pool(4, at: head - 50)]
+        // The node answering the logs is three blocks behind the one that answered the head.
+        let lagging = { (head: UInt64) -> LogsStub.Rule in
+            { range in range.to > head - 3 ? .error(code: -32602, message: "block range extends beyond current head block") : nil }
+        }
+        LogsStub.install(head: head, logs: pools, rule: lagging(head))
+        let firstRead = await service().refresh(tokens: [], checkpoint: 0, logos: { [:] }) { _ in }
+        let first = try XCTUnwrap(firstRead)
+        XCTAssertTrue(first.complete)
+        XCTAssertEqual(first.checkpoint, head - 100)
+        XCTAssertEqual(first.tokens.map(\.symbol), ["T1", "T3"], "T4, 50 blocks from the head, waits for the next run")
+        XCTAssertTrue(LogsStub.queries().allSatisfy { $0.to <= head - 100 })
+
+        LogsStub.install(head: head + 200, logs: pools, rule: lagging(head + 200))
+        let nextRead = await service().refresh(tokens: first.tokens, checkpoint: first.checkpoint, logos: { [:] }) { _ in }
+        let next = try XCTUnwrap(nextRead)
+        XCTAssertEqual(next.tokens.map(\.symbol), ["T1", "T3", "T4"])
+        XCTAssertEqual(LogsStub.queries().map(\.from).min(), head - 99)
+    }
+
+    /// A token's `symbol()` and `name()` can return a string of any length; the list keeps 32 and 64 characters of them.
+    func testALongSymbolOrNameIsCapped() async {
+        let long = token(5)
+        MomentsChainStub.install { to, data in
+            let selector = data.prefix(4)
+            let text = to == long ? String(repeating: "W", count: 1_000) : "T\(to.data.last ?? 0)"
+            if selector == ABI.selector("symbol()") || selector == ABI.selector("name()") { return try! ABI.encode([.string(text)], "string") }
+            return nil
+        }
+        LogsStub.install(head: 1_000, logs: [pool(1, at: 10), pool(5, at: 20)]) { _ in nil }
+        let scan = await service().tokens(fromBlock: 0, toBlock: 1_000)
+        XCTAssertTrue(scan.complete)
+        let capped = scan.tokens.first { $0.address == long }
+        XCTAssertEqual(capped?.symbol, String(repeating: "W", count: 32))
+        XCTAssertEqual(capped?.name, String(repeating: "W", count: 64))
+        XCTAssertEqual(scan.tokens.first { $0.address == token(1) }?.symbol, "T1", "a short one as it is")
     }
 
     /// A head that couldn't be read reads nothing and says so; a list already at the head reads nothing and is complete.

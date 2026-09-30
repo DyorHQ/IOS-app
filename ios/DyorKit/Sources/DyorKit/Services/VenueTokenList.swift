@@ -35,13 +35,13 @@ public final class VenueTokenList {
     public private(set) var isLoaded = false
 
     /// Whether a search may miss a token because the list is short of the chain: never read yet (a fresh install, or the
-    /// read build 17 makes once more), or short of the head the last run read towards (a refill under way, or a run that
-    /// ended short, read on at the next return to the app). The swap picker says so. Before a run has read the head,
-    /// only a list never read counts; after `stop()`, nothing reads on, so nothing is said.
+    /// read build 17 makes once more), or short of what the last run read towards (`VenueTokensService.target`: a refill
+    /// under way, or a run that ended short, read on at the next return to the app). The swap picker says so. Before a
+    /// run has read the head, only a list never read counts; after `stop()`, nothing reads on, so nothing is said.
     public var isCatchingUp: Bool {
         guard isLoaded, !isStopped else { return false }
         guard let head else { return checkpoint == 0 }
-        return checkpoint < head
+        return checkpoint < VenueTokensService.target(head: head)
     }
 
     @ObservationIgnored private let service: VenueTokensService
@@ -154,10 +154,11 @@ public final class VenueTokenList {
         saved = checkpoint
     }
 
-    /// The stored list, and its checkpoint.
+    /// The stored list, its symbols and names capped (`VenueTokensService.capped`), and its checkpoint. A list that can't
+    /// be read back is read again from genesis: its checkpoint would skip every token it held.
     nonisolated static func decode(_ stored: Stored) -> (tokens: [Token], checkpoint: UInt64) {
-        guard let data = stored.list, let list = try? JSONDecoder().decode([Token].self, from: data) else { return ([], stored.checkpoint) }
-        return (list, stored.checkpoint)
+        guard let data = stored.list, let list = try? JSONDecoder().decode([Token].self, from: data) else { return ([], 0) }
+        return (list.map(VenueTokensService.capped), stored.checkpoint)
     }
 
     /// The list as build 16 stores it.

@@ -25,6 +25,25 @@ public struct VenueTokensService: Sendable {
     /// Blocks a refresh reads between saves (`refresh`), so progress survives an interruption.
     public static let segment: UInt64 = 5_000_000
 
+    /// Blocks a refresh stays behind the chain head (`Progress.target`), read by the next one. Monad finalizes a block two
+    /// rounds after it is proposed (under a second) and executes a few blocks behind consensus, and rpc1's nodes can be a
+    /// few blocks apart: the head comes from one, the logs from another, which refuses a range past its own head (-32602
+    /// "block range extends beyond current head block"). 100 blocks, about 30 s, covers all three many times over, so
+    /// the checkpoint never passes a block that isn't final or that the node answering hasn't reached.
+    public static let headMargin: UInt64 = 100
+
+    /// The longest symbol and name the list keeps: a token's `symbol()` can return a string of any length, and the list is
+    /// stored whole.
+    public static let maxSymbol = 32
+    public static let maxName = 64
+
+    /// `token` with its symbol and name cut to `maxSymbol` and `maxName` characters.
+    public static func capped(_ token: Token) -> Token {
+        guard token.symbol.count > maxSymbol || token.name.count > maxName else { return token }
+        return Token(address: token.address, symbol: String(token.symbol.prefix(maxSymbol)), name: String(token.name.prefix(maxName)),
+                     decimals: token.decimals, logoURL: token.logoURL, isLaunchpad: token.isLaunchpad)
+    }
+
     /// What one read of the venues found (`tokens`).
     public struct Scan: Sendable, Equatable {
         public var tokens: [Token]
@@ -93,7 +112,7 @@ public struct VenueTokensService: Sendable {
         if capped { addresses = Array(addresses.prefix(max(1, limit))) }
         let metadata = await ERC20.metadataReport(addresses, multicall: multicall)
         let answered = Set(metadata.tokens.map(\.address)).union(metadata.unread)
-        return Scan(tokens: metadata.tokens, complete: read && metadata.unread.isEmpty && !Task.isCancelled, capped: capped,
+        return Scan(tokens: metadata.tokens.map(Self.capped), complete: read && metadata.unread.isEmpty && !Task.isCancelled, capped: capped,
                     dropped: addresses.filter { !answered.contains($0) })
     }
 
@@ -101,10 +120,12 @@ public struct VenueTokensService: Sendable {
     public struct Progress: Sendable, Equatable {
         public var tokens: [Token]
         public var checkpoint: UInt64
-        /// The chain head the refresh read towards.
+        /// The chain head the refresh read.
         public var head: UInt64
-        /// Whether the list is read up to the head.
-        public var complete: Bool { checkpoint >= head }
+        /// The block the refresh reads up to: `headMargin` behind the head.
+        public var target: UInt64 { VenueTokensService.target(head: head) }
+        /// Whether the list is read up to `target`.
+        public var complete: Bool { checkpoint >= target }
 
         public init(tokens: [Token], checkpoint: UInt64, head: UInt64) {
             self.tokens = tokens
@@ -113,26 +134,30 @@ public struct VenueTokensService: Sendable {
         }
     }
 
-    /// Brings a venue list up to the chain head: from the block after `checkpoint` (from genesis when it is 0), in
-    /// segments of `segment` blocks. Each segment's new tokens are added to the list, with their logo from `logos` (read
-    /// once, only when there is something to read), and the list is handed to `save` with its checkpoint. The checkpoint
-    /// moves past a segment only once every venue was read in it in full, and every token found was read (`Scan`); a
-    /// segment read in part keeps what it found, ends the refresh there, and is read again by the next one. A segment
-    /// with more new tokens than one read keeps (`limit`) is read again at once, what it found or dropped excluded, until
-    /// the rest are in. Returns where it got to, to the head or short of it; nil when the head couldn't be read, so
-    /// nothing was.
+    /// The block a refresh reads up to when the chain head is `head` (`headMargin`).
+    public static func target(head: UInt64) -> UInt64 { head > headMargin ? head - headMargin : 0 }
+
+    /// Brings a venue list up to the chain head, `headMargin` behind it (`Progress.target`): from the block after
+    /// `checkpoint` (from genesis when it is 0), in segments of `segment` blocks. Each segment's new tokens are added to
+    /// the list, with their logo from `logos` (read once, only when there is something to read), and the list is handed to
+    /// `save` with its checkpoint. The checkpoint moves past a segment only once every venue was read in it in full, and
+    /// every token found was read (`Scan`); a segment read in part keeps what it found, ends the refresh there, and is read
+    /// again by the next one. A segment with more new tokens than one read keeps (`limit`) is read again at once, what it
+    /// found or dropped excluded, until the rest are in. Returns where it got to, to the target or short of it; nil when
+    /// the head couldn't be read, so nothing was.
     @discardableResult
     public func refresh(tokens known: [Token], checkpoint: UInt64, logos: @Sendable () async -> [Address: URL], segment: UInt64 = Self.segment,
                         limit: Int = 3000, save: @Sendable (Progress) async -> Void) async -> Progress? {
         var progress = Progress(tokens: known, checkpoint: checkpoint, head: await head())
         guard progress.head > 0 else { return nil }
-        guard checkpoint < progress.head else { return progress }
+        let target = progress.target
+        guard checkpoint < target else { return progress }
         let logos = await logos()
         // Addresses this refresh read with no readable symbol: left out of a segment's next read, as the list is.
         var dropped: Set<Address> = []
         var from = checkpoint == 0 ? 0 : checkpoint + 1
-        while from <= progress.head, !Task.isCancelled {
-            let to = min(from + max(1, segment) - 1, progress.head)
+        while from <= target, !Task.isCancelled {
+            let to = min(from + max(1, segment) - 1, target)
             let exclude = Set(Token.core.map(\.address)).union(progress.tokens.map(\.address)).union(dropped)
             let scan = await tokens(fromBlock: from, toBlock: to, exclude: exclude, limit: limit)
             dropped.formUnion(scan.dropped)
@@ -146,7 +171,7 @@ public struct VenueTokensService: Sendable {
             guard scan.complete else { break }
             // The same segment again, what it read now excluded: at least `limit` fewer each time, so this ends.
             if scan.capped { continue }
-            guard to < progress.head else { break }
+            guard to < target else { break }
             from = to + 1
         }
         return progress
