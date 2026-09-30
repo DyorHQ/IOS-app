@@ -17,6 +17,7 @@ final class LookAlikeRuleTests: XCTestCase {
     static let imitatingSymbols: [(String, Token)] = [
         ("M0n", .mon), ("m0n", .mon), ("wm0n", .wmon), ("Wm0N", .wmon), ("M0NAD", .mon), ("usdto", Token.core.first { $0.symbol == "USDT0" }!),
         ("USDC.e", .usdc), ("USDC'", .usdc), ("USDC`", .usdc), ("$MON", .mon), ("MON2", .mon), ("USDC" + String(repeating: " ", count: 40) + ".", .usdc),
+        ("USDC e", .usdc), ("USDC E", .usdc), ("USDC  e", .usdc), ("x MON", .mon),
         ("\u{A4F4}\u{A4E2}\u{A4D3}\u{A4DA}", .usdc), ("\u{A4DF}\u{A4F3}\u{A4E0}", .mon), ("USD\u{0106}", .usdc), ("USD\u{03F9}", .usdc), ("USD\u{13DF}", .usdc),
     ]
     static let majorSymbols = ["USDT", "ETH", "BTC", "SOL", "DAI", "BNB"]
@@ -82,6 +83,20 @@ final class LookAlikeRuleTests: XCTestCase {
         }
         for own in ["\u{03BC}", "\u{03C0}", "\u{03A9}", "\u{0394}", "\u{03BB}"] {
             XCTAssertNil(WalletHoldings.lookAlikeLetters[own.unicodeScalars.first!], "\(own) is drawn like no Latin letter")
+        }
+    }
+
+    /// A space parts words as any character that isn't a letter does: "USDC e" is the bridged-USDC look "USDC.e" is, and
+    /// "ETH x" holds ETH on its own; a symbol made on the contracts can have spaces the forms don't allow. Letters still
+    /// make another word ("MONKE X", "xMON").
+    func testASpacePartsAWord() {
+        let eth = WalletHoldings.majorTokens.first { $0.symbol == "ETH" }!
+        for (symbol, expect) in [("USDC e", Token.usdc), ("USDC E", .usdc), ("USDC\u{3000}e", .usdc), ("USDC\te", .usdc), ("ETH x", eth), ("x MON", .mon)] {
+            XCTAssertEqual(WalletHoldings.imitated(by: token(symbol)), expect, label(symbol))
+            XCTAssertEqual(SymbolSafety.createRefusal(name: "Some Coin", symbol: symbol), .symbolImitates(expect), label(symbol))
+        }
+        for symbol in ["MONKE X", "xMON y", "PE PE"] {
+            XCTAssertNil(WalletHoldings.imitated(by: token(symbol)), symbol)
         }
     }
 

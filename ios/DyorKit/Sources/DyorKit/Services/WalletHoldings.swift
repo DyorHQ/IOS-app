@@ -275,18 +275,23 @@ public enum WalletHoldings {
         }
     }
 
-    /// `text`'s readings "a" and "c" untagged, for finding a token's symbol or name inside other text.
+    /// `text`'s readings "a" and "c" untagged, for finding a token's symbol or name inside other text: each as `visible`
+    /// gives it, and each with its spaces kept, one for each run of them, so a space parts a word as any other character
+    /// that isn't a letter does ("USDC e").
     static func forms(_ text: String) -> [String] {
-        shownForms(text).flatMap { [$0.lowercased(), zeroAsO($0.lowercased())] }
+        Array(Set((shownForms(text) + shownForms(text, keepingSpaces: true)).flatMap { form -> [String] in
+            let lower = form.lowercased()
+            return [lower, zeroAsO(lower)]
+        }))
     }
 
     /// `visible(text)`, and backwards too when a direction-changing character can show it so (its end, then, is what
     /// shows first); none for empty text.
-    private static func shownForms(_ text: String) -> [String] {
-        let base = visible(text)
+    private static func shownForms(_ text: String, keepingSpaces: Bool = false) -> [String] {
+        let base = visible(text, keepingSpaces: keepingSpaces)
         guard !base.isEmpty else { return [] }
         guard text.unicodeScalars.contains(where: { bidiControls.contains($0.value) }) else { return [base] }
-        return [base, String(visible(text, fromTheEnd: true).reversed())]
+        return [base, String(visible(text, keepingSpaces: keepingSpaces, fromTheEnd: true).reversed())]
     }
 
     private static func zeroAsO(_ text: String) -> String { text.replacingOccurrences(of: "0", with: "o") }
@@ -294,38 +299,62 @@ public enum WalletHoldings {
     /// `text` as it shows, at most `maxJudged` characters of it (the first, or `fromTheEnd` the last): compatibility forms
     /// (full-width and mathematical letters) as their plain letters; invisible, format and direction characters
     /// (zero-width spaces and joiners, soft hyphen, byte-order mark, overrides), control characters, combining marks,
-    /// spaces and the blank Braille pattern U+2800 removed; U+FFFD removed too, which is what bytes that aren't text
-    /// read as (`ABI.StringDecoding.lossy`) and draws as a mark, not a letter, so "USDC" and one such byte still reads as
-    /// "USDC"; letters from other scripts that look like Latin ones (Cyrillic "С", Greek "Ο", Armenian "օ", Lisu "ꓟ",
-    /// small capital "ᴏ": `lookAlikeLetters`) as those Latin letters, before the compatibility forms are folded (which
-    /// would turn a Greek lunate "Ϲ" into a "Σ" nobody mistakes for C) and after; accents and width ignored. Case is
-    /// kept (`readings` decides on it).
-    static func visible(_ text: String, fromTheEnd: Bool = false) -> String {
+    /// the blank Braille pattern U+2800 and spaces removed (or, `keepingSpaces`, each run of spaces as one); U+FFFD
+    /// removed too, which is what bytes that aren't text read as (`ABI.StringDecoding.lossy`) and draws as a mark, not a
+    /// letter, so "USDC" and one such byte still reads as "USDC"; letters from other scripts that look like Latin ones
+    /// (Cyrillic "С", Greek "Ο", Armenian "օ", Lisu "ꓟ", small capital "ᴏ": `lookAlikeLetters`) as those Latin
+    /// letters, before the compatibility forms are folded (which would turn a Greek lunate "Ϲ" into a "Σ" nobody
+    /// mistakes for C) and after; accents and width ignored. Case is kept (`readings` decides on it).
+    static func visible(_ text: String, keepingSpaces: Bool = false, fromTheEnd: Bool = false) -> String {
         // What shows, at most `maxJudged` of it, taken before anything else, so a long text costs no more.
         var shown: [Unicode.Scalar] = []
+        var space = false
         for scalar in fromTheEnd ? AnyIterator(text.unicodeScalars.reversed().makeIterator()) : AnyIterator(text.unicodeScalars.makeIterator()) {
+            if isSpace(scalar) {
+                space = true
+                continue
+            }
             if isUnseen(scalar) { continue }
+            if keepingSpaces, space, !shown.isEmpty { shown.append(" ") }
+            space = false
             shown.append(lookAlikeLetters[scalar] ?? scalar)
             if shown.count >= maxJudged { break }
         }
         if fromTheEnd { shown.reverse() }
         let composed = String(String.UnicodeScalarView(shown)).precomposedStringWithCompatibilityMapping
         var scalars = String.UnicodeScalarView()
-        for scalar in composed.unicodeScalars where !isUnseen(scalar) { scalars.append(lookAlikeLetters[scalar] ?? scalar) }
+        space = false
+        for scalar in composed.unicodeScalars {
+            if isSpace(scalar) {
+                space = true
+                continue
+            }
+            if isUnseen(scalar) { continue }
+            if keepingSpaces, space, !scalars.isEmpty { scalars.append(" ") }
+            space = false
+            scalars.append(lookAlikeLetters[scalar] ?? scalar)
+        }
         let folded = String(scalars).folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil)
-        return String(folded.filter { !$0.isWhitespace }.prefix(maxJudged))
+        return String((keepingSpaces ? folded : folded.filter { !$0.isWhitespace }).prefix(maxJudged))
     }
 
-    /// What doesn't show as a character of its own: spaces, line breaks and tabs; format, control and default-ignorable
-    /// characters; combining marks; the invisible ones `Address.isInvisible` names; U+FFFD and the blank Braille pattern
-    /// U+2800.
+    /// A space, a line break or a tab: what `visible` removes, or keeps as one space.
+    private static func isSpace(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.properties.generalCategory {
+        case .spaceSeparator, .lineSeparator, .paragraphSeparator: return true
+        default: return scalar.properties.isWhitespace
+        }
+    }
+
+    /// What doesn't show as a character of its own: format, control and default-ignorable characters, combining marks,
+    /// the invisible ones `Address.isInvisible` names, U+FFFD and the blank Braille pattern U+2800.
     private static func isUnseen(_ scalar: Unicode.Scalar) -> Bool {
         let properties = scalar.properties
         switch properties.generalCategory {
-        case .format, .control, .nonspacingMark, .enclosingMark, .spaceSeparator, .lineSeparator, .paragraphSeparator: return true
+        case .format, .control, .nonspacingMark, .enclosingMark: return true
         default: break
         }
-        return properties.isWhitespace || properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) || scalar.value == 0xFFFD || scalar.value == 0x2800
+        return properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) || scalar.value == 0xFFFD || scalar.value == 0x2800
     }
 
     /// Whether `text` is plain printable ASCII — letters, digits, punctuation and spaces — and not empty.
