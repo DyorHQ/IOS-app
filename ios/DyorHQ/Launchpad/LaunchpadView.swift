@@ -401,6 +401,9 @@ struct LaunchDetailView: View {
     @Environment(Session.self) private var session
     @Environment(Router.self) private var router
     @State private var detail: LaunchDetail?
+    /// The latest read of `detail` failed: its rows (stuck since, the Uniswap v4 fallback, hook fees waiting for a sweep,
+    /// rewards queued for holders) keep the last good read, and the stats section says so, with Retry.
+    @State private var detailUnread = false
     @State private var account: LaunchAccountView?
     @State private var trades: [CurveTrade] = []
     @State private var priceSeries: [PricePoint] = []
@@ -581,6 +584,13 @@ struct LaunchDetailView: View {
                 stat("Holders", holders.map { "\($0)" } ?? "—")
                 Divider().frame(height: 34)
                 stat("Progress", "\(launch.progressBps / 100)%")
+            }
+            if detailUnread {
+                HStack(alignment: .firstTextBaseline) {
+                    InlineError(message: "Some details of this launch couldn't be read just now.")
+                    Spacer(minLength: 8)
+                    Button("Retry") { Task { await load() } }.font(.footnote.weight(.semibold))
+                }
             }
         }
     }
@@ -788,7 +798,14 @@ struct LaunchDetailView: View {
         async let h = env.launchpad.holderCount(token: launch.token, excluding: [launch.curve])
         async let pu = pairUSDPrice()
         if let address = session.address { account = try? await env.launchpad.accountView(launch, account: address) }
-        detail = try? await d
+        // A launch that can't be read keeps the last good detail and says so (`LaunchpadService.launch`); one that isn't
+        // recorded reads as nil, as before.
+        do {
+            detail = try await d
+            detailUnread = false
+        } catch {
+            detailUnread = true
+        }
         pairUSD = await pu
         let curveTrades = (try? await t) ?? []
         trades = curveTrades
