@@ -13,17 +13,21 @@ import Foundation
 ///
 /// A name is display-safe when it has no hidden or direction-changing character (`hasHiddenCharacters`) and no word
 /// mixes Latin letters with letters of another script drawn like Latin ones (`mixesLookAlikeAlphabets`); any language
-/// and emoji are fine. A DyorHQ coin whose symbol or name isn't display-safe, or is longer than the create forms allow
-/// (`maxSymbolLength`, `maxLaunchNameLength`, `maxMomentNameLength`), carries a warning, never "DyorHQ Launch"
-/// (`TokenBadge`), and the create forms refuse all of it (`createRefusal`), so a coin made in the app never carries a
-/// warning. One made directly on the contracts still can. Every check reads the chain's text as it is — never
-/// `ChainText.shown`, which removes the direction characters these checks exist to catch.
+/// and emoji are fine. A DyorHQ coin whose symbol or name isn't display-safe, or whose symbol is longer than the create
+/// forms allow (`maxSymbolLength`), carries a warning, never "DyorHQ Launch" (`TokenBadge`), and the create forms refuse
+/// all of it (`createRefusal`), so a coin made in the app never carries a warning. A name's length is the forms' alone
+/// (`maxLaunchNameLength`, `maxMomentNameLength`): the launch form of build 16 and before set none and the Moment form
+/// no byte limit, so a long name is no reason to warn, and what the registry keeps of one is cut
+/// (`DyorCoin.maxStoredName`). One made directly on the contracts can still carry a warning. Every check reads the
+/// chain's text as it is — never `ChainText.shown`, which removes the direction characters these checks exist to catch.
 public enum SymbolSafety {
     /// The longest symbol the create forms take, in characters (`LaunchpadView`, `CreateMomentView`).
     public static let maxSymbolLength = 10
-    /// The longest name a launch may have: the launch form sets none, so this is the app's.
+    /// The longest name a new launch may have: the launch form sets none, so this is the create guard's. Coins launched
+    /// before it with longer names keep their DyorHQ label (`isDisplaySafe(_:)` of a coin doesn't judge a name's length).
     public static let maxLaunchNameLength = 32
-    /// The longest name a Moment may have (`CreateMomentView`).
+    /// The longest name a new Moment may have (`CreateMomentView`, which counts characters only; the guard also counts
+    /// bytes, `fits`).
     public static let maxMomentNameLength = 48
 
     /// Whether `symbol` shows as what it is (see above). False for empty text or spaces alone.
@@ -53,12 +57,12 @@ public enum SymbolSafety {
         !hasHiddenCharacters(name) && !mixesLookAlikeAlphabets(name)
     }
 
-    /// Whether a DyorHQ coin's own symbol and name show as what they are and fit the create forms (a launch's name
-    /// `maxLaunchNameLength`, a Moment's `maxMomentNameLength`). An unreadable symbol or name (`ChainText.unreadable`) is
-    /// not.
+    /// Whether a DyorHQ coin's own symbol and name show as what they are, and its symbol fits the create forms
+    /// (`maxSymbolLength`, which every form of every build has kept to). A name is judged by what it holds, not its
+    /// length: earlier forms let a launch's name be any length and a Moment's any number of bytes. An unreadable symbol
+    /// or name (`ChainText.unreadable`) is not display-safe.
     public static func isDisplaySafe(_ coin: DyorCoin) -> Bool {
-        isDisplaySafe(coin.symbol) && fits(coin.symbol, limit: maxSymbolLength)
-            && isNameDisplaySafe(coin.name) && fits(coin.name, limit: coin.isMoment ? maxMomentNameLength : maxLaunchNameLength)
+        isDisplaySafe(coin.symbol) && fits(coin.symbol, limit: maxSymbolLength) && isNameDisplaySafe(coin.name)
     }
 
     /// A precomposed letter of the Latin alphabets beyond ASCII (Latin-1, Extended-A and -B, Extended Additional) that

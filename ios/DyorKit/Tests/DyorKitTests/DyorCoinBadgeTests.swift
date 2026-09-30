@@ -90,28 +90,38 @@ final class DyorCoinBadgeTests: XCTestCase {
 
     // MARK: Lengths (F6)
 
-    /// A DyorHQ coin whose symbol or name is longer than the forms allow is not display-safe; what is kept of its text is
-    /// cut (a symbol 32 characters, a name 64, within 128 and 256 bytes; a link over 2,048 bytes dropped), and what is
-    /// cut still reads as too long.
+    /// A DyorHQ coin whose symbol is longer than the forms allow is not display-safe, but a long name is no warning: the
+    /// launch form of build 16 and before set no name limit and the Moment form no byte limit, so coins made in the app
+    /// carry names such as "Monad Community Appreciation Token" (34 characters) or "USA" and 25 flags (204 bytes), and
+    /// keep their DyorHQ label. The create guard still refuses them for new coins. What is kept of the text is cut (a
+    /// symbol 32 characters, a name 64, within 128 and 256 bytes; a link over 2,048 bytes dropped), and a cut symbol
+    /// still reads as too long.
     func testLengthsTheFormsAllow() {
         XCTAssertEqual(TokenBadge.of(coin("ABCDEFGHIJ").token, coin: coin("ABCDEFGHIJ"), receivedUnasked: false), .dyorLaunch)
         let longSymbol = coin(String(repeating: "A", count: 11))
         XCTAssertEqual(TokenBadge.of(longSymbol.token, coin: longSymbol, receivedUnasked: false), .unverified)
-        let longLaunchName = coin("SAFE", String(repeating: "n", count: 33))
-        XCTAssertEqual(TokenBadge.of(longLaunchName.token, coin: longLaunchName, receivedUnasked: false), .unverified)
-        let momentName = coin("SAFE", String(repeating: "n", count: 48), moment: true)
-        XCTAssertEqual(TokenBadge.of(momentName.token, coin: momentName, receivedUnasked: false), .dyorMoment)
-        let piled = coin("SAFE", "A" + String(repeating: "\u{0301}", count: 200))
-        XCTAssertEqual(TokenBadge.of(piled.token, coin: piled, receivedUnasked: false), .unverified, "one character piled with marks is not short")
+        let flags = "USA " + String(repeating: "\u{1F1FA}\u{1F1F8}", count: 25)
+        XCTAssertGreaterThan(flags.utf8.count, 4 * SymbolSafety.maxMomentNameLength, "over what the guard's byte count allows")
+        for (name, moment) in [(String(repeating: "n", count: 33), false), ("Monad Community Appreciation Token", false), ("Department of Government Efficiency", false),
+                               (String(repeating: "n", count: 64), false), (String(repeating: "n", count: 48), true), (flags, true)] {
+            let entry = coin("SAFE", name, moment: moment)
+            XCTAssertEqual(TokenBadge.of(entry.token, coin: entry, receivedUnasked: true), moment ? .dyorMoment : .dyorLaunch, name)
+            XCTAssertTrue(SymbolSafety.isDisplaySafe(entry), name)
+        }
+        XCTAssertEqual(SymbolSafety.createRefusal(name: "Monad Community Appreciation Token", symbol: "MCAT"), .nameTooLong(32), "a new launch is still held to 32")
+        XCTAssertEqual(SymbolSafety.createRefusal(name: flags, symbol: "USA", maxName: SymbolSafety.maxMomentNameLength), .nameTooLong(48))
         let huge = coin(String(repeating: "A", count: 12_000), String(repeating: "B", count: 12_000), logo: "https://x.example/" + String(repeating: "a", count: 3_000))
         XCTAssertEqual(huge.symbol.count, DyorCoin.maxStoredSymbol.characters, "kept cut")
         XCTAssertEqual(huge.name.count, DyorCoin.maxStoredName.characters)
         XCTAssertEqual(huge.logo, "", "a link over 2,048 bytes is dropped")
-        XCTAssertEqual(TokenBadge.of(huge.token, coin: huge, receivedUnasked: false), .unverified, "still too long once cut")
+        XCTAssertEqual(TokenBadge.of(huge.token, coin: huge, receivedUnasked: false), .unverified, "its symbol still too long once cut")
+        let longName = coin("SAFE", String(repeating: "B", count: 12_000))
+        XCTAssertEqual(longName.name.count, DyorCoin.maxStoredName.characters)
+        XCTAssertEqual(TokenBadge.of(longName.token, coin: longName, receivedUnasked: false), .dyorLaunch, "a long name alone is no warning")
         let zalgo = coin("SAFE", String(repeating: "Z" + String(repeating: "\u{0301}", count: 100), count: 5))
         XCTAssertLessThanOrEqual(zalgo.name.utf8.count, DyorCoin.maxStoredName.bytes)
-        XCTAssertGreaterThan(zalgo.name.utf8.count, 4 * SymbolSafety.maxLaunchNameLength, "cut, and still over what a form allows")
-        XCTAssertEqual(TokenBadge.of(zalgo.token, coin: zalgo, receivedUnasked: false), .unverified)
+        let piledSymbol = coin("A" + String(repeating: "\u{0301}", count: 200))
+        XCTAssertEqual(TokenBadge.of(piledSymbol.token, coin: piledSymbol, receivedUnasked: false), .unverified, "one character piled with marks is not a short symbol")
         let decoded = try? JSONDecoder().decode(DyorCoin.self, from: JSONEncoder().encode(DyorCoin(address: address,
             origin: .launch(factory: LaunchpadAddresses.monadMainnet.factory, generation: .v2, retired: false), symbol: "S", name: "N", creator: .zero, logo: "", pair: .zero)))
         XCTAssertEqual(decoded?.symbol, "S", "an entry round-trips through the file's form")

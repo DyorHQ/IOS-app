@@ -27,7 +27,8 @@ public enum TokenBadge: Hashable, Sendable {
     ///    coin's: the imitation warning, whatever made it — a DyorHQ launch called "USDC.e" or "M0N" included;
     /// 3. a DyorHQ coin whose own text, as the chain holds it, doesn't show as itself (`SymbolSafety.isDisplaySafe(_:)`
     ///    of the coin: a symbol that isn't display-safe or is longer than the forms allow, a name with hidden or
-    ///    direction-changing characters or a word mixing look-alike alphabets, text that couldn't be read): Unverified.
+    ///    direction-changing characters or a word mixing look-alike alphabets, text that couldn't be read; never a
+    ///    name's length alone): Unverified.
     ///    Only the coin's text decides, never the token's, which a screen may have had shown (`ChainText.shown` adds
     ///    isolates and removes direction characters);
     /// 4. a DyorHQ coin: DyorHQ Launch or DyorHQ Moment, received or chosen — a Chinese, Japanese or Korean symbol included;

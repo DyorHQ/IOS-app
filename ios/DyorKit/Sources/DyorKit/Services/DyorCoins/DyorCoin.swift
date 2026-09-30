@@ -81,11 +81,12 @@ public struct DyorCoin: Hashable, Sendable, Identifiable, Codable {
     /// The most kept of a symbol: characters, then UTF-8 bytes. Longer than any form allows
     /// (`SymbolSafety.maxSymbolLength`), so what is cut still reads as too long and keeps its warning.
     public static let maxStoredSymbol = (characters: 32, bytes: 128)
-    /// The most kept of a name, as `maxStoredSymbol` (`SymbolSafety.maxMomentNameLength` is the longest a form allows).
+    /// The most kept of a name, as `maxStoredSymbol`: more than a screen shows. A name's length never makes a warning
+    /// (`SymbolSafety.isDisplaySafe(_:)`), so this only keeps the file small.
     public static let maxStoredName = (characters: 64, bytes: 256)
 
     /// `text` cut to `cap.characters` characters, then, if still over `cap.bytes` UTF-8 bytes, to that many bytes at a
-    /// scalar's end: a cut text is then at least `cap.bytes` - 3 bytes long, never short enough to pass as fitting a form.
+    /// scalar's end: a cut symbol is then at least `cap.bytes` - 3 bytes long, never short enough to pass as fitting a form.
     static func capped(_ text: String, _ cap: (characters: Int, bytes: Int)) -> String {
         guard text.utf8.count > cap.characters else { return text } // no more characters than bytes
         var out = String(text.prefix(cap.characters))
