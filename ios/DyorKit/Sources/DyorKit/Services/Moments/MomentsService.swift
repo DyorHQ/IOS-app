@@ -110,6 +110,20 @@ public actor MomentsService {
         return try await hydrate(try await records(ids))
     }
 
+    /// A retired cohort's Moments (`RetiredMoments.moments`), newest first: ids 1…`pinned`, always, and up to `later` of
+    /// the newest Moments after them. A count below the pin was read on a node behind (the pinned Moments exist), and
+    /// throws.
+    func moments(pinned: Int, later: Int) async throws -> [MomentInfo] {
+        guard isDeployed else { return [] }
+        let total = MomentsABI.int(try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.momentCount, returns: "uint256")])[0][0])
+        guard total >= pinned else { throw ChainListUnread("A Moment") }
+        let first = max(pinned + 1, total - max(0, later) + 1)
+        let newer = total >= first ? Array(stride(from: total, through: first, by: -1)) : []
+        let ids = (newer + Array(stride(from: pinned, through: 1, by: -1))).map { BigUInt($0) }
+        guard !ids.isEmpty else { return [] }
+        return try await hydrate(try await records(ids))
+    }
+
     /// One Moment with the supply identity, or nil when the id is out of range; a Moment in range that can't be read
     /// throws, so its page says so with Retry, never that it doesn't exist. Its link is `external_url` exactly as
     /// the NFT reports it: a v2 NFT keeps the base it was published with (`externalBaseURI()` on the NFT), a v1 NFT

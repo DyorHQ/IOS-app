@@ -75,11 +75,16 @@ public struct RetiredMoments: Sendable {
 
     // MARK: Reads
 
-    /// Every Moment of the cohort, newest first, read from the chain: on cohort 3, whose publishing is not paused (owner
-    /// decision 2026-09-28), that includes any Moment published after its pin.
+    /// The cohort's Moments, newest first, read from the chain: every pinned one (`MomentLink.Cohort.finalMomentCount`,
+    /// whose coins are `MomentsAddresses.retiredMainnetCoins`), always, by id, then up to `laterLimit` of the newest
+    /// published after the pin — cohort 3's publishing is not paused (owner decision 2026-09-28). However many Moments
+    /// are published after the pin, none can push a pinned one off the list and hide what its holders are owed.
     public func moments() async throws -> [MomentInfo] {
-        try await service.moments(limit: 200)
+        try await service.moments(pinned: MomentLink.Cohort(factory: factory)?.finalMomentCount ?? 0, later: Self.laterLimit)
     }
+
+    /// How many of the Moments published after a cohort's pin are read (`moments`).
+    static let laterLimit = 100
 
     /// A refreshed `MomentInfo` for an id of THIS cohort.
     public func info(id: BigUInt) async throws -> MomentInfo? {
