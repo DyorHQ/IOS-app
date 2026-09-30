@@ -108,7 +108,8 @@ public enum ERC20 {
                 spent += 1
                 _ = take(await symbolReads([first], multicall: multicall), alone: true)
             }
-            let rest = Array(failed.dropFirst()) + odd
+            // What answered what isn't a symbol goes first, so a token that burns gas later in the read can't starve it.
+            let rest = odd + Array(failed.dropFirst())
             guard !rest.isEmpty else { continue }
             guard spent < budget else { unread.formUnion(failed.dropFirst()); dropped.formUnion(odd); continue }
             spent += 1

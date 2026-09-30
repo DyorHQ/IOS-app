@@ -253,6 +253,16 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertEqual(found.dropped, [reverting])
         XCTAssertTrue(found.unread.isEmpty)
         XCTAssertEqual(MomentsChainStub.batches().count, 3, "the read, the reverting token on its own, and the rest again")
+
+        // The V1 last check's finding (I1): it went after the others in that second read, so a token there that burns gas
+        // starved it and it was read once more on its own. It goes first: never starved, never asked alone.
+        let odd = all[0]
+        let burners: Set<Address> = [all[10], all[20]]
+        MomentsChainStub.install({ to, data in to == odd ? Data() : Self.symbolAnswer(to, data) }, starving: burners)
+        let beside = await metadataReport(Array(all.prefix(50)))
+        XCTAssertEqual(Set(beside.dropped), burners.union([odd]), "it, and the two that burn gas even on their own")
+        XCTAssertEqual(beside.tokens.count, 47, "every other token found")
+        XCTAssertFalse(MomentsChainStub.batches().contains { Set($0.map(\.to)) == [odd] }, "never read on its own")
     }
 
     /// A token that burns the gas of its read starves every token after it: the first that failed is read on its own,
