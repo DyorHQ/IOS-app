@@ -14,16 +14,20 @@ import Foundation
 ///   cohort's `momentIdByCoin(coin)`; a launch counts when a record exists and names this coin, a Moment when
 ///   `getMoment(id).coin` is this coin. An answer that is missing makes it unknown — shown as today — never "not DyorHQ";
 ///   "not DyorHQ" is kept for this session only, and only after every factory answered.
-/// - **Ingest** of launches and Moments other screens already read from a known factory (Home, Portfolio, Send, a launch
-///   or publish that just settled), at no cost.
+/// - **Ingest** of launches and Moments other screens read (Home, Portfolio, Send, a launch or publish that just
+///   settled): each coin not known yet is proven, so only a factory's own record admits one — never a value handed in.
 ///
 /// Membership never comes from anything a token says about itself: no call ever goes to a candidate token until a
 /// factory has named it. A coin's name, symbol and picture are its creator's strings, which anyone launching for 5 MON
-/// can make too costly to read: each coin's calls are read as one group, a group that fails is read again on its own, so
-/// one such coin never keeps the others from being read, and a coin whose own calls fail however they are read is
-/// passed over, unlabelled, rather than read again at every refresh. Reads go one after another on the client given (the
-/// app's failover RPC), each a single Multicall3 `eth_call`. When to refresh is the app's (at start, every 5 minutes in
-/// the foreground, after a launch or publish settles); no view triggers a read.
+/// can make as long as a transaction stores, or bytes that aren't text: they are read as a list's text is
+/// (`Multicall.readItems`: 20 coins a read, 4 reads in flight, a coin whose read fails read again on its own), decoded
+/// leniently (U+FFFD for bytes that aren't text), and a text call that fails however it is read stands in as
+/// `ChainText.unreadable`. Once its factory's record names a coin, the coin is admitted whatever its text — the
+/// unreadable text then makes its badge a warning (`TokenBadge`), never "DyorHQ Launch" — so no creator's text can hold
+/// a factory's list back. Only the factory's own answer can: a record that is empty or names another coin (a node
+/// behind the chain) or that couldn't be read stops that list there, to be read again at the next refresh. Reads go on
+/// the client given (the app's failover RPC), each a single Multicall3 `eth_call`. When to refresh is the app's (at
+/// start, every 5 minutes in the foreground, after a launch or publish settles); no view triggers a read.
 public actor DyorCoinRegistry {
     /// What the registry can say of an address.
     public enum Membership: Hashable, Sendable {
@@ -31,7 +35,7 @@ public actor DyorCoinRegistry {
         case dyor(DyorCoin)
         /// Not one: MON, a curated token, or an address every factory answered for without naming it (this session).
         case notDyor
-        /// Not known yet: not read, a read that failed, or a DyorHQ coin whose own calls can't be read. Shown as today.
+        /// Not known yet: not read, or a read that failed. Shown as today.
         case unknown
     }
 
@@ -50,9 +54,6 @@ public actor DyorCoinRegistry {
     private(set) var checkpoints: [Address: Int]
     /// Addresses every factory answered for without naming them, this session.
     private var notDyor: Set<Address> = []
-    /// Coins a factory names whose own calls fail however they are read (their strings cost more gas than a read has),
-    /// this session: unknown, and not asked again.
-    private var unreadable: Set<Address> = []
     private var running: Task<Bool, Never>?
     private var lastCompleteRefresh: Date?
     /// Bumped by `erase`, so a read that started before it never writes its results back.
@@ -66,8 +67,9 @@ public actor DyorCoinRegistry {
     static let maxNewPerRefresh = 500
     /// Launch addresses asked for in one `getLaunches` call.
     static let launchPage = 250
-    /// Coins read again on their own in one pass, at most (`readGroups`): what is left past them is read by a later one.
-    static let maxRereads = 64
+    /// Where a coin's reads (`launchReads`, `momentReads`) read its creator's text: every call but the first, its
+    /// factory's record, which is the only one that must answer (`Multicall.readItems`).
+    static let textCalls: Set<Int> = [1, 2, 3]
 
     /// Reads the live launchpad `live` and cohort `liveMoments` (zero while not deployed) plus every retired one, from
     /// what `store` kept, if anything.
@@ -243,37 +245,56 @@ public actor DyorCoinRegistry {
             }
             items.append(list)
         }
-        // 3. Each new coin's record in its factory, name, symbol and picture: one group of calls per coin.
-        let outcomes = await readGroups(items.flatMap { $0.map(\.reads) })
-        // 4. Admit them in list order (`verdict`). A factory's checkpoint moves past each coin admitted, and past one whose
-        //    own calls fail however they are read (it is left unlabelled); it stops at the first coin whose read got no
-        //    answer, or an answer these contracts never give, or whose record doesn't agree with the list — a node behind
-        //    the chain answers a coin it hasn't reached that way — so that one is read again next time.
+        // 3. Each new coin's record in its factory, name, symbol and picture: one item of four calls per coin, its text
+        //    allowed to fail on its own.
+        let answers = await readCoins(items)
+        // 4. Admit them in list order. A factory's checkpoint moves past each coin its record names, whatever its text; it
+        //    stops at the first whose record is empty or names another coin — a node behind the chain answers a coin it
+        //    hasn't reached that way — and stays where it was when the factory's records couldn't be read, so those are
+        //    read again next time.
         var found: [DyorCoin] = []
-        var skipped: [Address] = []
-        var at = 0
-        for (job, list) in zip(jobs, items) {
+        for (index, job) in jobs.enumerated() {
+            guard let answers = answers[index] else { complete = false; continue }
             var passed = job.from
-            var reading = true
-            for item in list {
-                let outcome = outcomes[at]
-                at += 1
-                guard reading else { continue }
-                switch Self.verdict(outcome, decide: { item.coin($0, retired: item.factory != (item.isLaunch ? self.liveLaunchpad : self.liveCohort)) }) {
-                case .admit(let coin): found.append(coin); passed += 1
-                case .unreadable: skipped.append(item.address); passed += 1
-                case .later: reading = false
-                }
+            for (item, answer) in zip(items[index], answers) {
+                guard let coin = item.coin(answer, retired: item.factory != (item.isLaunch ? liveLaunchpad : liveCohort)) else { break }
+                found.append(coin)
+                passed += 1
             }
             reached[job.source.factory] = passed
             if passed < job.to { complete = false }
         }
         guard epoch == self.epoch else { return false }
-        unreadable.formUnion(skipped)
         let checkpointsMoved = reached != checkpoints
         checkpoints = reached
         commit(found, persistAnyway: checkpointsMoved)
         return complete
+    }
+
+    /// Each list's coins read (`Multicall.readItems`), one answer per coin in its layout; nil for a list whose records
+    /// couldn't be read. All lists are read together; when a record couldn't be read, each list is read again on its
+    /// own, so one factory's trouble holds back only its own list. No answer at all leaves every list unread.
+    private func readCoins(_ lists: [[Item]]) async -> [[[Result<[ABIValue], Error>]]?] {
+        let all = lists.flatMap { $0 }
+        guard !all.isEmpty else { return lists.map { _ in [] } }
+        do {
+            let answers = try await multicall.readItems(all.map(\.reads), text: Self.textCalls, what: "A DyorHQ coin")
+            var out: [[[Result<[ABIValue], Error>]]?] = []
+            var at = 0
+            for list in lists {
+                out.append(Array(answers[at..<at + list.count]))
+                at += list.count
+            }
+            return out
+        } catch is ChainListUnread where lists.filter({ !$0.isEmpty }).count > 1 {
+            var out: [[[Result<[ABIValue], Error>]]?] = []
+            for list in lists {
+                out.append(list.isEmpty ? [] : try? await multicall.readItems(list.map(\.reads), text: Self.textCalls, what: "A DyorHQ coin"))
+            }
+            return out
+        } catch {
+            return lists.map { $0.isEmpty ? [] : nil }
+        }
     }
 
     /// One coin a factory listed, with the factory's stack or cohort.
@@ -336,46 +357,36 @@ public actor DyorCoinRegistry {
     }
 
     /// Pure: the coin `token` is on `stack`, from `launchReads`' answers — only when the stack's record of it exists, names
-    /// this very token and a curve. Nil otherwise, or when an answer is missing.
+    /// this very token and a curve; nil otherwise, or when the record is missing. Its text is as read: a name or symbol
+    /// that couldn't be read is `ChainText.unreadable`, a picture that couldn't be read none.
     static func launchCoin(_ token: Address, stack: LaunchpadAddresses, retired: Bool, answers: [Result<[ABIValue], Error>]) -> DyorCoin? {
-        guard answers.count == 4, case .success(let record) = answers[0], let tuple = record.first, case .success(let name) = answers[1],
-              case .success(let symbol) = answers[2], case .success(let info) = answers[3], info.count == 4 else { return nil }
+        guard answers.count == 4, case .success(let record) = answers[0], let tuple = record.first else { return nil }
         let launch = LaunchpadABI.LaunchRecord(tuple, legacy: stack.generation.legacyRecord)
         guard launch.exists, launch.token == token, !launch.curve.isZero, !token.isZero else { return nil }
+        var logo = ""
+        if case .success(let info) = answers[3], info.count == 4 { logo = LaunchpadABI.TokenInfo(info).logo }
         return DyorCoin(address: token, origin: .launch(factory: stack.factory, generation: stack.generation, retired: retired),
-                        symbol: symbol.first?.string ?? "", name: name.first?.string ?? "", creator: launch.deployer,
-                        logo: LaunchpadABI.TokenInfo(info).logo, pair: launch.pairToken)
+                        symbol: text(answers[2]), name: text(answers[1]), creator: launch.deployer, logo: logo, pair: launch.pairToken)
     }
 
     /// Pure: `moment`'s coin on `cohort`, from `momentReads`' answers — only when the cohort maps the coin back to this
-    /// Moment's id. Nil otherwise, or when an answer is missing.
+    /// Moment's id; nil otherwise, or when that answer is missing. Its text is as read, as `launchCoin`'s; provenance
+    /// that couldn't be read leaves it with no picture.
     static func momentCoin(_ moment: Moment, cohort: MomentsAddresses, retired: Bool, answers: [Result<[ABIValue], Error>]) -> DyorCoin? {
-        guard answers.count == 4, case .success(let idValues) = answers[0], let id = idValues.first?.uint, case .success(let name) = answers[1],
-              case .success(let symbol) = answers[2], case .success(let provenanceValues) = answers[3], let tuple = provenanceValues.first,
+        guard answers.count == 4, case .success(let idValues) = answers[0], let id = idValues.first?.uint,
               moment.id > 0, id == moment.id, !moment.coin.isZero, moment.factory == cohort.factory else { return nil }
-        let provenance = MomentsABI.provenance(tuple)
+        var provenance: MomentProvenance?
+        if case .success(let values) = answers[3], let tuple = values.first { provenance = MomentsABI.provenance(tuple) }
         return DyorCoin(address: moment.coin, origin: .moment(factory: cohort.factory, id: moment.id, retired: retired),
-                        symbol: symbol.first?.string ?? "", name: name.first?.string ?? "", creator: moment.creator,
-                        logo: provenance.mediaURI, mediaHash: provenance.mediaHash, mediaIsVideo: !provenance.animationURI.isEmpty, pair: cohort.usdc)
+                        symbol: text(answers[2]), name: text(answers[1]), creator: moment.creator,
+                        logo: provenance?.mediaURI ?? "", mediaHash: provenance?.mediaHash, mediaIsVideo: !(provenance?.animationURI.isEmpty ?? true),
+                        pair: cohort.usdc)
     }
 
-    /// What one coin's read comes to.
-    enum Verdict: Equatable {
-        /// A DyorHQ coin: every call answered, and its factory's record names it.
-        case admit(DyorCoin)
-        /// Its own calls fail however they are read (they revert or run out of gas, read on their own): passed over,
-        /// unlabelled.
-        case unreadable
-        /// Read it again later: no answer, an answer that isn't what these contracts return (a node that hasn't reached
-        /// the coin answers as an account with no code), or a record that doesn't name it.
-        case later
-    }
-
-    /// Pure: what `outcome` (one coin's `readGroups` answer) comes to, `decide` making the coin from a full answer.
-    static func verdict(_ outcome: GroupRead, decide: ([Result<[ABIValue], Error>]) -> DyorCoin?) -> Verdict {
-        guard case .answered(let answers) = outcome else { return .later }
-        if answers.allSatisfy(\.succeeded) { return decide(answers).map(Verdict.admit) ?? .later }
-        return answers.contains(where: \.isCallFailure) ? .unreadable : .later
+    /// A `string` answer as read (bytes that aren't text already U+FFFD), or `ChainText.unreadable` when the call failed.
+    private static func text(_ answer: Result<[ABIValue], Error>) -> String {
+        guard case .success(let values) = answer, let value = values.first, case .string(let text) = value else { return ChainText.unreadable }
+        return text
     }
 
     // MARK: Point proof
@@ -388,9 +399,16 @@ public actor DyorCoinRegistry {
         for address in addresses where out[address] == nil {
             let known = membership(address)
             out[address] = known
-            if known == .unknown, !unreadable.contains(address) { candidates.append(address) }
+            if known == .unknown { candidates.append(address) }
         }
         guard !candidates.isEmpty, !launchpads.isEmpty || !cohorts.isEmpty else { return out }
+        await proveReads(candidates)
+        for address in candidates { out[address] = membership(address) }
+        return out
+    }
+
+    /// `prove`'s reads for `candidates`, none known yet, and what they come to kept.
+    private func proveReads(_ candidates: [Address]) async {
         let epoch = self.epoch
         // 1. Every launchpad's record of each candidate, in its own layout, and every cohort's Moment id for it: the
         //    factories' own answers, of a fixed size.
@@ -402,64 +420,53 @@ public actor DyorCoinRegistry {
         let claims = candidates.enumerated().map { i, candidate in
             Self.claims(candidate, launchpads: launchpads, cohorts: cohorts, answers: Array(records[i * perCandidate..<(i + 1) * perCandidate]))
         }
-        // 2. In one pass: each launch a factory named, its name, symbol and picture; each Moment id a cohort gave, the
-        //    Moment, to see whether it is this coin's. One group a coin.
-        let launchClaims = claims.compactMap { claim in claim.launch.map { (claim: claim, stack: $0) } }
+        // 2. At once: each launch a factory named, read as enumeration reads it (its record again, then its text); and
+        //    each Moment id a cohort gave, the Moment, to see whether it is this coin's.
+        let launchClaims = claims.compactMap { claim in claim.launch.map { (address: claim.address, stack: $0) } }
         let momentClaims = claims.filter { $0.launch == nil && !$0.moments.isEmpty }
-        let second = await readGroups(launchClaims.map { Array(Self.launchReads($0.claim.address, stack: $0.stack).dropFirst()) }
-            + momentClaims.map { claim in claim.moments.map { MomentsABI.call($0.0.factory, MomentsABI.Factory.getMoment, [.uint($0.1)], returns: MomentsABI.momentTuple) } })
-        let launchReads = second.prefix(launchClaims.count)
+        async let launchAnswers = readItems(launchClaims.map { Self.launchReads($0.address, stack: $0.stack) })
+        async let momentAnswers = read(momentClaims.flatMap { claim in claim.moments.map { MomentsABI.call($0.0.factory, MomentsABI.Factory.getMoment, [.uint($0.1)], returns: MomentsABI.momentTuple) } })
+        var found: [DyorCoin] = []
+        if let answers = await launchAnswers {
+            for (claim, answer) in zip(launchClaims, answers) {
+                if let coin = Self.launchCoin(claim.address, stack: claim.stack, retired: claim.stack.factory != liveLaunchpad, answers: answer) { found.append(coin) }
+            }
+        }
+        let moments = await momentAnswers
         var confirmed: [(cohort: MomentsAddresses, moment: Moment)] = []
         var settled = Set(claims.filter { $0.launch == nil && $0.moments.isEmpty }.map(\.address))
-        for (claim, outcome) in zip(momentClaims, second.dropFirst(launchClaims.count)) {
-            guard case .answered(let answers) = outcome else { continue }
+        var cursor = 0
+        for claim in momentClaims {
             var answered = true
             var match: (MomentsAddresses, Moment)?
-            for ((cohort, id), answer) in zip(claim.moments, answers) {
+            for (cohort, id) in claim.moments {
+                let answer = moments[cursor]
+                cursor += 1
                 guard case .success(let values) = answer, let tuple = values.first else { answered = false; continue }
                 let moment = MomentsABI.moment(id: id, tuple, factory: cohort.factory)
                 if moment.coin == claim.address, match == nil { match = (cohort, moment) }
             }
             if let match { confirmed.append(match) } else if answered { settled.insert(claim.address) }
         }
-        // 3. Each Moment that is this coin's: its coin's name and symbol and its NFT's provenance, one group a coin.
-        let momentReads = await readGroups(confirmed.map { Array(Self.momentReads($0.moment, cohort: $0.cohort).dropFirst()) })
-        // Decide. A coin is DyorHQ's only on its factory's word and every answer read; "not DyorHQ" only when every
-        // factory answered and none named it.
-        var found: [DyorCoin] = []
-        var skipped: [Address] = []
-        for ((claim, stack), outcome) in zip(launchClaims, launchReads) {
-            guard let record = claim.record else { continue }
-            let full = outcome.prepending(.success([record]))
-            switch Self.verdict(full, decide: { Self.launchCoin(claim.address, stack: stack, retired: stack.factory != self.liveLaunchpad, answers: $0) }) {
-            case .admit(let coin): found.append(coin)
-            case .unreadable: skipped.append(claim.address)
-            case .later: break
+        // 3. Each Moment that is this coin's, read as enumeration reads it.
+        if let answers = await readItems(confirmed.map { Self.momentReads($0.moment, cohort: $0.cohort) }) {
+            for (entry, answer) in zip(confirmed, answers) {
+                if let coin = Self.momentCoin(entry.moment, cohort: entry.cohort, retired: entry.cohort.factory != liveCohort, answers: answer) { found.append(coin) }
             }
         }
-        for (entry, outcome) in zip(confirmed, momentReads) {
-            let full = outcome.prepending(.success([.uint(entry.moment.id)]))
-            switch Self.verdict(full, decide: { Self.momentCoin(entry.moment, cohort: entry.cohort, retired: entry.cohort.factory != self.liveCohort, answers: $0) }) {
-            case .admit(let coin): found.append(coin)
-            case .unreadable: skipped.append(entry.moment.coin)
-            case .later: break
-            }
-        }
+        // A coin is DyorHQ's only on its factory's word; "not DyorHQ" only when every factory answered and none named it.
         let negatives = claims.filter { $0.launch == nil && $0.complete && settled.contains($0.address) }.map(\.address)
-        guard epoch == self.epoch else { return out }
+        guard epoch == self.epoch else { return }
         notDyor.formUnion(negatives)
-        unreadable.formUnion(skipped)
         commit(found)
-        for address in candidates { out[address] = membership(address) }
-        return out
     }
 
     /// What the factories' first answers say of one candidate.
     struct Claims {
         let address: Address
-        /// The first launchpad (live first) whose record of it exists and names it and a curve, with that record.
+        /// The launchpad whose record of it names it and a curve: the first (live first) whose record exists and names a
+        /// curve (`LaunchpadService.firstRecord`, as `knownCurve` and held coins find one), when that record names it.
         let launch: LaunchpadAddresses?
-        let record: ABIValue?
         /// Each cohort that maps it to a Moment id, with the id.
         let moments: [(MomentsAddresses, BigUInt)]
         /// Every factory answered.
@@ -468,50 +475,41 @@ public actor DyorCoinRegistry {
 
     /// Pure: `answers` holds each launchpad's `getLaunchedToken(candidate)` then each cohort's `momentIdByCoin(candidate)`.
     static func claims(_ candidate: Address, launchpads: [LaunchpadAddresses], cohorts: [MomentsAddresses], answers: [Result<[ABIValue], Error>]) -> Claims {
-        var launch: (LaunchpadAddresses, ABIValue)?
         var complete = answers.count == launchpads.count + cohorts.count
-        for (stack, answer) in zip(launchpads, answers) {
-            guard case .success(let values) = answer, let tuple = values.first else { complete = false; continue }
-            let record = LaunchpadABI.LaunchRecord(tuple, legacy: stack.generation.legacyRecord)
-            if launch == nil, record.exists, record.token == candidate, !record.curve.isZero { launch = (stack, tuple) }
+        let records = Array(answers.prefix(launchpads.count))
+        for answer in records {
+            guard case .success(let values) = answer, values.first != nil else { complete = false; continue }
         }
+        let hit = LaunchpadService.firstRecord(stacks: launchpads, records: records)
         var moments: [(MomentsAddresses, BigUInt)] = []
         for (cohort, answer) in zip(cohorts, answers.dropFirst(launchpads.count)) {
-            guard case .success(let values) = answer, let id = values.first?.uint else { complete = false; continue }
+            guard case .success(let values) = answer, let id = values.first?.uintOrNil else { complete = false; continue }
             if id > 0 { moments.append((cohort, id)) }
         }
-        return Claims(address: candidate, launch: launch?.0, record: launch?.1, moments: moments, complete: complete)
+        return Claims(address: candidate, launch: hit.flatMap { $0.record.token == candidate ? $0.stack : nil }, moments: moments, complete: complete)
     }
 
     // MARK: Ingest
 
-    /// Launches another screen read from a known launchpad (`LaunchpadService`: the board, Home's holdings, a launch that
-    /// just settled). A launch whose factory the registry doesn't read is ignored. Only a `Launch` the service built from
-    /// its factory's record belongs here: its token is the record's.
-    public func ingest(_ launches: [Launch]) {
-        var found: [DyorCoin] = []
-        for launch in launches where !launch.token.isZero {
+    /// Launches another screen read (`LaunchpadService`: the board, Home's holdings, a launch that just settled). The coin
+    /// of each launch of a launchpad the registry reads that isn't known yet is proven (`prove`): only its factory's own
+    /// record admits it, never the `Launch` given, which anything could have built.
+    @discardableResult
+    public func ingest(_ launches: [Launch]) async -> [Address: Membership] {
+        await prove(launches.filter { launch in
             let factory = launch.factory.isZero ? liveLaunchpad : launch.factory
-            guard !factory.isZero, let stack = launchpads.first(where: { $0.factory == factory }) else { continue }
-            found.append(DyorCoin(address: launch.token, origin: .launch(factory: factory, generation: stack.generation, retired: factory != liveLaunchpad),
-                                  symbol: launch.symbol, name: launch.name, creator: launch.deployer, logo: launch.logo, pair: launch.pairToken))
-        }
-        commit(found)
+            return !launch.token.isZero && !factory.isZero && launchpads.contains { $0.factory == factory }
+        }.map(\.token))
     }
 
-    /// Moments another screen read from a known cohort (`MomentsService`, `RetiredMoments`: the Moments tab, holdings, a
-    /// publish that just settled). A Moment of a cohort the registry doesn't read is ignored. Only a `MomentInfo` the
-    /// service built from its cohort's `getMoment` belongs here.
-    public func ingest(_ moments: [MomentInfo]) {
-        var found: [DyorCoin] = []
-        for info in moments where !info.moment.coin.isZero && info.moment.id > 0 {
-            let factory = info.moment.factory
-            guard !factory.isZero, let cohort = cohorts.first(where: { $0.factory == factory }) else { continue }
-            found.append(DyorCoin(address: info.moment.coin, origin: .moment(factory: factory, id: info.moment.id, retired: factory != liveCohort),
-                                  symbol: info.symbol, name: info.name, creator: info.moment.creator, logo: info.provenance.mediaURI,
-                                  mediaHash: info.provenance.mediaHash, mediaIsVideo: !info.provenance.animationURI.isEmpty, pair: cohort.usdc))
-        }
-        commit(found)
+    /// Moments another screen read (`MomentsService`, `RetiredMoments`: the Moments tab, holdings, a publish that just
+    /// settled). The coin of each Moment of a cohort the registry reads that isn't known yet is proven (`prove`), as
+    /// `ingest(_ launches:)`.
+    @discardableResult
+    public func ingest(_ moments: [MomentInfo]) async -> [Address: Membership] {
+        await prove(moments.filter { info in
+            !info.moment.coin.isZero && info.moment.id > 0 && cohorts.contains { $0.factory == info.moment.factory }
+        }.map(\.moment.coin))
     }
 
     // MARK: Erase
@@ -522,7 +520,6 @@ public actor DyorCoinRegistry {
         coins = [:]
         checkpoints = [:]
         notDyor = []
-        unreadable = []
         lastCompleteRefresh = nil
         store?.erase()
         publish()
@@ -537,7 +534,6 @@ public actor DyorCoinRegistry {
         for coin in found where !coin.address.isZero && Token.core(coin.address) == nil && coins[coin.address] != coin {
             coins[coin.address] = coin
             notDyor.remove(coin.address)
-            unreadable.remove(coin.address)
             changed = true
         }
         if changed || persistAnyway {
@@ -595,88 +591,10 @@ public actor DyorCoinRegistry {
         return out
     }
 
-    /// What one group of calls (one coin's) came back as.
-    enum GroupRead {
-        /// Each call's answer. A group with a failed call has been read on its own, so the failure is its own: none of
-        /// its calls was starved of gas by another coin's.
-        case answered([Result<[ABIValue], Error>])
-        /// No answer: the connection, a throttle, or past the pass's budget of reads on their own.
-        case unanswered
-
-        /// The group with `result` answered before its first call.
-        func prepending(_ result: Result<[ABIValue], Error>) -> GroupRead {
-            if case .answered(let answers) = self { return .answered([result] + answers) }
-            return self
-        }
-    }
-
-    /// `groups` in Multicall3 reads of at most `maxCallsPerRead` calls (a group is never split), one after another, so
-    /// that no one coin can keep the others from being read, as `ERC20.metadataReport` reads symbols. A group with a failed
-    /// call — a revert, a call starved of gas by a coin before it (Multicall3 reports that the same way), an answer that
-    /// doesn't decode — and every group of a read the node refused as a whole on a call error (one coin's strings ran the
-    /// aggregate out of gas) is read again: the first of them on its own (a coin that starves the rest fails first), the
-    /// others together once, and what fails again each on its own, `maxRereads` reads again at most in all. A read with no
-    /// answer at all is not retried here.
-    func readGroups(_ groups: [[ContractCall]]) async -> [GroupRead] {
-        var out = [GroupRead](repeating: .unanswered, count: groups.count)
-        var budget = Self.maxRereads
-        var start = 0
-        while start < groups.count {
-            var end = start
-            var size = 0
-            while end < groups.count, end == start || size + groups[end].count <= Self.maxCallsPerRead {
-                size += groups[end].count
-                end += 1
-            }
-            var failing = await readTogether(Array(start..<end), groups, into: &out)
-            start = end
-            guard !failing.isEmpty, budget > 0 else { continue }
-            budget -= 1
-            _ = await readTogether([failing.removeFirst()], groups, into: &out)
-            guard !failing.isEmpty, budget > 0 else { continue }
-            budget -= 1
-            failing = await readTogether(failing, groups, into: &out)
-            for index in failing where budget > 0 {
-                budget -= 1
-                _ = await readTogether([index], groups, into: &out)
-            }
-        }
-        return out
-    }
-
-    /// `members`' groups in one read, their answers put in `out`: every group of a read of one, and every group whose
-    /// calls all answered. Returns the others, to read again; a read with no answer leaves them all unanswered.
-    private func readTogether(_ members: [Int], _ groups: [[ContractCall]], into out: inout [GroupRead]) async -> [Int] {
-        let calls = members.flatMap { groups[$0] }
-        switch await ERC20.captured({ try await self.multicall.read(calls) }) {
-        case .success(let results) where results.count == calls.count:
-            var failing: [Int] = []
-            var at = 0
-            for index in members {
-                let answers = Array(results[at..<at + groups[index].count])
-                at += groups[index].count
-                if members.count == 1 || answers.allSatisfy(\.succeeded) { out[index] = .answered(answers) } else { failing.append(index) }
-            }
-            return failing
-        case .failure(let error) where ERC20.isCallError(error):
-            guard members.count > 1 else {
-                out[members[0]] = .answered(groups[members[0]].map { _ in .failure(error) })
-                return []
-            }
-            return members
-        default:
-            return []
-        }
-    }
-}
-
-extension Result where Success == [ABIValue], Failure == Error {
-    /// The call answered.
-    var succeeded: Bool { if case .success = self { return true } else { return false } }
-    /// The call itself failed — it reverted or ran out of gas (Multicall3's report of a sub-call, or the node's of a read
-    /// refused as a whole) — as opposed to an answer that doesn't decode or none at all.
-    var isCallFailure: Bool {
-        guard case .failure(let error) = self else { return false }
-        return ERC20.isCallError(error)
+    /// Coins' reads (`launchReads`, `momentReads`) as a list's items (`Multicall.readItems`); nil when a record couldn't
+    /// be read or no answer came.
+    private func readItems(_ items: [[ContractCall]]) async -> [[Result<[ABIValue], Error>]]? {
+        guard !items.isEmpty else { return [] }
+        return try? await multicall.readItems(items, text: Self.textCalls, what: "A DyorHQ coin")
     }
 }

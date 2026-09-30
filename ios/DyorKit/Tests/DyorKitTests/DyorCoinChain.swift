@@ -55,10 +55,21 @@ struct DyorCoinChain: Sendable {
     /// Tokens no factory made that answer as if one did: `factory()` naming the live launchpad, `name`, `symbol`,
     /// `getTokenInfo` with DyorHQ's bucket.
     var impostors: Set<Address> = []
+    /// Coins whose `name()` and `symbol()` answer these raw bytes (a `string`'s layout), as a creator who wrote bytes that
+    /// aren't text has them.
+    var rawText: [Address: Data] = [:]
+    /// Coins, and Moments' NFTs, whose own calls revert however they are read: their text can't be read at all.
+    var textReverts: Set<Address> = []
+    /// Coins whose factory's `getLaunchedToken` or `momentIdByCoin` reverts: the factory's own record can't be read.
+    var brokenRecords: Set<Address> = []
+
+    /// A `string` answer holding `bytes` as they are.
+    static func rawString(_ bytes: [UInt8]) -> Data { try! ABI.encode([.bytes(Data(bytes))], "bytes") }
 
     func answer(_ to: Address, _ data: Data) -> Data? {
-        if silent.contains(to) { return nil }
+        if silent.contains(to) || textReverts.contains(to) { return nil }
         if lagging.contains(to) { return Data() }
+        if let raw = rawText[to], data.prefix(4) == ABI.selector(LaunchpadABI.Token.name) || data.prefix(4) == ABI.selector(LaunchpadABI.Token.symbol) { return raw }
         let selector = data.prefix(4)
         let args = ABIWords(data.dropFirst(4))
         func is_(_ signature: String) -> Bool { selector == ABI.selector(signature) }
@@ -73,6 +84,7 @@ struct DyorCoinChain: Sendable {
                 return encode([.array(offset < end ? list[offset..<end].map { .address($0.token) } : [])], "address[]")
             }
             if is_(F.getLaunchedToken), let asked = args.address(0) {
+                if brokenRecords.contains(asked) { return nil }
                 let coin = lagging.contains(asked) ? nil : list.first { $0.token == asked }
                 return encode([.tuple(Self.record(coin, legacy: stack.generation.legacyRecord))], LaunchpadABI.launchedTokenReturns(legacy: stack.generation.legacyRecord))
             }
@@ -89,6 +101,7 @@ struct DyorCoinChain: Sendable {
                                        .uint(1_790_000_000), .uint(1_790_086_400)])], MomentsABI.momentTuple)
             }
             if is_(MomentsABI.Factory.momentIdByCoin), let asked = args.address(0) {
+                if brokenRecords.contains(asked) { return nil }
                 let id = list.firstIndex { $0.coin == asked }.map { $0 + 1 } ?? 0
                 return encode([.uint(BigUInt(id))], "uint256")
             }

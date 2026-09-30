@@ -111,7 +111,7 @@ final class DyorCoinRegistryTests: XCTestCase {
             XCTAssertEqual(coin.origin, .moment(factory: factory, id: 1, retired: factory != c4))
             XCTAssertEqual(coin.pair, Monad.usdc)
         }
-        XCTAssertEqual(MomentsChainStub.batches().count, 3, "every factory's record, then details or the Moment, then the Moments' details")
+        XCTAssertEqual(MomentsChainStub.batches().count, 4, "every factory's record; then, at once, the launches' records and text and the Moments; then the Moments' text")
         let known = await registry.all
         XCTAssertEqual(known.count, 9, "a coin proven is kept")
     }
@@ -163,8 +163,136 @@ final class DyorCoinRegistryTests: XCTestCase {
         var named = answers
         named[0] = .success([.tuple(DyorCoinChain.record(listed, legacy: false))])
         XCTAssertNotNil(DyorCoinRegistry.launchCoin(listed.token, stack: stack, retired: false, answers: named))
-        named[3] = .failure(RPCError(code: 3, message: "reverted"))
-        XCTAssertNil(DyorCoinRegistry.launchCoin(listed.token, stack: stack, retired: false, answers: named), "a missing answer admits nothing")
+        var noRecord = named
+        noRecord[0] = .failure(RPCError(code: 3, message: "reverted"))
+        XCTAssertNil(DyorCoinRegistry.launchCoin(listed.token, stack: stack, retired: false, answers: noRecord), "no record, no coin")
+    }
+
+    // MARK: Creator text never holds a list back (F1)
+
+    /// A launch named with bytes that aren't text (ff fe fd fc) on the live launchpad, then two ordinary ones; a Moment on
+    /// cohort 4 whose name and symbol aren't text, then an ordinary one; and a launch whose own calls revert however
+    /// they are read. One refresh reads every list to its count: each poisoned coin is a DyorHQ coin with its text as
+    /// read (U+FFFD) or stood in (`ChainText.unreadable`), badged with a warning, and the coins after it are listed. So
+    /// is it after a restart from the file.
+    func testTextThatIsntTextNeverHoldsAFactorysListBack() async throws {
+        var chain = DyorCoinChain.mainnet
+        let v2 = LaunchpadAddresses.monadMainnet.factory
+        let c4 = MomentsAddresses.monadMainnet.factory
+        let poisoned = launch("0x0000000000000000000000000000000000000f11", "BAD")
+        let mute = launch("0x0000000000000000000000000000000000000f12", "MUTE")
+        let later = [launch("0x0000000000000000000000000000000000000f13", "SEA"), launch("0x0000000000000000000000000000000000000f14", "SUN")]
+        chain.launches[v2] = [poisoned, mute] + later
+        let poisonedMoment = moment("0x0000000000000000000000000000000000000f21", "BADM")
+        let laterMoment = moment("0x0000000000000000000000000000000000000f22", "SEAM")
+        chain.moments[c4] = [poisonedMoment, laterMoment]
+        chain.rawText = [poisoned.token: DyorCoinChain.rawString([0xff, 0xfe, 0xfd, 0xfc]), poisonedMoment.coin: DyorCoinChain.rawString([0x41, 0xff, 0xfe, 0xfd, 0xfc, 0x5a])]
+        chain.textReverts = [mute.token]
+        let registry = registry(chain, store: store)
+        let complete = await registry.refresh()
+        XCTAssertTrue(complete, "every list read to its count")
+        let checkpoints = await registry.checkpoints
+        XCTAssertEqual(checkpoints[v2], 4)
+        XCTAssertEqual(checkpoints[c4], 2)
+        let coins = await registry.all
+        XCTAssertEqual(coins.count, 19)
+        XCTAssertEqual(Set(later.map { coins[$0.token]?.symbol }), ["SEA", "SUN"], "the launches after the poisoned ones are listed")
+        XCTAssertEqual(coins[laterMoment.coin]?.symbol, "SEAM", "and the Moment after the poisoned one")
+        let bad = try XCTUnwrap(coins[poisoned.token])
+        XCTAssertEqual([bad.name, bad.symbol], ["\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}", "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}"], "each byte that isn't text is one U+FFFD")
+        let badMoment = try XCTUnwrap(coins[poisonedMoment.coin])
+        XCTAssertEqual(badMoment.name, "A\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}Z")
+        let muted = try XCTUnwrap(coins[mute.token])
+        XCTAssertEqual([muted.name, muted.symbol, muted.logo], [ChainText.unreadable, ChainText.unreadable, ""])
+        for coin in [bad, badMoment, muted] {
+            let badge = TokenBadge.of(coin.token, coin: coin, receivedUnasked: false)
+            XCTAssertTrue(badge.isWarning, "\(coin.address): \(badge)")
+            let membership = await registry.membership(coin.address)
+            XCTAssertEqual(membership, .dyor(coin))
+        }
+        XCTAssertEqual(TokenBadge.of(coins[later[0].token]!.token, coin: coins[later[0].token], receivedUnasked: false), .dyorLaunch)
+
+        MomentsChainStub.install { chain.answer($0, $1) }
+        let reopened = DyorCoinRegistry(rpc: MomentsChainStub.rpc(), store: store)
+        let kept = await reopened.all
+        XCTAssertEqual(kept, coins, "kept in the file as read")
+        let again = await reopened.refresh()
+        XCTAssertTrue(again)
+        XCTAssertEqual(MomentsChainStub.batches().count, 1, "nothing left to read: the counts alone")
+    }
+
+    /// Only a factory's own answer may hold its list back: a coin whose record can't be read stops that factory's list
+    /// there (it is read again next time), while every other factory's list is read on.
+    func testAFactoryRecordThatCantBeReadHoldsBackOnlyItsOwnList() async throws {
+        var chain = DyorCoinChain.mainnet
+        let v2 = LaunchpadAddresses.monadMainnet.factory
+        let stuck = launch("0x0000000000000000000000000000000000000f31", "STUCK")
+        let behind = launch("0x0000000000000000000000000000000000000f32", "BEHIND")
+        let elsewhere = launch("0x0000000000000000000000000000000000000f33", "ELSE")
+        chain.launches[v2] = [stuck, behind]
+        chain.launches[DyorCoinChain.relaunch] = [elsewhere]
+        chain.brokenRecords = [stuck.token]
+        let registry = registry(chain)
+        let complete = await registry.refresh()
+        XCTAssertFalse(complete)
+        var checkpoints = await registry.checkpoints
+        XCTAssertEqual(checkpoints[v2], 0, "held at the coin whose record couldn't be read")
+        XCTAssertEqual(checkpoints[DyorCoinChain.relaunch], 1)
+        var coins = await registry.all
+        XCTAssertEqual(coins.count, 14, "every other factory's coins")
+        XCTAssertNil(coins[behind.token])
+
+        chain.brokenRecords = []
+        chain.install()
+        let healed = await registry.refresh()
+        XCTAssertTrue(healed)
+        checkpoints = await registry.checkpoints
+        XCTAssertEqual(checkpoints[v2], 2)
+        coins = await registry.all
+        XCTAssertEqual(coins[behind.token]?.symbol, "BEHIND")
+    }
+
+    /// 300 coins whose text is as long as a launch stores, then an ordinary one: read 20 coins a read
+    /// (`Multicall.textChunk`), every read stays under the node's answer cap, and the ordinary coin is admitted in the
+    /// first refresh in 18 requests (the counts, the lists, 16 reads of coins). Even 300 coins that make any read they
+    /// are in fail — which no launch's text can do (a transaction stores far less than one read answers) — cost two
+    /// requests each, all in the first refresh, and the ordinary coin with them.
+    func testHeavyCoinsDontHoldBackTheOthersNorCostARequestEach() async throws {
+        let v2 = LaunchpadAddresses.monadMainnet.factory
+        let long = String(repeating: "L", count: 20_000)
+        func coin(_ i: Int, _ symbol: String) -> DyorCoinChain.LaunchCoin {
+            var coin = launch(String(format: "0x00000000000000000000000000000000%08x", 0xa0000 + i), symbol)
+            coin.name = long
+            coin.logo = "ipfs://" + long
+            return coin
+        }
+        let heavy = (1...300).map { coin($0, "H\($0)") }
+        let normal = launch("0x000000000000000000000000000000000000f401", "NORMAL")
+        var chain = DyorCoinChain()
+        chain.launches[v2] = heavy + [normal]
+        MomentsChainStub.install({ chain.answer($0, $1) }, responseCap: 4_100_000)
+        let registry = DyorCoinRegistry(rpc: MomentsChainStub.rpc())
+        let complete = await registry.refresh()
+        XCTAssertTrue(complete)
+        var admitted = await registry.coin(normal.token)
+        XCTAssertEqual(admitted?.symbol, "NORMAL")
+        XCTAssertEqual(MomentsChainStub.batches().count, 18, "counts, lists, then 301 coins 20 a read")
+        let cut = await registry.coin(heavy[0].token)
+        XCTAssertEqual(cut?.name.count, DyorCoin.maxStoredName.characters, "kept cut")
+        XCTAssertEqual(cut?.logo, "", "a picture link over 2,048 bytes is dropped")
+
+        chain.breaking = Set(heavy.map(\.token))
+        chain.install()
+        let bombed = DyorCoinRegistry(rpc: MomentsChainStub.rpc())
+        let bombedComplete = await bombed.refresh()
+        XCTAssertTrue(bombedComplete)
+        admitted = await bombed.coin(normal.token)
+        XCTAssertEqual(admitted?.symbol, "NORMAL", "in the first refresh")
+        let requests = MomentsChainStub.batches().count
+        XCTAssertEqual(requests, 2 + 16 + 300 + 300, "counts, lists, 16 reads (15 fail), each bomb on its own, then its record alone")
+        print("DyorCoinRegistry heavy coins: 301 coins of long text in 18 requests; 300 read-breaking coins and 1 normal in \(requests)")
+        let bombs = await bombed.all
+        XCTAssertEqual(bombs.count, 301)
     }
 
     /// A token that claims a DyorHQ factory (`factory()`), DyorHQ's name, symbol and bucket is none of DyorHQ's: no factory
@@ -237,10 +365,11 @@ final class DyorCoinRegistryTests: XCTestCase {
         XCTAssertEqual(coins[fresh.token]?.symbol, "NEW")
     }
 
-    /// Anyone launching for 5 MON can make a coin's strings cost more gas than a read has. That coin's calls fail however
-    /// they are read: it is passed over, unlabelled (shown as today), and not read again at every refresh or proof, while
-    /// the coins listed after it — whose calls it starved in the shared read — are read again and admitted.
-    func testACoinWhoseCallsBurnTheReadsGasIsPassedOverUnlabelled() async throws {
+    /// Anyone launching for 5 MON can make a coin's strings cost more gas than a read has. The coins listed after it —
+    /// whose calls it starved in the shared read — are read again on their own and admitted, and so is it: its factory
+    /// names it, so it is a DyorHQ coin whose text couldn't be read (`ChainText.unreadable`), badged with a warning. Its
+    /// factory's list moves past it, and nothing is read again at the next refresh.
+    func testACoinWhoseCallsBurnTheReadsGasIsAdmittedWithAWarning() async throws {
         var chain = DyorCoinChain.mainnet
         let bomb = launch("0x0000000000000000000000000000000000000b0a", "BOMB")
         let after = launch("0x0000000000000000000000000000000000000b0b", "AFTER")
@@ -250,25 +379,22 @@ final class DyorCoinRegistryTests: XCTestCase {
         let complete = await registry.refresh()
         XCTAssertTrue(complete)
         let coins = await registry.all
-        XCTAssertNil(coins[bomb.token])
         XCTAssertEqual(coins[after.token]?.symbol, "AFTER")
-        XCTAssertEqual(coins.count, 14)
-        XCTAssertEqual(MomentsChainStub.batches().count, 5, "counts, lists, every coin, the bomb on its own, the others again together")
+        XCTAssertEqual(coins.count, 15)
+        let admitted = try XCTUnwrap(coins[bomb.token], "its factory names it")
+        XCTAssertEqual([admitted.symbol, admitted.name, admitted.logo], [ChainText.unreadable, ChainText.unreadable, ""])
+        XCTAssertEqual(TokenBadge.of(admitted.token, coin: admitted, receivedUnasked: false), .unverified, "never plainly \"DyorHQ Launch\"")
+        XCTAssertEqual(MomentsChainStub.batches().count, 18, "counts, lists, every coin, then each of the 15 coins from the bomb on (it starved them) on its own")
         let checkpoints = await registry.checkpoints
         XCTAssertEqual(checkpoints[LaunchpadAddresses.monadMainnet.factory], 2, "past it")
-        let membership = await registry.membership(bomb.token)
-        XCTAssertEqual(membership, .unknown, "never \"not DyorHQ\": its factory named it")
 
         chain.install()
-        let proof = await registry.prove([bomb.token])
-        XCTAssertEqual(proof[bomb.token], .unknown)
-        XCTAssertTrue(MomentsChainStub.batches().isEmpty, "not asked again this session")
         await registry.refresh()
-        XCTAssertEqual(MomentsChainStub.batches().count, 1, "nor at the next refresh: the counts alone")
+        XCTAssertEqual(MomentsChainStub.batches().count, 1, "the next refresh: the counts alone")
     }
 
-    /// A coin that makes the node refuse the whole read (out of gas) doesn't take the others down: they are read again, and
-    /// it is left unlabelled. The same holds for a held coin being proven.
+    /// A coin that makes the node refuse any read it is in (out of gas) doesn't take the others down: they are read
+    /// again, and it is admitted with its text unread. The same holds for a held coin being proven.
     func testAReadRefusedAsAWholeIsReadAgainCoinByCoin() async throws {
         var chain = DyorCoinChain.mainnet
         let bomb = launch("0x0000000000000000000000000000000000000b1a", "BOMB")
@@ -278,34 +404,46 @@ final class DyorCoinRegistryTests: XCTestCase {
         let complete = await registry.refresh()
         XCTAssertTrue(complete)
         let coins = await registry.all
-        XCTAssertEqual(coins.count, 13)
-        XCTAssertNil(coins[bomb.token])
+        XCTAssertEqual(coins.count, 14)
+        XCTAssertEqual(coins[bomb.token]?.symbol, ChainText.unreadable)
 
         let fresh = self.registry(chain)
         let proof = await fresh.prove([bomb.token, DyorCoinChain.qt])
-        XCTAssertEqual(proof[bomb.token], .unknown)
+        guard case .dyor(let proven)? = proof[bomb.token] else { return XCTFail("its factory names it") }
+        XCTAssertEqual(proven.name, ChainText.unreadable)
         guard case .dyor(let qt)? = proof[DyorCoinChain.qt] else { return XCTFail("QT is read though the bomb shared its read") }
         XCTAssertEqual(qt.symbol, "QT")
     }
 
-    /// What one coin's read comes to: admitted on every answer and the factory's word; passed over, unlabelled, when its own
-    /// calls revert or run out of gas read on their own; read again later on no answer, an answer that doesn't decode (an
-    /// account with no code yet) or a record that doesn't name it.
-    func testTheVerdictOnOneCoinsRead() {
-        let coin = DyorCoin(address: DyorCoinChain.qt, origin: .launch(factory: DyorCoinChain.legacy, generation: .legacy, retired: true), symbol: "QT", name: "Quet",
-                            creator: DyorCoinChain.owner, logo: "", pair: .zero)
-        let ok: Result<[ABIValue], Error> = .success([.string("QT")])
+    /// A coin is its factory's record's: once that names it, its text is as read — bytes that aren't text as U+FFFD, a
+    /// call that failed as `ChainText.unreadable`, a picture that couldn't be read as none — and only a record that is
+    /// missing, empty or names another coin admits nothing.
+    func testACoinsTextIsAsReadAndOnlyItsRecordDecides() throws {
+        let stack = LaunchpadAddresses.monadMainnet
+        let listed = launch("0x0000000000000000000000000000000000000b0c", "TXT")
+        let record: Result<[ABIValue], Error> = .success([.tuple(DyorCoinChain.record(listed, legacy: false))])
         let reverted: Result<[ABIValue], Error> = .failure(RPCError(code: -32000, message: "Call reverted", data: "0x"))
-        let outOfGas: Result<[ABIValue], Error> = .failure(RPCError(code: -32000, message: "out of gas"))
-        let undecodable: Result<[ABIValue], Error> = .failure(ABIError.truncated)
-        let throttled: Result<[ABIValue], Error> = .failure(RPCError(code: -32005, message: "request limit reached"))
-        XCTAssertEqual(DyorCoinRegistry.verdict(.answered([ok, ok]), decide: { _ in coin }), .admit(coin))
-        XCTAssertEqual(DyorCoinRegistry.verdict(.answered([ok, ok]), decide: { _ in nil }), .later, "a record that doesn't name it")
-        XCTAssertEqual(DyorCoinRegistry.verdict(.answered([ok, reverted]), decide: { _ in coin }), .unreadable)
-        XCTAssertEqual(DyorCoinRegistry.verdict(.answered([outOfGas, outOfGas]), decide: { _ in coin }), .unreadable)
-        XCTAssertEqual(DyorCoinRegistry.verdict(.answered([ok, undecodable]), decide: { _ in coin }), .later)
-        XCTAssertEqual(DyorCoinRegistry.verdict(.answered([ok, throttled]), decide: { _ in coin }), .later)
-        XCTAssertEqual(DyorCoinRegistry.verdict(.unanswered, decide: { _ in coin }), .later)
+        let info: Result<[ABIValue], Error> = .success([.address(.zero), .string("ipfs://x"), .string(""), .tuple(Array(repeating: .string(""), count: 5))])
+        let lossy = try XCTUnwrap(DyorCoinRegistry.launchCoin(listed.token, stack: stack, retired: false,
+                                                              answers: [record, .success([.string("A\u{FFFD}B")]), .success([.string("\u{FFFD}")]), info]))
+        XCTAssertEqual([lossy.name, lossy.symbol, lossy.logo], ["A\u{FFFD}B", "\u{FFFD}", "ipfs://x"])
+        let unread = try XCTUnwrap(DyorCoinRegistry.launchCoin(listed.token, stack: stack, retired: false, answers: [record, reverted, reverted, reverted]))
+        XCTAssertEqual([unread.name, unread.symbol, unread.logo], [ChainText.unreadable, ChainText.unreadable, ""])
+        XCTAssertFalse(SymbolSafety.isDisplaySafe(unread), "a stand-in is never display-safe")
+        let empty: Result<[ABIValue], Error> = .success([.tuple(DyorCoinChain.record(nil, legacy: false))])
+        for bad in [reverted, empty] {
+            XCTAssertNil(DyorCoinRegistry.launchCoin(listed.token, stack: stack, retired: false, answers: [bad, reverted, reverted, reverted]))
+        }
+
+        let cohort = MomentsAddresses.monadMainnet
+        let moment = Moment(id: 3, creator: DyorCoinChain.creator, platform: .zero, treasury: .zero, coin: Address(literal: "0x0000000000000000000000000000000000000e0c"),
+                            nft: Address(literal: "0x0000000000000000000000000000000000000e0d"), price: 1, threshold: 1, rateNum: 1, rateDen: 1, creatorBps: 0, platformBps: 0,
+                            reserveBps: 0, creatorAllocBps: 0, expiryCreatorBps: 0, royaltyBps: 0, publishedAt: 0, deadline: 0, factory: cohort.factory)
+        let unreadMoment = try XCTUnwrap(DyorCoinRegistry.momentCoin(moment, cohort: cohort, retired: false, answers: [.success([.uint(3)]), reverted, reverted, reverted]))
+        XCTAssertEqual([unreadMoment.name, unreadMoment.symbol, unreadMoment.logo], [ChainText.unreadable, ChainText.unreadable, ""])
+        XCTAssertNil(unreadMoment.mediaHash)
+        XCTAssertNil(DyorCoinRegistry.momentCoin(moment, cohort: cohort, retired: false, answers: [.success([.uint(4)]), reverted, reverted, reverted]), "another Moment's id")
+        XCTAssertNil(DyorCoinRegistry.momentCoin(moment, cohort: cohort, retired: false, answers: [reverted, reverted, reverted, reverted]))
     }
 
     /// Answers the pure half gets: a missing one leaves the candidate incomplete; an empty record or a zero id is an
@@ -463,49 +601,60 @@ final class DyorCoinRegistryTests: XCTestCase {
 
     // MARK: Ingest
 
-    /// Launches and Moments another screen already read from a known factory are kept at no cost; one from a factory the
-    /// registry doesn't read is not.
-    func testLaunchesAndMomentsReadElsewhereAreKeptOnlyFromKnownFactories() async throws {
-        let registry = registry(DyorCoinChain())
+    /// Launches and Moments another screen read are only a hint: each coin not known yet is proven from its factory's
+    /// own record, so a hand-built `Launch` or `MomentInfo` — a fake token under a real factory, a real token under a fake
+    /// one, the value's own name — admits nothing, and a coin already known isn't asked again.
+    func testIngestProvesWhatItIsGivenAndAdmitsNothingElse() async throws {
+        var chain = DyorCoinChain()
+        let v2 = LaunchpadAddresses.monadMainnet.factory
+        let real = launch("0x0000000000000000000000000000000000000d01", "REAL")
+        chain.launches[v2] = [real]
+        let sea = moment("0x0000000000000000000000000000000000000e01", "SEA")
+        chain.moments[DyorCoinChain.c2] = [sea]
+        let registry = registry(chain)
         func launchValue(_ token: Address, factory: Address) -> Launch {
             Launch(token: token, curve: Address(literal: "0x00000000000000000000000000000000000c02c0"), deployer: DyorCoinChain.owner, creatorFeeRecipient: DyorCoinChain.owner,
                    pairToken: Monad.usdc, graduationThreshold: 1, creatorTaxBps: 0, poolFeeBps: 100, tickSpacing: 60, holderFeeSharing: false, graduationVenue: .uniswapV4,
                    phase: .bonding, sweptQuote: 0, sweptTokens: 0, sweptAt: 0, poolId: Data(count: 32), name: "Doge", symbol: "狗狗",
-                   logo: DyorCoinChain.media(DyorCoinChain.owner, "d.jpg"), description: "", socials: .none, pair: .mon, price: 0, realQuoteReserve: 0,
+                   logo: "https://tracker.example/d.jpg", description: "", socials: .none, pair: .mon, price: 0, realQuoteReserve: 0,
                    completed: false, rescued: false, launchedAt: 0, supply: 0, marketCap: 0, progressBps: 0, factory: factory)
         }
-        let live = Address(literal: "0x0000000000000000000000000000000000000d01")
-        let retired = Address(literal: "0x0000000000000000000000000000000000000d02")
+        let fake = Address(literal: "0x0000000000000000000000000000000000000d02")
         let stranger = Address(literal: "0x0000000000000000000000000000000000000d03")
-        await registry.ingest([launchValue(live, factory: .zero), launchValue(retired, factory: DyorCoinChain.audit), launchValue(stranger, factory: stranger),
-                               launchValue(Monad.usdc, factory: .zero)])
+        await registry.ingest([launchValue(real.token, factory: .zero), launchValue(fake, factory: v2), launchValue(fake, factory: DyorCoinChain.audit),
+                               launchValue(stranger, factory: stranger), launchValue(Monad.usdc, factory: .zero)])
         let first = await registry.all
-        XCTAssertEqual(first[live]?.origin, .launch(factory: LaunchpadAddresses.monadMainnet.factory, generation: .v2, retired: false), "the zero factory is the live one")
-        XCTAssertEqual(first[live]?.symbol, "狗狗")
-        XCTAssertEqual(first[live]?.pair, Monad.usdc)
-        XCTAssertEqual(first[retired]?.origin, .launch(factory: DyorCoinChain.audit, generation: .v1, retired: true))
-        XCTAssertNil(first[stranger])
-        XCTAssertNil(first[Monad.usdc], "a curated token is never a DyorHQ coin")
+        XCTAssertEqual(Set(first.keys), [real.token], "only the coin a factory's record names")
+        let admitted = try XCTUnwrap(first[real.token])
+        XCTAssertEqual([admitted.symbol, admitted.name, admitted.logo], [real.symbol, real.name, real.logo], "as the chain has it, not as the value said")
+        XCTAssertEqual(admitted.origin, .launch(factory: v2, generation: .v2, retired: false))
+        let unasked = await registry.membership(stranger)
+        XCTAssertEqual(unasked, .unknown, "a launch of a factory the registry doesn't read is never proven")
+        let asked = await registry.membership(fake)
+        XCTAssertEqual(asked, .notDyor, "a fake token under a real factory: every factory answered for it")
 
-        let provenance = MomentProvenance(mediaURI: "ipfs://bafkreihhphi3iebkxbt76qhcwhz3e4nobtn6756len366po7tic6n7rxhe", mediaHash: Data(repeating: 1, count: 32), place: "", date: 0,
-                                          animationURI: "ipfs://bafybeie4rh73i7kfugowp4jyjdjpnng3a7z4suslievdbulqfjb6ywzvuy")
-        func info(_ coin: Address, factory: Address) -> MomentInfo {
-            let moment = Moment(id: 4, creator: DyorCoinChain.creator, platform: .zero, treasury: .zero, coin: coin, nft: coin, price: 1, threshold: 1, rateNum: 1, rateDen: 1,
+        MomentsChainStub.install { chain.answer($0, $1) }
+        await registry.ingest([launchValue(real.token, factory: .zero)])
+        XCTAssertTrue(MomentsChainStub.batches().isEmpty, "a coin already known isn't asked again")
+
+        let provenance = MomentProvenance(mediaURI: "https://tracker.example/sea.jpg", mediaHash: Data(repeating: 1, count: 32), place: "", date: 0, animationURI: "")
+        func info(_ coin: Address, id: BigUInt, factory: Address) -> MomentInfo {
+            let moment = Moment(id: id, creator: DyorCoinChain.owner, platform: .zero, treasury: .zero, coin: coin, nft: coin, price: 1, threshold: 1, rateNum: 1, rateDen: 1,
                                 creatorBps: 0, platformBps: 0, reserveBps: 0, creatorAllocBps: 0, expiryCreatorBps: 0, royaltyBps: 0, publishedAt: 0, deadline: 0, factory: factory)
-            return MomentInfo(moment: moment, name: "Sea", symbol: "SEA", provenance: provenance,
+            return MomentInfo(moment: moment, name: "Fake Sea", symbol: "FSEA", provenance: provenance,
                               ledger: MomentLedger(state: .collecting, completedAt: 0, stuckSince: 0, endedAt: 0, reserve: 0, creatorClaimable: 0, platformClaimable: 0,
                                                    treasuryClaimable: 0, totalGross: 0, collects: 0),
                               editions: 0, closed: false, entitlements: 0, graduated: false, progressBps: 0, pool: nil)
         }
-        let sea = Address(literal: "0x0000000000000000000000000000000000000e01")
-        let strangerMoment = Address(literal: "0x0000000000000000000000000000000000000e02")
-        await registry.ingest([info(sea, factory: DyorCoinChain.c2), info(strangerMoment, factory: stranger)])
+        let fakeMoment = Address(literal: "0x0000000000000000000000000000000000000e02")
+        await registry.ingest([info(sea.coin, id: 9, factory: DyorCoinChain.c2), info(fakeMoment, id: 1, factory: DyorCoinChain.c2), info(stranger, id: 1, factory: stranger)])
         let second = await registry.all
-        XCTAssertEqual(second[sea]?.origin, .moment(factory: DyorCoinChain.c2, id: 4, retired: true))
-        XCTAssertEqual(second[sea]?.mediaIsVideo, true)
-        XCTAssertEqual(second[sea]?.mediaHash, provenance.mediaHash)
-        XCTAssertNil(second[strangerMoment])
-        XCTAssertTrue(MomentsChainStub.batches().isEmpty, "ingest reads nothing")
+        let seaCoin = try XCTUnwrap(second[sea.coin])
+        XCTAssertEqual(seaCoin.origin, .moment(factory: DyorCoinChain.c2, id: 1, retired: true), "the cohort's own id, not the value's")
+        XCTAssertEqual([seaCoin.symbol, seaCoin.logo], [sea.symbol, sea.mediaURI])
+        XCTAssertEqual(seaCoin.creator, sea.creator)
+        XCTAssertNil(second[fakeMoment])
+        XCTAssertNil(second[stranger])
     }
 
     /// A screen model following the registry gets the list at once, then again when a coin arrives.
