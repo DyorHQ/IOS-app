@@ -142,8 +142,9 @@ final class LogScanTests: XCTestCase {
         let limits = LogScanLimits(outage: 0.3)
         var returned = LogScan(mode: .paced, limits: limits)
         var stayed = LogScan(mode: .patient, limits: limits)
+        LogScanClock.suspended()
         try await Task.sleep(for: .milliseconds(400)) // the app, suspended
-        LogScanClock.resumed()
+        XCTAssertTrue(LogScanClock.resumed())
         returned.record([.failed])
         XCTAssertFalse(returned.down, "the time away doesn't count")
         try await Task.sleep(for: .milliseconds(400))
@@ -158,6 +159,35 @@ final class LogScanTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(400))
         failFast.record([.failed])
         XCTAssertFalse(failFast.down, "fail-fast counts rounds, not time")
+    }
+
+    /// The re-review's finding: the app reset the outage at every activation of its scene, and App Lock's Face ID prompt,
+    /// a passkey sheet or Control Center each make one without the app leaving the foreground, so while they kept coming a
+    /// scan whose endpoint was down never ended. Only the first activation after the background resets it.
+    func testOnlyAReturnFromTheBackgroundResetsTheOutage() async throws {
+        let limits = LogScanLimits(outage: 0.3)
+        var scan = LogScan(mode: .patient, limits: limits)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertFalse(LogScanClock.resumed(), "the scene was only inactive")
+        scan.record([.failed])
+        XCTAssertTrue(scan.down, "the outage since the scan's start counts")
+        LogScanClock.suspended()
+        XCTAssertTrue(LogScanClock.resumed(), "a return")
+        XCTAssertFalse(LogScanClock.resumed(), "one reset a return")
+
+        // A paced scan throttled throughout ends at its outage, however many activations come meanwhile.
+        LogsStub.install(head: 10_000_000, logs: []) { _ in .error(code: -32005, message: "rate limit exceeded") }
+        let activations = Task.detached {
+            for _ in 0..<16 { LogScanClock.resumed(); try? await Task.sleep(for: .milliseconds(250)) }
+        }
+        let started = Date()
+        let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 4_999_999, chunkSize: 5_000_000,
+                                                             concurrency: 1, mode: .paced, limits: LogScanLimits(outage: 1, throttlePause: 0.05, maxThrottlePause: 0.1))
+        let elapsed = Date().timeIntervalSince(started)
+        activations.cancel()
+        await activations.value
+        XCTAssertFalse(report.complete)
+        XCTAssertLessThan(elapsed, 3, "it ran on for as long as the activations came (4 s)")
     }
 
     /// Patient halves failed ranges a bounded number of times: an endpoint that answers only small ranges, failing every

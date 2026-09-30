@@ -422,9 +422,13 @@ final class VenueTokensTests: XCTestCase {
         // A cold launch runs the list; every return to the app resets log scans' outage and resumes a run that ended short.
         let root = squeezed(try String(contentsOf: app.appendingPathComponent("App/RootView.swift"), encoding: .utf8))
         XCTAssertTrue(root.contains(".task { env.refreshVenueTokens() }"))
-        // In the scene-phase handler, wherever its branch for the app's return sits.
+        // In the scene-phase handler, wherever its branches sit: the background is noted, and only the activation that
+        // follows it, a return, resets log scans' outage and resumes the list (`LogScanClock`).
         let phases = try XCTUnwrap(root.range(of: ".onChange(of: scenePhase)")).upperBound
-        XCTAssertTrue(root[phases...].contains("LogScanClock.resumed() env.venueList.resume()"))
+        let background = try XCTUnwrap(root[phases...].range(of: "if phase == .background {")).upperBound
+        XCTAssertTrue(root[background...].prefix { $0 != "}" }.contains("LogScanClock.suspended()"))
+        XCTAssertTrue(root[phases...].contains("if LogScanClock.resumed() { env.venueList.resume() }"))
+        XCTAssertEqual(root.components(separatedBy: "LogScanClock.resumed()").count - 1, 1, "nothing else resets the outage")
         XCTAssertEqual(LaunchpadService.defaultLogsRPC.absoluteString, "https://rpc1.monad.xyz")
         let service = squeezed(try String(contentsOf: ios.appendingPathComponent("DyorKit/Sources/DyorKit/Services/VenueTokensService.swift"), encoding: .utf8))
         XCTAssertTrue(service.contains("public init(logsRPC: RPCClient, multicall: Multicall) {"))

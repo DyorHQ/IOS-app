@@ -82,15 +82,31 @@ struct LogScanLimits: Sendable, Equatable {
 /// When the app last came back to the foreground, for every log scan's outage (`LogScan`): iOS suspends an app in the
 /// background, and a scan waiting on an answer then hears none, however healthy the endpoint, so a scan that was running
 /// would find the endpoint down on the app's return. A scan measures an outage from the later of its last answer and
-/// the return, on a clock that stops while the device sleeps (`SuspendingClock`). The app calls `resumed()` whenever its
-/// scene becomes active.
+/// the return, on a clock that stops while the device sleeps (`SuspendingClock`). The app calls `suspended()` when its
+/// scene goes to the background and `resumed()` whenever it becomes active: only the first activation after a background
+/// is a return. App Lock's Face ID or passcode prompt, a passkey sheet, Control Center and Notification Center make the
+/// scene inactive, never background, and the app runs on behind them: an activation after one of them changes nothing,
+/// so it can't hide an outage.
 public enum LogScanClock {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var last: SuspendingClock.Instant?
+    nonisolated(unsafe) private static var inBackground = false
 
-    public static func resumed() {
+    /// The app's scene went to the background, where iOS may suspend it.
+    public static func suspended() {
         lock.lock(); defer { lock.unlock() }
+        inBackground = true
+    }
+
+    /// The app's scene became active. The first time after `suspended()`, a return to the app: the clock restarts, and
+    /// true says so, for what else reads on at a return (`VenueTokenList.resume`). Otherwise nothing, and false.
+    @discardableResult
+    public static func resumed() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard inBackground else { return false }
+        inBackground = false
         last = .now
+        return true
     }
 
     static var resumedAt: SuspendingClock.Instant? {
