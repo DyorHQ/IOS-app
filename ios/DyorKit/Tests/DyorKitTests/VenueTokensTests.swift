@@ -390,6 +390,32 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertEqual(scan.tokens.first { $0.address == token(1) }?.symbol, "T1", "a short one as it is")
     }
 
+    /// The re-review's finding: the caps counted characters, and "A" with 50,000 combining accents is one character, 100 KB
+    /// in a list stored whole. They count Unicode scalars: 32 and 64 of them, 128 and 256 bytes at most.
+    func testASymbolOfCombiningMarksIsCappedByScalars() async {
+        let heavy = "A" + String(repeating: "\u{0301}", count: 50_000)
+        XCTAssertEqual(heavy.count, 1)
+        let capped = VenueTokensService.capped(Token(address: token(1), symbol: heavy, name: heavy, decimals: 18))
+        XCTAssertEqual(capped.symbol.unicodeScalars.count, 32)
+        XCTAssertEqual(capped.name.unicodeScalars.count, 64)
+        XCTAssertLessThanOrEqual(capped.symbol.utf8.count, 128)
+        XCTAssertLessThanOrEqual(capped.name.utf8.count, 256)
+        XCTAssertEqual(capped.symbol.unicodeScalars.first, "A")
+
+        let long = token(5)
+        MomentsChainStub.install { to, data in
+            let selector = data.prefix(4)
+            let text = to == long ? heavy : "T\(to.data.last ?? 0)"
+            if selector == ABI.selector("symbol()") || selector == ABI.selector("name()") { return try! ABI.encode([.string(text)], "string") }
+            return nil
+        }
+        LogsStub.install(head: 1_000, logs: [pool(1, at: 10), pool(5, at: 20)]) { _ in nil }
+        let scan = await service().tokens(fromBlock: 0, toBlock: 1_000)
+        XCTAssertLessThanOrEqual(scan.tokens.first { $0.address == long }?.symbol.utf8.count ?? .max, 128, "a new read")
+        let stored = VenueTokenList.decode(.init(list: try? JSONEncoder().encode([Token(address: long, symbol: heavy, name: heavy, decimals: 18)]), checkpoint: 7))
+        XCTAssertEqual(stored.tokens.map(\.symbol.unicodeScalars.count), [32], "a list read from the store")
+    }
+
     /// A head that couldn't be read reads nothing and says so; a list already at the head reads nothing and is complete.
     func testNothingIsReadWithoutAHead() async throws {
         installMetadata()
@@ -438,6 +464,11 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(store.contains("private static let key = \"venueTokens.v1\""), "the list is kept")
         XCTAssertTrue(store.contains("private static let blockKey = \"venueScan.v2.lastBlock\""), "a new checkpoint: the history read once more")
         XCTAssertFalse(store.contains("\"venueTokens.v1.lastBlock\""), "build 16's checkpoint is never read, nor written")
+        // The checkpoint is saved only once the list reads back as written (UserDefaults refuses a value past its ceiling).
+        let write = squeezed(store)
+        let readBack = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(list, forKey: key) guard UserDefaults.standard.data(forKey: key) == list else { return }"))
+        let checkpoint = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(String(lastBlock), forKey: blockKey)"))
+        XCTAssertLessThan(readBack.upperBound, checkpoint.lowerBound)
         // R4: every key the store names, beyond build 16's list and stamp, is outside the prefixes that mark an earlier
         // install.
         let theme = try String(contentsOf: app.appendingPathComponent("Design/Theme.swift"), encoding: .utf8)

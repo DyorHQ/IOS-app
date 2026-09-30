@@ -40,16 +40,24 @@ public struct VenueTokensService: Sendable {
     /// leaves out what this one dropped.
     public static let metadataRereads = 200
 
-    /// The longest symbol and name the list keeps: a token's `symbol()` can return a string of any length, and the list is
-    /// stored whole.
+    /// The longest symbol and name the list keeps, in Unicode scalars (four UTF-8 bytes at most each, so 128 and 256
+    /// bytes): a token's `symbol()` can return a string of any length, and the list is stored whole. Characters don't
+    /// bound it: "A" and 50,000 combining accents are one character, 100 KB.
     public static let maxSymbol = 32
     public static let maxName = 64
 
-    /// `token` with its symbol and name cut to `maxSymbol` and `maxName` characters.
+    /// `token` with its symbol and name cut to `maxSymbol` and `maxName` Unicode scalars.
     public static func capped(_ token: Token) -> Token {
-        guard token.symbol.count > maxSymbol || token.name.count > maxName else { return token }
-        return Token(address: token.address, symbol: String(token.symbol.prefix(maxSymbol)), name: String(token.name.prefix(maxName)),
+        guard token.symbol.unicodeScalars.count > maxSymbol || token.name.unicodeScalars.count > maxName else { return token }
+        return Token(address: token.address, symbol: prefix(token.symbol, scalars: maxSymbol), name: prefix(token.name, scalars: maxName),
                      decimals: token.decimals, logoURL: token.logoURL, isLaunchpad: token.isLaunchpad)
+    }
+
+    /// The first `scalars` Unicode scalars of `text`.
+    private static func prefix(_ text: String, scalars: Int) -> String {
+        var cut = String.UnicodeScalarView()
+        cut.append(contentsOf: text.unicodeScalars.prefix(scalars))
+        return String(cut)
     }
 
     /// What one read of the venues found (`tokens`).
