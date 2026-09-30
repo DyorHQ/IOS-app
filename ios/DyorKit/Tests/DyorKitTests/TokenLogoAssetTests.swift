@@ -109,6 +109,29 @@ final class TokenLogoAssetTests: XCTestCase {
         XCTAssertEqual(seen, Set(Self.reviewedRims.keys), "reviewedRims lists a file that isn't shipped")
     }
 
+    /// No coin sits on a white disc: the outer tenth of the disc is at most half near-white. A second check beside
+    /// `testNoCoinSitsOnAPlate`, whose band must end in a circle, which a coin that isn't round (WETH) never makes: WETH
+    /// scaled onto a white disc passes that check and fails this one. The shipped coins' edges are at most 17%
+    /// near-white (WBTC); each plated build-16 file had at least 66%.
+    func testNoCoinSitsOnAWhiteDisc() throws {
+        for name in try Self.fileNames() where name.hasPrefix("logo-") {
+            let logo = try Bitmap(Self.logoFolder().appendingPathComponent(name))
+            let radius = Double(logo.width) / 2
+            var edge = 0, white = 0
+            for y in 0..<logo.height {
+                for x in 0..<logo.width where logo.alpha(x, y) >= 200 {
+                    let distance = ((Double(x) + 0.5 - radius) * (Double(x) + 0.5 - radius)
+                        + (Double(y) + 0.5 - radius) * (Double(y) + 0.5 - radius)).squareRoot()
+                    guard distance >= radius * 0.9, distance <= radius - 2 else { continue }
+                    edge += 1
+                    if logo.isNearWhite(x, y) { white += 1 }
+                }
+            }
+            XCTAssertGreaterThan(edge, 0, "\(name) has no edge")
+            XCTAssertLessThanOrEqual(Double(white) / Double(max(edge, 1)), 0.5, "\(name) sits on a white disc")
+        }
+    }
+
     /// The coins whose rim is a plain ring of their own, reviewed by eye against the official art: the ring's colour
     /// (premultiplied RGBA, as `Bitmap.plate` reads it) and its width as a fraction of the radius.
     static let reviewedRims: [String: (colour: [Int], width: Double)] = [
@@ -184,6 +207,14 @@ private struct Bitmap {
     func alpha(_ x: Int, _ y: Int) -> UInt8 { rgba[(y * width + x) * 4 + 3] }
 
     func pixel(_ x: Int, _ y: Int) -> [UInt8] { Array(rgba[(y * width + x) * 4..<(y * width + x) * 4 + 4]) }
+
+    /// Whether a pixel is white or nearly so (every channel at least 230 once its alpha is divided out): a plate's
+    /// colour, never a coin's own pale tint such as ezETH's lime or mUSD's blue.
+    func isNearWhite(_ x: Int, _ y: Int) -> Bool {
+        let value = pixel(x, y)
+        guard value[3] > 0 else { return false }
+        return value[0..<3].allSatisfy { Int($0) * 255 >= 230 * Int(value[3]) }
+    }
 
     /// How far a pixel's colour is from `other`: the sum of the channel differences.
     func difference(_ x: Int, _ y: Int, _ other: [UInt8]) -> Int {
