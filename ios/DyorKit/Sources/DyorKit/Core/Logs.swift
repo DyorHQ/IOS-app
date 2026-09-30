@@ -43,6 +43,9 @@ enum LogsAnswer: Sendable {
     /// Anything else: an internal error, a throttle that outlasted the client's retries, no answer. A smaller range
     /// may not be answered either.
     case failed
+    /// Paced: throttled still after the scan's waits for it (`LogScanLimits.throttleWaits`). Read in halves, once a scan
+    /// (`LogScanLimits.throttleSplits`): a range the endpoint throttles every time may be too heavy for it.
+    case throttled
 }
 
 /// How a scan (`RPCClient.chunkedLogsReport`) meets a range the endpoint doesn't answer for a reason other than its size:
@@ -60,11 +63,13 @@ public enum LogScanMode: Sendable, Equatable {
     /// requests.
     case failFast
     /// The venue token list's read in the background (`VenueTokensService`), which shares rpc1 with every other reader:
-    /// as patient, except that a throttle — HTTP 429 or 5xx once the client's own retries are spent, a rate-limit error,
+    /// as patient, except that a throttle — HTTP 429 or 503 once the client's own retries are spent, a rate-limit error,
     /// or a request with no answer after one — is waited out, the same ranges asked again after a pause that doubles
-    /// (`LogScanLimits.throttlePause`), never split: a smaller range doesn't ease a throttle or an overloaded endpoint, it
-    /// multiplies the requests. A throttle is no answer, so one that lasts past the outage ends the scan there,
-    /// incomplete, for a later run.
+    /// (`LogScanLimits.throttlePause`), not split: a smaller range doesn't ease a throttle or an overloaded endpoint, it
+    /// multiplies the requests. A range throttled still after three waits is read in halves, once a scan
+    /// (`LogsAnswer.throttled`). A throttle is no answer, so one that lasts past the outage ends the scan there,
+    /// incomplete, for a later run. Any other 5xx (a gateway timeout for a heavy range, the same every time) is a failure,
+    /// read in halves as patient reads one.
     case paced
 }
 
@@ -84,6 +89,10 @@ struct LogScanLimits: Sendable, Equatable {
     /// `maxThrottlePause`.
     var throttlePause: TimeInterval = 2
     var maxThrottlePause: TimeInterval = 16
+    /// Paced: a range throttled still after `throttleWaits` waits in a row is read in halves (`LogsAnswer.throttled`),
+    /// `throttleSplits` times a scan; past them, it is waited out until the outage.
+    var throttleWaits = 3
+    var throttleSplits = 1
     /// A range refused for ending past the node's head (`LogsAnswer.pastHead`) is asked again after `headPause` seconds,
     /// then twice that: `headRetries` waits a scan in all, not a range, since Monad makes a block every 0.4 s and the
     /// nodes are a few apart. Past them, such a range is read in halves at once.
@@ -138,6 +147,8 @@ struct LogScan {
     private(set) var failedInARow = 0
     /// Waits spent on ranges past the answering node's head (`LogScanLimits.headRetries`).
     private(set) var headWaits = 0
+    /// Paced: how many more ranges throttled still after the waits may be read in halves (`LogScanLimits.throttleSplits`).
+    private(set) var throttleSplits: Int
     /// When a range was last answered — with its logs, or a refusal of its size — or the scan started.
     private var answeredAt = SuspendingClock.Instant.now
     /// Patient or paced: no range has been answered for `limits.outage` (since the app's return, when that is later:
@@ -149,11 +160,12 @@ struct LogScan {
         self.limits = limits
         splits = limits.splits
         failedSplits = limits.failedSplits
+        throttleSplits = limits.throttleSplits
     }
 
     /// One request's answers. A range answered with its logs, or refused for its size, is the endpoint answering.
     mutating func record(_ answers: [LogsAnswer]) {
-        if answers.contains(where: { if case .failed = $0 { return false }; return true }) {
+        if answers.contains(where: { switch $0 { case .failed, .throttled: return false; default: return true } }) {
             failedInARow = 0
             answeredAt = .now
             return
@@ -189,8 +201,8 @@ struct LogScan {
 
     /// `part` in two after `answer`. Refused for its size: where the refusal says a range the endpoint can answer ends,
     /// while `cuts` lasts, else in halves. Past the answering node's head, its waits spent: in halves. Failed for another
-    /// reason: in halves when `halvesFailures`. Nil — the part is a gap — when it was answered, is no wider than `floor`
-    /// blocks, or the scan's splits are spent.
+    /// reason: in halves when `halvesFailures`; throttled still after the waits, the same while `throttleSplits` lasts.
+    /// Nil — the part is a gap — when it was answered, is no wider than `floor` blocks, or the scan's splits are spent.
     mutating func divide(_ part: LogFilter, after answer: LogsAnswer, cuts: inout Int, floor: UInt64) -> [LogFilter]? {
         guard splits > 0 else { return nil }
         let parts: [LogFilter]?
@@ -207,6 +219,10 @@ struct LogScan {
             guard halvesFailures(part, floor: floor) else { return nil }
             parts = RPCClient.split(part, floor: floor)
             if parts != nil { failedSplits -= 1 }
+        case .throttled:
+            guard throttleSplits > 0, halvesFailures(part, floor: floor) else { return nil }
+            parts = RPCClient.split(part, floor: floor)
+            if parts != nil { failedSplits -= 1; throttleSplits -= 1 }
         }
         if parts != nil { splits -= 1 }
         return parts
@@ -409,7 +425,7 @@ public extension RPCClient {
             switch answer {
             case .logs(let found): return (found, true)
             case .tooLarge(_?): return await narrowedLogs(whole, after: answer, scan: &scan)
-            case .tooLarge(nil), .failed, .pastHead: if Task.isCancelled || scan.down { return ([], false) }
+            case .tooLarge(nil), .failed, .pastHead, .throttled: if Task.isCancelled || scan.down { return ([], false) }
             }
         }
         var out: [Log] = []
@@ -434,9 +450,9 @@ public extension RPCClient {
                     let narrowed = await narrowedLogs(filter, after: answer, scan: &scan)
                     out.append(contentsOf: narrowed.logs)
                     complete = complete && narrowed.complete
-                case .failed where mode != .failFast:
+                case .failed where mode != .failFast, .throttled:
                     // As build 15 read it: in halves, which a moment's outage, or a range too heavy for the endpoint to
-                    // answer in time, lets through.
+                    // answer in time, lets through. Throttled still after the waits (paced): the same, once a scan.
                     let narrowed = await narrowedLogs(filter, after: answer, scan: &scan)
                     out.append(contentsOf: narrowed.logs)
                     complete = complete && narrowed.complete
@@ -481,12 +497,17 @@ public extension RPCClient {
     /// Each of `filters` asked once, in one round trip, and recorded in `scan`; every one failed when the request as a
     /// whole got no answer. Paced, those throttled are asked again after a pause while they are throttled, until the
     /// scan finds the endpoint down (`LogScanMode.paced`); a request with no answer at all after a throttle is the
-    /// throttle still (a rate limiter drops connections as well as answering 429).
+    /// throttle still (a rate limiter drops connections as well as answering 429). Those throttled still after
+    /// `LogScanLimits.throttleWaits` waits are `.throttled`, while the scan's `throttleSplits` last.
     private func batchAnswers(_ filters: [LogFilter], scan: inout LogScan) async -> [LogsAnswer] {
         var (answers, throttled, _) = await ask(filters)
         scan.record(answers)
         var inARow = 0
         while scan.mode == .paced, !throttled.isEmpty, !scan.down, !Task.isCancelled {
+            if inARow >= scan.limits.throttleWaits, scan.throttleSplits > 0 {
+                for i in throttled { answers[i] = .throttled }
+                break
+            }
             inARow += 1
             try? await Task.sleep(for: .seconds(scan.throttlePause(after: inARow)))
             if Task.isCancelled { break }
@@ -511,8 +532,8 @@ public extension RPCClient {
 
     /// Each of `filters` asked once, in one round trip, which of them were throttled, themselves `.failed`, and whether
     /// the request got no answer at all. Throttled, once the client's own retries were spent: the request answered HTTP
-    /// 429 or 5xx (an endpoint overloaded or restarting; `RPCClient.shouldFailOver`), the call a rate-limit error, or the
-    /// request got no answer after the endpoint answered it 429 or 5xx on the way (`throttles`).
+    /// 429 or 503 (an endpoint throttling, overloaded or restarting; `RPCClient.isThrottle`), the call a rate-limit error,
+    /// or the request got no answer after the endpoint answered it 429 or 503 on the way (`throttles`).
     private func ask(_ filters: [LogFilter]) async -> (answers: [LogsAnswer], throttled: [Int], unanswered: Bool) {
         let throttlesBefore = throttles
         do {
@@ -533,7 +554,7 @@ public extension RPCClient {
             return (answers, throttled, false)
         } catch {
             let throttle: Bool
-            if case NetworkError.badStatus(let status) = error { throttle = Self.shouldFailOver(status: status) } else { throttle = (error as? RPCError).map(Self.isRateLimited) ?? false }
+            if case NetworkError.badStatus(let status) = error { throttle = Self.isThrottle(status: status) } else { throttle = (error as? RPCError).map(Self.isRateLimited) ?? false }
             return (filters.map { _ in .failed }, throttle || throttles > throttlesBefore ? Array(filters.indices) : [], true)
         }
     }
@@ -587,7 +608,7 @@ public extension RPCClient {
             let reply = await logsAnswer(part, tries: scan.halvesFailures(part, floor: floor) ? 1 : 2, scan: &scan)
             switch reply {
             case .logs(let logs): out.append(contentsOf: logs)
-            case .tooLarge, .failed, .pastHead:
+            case .tooLarge, .failed, .pastHead, .throttled:
                 if let smaller = scan.divide(part, after: reply, cuts: &cuts, floor: floor) { pending += smaller.reversed() } else { complete = false }
             }
         }

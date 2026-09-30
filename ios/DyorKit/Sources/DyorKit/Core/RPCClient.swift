@@ -45,8 +45,8 @@ public actor RPCClient {
     private var preferred = 0
     private var preferredSince = Date.distantPast
     private static let stickiness: TimeInterval = 30
-    /// Answers of HTTP 429 or 5xx this client has had (`post`): a request that then fails with no answer was throttled on
-    /// its way (`chunkedLogsReport`, paced).
+    /// Answers of HTTP 429 or 503 this client has had (`post`, `isThrottle`): a request that then fails with no answer was
+    /// throttled on its way (`chunkedLogsReport`, paced).
     private(set) var throttles = 0
 
     public init(url: URL, session: URLSession = .shared, maxBatch: Int = 100) {
@@ -90,6 +90,10 @@ public actor RPCClient {
     /// Whether an HTTP status means "this endpoint, not this request" — worth retrying on the next endpoint.
     static func shouldFailOver(status: Int) -> Bool { status == 429 || (500...599).contains(status) }
 
+    /// Whether an HTTP status is the endpoint throttling or overloaded (429, 503), which waiting eases, rather than this
+    /// request failing: another 5xx, such as a gateway timeout for a heavy range, is answered the same every time.
+    static func isThrottle(status: Int) -> Bool { status == 429 || status == 503 }
+
     /// POSTs `body` to the preferred endpoint, failing over to the next on a transport error or a 429 / 5xx answer.
     /// When every endpoint is throttling at once (a burst, measured on the live public endpoints) it backs off and tries
     /// again in bounded rounds; when every endpoint is simply unreachable (offline) it fails at once instead. Any other
@@ -119,7 +123,8 @@ public actor RPCClient {
                 }
                 if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                     failure = NetworkError.badStatus(http.statusCode)
-                    if Self.shouldFailOver(status: http.statusCode) { throttled = true; throttles += 1; continue }
+                    if Self.isThrottle(status: http.statusCode) { throttles += 1 }
+                    if Self.shouldFailOver(status: http.statusCode) { throttled = true; continue }
                     return (data, http.statusCode)
                 }
                 if index != preferred { preferred = index; preferredSince = Date() }

@@ -400,8 +400,8 @@ final class LogScanTests: XCTestCase {
 
     /// The re-review's finding: paced, only HTTP 429 and rate-limit errors were waited out, so a storm of 503s, or 429s
     /// that ended in a request with no answer, failed the range and the 5M-block range was halved. An endpoint answering
-    /// 5xx is overloaded or restarting, and one that stops answering after a throttle is throttling still: both are waited
-    /// out, the same range asked again, never split.
+    /// 503 is overloaded or restarting, and one that stops answering after a throttle is throttling still: both are waited
+    /// out, the same range asked again, not split (`testAPacedScanReadsARangeThrottledPastItsWaitsInHalvesOnce`).
     func testAPacedScanWaitsOutServerErrorsAndNoAnswerAfterAThrottle() async {
         let limits = LogScanLimits(throttlePause: 0.05, maxThrottlePause: 0.1)
         let scenarios: [(String, LogsStub.Rule)] = [
@@ -432,6 +432,47 @@ final class LogScanTests: XCTestCase {
         XCTAssertFalse(report.complete)
         XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999)], "the first range only, never split")
         XCTAssertEqual(LogsStub.requests(), 5, "one ask, the client's own retries")
+    }
+
+    /// The V1 final check's finding (P2): paced, every HTTP 5xx was a throttle, so a range the endpoint answers 5xx every
+    /// time (a gateway timeout for a heavy range) was waited out, never split, and the venue list stalled on it, run after
+    /// run. Only 429 and 503 (and rate-limit errors) are throttles; a 504 is a failure, and a paced scan reads a failed
+    /// range in halves, as a patient one does.
+    func testAPacedScanReadsARangeAnswered504EveryTimeInHalves() async {
+        LogsStub.install(head: 10_000_000, logs: [5, 4_000_000].map(transfer)) { range in range.span > 2_500_000 ? .status(504) : nil }
+        let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 4_999_999, chunkSize: 5_000_000,
+                                                             concurrency: 1, mode: .paced,
+                                                             limits: LogScanLimits(outage: 15, pause: 0, maxPause: 0, throttlePause: 0.05, maxThrottlePause: 0.1))
+        XCTAssertTrue(report.complete)
+        XCTAssertEqual(report.logs.map(\.blockNumber), [5, 4_000_000])
+        XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999), LogsStub.Range(from: 0, to: 2_499_999), LogsStub.Range(from: 2_500_000, to: 4_999_999)])
+        XCTAssertEqual(LogsStub.requests(), 12, "the range asked twice (the client's five each), then its halves")
+    }
+
+    /// ...and a range the endpoint throttles every time (a 503 for a range too heavy for it) is waited out, then read in
+    /// halves: once a scan, so the requests at most double, and a range throttled after that is waited out until the
+    /// outage, never split.
+    func testAPacedScanReadsARangeThrottledPastItsWaitsInHalvesOnce() async {
+        LogsStub.install(head: 10_000_000, logs: [5, 4_000_000].map(transfer)) { range in range.span > 2_500_000 ? .status(503) : nil }
+        let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 4_999_999, chunkSize: 5_000_000,
+                                                             concurrency: 1, mode: .paced,
+                                                             limits: LogScanLimits(outage: 30, pause: 0, maxPause: 0, throttlePause: 0.05, maxThrottlePause: 0.1,
+                                                                                   throttleWaits: 1))
+        XCTAssertTrue(report.complete)
+        XCTAssertEqual(report.logs.map(\.blockNumber), [5, 4_000_000])
+        XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999), LogsStub.Range(from: 0, to: 2_499_999), LogsStub.Range(from: 2_500_000, to: 4_999_999)])
+        XCTAssertEqual(LogsStub.requests(), 12, "asked, waited out once (the client's five each), then its halves")
+
+        // Once a scan: a range throttled past its waits after the first is not split.
+        var scan = LogScan(mode: .paced, limits: LogScanLimits())
+        var cuts = 200
+        let whole = LogFilter(fromBlock: 0, toBlock: 4_999_999)
+        XCTAssertEqual(scan.divide(whole, after: .throttled, cuts: &cuts, floor: 100)?.map(\.toBlock), [2_499_999, 4_999_999])
+        XCTAssertNil(scan.divide(LogFilter(fromBlock: 0, toBlock: 2_499_999), after: .throttled, cuts: &cuts, floor: 100))
+        XCTAssertNotNil(scan.divide(LogFilter(fromBlock: 0, toBlock: 2_499_999), after: .failed, cuts: &cuts, floor: 100), "a failure is still halved")
+        XCTAssertEqual(scan.throttleSplits, 0)
+        XCTAssertTrue(RPCClient.isThrottle(status: 429) && RPCClient.isThrottle(status: 503))
+        XCTAssertFalse([500, 502, 504].contains(where: RPCClient.isThrottle(status:)))
     }
 
     /// The re-review's finding (from before V1): rpc1 refuses a range past the head of the node answering it (its nodes
