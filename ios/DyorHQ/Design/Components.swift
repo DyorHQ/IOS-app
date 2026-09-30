@@ -47,10 +47,13 @@ struct TokenLogo: View {
         return ZStack {
             LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
             // One line, shrunk rather than wrapped: two emoji at 0.4 of the disc would otherwise break onto two lines.
-            Text(symbol.prefix(2).uppercased())
+            // Inset from the sides so wide letters (two emoji, a ZWJ family, ﷽) fit the circle, not the square. "?"
+            // for a token with no symbol, as the launch views show.
+            Text(symbol.isEmpty ? "?" : symbol.prefix(2).uppercased())
                 .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
+                .padding(.horizontal, size * 0.12)
                 .foregroundStyle(.white)
         }
     }
