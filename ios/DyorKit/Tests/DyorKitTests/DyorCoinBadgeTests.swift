@@ -56,6 +56,22 @@ final class DyorCoinBadgeTests: XCTestCase {
         for curated in Token.core { XCTAssertEqual(TokenBadge.of(curated, coin: nil, receivedUnasked: true), .none, curated.symbol) }
     }
 
+    /// Every DyorHQ coin on chain today (`DyorCoinChain.mainnet`: QT, JUST, BB, BP, GMGM, BPP, LP, NAT, 0N1, RWA, SPT,
+    /// BTCD — "Bitcoin Diva" — and 0N1F) keeps its DyorHQ label under the stricter look-alike rules, and none is refused
+    /// by the create forms.
+    func testEveryDyorHQCoinOnChainKeepsItsLabel() async {
+        DyorCoinChain.mainnet.install()
+        let registry = DyorCoinRegistry(rpc: MomentsChainStub.rpc())
+        await registry.refresh()
+        let coins = await registry.all
+        XCTAssertEqual(coins.count, 13)
+        for coin in coins.values {
+            XCTAssertEqual(TokenBadge.of(coin.token, coin: coin, receivedUnasked: true), coin.isMoment ? .dyorMoment : .dyorLaunch, "\(coin.symbol) / \(coin.name)")
+            XCTAssertNil(SymbolSafety.createRefusal(name: coin.name, symbol: coin.symbol,
+                                                    maxName: coin.isMoment ? SymbolSafety.maxMomentNameLength : SymbolSafety.maxLaunchNameLength), coin.symbol)
+        }
+    }
+
     // MARK: The badge reads the name (F7)
 
     /// A DyorHQ coin whose name has a direction override — "USDC COIN" drawn from "NIOC CDSU" — a hidden character, a
