@@ -55,6 +55,17 @@ final class ChainTextDisplayTests: XCTestCase {
         }
     }
 
+    /// Text made only of the invisible characters `shown` keeps draws nothing, so it is empty, as it was before they were
+    /// kept: a place of one zero-width joiner hides its pin label rather than showing it blank.
+    func testTextOfOnlyKeptInvisiblesIsEmpty() {
+        for text in ["\u{200D}", "\u{200C}\u{200D}", "\u{FE0F}", "\u{00AD}\u{034F}", "\u{180B}", "\u{E0100}", "\u{202E}\u{200D}", "\u{E0061}\u{200D}"] {
+            XCTAssertEqual(ChainText.shown(text), "", text.unicodeScalars.map { String(format: "U+%04X", $0.value) }.joined(separator: " "))
+            XCTAssertEqual(ChainText.shown(text, multiline: true), "")
+        }
+        XCTAssertEqual(ChainText.shown("A\u{200D}"), "A\u{200D}", "kept beside anything that draws")
+        XCTAssertEqual(ChainText.shown(" "), " ", "a space is as it was")
+    }
+
     /// Tag characters stay only in an emoji tag sequence (a subdivision flag: U+1F3F4, the tags, CANCEL TAG), and at most
     /// `ChainText.maxTags` of them; after anything else, however many, they are removed, so none can pad a name.
     func testTagsStayOnlyInAFlagAndOnlyAFew() {

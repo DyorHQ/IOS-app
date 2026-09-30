@@ -16,7 +16,7 @@ public extension ChainText {
     /// grapheme joiner and the soft hyphen. A tag character (U+E0020–U+E007F) is kept only in an emoji tag sequence, which
     /// draws a subdivision flag (England's): right after U+1F3F4 WAVING BLACK FLAG, or after a tag kept in that sequence,
     /// until U+E007F CANCEL TAG ends it; at most `maxTags` of them, so nobody can pad text with thousands of invisible
-    /// tags. Anywhere else a tag is removed.
+    /// tags. Anywhere else a tag is removed. Text made only of these kept characters is empty: it would draw nothing.
     ///
     /// Single-line text (a name, a symbol, a place) with a right-to-left letter in it (`isRightToLeft`) comes back inside
     /// U+2068 FIRST STRONG ISOLATE … U+2069 POP DIRECTIONAL ISOLATE: its own letters still read right to left, and the
@@ -67,6 +67,9 @@ public extension ChainText {
             if properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) { continue }
             out.append(scalar)
         }
+        // Text made only of the invisible characters kept above draws nothing: it is empty, as it was before they were
+        // kept, so no name, symbol or place shows as a blank label.
+        if out.allSatisfy({ joins($0.value) }) { return "" }
         guard !multiline, out.contains(where: isRightToLeft) else { return String(out) }
         return "\u{2068}" + String(out) + "\u{2069}"
     }
