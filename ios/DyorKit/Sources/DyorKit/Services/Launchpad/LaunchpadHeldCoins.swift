@@ -49,10 +49,11 @@ public extension LaunchpadService {
     /// (`stacks`) — in any phase, by coin, each from the first factory whose record names a curve (`firstRecord`, as
     /// `knownCurve` reads it), with each coin's live price (`HeldLaunches.pairPerCoin`). MON and the curated tokens are
     /// never asked. One aggregate asks every factory for every coin's record; then each factory's coins are read as
-    /// launches in one read per factory, and every coin's live price in one more read. Throws when the aggregate fails or
+    /// launches (`hydrate`, in chunks), and every coin's live price in one more read. Throws when the aggregate fails or
     /// any answer in it is missing: a coin could then be missed, so nothing is ruled in or out. A factory whose launches
-    /// can't be read leaves its coins without a launch or price, still recorded (`HeldLaunches.complete` is false), and a
-    /// coin whose own launch can't be read (`hydrate`) only itself.
+    /// can't be read leaves every one of its coins without a launch or price, still recorded (`HeldLaunches.complete` is
+    /// false): that includes a factory one of whose coins has a protocol value (price, reserve, state, supply) that can't
+    /// be read, since `hydrate` then throws for the whole read. A coin whose text can't be read keeps its launch.
     func heldLaunches(_ tokens: [Token]) async throws -> HeldLaunches {
         var seen = Set<Address>()
         let coins = tokens.filter { SwapEngine.mayBeLaunchCoin($0) && seen.insert($0.address).inserted }.map(\.address)

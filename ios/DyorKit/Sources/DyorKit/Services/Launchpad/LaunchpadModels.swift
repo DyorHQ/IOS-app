@@ -377,7 +377,6 @@ public struct LaunchpadModules: Hashable, Sendable {
     }
 }
 
-/// One launch as the explore list shows it: the factory record plus the token metadata and live curve state.
 /// The launches of every launchpad the app reads (`LaunchpadService.launchListing`), newest first: the live factory's,
 /// then each retired factory's, newest stack first. A factory whose launches couldn't be read is in `unread`, with why,
 /// and has none here: never taken for a factory with none.
@@ -408,6 +407,7 @@ public struct LaunchListing: Sendable {
     }
 }
 
+/// One launch as the explore list shows it: the factory record plus the token metadata and live curve state.
 public struct Launch: Identifiable, Hashable, Sendable {
     public var id: Address { token }
 

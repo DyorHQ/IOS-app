@@ -45,6 +45,17 @@ final class ChainTextForkTests: XCTestCase {
     private static let longDescription = 20_000
     private static let longName = 8_000
 
+    /// Each of `items`' calls, `calls(item)`, answered in order, `Multicall.textChunk` items per read (as the app reads
+    /// them): one read of every item's text at once is more than anvil answers on a fork holding about 100 launches of
+    /// the longest text ("EVM error MemoryOOG"), and this check's own read must never be what fails.
+    private static func readInChunks<Item>(_ items: [Item], multicall: Multicall, _ calls: (Item) throws -> [ContractCall]) async throws -> [[ABIValue]] {
+        var out: [[ABIValue]] = []
+        for start in stride(from: 0, to: items.count, by: Multicall.textChunk) {
+            out += try await multicall.readAll(try items[start ..< min(start + Multicall.textChunk, items.count)].flatMap(calls))
+        }
+        return out
+    }
+
     /// One reader's answer, or nil with a failure naming the reader, so every reader is tried.
     private func read<T>(_ reader: String, _ body: () async throws -> T) async -> T? {
         do { return try await body() } catch {
@@ -60,10 +71,10 @@ final class ChainTextForkTests: XCTestCase {
         let tokens = try await multicall.readAll([try ContractCall(to: factory, "getLaunches(uint256,uint256)", [.uint(0), .uint(count)], returns: "address[]")])[0][0]
             .elements.map(\.address)
         // Each coin's text as raw bytes (`bytes` shares `string`'s layout): name, symbol, then getTokenInfo's logo, description and links.
-        let raw = try await multicall.readAll(tokens.flatMap { token in
+        let raw = try await Self.readInChunks(tokens, multicall: multicall) { token in
             [try ContractCall(to: token, "name()", returns: "bytes"), try ContractCall(to: token, "symbol()", returns: "bytes"),
              try ContractCall(to: token, "getTokenInfo()", returns: "address,bytes,bytes,(bytes,bytes,bytes,bytes,bytes)")]
-        })
+        }
         func texts(_ i: Int) -> [Data] {
             let info = raw[3 * i + 2]
             return [raw[3 * i][0].bytes, raw[3 * i + 1][0].bytes, info[1].bytes, info[2].bytes] + info[3].elements.map(\.bytes)
@@ -111,10 +122,10 @@ final class ChainTextForkTests: XCTestCase {
         let moments = try await multicall.readAll(ids.map { try ContractCall(to: cohort.factory, "getMoment(uint256)", [.uint($0)], returns: MomentsABI.momentTuple) })
             .enumerated().map { MomentsABI.moment(id: ids[$0.offset], $0.element[0], factory: cohort.factory) }
         // Each Moment's text as raw bytes: its coin's name and symbol, its NFT's media URI, place and animation URI.
-        let raw = try await multicall.readAll(moments.flatMap { m in
+        let raw = try await Self.readInChunks(moments, multicall: multicall) { m in
             [try ContractCall(to: m.coin, "name()", returns: "bytes"), try ContractCall(to: m.coin, "symbol()", returns: "bytes"),
              try ContractCall(to: m.nft, "provenance()", returns: "(bytes,bytes32,bytes,uint64,bytes)")]
-        })
+        }
         func texts(_ i: Int) -> [Data] {
             let p = raw[3 * i + 2][0]
             return [raw[3 * i][0].bytes, raw[3 * i + 1][0].bytes, p[0].bytes, p[2].bytes, p[4].bytes]
