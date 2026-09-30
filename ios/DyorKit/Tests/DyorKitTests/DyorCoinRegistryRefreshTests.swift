@@ -223,10 +223,46 @@ final class DyorCoinRegistryRefreshTests: XCTestCase {
         XCTAssertTrue(created.contains("NEXT"))
     }
 
-    /// A factory whose count is below what the file says was read — a fork's file, a node that answered wrongly before —
-    /// has its stored coins dropped and its list read again from the start; every other factory's coins stay, and the
-    /// file is rewritten without them.
-    func testACountBelowTheCheckpointDropsThatFactorysCoinsAndReadsThemAgain() async throws {
+    /// A node one launch behind (the app's failover RPC can land on one) answers the live launchpad's count one lower
+    /// than what was read. That is the node's lag, not the chain's: every coin of that factory is kept, in memory and in
+    /// the file, its checkpoint stays, nothing is read but the counts, and the refresh isn't complete, so the next one
+    /// reads again. The newest coin keeps its label and is never asked about on that node.
+    func testACountOneBehindKeepsTheFactorysCoins() async throws {
+        var chain = DyorCoinChain.mainnet
+        chain.launches[Self.v2] = (1...7).map { launch($0, "C\($0)") }
+        let registry = registry(chain, store: store)
+        let first = await registry.refresh()
+        XCTAssertTrue(first)
+        let newest = try XCTUnwrap(chain.launches[Self.v2]?.last)
+        var behind = chain
+        behind.launches[Self.v2]?.removeLast()
+        behind.install()
+        let lagging = await registry.refresh()
+        XCTAssertFalse(lagging, "a count below what was read isn't a complete refresh")
+        XCTAssertEqual(MomentsChainStub.batches().count, 1, "the counts alone")
+        let coins = await registry.all
+        XCTAssertEqual(coins.values.filter { $0.factory == Self.v2 }.count, 7, "no coin dropped")
+        let checkpoints = await registry.checkpoints
+        XCTAssertEqual(checkpoints[Self.v2], 7)
+        XCTAssertEqual(try XCTUnwrap(store.load()).coins.filter { $0.factory == Self.v2 }.count, 7, "nor from the file")
+        behind.install()
+        let proof = await registry.prove([newest.token])
+        guard case .dyor? = proof[newest.token] else { return XCTFail("the newest coin keeps its label") }
+        XCTAssertTrue(MomentsChainStub.batches().isEmpty, "and is never asked about on the lagging node")
+        behind.install()
+        _ = await registry.refreshIfStale()
+        XCTAssertFalse(MomentsChainStub.batches().isEmpty, "not fresh: read again at once")
+        chain.install()
+        let caughtUp = await registry.refresh()
+        XCTAssertTrue(caughtUp)
+        XCTAssertEqual(MomentsChainStub.batches().count, 1, "the counts alone: nothing was dropped to read again")
+    }
+
+    /// A factory whose count stays below what the file says was read — a fork restarted under the same file — for ten
+    /// minutes (`lowerCountGrace`) has its stored coins dropped and its list read again from the start; every other
+    /// factory's coins stay, and the file is rewritten without them. A count that reaches the checkpoint in between
+    /// starts the wait again.
+    func testACountBelowTheCheckpointForTenMinutesDropsThatFactorysCoinsAndReadsThemAgain() async throws {
         let ghosts = (1...3).map { n in
             DyorCoin(address: Address(literal: String(format: "0x00000000000000000000000000000000%08x", 0x9000 + n)), origin: .launch(factory: Self.v2, generation: .v2, retired: false),
                      symbol: "GHOST\(n)", name: "Ghost", creator: DyorCoinChain.creator, logo: "", pair: .zero)
@@ -238,11 +274,20 @@ final class DyorCoinRegistryRefreshTests: XCTestCase {
         let real = launch(7, "REAL")
         chain.launches[Self.v2] = [real]
         let registry = registry(chain, store: store)
-        let before = await registry.all
-        XCTAssertEqual(before.count, 4)
-        let complete = await registry.refresh()
+        let start = Date()
+        var complete = await registry.refresh(now: start)
+        XCTAssertFalse(complete)
+        var coins = await registry.all
+        XCTAssertEqual(Set(coins.values.filter { $0.factory == Self.v2 }.map(\.symbol)), ["GHOST1", "GHOST2", "GHOST3"], "kept while it may be a node behind")
+        chain.install()
+        complete = await registry.refresh(now: start.addingTimeInterval(DyorCoinRegistry.lowerCountGrace - 1))
+        XCTAssertFalse(complete)
+        coins = await registry.all
+        XCTAssertNil(coins[real.token])
+        chain.install()
+        complete = await registry.refresh(now: start.addingTimeInterval(DyorCoinRegistry.lowerCountGrace))
         XCTAssertTrue(complete)
-        let coins = await registry.all
+        coins = await registry.all
         XCTAssertEqual(Set(coins.values.filter { $0.factory == Self.v2 }.map(\.symbol)), ["REAL"], "the fork's coins are gone")
         XCTAssertEqual(coins[DyorCoinChain.qt]?.symbol, "QT", "other factories' coins stay")
         XCTAssertEqual(coins.count, 11, "QT from the file (0xad3d's list was read to its count), the other factories' 9, and REAL")
@@ -250,6 +295,26 @@ final class DyorCoinRegistryRefreshTests: XCTestCase {
         XCTAssertEqual(checkpoints[Self.v2], 1)
         let kept = try XCTUnwrap(store.load())
         XCTAssertFalse(kept.coins.contains { $0.symbol.hasPrefix("GHOST") })
+
+        // A count that reaches the checkpoint starts the wait again.
+        let again = DyorCoinRegistry(rpc: MomentsChainStub.rpc())
+        var full = DyorCoinChain.mainnet
+        full.launches[Self.v2] = [launch(8, "ONE"), launch(9, "TWO")]
+        full.install()
+        await again.refresh(now: start)
+        var short = full
+        short.launches[Self.v2]?.removeLast()
+        short.install()
+        await again.refresh(now: start.addingTimeInterval(60))
+        full.install()
+        await again.refresh(now: start.addingTimeInterval(120))
+        short.install()
+        await again.refresh(now: start.addingTimeInterval(700))
+        short.install()
+        complete = await again.refresh(now: start.addingTimeInterval(700 + DyorCoinRegistry.lowerCountGrace - 1))
+        XCTAssertFalse(complete)
+        let both = await again.all.values.filter { $0.factory == Self.v2 }.count
+        XCTAssertEqual(both, 2, "ten minutes from the last time it was seen lower, not the first")
     }
 }
 

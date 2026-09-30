@@ -503,8 +503,8 @@ final class DyorCoinRegistryTests: XCTestCase {
         XCTAssertEqual(MomentsChainStub.batches().count, 1, "nothing new: the counts alone")
     }
 
-    /// A factory whose count is below what was read (a fork restarted under the same file, a node behind the others) is
-    /// read again from the start.
+    /// A factory whose count stays below what was read (a fork restarted under the same file) for `lowerCountGrace` is
+    /// read again from the start, and read on from there.
     func testACountBelowTheCheckpointIsReadAgainFromThere() async throws {
         let v2 = LaunchpadAddresses.monadMainnet.factory
         try store.save(DyorCoinStore.Snapshot(coins: [], checkpoints: [DyorCoinStore.Checkpoint(factory: v2, count: 5)]))
@@ -512,10 +512,13 @@ final class DyorCoinRegistryTests: XCTestCase {
         let first = launch("0x0000000000000000000000000000000000000f02", "ONE")
         chain.launches[v2] = [first]
         let registry = registry(chain, store: store)
-        await registry.refresh()
+        let start = Date()
+        await registry.refresh(now: start)
+        chain.install()
+        await registry.refresh(now: start.addingTimeInterval(DyorCoinRegistry.lowerCountGrace))
         chain.launches[v2]?.append(launch("0x0000000000000000000000000000000000000f03", "TWO"))
         chain.install()
-        await registry.refresh()
+        await registry.refresh(now: start.addingTimeInterval(DyorCoinRegistry.lowerCountGrace + 1))
         let coins = await registry.all
         XCTAssertEqual(Set(coins.values.map(\.symbol)), ["ONE", "TWO"])
     }

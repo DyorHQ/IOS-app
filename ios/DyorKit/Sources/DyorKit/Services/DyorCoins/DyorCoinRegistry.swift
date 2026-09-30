@@ -25,7 +25,10 @@ import Foundation
 /// `ChainText.unreadable`. Once its factory's record names a coin, the coin is admitted whatever its text — the
 /// unreadable text then makes its badge a warning (`TokenBadge`), never "DyorHQ Launch" — so no creator's text can hold
 /// a factory's list back. Only the factory's own answer can: a record that is empty or names another coin (a node
-/// behind the chain) or that couldn't be read stops that list there, to be read again at the next refresh. Reads go on
+/// behind the chain) or that couldn't be read stops that list there, to be read again at the next refresh. A count
+/// below what was read is a node behind the chain too (the app's failover RPC can land on one): that factory's coins
+/// and checkpoint stay and the refresh isn't complete; only a count that stays below it for `lowerCountGrace` (a fork
+/// restarted under the same file) has that list dropped and read again from the start. Reads go on
 /// the client given (the app's failover RPC), each a single Multicall3 `eth_call`. When to refresh is the app's (at
 /// start, every 5 minutes in the foreground, after a launch or publish settles); no view triggers a read.
 public actor DyorCoinRegistry {
@@ -60,6 +63,9 @@ public actor DyorCoinRegistry {
     private var proving: [Int: Task<Void, Never>] = [:]
     private var tasksStarted = 0
     private var lastCompleteRefresh: Date?
+    /// Factories whose count came back below their checkpoint, with when that was first seen and not answered otherwise
+    /// since (`lowerCountGrace`).
+    private var lowerCounts: [Address: Date] = [:]
     /// Bumped by `erase`, so a read that started before it never writes its results back.
     private var epoch = 0
     private var subscribers: [UUID: AsyncStream<[Address: DyorCoin]>.Continuation] = [:]
@@ -71,6 +77,10 @@ public actor DyorCoinRegistry {
     static let maxNewPerRefresh = 500
     /// Launch addresses asked for in one `getLaunches` call.
     static let launchPage = 250
+    /// How long a factory's count must stay below what was read before the registry believes it and reads that list
+    /// again from the start: ten minutes, long after a node behind the chain (Monad makes a block every 0.4 s) has
+    /// caught up. Until then the count is taken as that node's and the coins are kept.
+    static let lowerCountGrace: TimeInterval = 600
     /// Where a coin's reads (`launchReads`, `momentReads`) read its creator's text: every call but the first, its
     /// factory's record, which is the only one that must answer (`Multicall.readItems`).
     static let textCalls: Set<Int> = [1, 2, 3]
@@ -138,29 +148,30 @@ public actor DyorCoinRegistry {
 
     // MARK: Enumeration
 
-    /// Reads what every factory recorded since the last refresh (at most `maxNewPerRefresh` per factory). True when the
-    /// registry then holds every coin the factories had recorded; false when a read failed or more is left for next time
-    /// (what was read is kept either way). A refresh already running is joined, not repeated.
+    /// Reads what every factory recorded since the last refresh (at most `maxNewPerRefresh` per factory), `now` being
+    /// when. True when the registry then holds every coin the factories had recorded; false when a read failed, a count
+    /// came back below what was read (`lowerCountGrace`) or more is left for next time (what was read is kept either
+    /// way). A refresh already running is joined, not repeated.
     @discardableResult
-    public func refresh() async -> Bool {
+    public func refresh(now: Date = Date()) async -> Bool {
         if let running { return await running.task.value }
         tasksStarted += 1
         let id = tasksStarted
         let epoch = self.epoch
-        let task = Task { await self.enumerate() }
+        let task = Task { await self.enumerate(now: now) }
         running = (id, task)
         let complete = await task.value
         if running?.id == id { running = nil }
-        if complete, epoch == self.epoch { lastCompleteRefresh = Date() }
+        if epoch == self.epoch { lastCompleteRefresh = complete ? now : nil }
         return complete
     }
 
-    /// `refresh`, unless a complete one finished less than `maxAge` seconds before `now`: one that left anything unread
-    /// doesn't count.
+    /// `refresh`, unless the last one was complete and finished less than `maxAge` seconds before `now`: one that left
+    /// anything unread, or heard a count below what was read, makes the next call read again.
     @discardableResult
     public func refreshIfStale(maxAge: TimeInterval = 300, now: Date = Date()) async -> Bool {
         if let lastCompleteRefresh, now.timeIntervalSince(lastCompleteRefresh) < maxAge { return true }
-        return await refresh()
+        return await refresh(now: now)
     }
 
     /// A launchpad stack or a Moments cohort, as the enumeration reads it.
@@ -190,23 +201,34 @@ public actor DyorCoinRegistry {
         let to: Int
     }
 
-    private func enumerate() async -> Bool {
+    private func enumerate(now: Date) async -> Bool {
         let epoch = self.epoch
         let sources = launchpads.map(Source.launchpad) + cohorts.map(Source.cohort)
-        // 1. How many each factory has recorded. A count below what was read before is another chain's (a fork restarted
-        //    under the same file) or a node that answered wrongly: that factory's coins are dropped and its list is read
-        //    again from the start.
+        // 1. How many each factory has recorded. A count below what was read before is a node behind the chain (or one
+        //    that answered wrongly): that factory stays as it is and the refresh isn't complete. Only when counts stay
+        //    below it for `lowerCountGrace` — another chain's, a fork restarted under the same file — are that factory's
+        //    coins dropped and its list read again from the start.
         let counts = await read(sources.map(\.countCall))
         var complete = true
         var jobs: [Job] = []
         var reached = checkpoints
         var dropped: Set<Address> = []
+        var lower = lowerCounts
         for (source, result) in zip(sources, counts) {
             guard case .success(let values) = result, let value = values.first else { complete = false; continue }
             let count = LaunchpadABI.int(value)
             let stored = checkpoints[source.factory] ?? 0
-            if stored > count { dropped.insert(source.factory) }
-            let done = stored > count ? 0 : stored
+            var done = stored
+            if count < stored {
+                guard let since = lower[source.factory], now.timeIntervalSince(since) >= Self.lowerCountGrace else {
+                    if lower[source.factory] == nil { lower[source.factory] = now }
+                    complete = false
+                    continue
+                }
+                dropped.insert(source.factory)
+                done = 0
+            }
+            lower[source.factory] = nil
             reached[source.factory] = done
             guard count > done else { continue }
             let to = min(count, done + Self.maxNewPerRefresh)
@@ -276,6 +298,7 @@ public actor DyorCoinRegistry {
             if passed < job.to { complete = false }
         }
         guard epoch == self.epoch else { return false }
+        lowerCounts = lower
         let checkpointsMoved = reached != checkpoints
         checkpoints = reached
         commit(found, dropping: dropped, persistAnyway: checkpointsMoved)
@@ -534,6 +557,7 @@ public actor DyorCoinRegistry {
         coins = [:]
         checkpoints = [:]
         notDyor = []
+        lowerCounts = [:]
         lastCompleteRefresh = nil
         store?.erase()
         publish()
