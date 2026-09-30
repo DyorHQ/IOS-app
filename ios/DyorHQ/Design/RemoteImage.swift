@@ -71,6 +71,9 @@ struct RemoteImage<Placeholder: View>: View {
     @State private var image: UIImage?
     @State private var failed: Bool
     @State private var graceOver = false
+    /// The URL `graceOver` was counted for: a row scrolled back on screen keeps its letters rather than showing the disc
+    /// again for another grace.
+    @State private var graceURL: URL?
 
     init(url: URL?, pointSize: CGFloat, contentMode: ContentMode = .fill, grace: Duration? = nil,
          @ViewBuilder placeholder: @escaping (_ loading: Bool) -> Placeholder) {
@@ -100,8 +103,8 @@ struct RemoteImage<Placeholder: View>: View {
         }
         .task(id: url) { await load() }
         .task(id: url) {
-            graceOver = false
-            guard let grace, image == nil, await RemoteImageWait.graceElapses(grace) else { return }
+            if graceURL != url { graceOver = false; graceURL = url }
+            guard !graceOver, let grace, image == nil, await RemoteImageWait.graceElapses(grace) else { return }
             graceOver = true
         }
     }
