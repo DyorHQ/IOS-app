@@ -382,6 +382,7 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         XCTAssertTrue(LaunchpadAddresses.isRetired(retired.factory))
         XCTAssertNotEqual(retired.factory, fork.addresses.factory)
         XCTAssertFalse(retired.curveBuysOpen)
+        XCTAssertFalse(retired.listsOnBoard, "the public board never lists it")
         do {
             _ = try await fork.service.buyPlan(launch: retired, quoteIn: Self.mon, minTokensOut: 0, recipient: wallet.address)
             XCTFail("the app builds no buy on a retired launchpad's curve")
@@ -421,5 +422,51 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         try await run(await fork.service.sellPlan(launch: retired, tokensIn: held, minQuoteOut: quote.quoteOut * 99 / 100, recipient: wallet.address), wallet)
         let left = try await balance(retired.token, wallet.address)
         XCTAssertEqual(left, 0)
+    }
+
+    /// The Launch tab on mainnet as it stands (owner decision 2026-09-29): a retired launchpad's coin lists only once it
+    /// graduated; LP's one holder (0x2AF8…) finds it under "Your Sell-Only Coins" and sells all of it on its retired curve
+    /// through the app's plan (impersonated on the fork only); a new v2 launch lists in Explore, so its empty card goes.
+    func testTheBoardListsWhatTradesAndAHolderStillSellsTheRest() async throws {
+        let fork = try launchpad()
+        let all = try await fork.service.allLaunches(limit: 60)
+        let listed = all.filter(\.listsOnBoard)
+        XCTAssertTrue(listed.filter(\.isRetiredLaunchpad).allSatisfy { $0.phase == .graduated }, "\(listed.map(\.symbol))")
+        XCTAssertTrue(all.filter(\.isSellOnly).allSatisfy { !$0.listsOnBoard })
+
+        let holder = Address(literal: "0x2AF85656F1B17Ce935DE335A4Ce95A4eFa807af5")
+        let lpToken = Address(literal: "0xA4D9b2697254292ad30e06Ce968a7e18De6fF884")
+        guard let lp = all.first(where: { $0.token == lpToken }), lp.isSellOnly, lp.curveSellsOpen else { throw XCTSkip("LP isn't a sell-only coin taking sells on this fork") }
+        let sellOnly = all.filter { !$0.listsOnBoard }
+        let tokens = sellOnly.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
+        let balances = try await ERC20.balances(of: tokens, owner: holder, rpc: rpc, multicall: Multicall(rpc: rpc))
+        let section = try XCTUnwrap(LaunchBoard.heldSellOnly(sellOnly, balances: balances))
+        XCTAssertTrue(section.contains { $0.token == lpToken }, "\(section.map(\.symbol))")
+        let held = try XCTUnwrap(balances[lpToken])
+        guard held > 0 else { throw XCTSkip("0x2AF8… no longer holds LP") }
+        let nobody = try await ERC20.balances(of: tokens, owner: Address(literal: "0x00000000000000000000000000000000000b0a2d"), rpc: rpc, multicall: Multicall(rpc: rpc))
+        XCTAssertEqual(LaunchBoard.heldSellOnly(sellOnly, balances: nobody), [], "no section for a wallet holding none")
+
+        // Its page, as Home and the Portfolio open it: the sell through the app's plan against its quote's floor.
+        let quote = try await fork.service.quoteSell(curve: lp.curve, tokensIn: held)
+        XCTAssertGreaterThan(quote.quoteOut, 0)
+        let plan = await fork.service.sellPlan(launch: lp, tokensIn: held, minQuoteOut: quote.quoteOut * 99 / 100, recipient: holder)
+        XCTAssertEqual(plan.count, 2)
+        for step in plan {
+            let request = try XCTUnwrap(try step.request(), step.label)
+            try await sendAs(holder, to: request.to, data: request.data, value: request.value)
+        }
+        let left = try await balance(lpToken, holder)
+        XCTAssertEqual(left, 0)
+        let mon = try await balance(.zero, holder)
+        XCTAssertGreaterThan(mon, 1_000 * Self.mon, "paid in MON (the impersonated sender starts each call at 1,000 MON)")
+
+        // A v2 launch lists in Explore, on the curve.
+        let wallet = try await wallet()
+        let launched = try await launch(fork, input("BRD"), wallet)
+        let board = try await fork.service.allLaunches(limit: 60).filter(\.listsOnBoard)
+        let shown = try XCTUnwrap(board.first { $0.token == launched.token })
+        XCTAssertEqual(shown.phase.boardSection, .climbing)
+        XCTAssertFalse(shown.isRetiredLaunchpad)
     }
 }

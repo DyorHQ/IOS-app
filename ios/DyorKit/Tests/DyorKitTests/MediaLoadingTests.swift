@@ -96,4 +96,50 @@ final class MediaLoadingTests: XCTestCase {
         XCTAssertEqual(sawCancel.peak, 1, "the load itself was cancelled")
         XCTAssertEqual(slow.count, 0)
     }
+
+    // MARK: How a logo waits
+
+    /// A logo shows its plain disc only for the grace period while it loads, then its letters; the letters at once when
+    /// there is no URL or it failed (lately); the picture whenever there is one.
+    func testALogoWaitsOnlyAMomentBeforeItsLetters() {
+        typealias Wait = RemoteImageWait
+        XCTAssertEqual(Wait.shown(hasImage: false, hasURL: true, failed: false, graceOver: false), .loading)
+        XCTAssertEqual(Wait.shown(hasImage: false, hasURL: true, failed: false, graceOver: true), .standIn, "a slow or dead host")
+        XCTAssertEqual(Wait.shown(hasImage: false, hasURL: true, failed: true, graceOver: false), .standIn, "failed, or failed lately")
+        XCTAssertEqual(Wait.shown(hasImage: false, hasURL: false, failed: false, graceOver: false), .standIn, "no image")
+        XCTAssertEqual(Wait.shown(hasImage: true, hasURL: true, failed: false, graceOver: true), .image, "late, but here")
+        XCTAssertEqual(Wait.shown(hasImage: true, hasURL: true, failed: true, graceOver: false), .image)
+        // A moment: long enough for a live host, far short of a dead one's 15 s.
+        XCTAssertGreaterThanOrEqual(Wait.grace, .milliseconds(500))
+        XCTAssertLessThanOrEqual(Wait.grace, .seconds(1))
+    }
+
+    func testTheGracePeriodEndsUnlessTheViewLeavesFirst() async {
+        let over = await RemoteImageWait.graceElapses(.milliseconds(10))
+        XCTAssertTrue(over)
+        let left = Task { await RemoteImageWait.graceElapses(.seconds(30)) }
+        left.cancel()
+        let leftOver = await left.value
+        XCTAssertFalse(leftOver, "a view that left, or changed URL, doesn't show its letters on the old wait")
+    }
+
+    /// A failed URL is remembered for its lifetime, then asked again; one that loaded is forgotten; run-out failures
+    /// don't pile up.
+    func testAFailedURLIsRememberedForAMinute() {
+        let start = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        var misses = RecentMisses()
+        XCTAssertEqual(misses.lifetime, 60)
+        XCTAssertFalse(misses.contains("a", now: start))
+        misses.record("a", at: start)
+        XCTAssertTrue(misses.contains("a", now: start))
+        XCTAssertTrue(misses.contains("a", now: start + 59.9))
+        XCTAssertFalse(misses.contains("a", now: start + 60), "asked again after a minute")
+        XCTAssertFalse(misses.contains("b", now: start))
+        misses.record("b", at: start + 30)
+        misses.remove("b")
+        XCTAssertFalse(misses.contains("b", now: start + 31), "it loaded since")
+        misses.record("c", at: start + 61)
+        XCTAssertEqual(misses.count, 1, "a's run-out failure is dropped when another is recorded")
+        XCTAssertTrue(misses.contains("c", now: start + 61))
+    }
 }

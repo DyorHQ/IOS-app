@@ -32,7 +32,9 @@ public struct Multicall: Sendable {
 
     public init(rpc: RPCClient) { self.rpc = rpc }
 
-    /// Runs every call; failed calls come back as `.failure` so one bad read never hides the others.
+    /// Runs every call; failed calls come back as `.failure` so one bad read never hides the others: a call that failed
+    /// (it reverted or ran out of gas) as an `RPCError` carrying what it returned, and one whose return data isn't of its
+    /// `returnTypes` as the decoding's error.
     public func read(_ calls: [ContractCall], block: BlockTag = .latest) async throws -> [Result<[ABIValue], Error>] {
         guard !calls.isEmpty else { return [] }
         let args: ABIValue = .array(calls.map { .tuple([.address($0.to), .bool(true), .bytes($0.data)]) })

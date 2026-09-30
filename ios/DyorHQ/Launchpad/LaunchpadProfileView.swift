@@ -98,7 +98,7 @@ struct LaunchpadProfileView: View {
             HStack {
                 stat("Portfolio", model.portfolioValueUSD.formatted(.currency(code: "USD")))
                 Divider().frame(height: 34)
-                stat("Launched", "\(model.created.count)")
+                stat("Launched", "\(model.launched.count)")
                 Divider().frame(height: 34)
                 stat("Holdings", "\(model.positions.count)")
             }
@@ -178,10 +178,10 @@ struct LaunchpadProfileView: View {
 
     @ViewBuilder private var launchesSection: some View {
         Section {
-            if model.created.isEmpty {
+            if model.launched.isEmpty {
                 emptyRow("No coins launched", "Launch a coin and it shows here with its market cap and performance.")
             } else {
-                ForEach(model.created) { item in
+                ForEach(model.launched) { item in
                     Button { open(item.launch) } label: { CreatedRow(item: item) }.buttonStyle(.plain)
                 }
             }
@@ -369,7 +369,12 @@ final class LaunchpadProfileModel {
     }
 
     private(set) var positions: [Position] = []
+    /// Every coin the wallet created, on every stack: which escrows' pair assets are read for its creator fees.
     private(set) var created: [Created] = []
+    /// The coins it created that "Coins You Launched" shows: those the board lists (`Launch.listsOnBoard`). A retired
+    /// launchpad's sell-only coin is left out (owner decision 2026-09-29), still under Holdings while held, and its
+    /// creator fees still read from `created`.
+    var launched: [Created] { created.filter(\.launch.listsOnBoard) }
     /// The live stack's escrow first, then the retired stacks'.
     private(set) var escrows: [EscrowHolding] = []
     private(set) var activity: [FeedItem] = []
@@ -402,7 +407,7 @@ final class LaunchpadProfileModel {
         var amountText: String { "\(NumberStyle.units(amount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" }
     }
 
-    var isEmpty: Bool { positions.isEmpty && created.isEmpty && activity.isEmpty }
+    var isEmpty: Bool { positions.isEmpty && launched.isEmpty && activity.isEmpty }
     var portfolioValueUSD: Double { positions.reduce(0) { $0 + $1.valueUSD } }
 
     /// Creator fees claimable, one entry per escrow and pair asset (MON first, then each token), largest first.
@@ -481,7 +486,8 @@ final class LaunchpadProfileModel {
         }
         .sorted { ($0.mcapUSD ?? 0) > ($1.mcapUSD ?? 0) }
 
-        // Escrow (claimable creator fees): each stack's escrow, keyed by the pair assets of the coins you created on it.
+        // Escrow (claimable creator fees): each stack's escrow, keyed by the pair assets of the coins you created on it,
+        // every one of them: a retired coin hidden from Coins You Launched can still hold fees there (aBIL in 0xad3d's).
         var pairsByEscrow: [Address: [Address]] = [:]
         for item in created {
             let escrow = await env.launchpad.stack(for: item.launch).escrow

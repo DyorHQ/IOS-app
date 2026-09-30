@@ -4,7 +4,9 @@ import SwiftUI
 
 // Small, reusable pieces that keep every screen on the same system: SF Symbols, text styles, semantic colors.
 
-/// A token or market logo: remote image with a monogram fallback, always circular.
+/// A token or market logo: remote image with a monogram fallback, always circular, with a faint ring that suits the
+/// appearance (`Color.logoRing`). Smart Invert leaves the logo as it is but inverts the ring with the card, so the ring
+/// still edges the logo on the inverted card.
 struct TokenLogo: View {
     let symbol: String
     let url: URL?
@@ -16,17 +18,23 @@ struct TokenLogo: View {
     var body: some View {
         Group {
             // Curated tokens ship a rasterized logo (the token list only publishes SVGs, which the app cannot
-            // draw); anything else tries the remote image (capped and downsampled, RemoteImage) and falls back to a
-            // monogram.
+            // draw): a transparent disc that fills the square (TokenLogoAssetTests). Anything else tries the remote
+            // image (capped and downsampled, RemoteImage): a neutral disc for a moment while it loads, then the
+            // monogram until it comes; the monogram at once when there is no image or it failed lately
+            // (RemoteImageWait).
             if bundled, let shipped = UIImage(named: "logo-\(symbol)") {
                 Image(uiImage: shipped).resizable().scaledToFit()
             } else {
-                RemoteImage(url: url, pointSize: size, contentMode: .fit) { _ in monogram }
+                RemoteImage(url: url, pointSize: size, contentMode: .fit, grace: RemoteImageWait.grace) { loading in
+                    if loading { Color.clear } else { monogram }
+                }
             }
         }
         .frame(width: size, height: size)
         .background(Color(.tertiarySystemFill))
         .clipShape(Circle())
+        .accessibilityIgnoresInvertColors()
+        .overlay(Circle().strokeBorder(Color.logoRing, lineWidth: 0.5))
         .accessibilityHidden(true)
     }
 
@@ -38,8 +46,14 @@ struct TokenLogo: View {
         let tint = Color(hue: hue, saturation: 0.5, brightness: 0.62)
         return ZStack {
             LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            Text(symbol.prefix(2).uppercased())
+            // One line, shrunk rather than wrapped: two emoji at 0.4 of the disc would otherwise break onto two lines.
+            // Inset from the sides so wide letters (two emoji, a ZWJ family, ﷽) fit the circle, not the square. "?"
+            // for a token with no symbol, as the launch views show.
+            Text(symbol.isEmpty ? "?" : symbol.prefix(2).uppercased())
                 .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .padding(.horizontal, size * 0.12)
                 .foregroundStyle(.white)
         }
     }
@@ -76,6 +90,7 @@ struct Avatar: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        .accessibilityIgnoresInvertColors() // the photo; its ring inverts with the card, like TokenLogo's
         .overlay(Circle().strokeBorder(Color(.separator).opacity(0.6), lineWidth: 0.5))
         .accessibilityHidden(true)
     }

@@ -15,8 +15,10 @@ final class AppSettings {
     var notifyFills: Bool { didSet { store(notifyFills, "settings.notifyFills") } }
     var notifyPriceAlerts: Bool { didSet { store(notifyPriceAlerts, "settings.notifyPrice") } }
     /// Require Face ID / Touch ID before signing a transaction — a device-side second factor for a self-custodial
-    /// wallet, enforced in the confirmation sheet. On by default for a new install (`appLockDefault`).
-    var requireBiometrics: Bool { didSet { store(requireBiometrics, "settings.biometrics") } }
+    /// wallet, enforced in the confirmation sheet. On by default for a new install (`appLockDefault`), and after this
+    /// device's data is erased (`Session.eraseLocalData`). This device's own: it isn't mirrored to the backend (not in
+    /// `snapshot`), so a change isn't reported (`onChange`), which would mark the settings changed and keep a restore out.
+    var requireBiometrics: Bool { didSet { defaults.set(requireBiometrics, forKey: "settings.biometrics") } }
     /// Default leverage the perps ticket opens on.
     var defaultLeverage: Double { didSet { store(defaultLeverage, "settings.leverage") } }
     /// Max slippage for market orders and swaps, in basis points.
@@ -225,6 +227,15 @@ extension Color {
     init(light: Color, dark: Color) {
         self = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(dark) : UIColor(light) })
     }
+
+    /// The hairline around every coin logo: it edges a white logo (WBTC, cbBTC, WETH) on a light card and a near-black
+    /// one (HYPE, USDe, LBTC) on a dark card, and is stronger under Increase Contrast. It resolves through the traits,
+    /// so it follows the in-app appearance too.
+    static let logoRing = Color(uiColor: UIColor { traits in
+        let strong = traits.accessibilityContrast == .high
+        return traits.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: strong ? 0.28 : 0.12)
+                                                  : UIColor(white: 0, alpha: strong ? 0.22 : 0.08)
+    })
 
     // Allocation ring hues — three restrained, distinguishable tones that hold up on paper and ink grounds.
     // They are identity, not status: never reused for up/down, which stay Positive/Negative.

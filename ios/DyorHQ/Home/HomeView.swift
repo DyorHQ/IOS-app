@@ -25,6 +25,9 @@ struct HomeView: View {
     @State private var showTransfer = false
     @State private var showSearch = false
     @State private var searchTarget: MarketRow?
+    /// The Top Tokens rank column: 16 pt at the default text size, grown with the rank's footnote text so a digit never
+    /// shows as "…" at the accessibility sizes. The dividers are inset by it too (`TokenListRow.textInset`).
+    @ScaledMetric(relativeTo: .footnote) private var rankWidth: CGFloat = 16
 
     var body: some View {
         NavigationStack {
@@ -242,9 +245,9 @@ struct HomeView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(tokens.prefix(6).enumerated()), id: \.element.id) { index, row in
-                        NavigationLink(value: row) { TokenListRow(rank: index + 1, row: row) }
+                        NavigationLink(value: row) { TokenListRow(rank: index + 1, row: row, rankWidth: rankWidth) }
                             .buttonStyle(.plain)
-                        if index < min(5, tokens.count - 1) { Divider().padding(.leading, 44) }
+                        if index < min(5, tokens.count - 1) { Divider().padding(.leading, TokenListRow.textInset(rankWidth: rankWidth)) }
                     }
                 }
             }
@@ -417,11 +420,19 @@ struct AllocationDonut: View {
 private struct TokenListRow: View {
     let rank: Int
     let row: MarketRow
+    /// The rank column's width (`HomeView.rankWidth`).
+    let rankWidth: CGFloat
+
+    private static let spacing: CGFloat = 12
+    private static let logoSize: CGFloat = 34
+
+    /// Where the row's text starts, for the divider under it: rank, gap, logo, gap (74 pt at the default text size).
+    static func textInset(rankWidth: CGFloat) -> CGFloat { rankWidth + spacing + logoSize + spacing }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Text("\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: 16, alignment: .center)
-            TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: 32)
+        HStack(spacing: Self.spacing) {
+            Text("\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: rankWidth, alignment: .center)
+            TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: Self.logoSize)
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.token.symbol).font(.subheadline.weight(.semibold))
                 Text(row.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -712,7 +723,9 @@ final class HomeModel {
         return launches.compactMap { launch -> LaunchHolding? in
             let balance = balances[launch.token] ?? 0
             let created = launch.deployer == address
-            guard balance > 0 || created else { return nil }
+            // A coin the wallet created shows at a zero balance only while the board lists it: a retired launchpad's
+            // sell-only coin shows only while held (owner decision 2026-09-29).
+            guard balance > 0 || (created && launch.listsOnBoard) else { return nil }
             let pairUSD = launch.pair.isNative ? priceMap[Monad.native]?.usd : priceMap[launch.pairToken]?.usd
             let value = pairUSD.map { Amount.units(balance, decimals: 18) * LaunchpadService.priceNumber(launch) * $0 } ?? 0
             return LaunchHolding(launch: launch, balance: balance, valueUSD: value)
@@ -784,11 +797,9 @@ struct TokenDetailView: View {
                     Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
                 } else if let route = curveRoute, route.isOnCurve, let title = route.actionTitle(row.token.symbol) {
                     // Never Swap: no venue routes a coin still on a launchpad's curve, live or retired. Its curve trades
-                    // on its Launch page (Buy and Sell on the live launchpad, Sell only on a retired one); unread, the
-                    // Launch tab lists it.
-                    Button(title, systemImage: "arrow.up.right.circle") {
-                        if let launch = route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
-                    }
+                    // on its Launch page (Buy and Sell on the live launchpad, Sell only on a retired one), opened by
+                    // reference when its launch couldn't be read.
+                    Button(title, systemImage: "arrow.up.right.circle") { router.openLaunchPage(for: route) }
                 } else {
                     Button("Swap \(row.token.symbol)", systemImage: "arrow.left.arrow.right") {
                         router.openSwap(tokenIn: row.token.symbol == "USDC" ? Token.mon : Token.usdc, tokenOut: row.token)
