@@ -13,7 +13,8 @@ final class ChainTextDisplayTests: XCTestCase {
 
     func testDirectionAndInvisibleCharactersAreRemoved() {
         let removed: [UInt32] = [0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069, 0x200E, 0x200F, 0x061C, // direction
-                                 0x200B, 0x200C, 0x2060, 0xFEFF, 0x00AD, 0x034F, 0x115F, 0x3164, 0x180E, // invisible
+                                 0x200B, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0x206A, 0x206F, 0xFEFF, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x180E, // invisible
+                                 0xE0001, 0xE0020, 0xE0067, 0xE007F, // tags outside an emoji tag sequence
                                  0x00, 0x07, 0x1B, 0x7F, 0x9B] // control
         for value in removed {
             let scalar = Unicode.Scalar(value)!
@@ -38,8 +39,36 @@ final class ChainTextDisplayTests: XCTestCase {
         for text in ["שלום", "مرحبا"] {
             XCTAssertEqual(ChainText.shown(text), "\u{2068}\(text)\u{2069}", text)
         }
-        // A joiner or variation selector that follows no emoji is dropped like any other.
-        XCTAssertEqual(ChainText.shown("A\u{200D}B\u{FE0F}C"), "ABC")
+    }
+
+    /// The joiners and selectors scripts and emoji need stay wherever they are, since none changes direction: Persian's
+    /// zero-width non-joiner, an Indic conjunct's joiner, a CJK ideographic variation selector, emoji sequences, the
+    /// Mongolian free variation selectors, the grapheme joiner and the soft hyphen. They used to be removed anywhere but
+    /// right after an emoji, which broke "می‌خواهم", "क्‍ष" and "葛󠄀".
+    func testJoinersAndSelectorsStayWhereverTheyAre() {
+        let persian = "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}" // می‌خواهم
+        XCTAssertEqual(ChainText.shown(persian, multiline: true), persian)
+        XCTAssertEqual(ChainText.shown(persian), "\u{2068}\(persian)\u{2069}", "kept, inside the isolate of right-to-left text")
+        for text in ["\u{0915}\u{094D}\u{200D}\u{0937}", "\u{845B}\u{E0100}", "👨‍👩‍👧", "❤️", "❤️‍🔥", "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "🏴󠁧󠁢󠁥󠁮󠁧󠁿🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+                     "\u{1820}\u{180B}", "\u{1820}\u{180F}", "A\u{034F}B", "Co\u{00AD}in", "A\u{200D}B\u{FE0F}C", "#\u{200D}", "1\u{FE0F}\u{20E3}"] {
+            XCTAssertEqual(ChainText.shown(text), text, text.unicodeScalars.map { String(format: "U+%04X", $0.value) }.joined(separator: " "))
+        }
+    }
+
+    /// Tag characters stay only in an emoji tag sequence (a subdivision flag: U+1F3F4, the tags, CANCEL TAG), and at most
+    /// `ChainText.maxTags` of them; after anything else, however many, they are removed, so none can pad a name.
+    func testTagsStayOnlyInAFlagAndOnlyAFew() {
+        let tags = String(repeating: "\u{E0061}", count: 1000)
+        XCTAssertEqual(ChainText.shown("1" + tags), "1")
+        XCTAssertEqual(ChainText.shown("#" + tags), "#")
+        XCTAssertEqual(ChainText.shown("1\u{FE0F}" + tags), "1\u{FE0F}")
+        XCTAssertEqual(ChainText.shown("😀" + tags + "X"), "😀X")
+        XCTAssertEqual(ChainText.shown("PE" + tags + "PE"), "PEPE")
+        let flag = "🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}"
+        XCTAssertEqual(ChainText.shown(flag + "\u{E0061}X"), flag + "X", "CANCEL TAG ends the sequence")
+        XCTAssertEqual(ChainText.shown("🏴\u{200B}\u{E0067}\u{E0062}"), "🏴", "only right after the flag")
+        XCTAssertEqual(ChainText.shown("🏴" + tags), "🏴" + String(repeating: "\u{E0061}", count: ChainText.maxTags))
+        XCTAssertEqual(ChainText.maxTags, 16)
     }
 
     /// Single-line text with a right-to-left letter comes back inside one isolate (U+2068 … U+2069), however often it is

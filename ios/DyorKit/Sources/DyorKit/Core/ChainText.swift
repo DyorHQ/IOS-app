@@ -2,14 +2,21 @@ import Foundation
 
 public extension ChainText {
     /// Creator text as the app shows it (a launch's name, symbol and description, a Moment's name, symbol and place),
-    /// with the characters `WalletHoldings.visible` drops for being invisible or changing direction removed: format
-    /// characters (general category Cf: the direction embeddings, overrides and isolates, the direction marks,
-    /// zero-width spaces and joiners, the byte-order mark, the soft hyphen), default-ignorable code points and the rest
-    /// of `Address.cleanedInput`'s invisible set, and control characters. A creator's symbol can then never reverse or
-    /// hide the app's text around it: "PEPE" and U+202E before "· 10.5 MON" showed "NOM 5.01 ·". A line break (CR LF as
-    /// one) is a space, or stays a line break in `multiline` text (a description); a tab is a space. A joiner, variation
-    /// selector or tag right after an emoji stays, so emoji sequences (a family, a flag, a red heart) still draw as one:
-    /// none of them changes direction.
+    /// with the characters that change direction or hide removed: the direction embeddings, overrides and isolates and
+    /// the direction marks (U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069), the byte-order mark, the zero-width
+    /// space, the word joiner and invisible operators (U+2060–U+2064), the Hangul fillers and the Mongolian vowel
+    /// separator, every other format character (general category Cf) and default-ignorable code point, and control
+    /// characters. A creator's symbol can then never reverse or hide the app's text around it: "PEPE" and U+202E before
+    /// "· 10.5 MON" showed "NOM 5.01 ·". A line break (CR LF as one) is a space, or stays a line break in `multiline`
+    /// text (a description); a tab is a space.
+    ///
+    /// Kept wherever they are (`joins`), since none of them changes direction and scripts and emoji need them: the
+    /// zero-width non-joiner and joiner (Persian "می‌خواهم", Indic conjuncts, emoji sequences such as a family), the
+    /// variation selectors (a red heart, CJK ideographic variants), the Mongolian free variation selectors, the combining
+    /// grapheme joiner and the soft hyphen. A tag character (U+E0020–U+E007F) is kept only in an emoji tag sequence, which
+    /// draws a subdivision flag (England's): right after U+1F3F4 WAVING BLACK FLAG, or after a tag kept in that sequence,
+    /// until U+E007F CANCEL TAG ends it; at most `maxTags` of them, so nobody can pad text with thousands of invisible
+    /// tags. Anywhere else a tag is removed.
     ///
     /// Single-line text (a name, a symbol, a place) with a right-to-left letter in it (`isRightToLeft`) comes back inside
     /// U+2068 FIRST STRONG ISOLATE … U+2069 POP DIRECTIONAL ISOLATE: its own letters still read right to left, and the
@@ -23,23 +30,32 @@ public extension ChainText {
     /// For showing only: a Moment's link slug, and anything hashed or compared, reads the chain's text as it is.
     static func shown(_ text: String, multiline: Bool = false) -> String {
         var out = String.UnicodeScalarView()
-        var afterEmoji = false
         var previous: UInt32 = 0
+        // The tags kept so far in the emoji tag sequence being read; nil outside one.
+        var tags: Int?
         for scalar in text.unicodeScalars {
             let value = scalar.value
             defer { previous = value }
+            if (0xE0020...0xE007F).contains(value) {
+                if let kept = tags, kept < maxTags {
+                    out.append(scalar)
+                    tags = value == 0xE007F ? nil : kept + 1
+                } else {
+                    tags = nil
+                }
+                continue
+            }
+            tags = value == 0x1F3F4 ? 0 : nil
             if lineBreaks.contains(value) {
-                afterEmoji = false
                 if value == 0x0A, previous == 0x0D { continue }
                 out.append(multiline ? "\n" : " ")
                 continue
             }
             if value == 0x09 {
-                afterEmoji = false
                 out.append(" ")
                 continue
             }
-            if afterEmoji, value == 0x200D || value == 0xFE0E || value == 0xFE0F || (0xE0020...0xE007F).contains(value) {
+            if joins(value) {
                 out.append(scalar)
                 continue
             }
@@ -50,7 +66,6 @@ public extension ChainText {
             }
             if properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) { continue }
             out.append(scalar)
-            afterEmoji = properties.isEmoji
         }
         guard !multiline, out.contains(where: isRightToLeft) else { return String(out) }
         return "\u{2068}" + String(out) + "\u{2069}"
@@ -75,6 +90,20 @@ public extension ChainText {
         default: return false
         }
     }
+
+    /// The invisible characters `shown` keeps wherever they are: U+00AD soft hyphen, U+034F combining grapheme joiner,
+    /// U+180B–U+180D and U+180F Mongolian free variation selectors, U+200C zero-width non-joiner, U+200D zero-width
+    /// joiner, U+FE00–U+FE0F and U+E0100–U+E01EF variation selectors. None of them changes the order text shows in.
+    private static func joins(_ value: UInt32) -> Bool {
+        switch value {
+        case 0x00AD, 0x034F, 0x180B...0x180D, 0x180F, 0x200C, 0x200D, 0xFE00...0xFE0F, 0xE0100...0xE01EF: return true
+        default: return false
+        }
+    }
+
+    /// The most tag characters `shown` keeps in one emoji tag sequence. A subdivision flag needs at most eight: a code of
+    /// up to seven letters and digits (a region and a subdivision), then CANCEL TAG; England's takes six.
+    internal static let maxTags = 16
 
     /// LF, VT, FF, CR, NEL, and the line and paragraph separators.
     private static let lineBreaks: Set<UInt32> = [0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029]
