@@ -29,6 +29,10 @@ public extension Multicall {
     static let nameChunk = 40
     /// Items per read of fixed-size records (no text): a Moment's or a launch's record is about 0.5 KB.
     static let recordChunk = 200
+    /// The most reads of one list in flight at once (`readItems`): its chunks, then its per-item retries, go out this
+    /// many at a time, the next as each one answers. The public RPC answers about 50 requests a second and throttles a
+    /// burst of 100 (measured), and a long list sent all at once is such a burst.
+    static let readsInFlight = 4
 
     /// The reads of a list, item by item: `items` holds each item's calls, all in the same layout, and `text` the
     /// positions in that layout that read text the item's creator chose. Every other call reads a protocol value, which
@@ -37,12 +41,13 @@ public extension Multicall {
     /// a stand-in (`ChainText.unreadable`): the item and its numbers, claims and routing stay. Each item's results come
     /// back in its own layout.
     ///
-    /// The items are read in reads of at most `chunk` items, all at once, so no creator's text, however long, can make
-    /// one read too large to answer (`textChunk`). A read the node refuses as a whole (an `eth_call` error about the call
-    /// itself: out of gas, a revert), and an item one of whose calls failed inside a read (a long answer before it can
-    /// starve it of gas), are read again one item at a time; an item whose read still fails is read once more without
-    /// its text, which then shows stand-ins. Any other error (no answer, throttling that outlasted the client's retries)
-    /// throws: it would fail item by item too.
+    /// The items are read in reads of at most `chunk` items, `readsInFlight` reads at a time, so no creator's text,
+    /// however long, can make one read too large to answer (`textChunk`), and no list sends the node a burst. A read the
+    /// node refuses as a whole (an `eth_call` error about the call itself: out of gas, a revert), and an item one of
+    /// whose calls failed inside a read (a long answer before it can starve it of gas), are read again one item at a
+    /// time, as many at a time; an item whose read still fails is read once more without its text, which then shows
+    /// stand-ins. Any other error (no answer, throttling that outlasted the client's retries) throws: it would fail item
+    /// by item too.
     func readItems(_ items: [[ContractCall]], text: Set<Int>, what: String, chunk: Int = textChunk) async throws -> [[Result<[ABIValue], Error>]] {
         guard !items.isEmpty else { return [] }
         let size = max(1, chunk)
@@ -50,10 +55,13 @@ public extension Multicall {
         var out = [[Result<[ABIValue], Error>]?](repeating: nil, count: items.count)
         var retry: [Int] = []
         try await withThrowingTaskGroup(of: (Range<Int>, Result<[Result<[ABIValue], Error>], Error>).self) { tasks in
-            for group in groups {
+            var pending = groups[...]
+            func sendNext() {
+                guard let group = pending.popFirst() else { return }
                 tasks.addTask { (group, await ERC20.captured { try await self.read(group.flatMap { items[$0] }) }) }
             }
-            for try await (group, outcome) in tasks {
+            for _ in 0 ..< Self.readsInFlight { sendNext() }
+            while let (group, outcome) = try await tasks.next() {
                 switch outcome {
                 case .success(let results):
                     var start = 0
@@ -66,14 +74,21 @@ public extension Multicall {
                     guard ERC20.isCallError(error) else { throw error }
                     retry += group
                 }
+                sendNext()
             }
         }
         if !retry.isEmpty {
             try await withThrowingTaskGroup(of: (Int, [Result<[ABIValue], Error>]).self) { tasks in
-                for index in retry {
+                var pending = retry[...]
+                func sendNext() {
+                    guard let index = pending.popFirst() else { return }
                     tasks.addTask { (index, try await self.readAlone(items[index], text: text, what: what)) }
                 }
-                for try await (index, slice) in tasks { out[index] = slice }
+                for _ in 0 ..< Self.readsInFlight { sendNext() }
+                while let (index, slice) = try await tasks.next() {
+                    out[index] = slice
+                    sendNext()
+                }
             }
         }
         return try out.map { slice in
