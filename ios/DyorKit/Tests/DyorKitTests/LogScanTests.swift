@@ -434,6 +434,39 @@ final class LogScanTests: XCTestCase {
         XCTAssertEqual(LogsStub.requests(), 5, "one ask, the client's own retries")
     }
 
+    /// The re-review's finding (from before V1): rpc1 refuses a range past the head of the node answering it (its nodes
+    /// can be a few blocks apart, the head read from one and the logs from another) with "block range extends beyond
+    /// current head block", and `refusesSize` took that for a size refusal: the range was split, 59 requests for a
+    /// 1M-block range. It is asked again once the node has had time to catch up, never split, and left as a gap, for the
+    /// caller to read later, if the node still hasn't.
+    func testARangePastTheNodesHeadIsAskedAgainNeverSplit() async {
+        let limits = LogScanLimits(pause: 0, maxPause: 0, headPause: 0.05)
+        let pastHead = LogsStub.Failure.error(code: -32602, message: "block range extends beyond current head block")
+        let whole = LogsStub.Range(from: 0, to: 999_999)
+        for mode in [LogScanMode.patient, .failFast, .paced] {
+            // The node answering catches up by the second ask again.
+            LogsStub.install(head: 1_000_000, logs: [5, 999_990].map(transfer)) { range in range.to > 999_000 && LogsStub.requests() <= 2 ? pastHead : nil }
+            let caughtUp = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 999_999, chunkSize: 1_000_000,
+                                                                  concurrency: 1, mode: mode, limits: limits)
+            XCTAssertTrue(caughtUp.complete, "\(mode)")
+            XCTAssertEqual(caughtUp.logs.map(\.blockNumber), [5, 999_990], "\(mode)")
+            XCTAssertEqual(LogsStub.queries(), [whole, whole, whole], "\(mode): asked again, never split")
+
+            // A node that doesn't catch up: a gap after two more asks.
+            LogsStub.install(head: 1_000_000, logs: [5].map(transfer)) { range in range.to > 999_000 ? pastHead : nil }
+            let behind = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 999_999, chunkSize: 1_000_000,
+                                                                concurrency: 1, mode: mode, limits: limits)
+            XCTAssertFalse(behind.complete, "\(mode)")
+            XCTAssertEqual(LogsStub.queries(), [whole, whole, whole], "\(mode): never split")
+        }
+        // A size refusal is still split.
+        LogsStub.install(head: 1_000_000, logs: [5].map(transfer)) { range in range.span > 500_000 ? .error(code: -32062, message: "Block range is too large") : nil }
+        let split = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 999_999, chunkSize: 1_000_000,
+                                                           concurrency: 1, mode: .paced, limits: limits)
+        XCTAssertTrue(split.complete)
+        XCTAssertEqual(Set(LogsStub.queries()), [whole, LogsStub.Range(from: 0, to: 499_999), LogsStub.Range(from: 500_000, to: 999_999)])
+    }
+
     func testTheRangeASizeRefusalNamesIsReadOnlyWhenItFits() {
         let refusal = RPCError(code: -32602, message: "Log response size exceeded. Based on your parameters and the response size limit, this block range should work: [0x6000000, 0x6000b41]")
         XCTAssertEqual(RPCClient.suggestedEnd(refusal, from: 0x6000000, to: 0x6700000), 0x6000b41)
@@ -457,7 +490,14 @@ final class LogScanTests: XCTestCase {
             RPCError(code: -32062, message: "Block range is too large"),
             RPCError(code: -32005, message: "query returned more than 10000 results"),
         ]
-        for error in size { XCTAssertTrue(RPCClient.refusesSize(error), error.message) }
+        for error in size {
+            XCTAssertTrue(RPCClient.refusesSize(error), error.message)
+            XCTAssertFalse(RPCClient.refusesPastHead(error), error.message)
+        }
+        // rpc1's refusal of a range past the head of the node answering it (probed live) says "block range" too.
+        let pastHead = RPCError(code: -32602, message: "block range extends beyond current head block")
+        XCTAssertTrue(RPCClient.refusesPastHead(pastHead))
+        XCTAssertFalse(RPCClient.refusesSize(pastHead))
         let other = [
             RPCError(code: -32603, message: "Internal error"),
             RPCError(code: -32000, message: "header not found"),
