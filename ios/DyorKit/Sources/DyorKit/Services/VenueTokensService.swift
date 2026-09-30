@@ -8,16 +8,14 @@ import Foundation
 public struct VenueTokensService: Sendable {
     private let logsRPC: RPCClient
     private let multicall: Multicall
-    /// Ranges each venue's scan asks per round trip (`RPCClient.chunkedLogsReport`).
-    private let concurrency: Int
 
-    /// `logsRPC` reads the venues' events from genesis: rpc1, in 100,000-block ranges (`RPCClient.logChunkSize`), about
-    /// 1,100 ranges a venue for 109M blocks. `concurrency` 2 keeps the three venues to six ranges at a time, so a fresh
-    /// install's first read doesn't crowd out the wallet's own history scans on the same endpoint.
-    public init(logsRPC: RPCClient, multicall: Multicall, concurrency: Int = 2) {
+    /// `logsRPC` reads the venues' events from genesis. On rpc1, which answers a range of any span up to 10K logs and names
+    /// the part it can answer past that (`RPCClient.answersAnyRange`), each venue's segment is one range (`segment`):
+    /// about 70 requests from genesis, one at a time, where 100,000-block ranges took 2,714 and drew 1,000 HTTP 429s from
+    /// the endpoint every other reader in the app shares. Elsewhere, ranges the endpoint's size (`logChunkSize`).
+    public init(logsRPC: RPCClient, multicall: Multicall) {
         self.logsRPC = logsRPC
         self.multicall = multicall
-        self.concurrency = max(1, concurrency)
     }
 
     // Uniswap v3 / Monday Trade share the v3 PoolCreated shape; Uniswap v4 uses the PoolManager's Initialize.
@@ -56,16 +54,26 @@ public struct VenueTokensService: Sendable {
     /// whether the window was read in full. Quote/stable/hop assets and anything in `exclude` are dropped; the first
     /// `limit` are kept (newest pools first), and the read says when there were more. Callers scan the full history from
     /// genesis in segments (`refresh`), checkpointing each segment once it is read in full.
+    ///
+    /// The venues are read one after the other, one request at a time (`LogScanMode.paced`: a throttle is waited out,
+    /// never split), and a venue read in part ends the read there: the window is read again anyway, and the next venue
+    /// would meet the same endpoint.
     public func tokens(fromBlock: UInt64, toBlock: UInt64, exclude: Set<Address> = [], limit: Int = 3000) async -> Scan {
         guard fromBlock <= toBlock else { return Scan(tokens: [], complete: true) }
         let created = ABI.eventTopic(Self.poolCreated)
         let initialized = ABI.eventTopic(Self.initialize)
+        let chunk: UInt64? = logsRPC.answersAnyRange ? Self.segment : nil
 
-        async let v3 = logsRPC.chunkedLogsReport(address: Uniswap.v3Factory, topics: [created], fromBlock: fromBlock, toBlock: toBlock, concurrency: concurrency)
-        async let monday = logsRPC.chunkedLogsReport(address: MondayTrade.factory, topics: [created], fromBlock: fromBlock, toBlock: toBlock, concurrency: concurrency)
-        async let v4 = logsRPC.chunkedLogsReport(address: Uniswap.poolManager, topics: [initialized], fromBlock: fromBlock, toBlock: toBlock, concurrency: concurrency)
-        let (v3Scan, mondayScan, v4Scan) = await (v3, monday, v4)
-        let read = v3Scan.complete && mondayScan.complete && v4Scan.complete
+        var scans: [(logs: [Log], complete: Bool)] = []
+        for (venue, topic) in [(Uniswap.v3Factory, created), (MondayTrade.factory, created), (Uniswap.poolManager, initialized)] {
+            let scan = await logsRPC.chunkedLogsReport(address: venue, topics: [topic], fromBlock: fromBlock, toBlock: toBlock, chunkSize: chunk,
+                                                       concurrency: 1, mode: .paced)
+            scans.append(scan)
+            if !scan.complete { break }
+        }
+        let read = scans.count == 3 && scans.allSatisfy(\.complete)
+        let unread: (logs: [Log], complete: Bool) = ([], false)
+        let (v3Scan, mondayScan, v4Scan) = (scans[0], scans.count > 1 ? scans[1] : unread, scans.count > 2 ? scans[2] : unread)
 
         // Exclude the quote/stable/hop assets (they're already curated) so the list is the tradeable long tail.
         var seen: Set<Address> = [Monad.native, Monad.wmon, Monad.usdc, Monad.ausd, Monad.usdt0, Monad.weth]

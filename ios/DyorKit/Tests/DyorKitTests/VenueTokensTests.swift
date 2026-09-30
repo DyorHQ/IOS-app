@@ -42,10 +42,9 @@ final class VenueTokensTests: XCTestCase {
         }, breaking: breaking, starving: starving)
     }
 
-    /// The service on the stubs. `concurrency` only makes a test quicker: it changes how many ranges share a round trip,
-    /// never which ranges are asked.
-    private func service(_ url: URL = LogsStub.url, concurrency: Int = 2) -> VenueTokensService {
-        VenueTokensService(logsRPC: LogsStub.rpc(url: url), multicall: Multicall(rpc: MomentsChainStub.rpc()), concurrency: concurrency)
+    /// The service on the stubs: named like rpc1 unless `url` says otherwise.
+    private func service(_ url: URL = LogsStub.url) -> VenueTokensService {
+        VenueTokensService(logsRPC: LogsStub.rpc(url: url), multicall: Multicall(rpc: MomentsChainStub.rpc()))
     }
 
     /// Every save a refresh made, in order.
@@ -58,7 +57,8 @@ final class VenueTokensTests: XCTestCase {
     /// the segment again and finds what the gap hid, then reads on to the head.
     func testASegmentReadInPartKeepsItsCheckpointAndIsReadAgain() async throws {
         installMetadata()
-        let pools = [pool(1, at: 1_000_000), pool(2, at: 6_000_000), pool(3, at: 7_000_000), pool(4, at: 11_000_000)]
+        // T6 and T3 on Uniswap v3, T1 and T4 on Monday Trade.
+        let pools = [pool(1, at: 1_000_000), pool(6, at: 6_000_000), pool(3, at: 7_000_000), pool(4, at: 11_000_000)]
         // An endpoint that refuses, at every size, any range holding block 7,000,000: a gap in the second segment.
         LogsStub.install(head: 12_000_000, logs: pools) { range in
             range.contains(7_000_000) ? .error(code: -32062, message: "Block range is too large") : nil
@@ -69,16 +69,18 @@ final class VenueTokensTests: XCTestCase {
         let firstSaves = await saves.all
         XCTAssertEqual(firstSaves.map(\.checkpoint), [4_999_999, 4_999_999], "the first segment in full; the second in part, which moves nothing")
         XCTAssertEqual(firstSaves.map(\.complete), [false, false])
-        XCTAssertEqual(firstSaves.last?.symbols, ["T1", "T2"], "what the second segment found is kept")
+        XCTAssertEqual(firstSaves.last?.symbols, ["T1", "T6"], "what the second segment found is kept")
         XCTAssertEqual(first.checkpoint, 4_999_999)
         XCTAssertEqual(first.head, 12_000_000)
         XCTAssertFalse(first.complete)
         XCTAssertFalse(LogsStub.queries().contains { $0.to >= 10_000_000 }, "the refresh ends at the segment read in part")
+        let second5M = zip(LogsStub.queries(), LogsStub.addresses()).filter { $0.0.from >= 5_000_000 }.map(\.1)
+        XCTAssertEqual(Set(second5M), [Uniswap.v3Factory], "a venue read in part ends the segment's read: the others aren't asked")
 
         LogsStub.install(head: 12_000_000, logs: pools) { _ in nil }
         let secondRead = await service().refresh(tokens: first.tokens, checkpoint: first.checkpoint, logos: { [:] }) { await saves.record($0) }
         let second = try XCTUnwrap(secondRead)
-        XCTAssertEqual(second.tokens.map(\.symbol), ["T1", "T2", "T3", "T4"], "the gap's token found, none twice")
+        XCTAssertEqual(second.tokens.map(\.symbol), ["T1", "T6", "T3", "T4"], "the gap's token found, none twice")
         XCTAssertEqual(second.checkpoint, 12_000_000)
         XCTAssertTrue(second.complete)
         XCTAssertEqual(LogsStub.queries().map(\.from).min(), 5_000_000, "read again from the segment read in part")
@@ -100,6 +102,31 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertFalse(scan.capped)
         XCTAssertEqual(Set(scan.tokens.map(\.symbol)), ["T3", "T4", "T5", "T6"])
         XCTAssertEqual(LogsStub.queries().count, 600, "three venues, 200 ranges each, none refused")
+    }
+
+    /// The finding: the refill read rpc1 in 100,000-block ranges, the three venues at once: 2,714 requests on the endpoint
+    /// every other reader in the app shares, 1,000 of them answered HTTP 429. On rpc1, which answers a range of any span
+    /// up to its log cap, each venue's segment is one range, the venues one after the other, one request at a time: 22
+    /// segments from genesis take 66 ranges, one more where a venue holds more logs than rpc1 returns and it names the
+    /// part it can (as an HTTP 400, as rpc1 sends it for one call), and the head.
+    func testARefillFromGenesisTakesAboutSeventyRequestsOneAtATime() async throws {
+        installMetadata()
+        let head: UInt64 = 109_175_022
+        // One pool a venue a segment; in the eighth, four more on v4, past this rpc1's cap of three logs an answer.
+        var pools: [Log] = (1...66).map { n in pool(UInt8(n), at: UInt64((n - 1) / 3) * VenueTokensService.segment + 1_000 + UInt64(n)) }
+        pools += [200, 203, 206, 209].map { pool($0, at: 7 * VenueTokensService.segment + 2_000_000 + UInt64($0)) }
+        LogsStub.install(head: head, logs: pools, singleErrorStatus: 400, latency: 0.002, logCap: 3) { _ in nil }
+        let refreshed = await service().refresh(tokens: [], checkpoint: 0, logos: { [:] }) { _ in }
+        let read = try XCTUnwrap(refreshed)
+        XCTAssertTrue(read.complete)
+        XCTAssertEqual(read.tokens.count, 70)
+        XCTAssertEqual(LogsStub.requests(), 69, "the head, 66 ranges, and one more for the part rpc1 named")
+        XCTAssertEqual(LogsStub.queries().count, 68, "one range a request")
+        XCTAssertEqual(LogsStub.maxInFlight(), 1, "one request at a time")
+        var order: [Address?] = []
+        for address in LogsStub.addresses() where address != order.last { order.append(address) }
+        let venues: [Address?] = [Uniswap.v3Factory, MondayTrade.factory, Uniswap.poolManager]
+        XCTAssertEqual(order, Array((0..<22).map { _ in venues }.joined()), "each segment: v3, then Monday Trade, then v4")
     }
 
     /// More tokens than a read keeps: the newest are kept and the read says so; a read of the same window that excludes
@@ -225,7 +252,7 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(LogsStub.queries().isEmpty)
     }
 
-    /// The app reads the venues on rpc1, two ranges at a time for each, and reads the whole history once more: the list
+    /// The app reads the venues on rpc1, one request at a time, and reads the whole history once more: the list
     /// is kept, and the checkpoint is a new one, since build 16's moved past gaps, under a key that can't mark the install
     /// as earlier than App Lock's default (`AppSettings`, security audit 2026-09-26, IOSK-4). The swap picker says while
     /// the list is short.
@@ -245,7 +272,8 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(environment.contains("if let read { venueListCatchingUp = !read.complete }"))
         XCTAssertEqual(LaunchpadService.defaultLogsRPC.absoluteString, "https://rpc1.monad.xyz")
         let service = try String(contentsOf: ios.appendingPathComponent("DyorKit/Sources/DyorKit/Services/VenueTokensService.swift"), encoding: .utf8)
-        XCTAssertTrue(service.contains("public init(logsRPC: RPCClient, multicall: Multicall, concurrency: Int = 2)"))
+        XCTAssertTrue(service.contains("public init(logsRPC: RPCClient, multicall: Multicall) {"))
+        XCTAssertTrue(service.contains("concurrency: 1, mode: .paced)"), "one request at a time, a throttle waited out")
 
         let store = try String(contentsOf: app.appendingPathComponent("Wallet/VenueTokenStore.swift"), encoding: .utf8)
         XCTAssertTrue(store.contains("private static let key = \"venueTokens.v1\""), "the list is kept")
@@ -293,8 +321,9 @@ final class VenueTokensTests: XCTestCase {
     }
 }
 
-/// Real requests, passed through and counted (`VenueTokensTests`' live read): each HTTP request as "<host> http", and
-/// each JSON-RPC call in it as "<host> <method>".
+/// Real requests, passed through and counted (`VenueTokensTests`' live read): each HTTP request as "<host> http", each
+/// JSON-RPC call in it as "<host> <method>", and each answer's status as "<host> status <code>". Every request names
+/// itself in its User-Agent.
 final class CountingForwarder: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var tally: [String: Int] = [:]
@@ -313,6 +342,7 @@ final class CountingForwarder: URLProtocol {
         forwarded.httpBodyStream = nil
         forwarded.httpBody = body
         forwarded.setValue(nil, forHTTPHeaderField: "Content-Length")
+        forwarded.setValue("DyorHQ-build17-tests/1.0 (read-only venue list measurement)", forHTTPHeaderField: "User-Agent")
         let decoded = (try? JSONDecoder().decode(JSON.self, from: body)) ?? .null
         let host = request.url?.host() ?? "?"
         Self.lock.lock()
@@ -320,6 +350,9 @@ final class CountingForwarder: URLProtocol {
         for call in decoded.array ?? [decoded] { Self.tally["\(host) \(call["method"].string ?? "?")", default: 0] += 1 }
         Self.lock.unlock()
         forwarding = Self.forward.dataTask(with: forwarded) { [weak self] data, response, error in
+            if let status = (response as? HTTPURLResponse)?.statusCode {
+                Self.lock.lock(); Self.tally["\(host) status \(status)", default: 0] += 1; Self.lock.unlock()
+            }
             guard let self else { return }
             if let response { self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed) }
             if let data { self.client?.urlProtocol(self, didLoad: data) }

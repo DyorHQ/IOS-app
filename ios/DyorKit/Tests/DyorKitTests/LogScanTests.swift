@@ -93,15 +93,15 @@ final class LogScanTests: XCTestCase {
     /// nothing: every range comes back, and none is split near the smallest size.
     func testAPatientScanRidesOutAMomentsOutage() async {
         let blocks: [UInt64] = [5, 30_000, 99_999, 150_000, 640_000, 1_250_000]
-        for mode in [LogScanMode.patient, .failFast] {
+        for mode in [LogScanMode.patient, .paced, .failFast] {
             let until = Date().addingTimeInterval(2)
             LogsStub.install(head: 1_300_000, logs: blocks.map(transfer)) { _ in
                 Date() < until ? .error(code: -32603, message: "Internal error") : nil
             }
             let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 1_299_999, mode: mode)
             switch mode {
-            case .patient:
-                XCTAssertTrue(report.complete)
+            case .patient, .paced:
+                XCTAssertTrue(report.complete, "\(mode)")
                 XCTAssertEqual(report.logs.map(\.blockNumber), blocks)
                 XCTAssertTrue(LogsStub.queries().allSatisfy { $0.span >= 10_000 }, "no range split near the smallest size")
             case .failFast:
@@ -313,7 +313,7 @@ final class LogScanTests: XCTestCase {
     }
 
     /// Ranges are sized to what each endpoint answers, as measured on 2026-09-29 (rpc4: what every node behind it answers),
-    /// and only rpc3 counts a request's ranges together.
+    /// and only rpc3 counts a request's ranges together. Only rpc1 answers a range of any span, up to its log cap.
     func testRangesAreSizedToWhatEachEndpointAnswers() {
         let sizes: [(String, UInt64, UInt64?)] = [("https://rpc1.monad.xyz", 100_000, nil), ("https://rpc3.monad.xyz", 1_000, 1_000),
                                                   ("https://rpc4.monad.xyz", 1_000, nil), ("https://rpc.monad.xyz", 100, nil),
@@ -321,7 +321,38 @@ final class LogScanTests: XCTestCase {
         for (url, size, batch) in sizes {
             XCTAssertEqual(RPCClient.logChunkSize(for: URL(string: url)!), size, url)
             XCTAssertEqual(RPCClient.logBatchSpan(for: URL(string: url)!), batch, url)
+            XCTAssertEqual(RPCClient.answersAnyRange(URL(string: url)!), url.contains("rpc1"), url)
         }
+    }
+
+    /// Paced (the venue token list): a throttle — HTTP 429 once the client's own retries are spent, or a rate-limit error
+    /// in the answer — is waited out and the same range asked again, never split. The venue list's refill split throttled
+    /// ranges, patient: 2,714 requests on rpc1, 1,000 of them answered HTTP 429.
+    func testAPacedScanWaitsOutAThrottleAndNeverSplits() async {
+        let limits = LogScanLimits(throttlePause: 0.05, maxThrottlePause: 0.1)
+        for throttle in [LogsStub.Failure.status(429), .error(code: -32005, message: "rate limit exceeded")] {
+            // The client asks five times (its own retries) before the scan sees a throttle: the first ask is throttled
+            // in full, the next is answered.
+            LogsStub.install(head: 10_000_000, logs: [5, 4_000_000].map(transfer)) { _ in LogsStub.requests() <= 5 ? throttle : nil }
+            let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 4_999_999, chunkSize: 5_000_000,
+                                                                 concurrency: 1, mode: .paced, limits: limits)
+            XCTAssertTrue(report.complete, "\(throttle)")
+            XCTAssertEqual(report.logs.map(\.blockNumber), [5, 4_000_000], "\(throttle)")
+            XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999)], "\(throttle): the same range, never split")
+            XCTAssertEqual(LogsStub.requests(), 6, "\(throttle): the client's five, then the scan's one after its pause")
+        }
+    }
+
+    /// Paced, a throttle that outlasts the outage ends the scan there, incomplete: nothing split, nothing more asked. The
+    /// venue list reads the range on a later run.
+    func testAPacedScanStopsWhenAThrottleOutlastsTheOutage() async {
+        LogsStub.install(head: 10_000_000, logs: [5].map(transfer)) { _ in .error(code: -32005, message: "rate limit exceeded") }
+        let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 9_999_999, chunkSize: 5_000_000,
+                                                             concurrency: 1, mode: .paced,
+                                                             limits: LogScanLimits(outage: 1, throttlePause: 0.05, maxThrottlePause: 0.1))
+        XCTAssertFalse(report.complete)
+        XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999)], "the first range only, never split")
+        XCTAssertEqual(LogsStub.requests(), 5, "one ask, the client's own retries")
     }
 
     func testTheRangeASizeRefusalNamesIsReadOnlyWhenItFits() {
@@ -362,10 +393,11 @@ final class LogScanTests: XCTestCase {
 
 /// An `eth_getLogs` endpoint answered from memory, named like rpc1 so ranges are 100,000 blocks (`rpc(url: rpc3)` names
 /// it like rpc3: 1,000 blocks): the chain head is `head`, every range asked is recorded (`queries()`), every request
-/// counted (`requests()`), and `rule` refuses a range (an error, or no answer to the whole request) or lets it be answered
-/// from `logs`. With `batchSpan`, a request's ranges share that many blocks, as on rpc3: a range past what the ranges
-/// before it in the request used is refused for its size. With `singleErrorStatus`, a single-object request (not an
-/// array) whose call is refused gets that HTTP status, the error still its body, as rpc1 sends a size refusal (400).
+/// counted (`requests()`), and `rule` refuses a range (an error, no answer to the whole request, or an HTTP status for it)
+/// or lets it be answered from `logs`. With `batchSpan`, a request's ranges share that many blocks, as on rpc3: a range
+/// past what the ranges before it in the request used is refused for its size. With `singleErrorStatus`, a single-object
+/// request (not an array) whose call is refused gets that HTTP status, the error still its body, as rpc1 sends a size
+/// refusal (400).
 final class LogsStub: URLProtocol {
     struct Range: Hashable, Sendable {
         let from: UInt64
@@ -378,10 +410,13 @@ final class LogsStub: URLProtocol {
         case error(code: Int, message: String)
         /// No answer to the request that asked it: the connection fails.
         case noAnswer
+        /// The request that asked it answered with this HTTP status and no body (429: a throttle).
+        case status(Int)
         var description: String {
             switch self {
             case .error(let code, let message): return "\(code) \(message)"
             case .noAnswer: return "no answer"
+            case .status(let code): return "HTTP \(code)"
             }
         }
     }
@@ -398,16 +433,41 @@ final class LogsStub: URLProtocol {
     nonisolated(unsafe) private static var batchSpan: UInt64?
     nonisolated(unsafe) private static var singleErrorStatus = 200
     nonisolated(unsafe) private static var requestCount = 0
+    nonisolated(unsafe) private static var askedAddresses: [String?] = []
+    nonisolated(unsafe) private static var latency: TimeInterval = 0
+    nonisolated(unsafe) private static var logCap: Int?
+    nonisolated(unsafe) private static var inFlight = 0
+    nonisolated(unsafe) private static var mostInFlight = 0
 
-    static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, singleErrorStatus: Int = 200, rule: @escaping Rule) {
+    /// `latency`: how long each request takes to answer, so requests sent together overlap (`maxInFlight()`). `logCap`: a
+    /// range matching more logs is refused as rpc1 refuses one over its 10K, naming the range from its start that fits.
+    static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, singleErrorStatus: Int = 200, latency: TimeInterval = 0,
+                        logCap: Int? = nil, rule: @escaping Rule) {
         lock.lock(); defer { lock.unlock() }
         self.head = head
         chainLogs = logs
         self.batchSpan = batchSpan
         self.singleErrorStatus = singleErrorStatus
+        self.latency = latency
+        self.logCap = logCap
         self.rule = rule
         asked = []
+        askedAddresses = []
         requestCount = 0
+        inFlight = 0
+        mostInFlight = 0
+    }
+
+    /// The address each range in `queries()` asked for, in the same order.
+    static func addresses() -> [Address?] {
+        lock.lock(); let asked = askedAddresses; lock.unlock()
+        return asked.map { $0.flatMap(Address.init) }
+    }
+
+    /// The most requests that were being answered at once.
+    static func maxInFlight() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return mostInFlight
     }
 
     /// How many requests were made.
@@ -435,13 +495,26 @@ final class LogsStub: URLProtocol {
     override func startLoading() {
         let decoded = (try? JSONDecoder().decode(JSON.self, from: Self.body(request))) ?? .null
         let calls = decoded.array ?? [decoded]
-        Self.lock.lock(); Self.requestCount += 1; Self.lock.unlock()
+        Self.lock.lock()
+        Self.requestCount += 1
+        Self.inFlight += 1
+        Self.mostInFlight = max(Self.mostInFlight, Self.inFlight)
+        let latency = Self.latency
+        Self.lock.unlock()
+        if latency > 0 { Thread.sleep(forTimeInterval: latency) }
+        defer { Self.lock.lock(); Self.inFlight -= 1; Self.lock.unlock() }
         // Every call is recorded, even in a request that is to get no answer.
         var spent: UInt64 = 0
         let answers = calls.map { Self.reply($0, spent: &spent) }
         let replies = answers.compactMap { $0 }
         guard replies.count == answers.count else {
             client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
+        if let code = replies.lazy.compactMap({ $0["httpStatus"].number }).first {
+            let response = HTTPURLResponse(url: request.url!, statusCode: Int(code), httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocolDidFinishLoading(self)
             return
         }
         let body = (try? JSONEncoder().encode(decoded.array == nil ? replies[0] : .array(replies))) ?? Data()
@@ -461,7 +534,7 @@ final class LogsStub: URLProtocol {
         func error(_ code: Int, _ message: String) -> JSON {
             .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(Double(code)), "message": .string(message)])])
         }
-        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; let budget = batchSpan; lock.unlock()
+        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; let budget = batchSpan; let cap = logCap; lock.unlock()
         switch call["method"].string {
         case "eth_getBlockByNumber":
             return result(.object(["number": .string(BigUInt(head).hexQuantity), "timestamp": .string(BigUInt(1_790_000_000).hexQuantity)]))
@@ -470,7 +543,7 @@ final class LogsStub: URLProtocol {
             let from = filter["fromBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? 0
             let to = filter["toBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? head
             let range = Range(from: from, to: to)
-            lock.lock(); asked.append(range); lock.unlock()
+            lock.lock(); asked.append(range); askedAddresses.append(filter["address"].string); lock.unlock()
             if let budget {
                 guard spent + range.span <= budget else { return error(-32062, "Block range is too large") }
                 spent += range.span
@@ -478,6 +551,7 @@ final class LogsStub: URLProtocol {
             switch rule(range) {
             case .error(let code, let message)?: return error(code, message)
             case .noAnswer?: return nil
+            case .status(let code)?: return .object(["httpStatus": .number(Double(code))])
             case nil: break
             }
             let address = filter["address"].string.flatMap(Address.init)
@@ -485,6 +559,10 @@ final class LogsStub: URLProtocol {
             let matching = logs.filter { log in
                 (address == nil || address == log.address) && range.contains(log.blockNumber)
                     && topics.enumerated().allSatisfy { i, topic in topic == nil || (log.topics.indices.contains(i) && log.topics[i] == topic) }
+            }
+            if let cap, matching.count > cap {
+                let fits = matching.map(\.blockNumber).sorted()[cap] - 1
+                return error(-32602, "Log response size exceeded. Based on your parameters and the response size limit, this block range should work: [\(BigUInt(from).hexQuantity), \(BigUInt(fits).hexQuantity)]")
             }
             return result(.array(matching.map(json)))
         default:
