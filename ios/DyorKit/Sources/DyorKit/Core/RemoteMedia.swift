@@ -49,6 +49,17 @@ public enum RemoteMedia {
         case notAnImage
         /// The image declares more pixels than may be decoded.
         case tooManyPixels
+        /// The server sent the request somewhere `mayFollow` doesn't allow.
+        case redirected
+    }
+
+    /// Whether a fetch of `original` may follow a redirect to `target`: https, on the same host or one under it — as
+    /// dweb.link sends `/ipfs/<cid>` to `<cid>.ipfs.dweb.link` — and no other port. Anything else could be a host a
+    /// coin's creator chose (a gateway applies a creator's `_redirects` file), which must never learn who looked (pick 6).
+    public static func mayFollow(from original: URL, to target: URL) -> Bool {
+        guard target.scheme?.lowercased() == "https", target.port == nil || target.port == 443, target.user == nil, target.password == nil,
+              let from = original.host?.lowercased(), !from.isEmpty, let to = target.host?.lowercased(), !to.isEmpty else { return false }
+        return to == from || to.hasSuffix("." + from)
     }
 
     /// A session for untrusted media: no cookies or stored credentials, and a limit on the whole transfer as well as
@@ -65,7 +76,8 @@ public enum RemoteMedia {
 
     /// GETs `url` (https only) and returns its body, reading at most `maxBytes`: refused up front when the declared
     /// Content-Length is larger, and cancelled as soon as the body grows past the cap. The body arrives in the chunks
-    /// the network delivers (a task delegate), so the cap costs nothing per byte.
+    /// the network delivers (a task delegate), so the cap costs nothing per byte. A redirect is followed only where
+    /// `mayFollow` allows; any other ends the fetch (`Failure.redirected`), whatever session it runs in.
     public static func fetch(_ url: URL, session: URLSession, maxBytes: Int = maxImageBytes) async throws -> Data {
         guard url.scheme?.lowercased() == "https" else { throw Failure.insecureURL }
         var request = URLRequest(url: url)
@@ -137,9 +149,21 @@ private final class CappedLoad: NSObject, URLSessionDataDelegate, @unchecked Sen
         return taken
     }
 
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let original = task.originalRequest?.url, let target = request.url, RemoteMedia.mayFollow(from: original, to: target) else {
+            failure = .redirected
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
+
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        if failure != nil {
+            completionHandler(.cancel)
+        } else if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             failure = .status(http.statusCode)
             completionHandler(.cancel)
         } else if response.expectedContentLength > Int64(maxBytes) {

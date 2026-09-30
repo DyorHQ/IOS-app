@@ -27,7 +27,7 @@ public struct RemoteImageSource: Hashable, Sendable {
 /// source, and the coin shows its letters. All seven launches on chain today use `launch-media`, so no picture users see
 /// goes away. A logo a token list supplies for a coin that isn't DyorHQ's (`listSources`) loads only from the hosts the
 /// app's lists really use (`listHosts`), or else by the rules above. The byte, pixel and decode caps (`RemoteMedia`)
-/// apply to every source.
+/// apply to every source, and `RemoteMedia` follows no redirect to another host.
 public struct ImageSourcePolicy: Hashable, Sendable {
     /// `https://<project>.supabase.co`: the Supabase project whose `launch-media` bucket is DyorHQ's.
     public let supabaseURL: URL
