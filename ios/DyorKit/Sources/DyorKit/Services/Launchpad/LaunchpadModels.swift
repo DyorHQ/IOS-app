@@ -378,6 +378,36 @@ public struct LaunchpadModules: Hashable, Sendable {
 }
 
 /// One launch as the explore list shows it: the factory record plus the token metadata and live curve state.
+/// The launches of every launchpad the app reads (`LaunchpadService.launchListing`), newest first: the live factory's,
+/// then each retired factory's, newest stack first. A factory whose launches couldn't be read is in `unread`, with why,
+/// and has none here: never taken for a factory with none.
+public struct LaunchListing: Sendable {
+    /// Every factory asked, in list order.
+    public let factories: [Address]
+    public let launches: [Launch]
+    /// The factories whose launches couldn't be read, with the error.
+    public let unread: [Address: any Error]
+
+    public init(factories: [Address], launches: [Launch], unread: [Address: any Error] = [:]) {
+        self.factories = factories
+        self.launches = launches
+        self.unread = unread
+    }
+
+    /// Every factory's launches were read.
+    public var complete: Bool { unread.isEmpty }
+
+    /// The error of the first factory, in list order, whose launches couldn't be read.
+    public var firstError: (any Error)? { factories.lazy.compactMap { self.unread[$0] }.first }
+
+    /// `launches`, with each factory that couldn't be read now keeping its launches from `previous` (an earlier read's),
+    /// in its place in the list: what a screen shows beside its error, so a failed read never empties a list it had.
+    public func keeping(_ previous: [Launch]) -> [Launch] {
+        guard !unread.isEmpty else { return launches }
+        return factories.flatMap { factory in (unread[factory] == nil ? launches : previous).filter { $0.factory == factory } }
+    }
+}
+
 public struct Launch: Identifiable, Hashable, Sendable {
     public var id: Address { token }
 

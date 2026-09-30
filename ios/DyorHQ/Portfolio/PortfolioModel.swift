@@ -321,14 +321,15 @@ final class PortfolioModel {
 
         // Reference data first: the launch list (curves + pair assets), the Moments list (coins + pools), the token universe.
         // Launches on retired factories are history too: the coins and trades stay part of the wallet's record.
-        async let launchesTask = env.launchpad.allLaunches(limit: 200)
+        async let launchesTask = env.launchpad.launchListing(limit: 200)
         async let momentsTask = env.moments.moments(limit: 200)
         // Moments of the retired cohorts are history too (their collects, claims and withdrawals); keyed by (factory, id).
         async let retiredMomentsTask = PastMomentsModel.allMoments(env: env)
-        let fetchedLaunches = try? await launchesTask
+        // A launchpad whose launches couldn't be read keeps its last good ones, and the load says it is incomplete.
+        let listing = await launchesTask
         let fetchedMoments = try? await momentsTask
         let retiredMoments = await retiredMomentsTask
-        let launches = fetchedLaunches ?? Array(launchesByCurve.values)
+        let launches = listing.keeping(Array(launchesByCurve.values))
         let moments = fetchedMoments.map { $0 + retiredMoments } ?? Array(momentsByKey.values)
 
         var universe = KnownTokenStore.universe(owner: address)
@@ -389,7 +390,7 @@ final class PortfolioModel {
 
         loadedFor = address
         hasLoaded = true
-        if fetchedLaunches == nil || fetchedMoments == nil || head == nil || fetchedPrices == nil {
+        if !listing.complete || fetchedMoments == nil || head == nil || fetchedPrices == nil {
             error = "Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh."
             updatedAt = nil
         } else {

@@ -95,6 +95,7 @@ struct LaunchpadProfileView: View {
             }
             .padding(.vertical, 6)
             if let address = session.address { AddressRow(title: "Address", address: address) }
+            if let incomplete = model.incomplete { InlineError(message: incomplete) }
             HStack {
                 stat("Portfolio", model.portfolioValueUSD.formatted(.currency(code: "USD")))
                 Divider().frame(height: 34)
@@ -374,6 +375,10 @@ final class LaunchpadProfileModel {
     private(set) var escrows: [EscrowHolding] = []
     private(set) var activity: [FeedItem] = []
     private(set) var loading = false
+    /// Said when part of the launchpad couldn't be read: the holdings, launches and fees shown may be missing some.
+    private(set) var incomplete: String?
+    /// The last launches read, which a launchpad that can't be read now keeps (`LaunchListing.keeping`).
+    private var lastLaunches: [Launch] = []
 
     // Pair asset → USD price, and pair asset → (symbol, decimals) for escrow display.
     private var pairUSD: [Address: Double] = [:]
@@ -453,7 +458,10 @@ final class LaunchpadProfileModel {
         loading = true
         defer { loading = false }
 
-        let launches = (try? await env.launchpad.allLaunches(limit: 100)) ?? []
+        let listing = await env.launchpad.launchListing(limit: 100)
+        let launches = listing.keeping(lastLaunches)
+        lastLaunches = launches
+        incomplete = listing.complete ? nil : "Part of your launchpad couldn't be read just now, so some coins or fees may be missing. Pull to refresh."
         guard !launches.isEmpty else { positions = []; created = []; return }
 
         // Pair-asset prices (MON priced live; USDC/AUSD pinned to 1 by the price service).

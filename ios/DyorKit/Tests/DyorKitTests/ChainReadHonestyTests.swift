@@ -66,7 +66,7 @@ final class ChainReadHonestyTests: XCTestCase {
     /// that launch): the Launch board says it couldn't read, never shows the first coin alone.
     func testALaunchWhoseRecordIsNotThereYetIsAnError() async throws {
         let chain = HonestyLaunchpad(recorded: [HonestyLaunchpad.alpha])
-        MomentsChainStub.install { chain.answer($0, $1) }
+        MomentsChainStub.install { [chain] in chain.answer($0, $1) }
         let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: HonestyLaunchpad.live)
         await throwsError("launches()") { try await service.launches().map(\.name) }
     }
@@ -75,7 +75,7 @@ final class ChainReadHonestyTests: XCTestCase {
     func testALaunchWhosePriceCantBeReadIsAnErrorNotNotFound() async throws {
         var chain = HonestyLaunchpad()
         chain.priceFails = true
-        MomentsChainStub.install { chain.answer($0, $1) }
+        MomentsChainStub.install { [chain] in chain.answer($0, $1) }
         let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: HonestyLaunchpad.live)
         await throwsError("launch(token: beta)") { try await service.launch(token: HonestyLaunchpad.beta).map(\.launch.name) }
         await throwsError("launches()") { try await service.launches().map(\.name) }
@@ -90,7 +90,7 @@ final class ChainReadHonestyTests: XCTestCase {
     func testALaunchWhoseTextCantBeReadKeepsItsPlace() async throws {
         var chain = HonestyLaunchpad()
         chain.textFails = true
-        MomentsChainStub.install { chain.answer($0, $1) }
+        MomentsChainStub.install { [chain] in chain.answer($0, $1) }
         let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: HonestyLaunchpad.live)
         let listed = try await service.launches()
         XCTAssertEqual(listed.map(\.token), [HonestyLaunchpad.beta, HonestyLaunchpad.alpha])
@@ -101,11 +101,24 @@ final class ChainReadHonestyTests: XCTestCase {
         let page = try await service.launch(token: HonestyLaunchpad.beta)
         XCTAssertEqual(page?.launch.token, HonestyLaunchpad.beta)
     }
+
+    /// The live launchpad can't be read while a retired one lists a coin: the board with every launchpad throws, never a
+    /// board of retired coins alone that looks like the live launchpad has none.
+    func testALiveLaunchpadThatCantBeReadIsAnErrorNotARetiredOnlyBoard() async throws {
+        var chain = HonestyLaunchpad()
+        chain.liveFails = true
+        chain.retiredCoin = HonestyLaunchpad.old
+        MomentsChainStub.install { [chain] in chain.answer($0, $1) }
+        let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: HonestyLaunchpad.live)
+        await throwsError("allLaunches()") { try await service.allLaunches().map(\.name) }
+        await throwsError("launches()") { try await service.launches().map(\.name) }
+    }
 }
 
 /// Two launches on the v2 fixture launchpad, "Alpha" then "Beta". `recorded` are the coins the factory's record read
 /// knows (a node that hasn't seen the newest launch answers an empty record for it); `priceFails` makes Beta's curve
-/// refuse `price()`, `textFails` makes Beta's token answer nothing for its text. Retired stacks launched nothing.
+/// refuse `price()`, `textFails` makes Beta's token answer nothing for its text; `liveFails` makes the live factory
+/// refuse `launchCount()`. The newest retired stack lists `retiredCoin` ("Old") when set; the others launched nothing.
 struct HonestyLaunchpad: Sendable {
     static let live = V2Fixture.launchpad
     static let alpha = Address(literal: "0x0000000000000000000000000000000000a1a100")
@@ -115,6 +128,9 @@ struct HonestyLaunchpad: Sendable {
     var recorded: Set<Address> = [alpha, beta]
     var priceFails = false
     var textFails = false
+    var liveFails = false
+    var retiredCoin: Address?
+    static let old = Address(literal: "0x0000000000000000000000000000000000a1a300")
 
     func answer(_ to: Address, _ data: Data) -> Data? {
         let selector = data.prefix(4)
@@ -125,7 +141,7 @@ struct HonestyLaunchpad: Sendable {
         typealias C = LaunchpadABI.Curve
         let arg = data.count >= 36 ? Address(data: data.dropFirst(4).prefix(32).suffix(20)) : nil
         if to == Self.live.factory {
-            if is_(F.launchCount) { return enc([.uint(2)], "uint256") }
+            if is_(F.launchCount) { return liveFails ? nil : enc([.uint(2)], "uint256") }
             if is_(F.getLaunches) { return enc([.array([.address(Self.alpha), .address(Self.beta)])], "address[]") }
             if is_(F.getLaunchedToken), let arg {
                 let exists = recorded.contains(arg)
@@ -139,16 +155,20 @@ struct HonestyLaunchpad: Sendable {
             return nil
         }
         if let retired = LaunchpadAddresses.retiredStacks.first(where: { $0.factory == to }) {
-            if is_(F.launchCount) { return enc([.uint(0)], "uint256") }
+            let lists = retired.factory == LaunchpadAddresses.retiredStacks.first?.factory ? retiredCoin : nil
+            if is_(F.launchCount) { return enc([.uint(lists == nil ? 0 : 1)], "uint256") }
+            if is_(F.getLaunches), let lists { return enc([.array([.address(lists)])], "address[]") }
             if is_(F.getLaunchedToken) {
-                var fields: [ABIValue] = [.address(.zero), .address(.zero), .address(.zero), .address(.zero), .address(.zero), .uint(0), .uint(0), .uint(0), .int(0),
-                                          .bool(false), .uint(0), .uint(0), .uint(0), .uint(0), .uint(0), .bytes(Data(count: 32)), .bool(false)]
+                let exists = lists != nil && arg == lists
+                var fields: [ABIValue] = [.address(exists ? lists! : .zero), .address(exists ? Self.curve(lists!) : .zero), .address(.zero), .address(.zero), .address(.zero),
+                                          .uint(exists ? BigUInt(10).power(21) : 0), .uint(0), .uint(0), .int(0),
+                                          .bool(false), .uint(0), .uint(0), .uint(0), .uint(0), .uint(0), .bytes(Data(count: 32)), .bool(exists)]
                 if retired.generation.legacyRecord { fields.remove(at: 10) }
                 return enc([.tuple(fields)], LaunchpadABI.launchedTokenReturns(legacy: retired.generation.legacyRecord))
             }
             return nil
         }
-        for (token, name) in [(Self.alpha, "Alpha"), (Self.beta, "Beta")] {
+        for (token, name) in [(Self.alpha, "Alpha"), (Self.beta, "Beta"), (Self.old, "Old")] {
             if to == token {
                 if token == Self.beta, textFails, is_(T.name) || is_(T.symbol) || is_(T.getTokenInfo) { return Data() }
                 if is_(T.name) { return enc([.string(name)], "string") }

@@ -61,8 +61,16 @@ struct LaunchpadView: View {
                     Label("New launches open soon. Coins from the retired launchpads can be sold here, but not bought; graduated ones trade on Swap.", systemImage: "clock")
                         .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
+                // A launchpad whose launches couldn't be read says so, with Retry; its last good coins stay listed.
+                if let error = model.error {
+                    HStack(alignment: .firstTextBaseline) {
+                        InlineError(message: error)
+                        Spacer(minLength: 8)
+                        Button("Retry") { Task { await model.load(env: env, account: session.address) } }.font(.footnote.weight(.semibold))
+                    }
+                }
                 if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, !model.loading {
-                    emptyState
+                    if model.error == nil { emptyState }
                 } else {
                     if !graduated.isEmpty { section(title: "Graduated", count: graduated.count, subtitle: "Cleared the graduation threshold", coins: graduated) }
                     exploreSection
@@ -359,19 +367,18 @@ final class LaunchpadModel {
         }
     }
 
-    /// `account` is the signed-in wallet: whether it may launch (`canLaunch`) comes with the factory's terms.
+    /// `account` is the signed-in wallet: whether it may launch (`canLaunch`) comes with the factory's terms. A launchpad
+    /// whose launches couldn't be read keeps its last good coins on the board, and the board shows the error with Retry
+    /// (`LaunchListing.keeping`): never a board with that launchpad's coins silently gone.
     func load(env: AppEnvironment, account: Address?) async {
         // Runs while the live stack is pending too: the retired stacks' launches still list (and `protocolInfo` is nil).
         loading = true
         defer { loading = false }
-        do {
-            async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets, account: account)
-            launches = try await env.launchpad.allLaunches(limit: 60)
-            protocolInfo = try? await info
-            error = nil
-        } catch {
-            self.error = describe(error)
-        }
+        async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets, account: account)
+        let listing = await env.launchpad.launchListing(limit: 60)
+        launches = listing.keeping(launches)
+        protocolInfo = try? await info
+        error = listing.firstError.map(describe)
         if let prices = await Self.pairPrices(env: env, launches: launches) { pairUSD = prices }
     }
 

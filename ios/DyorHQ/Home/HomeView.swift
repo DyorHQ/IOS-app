@@ -653,17 +653,19 @@ final class HomeModel {
         unverified = KnownTokenStore.unverified(owner: address)
         async let prices = env.prices.prices(for: tokens)
         async let balances = walletBalances(env: env, address: address, tokens: tokens)
-        async let launches = env.launchpad.allLaunches(limit: 30)
+        async let launches = env.launchpad.launchListing(limit: 30)
         async let perps = loadPerps(env: env, address: address)
         async let moments = loadMoments(env: env, address: address)
         var priceMap: [Address: PriceInfo]?
         var priceError: Error?
         do { priceMap = try await prices } catch { priceError = error }
         let balanceMap = await balances
-        let launchList = try? await launches
+        // A launchpad whose launches couldn't be read keeps its last good ones, and the screen says so.
+        let listing = await launches
+        let launchList = listing.keeping(self.launches)
         let perpState = await perps
         let momentState = await moments
-        let holdings = await loadLaunchHoldings(env: env, address: address, launches: launchList ?? self.launches, priceMap: priceMap ?? [:])
+        let holdings = await loadLaunchHoldings(env: env, address: address, launches: launchList, priceMap: priceMap ?? [:])
         // A read that failed keeps what the last good one showed, and says so; a load cancelled part-way (the screen
         // went away, the account changed) publishes nothing (security audit 2026-09-26, RS-10).
         guard !Task.isCancelled, address == loadedFor else { return }
@@ -678,11 +680,13 @@ final class HomeModel {
             error = describe(priceError)
         } else if balanceMap == nil {
             error = "Your balances couldn't be read just now — showing the last ones read."
+        } else if !listing.complete {
+            error = "Some launch coins couldn't be read just now — showing the last ones read."
         } else {
             error = nil
             updatedAt = .now
         }
-        if let launchList { self.launches = launchList }
+        self.launches = launchList
         if let holdings, priceMap != nil { launchHoldings = holdings } // valued at the pair's price: not without one
         if let perpState {
             positions = perpState.positions

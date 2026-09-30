@@ -215,27 +215,37 @@ public actor LaunchpadService {
         return try await hydrate(records, factory: factory).reversed()
     }
 
-    /// The newest `limit` launches of the live factory followed by those of each retired factory (newest stack
-    /// first), so the whole list stays newest first. A factory that fails to answer is left out rather than failing
-    /// the others; the live factory's error is only thrown when no retired launch came back either. While the live
-    /// stack is not deployed (v2 pending) the list is the retired stacks' launches alone.
-    public func allLaunches(limit: Int = 48) async throws -> [Launch] {
-        let retiredStacks = self.retiredStacks
-        async let live: [Launch] = addresses.isDeployed ? launches(limit: limit, factory: addresses.factory) : []
-        let retired = await withTaskGroup(of: (Int, [Launch]).self) { group in
-            for (i, stack) in retiredStacks.enumerated() {
-                group.addTask { (i, (try? await self.launches(limit: limit, factory: stack.factory)) ?? []) }
+    /// The newest `limit` launches of the live factory followed by those of each retired factory (newest stack first),
+    /// so the whole list stays newest first, with every factory whose launches couldn't be read (`LaunchListing.unread`):
+    /// one factory's failure never takes the others down, and is never mistaken for a factory with fewer launches. While
+    /// the live stack is not deployed (v2 pending) the list is the retired stacks' launches alone.
+    public func launchListing(limit: Int = 48) async -> LaunchListing {
+        let factories = stacks.map(\.factory)
+        let reads = await withTaskGroup(of: (Int, Result<[Launch], Error>).self) { group in
+            for (i, factory) in factories.enumerated() {
+                group.addTask { (i, await ERC20.captured { try await self.launches(limit: limit, factory: factory) }) }
             }
-            var out = Array(repeating: [Launch](), count: retiredStacks.count)
-            for await (i, list) in group { out[i] = list }
-            return out.flatMap { $0 }
+            var out = Array(repeating: Result<[Launch], Error>.success([]), count: factories.count)
+            for await (i, read) in group { out[i] = read }
+            return out
         }
-        do {
-            return try await live + retired
-        } catch {
-            if retired.isEmpty { throw error }
-            return retired
+        var launches: [Launch] = []
+        var unread: [Address: any Error] = [:]
+        for (factory, read) in zip(factories, reads) {
+            switch read {
+            case .success(let list): launches += list
+            case .failure(let error): unread[factory] = error
+            }
         }
+        return LaunchListing(factories: factories, launches: launches, unread: unread)
+    }
+
+    /// Every factory's launches (`launchListing`), or the error of the first factory (the live one first) whose launches
+    /// couldn't be read: for a reader that must have them all, such as one that totals what they are worth.
+    public func allLaunches(limit: Int = 48) async throws -> [Launch] {
+        let listing = await launchListing(limit: limit)
+        if let error = listing.firstError { throw error }
+        return listing.launches
     }
 
     /// One launch with its curve state, or nil when `token` was not launched on `factory` (the live factory when
