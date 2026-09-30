@@ -171,7 +171,9 @@ final class DyorCoinRegistryRefreshTests: XCTestCase {
     // MARK: The file (F11)
 
     /// The file is read entry by entry: an entry this build can't read (a launchpad generation a later build added, a
-    /// damaged count) is left out, and the rest kept. Writes stay whole-file and atomic.
+    /// damaged count) is left out, and the rest kept. A coin left out takes its factory's checkpoint with it, so that
+    /// list is read again; one whose factory can't be read either takes every checkpoint. Writes stay whole-file and
+    /// atomic.
     func testAnEntryTheFileCantReadIsLeftOutAndTheRestKept() throws {
         let coins = [
             DyorCoin(address: DyorCoinChain.qt, origin: .launch(factory: DyorCoinChain.legacy, generation: .legacy, retired: true), symbol: "QT", name: "Quet",
@@ -181,14 +183,44 @@ final class DyorCoinRegistryRefreshTests: XCTestCase {
             DyorCoin(address: Address(literal: "0x43682FA268A98a87C946d0b933203a8834b391BF"), origin: .moment(factory: DyorCoinChain.c3, id: 1, retired: true), symbol: "NAT",
                      name: "Nature", creator: DyorCoinChain.owner, logo: "", mediaHash: Data(count: 32), mediaIsVideo: true, pair: Monad.usdc),
         ]
-        try store.save(DyorCoinStore.Snapshot(coins: coins, checkpoints: [.init(factory: Self.v2, count: 1), .init(factory: DyorCoinChain.legacy, count: 4)]))
-        var text = try String(contentsOf: store.url, encoding: .utf8)
-        text = text.replacingOccurrences(of: "\"generation\":\"v2\"", with: "\"generation\":\"v9\"")
+        try store.save(DyorCoinStore.Snapshot(coins: coins, checkpoints: [.init(factory: Self.v2, count: 1), .init(factory: DyorCoinChain.legacy, count: 4),
+                                                                          .init(factory: DyorCoinChain.c3, count: 1)]))
+        let written = try String(contentsOf: store.url, encoding: .utf8)
+        var text = written.replacingOccurrences(of: "\"generation\":\"v2\"", with: "\"generation\":\"v9\"")
         text = text.replacingOccurrences(of: "\"count\":4", with: "\"count\":\"four\"")
         try Data(text.utf8).write(to: store.url)
         let snapshot = try XCTUnwrap(store.load(), "one bad entry doesn't discard the file")
         XCTAssertEqual(Set(snapshot.coins.map(\.symbol)), ["QT", "NAT"])
-        XCTAssertEqual(snapshot.checkpoints, [.init(factory: Self.v2, count: 1)])
+        XCTAssertEqual(snapshot.checkpoints, [.init(factory: DyorCoinChain.c3, count: 1)], "v2's coin was left out, so v2's list is read again; 0xad3d's count was damaged")
+
+        let natOrigin = try XCTUnwrap(written.range(of: #""origin":\{"factory":"[^"]*","id":"1","kind":"moment","retired":true\}"#, options: .regularExpression))
+        try Data(written.replacingCharacters(in: natOrigin, with: #""origin":"lost""#).utf8).write(to: store.url)
+        let blind = try XCTUnwrap(store.load())
+        XCTAssertEqual(Set(blind.coins.map(\.symbol)), ["QT", "NEXT"])
+        XCTAssertTrue(blind.checkpoints.isEmpty, "a coin whose factory can't be told sends every list back to be read")
+    }
+
+    /// A coin whose entry the file couldn't read is read again at the next refresh — never left out while its factory's
+    /// list counts as read.
+    func testACoinWhoseEntryWasLeftOutIsReadAgain() async throws {
+        var chain = DyorCoinChain.mainnet
+        let next = launch(1, "NEXT")
+        chain.launches[Self.v2] = [next]
+        let first = registry(chain, store: store)
+        await first.refresh()
+        let text = try String(contentsOf: store.url, encoding: .utf8).replacingOccurrences(of: "\"generation\":\"v2\"", with: "\"generation\":\"v9\"")
+        try Data(text.utf8).write(to: store.url)
+        let reopened = registry(chain, store: store)
+        let before = await reopened.membership(next.token)
+        XCTAssertEqual(before, .unknown, "left out of the file")
+        let complete = await reopened.refresh()
+        XCTAssertTrue(complete)
+        guard case .dyor(let coin) = await reopened.membership(next.token) else { return XCTFail("read again at the next refresh") }
+        XCTAssertEqual(coin.symbol, "NEXT")
+        let checkpoints = await reopened.checkpoints
+        XCTAssertEqual(checkpoints[Self.v2], 1)
+        let created = await reopened.coins(createdBy: DyorCoinChain.creator).map(\.symbol)
+        XCTAssertTrue(created.contains("NEXT"))
     }
 
     /// A factory whose count is below what the file says was read — a fork's file, a node that answered wrongly before —

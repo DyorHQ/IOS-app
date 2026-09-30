@@ -26,12 +26,22 @@ public struct DyorCoinStore: Sendable {
         private enum CodingKeys: String, CodingKey { case version, coins, checkpoints }
 
         /// The file's contents entry by entry: an entry this build can't read (a launchpad generation a later build added,
-        /// a damaged value) is left out, and every other one kept.
+        /// a damaged value) is left out, and every other one kept. A coin left out takes its factory's checkpoint with it,
+        /// so that list is read again from the start and the coin comes back at the next refresh; when not even its
+        /// factory can be read, every checkpoint goes (every list is read again: a few requests).
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             version = try container.decode(Int.self, forKey: .version)
-            coins = try container.decode([Entry<DyorCoin>].self, forKey: .coins).compactMap(\.value)
-            checkpoints = try container.decode([Entry<Checkpoint>].self, forKey: .checkpoints).compactMap(\.value)
+            let entries = try container.decode([CoinEntry].self, forKey: .coins)
+            coins = entries.compactMap(\.coin)
+            let kept = try container.decode([Entry<Checkpoint>].self, forKey: .checkpoints).compactMap(\.value)
+            let unread = entries.filter { $0.coin == nil }
+            if unread.contains(where: { $0.factory == nil }) {
+                checkpoints = []
+            } else {
+                let factories = Set(unread.compactMap(\.factory))
+                checkpoints = kept.filter { !factories.contains($0.factory) }
+            }
         }
     }
 
@@ -39,6 +49,21 @@ public struct DyorCoinStore: Sendable {
     private struct Entry<Value: Decodable>: Decodable {
         let value: Value?
         init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
+    }
+
+    /// One coin entry of the file: the coin, or, when it can't be read, the factory it was recorded under, if that
+    /// can be read on its own.
+    private struct CoinEntry: Decodable {
+        let coin: DyorCoin?
+        let factory: Address?
+
+        private enum Keys: String, CodingKey { case origin }
+        private struct Origin: Decodable { let factory: Address }
+
+        init(from decoder: Decoder) throws {
+            coin = try? DyorCoin(from: decoder)
+            factory = coin?.factory ?? (try? decoder.container(keyedBy: Keys.self).decode(Origin.self, forKey: .origin).factory)
+        }
     }
 
     /// A launchpad's first `count` launches, or a cohort's Moments 1…`count`, have been read.
