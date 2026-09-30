@@ -102,7 +102,7 @@ final class AppEnvironment {
         // 330,000.
         venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
         venueList = VenueTokenList(service: venueTokens, logos: { [kuruTokens] in await kuruTokens.logos() },
-                                   read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1) })
+                                   read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1, dropped: $2) })
         session = Session(config: config, backend: social)
         // An erase of this device's data saves App Lock as a new install has it, and sets it here too (R4).
         session.settings = settings

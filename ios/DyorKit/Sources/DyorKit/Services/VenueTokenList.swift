@@ -4,18 +4,22 @@ import Observation
 /// The swap picker's venue token list (`VenueTokensService`) as the app holds it: read from the store once, off the main
 /// actor, and kept in memory, so a search never decodes it (9,405 tokens are 1.8 MB of JSON: 0.1–0.15 s to decode, 0.7 s
 /// to encode); brought up to the chain head in the background, one run at a time; and saved only once a segment is read
-/// in full, off the main actor, in the format build 16 reads (a JSON array of `Token`), so a downgrade keeps the list.
+/// in full or a run dropped addresses, off the main actor, in the format build 16 reads (a JSON array of `Token`), so a
+/// downgrade keeps the list.
 @Observable
 @MainActor
 public final class VenueTokenList {
-    /// What the store holds: the list as saved, and the last block it is read up to in full.
+    /// What the store holds: the list as saved, the last block it is read up to in full, and what runs dropped
+    /// (`encode(dropped:)`).
     public struct Stored: Sendable {
         public var list: Data?
         public var checkpoint: UInt64
+        public var dropped: Data?
 
-        public init(list: Data?, checkpoint: UInt64) {
+        public init(list: Data?, checkpoint: UInt64, dropped: Data? = nil) {
             self.list = list
             self.checkpoint = checkpoint
+            self.dropped = dropped
         }
     }
 
@@ -49,24 +53,30 @@ public final class VenueTokenList {
     @ObservationIgnored private let service: VenueTokensService
     @ObservationIgnored private let logos: @Sendable () async -> [Address: URL]
     @ObservationIgnored private let read: @Sendable () -> Stored
-    @ObservationIgnored private let write: @MainActor (Data, UInt64) -> Bool
+    @ObservationIgnored private let write: @MainActor (Data, UInt64, Data) -> Bool
     @ObservationIgnored private let now: @Sendable () -> Date
     /// When `resume` may run again after a run that ended short.
     @ObservationIgnored private var retryAfter = Date.distantPast
     /// The checkpoint the store holds: moved only by a save the store took.
     @ObservationIgnored private var saved: UInt64 = 0
-    /// Addresses a run read with no readable symbol (`VenueTokensService.Progress.dropped`), kept for the runs after it in
-    /// this process: a segment a run left short is read again, and what it dropped isn't read again with it.
+    /// Addresses a run read with no readable symbol (`VenueTokensService.Progress.dropped`), kept for the runs after it: a
+    /// segment a run left short is read again, and what it dropped isn't read again with it. Saved with the checkpoint, so
+    /// a segment that needs more reads again than one run allows (`VenueTokensService.metadataRereads`) is read in full
+    /// over a few launches, not read from nothing again at each.
     @ObservationIgnored private var dropped: Set<Address> = []
+    /// What the store holds of `dropped`, the newest first (`storedDropped(_:after:)`), and what `dropped` held then.
+    @ObservationIgnored private var droppedStored: [Address] = []
+    @ObservationIgnored private var droppedSaved: Set<Address> = []
     @ObservationIgnored private var run: Task<Void, Never>?
     /// Which run may change the list and the store: `stop` moves it on, so a run it cancelled, and a save of that run
     /// already on its way, change nothing.
     @ObservationIgnored private var generation = 0
 
-    /// `read` and `write` are the store: `read` runs off the main actor, once; `write` on it, with the list encoded, and
-    /// says whether the store took it (UserDefaults refuses a value past its ceiling, and the checkpoint isn't saved then).
+    /// `read` and `write` are the store: `read` runs off the main actor, once; `write` on it, with the list, the checkpoint
+    /// and what runs dropped encoded, and says whether the store took them (UserDefaults refuses a value past its ceiling,
+    /// and the checkpoint isn't saved then).
     public init(service: VenueTokensService, logos: @escaping @Sendable () async -> [Address: URL], read: @escaping @Sendable () -> Stored,
-                write: @escaping @MainActor (Data, UInt64) -> Bool, now: @escaping @Sendable () -> Date = { Date() }) {
+                write: @escaping @MainActor (Data, UInt64, Data) -> Bool, now: @escaping @Sendable () -> Date = { Date() }) {
         self.service = service
         self.logos = logos
         self.read = read
@@ -122,12 +132,15 @@ public final class VenueTokenList {
             tokens = stored.tokens
             checkpoint = stored.checkpoint
             saved = stored.checkpoint
+            dropped.formUnion(stored.dropped)
+            droppedStored = stored.dropped
+            droppedSaved = dropped
             isLoaded = true
         }
         let result = await service.refresh(tokens: tokens, checkpoint: checkpoint, dropped: dropped, logos: logos) { [weak self] progress in
             guard let self, await self.show(progress, generation) else { return }
             let data = await Task.detached(priority: .utility) { Self.encode(progress.tokens) }.value
-            if let data { await self.store(data, checkpoint: progress.checkpoint, generation) }
+            if let data { await self.store(data, checkpoint: progress.checkpoint, dropped: progress.dropped, generation) }
         }
         guard generation == self.generation else { return }
         // Nothing read (the head couldn't be read): the list is as it was, and so is what the picker says.
@@ -142,29 +155,58 @@ public final class VenueTokenList {
         isRefreshing = false
     }
 
-    /// A run's progress, in memory at once; whether the store should follow: only once the checkpoint moved, so a segment
-    /// read in part, or one to be read again for more tokens than a read keeps, costs no save.
+    /// A run's progress, in memory at once; whether the store should follow: only once the checkpoint moved or the run
+    /// dropped more, so a segment read in part, or one to be read again for more tokens than a read keeps, costs no save
+    /// unless it dropped addresses.
     private func show(_ progress: VenueTokensService.Progress, _ generation: Int) -> Bool {
         guard generation == self.generation else { return false }
         tokens = progress.tokens
         checkpoint = progress.checkpoint
         head = progress.head
         dropped = progress.dropped
-        return progress.checkpoint != saved
+        return progress.checkpoint != saved || progress.dropped.count != droppedSaved.count
     }
 
     /// Checked here, on the main actor with the write: an erase runs there too, so it comes before this save (which then
     /// writes nothing) or after it (and erases it). A save the store declined is tried again with the next progress.
-    private func store(_ list: Data, checkpoint: UInt64, _ generation: Int) {
-        guard generation == self.generation, write(list, checkpoint) else { return }
+    private func store(_ list: Data, checkpoint: UInt64, dropped: Set<Address>, _ generation: Int) {
+        guard generation == self.generation else { return }
+        let kept = Self.storedDropped(dropped.subtracting(droppedSaved), after: droppedStored)
+        guard write(list, checkpoint, Self.encode(dropped: kept)) else { return }
         saved = checkpoint
+        droppedStored = kept
+        droppedSaved = dropped
     }
 
-    /// The stored list, its symbols and names capped (`VenueTokensService.capped`), and its checkpoint. A list that can't
-    /// be read back is read again from genesis: its checkpoint would skip every token it held.
-    nonisolated static func decode(_ stored: Stored) -> (tokens: [Token], checkpoint: UInt64) {
-        guard let data = stored.list, let list = try? JSONDecoder().decode([Token].self, from: data) else { return ([], 0) }
-        return (list.map(VenueTokensService.capped), stored.checkpoint)
+    /// The most addresses of what runs dropped the store keeps: 100 KB. A list read from genesis drops a handful (3 on
+    /// 2026-09-30); past this, only addresses put in pools in bulk.
+    nonisolated static let maxStoredDropped = 5_000
+
+    /// What the store keeps, the newest first: what was `dropped` since it last saved that `stored` (the store's, newest
+    /// first) lacks, then `stored`, at most `maxStoredDropped`, so a segment read again keeps what its own runs dropped.
+    nonisolated static func storedDropped(_ dropped: Set<Address>, after stored: [Address]) -> [Address] {
+        let known = Set(stored)
+        return Array((dropped.filter { !known.contains($0) } + stored).prefix(maxStoredDropped))
+    }
+
+    /// Addresses as the store keeps them: 20 bytes each, one after the other.
+    nonisolated static func encode(dropped: [Address]) -> Data {
+        dropped.reduce(into: Data()) { $0.append($1.data) }
+    }
+
+    /// The addresses `encode(dropped:)` stored, at most `maxStoredDropped`; none from what isn't such a list.
+    nonisolated static func decode(dropped data: Data?) -> [Address] {
+        guard let data, !data.isEmpty, data.count % 20 == 0 else { return [] }
+        let bytes = [UInt8](data)
+        return stride(from: 0, to: bytes.count, by: 20).prefix(maxStoredDropped).compactMap { Address(data: Data(bytes[$0 ..< $0 + 20])) }
+    }
+
+    /// The stored list, its symbols and names capped (`VenueTokensService.capped`), its checkpoint, and what runs dropped.
+    /// A list that can't be read back is read again from genesis: its checkpoint would skip every token it held.
+    nonisolated static func decode(_ stored: Stored) -> (tokens: [Token], checkpoint: UInt64, dropped: [Address]) {
+        let dropped = decode(dropped: stored.dropped)
+        guard let data = stored.list, let list = try? JSONDecoder().decode([Token].self, from: data) else { return ([], 0, dropped) }
+        return (list.map(VenueTokensService.capped), stored.checkpoint, dropped)
     }
 
     /// The list as build 16 stores it.

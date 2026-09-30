@@ -155,7 +155,7 @@ final class VenueTokenListTests: XCTestCase {
         let slow = VenueTokenList(service: service, logos: { [:] }, read: {
             Thread.sleep(forTimeInterval: 0.3)
             return VenueTokenList.Stored(list: nil, checkpoint: 0)
-        }, write: { _, _ in true })
+        }, write: { _, _, _ in true })
         XCTAssertFalse(slow.isCatchingUp, "nothing reads yet")
         slow.refresh()
         XCTAssertFalse(slow.isLoaded)
@@ -226,6 +226,69 @@ final class VenueTokenListTests: XCTestCase {
         XCTAssertTrue(MomentsChainStub.calls().filter { $0.to == bad }.isEmpty, "not read again")
     }
 
+    /// The V1 final check's finding (P3): what a run dropped lived only in memory, so a segment that needs more reads again
+    /// than one run allows (over about 196 addresses whose `symbol()` reverts: `VenueTokensService.metadataRereads`) was
+    /// read from nothing again at every launch, never completed, and held every segment after it. It is saved with the
+    /// checkpoint, and the next launch reads on from it.
+    func testWhatARunDroppedIsKeptAcrossLaunches() async throws {
+        let bad = (1...250).map(VenueFixture.spam)
+        let badSet = Set(bad)
+        let answer: MomentsChainStub.Answer = { to, data in
+            guard !badSet.contains(to) else { return nil }
+            let selector = data.prefix(4)
+            if selector == ABI.selector("symbol()") || selector == ABI.selector("name()") { return try! ABI.encode([.string("T\(to.data.last ?? 0)")], "string") }
+            return selector == ABI.selector("decimals()") ? try! ABI.encode([.uint(18)], "uint8") : nil
+        }
+        LogsStub.install(head: 1_000, logs: [VenueFixture.pool(1, at: 5)] + bad.enumerated().map { VenueFixture.spamPool($1, at: UInt64($0) + 10) }) { _ in nil }
+        let store = MemoryStore(list: [], checkpoint: 0)
+
+        // The first launch drops what its budget lets it read again, leaves the rest unread, and saves what it dropped with
+        // the checkpoint, which stays.
+        MomentsChainStub.install(answer)
+        let first = store.list()
+        first.refresh()
+        await first.finished()
+        XCTAssertEqual(first.checkpoint, 0)
+        XCTAssertEqual(first.shortRuns, 1)
+        let dropped = Set(store.dropped)
+        XCTAssertEqual(dropped.count, 197, "three reads in full, 46 of the fourth, and the last address, read on its own")
+        XCTAssertTrue(dropped.isSubset(of: badSet))
+        XCTAssertEqual(store.writes.map(\.checkpoint), [0], "saved for what it dropped, the checkpoint where it was")
+
+        // A relaunch: a new list on the same store reads on from what the first launch dropped, and reads the segment in full.
+        MomentsChainStub.install(answer)
+        let second = store.list()
+        second.refresh()
+        await second.finished()
+        XCTAssertTrue(MomentsChainStub.calls().allSatisfy { !dropped.contains($0.to) }, "what the first launch dropped isn't read again")
+        XCTAssertEqual(second.checkpoint, 900)
+        XCTAssertEqual(second.tokens.map(\.symbol), ["T1"])
+        XCTAssertEqual(store.writes.map(\.checkpoint), [0, 900])
+        XCTAssertEqual(Set(store.dropped), badSet)
+    }
+
+    /// What runs dropped is stored as 20 bytes an address, at most `maxStoredDropped` (100 KB), the newest first: past it,
+    /// the oldest go. It is kept when the list starts over from genesis.
+    func testWhatRunsDroppedIsStoredBoundedNewestFirst() {
+        let old = (1...4_990).map(VenueFixture.spam)
+        let new = (5_001...5_020).map(VenueFixture.spam)
+        let stored = VenueTokenList.storedDropped(Set(old), after: [])
+        XCTAssertEqual(Set(stored), Set(old))
+        let next = VenueTokenList.storedDropped(Set(new), after: stored)
+        let again = VenueTokenList.storedDropped(Set(old + new), after: stored)
+        XCTAssertEqual(Set(again.prefix(20)), Set(new), "what the store holds isn't new")
+        XCTAssertEqual(Array(again.dropFirst(20)), Array(next.dropFirst(20)))
+        XCTAssertEqual(next.count, VenueTokenList.maxStoredDropped)
+        XCTAssertEqual(Set(next.prefix(20)), Set(new), "the newest first")
+        XCTAssertEqual(Array(next.dropFirst(20)), Array(stored.prefix(4_980)), "the oldest go")
+        let data = VenueTokenList.encode(dropped: next)
+        XCTAssertEqual(data.count, 100_000)
+        XCTAssertEqual(VenueTokenList.decode(dropped: data), next)
+        XCTAssertEqual(VenueTokenList.decode(dropped: Data([1, 2, 3])), [])
+        XCTAssertEqual(VenueTokenList.decode(dropped: nil), [])
+        XCTAssertEqual(VenueTokenList.decode(.init(list: nil, checkpoint: 7, dropped: data)).dropped, next, "kept when the list starts over")
+    }
+
     /// The V1 final check's finding: a save the store declined (UserDefaults refuses a value past its ceiling, and
     /// `VenueTokenStore.write` then saves no checkpoint) was taken as saved, so it wasn't tried again until the checkpoint
     /// moved on. Only a save the store took counts.
@@ -292,6 +355,17 @@ enum VenueFixture {
         }
     }
 
+    /// Address `n` of many (up to 65,535) as anyone can put in Uniswap v4 pools (`initialize` takes any pair).
+    static func spam(_ n: Int) -> Address { Address(data: Data(repeating: 0, count: 16) + Data([0x5b, 0xad, UInt8((n >> 8) & 0xff), UInt8(n & 0xff)]))! }
+
+    /// A Uniswap v4 pool for `token` against MON at `block`.
+    static func spamPool(_ token: Address, at block: UInt64) -> Log {
+        let word = { (address: Address) in address.data.leftPadded(to: 32) }
+        let id = Data(repeating: 0, count: 24) + BigUInt(block).word.suffix(8)
+        return Log(address: Uniswap.poolManager, topics: [initialized, id, word(Monad.native), word(token)], data: Data(count: 160),
+                   blockNumber: block, transactionHash: id, logIndex: 0)
+    }
+
     /// Every token answers its symbol and name ("T" and its number) and 18 decimals.
     static func installMetadata() {
         MomentsChainStub.install { to, data in
@@ -323,6 +397,8 @@ final class MemoryStore: @unchecked Sendable {
     var reads: Int { lock.lock(); defer { lock.unlock() }; return readCount }
     var writes: [(symbols: [String], checkpoint: UInt64)] { lock.lock(); defer { lock.unlock() }; return written }
     var data: Data? { lock.lock(); defer { lock.unlock() }; return stored.list }
+    /// What runs dropped, as saved.
+    var dropped: [Address] { lock.lock(); defer { lock.unlock() }; return VenueTokenList.decode(dropped: stored.dropped) }
     /// The checkpoint of every write asked, taken or declined.
     var attempts: [UInt64] { lock.lock(); defer { lock.unlock() }; return attempted }
 
@@ -335,12 +411,12 @@ final class MemoryStore: @unchecked Sendable {
         return stored
     }
 
-    func write(_ list: Data, _ checkpoint: UInt64) -> Bool {
+    func write(_ list: Data, _ checkpoint: UInt64, _ dropped: Data) -> Bool {
         let symbols = ((try? JSONDecoder().decode([Token].self, from: list)) ?? []).map(\.symbol)
         lock.lock(); defer { lock.unlock() }
         attempted.append(checkpoint)
         guard !refusing else { return false }
-        stored = VenueTokenList.Stored(list: list, checkpoint: checkpoint)
+        stored = VenueTokenList.Stored(list: list, checkpoint: checkpoint, dropped: dropped)
         written.append((symbols, checkpoint))
         return true
     }
@@ -349,7 +425,7 @@ final class MemoryStore: @unchecked Sendable {
     @MainActor
     func list(now: @escaping @Sendable () -> Date = { Date() }) -> VenueTokenList {
         VenueTokenList(service: VenueTokensService(logsRPC: LogsStub.rpc(), multicall: Multicall(rpc: MomentsChainStub.rpc())), logos: { [:] },
-                       read: { self.read() }, write: { self.write($0, $1) }, now: now)
+                       read: { self.read() }, write: { self.write($0, $1, $2) }, now: now)
     }
 }
 

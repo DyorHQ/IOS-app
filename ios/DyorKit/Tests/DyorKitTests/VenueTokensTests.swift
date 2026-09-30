@@ -462,7 +462,7 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(environment.contains("venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)"))
         XCTAssertFalse(environment.contains("rpc3.monad.xyz"), "no scan on rpc3")
         XCTAssertTrue(environment.contains("venueList = VenueTokenList(service: venueTokens, logos: { [kuruTokens] in await kuruTokens.logos() },"))
-        XCTAssertTrue(environment.contains("read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1) })"))
+        XCTAssertTrue(environment.contains("read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1, dropped: $2) })"))
         XCTAssertEqual(environment.components(separatedBy: "VenueTokenStore.").count - 1, 2, "the list reads and writes the store; nothing else does")
         // A cold launch runs the list; every return to the app resets log scans' outage and resumes a run that ended short.
         let root = squeezed(try String(contentsOf: app.appendingPathComponent("App/RootView.swift"), encoding: .utf8))
@@ -482,14 +482,19 @@ final class VenueTokensTests: XCTestCase {
         let store = try String(contentsOf: app.appendingPathComponent("Wallet/VenueTokenStore.swift"), encoding: .utf8)
         XCTAssertTrue(store.contains("private static let key = \"venueTokens.v1\""), "the list is kept")
         XCTAssertTrue(store.contains("private static let blockKey = \"venueScan.v2.lastBlock\""), "a new checkpoint: the history read once more")
+        XCTAssertTrue(store.contains("private static let droppedKey = \"venueScan.v2.dropped\""), "what runs dropped, kept across launches")
         XCTAssertFalse(store.contains("\"venueTokens.v1.lastBlock\""), "build 16's checkpoint is never read, nor written")
         // The checkpoint is saved only once the list reads back as written (UserDefaults refuses a value past its ceiling).
         let write = squeezed(store)
         // It says whether it saved them, and the list counts a save only then (`VenueTokenList.store`).
         let readBack = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(list, forKey: key) guard UserDefaults.standard.data(forKey: key) == list else { return false }"))
-        let checkpoint = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(String(lastBlock), forKey: blockKey) return true }"))
+        let checkpoint = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(String(lastBlock), forKey: blockKey)"))
         XCTAssertLessThan(readBack.upperBound, checkpoint.lowerBound)
-        XCTAssertTrue(write.contains("static func write(_ list: Data, lastBlock: UInt64) -> Bool {"))
+        XCTAssertTrue(write.contains("static func write(_ list: Data, lastBlock: UInt64, dropped: Data) -> Bool {"))
+        // What runs dropped is saved with the checkpoint, after the read-back, and read with it.
+        let droppedSave = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(dropped, forKey: droppedKey) return true }"))
+        XCTAssertLessThan(checkpoint.upperBound, droppedSave.lowerBound)
+        XCTAssertTrue(write.contains("dropped: UserDefaults.standard.data(forKey: droppedKey))"))
         // R4: every key the store names, beyond build 16's list and stamp, is outside the prefixes that mark an earlier
         // install.
         let theme = try String(contentsOf: app.appendingPathComponent("Design/Theme.swift"), encoding: .utf8)
@@ -499,7 +504,7 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(prefixes.contains("venueTokens."), "\(prefixes)")
         let keys = store.components(separatedBy: "\n").filter { $0.contains("Key = \"") || $0.contains("key = \"") }
             .compactMap { line in line.split(separator: "\"").dropFirst().first.map(String.init) }
-        XCTAssertEqual(keys, ["venueTokens.v1", "venueTokens.v1.updatedAt", "venueScan.v2.lastBlock"])
+        XCTAssertEqual(keys, ["venueTokens.v1", "venueTokens.v1.updatedAt", "venueScan.v2.lastBlock", "venueScan.v2.dropped"])
         for key in keys.dropFirst(2) { XCTAssertFalse(prefixes.contains { key.hasPrefix($0) }, "\(key) would mark a fresh install as earlier (R4)") }
 
         // R4: every erase of this device's data stops the list's reading first, so no save of it follows the erase.
@@ -551,7 +556,7 @@ final class VenueTokensTests: XCTestCase {
         let result = try XCTUnwrap(live)
         let seconds = Int(Date().timeIntervalSince(started))
         let saved = await saves.all
-        print("VENUES \(result.tokens.count) tokens, checkpoint \(result.checkpoint) of head \(result.head), \(saved.count) saves, \(seconds) s")
+        print("VENUES \(result.tokens.count) tokens, checkpoint \(result.checkpoint) of head \(result.head), \(result.dropped.count) dropped, \(saved.count) saves, \(seconds) s")
         let counts = CountingForwarder.counts()
         for name in counts.keys.sorted() { print("VENUES \(name): \(counts[name] ?? 0)") }
         XCTAssertTrue(result.complete, "read to the head in full")
