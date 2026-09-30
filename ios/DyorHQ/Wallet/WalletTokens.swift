@@ -201,7 +201,7 @@ enum WalletTokens {
         if !liveInfos.isEmpty, let portfolio = try? await live.portfolio(account: owner, moments: liveInfos) { rows += portfolio.rows }
         for cohort in env.retiredMoments {
             let own = found.filter { $0.moment.factory == cohort.factory }
-            if !own.isEmpty, let positions = try? await cohort.positions(account: owner, moments: own) { rows += positions.map(\.row) }
+            if !own.isEmpty, let read = try? await cohort.positions(account: owner, moments: own) { rows += read.positions.map(\.row) }
         }
         let staked = Set(rows.filter { $0.isCreator || $0.entitlement > 0 }.map(\.moment.moment.coin)).intersection(moments.keys)
         return (prices, staked, complete)

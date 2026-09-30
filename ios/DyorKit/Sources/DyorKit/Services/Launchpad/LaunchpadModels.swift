@@ -191,30 +191,14 @@ public enum LaunchBoardSection: Sendable, Hashable, CaseIterable {
     case refundAndMigrating
 }
 
-/// One read of every launchpad's launches (`LaunchpadService.allLaunchesRead`): what the factories that answered
-/// recorded, and the factories that didn't, whose launches are missing.
-public struct LaunchesRead: Sendable, Hashable {
-    public let launches: [Launch]
-    /// The factories, live or retired, whose read failed: none of their launches is in `launches`.
-    public let unread: [Address]
-
-    public init(launches: [Launch], unread: [Address]) {
-        self.launches = launches
-        self.unread = unread
-    }
-
-    /// Every factory answered: `launches` holds every launchpad's launches (the newest of each).
-    public var complete: Bool { unread.isEmpty }
-}
-
 /// What the Launch tab's board shows beyond its public sections.
 public enum LaunchBoard {
     /// The coins among `launches` that the public board leaves out (`Launch.listsOnBoard`: sell-only) and the wallet
     /// holds, per `balances`, newest first: the board's holder-only "Your Sell-Only Coins", so a holder can always reach
     /// their page from the Launch tab. Nil when a balance of one of them is missing (its read failed): the section then
     /// keeps what it last showed, never a coin dropped or added on a failed read. For the same reason `launches` must
-    /// come from a complete read (`LaunchesRead.complete`): a retired factory that didn't answer leaves its coins out,
-    /// and a held one would drop from the section.
+    /// come from a complete listing (`LaunchListing.complete`): a retired factory that couldn't be read leaves its coins
+    /// out, and a held one would drop from the section.
     public static func heldSellOnly(_ launches: [Launch], balances: [Address: BigUInt]) -> [Launch]? {
         var held: [Launch] = []
         for launch in launches where !launch.listsOnBoard {
@@ -417,6 +401,36 @@ public struct LaunchpadModules: Hashable, Sendable {
         let compared = [("hook", hook, baked.hook), ("router", router, baked.router), ("escrow", escrow, baked.escrow), ("holderFeeSharing", holderFeeSharing, baked.holderFeeSharing)]
         let set = [("locker", locker), ("graduationExecutor", graduationExecutor), ("mondayExecutor", mondayExecutor), ("launchDeployer", launchDeployer)]
         return compared.filter { $0.1 != $0.2 || $0.1.isZero }.map(\.0) + set.filter { $0.1.isZero }.map(\.0)
+    }
+}
+
+/// The launches of every launchpad the app reads (`LaunchpadService.launchListing`), newest first: the live factory's,
+/// then each retired factory's, newest stack first. A factory whose launches couldn't be read is in `unread`, with why,
+/// and has none here: never taken for a factory with none.
+public struct LaunchListing: Sendable {
+    /// Every factory asked, in list order.
+    public let factories: [Address]
+    public let launches: [Launch]
+    /// The factories whose launches couldn't be read, with the error.
+    public let unread: [Address: any Error]
+
+    public init(factories: [Address], launches: [Launch], unread: [Address: any Error] = [:]) {
+        self.factories = factories
+        self.launches = launches
+        self.unread = unread
+    }
+
+    /// Every factory's launches were read.
+    public var complete: Bool { unread.isEmpty }
+
+    /// The error of the first factory, in list order, whose launches couldn't be read.
+    public var firstError: (any Error)? { factories.lazy.compactMap { self.unread[$0] }.first }
+
+    /// `launches`, with each factory that couldn't be read now keeping its launches from `previous` (an earlier read's),
+    /// in its place in the list: what a screen shows beside its error, so a failed read never empties a list it had.
+    public func keeping(_ previous: [Launch]) -> [Launch] {
+        guard !unread.isEmpty else { return launches }
+        return factories.flatMap { factory in (unread[factory] == nil ? launches : previous).filter { $0.factory == factory } }
     }
 }
 
@@ -659,6 +673,47 @@ public struct EscrowBalances: Hashable, Sendable {
     public var claimableTokens: [Address] { tokens.filter { $0.value > 0 }.map(\.key) }
     public var hasNative: Bool { native > 0 }
     public var isEmpty: Bool { native == 0 && tokens.values.allSatisfy { $0 == 0 } }
+}
+
+/// One launchpad's fee escrow and what an account can claim from it (`LaunchpadService.escrowReads`): nil balances when
+/// the read failed.
+public struct LaunchpadEscrowRead: Hashable, Sendable {
+    public let escrow: Address
+    public let factory: Address
+    public let retired: Bool
+    public let balances: EscrowBalances?
+    /// The balances are an earlier read's, kept because this one failed (`keeping`).
+    public let kept: Bool
+
+    public init(escrow: Address, factory: Address, retired: Bool, balances: EscrowBalances?, kept: Bool = false) {
+        self.escrow = escrow
+        self.factory = factory
+        self.retired = retired
+        self.balances = balances
+        self.kept = kept
+    }
+
+    /// `reads` as a screen shows them: an escrow read now as read, and one whose read failed with the balances `previous`
+    /// had for it, marked `kept` (still unread, never zero, when it had none). `previous` is the screen's last `keeping`
+    /// for the SAME account: a caller passes none once the wallet changed, so no wallet ever sees another's fees.
+    public static func keeping(_ reads: [LaunchpadEscrowRead], previous: [LaunchpadEscrowRead]) -> [LaunchpadEscrowRead] {
+        reads.map { read in
+            guard read.balances == nil, let last = previous.first(where: { $0.escrow == read.escrow && $0.balances != nil }) else { return read }
+            return LaunchpadEscrowRead(escrow: read.escrow, factory: read.factory, retired: read.retired, balances: last.balances, kept: true)
+        }
+    }
+
+    /// `reads` once `token` (native MON when zero) was claimed from `escrow`: its balance there is zero, so a later read
+    /// that fails can't bring the claimed amount back as kept (`keeping`). Every other balance is as it was.
+    public static func claimed(_ token: Address, escrow: Address, in reads: [LaunchpadEscrowRead]) -> [LaunchpadEscrowRead] {
+        reads.map { read in
+            guard read.escrow == escrow, let balances = read.balances else { return read }
+            var tokens = balances.tokens
+            if !token.isZero, tokens[token] != nil { tokens[token] = 0 }
+            let after = EscrowBalances(native: token.isZero ? 0 : balances.native, tokens: tokens)
+            return LaunchpadEscrowRead(escrow: read.escrow, factory: read.factory, retired: read.retired, balances: after, kept: read.kept)
+        }
+    }
 }
 
 /// What one wallet holds and can claim for a launch.

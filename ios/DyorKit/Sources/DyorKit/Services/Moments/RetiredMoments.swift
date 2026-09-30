@@ -75,10 +75,40 @@ public struct RetiredMoments: Sendable {
 
     // MARK: Reads
 
-    /// Every Moment of the cohort, newest first, read from the chain: on cohort 3, whose publishing is not paused (owner
-    /// decision 2026-09-28), that includes any Moment published after its pin.
+    /// The cohort's Moments, newest first (`list`), for a reader that doesn't ask whether any were left out.
     public func moments() async throws -> [MomentInfo] {
-        try await service.moments(limit: 200)
+        try await list().moments
+    }
+
+    /// The cohort's Moments, newest first, read from the chain: every pinned one (`MomentLink.Cohort.finalMomentCount`,
+    /// whose coins are `MomentsAddresses.retiredMainnetCoins`), always, by id, then up to `laterLimit` of the newest
+    /// published after the pin — cohort 3's publishing is not paused (owner decision 2026-09-28). However many Moments
+    /// are published after the pin, none can push a pinned one off the list and hide what its holders are owed. `cut` is
+    /// true when more than `laterLimit` were published after the pin: the oldest of those are not in `moments`
+    /// (`positions` then also reads the account's own among them).
+    public func list() async throws -> (moments: [MomentInfo], cut: Bool) {
+        try await service.moments(pinned: MomentLink.Cohort(factory: factory)?.finalMomentCount ?? 0, later: Self.laterLimit)
+    }
+
+    /// How many of the Moments published after a cohort's pin are read (`list`): as many as build 16 read of a retired
+    /// cohort in all (its newest 200), so whatever the counts, every id build 16 read is read here too.
+    static let laterLimit = 200
+
+    /// Every Moment of `cohorts`, cohort by cohort (`moments`), and whether every cohort was read. A cohort whose read
+    /// fails keeps its Moments from `previous` (an earlier read's, of any cohorts; none when there was none) and makes
+    /// `complete` false: a cohort is never left out unsaid.
+    public static func moments(of cohorts: [RetiredMoments], keeping previous: [MomentInfo] = []) async -> (moments: [MomentInfo], complete: Bool) {
+        var out: [MomentInfo] = []
+        var complete = true
+        for cohort in cohorts {
+            do {
+                out += try await cohort.moments()
+            } catch {
+                complete = false
+                out += previous.filter { $0.moment.factory == cohort.factory }
+            }
+        }
+        return (out, complete)
     }
 
     /// A refreshed `MomentInfo` for an id of THIS cohort.
@@ -98,13 +128,34 @@ public struct RetiredMoments: Sendable {
         return try await service.accountView(info, account: account)
     }
 
-    /// The Moments of this cohort the account still has something in (see `RetiredMomentPosition.isOpen`).
-    public func positions(account: Address, moments: [MomentInfo]? = nil) async throws -> [RetiredMomentPosition] {
-        let list: [MomentInfo]
-        if let moments { list = moments.filter { $0.moment.factory == factory } } else { list = try await self.moments() }
-        guard !list.isEmpty else { return [] }
+    /// The Moments of this cohort the account still has something in (see `RetiredMomentPosition.isOpen`), newest first,
+    /// among `moments` (Moments a caller already read; this cohort's are kept, and `cut` says whether that read left
+    /// Moments out) or, when nil, the cohort's own `list`. When the list was cut, the Moments of this cohort the account
+    /// collected, claimed, withdrew from or published (`history`) that aren't in it are read by id and counted too. That
+    /// history is a log scan, and a Moment the account only received by transfer is in none of it, so the positions of a
+    /// cut list may still miss one: `complete` is then false. A scan or a read of those Moments that fails leaves them out
+    /// (the list's positions stay; `complete` is false already). A list that wasn't cut scans nothing.
+    public func positions(account: Address, moments: [MomentInfo]? = nil, cut: Bool = false) async throws -> (positions: [RetiredMomentPosition], complete: Bool) {
+        let read: (moments: [MomentInfo], cut: Bool)
+        if let moments { read = (moments.filter { $0.moment.factory == factory }, cut) } else { read = try await list() }
+        var list = read.moments
+        if read.cut {
+            let missing = Self.ownIds(await history(account: account), factory: factory).subtracting(list.map(\.id))
+            if !missing.isEmpty {
+                list += (try? await service.infos(ids: missing.sorted(by: >))) ?? []
+                list.sort { $0.id > $1.id }
+            }
+        }
+        guard !list.isEmpty else { return ([], !read.cut) }
         let portfolio = try await service.portfolio(account: account, moments: list)
-        return Self.positions(rows: portfolio.rows, moments: list, account: account)
+        return (Self.positions(rows: portfolio.rows, moments: list, account: account), !read.cut)
+    }
+
+    /// The ids of this cohort's Moments that `history` shows the account in: its collects, claims, withdrawals and
+    /// publishes.
+    static func ownIds(_ history: MomentsAccountHistory, factory: Address) -> Set<BigUInt> {
+        let keys = history.collects.map(\.key) + history.claims.map(\.key) + history.withdrawals.map(\.key) + history.publishes.map(\.key)
+        return Set(keys.filter { $0.factory == factory }.map(\.id))
     }
 
     /// Everything the account did on this cohort since its deployment block; every record carries this factory.

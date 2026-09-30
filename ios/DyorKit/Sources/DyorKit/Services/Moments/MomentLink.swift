@@ -339,6 +339,9 @@ public enum MomentLinkGate {
 /// published there later gets no name; the live cohort is re-counted when a lookup needs newer Moments. A cohort with no factory (c4 while v2 is pending) is left out: a
 /// Multicall3 call to address 0 returns no data, and that one failed decode would fail every lookup. Nothing is kept
 /// across launches, and a read that fails anywhere fails the whole lookup: a missing name would shift the slugs after it.
+/// Names are read in chunks (`Multicall.nameChunk`, a chunk the node refuses again one name at a time), so no name,
+/// however long, can make a read too large to answer; a name that can't be read even on its own fails the lookup too,
+/// never gets a stand-in, since that would give its Moment, and later ones of the same name, other slugs.
 public actor MomentDirectory {
     private let multicall: Multicall
     private let cohorts: [MomentLink.Cohort]
@@ -410,11 +413,14 @@ public actor MomentDirectory {
             if count > have { for id in (have + 1)...count { wanted.append((cohort, id)) } }
         }
         if !wanted.isEmpty {
-            let moments = try await multicall.readAll(wanted.map { MomentsABI.call($0.cohort.factory, MomentsABI.Factory.getMoment, [.uint($0.id)], returns: MomentsABI.momentTuple) })
-            let coins = zip(wanted, moments).map { MomentsABI.moment(id: $0.id, $1[0], factory: $0.cohort.factory).coin }
-            let read = try await multicall.readAll(coins.map { MomentsABI.call($0, MomentsABI.Coin.name, returns: "string") })
-            // Appended in id order per cohort: `wanted` is ascending within each cohort.
-            for (entry, value) in zip(wanted, read) { names[entry.cohort, default: []].append(value[0].string) }
+            let moments = try await multicall.readItems(wanted.map { [MomentsABI.call($0.cohort.factory, MomentsABI.Factory.getMoment, [.uint($0.id)], returns: MomentsABI.momentTuple)] },
+                                                        text: [], what: "A Moment", chunk: Multicall.recordChunk)
+            let coins = try zip(wanted, moments).map { MomentsABI.moment(id: $0.id, try $1[0].get()[0], factory: $0.cohort.factory).coin }
+            let read = try await multicall.readItems(coins.map { [MomentsABI.call($0, MomentsABI.Coin.name, returns: "string")] }, text: [], what: "A Moment's name",
+                                                     chunk: Multicall.nameChunk)
+            // Appended in id order per cohort, once every name is read: `wanted` is ascending within each cohort.
+            let values = try read.map { try $0[0].get()[0].string }
+            for (entry, value) in zip(wanted, values) { names[entry.cohort, default: []].append(value) }
         }
         for cohort in stale { counted[cohort] = now }
     }

@@ -218,9 +218,11 @@ public extension LaunchpadService {
     /// The coins among a wallet's `holdings` still on a launchpad's bonding curve, the live launchpad's (once deployed) or
     /// a retired one's, each with its launch, so a list of holdings (the Portfolio) opens a coin's Launch page, where its
     /// curve trades, instead of Swap, which routes no curve. One aggregate asks every known factory (`stacks`) for each
-    /// coin's record (MON and the app's own tokens are never asked); then each stack's coins are read as launches in one
-    /// read per stack, from those records. A stack whose launch read fails leaves its coins without a launch (their page
-    /// opens by reference). Throws when the aggregate fails: then no coin could be ruled in or out.
+    /// coin's record (MON and the app's own tokens are never asked); then each stack's coins are read as launches
+    /// (`hydrate`, in chunks), from those records. A stack whose launch read fails leaves every one of its coins without a
+    /// launch (their page opens by reference): that includes a stack one of whose coins has a protocol value that can't be
+    /// read, since `hydrate` then throws for the whole read. Throws when the aggregate fails: then no coin could be ruled
+    /// in or out.
     func curveHoldings(_ holdings: [Token]) async throws -> CurveHoldings {
         var seen = Set<Address>()
         let candidates = holdings.filter { SwapEngine.mayBeLaunchCoin($0) && seen.insert($0.address).inserted }.map(\.address)

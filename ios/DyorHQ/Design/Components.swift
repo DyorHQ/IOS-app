@@ -44,12 +44,14 @@ struct TokenLogo: View {
         let seed = symbol.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
         let hue = Double(seed % 360) / 360
         let tint = Color(hue: hue, saturation: 0.5, brightness: 0.62)
+        let letters = ChainText.leading(symbol, 2)
         return ZStack {
             LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
             // One line, shrunk rather than wrapped: two emoji at 0.4 of the disc would otherwise break onto two lines.
-            // Inset from the sides so wide letters (two emoji, a ZWJ family, ﷽) fit the circle, not the square. "?"
-            // for a token with no symbol, as the launch views show.
-            Text(symbol.isEmpty ? "?" : symbol.prefix(2).uppercased())
+            // Inset from the sides so wide letters (two emoji, a ZWJ family, ﷽) fit the circle, not the square. The
+            // letters skip the isolate around right-to-left text (`ChainText.leading`); "?" for a token with no symbol
+            // that draws, as the launch views show.
+            Text(letters.isEmpty ? "?" : letters.uppercased())
                 .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)

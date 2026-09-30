@@ -49,9 +49,10 @@ struct MomentArtwork: View {
     private var placeholder: some View {
         ZStack {
             LinearGradient(colors: [Color.allocationMoments.opacity(0.35), Color.brand.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            // Sized to the frame: a fixed 36 pt shows only "…" in the 34–44 pt rows. Cards and headers keep 36.
+            // Sized to the frame: a fixed 36 pt shows only "…" in the 34–44 pt rows. Cards and headers keep 36. The letters
+            // skip the isolate around right-to-left text (`ChainText.leading`).
             GeometryReader { frame in
-                Text(symbol.prefix(2).uppercased())
+                Text(ChainText.leading(symbol, 2).uppercased())
                     .font(.system(size: min(36, frame.size.width * 0.4), weight: .bold, design: .rounded))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)

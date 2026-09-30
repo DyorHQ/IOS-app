@@ -5,11 +5,63 @@
 //   record: the v2 Moments deployment record (default contracts/deployments/pending-moments-143.json)
 //   port:   the fork's local port (default 8545)
 // v2 `publish(params, expectedTermsHash)` carries the factory's current `termsHash()`, read right before each publish.
-import { createPublicClient, createWalletClient, encodeAbiParameters, http, keccak256, parseEventLogs, toHex } from "viem";
+//
+//        node scripts/dev/seed-moments-fork.mjs --text [port]
+//   publishes on the SHIPPED cohort 4 (MomentsAddresses.monadMainnet, forked, nothing deployed) the Moments DyorKit's
+//   ChainTextForkTests reads: one whose name, symbol and provenance text aren't UTF-8, and one whose name is as long as a
+//   30M-gas transaction stores. The creator's key is derived at run time from a public label: fork only.
+import { concat, createPublicClient, createWalletClient, encodeAbiParameters, http, keccak256, parseAbi, parseAbiParameters, parseEventLogs, toFunctionSelector, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+if (process.argv[2] === "--text") {
+  await seedText(process.argv[3] ?? "8545");
+  process.exit(0);
+}
+
+/** The --text fixture (see the usage above). `bytes` has `string`'s ABI layout, so text that isn't UTF-8 is sent as bytes
+ *  under the real `publish` signature. */
+async function seedText(port) {
+  if (!/^[0-9]{2,5}$/.test(port)) throw new Error("the port must be a number");
+  const RPC = `http://127.0.0.1:${port}`; // the local fork only, never a public RPC
+  const chain = { id: 143, name: "Monad fork", nativeCurrency: { name: "Monad", symbol: "MON", decimals: 18 }, rpcUrls: { default: { http: [RPC] } } };
+  const pub = createPublicClient({ chain, transport: http(RPC) });
+  if (await pub.getChainId() !== 143) throw new Error("not a Monad (143) fork");
+  const FACTORY = "0x95eb7F5A88B10D9dF32aC54F48C767927fa80840"; // MomentsAddresses.monadMainnet.factory (cohort 4)
+  const factoryAbi = parseAbi(["function termsHash() view returns (bytes32)", "function momentCount() view returns (uint256)"]);
+  const account = privateKeyToAccount(keccak256(toHex("dyorhq-chain-text-fork-creator")));
+  const wallet = createWalletClient({ account, chain, transport: http(RPC) });
+  await pub.request({ method: "anvil_setBalance", params: [account.address, toHex(10n ** 22n)] });
+  const selector = toFunctionSelector("publish((string,string,(string,bytes32,string,uint64,string),uint256,uint16,uint32,bytes32),bytes32)");
+  const layout = parseAbiParameters("(bytes,bytes,(bytes,bytes32,bytes,uint64,bytes),uint256,uint16,uint32,bytes32),bytes32");
+  const MAX_GAS = 29_900_000n; // Monad's per-transaction limit is 30M
+  async function publish(label, t) {
+    const terms = await pub.readContract({ address: FACTORY, abi: factoryAbi, functionName: "termsHash" });
+    const data = concat([selector, encodeAbiParameters(layout, [[t.name, t.symbol, [t.media, keccak256(t.media), t.place, 1_790_000_000n, t.animation], 100_000n, 0, 86_400,
+      toHex(crypto.getRandomValues(new Uint8Array(32)))], terms])]);
+    const call = { account, to: FACTORY, data };
+    const gas = await pub.estimateGas(call);
+    if (gas > MAX_GAS) throw new Error(`${label}: ${gas} gas is over the limit`);
+    const receipt = await pub.waitForTransactionReceipt({ hash: await wallet.sendTransaction({ ...call, gas: MAX_GAS }) });
+    if (receipt.status !== "success") throw new Error(`${label} reverted ${receipt.transactionHash}`);
+    console.log(`published ${label} (${receipt.gasUsed} gas)`);
+  }
+  // 1. The coin's name and symbol and every provenance text ill-formed UTF-8, each a different way.
+  await publish("text that isn't UTF-8", { name: "0x41fffefdfc5a", symbol: "0x41805a", media: "0x697066733a2f2f41c0af5a", place: "0x41e2825a", animation: "0x41eda0805a" });
+  // 2. The longest name a transaction under the limit stores (about 20 KB).
+  for (let length = 24_000; ; length -= 1_000) {
+    if (length < 8_000) throw new Error("no name of 8 KB or more fits under the gas limit");
+    try {
+      await publish(`a ${length}-byte name`, { name: toHex("Long " + "n".repeat(length - 5)), symbol: toHex("LONG"), media: toHex("ipfs://" + "m".repeat(1_000)), place: toHex("Accra"), animation: toHex("") });
+      break;
+    } catch (error) {
+      if (!/over the limit|gas|exceeds/i.test(String(error?.message ?? error))) throw error;
+    }
+  }
+  console.log(`momentCount ${await pub.readContract({ address: FACTORY, abi: factoryAbi, functionName: "momentCount" })}`);
+}
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const port = process.argv[3] ?? "8545";

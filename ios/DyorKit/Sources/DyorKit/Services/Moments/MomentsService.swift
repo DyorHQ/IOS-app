@@ -63,7 +63,8 @@ public actor MomentsService {
             MomentsABI.call(f, MomentsABI.Factory.policy, returns: MomentsABI.policyFlat),
             MomentsABI.call(f, MomentsABI.Factory.momentCount, returns: "uint256"),
             MomentsABI.call(f, MomentsABI.Factory.publishingPaused, returns: "bool"),
-            MomentsABI.call(f, MomentsABI.Factory.externalBaseURI, returns: "string"),
+            // Strict: the base is compared with DyorHQ's and hashed into `termsHash()` (`MomentPolicy.publishBlock`).
+            MomentsABI.call(f, MomentsABI.Factory.externalBaseURI, returns: "string", strings: .strict),
             MomentsABI.call(f, MomentsABI.Factory.pendingPolicy, returns: MomentsABI.policyFlat),
             MomentsABI.call(f, MomentsABI.Factory.pendingPolicyAt, returns: "uint64"),
         ]
@@ -98,19 +99,50 @@ public actor MomentsService {
 
     // MARK: - Moments
 
-    /// The newest Moments first.
+    /// The Moments tab's read: the newest Moments and, beside them, the policy (`policy()`). The list never waits on the
+    /// policy: a policy that can't be read — a link base that isn't text is refused (`ABI.StringDecoding.strict`), since
+    /// it is compared with DyorHQ's and hashed into `termsHash()` — is returned as its failure, and Publish is then
+    /// unavailable while the Moments still show. Throws only when the Moments can't be read.
+    public func board(limit: Int = 48) async throws -> MomentsBoard {
+        async let policyRead = ERC20.captured { try await self.policy() }
+        let list = try await moments(limit: limit)
+        return MomentsBoard(moments: list, policy: await policyRead)
+    }
+
+    /// The newest Moments first: every Moment the cohort counts in that range. One whose text can't be read shows
+    /// stand-ins (`hydrate`); a read that doesn't answer for every Moment throws (`ChainListUnread`), never a shorter list.
     public func moments(limit: Int = 48) async throws -> [MomentInfo] {
         guard isDeployed, limit > 0 else { return [] }
         let total = MomentsABI.int(try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.momentCount, returns: "uint256")])[0][0])
         guard total > 0 else { return [] }
         let first = max(1, total - limit + 1)
         let ids = stride(from: total, through: first, by: -1).map { BigUInt($0) }
-        let raws = try await multicall.readAll(ids.map { MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint($0)], returns: MomentsABI.momentTuple) })
-        let moments = zip(ids, raws).map { MomentsABI.moment(id: $0, $1[0], factory: addresses.factory) }
-        return try await hydrate(moments)
+        return try await hydrate(try await records(ids))
     }
 
-    /// One Moment with the supply identity, or nil when the id is out of range. Its link is `external_url` exactly as
+    /// A retired cohort's Moments (`RetiredMoments.list`), newest first: ids 1…`pinned`, always, and up to `later` of
+    /// the newest Moments after them (`retiredIds`), with `cut` true when Moments after the pin were left out. A count
+    /// below the pin was read on a node behind (the pinned Moments exist), and throws.
+    func moments(pinned: Int, later: Int) async throws -> (moments: [MomentInfo], cut: Bool) {
+        guard isDeployed else { return ([], false) }
+        let total = MomentsABI.int(try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.momentCount, returns: "uint256")])[0][0])
+        guard total >= pinned else { throw ChainListUnread("A Moment") }
+        let read = Self.retiredIds(total: total, pinned: pinned, later: later)
+        guard !read.ids.isEmpty else { return ([], read.cut) }
+        return (try await hydrate(try await records(read.ids.map { BigUInt($0) })), read.cut)
+    }
+
+    /// The ids `moments(pinned:later:)` reads of a cohort that counts `total` Moments, newest first: up to `later` of the
+    /// newest after the pin, then the pinned ones, `pinned` down to 1. `cut` is true when more than `later` Moments were
+    /// published after the pin, so the oldest of them are not among `ids`.
+    static func retiredIds(total: Int, pinned: Int, later: Int) -> (ids: [Int], cut: Bool) {
+        let first = max(pinned + 1, total - max(0, later) + 1)
+        let newer = total >= first ? Array(stride(from: total, through: first, by: -1)) : []
+        return (newer + Array(stride(from: pinned, through: 1, by: -1)), first > pinned + 1)
+    }
+
+    /// One Moment with the supply identity, or nil when the id is out of range; a Moment in range that can't be read
+    /// throws, so its page says so with Retry, never that it doesn't exist. Its link is `external_url` exactly as
     /// the NFT reports it: a v2 NFT keeps the base it was published with (`externalBaseURI()` on the NFT), a v1 NFT
     /// reads its factory's current base, and has no getter of its own.
     public func moment(id: BigUInt) async throws -> MomentDetail? {
@@ -121,7 +153,7 @@ public actor MomentsService {
         guard id <= head[0][0].uint else { return nil }
         let raw = try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint(id)], returns: MomentsABI.momentTuple)])[0][0]
         let m = MomentsABI.moment(id: id, raw, factory: addresses.factory)
-        guard let info = try await hydrate([m]).first else { return nil }
+        let info = try await hydrate([m])[0]
         let baseSource = addresses.generation >= .v2 ? m.nft : addresses.factory
         let extras = try await multicall.readAll([
             MomentsABI.call(addresses.collect, MomentsABI.Collect.supplyCheck, [.uint(id)], returns: "uint256,uint256,uint256,uint256,uint256"),
@@ -134,26 +166,35 @@ public actor MomentsService {
         return MomentDetail(info: info, supply: supply, coinTotalSupply: extras[1][0].uint, externalURL: base.isEmpty ? "" : base + String(id))
     }
 
-    /// A refreshed `MomentInfo` for an id (the detail page polls this).
+    /// A refreshed `MomentInfo` for an id (the detail page polls this, a link opens it): nil when the cohort has no such
+    /// Moment (the id is past its count, read with the Moment at one block). A Moment in range that can't be read throws
+    /// (`ChainListUnread`), so a link to it says "Couldn't open this Moment", with Retry, never "No Moment at this link".
     public func info(id: BigUInt) async throws -> MomentInfo? {
         guard isDeployed, id > 0 else { return nil }
-        let raw = try await multicall.read([MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint(id)], returns: MomentsABI.momentTuple)])[0]
-        guard case .success(let values) = raw else { return nil }
-        return try await hydrate([MomentsABI.moment(id: id, values[0], factory: addresses.factory)]).first
+        let read = try await multicall.read([
+            MomentsABI.call(addresses.factory, MomentsABI.Factory.momentCount, returns: "uint256"),
+            MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint(id)], returns: MomentsABI.momentTuple),
+        ])
+        guard id <= (try read[0].get())[0].uint else { return nil }
+        guard case .success(let values) = read[1], let tuple = values.first else { throw ChainListUnread("This Moment") }
+        return try await hydrate([MomentsABI.moment(id: id, tuple, factory: addresses.factory)])[0]
     }
 
     /// Fresh `MomentInfo`s for many ids at once: one read of their Moments, then one hydration of them all, in `ids`
-    /// order. An id whose Moment couldn't be read (out of range) is left out; throws when a read fails as a whole.
+    /// order. The ids are Moments known to exist (a coin's `momentIdByCoin`, a pinned retired Moment): one that can't be
+    /// read, or any read that fails, throws, so a wallet's Moment is never dropped from its list unsaid.
     public func infos(ids: [BigUInt]) async throws -> [MomentInfo] {
         var seen = Set<BigUInt>()
         let ids = ids.filter { $0 > 0 && seen.insert($0).inserted }
         guard isDeployed, !ids.isEmpty else { return [] }
-        let raws = try await multicall.read(ids.map { MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint($0)], returns: MomentsABI.momentTuple) })
-        var moments: [Moment] = []
-        for (id, raw) in zip(ids, raws) {
-            if case .success(let values) = raw, let tuple = values.first { moments.append(MomentsABI.moment(id: id, tuple, factory: addresses.factory)) }
-        }
-        return try await hydrate(moments)
+        return try await hydrate(try await records(ids))
+    }
+
+    /// The Moments of `ids`, in `ids` order, in one read. A Moment's record holds no text and every id asked exists, so
+    /// the read is all or nothing: one that fails was read on a node behind, and throws.
+    private func records(_ ids: [BigUInt]) async throws -> [Moment] {
+        let raws = try await multicall.readAll(ids.map { MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint($0)], returns: MomentsABI.momentTuple) })
+        return zip(ids, raws).map { MomentsABI.moment(id: $0, $1[0], factory: addresses.factory) }
     }
 
     /// The Moment id of a coin, 0 when the address is not a Moment coin.
@@ -399,13 +440,18 @@ public actor MomentsService {
 
     // MARK: - Hydration
 
-    /// Ledger, NFT and coin metadata, entitlements and graduation for a page of Moments in one multicall, then the
-    /// pool state of the graduated ones.
+    /// Ledger, NFT and coin metadata, entitlements and graduation for a page of Moments, in reads of at most
+    /// `Multicall.textChunk` Moments, all at once (`Multicall.readItems`, which retries a refused read Moment by Moment), then the
+    /// pool state of the graduated ones, one `MomentInfo` per Moment, in order. A Moment's coin name, symbol and
+    /// provenance are its creator's: one that can't be read shows a stand-in (`ChainText.unreadable` for the name and
+    /// symbol, an empty provenance) and the Moment keeps its numbers and claims. Its ledger, editions, entitlements and
+    /// graduation are the protocol's: one that fails means the read didn't happen, and this throws (`ChainListUnread`).
+    /// The name, symbol and place are kept as they show (`ChainText.shown`), so none can reorder or hide the app's text
+    /// around it; the media links are kept as read. Name links read the names as they are (`MomentDirectory`).
     private func hydrate(_ moments: [Moment]) async throws -> [MomentInfo] {
         guard !moments.isEmpty else { return [] }
-        var calls: [ContractCall] = []
-        for m in moments {
-            calls += [
+        let items = moments.map { m in
+            [
                 MomentsABI.call(addresses.collect, MomentsABI.Collect.ledger, [.uint(m.id)], returns: MomentsABI.ledgerTuple),
                 MomentsABI.call(m.nft, MomentsABI.NFT.totalMinted, returns: "uint256"),
                 MomentsABI.call(m.nft, MomentsABI.NFT.closed, returns: "bool"),
@@ -416,13 +462,15 @@ public actor MomentsService {
                 MomentsABI.call(addresses.graduation, MomentsABI.Graduation.isGraduated, [.uint(m.id)], returns: "bool"),
             ]
         }
-        let results = try await multicall.readAll(calls)
-        let stride = 8
+        let results = try await multicall.readItems(items, text: Self.momentTextCalls, what: "A Moment")
         var partial: [(Moment, MomentLedger, Int, Bool, MomentProvenance, String, String, BigUInt, Bool)] = []
-        for (i, m) in moments.enumerated() {
-            let base = i * stride
-            partial.append((m, MomentsABI.ledger(results[base][0]), MomentsABI.int(results[base + 1][0]), results[base + 2][0].bool, MomentsABI.provenance(results[base + 3][0]),
-                            results[base + 4][0].string, results[base + 5][0].string, results[base + 6][0].uint, results[base + 7][0].bool))
+        for (m, r) in zip(moments, results) {
+            func value(_ at: Int) throws -> [ABIValue] { try r[at].get() }
+            func text(_ at: Int) -> String { (try? r[at].get())?.first?.stringOrNil ?? ChainText.unreadable }
+            let read = (try? value(3)).map { MomentsABI.provenance($0[0]) } ?? MomentProvenance(mediaURI: "", mediaHash: Data(), place: "", date: 0, animationURI: "")
+            let provenance = MomentProvenance(mediaURI: read.mediaURI, mediaHash: read.mediaHash, place: ChainText.shown(read.place), date: read.date, animationURI: read.animationURI)
+            partial.append((m, MomentsABI.ledger(try value(0)[0]), MomentsABI.int(try value(1)[0]), try value(2)[0].bool, provenance,
+                            ChainText.shown(text(4)), ChainText.shown(text(5)), try value(6)[0].uint, try value(7)[0].bool))
         }
         let graduatedIds = partial.filter { $0.8 }.map { $0.0.id }
         let pools = try await self.pools(ids: graduatedIds)
@@ -434,6 +482,10 @@ public actor MomentsService {
             )
         }
     }
+
+    /// The calls of `hydrate`'s layout that read the creator's text: provenance, coin name and symbol. The others read
+    /// the protocol's values.
+    static let momentTextCalls: Set<Int> = [3, 4, 5]
 
     /// Pool state for graduated Moments: the graduation record, locked liquidity, accrued hook fees, buyback state (on
     /// v2 also the USDC the locker holds for later rounds), and the live sqrt price read straight from the

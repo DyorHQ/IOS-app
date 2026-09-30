@@ -511,15 +511,15 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         XCTAssertFalse(assets.contains("openLaunchTab"), "nor the Portfolio")
 
         // My Launchpad: Coins You Launched and its count list what the board lists; the creator-fee escrows are read for
-        // every coin created, so a hidden retired coin's fees (aBIL in 0xad3d's escrow) are still read.
+        // every coin created and every pair asset, so a hidden retired coin's fees (aBIL in 0xad3d's escrow) are still read.
         let profile = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadProfileView.swift"), encoding: .utf8)
         XCTAssertTrue(profile.contains("var launched: [Created] { created.filter(\\.launch.listsOnBoard) }"))
         XCTAssertTrue(profile.contains("stat(\"Launched\", \"\\(model.launched.count)\")"))
         XCTAssertTrue(profile.contains("ForEach(model.launched) { item in"))
         XCTAssertFalse(profile.contains("model.created"), "the view shows only what the board lists")
-        let escrowLoop = try XCTUnwrap(profile.range(of: "var pairsByEscrow: [Address: [Address]] = [:]\n"))
-        XCTAssertTrue(profile[escrowLoop.upperBound...].hasPrefix("        for item in created {\n            let escrow = await env.launchpad.stack(for: item.launch).escrow"),
+        XCTAssertTrue(profile.contains("let createdPairs = launches.filter { $0.deployer == address }.map(\\.pairToken)\n        let escrowReads = await env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)"),
                       "the escrow pairs come from every coin created, unfiltered")
+        XCTAssertTrue(Token.launchpadPairAssets.contains(Token.abil.address), "and every escrow reads aBIL, a pair asset, whatever was created")
 
         let swap = try String(contentsOf: app.appendingPathComponent("Swap/SwapView.swift"), encoding: .utf8)
         // The "no venue" answer shows as soon as the venues answer; the curve check follows it and never holds it back,
