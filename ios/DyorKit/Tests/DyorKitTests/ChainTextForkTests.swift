@@ -4,13 +4,16 @@ import XCTest
 @testable import DyorKit
 
 /// The app's list readers on a LOCAL anvil fork of Monad whose shipped v2 launchpad (`LaunchpadAddresses.monadMainnet`)
-/// and cohort 4 (`MomentsAddresses.monadMainnet`) hold, next to ordinary ones, launches and Moments whose text isn't
-/// valid UTF-8 (`ChainTextTests` has the same without a fork). Skipped unless `DYOR_TEXT_FORK_RPC` is a local RPC of
-/// chain 143, e.g. `anvil --fork-url https://rpc3.monad.xyz --no-rate-limit --auto-impersonate --disable-code-size-limit
-/// --port 8741` with the launches and Moments sent to it from fresh keys. What each list must hold is read from the fork
-/// itself: every launch the factory records and every Moment the cohort counts, with their text as raw bytes. Reads only.
+/// and cohort 4 (`MomentsAddresses.monadMainnet`) hold launches and Moments whose text isn't valid UTF-8, and ones whose
+/// text is as long as a transaction stores (`ChainTextTests` and `ChainTextSizeTests` have the same without a fork). The
+/// repository's seed scripts put them there; a fork without them fails the test, never skips it:
 ///
+///   anvil --fork-url https://rpc3.monad.xyz --no-rate-limit --disable-code-size-limit --port 8741
+///   node scripts/dev/seed-fork.mjs --text 8741 && node scripts/dev/seed-moments-fork.mjs --text 8741
 ///   cd ios/DyorKit && DYOR_TEXT_FORK_RPC=http://127.0.0.1:8741 swift test --filter ChainTextForkTests
+///
+/// Skipped only without `DYOR_TEXT_FORK_RPC`, or when it isn't a local RPC of chain 143. What each list must hold is read from the fork
+/// itself: every launch the factory records and every Moment the cohort counts, with their text as raw bytes. Reads only.
 final class ChainTextForkTests: XCTestCase {
     private var rpc: RPCClient!
 
@@ -38,6 +41,10 @@ final class ChainTextForkTests: XCTestCase {
 
     private static func isText(_ raw: Data) -> Bool { String(data: raw, encoding: .utf8) != nil }
 
+    /// What the seed scripts' longest text is at least: a launch's description, a Moment's name.
+    private static let longDescription = 20_000
+    private static let longName = 8_000
+
     /// One reader's answer, or nil with a failure naming the reader, so every reader is tried.
     private func read<T>(_ reader: String, _ body: () async throws -> T) async -> T? {
         do { return try await body() } catch {
@@ -62,9 +69,12 @@ final class ChainTextForkTests: XCTestCase {
             return [raw[3 * i][0].bytes, raw[3 * i + 1][0].bytes, info[1].bytes, info[2].bytes] + info[3].elements.map(\.bytes)
         }
         let illFormed = tokens.indices.filter { !texts($0).allSatisfy(Self.isText) }.map { tokens[$0] }
-        guard !illFormed.isEmpty else { throw XCTSkip("the fork's launchpad holds no launch whose text isn't UTF-8") }
+        let long = tokens.indices.filter { texts($0)[3].count >= Self.longDescription }.map { tokens[$0] }
+        guard !illFormed.isEmpty, !long.isEmpty else {
+            return XCTFail("the fork's launchpad holds \(illFormed.count) launches whose text isn't UTF-8 and \(long.count) with a description of \(Self.longDescription) bytes or more: seed it (node scripts/dev/seed-fork.mjs --text <port>)")
+        }
         XCTAssertLessThan(illFormed.count, tokens.count, "the fork holds ordinary launches too")
-        print("ChainTextForkTests launchpad: \(tokens.count) launches, \(illFormed.count) with text that isn't UTF-8: \(illFormed.map(\.short))")
+        print("ChainTextForkTests launchpad: \(tokens.count) launches, \(illFormed.count) with text that isn't UTF-8: \(illFormed.map(\.short)), \(long.count) with a long description: \(long.map { "\($0.short) \(texts(tokens.firstIndex(of: $0)!)[3].count) B" })")
 
         let service = LaunchpadService(rpc: rpc, addresses: .monadMainnet)
         let listed = await read("launches") { try await service.launches(limit: max(count, 1)) } ?? []
@@ -84,7 +94,7 @@ final class ChainTextForkTests: XCTestCase {
         let wallet = tokens.map { Token(address: $0, symbol: "?", name: "?", decimals: 18) }
         let held = await read("heldLaunches") { try await service.heldLaunches(wallet) }
         XCTAssertEqual(Set(held?.launches.keys.map { $0 } ?? []), Set(tokens), "every held launch coin is read as its launch")
-        for token in illFormed {
+        for token in illFormed + long {
             let detail = await read("launch(token:)") { try await service.launch(token: token) }
             XCTAssertEqual(detail??.launch.token, token, "the coin's page loads")
             let added = await read("ERC20.metadata") { try await ERC20.metadata(token, multicall: multicall) }
@@ -96,7 +106,7 @@ final class ChainTextForkTests: XCTestCase {
         let multicall = Multicall(rpc: rpc)
         let cohort = MomentsAddresses.monadMainnet
         let count = Int(try await multicall.readAll([try ContractCall(to: cohort.factory, "momentCount()", returns: "uint256")])[0][0].uint)
-        guard count > 0 else { throw XCTSkip("the fork's cohort 4 holds no Moment") }
+        guard count > 0 else { return XCTFail("the fork's cohort 4 holds no Moment: seed it (node scripts/dev/seed-moments-fork.mjs --text <port>)") }
         let ids = (1...count).map { BigUInt($0) }
         let moments = try await multicall.readAll(ids.map { try ContractCall(to: cohort.factory, "getMoment(uint256)", [.uint($0)], returns: MomentsABI.momentTuple) })
             .enumerated().map { MomentsABI.moment(id: ids[$0.offset], $0.element[0], factory: cohort.factory) }
@@ -110,9 +120,12 @@ final class ChainTextForkTests: XCTestCase {
             return [raw[3 * i][0].bytes, raw[3 * i + 1][0].bytes, p[0].bytes, p[2].bytes, p[4].bytes]
         }
         let illFormed = moments.indices.filter { !texts($0).allSatisfy(Self.isText) }.map { moments[$0] }
-        guard let poisoned = illFormed.first else { throw XCTSkip("the fork's cohort 4 holds no Moment whose text isn't UTF-8") }
+        let long = moments.indices.filter { texts($0)[0].count >= Self.longName }.map { moments[$0] }
+        guard let poisoned = illFormed.first, let longest = long.first else {
+            return XCTFail("the fork's cohort 4 holds \(illFormed.count) Moments whose text isn't UTF-8 and \(long.count) with a name of \(Self.longName) bytes or more: seed it (node scripts/dev/seed-moments-fork.mjs --text <port>)")
+        }
         XCTAssertLessThan(illFormed.count, moments.count, "the fork holds ordinary Moments too")
-        print("ChainTextForkTests moments: \(moments.count) Moments, \(illFormed.count) with text that isn't UTF-8: \(illFormed.map { String($0.id) })")
+        print("ChainTextForkTests moments: \(moments.count) Moments, \(illFormed.count) with text that isn't UTF-8: \(illFormed.map { String($0.id) }), \(long.count) with a long name: \(long.map { "\($0.id) \(texts(Int($0.id) - 1)[0].count) B" })")
 
         let service = MomentsService(rpc: rpc, addresses: .monadMainnet)
         let listed = await read("moments") { try await service.moments(limit: count) } ?? []
@@ -128,7 +141,12 @@ final class ChainTextForkTests: XCTestCase {
         XCTAssertEqual(infos?.map(\.id), ids, "the wallet's Moments read every id")
         let portfolio = await read("portfolio") { try await service.portfolio(account: poisoned.creator) }
         XCTAssertNotNil(portfolio, "the Moments portfolio reads")
-        let link = await read("MomentDirectory") { try await MomentDirectory(rpc: rpc).link(for: MomentKey(factory: cohort.factory, id: poisoned.id)) }
-        XCTAssertNotNil(link ?? nil, "the Moment has a name link")
+        let directory = MomentDirectory(rpc: rpc)
+        for moment in [poisoned, longest] {
+            let link = await read("MomentDirectory") { try await directory.link(for: MomentKey(factory: cohort.factory, id: moment.id)) }
+            let slug = try XCTUnwrap(link ?? nil, "Moment \(moment.id) has a name link").url.lastPathComponent
+            let back = await read("MomentDirectory") { try await directory.key(for: slug) }
+            XCTAssertEqual(back ?? nil, MomentKey(factory: cohort.factory, id: moment.id), "\(slug) opens Moment \(moment.id)")
+        }
     }
 }
