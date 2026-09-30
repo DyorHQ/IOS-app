@@ -311,8 +311,12 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(swap.contains("let venueHits = env.venueList.tokens.filter {"))
         XCTAssertTrue(swap.contains("let remote = remoteMatches"), "the matches computed once a render")
         XCTAssertEqual(swap.components(separatedBy: "remoteMatches").count - 1, 2, "declared, and read once in body")
-        XCTAssertTrue(swap.contains("private var venueListCatchingUp: Bool { !query.isEmpty && env.venueList.isCatchingUp }"), "said only while searching")
+        XCTAssertTrue(swap.contains("private var venueListCatchingUp: Bool { !query.isEmpty && Address(query) == nil && env.venueList.isCatchingUp }"),
+                      "said only while searching by name, never for a pasted address")
         XCTAssertTrue(swap.contains("if venueListCatchingUp { Text(\"Monad's token list is still loading, so a token may be missing for now.\") }"))
+        // With nothing matched, the "no match" footer says it: never two footers stacked.
+        XCTAssertTrue(swap.contains("if !remote.isEmpty || (venueListCatchingUp && !noMatch) {"))
+        XCTAssertTrue(swap.contains("} else if venueListCatchingUp {\n                            Text(\"No token matches yet: Monad's token list is still loading. Paste a contract address to add any Monad token.\")"))
     }
 
     /// A fresh install's first read, live on Monad (read-only): every venue from genesis on rpc1, and the metadata on the

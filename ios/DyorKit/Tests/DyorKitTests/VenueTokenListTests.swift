@@ -110,6 +110,41 @@ final class VenueTokenListTests: XCTestCase {
         XCTAssertEqual(list.tokens.map(\.symbol), ["T1"], "the list in memory stays for search")
     }
 
+    /// The finding: the picker's "still loading" was `checkpoint == 0` at the start of a run, then whatever the last save
+    /// said: a refill resumed from part-way said nothing until its first segment, one whose head couldn't be read said
+    /// nothing at all, and a run that ended short kept saying it though nothing ran. It now follows the list: short of the
+    /// head the last run read towards (or never read), and nothing after `stop()`.
+    func testCatchingUpFollowsWhetherTheListIsShortOfTheChain() async {
+        VenueFixture.installMetadata()
+        let pools = [VenueFixture.pool(1, at: 1_000_000), VenueFixture.pool(4, at: 51_000_000)]
+        // A fresh install: nothing read, so a search may miss a token, from before the head is known.
+        LogsStub.install(head: 0, logs: pools) { _ in nil }
+        let fresh = MemoryStore(list: [], checkpoint: 0).list()
+        XCTAssertFalse(fresh.isCatchingUp, "not before the store is read")
+        fresh.refresh()
+        await fresh.finished()
+        XCTAssertNil(fresh.head, "the head couldn't be read")
+        XCTAssertTrue(fresh.isCatchingUp)
+        // Stopped (Delete Account): nothing reads on, so nothing is said.
+        fresh.stop()
+        XCTAssertFalse(fresh.isCatchingUp)
+
+        // A refill that stopped part-way, at 50M: said once the run knows the head, and while it ends short.
+        let gap = Flag(true)
+        LogsStub.install(head: 60_000_000, logs: pools) { range in gap.on && range.contains(52_000_000) ? .error(code: -32062, message: "Block range is too large") : nil }
+        let partWay = MemoryStore(list: [VenueFixture.token(1, symbol: "T1")], checkpoint: 49_999_999).list()
+        partWay.refresh()
+        await partWay.finished()
+        XCTAssertEqual(partWay.checkpoint, 49_999_999)
+        XCTAssertEqual(partWay.head, 60_000_000)
+        XCTAssertTrue(partWay.isCatchingUp, "short of the head, to be read on at the next return")
+        gap.set(false)
+        partWay.refresh()
+        await partWay.finished()
+        XCTAssertEqual(partWay.checkpoint, 60_000_000)
+        XCTAssertFalse(partWay.isCatchingUp, "read to the head")
+    }
+
     func testOneRunAtATime() async {
         VenueFixture.installMetadata()
         let store = MemoryStore(list: [], checkpoint: 0)

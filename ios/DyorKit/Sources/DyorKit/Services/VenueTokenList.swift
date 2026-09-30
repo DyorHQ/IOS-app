@@ -23,15 +23,26 @@ public final class VenueTokenList {
     public private(set) var tokens: [Token] = []
     /// The last block every venue is read up to in full.
     public private(set) var checkpoint: UInt64 = 0
+    /// The chain head the last run read towards; nil until a run has read one.
+    public private(set) var head: UInt64?
     /// Whether a run is reading.
     public private(set) var isRefreshing = false
     /// Runs in a row that ended short of the chain head: a gap, the head unread, an endpoint down or throttling.
     public private(set) var shortRuns = 0
     /// After `stop()` (Delete Account): nothing runs or is saved again until the app is launched anew.
     public private(set) var isStopped = false
-    /// Whether the list is still short of the chain head: read from genesis (a fresh install, or the read build 17 makes
-    /// once more), or stopped short by a gap. The swap picker says so while a search may miss a token.
-    public private(set) var isCatchingUp = false
+    /// Whether the store has been read.
+    public private(set) var isLoaded = false
+
+    /// Whether a search may miss a token because the list is short of the chain: never read yet (a fresh install, or the
+    /// read build 17 makes once more), or short of the head the last run read towards (a refill under way, or a run that
+    /// ended short, read on at the next return to the app). The swap picker says so. Before a run has read the head,
+    /// only a list never read counts; after `stop()`, nothing reads on, so nothing is said.
+    public var isCatchingUp: Bool {
+        guard isLoaded, !isStopped else { return false }
+        guard let head else { return checkpoint == 0 }
+        return checkpoint < head
+    }
 
     @ObservationIgnored private let service: VenueTokensService
     @ObservationIgnored private let logos: @Sendable () async -> [Address: URL]
@@ -40,7 +51,6 @@ public final class VenueTokenList {
     @ObservationIgnored private let now: @Sendable () -> Date
     /// When `resume` may run again after a run that ended short.
     @ObservationIgnored private var retryAfter = Date.distantPast
-    @ObservationIgnored private var loaded = false
     /// The checkpoint the store holds.
     @ObservationIgnored private var saved: UInt64 = 0
     @ObservationIgnored private var run: Task<Void, Never>?
@@ -99,16 +109,15 @@ public final class VenueTokenList {
     }
 
     private func perform(_ generation: Int) async {
-        if !loaded {
+        if !isLoaded {
             let read = self.read
             let stored = await Task.detached(priority: .utility) { Self.decode(read()) }.value
             guard generation == self.generation else { return }
             tokens = stored.tokens
             checkpoint = stored.checkpoint
             saved = stored.checkpoint
-            loaded = true
+            isLoaded = true
         }
-        isCatchingUp = checkpoint == 0
         let result = await service.refresh(tokens: tokens, checkpoint: checkpoint, logos: logos) { [weak self] progress in
             guard let self, await self.show(progress, generation) else { return }
             let data = await Task.detached(priority: .utility) { Self.encode(progress.tokens) }.value
@@ -116,7 +125,7 @@ public final class VenueTokenList {
         }
         guard generation == self.generation else { return }
         // Nothing read (the head couldn't be read): the list is as it was, and so is what the picker says.
-        if let result { isCatchingUp = !result.complete }
+        if let result { head = result.head }
         if result?.complete == true {
             shortRuns = 0
         } else {
@@ -133,7 +142,7 @@ public final class VenueTokenList {
         guard generation == self.generation else { return false }
         tokens = progress.tokens
         checkpoint = progress.checkpoint
-        isCatchingUp = !progress.complete
+        head = progress.head
         return progress.checkpoint != saved
     }
 

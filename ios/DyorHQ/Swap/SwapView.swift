@@ -737,8 +737,9 @@ struct TokenPickerSheet: View {
     }
 
     /// Whether a search may miss a token because the venue list is still being read (`VenueTokenList.isCatchingUp`).
-    /// Said only while searching: the default list is popular-only and never waits for it.
-    private var venueListCatchingUp: Bool { !query.isEmpty && env.venueList.isCatchingUp }
+    /// Said only while searching by name: the default list is popular-only and never waits for it, and a pasted address
+    /// is looked up on its own.
+    private var venueListCatchingUp: Bool { !query.isEmpty && Address(query) == nil && env.venueList.isCatchingUp }
 
     /// Search hits for tokens not in the popular default list: the Uniswap/Monday venue list (accurate symbols +
     /// logos, matched locally, in memory) plus Kuru's directory. Only while searching — the default list stays
@@ -755,6 +756,7 @@ struct TokenPickerSheet: View {
 
     var body: some View {
         let remote = remoteMatches
+        let noMatch = tokens.isEmpty && custom == nil && remote.isEmpty && unverifiedMatches.isEmpty
         NavigationStack {
             List {
                 if let custom {
@@ -765,8 +767,14 @@ struct TokenPickerSheet: View {
                 Section {
                     ForEach(tokens) { row($0) }
                 } footer: {
-                    if tokens.isEmpty, custom == nil, remote.isEmpty, unverifiedMatches.isEmpty {
-                        Text(lookingUp ? "Looking up this token…" : "No token matches. Paste a contract address to add any Monad token.")
+                    if noMatch {
+                        if lookingUp {
+                            Text("Looking up this token…")
+                        } else if venueListCatchingUp {
+                            Text("No token matches yet: Monad's token list is still loading. Paste a contract address to add any Monad token.")
+                        } else {
+                            Text("No token matches. Paste a contract address to add any Monad token.")
+                        }
                     }
                 }
                 if !unverifiedMatches.isEmpty {
@@ -778,7 +786,8 @@ struct TokenPickerSheet: View {
                         Text("These arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you trade.")
                     }
                 }
-                if !remote.isEmpty || venueListCatchingUp {
+                // With nothing matched, the "no match" footer says the list is loading: never a second footer under it.
+                if !remote.isEmpty || (venueListCatchingUp && !noMatch) {
                     Section {
                         ForEach(remote) { row($0) }
                     } header: {
