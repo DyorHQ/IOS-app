@@ -73,17 +73,23 @@ extension AuroraToken {
 }
 
 /// A small circular chain badge: the chain's real logo when Trust Wallet has it, otherwise a brand-coloured monogram.
+/// Like `TokenLogo`, it shows its plain tinted disc for a moment while the logo loads, so the letters don't flash
+/// first, then the letters until it comes (`RemoteImageWait`).
 struct ChainBadge: View {
     let chain: EVMChain
     var size: CGFloat = 20
 
     var body: some View {
         Group {
-            RemoteImage(url: chain.logoURL, pointSize: size, contentMode: .fit) { _ in monogram }
+            RemoteImage(url: chain.logoURL, pointSize: size, contentMode: .fit, grace: RemoteImageWait.grace) { loading in
+                if loading { Color.clear } else { monogram }
+            }
         }
         .frame(width: size, height: size)
         .background(chain.brandColor.opacity(0.18))
         .clipShape(Circle())
+        .accessibilityIgnoresInvertColors() // the logo; its ring inverts with the card, like TokenLogo's
+        .overlay(Circle().strokeBorder(Color.logoRing, lineWidth: 0.5))
         .accessibilityHidden(true)
     }
 
@@ -114,6 +120,7 @@ struct ChainDot: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        .accessibilityIgnoresInvertColors() // like the TokenLogo it sits on in AssetGlyph
         .accessibilityHidden(true)
     }
 }

@@ -380,21 +380,30 @@ struct LaunchArtwork: View {
     var pointSize: CGFloat = 240
 
     var body: some View {
-        if let url = URL(string: logo), url.scheme?.lowercased() == "https" {
-            RemoteImage(url: url, pointSize: pointSize) { loading in
-                if loading { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } } else { placeholder }
+        Group {
+            if let url = URL(string: logo), url.scheme?.lowercased() == "https" {
+                RemoteImage(url: url, pointSize: pointSize) { loading in
+                    if loading { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } } else { placeholder }
+                }
+            } else {
+                placeholder
             }
-        } else {
-            placeholder
         }
+        .accessibilityIgnoresInvertColors()
     }
 
     private var placeholder: some View {
         ZStack {
             LinearGradient(colors: [Color.brand.opacity(0.30), Color.brand.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            Text(symbol.prefix(2).uppercased())
-                .font(.system(size: 40, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.brand)
+            // Sized to the frame: a fixed 40 pt shows only "…" in the 34–44 pt rows. Cards and headers keep 40.
+            GeometryReader { frame in
+                Text(symbol.prefix(2).uppercased())
+                    .font(.system(size: min(40, frame.size.width * 0.4), weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .foregroundStyle(Color.brand)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 }
