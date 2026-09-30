@@ -27,6 +27,8 @@ public final class VenueTokenList {
     public private(set) var isRefreshing = false
     /// Runs in a row that ended short of the chain head: a gap, the head unread, an endpoint down or throttling.
     public private(set) var shortRuns = 0
+    /// After `stop()` (Delete Account): nothing runs or is saved again until the app is launched anew.
+    public private(set) var isStopped = false
     /// Whether the list is still short of the chain head: read from genesis (a fresh install, or the read build 17 makes
     /// once more), or stopped short by a gap. The swap picker says so while a search may miss a token.
     public private(set) var isCatchingUp = false
@@ -42,6 +44,9 @@ public final class VenueTokenList {
     /// The checkpoint the store holds.
     @ObservationIgnored private var saved: UInt64 = 0
     @ObservationIgnored private var run: Task<Void, Never>?
+    /// Which run may change the list and the store: `stop` moves it on, so a run it cancelled, and a save of that run
+    /// already on its way, change nothing.
+    @ObservationIgnored private var generation = 0
 
     /// `read` and `write` are the store: `read` runs off the main actor, once; `write` on it, with the list encoded.
     public init(service: VenueTokensService, logos: @escaping @Sendable () async -> [Address: URL], read: @escaping @Sendable () -> Stored,
@@ -57,9 +62,22 @@ public final class VenueTokenList {
     /// first run reads the store first. Call it once App Lock's default is decided (`AppSettings`): a save writes keys an
     /// earlier install is told apart by.
     public func refresh() {
-        guard run == nil else { return }
+        guard !isStopped, run == nil else { return }
         isRefreshing = true
-        run = Task { await perform() }
+        let generation = generation
+        run = Task { await perform(generation) }
+    }
+
+    /// Before this device's data is erased (Delete Account, Forget This Device): the run under way is cancelled, and
+    /// nothing is read or saved again until the app is launched anew. A save after the erase would put the list's
+    /// `venueTokens.` keys back in an emptied store, and App Lock's default would then take the next launch for an
+    /// install from before it (`AppSettings`, R4) and start OFF. The list in memory stays for search: it is public data.
+    public func stop() {
+        isStopped = true
+        generation += 1
+        run?.cancel()
+        run = nil
+        isRefreshing = false
     }
 
     /// On a return to the app: runs again when the last run ended short of the chain head, which a cold launch alone
@@ -80,10 +98,11 @@ public final class VenueTokenList {
         await run?.value
     }
 
-    private func perform() async {
+    private func perform(_ generation: Int) async {
         if !loaded {
             let read = self.read
             let stored = await Task.detached(priority: .utility) { Self.decode(read()) }.value
+            guard generation == self.generation else { return }
             tokens = stored.tokens
             checkpoint = stored.checkpoint
             saved = stored.checkpoint
@@ -91,10 +110,11 @@ public final class VenueTokenList {
         }
         isCatchingUp = checkpoint == 0
         let result = await service.refresh(tokens: tokens, checkpoint: checkpoint, logos: logos) { [weak self] progress in
-            guard let self, await self.show(progress) else { return }
+            guard let self, await self.show(progress, generation) else { return }
             let data = await Task.detached(priority: .utility) { Self.encode(progress.tokens) }.value
-            if let data { await self.store(data, checkpoint: progress.checkpoint) }
+            if let data { await self.store(data, checkpoint: progress.checkpoint, generation) }
         }
+        guard generation == self.generation else { return }
         // Nothing read (the head couldn't be read): the list is as it was, and so is what the picker says.
         if let result { isCatchingUp = !result.complete }
         if result?.complete == true {
@@ -109,14 +129,18 @@ public final class VenueTokenList {
 
     /// A run's progress, in memory at once; whether the store should follow: only once the checkpoint moved, so a segment
     /// read in part, or one to be read again for more tokens than a read keeps, costs no save.
-    private func show(_ progress: VenueTokensService.Progress) -> Bool {
+    private func show(_ progress: VenueTokensService.Progress, _ generation: Int) -> Bool {
+        guard generation == self.generation else { return false }
         tokens = progress.tokens
         checkpoint = progress.checkpoint
         isCatchingUp = !progress.complete
         return progress.checkpoint != saved
     }
 
-    private func store(_ list: Data, checkpoint: UInt64) {
+    /// Checked here, on the main actor with the write: an erase runs there too, so it comes before this save (which then
+    /// writes nothing) or after it (and erases it).
+    private func store(_ list: Data, checkpoint: UInt64, _ generation: Int) {
+        guard generation == self.generation else { return }
         write(list, checkpoint)
         saved = checkpoint
     }

@@ -83,6 +83,33 @@ final class VenueTokenListTests: XCTestCase {
         XCTAssertEqual((1...8).map(VenueTokenList.retryPause(afterShortRuns:)), [30, 60, 120, 240, 480, 960, 1_800, 1_800])
     }
 
+    /// The finding: Delete Account erased UserDefaults while the refill ran, and the refill's next save wrote
+    /// `venueTokens.v1` back, so App Lock's default took the next launch for an install from before it and started OFF
+    /// (R4). `stop()`, before the erase, cancels the run, and nothing is saved after it — not even a save already on its
+    /// way — nor run again in this process.
+    func testNothingIsSavedOrRunAfterStop() async throws {
+        VenueFixture.installMetadata()
+        let store = MemoryStore(list: [], checkpoint: 0)
+        LogsStub.install(head: 20_000_000, logs: [VenueFixture.pool(1, at: 1_000_000), VenueFixture.pool(4, at: 6_000_000), VenueFixture.pool(7, at: 11_000_000)],
+                         latency: 0.03) { _ in nil }
+        let list = store.list()
+        list.refresh()
+        let deadline = Date().addingTimeInterval(10)
+        while store.writes.isEmpty, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(store.writes.map(\.checkpoint), [4_999_999])
+        list.stop()
+        let requestsAtStop = LogsStub.requests()
+        XCTAssertFalse(list.isRefreshing)
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(store.writes.map(\.checkpoint), [4_999_999], "no save after stop")
+        XCTAssertLessThanOrEqual(LogsStub.requests(), requestsAtStop + 1, "the run is cancelled: the request under way at most")
+        list.refresh()
+        list.resume()
+        XCTAssertFalse(list.isRefreshing, "nothing runs again")
+        XCTAssertTrue(list.isStopped)
+        XCTAssertEqual(list.tokens.map(\.symbol), ["T1"], "the list in memory stays for search")
+    }
+
     func testOneRunAtATime() async {
         VenueFixture.installMetadata()
         let store = MemoryStore(list: [], checkpoint: 0)

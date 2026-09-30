@@ -294,6 +294,18 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertEqual(keys, ["venueTokens.v1", "venueTokens.v1.updatedAt", "venueScan.v2.lastBlock"])
         for key in keys.dropFirst(2) { XCTAssertFalse(prefixes.contains { key.hasPrefix($0) }, "\(key) would mark a fresh install as earlier (R4)") }
 
+        // R4: every erase of this device's data stops the list's reading first, so no save of it follows the erase.
+        var erases = 0
+        let files = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
+        for file in files where file.pathExtension == "swift" {
+            let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+            for (i, line) in lines.enumerated() where line.contains(".eraseLocalData()") && !line.contains("func eraseLocalData") {
+                erases += 1
+                XCTAssertTrue(lines[max(0, i - 3)..<i].contains { $0.contains("env.venueList.stop()") }, "\(file.lastPathComponent):\(i + 1)")
+            }
+        }
+        XCTAssertEqual(erases, 2, "Delete Account, and this device's erase (a passkey account's deletion, Forget This Device)")
+
         let swap = try String(contentsOf: app.appendingPathComponent("Swap/SwapView.swift"), encoding: .utf8)
         XCTAssertFalse(swap.contains("VenueTokenStore"), "the search never reads the store")
         XCTAssertTrue(swap.contains("let venueHits = env.venueList.tokens.filter {"))
