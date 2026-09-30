@@ -28,7 +28,10 @@ public struct DyorCoin: Hashable, Sendable, Identifiable, Codable {
     /// The coin's contract.
     public let address: Address
     public let origin: Origin
-    /// The coin's own `symbol()` and `name()`: what it calls itself, shown, never trusted (`TokenBadge` checks them).
+    /// The coin's own `symbol()` and `name()` as the chain holds them — bytes that aren't text as U+FFFD, a read that
+    /// failed as `ChainText.unreadable`, direction characters and all — cut to `maxStoredSymbol` and `maxStoredName`:
+    /// what it calls itself, never trusted. Every check reads these (`TokenBadge`, `SymbolSafety`,
+    /// `WalletHoldings.imitated(by:)`); a screen shows `displaySymbol` and `displayName`.
     public let symbol: String
     public let name: String
     /// Who made it, from the factory's record: a launch's deployer (the factory's caller, or the launch router's, never an
@@ -48,17 +51,62 @@ public struct DyorCoin: Hashable, Sendable, Identifiable, Codable {
 
     public var id: Address { address }
 
+    /// An entry, its creator's strings cut to what is kept (`maxStoredSymbol`, `maxStoredName`; a logo over
+    /// `ImageSourcePolicy.maxURLBytes` is dropped), so the registry's file stays small whatever a creator writes.
     public init(address: Address, origin: Origin, symbol: String, name: String, creator: Address, logo: String, mediaHash: Data? = nil, mediaIsVideo: Bool = false, pair: Address) {
         self.address = address
         self.origin = origin
-        self.symbol = symbol
-        self.name = name
+        self.symbol = Self.capped(symbol, Self.maxStoredSymbol)
+        self.name = Self.capped(name, Self.maxStoredName)
         self.creator = creator
-        self.logo = logo
-        self.mediaHash = mediaHash
+        self.logo = logo.utf8.count <= ImageSourcePolicy.maxURLBytes ? logo : ""
+        self.mediaHash = mediaHash.map { Data($0.prefix(32)) }
         self.mediaIsVideo = mediaIsVideo
         self.pair = pair
     }
+
+    private enum CodingKeys: String, CodingKey { case address, origin, symbol, name, creator, logo, mediaHash, mediaIsVideo, pair }
+
+    /// An entry from the registry's file, cut as `init` cuts one: a file written by a build that kept longer strings
+    /// reads as this build keeps them.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(address: try container.decode(Address.self, forKey: .address), origin: try container.decode(Origin.self, forKey: .origin),
+                  symbol: try container.decode(String.self, forKey: .symbol), name: try container.decode(String.self, forKey: .name),
+                  creator: try container.decode(Address.self, forKey: .creator), logo: try container.decode(String.self, forKey: .logo),
+                  mediaHash: try container.decodeIfPresent(Data.self, forKey: .mediaHash), mediaIsVideo: try container.decode(Bool.self, forKey: .mediaIsVideo),
+                  pair: try container.decode(Address.self, forKey: .pair))
+    }
+
+    /// The most kept of a symbol: characters, then UTF-8 bytes. Longer than any form allows
+    /// (`SymbolSafety.maxSymbolLength`), so what is cut still reads as too long and keeps its warning.
+    public static let maxStoredSymbol = (characters: 32, bytes: 128)
+    /// The most kept of a name, as `maxStoredSymbol` (`SymbolSafety.maxMomentNameLength` is the longest a form allows).
+    public static let maxStoredName = (characters: 64, bytes: 256)
+
+    /// `text` cut to `cap.characters` characters, then, if still over `cap.bytes` UTF-8 bytes, to that many bytes at a
+    /// scalar's end: a cut text is then at least `cap.bytes` - 3 bytes long, never short enough to pass as fitting a form.
+    static func capped(_ text: String, _ cap: (characters: Int, bytes: Int)) -> String {
+        guard text.utf8.count > cap.characters else { return text } // no more characters than bytes
+        var out = String(text.prefix(cap.characters))
+        guard out.utf8.count > cap.bytes else { return out }
+        var scalars = String.UnicodeScalarView()
+        var used = 0
+        for scalar in out.unicodeScalars {
+            let size = String(scalar).utf8.count
+            guard used + size <= cap.bytes else { break }
+            scalars.append(scalar)
+            used += size
+        }
+        out = String(scalars)
+        return out
+    }
+
+    /// The symbol as a screen shows it (`ChainText.shown`: direction characters and invisible padding removed, right-to-
+    /// left text isolated). For showing only: never compare or check it.
+    public var displaySymbol: String { ChainText.shown(symbol) }
+    /// The name as a screen shows it, as `displaySymbol`.
+    public var displayName: String { ChainText.shown(name) }
 
     /// The factory that recorded it: a launchpad's or a cohort's.
     public var factory: Address {
@@ -83,8 +131,9 @@ public struct DyorCoin: Hashable, Sendable, Identifiable, Codable {
         return nil
     }
 
-    /// The coin as a token the app can list: 18 decimals, as every launch token and Moment coin has. No logo URL: a
-    /// screen resolves the picture from this entry (`CoinIcon`), never from a stored one.
+    /// The coin as a token the app can list: 18 decimals, as every launch token and Moment coin has, and the chain's own
+    /// symbol and name (not `displaySymbol`), so what checks it reads what the chain says. No logo URL: a screen
+    /// resolves the picture from this entry (`CoinIcon`), never from a stored one.
     public var token: Token {
         Token(address: address, symbol: symbol, name: name, decimals: MomentsConstants.coinDecimals, isLaunchpad: isLaunch)
     }

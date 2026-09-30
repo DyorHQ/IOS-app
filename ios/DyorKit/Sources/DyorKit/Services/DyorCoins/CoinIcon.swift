@@ -16,8 +16,10 @@ public enum CoinIcon: Hashable, Sendable {
     /// for another address is ignored). In order:
     /// 1. a curated token, by address: its bundled logo, or its letters when none ships (aBIL, which has no logo on
     ///    purpose);
-    /// 2. a look-alike of a curated token (`WalletHoldings.imitated(by:)`), by its own name or its coin's, DyorHQ's coins
-    ///    included: its letters, never a picture that could pass for the real one;
+    /// 2. a token whose badge is a warning whatever else is known of it (`TokenBadge.of` as for a token the user chose): a
+    ///    look-alike of a curated or major token, by its own name or its coin's, DyorHQ's coins included, or a symbol or
+    ///    DyorHQ coin's text that doesn't show as itself ("USDϹ" with a Greek lunate sigma): its letters, never a picture
+    ///    that could pass for the real one;
     /// 3. a DyorHQ launch: its on-chain logo through `ImageSourcePolicy`, filled;
     /// 4. a DyorHQ Moment: its artwork as the Moments screens load it (`ImageSourcePolicy.momentSources`), filled;
     /// 5. a logo a token list gave it (`ImageSourcePolicy.listSources`), fitted;
@@ -25,7 +27,7 @@ public enum CoinIcon: Hashable, Sendable {
     public static func resolve(_ token: Token, coin: DyorCoin?, policy: ImageSourcePolicy) -> CoinIcon {
         if let curated = Token.core(token.address) { return curated.logoURL == nil ? .letters : .bundled(symbol: curated.symbol) }
         let coin = coin.flatMap { $0.address == token.address ? $0 : nil }
-        if TokenBadge.imitation(token, coin: coin) != nil { return .letters }
+        if TokenBadge.of(token, coin: coin, receivedUnasked: false).isWarning { return .letters }
         if let coin {
             let sources = coin.isMoment
                 ? policy.momentSources(mediaURI: coin.logo, mediaHash: coin.mediaHash, isVideo: coin.mediaIsVideo, creator: coin.creator)
