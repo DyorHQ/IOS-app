@@ -31,7 +31,7 @@ public struct DyorCoin: Hashable, Sendable, Identifiable, Codable {
     /// The coin's own `symbol()` and `name()` as the chain holds them — bytes that aren't text as U+FFFD, a read that
     /// failed as `ChainText.unreadable`, direction characters and all — cut to `maxStoredSymbol` and `maxStoredName`:
     /// what it calls itself, never trusted. Every check reads these (`TokenBadge`, `SymbolSafety`,
-    /// `WalletHoldings.imitated(by:)`); a screen shows `displaySymbol` and `displayName`.
+    /// `WalletHoldings.imitated(by:)`); a screen shows `displaySymbol` and `displayName` (and `token` carries them).
     public let symbol: String
     public let name: String
     /// Who made it, from the factory's record: a launch's deployer (the factory's caller, or the launch router's, never an
@@ -131,11 +131,13 @@ public struct DyorCoin: Hashable, Sendable, Identifiable, Codable {
         return nil
     }
 
-    /// The coin as a token the app can list: 18 decimals, as every launch token and Moment coin has, and the chain's own
-    /// symbol and name (not `displaySymbol`), so what checks it reads what the chain says. No logo URL: a screen
-    /// resolves the picture from this entry (`CoinIcon`), never from a stored one.
+    /// The coin as a token the app can list: 18 decimals, as every launch token and Moment coin has, and its symbol and
+    /// name as they show (`displaySymbol`, `displayName`), as a `Launch`'s and `MomentInfo.coinToken`'s are, so no
+    /// screen ever draws the chain's direction characters. The checks read the entry itself, never this token's text
+    /// (`TokenBadge.of`, `CoinIcon.resolve`). No logo URL: a screen resolves the picture from this entry (`CoinIcon`),
+    /// never from a stored one.
     public var token: Token {
-        Token(address: address, symbol: symbol, name: name, decimals: MomentsConstants.coinDecimals, isLaunchpad: isLaunch)
+        Token(address: address, symbol: displaySymbol, name: displayName, decimals: MomentsConstants.coinDecimals, isLaunchpad: isLaunch)
     }
 }
 

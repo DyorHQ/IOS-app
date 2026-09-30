@@ -301,8 +301,18 @@ public enum WalletHoldings {
     private static func shownForms(_ text: String, keepingSpaces: Bool = false) -> [String] {
         let base = visible(text, keepingSpaces: keepingSpaces)
         guard !base.isEmpty else { return [] }
-        guard text.unicodeScalars.contains(where: { bidiControls.contains($0.value) }) else { return [base] }
+        guard changesDirection(text) else { return [base] }
         return [base, String(visible(text, keepingSpaces: keepingSpaces, fromTheEnd: true).reversed())]
+    }
+
+    /// Whether `text` holds a character that can change the order it shows in (`bidiControls`), leaving out a first
+    /// strong isolate and its pop directional isolate around all of it, which is how `ChainText.shown` gives a creator's
+    /// right-to-left name to a screen: that isolate takes its direction from the text's first letter, so it reverses
+    /// nothing, and the shown "NOM ١" is no "١MON".
+    private static func changesDirection(_ text: String) -> Bool {
+        var scalars = Substring(text).unicodeScalars[...]
+        if scalars.count > 1, scalars.first?.value == 0x2068, scalars.last?.value == 0x2069 { scalars = scalars.dropFirst().dropLast() }
+        return scalars.contains { bidiControls.contains($0.value) }
     }
 
     private static func zeroAsO(_ text: String) -> String { text.replacingOccurrences(of: "0", with: "o") }

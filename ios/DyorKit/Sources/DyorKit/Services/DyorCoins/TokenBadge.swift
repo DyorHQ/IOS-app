@@ -19,33 +19,36 @@ public enum TokenBadge: Hashable, Sendable {
     case imitates(Token)
 
     /// The badge `token` shows, `coin` being its DyorHQ registry entry when it has one (an entry for another address is
-    /// ignored) and `receivedUnasked` whether it reached the wallet without being chosen in the app. In order:
+    /// ignored) and `receivedUnasked` whether it reached the wallet without being chosen in the app. `token` is the one
+    /// the screen lists, its text as it shows: a `Launch`'s or `MomentInfo.coinToken`'s (`ChainText.shown`: a right-to-
+    /// left name inside an isolate), `DyorCoin.token`, or a held token's. In order:
     /// 1. MON and the curated tokens: none;
     /// 2. a look-alike of a curated or major token (`WalletHoldings.imitated(by:)`), by its own name or symbol or its
     ///    coin's: the imitation warning, whatever made it — a DyorHQ launch called "USDC.e" or "M0N" included;
-    /// 3. a symbol, its own or its coin's, that isn't display-safe (`SymbolSafety.isDisplaySafe`), and for a DyorHQ coin a
-    ///    name that isn't (hidden or direction-changing characters, a word mixing look-alike alphabets), text that
-    ///    couldn't be read (U+FFFD, `ChainText.unreadable`), or a symbol or name longer than the create forms allow:
-    ///    Unverified;
+    /// 3. a DyorHQ coin whose own text, as the chain holds it, doesn't show as itself (`SymbolSafety.isDisplaySafe(_:)`
+    ///    of the coin: a symbol that isn't display-safe or is longer than the forms allow, a name with hidden or
+    ///    direction-changing characters or a word mixing look-alike alphabets, text that couldn't be read): Unverified.
+    ///    Only the coin's text decides, never the token's, which a screen may have had shown (`ChainText.shown` adds
+    ///    isolates and removes direction characters);
     /// 4. a DyorHQ coin: DyorHQ Launch or DyorHQ Moment, received or chosen — a Chinese, Japanese or Korean symbol included;
-    /// 5. received unasked: Unverified;
+    /// 5. any other token whose symbol isn't display-safe (`SymbolSafety.isDisplaySafe`), or one received unasked:
+    ///    Unverified;
     /// 6. otherwise none.
-    /// A coin the registry can't tell yet (a read that failed) has no entry, and shows as it does today. Every check
-    /// reads the chain's text as it is (`DyorCoin.symbol`, `Token.symbol`), never `DyorCoin.displaySymbol`.
+    /// A coin the registry can't tell yet (a read that failed) has no entry, and shows as it does today.
     public static func of(_ token: Token, coin: DyorCoin?, receivedUnasked: Bool) -> TokenBadge {
         if token.isNative || Token.core(token.address) != nil { return .none }
         let coin = coin.flatMap { $0.address == token.address ? $0 : nil }
         if let imitated = imitation(token, coin: coin) { return .imitates(imitated) }
-        if !SymbolSafety.isDisplaySafe(token.symbol) { return .unverified }
         if let coin {
-            guard SymbolSafety.isDisplaySafe(coin), SymbolSafety.isNameDisplaySafe(token.name) else { return .unverified }
+            guard SymbolSafety.isDisplaySafe(coin) else { return .unverified }
             return coin.isMoment ? .dyorMoment : .dyorLaunch
         }
-        return receivedUnasked ? .unverified : .none
+        return receivedUnasked || !SymbolSafety.isDisplaySafe(token.symbol) ? .unverified : .none
     }
 
     /// The curated or major token `token` reads as, by its own symbol and name or, for a DyorHQ coin, by what its contract
-    /// says (`WalletHoldings.imitated(by:)`); nil for MON, the curated tokens and every other name.
+    /// says, direction characters and all (`WalletHoldings.imitated(by:)`); nil for MON, the curated tokens and every
+    /// other name.
     static func imitation(_ token: Token, coin: DyorCoin?) -> Token? {
         if let curated = WalletHoldings.imitated(by: token) { return curated }
         guard let coin, coin.address == token.address else { return nil }

@@ -134,43 +134,77 @@ final class DyorCoinBadgeTests: XCTestCase {
 
     // MARK: Chain text, not shown text (F13)
 
-    /// A coin keeps its text as the chain has it, and every check reads that: a Hebrew symbol gets the same verdict raw
-    /// as shown, a Hebrew name isn't mistaken for hidden characters by the isolates `ChainText.shown` adds around it, and
-    /// direction characters the chain holds are caught though `shown` removes them. The shown text is for screens alone.
+    /// A coin keeps its text as the chain has it, and every check reads that, whichever token a screen passes: its
+    /// `DyorCoin.token`, a `MomentInfo.coinToken` or a token built from a `Launch`, each carrying the text as it shows
+    /// (`ChainText.shown`: a right-to-left name inside an isolate). So a Hebrew name gets its DyorHQ label and picture
+    /// every way, a shown "NOM ١" is no "١MON", a Hebrew symbol gets the same verdict raw as shown, and direction
+    /// characters the chain holds are caught though `shown` removes them.
     func testChecksReadTheChainsTextNeverTheShownText() async throws {
         var chain = DyorCoinChain()
         func launch(_ n: Int, _ symbol: String, _ name: String) -> DyorCoinChain.LaunchCoin {
             let token = Address(literal: String(format: "0x0000000000000000000000000000000000%06x", 0xc0d000 + n))
-            return DyorCoinChain.LaunchCoin(token: token, name: name, symbol: symbol, logo: "", deployer: DyorCoinChain.creator, curve: Address(data: Data(token.data.reversed()))!)
+            return DyorCoinChain.LaunchCoin(token: token, name: name, symbol: symbol, logo: DyorCoinChain.media(DyorCoinChain.creator, "\(n).jpg"), deployer: DyorCoinChain.creator,
+                                            curve: Address(data: Data(token.data.reversed()))!)
         }
+        let shalom = "\u{05E9}\u{05DC}\u{05D5}\u{05DD}"
         let hebrewSymbol = launch(1, "\u{05D0}\u{05D1}\u{05D2}", "Aleph")
-        let hebrewName = launch(2, "SHLM", "\u{05E9}\u{05DC}\u{05D5}\u{05DD}")
+        let hebrewName = launch(2, "SHLM", shalom)
         let isolated = launch(3, "\u{2066}QT\u{2069}", "Quiet")
-        chain.launches[LaunchpadAddresses.monadMainnet.factory] = [hebrewSymbol, hebrewName, isolated]
+        let arabicDigit = launch(4, "NOMI", "NOM \u{0661}")
+        chain.launches[LaunchpadAddresses.monadMainnet.factory] = [hebrewSymbol, hebrewName, isolated, arabicDigit]
+        let moment = DyorCoinChain.MomentCoin(coin: Address(literal: "0x0000000000000000000000000000000000c0d101"), nft: Address(literal: "0x0000000000000000000000000000000000c0d102"),
+                                              creator: DyorCoinChain.creator, name: shalom, symbol: "SHLM", mediaURI: DyorCoinChain.media(DyorCoinChain.creator, "moment.jpg"),
+                                              mediaHash: Data(count: 32))
+        chain.moments[MomentsAddresses.monadMainnet.factory] = [moment]
         chain.install()
         let registry = DyorCoinRegistry(rpc: MomentsChainStub.rpc())
         await registry.refresh()
         let coins = await registry.all
+
+        let nameCoin = try XCTUnwrap(coins[hebrewName.token])
+        XCTAssertEqual(nameCoin.name, shalom, "kept as the chain has it")
+        XCTAssertNil(SymbolSafety.createRefusal(name: shalom, symbol: "SHLM"), "the create forms allow it")
+        // As `LaunchpadService` reads a launch (`ChainText.shown`) and Home, the Portfolio and the board make a token of it.
+        let launchToken = Token(address: hebrewName.token, symbol: ChainText.shown("SHLM"), name: ChainText.shown(shalom), decimals: 18, isLaunchpad: true)
+        for token in [nameCoin.token, launchToken] {
+            XCTAssertEqual(TokenBadge.of(token, coin: nameCoin, receivedUnasked: true), .dyorLaunch)
+            XCTAssertNotEqual(CoinIcon.resolve(token, coin: nameCoin, policy: .dyorhq), .letters, "its own picture")
+        }
+
+        let momentCoin = try XCTUnwrap(coins[moment.coin])
+        let info = MomentInfo(moment: Moment(id: 1, creator: moment.creator, platform: .zero, treasury: .zero, coin: moment.coin, nft: moment.nft, price: 1, threshold: 1, rateNum: 1,
+                                             rateDen: 1, creatorBps: 0, platformBps: 0, reserveBps: 0, creatorAllocBps: 0, expiryCreatorBps: 0, royaltyBps: 0, publishedAt: 0,
+                                             deadline: 0, factory: MomentsAddresses.monadMainnet.factory),
+                              name: ChainText.shown(shalom), symbol: ChainText.shown("SHLM"),
+                              provenance: MomentProvenance(mediaURI: moment.mediaURI, mediaHash: moment.mediaHash, place: "", date: 0, animationURI: ""),
+                              ledger: MomentLedger(state: .collecting, completedAt: 0, stuckSince: 0, endedAt: 0, reserve: 0, creatorClaimable: 0, platformClaimable: 0,
+                                                   treasuryClaimable: 0, totalGross: 0, collects: 0),
+                              editions: 0, closed: false, entitlements: 0, graduated: false, progressBps: 0, pool: nil)
+        for token in [momentCoin.token, info.coinToken] {
+            XCTAssertEqual(TokenBadge.of(token, coin: momentCoin, receivedUnasked: true), .dyorMoment)
+            XCTAssertNotEqual(CoinIcon.resolve(token, coin: momentCoin, policy: .dyorhq), .letters)
+        }
+
+        let digitCoin = try XCTUnwrap(coins[arabicDigit.token])
+        XCTAssertNil(WalletHoldings.imitated(by: digitCoin.token), "an isolate around all of it reverses nothing")
+        XCTAssertEqual(TokenBadge.of(digitCoin.token, coin: digitCoin, receivedUnasked: true), .dyorLaunch)
+        XCTAssertNil(WalletHoldings.imitated(by: Token(address: digitCoin.address, symbol: "SAFE", name: "\u{2068}NOM .\u{2069}", decimals: 18)))
+        XCTAssertEqual(WalletHoldings.imitated(by: Token(address: digitCoin.address, symbol: "SAFE", name: "\u{202E}NOM .", decimals: 18)), .mon,
+                       "an override does reverse it: \". MON\"")
+
         let symbolCoin = try XCTUnwrap(coins[hebrewSymbol.token])
         XCTAssertEqual(symbolCoin.symbol, "\u{05D0}\u{05D1}\u{05D2}", "kept as read")
         XCTAssertEqual(symbolCoin.displaySymbol, "\u{2068}\u{05D0}\u{05D1}\u{05D2}\u{2069}", "isolated for showing")
         XCTAssertEqual(SymbolSafety.isDisplaySafe(symbolCoin.symbol), SymbolSafety.isDisplaySafe(symbolCoin.displaySymbol), "the same verdict raw as shown")
         XCTAssertEqual(TokenBadge.of(symbolCoin.token, coin: symbolCoin, receivedUnasked: false), .unverified)
 
-        let nameCoin = try XCTUnwrap(coins[hebrewName.token])
-        XCTAssertEqual(nameCoin.name, "\u{05E9}\u{05DC}\u{05D5}\u{05DD}")
-        XCTAssertEqual(nameCoin.displayName, "\u{2068}\u{05E9}\u{05DC}\u{05D5}\u{05DD}\u{2069}")
-        XCTAssertTrue(SymbolSafety.hasHiddenCharacters(nameCoin.displayName), "what a check reading the shown text would see")
-        XCTAssertEqual(TokenBadge.of(nameCoin.token, coin: nameCoin, receivedUnasked: false), .dyorLaunch, "the check read the chain's text")
-
         let isolatedCoin = try XCTUnwrap(coins[isolated.token])
-        XCTAssertEqual(isolatedCoin.displaySymbol, "QT", "shown without its isolates")
+        XCTAssertEqual(isolatedCoin.symbol, "\u{2066}QT\u{2069}")
+        XCTAssertEqual(isolatedCoin.token.symbol, "QT", "shown without its isolates")
         XCTAssertEqual(TokenBadge.of(isolatedCoin.token, coin: isolatedCoin, receivedUnasked: false), .unverified, "the isolates the chain holds are caught")
 
-        for coin in coins.values {
-            for text in [coin.symbol, coin.name, coin.token.symbol, coin.token.name] {
-                XCTAssertFalse(text.unicodeScalars.contains { $0.value == 0x2068 }, "no check is handed an isolate ChainText added")
-            }
-        }
+        // Last: a failure message holding the isolates can keep XCTest from reporting the ones after it.
+        XCTAssertEqual(nameCoin.token.name, "\u{2068}\(shalom)\u{2069}", "a screen gets it as it shows")
+        XCTAssertEqual(digitCoin.token.name, "\u{2068}NOM \u{0661}\u{2069}")
     }
 }
