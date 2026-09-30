@@ -82,6 +82,29 @@ final class TokenLogoAssetTests: XCTestCase {
             XCTAssertLessThanOrEqual(abs(Double(minY + maxY + 1) / 2 - side / 2), side * 0.01, "\(name) is off-centre down")
         }
     }
+
+    /// No coin sits on a white disc. A plate already cut to a circle, with the coin drawn smaller inside it, passes both
+    /// checks above, yet shows as a white ring round the coin on a dark card. So the outer tenth of the disc must be the
+    /// coin's own edge: at most half of it near-white. The shipped coins' edges are at most 17% near-white (WBTC); each
+    /// plated file had at least 66%.
+    func testNoCoinSitsOnAWhiteDisc() throws {
+        for name in try Self.fileNames() where name.hasPrefix("logo-") {
+            let logo = try Bitmap(Self.logoFolder().appendingPathComponent(name))
+            let radius = Double(logo.width) / 2
+            var edge = 0, white = 0
+            for y in 0..<logo.height {
+                for x in 0..<logo.width where logo.alpha(x, y) >= 200 {
+                    let distance = ((Double(x) + 0.5 - radius) * (Double(x) + 0.5 - radius)
+                        + (Double(y) + 0.5 - radius) * (Double(y) + 0.5 - radius)).squareRoot()
+                    guard distance >= radius * 0.9, distance <= radius - 2 else { continue }
+                    edge += 1
+                    if logo.isNearWhite(x, y) { white += 1 }
+                }
+            }
+            XCTAssertGreaterThan(edge, 0, "\(name) has no edge")
+            XCTAssertLessThanOrEqual(Double(white) / Double(max(edge, 1)), 0.5, "\(name) sits on a white disc")
+        }
+    }
 }
 
 /// A PNG's pixels (premultiplied RGBA), decoded with ImageIO the way UIKit reads the file. An image with no alpha reads
@@ -113,6 +136,14 @@ private struct Bitmap {
     func alpha(_ x: Int, _ y: Int) -> UInt8 { rgba[(y * width + x) * 4 + 3] }
 
     func pixel(_ x: Int, _ y: Int) -> [UInt8] { Array(rgba[(y * width + x) * 4..<(y * width + x) * 4 + 4]) }
+
+    /// Whether a pixel is white or nearly so (every channel at least 230 once its alpha is divided out): a plate's
+    /// colour, never a coin's own pale tint such as ezETH's lime or mUSD's blue.
+    func isNearWhite(_ x: Int, _ y: Int) -> Bool {
+        let value = pixel(x, y)
+        guard value[3] > 0 else { return false }
+        return value[0..<3].allSatisfy { Int($0) * 255 >= 230 * Int(value[3]) }
+    }
 
     /// How far a pixel's colour is from `other`: the sum of the channel differences.
     func difference(_ x: Int, _ y: Int, _ other: [UInt8]) -> Int {
