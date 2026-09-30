@@ -437,9 +437,9 @@ final class LogScanTests: XCTestCase {
     /// The re-review's finding (from before V1): rpc1 refuses a range past the head of the node answering it (its nodes
     /// can be a few blocks apart, the head read from one and the logs from another) with "block range extends beyond
     /// current head block", and `refusesSize` took that for a size refusal: the range was split, 59 requests for a
-    /// 1M-block range. It is asked again once the node has had time to catch up, never split, and left as a gap, for the
-    /// caller to read later, if the node still hasn't.
-    func testARangePastTheNodesHeadIsAskedAgainNeverSplit() async {
+    /// 1M-block range. It is asked again once the node has had time to catch up, not split; if the node still hasn't, it
+    /// is read in halves as before, so everything up to that node's head is read (`testARangeStillPastTheNodesHeadAfterTheWaitsIsReadInHalves`).
+    func testARangePastTheNodesHeadIsAskedAgainBeforeItIsSplit() async {
         let limits = LogScanLimits(pause: 0, maxPause: 0, headPause: 0.05)
         let pastHead = LogsStub.Failure.error(code: -32602, message: "block range extends beyond current head block")
         let whole = LogsStub.Range(from: 0, to: 999_999)
@@ -452,12 +452,16 @@ final class LogScanTests: XCTestCase {
             XCTAssertEqual(caughtUp.logs.map(\.blockNumber), [5, 999_990], "\(mode)")
             XCTAssertEqual(LogsStub.queries(), [whole, whole, whole], "\(mode): asked again, never split")
 
-            // A node that doesn't catch up: a gap after two more asks.
-            LogsStub.install(head: 1_000_000, logs: [5].map(transfer)) { range in range.to > 999_000 ? pastHead : nil }
+            // A node that doesn't catch up: after two more asks, read in halves, each part asked once (the waits are spent).
+            LogsStub.install(head: 1_000_000, logs: [5, 600_000].map(transfer)) { range in range.to > 999_000 ? pastHead : nil }
             let behind = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 999_999, chunkSize: 1_000_000,
                                                                 concurrency: 1, mode: mode, limits: limits)
-            XCTAssertFalse(behind.complete, "\(mode)")
-            XCTAssertEqual(LogsStub.queries(), [whole, whole, whole], "\(mode): never split")
+            XCTAssertFalse(behind.complete, "\(mode): the blocks past that node's head are a gap")
+            XCTAssertEqual(behind.logs.map(\.blockNumber), [5, 600_000], "\(mode): everything up to that node's head is read")
+            let asked = LogsStub.queries()
+            XCTAssertEqual(Array(asked.prefix(3)), [whole, whole, whole], "\(mode)")
+            XCTAssertEqual(Set(asked.dropFirst(3)).count, asked.count - 3, "\(mode): each part once")
+            XCTAssertTrue(asked.dropFirst(3).allSatisfy { $0.span < whole.span }, "\(mode)")
         }
         // A size refusal is still split.
         LogsStub.install(head: 1_000_000, logs: [5].map(transfer)) { range in range.span > 500_000 ? .error(code: -32062, message: "Block range is too large") : nil }
@@ -465,6 +469,47 @@ final class LogScanTests: XCTestCase {
                                                            concurrency: 1, mode: .paced, limits: limits)
         XCTAssertTrue(split.complete)
         XCTAssertEqual(Set(LogsStub.queries()), [whole, LogsStub.Range(from: 0, to: 499_999), LogsStub.Range(from: 500_000, to: 999_999)])
+    }
+
+    /// The V1 final check's finding (P1): a node that stayed behind the head the caller read for longer than the waits left
+    /// the whole last range (up to 100,000 blocks) as a gap, where before, its refusal taken for a size refusal, the range
+    /// was halved and everything up to that node's head read — and the callers that take what a scan read (launches,
+    /// Moments, swaps, NFTs) lost the newest activity. Once the waits are spent the range is read in halves, as before, in
+    /// every mode; the waits are the scan's, two in all, not two for every range it asks.
+    func testARangeStillPastTheNodesHeadAfterTheWaitsIsReadInHalves() async {
+        let pastHead = LogsStub.Failure.error(code: -32602, message: "block range extends beyond current head block")
+        let limits = LogScanLimits(pause: 0, maxPause: 0, headPause: 0.01)
+        for mode in [LogScanMode.patient, .failFast, .paced] {
+            for walletScoped in [false, true] {
+                let name = "\(mode), \(walletScoped ? "wallet-scoped" : "by address")"
+                // The node answering is 10 blocks short of the head the caller read, and stays there.
+                LogsStub.install(head: 1_000_000, logs: [5, 950_000, 999_950].map(transfer)) { range in range.to > 999_989 ? pastHead : nil }
+                let report = await LogsStub.rpc().chunkedLogsReport(address: walletScoped ? nil : token, topics: walletScoped ? [transferTopic, nil, walletWord] : [transferTopic],
+                                                                    fromBlock: 0, toBlock: 999_999, mode: mode, limits: limits)
+                XCTAssertEqual(report.logs.map(\.blockNumber), [5, 950_000], name)
+                XCTAssertFalse(report.complete, "\(name): the last blocks, past that node's head, are a gap the caller reads later")
+                let behind = LogsStub.queries().filter { $0.to > 999_989 }
+                XCTAssertEqual(behind.count - Set(behind).count, 2, "\(name): two asks again in all, then each part once")
+                XCTAssertTrue(behind.contains(LogsStub.Range(from: 999_804, to: 999_999)), "\(name): halved down to the smallest range")
+            }
+        }
+    }
+
+    /// The fallback costs the common case nothing: a node a block or two behind (under a second) costs the wallet's history
+    /// on Send and the Portfolio (fail-fast) the one wait of a second it cost before, with the app's limits, and is read
+    /// in full; the whole window asked twice.
+    func testANodeABlockOrTwoBehindCostsTheWalletsHistoryOneWait() async {
+        let pastHead = LogsStub.Failure.error(code: -32602, message: "block range extends beyond current head block")
+        let caughtUp = Date().addingTimeInterval(0.8)
+        LogsStub.install(head: 1_000_000, logs: [5, 999_990].map(transfer)) { range in range.to > 999_997 && Date() < caughtUp ? pastHead : nil }
+        let started = Date()
+        let report = await LogsStub.rpc().chunkedLogsReport(address: nil, topics: [transferTopic, nil, walletWord], fromBlock: 0, toBlock: 999_999, mode: .failFast)
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertTrue(report.complete)
+        XCTAssertEqual(report.logs.map(\.blockNumber), [5, 999_990])
+        XCTAssertEqual(LogsStub.queries(), [LogsStub.Range(from: 0, to: 999_999), LogsStub.Range(from: 0, to: 999_999)])
+        XCTAssertGreaterThanOrEqual(elapsed, 0.8)
+        XCTAssertLessThan(elapsed, 1.5, "one wait of a second")
     }
 
     func testTheRangeASizeRefusalNamesIsReadOnlyWhenItFits() {

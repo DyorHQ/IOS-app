@@ -36,7 +36,9 @@ enum LogsAnswer: Sendable {
     case tooLarge(cut: UInt64?)
     /// Refused for ending past the head of the node that answered (`RPCClient.refusesPastHead`): rpc1's nodes can be a
     /// few blocks apart, the head read from one and the logs from another. Asked again once that node has had time to
-    /// catch up (`LogScanLimits.headPause`), never split, and left as a gap if it still hasn't: the caller reads it later.
+    /// catch up (`LogScanLimits.headPause`), while the scan's waits for it last; past them, read in halves as a size
+    /// refusal is (`LogScan.divide`), as it was before it was told apart from one, so everything up to that node's head
+    /// is read and only the part past it is a gap, for the caller to read later.
     case pastHead
     /// Anything else: an internal error, a throttle that outlasted the client's retries, no answer. A smaller range
     /// may not be answered either.
@@ -83,7 +85,8 @@ struct LogScanLimits: Sendable, Equatable {
     var throttlePause: TimeInterval = 2
     var maxThrottlePause: TimeInterval = 16
     /// A range refused for ending past the node's head (`LogsAnswer.pastHead`) is asked again after `headPause` seconds,
-    /// then twice that, `headRetries` times in all: Monad makes a block every 0.4 s, and the nodes are a few apart.
+    /// then twice that: `headRetries` waits a scan in all, not a range, since Monad makes a block every 0.4 s and the
+    /// nodes are a few apart. Past them, such a range is read in halves at once.
     var headPause: TimeInterval = 1
     var headRetries = 2
 }
@@ -133,6 +136,8 @@ struct LogScan {
     private(set) var failedSplits: Int
     /// Requests in a row that got no range answered.
     private(set) var failedInARow = 0
+    /// Waits spent on ranges past the answering node's head (`LogScanLimits.headRetries`).
+    private(set) var headWaits = 0
     /// When a range was last answered — with its logs, or a refusal of its size — or the scan started.
     private var answeredAt = SuspendingClock.Instant.now
     /// Patient or paced: no range has been answered for `limits.outage` (since the app's return, when that is later:
@@ -168,6 +173,14 @@ struct LogScan {
         min(limits.throttlePause * pow(2, Double(max(0, n - 1))), limits.maxThrottlePause)
     }
 
+    /// How long to wait before asking again a range past the answering node's head, spending one of the scan's waits;
+    /// nil once they are spent (`LogScanLimits.headRetries`).
+    mutating func headPause() -> TimeInterval? {
+        guard headWaits < limits.headRetries else { return nil }
+        headWaits += 1
+        return limits.headPause * Double(headWaits)
+    }
+
     /// Whether `part` would be read in halves if it failed for a reason other than its size: patient or paced, while the
     /// scan's splits last, and when it is wider than `floor` blocks.
     func halvesFailures(_ part: LogFilter, floor: UInt64) -> Bool {
@@ -175,8 +188,9 @@ struct LogScan {
     }
 
     /// `part` in two after `answer`. Refused for its size: where the refusal says a range the endpoint can answer ends,
-    /// while `cuts` lasts, else in halves. Failed for another reason: in halves when `halvesFailures`. Nil — the part is a
-    /// gap — when it was answered, is no wider than `floor` blocks, or the scan's splits are spent.
+    /// while `cuts` lasts, else in halves. Past the answering node's head, its waits spent: in halves. Failed for another
+    /// reason: in halves when `halvesFailures`. Nil — the part is a gap — when it was answered, is no wider than `floor`
+    /// blocks, or the scan's splits are spent.
     mutating func divide(_ part: LogFilter, after answer: LogsAnswer, cuts: inout Int, floor: UInt64) -> [LogFilter]? {
         guard splits > 0 else { return nil }
         let parts: [LogFilter]?
@@ -188,7 +202,7 @@ struct LogScan {
             if named != nil { cuts -= 1 }
             parts = RPCClient.split(part, at: named, floor: floor)
         case .pastHead:
-            return nil
+            parts = RPCClient.split(part, floor: floor)
         case .failed:
             guard halvesFailures(part, floor: floor) else { return nil }
             parts = RPCClient.split(part, floor: floor)
@@ -414,15 +428,12 @@ public extension RPCClient {
                 case .logs(let logs):
                     out.append(contentsOf: logs)
                     answered = true
-                case .tooLarge:
+                case .tooLarge, .pastHead:
+                    // Past the node's head: asked again already while the scan's waits lasted (`batchAnswers`).
                     answered = true
                     let narrowed = await narrowedLogs(filter, after: answer, scan: &scan)
                     out.append(contentsOf: narrowed.logs)
                     complete = complete && narrowed.complete
-                case .pastHead:
-                    // Asked again already (`batchAnswers`): a gap, for the caller to read later, never read in halves.
-                    answered = true
-                    complete = false
                 case .failed where mode != .failFast:
                     // As build 15 read it: in halves, which a moment's outage, or a range too heavy for the endpoint to
                     // answer in time, lets through.
@@ -484,13 +495,12 @@ public extension RPCClient {
             for (k, i) in throttled.enumerated() { answers[i] = again.answers[k] }
             if !again.unanswered { throttled = again.throttled.map { throttled[$0] } }
         }
-        // Past the head of the node that answered: asked again once it has had time to catch up.
-        var waits = 0
-        while waits < scan.limits.headRetries, !scan.down, !Task.isCancelled {
+        // Past the head of the node that answered: asked again once it has had time to catch up, while the scan's waits
+        // last; past them, read in halves (`LogScan.divide`).
+        while !scan.down, !Task.isCancelled {
             let behind = answers.indices.filter { if case .pastHead = answers[$0] { return true }; return false }
-            guard !behind.isEmpty else { break }
-            waits += 1
-            try? await Task.sleep(for: .seconds(scan.limits.headPause * Double(waits)))
+            guard !behind.isEmpty, let pause = scan.headPause() else { break }
+            try? await Task.sleep(for: .seconds(pause))
             if Task.isCancelled { break }
             let again = await ask(behind.map { filters[$0] })
             scan.record(again.answers)
@@ -533,8 +543,8 @@ public extension RPCClient {
     /// rpc.monad.xyz's "eth_getLogs is limited to a 100 range" (-32614), rpc3's "Block range is too large" (-32062), and
     /// the same said in other words. Never a range past the node's head (`refusesPastHead`), a throttle, an internal error
     /// or a node that can't serve the method: a smaller range doesn't reliably fix those, so only a patient scan splits a
-    /// range for them (never one past the head), and within its limits (`LogScanLimits`): splitting every one sends
-    /// thousands of requests that fail the same way.
+    /// range for them (one past the head only once the scan's waits for it are spent), and within its limits
+    /// (`LogScanLimits`): splitting every one sends thousands of requests that fail the same way.
     internal static func refusesSize(_ error: RPCError) -> Bool {
         if refusesPastHead(error) { return false }
         let message = error.message.lowercased()
@@ -547,15 +557,15 @@ public extension RPCClient {
     /// Whether an `eth_getLogs` error refuses the range for ending past the head of the node that answered it — rpc1's
     /// "block range extends beyond current head block" (-32602, probed 2026-09-30), which `refusesSize` would otherwise
     /// take for a size refusal ("block range") and split — rather than for its size: a smaller range from the same start
-    /// ends there too, and the node reaches it in a moment.
+    /// ends there too, and the node reaches it in a moment, so it is asked again first (`LogsAnswer.pastHead`).
     internal static func refusesPastHead(_ error: RPCError) -> Bool {
         let message = error.message.lowercased()
         return message.contains("beyond current head") || message.contains("beyond the current head")
     }
 
-    /// A range refused — for its size, or, patient, for any reason (`answer`) — read in parts down to 100 blocks (the cap
-    /// of the default Monad RPC; 5 000 on a local node), each part refused again split again (`LogScan.divide`): where a
-    /// size refusal says a range the endpoint can answer ends, else in halves. The endpoint's word is taken up to 200
+    /// A range refused — for its size, past the node's head, or, patient, for any reason (`answer`) — read in parts down
+    /// to 100 blocks (the cap of the default Monad RPC; 5 000 on a local node), each part refused again split again
+    /// (`LogScan.divide`): where a size refusal says a range the endpoint can answer ends, else in halves. The endpoint's word is taken up to 200
     /// times a range (about 2M logs on rpc1), then halves only, so no endpoint can keep it splitting off a block at a time.
     /// Patient, a part that would be halved if it failed is asked once, after a pause while the endpoint isn't answering;
     /// every other part is asked twice. A part refused at the smallest size, or once the scan's splits are spent, is left
