@@ -163,16 +163,18 @@ public enum WalletHoldings {
     /// - or its name is one of their symbols or names with nothing but non-letters around it ("$MON", "USDC 2").
     /// Being chosen proves nothing here: tapping a search result in Swap stores a token as chosen. Nil for MON, the
     /// curated tokens and every other name. The wallet's warnings, the badge (`TokenBadge`) and the create forms'
-    /// guard (`SymbolSafety.createRefusal`) all go by this one rule.
+    /// guard (`SymbolSafety.createRefusal`) all go by this one rule. Only the first `maxJudged` characters that show of
+    /// each are judged, so its cost doesn't grow with what a creator writes.
     public static func imitated(by token: Token) -> Token? {
         guard !token.isNative, Token.core(token.address) == nil else { return nil }
         let own = Set([token.symbol, token.name].flatMap(readings))
         guard !own.isEmpty else { return nil }
-        if let target = lookAlikeTargets.first(where: { !own.isDisjoint(with: $0.readings) }) { return target.token }
-        let symbol = forms(token.symbol)
-        let name = forms(token.name)
-        return lookAlikeTargets.first { target in
-            target.forms.contains { wanted in symbol.contains { standsApart(wanted, in: $0) } || name.contains { standsAlone(wanted, in: $0) } }
+        let targets = lookAlikeTargets
+        if let target = targets.first(where: { !own.isDisjoint(with: $0.readings) }) { return target.token }
+        let symbol = forms(token.symbol).map(Text.init)
+        let name = forms(token.name).map(Text.init)
+        return targets.first { target in
+            target.forms.contains { wanted in symbol.contains { $0.standsApart(wanted) } || name.contains { $0.standsAlone(wanted) } }
         }?.token
     }
 
@@ -201,12 +203,12 @@ public enum WalletHoldings {
     private struct LookAlikeTarget {
         let token: Token
         let readings: Set<String>
-        let forms: Set<String>
+        let forms: [Text]
 
         init(_ token: Token, names: [String]) {
             self.token = token
             readings = Set(([token.symbol] + names).flatMap(WalletHoldings.readings))
-            forms = Set(([token.symbol] + names).flatMap(WalletHoldings.forms))
+            forms = Set(([token.symbol] + names).flatMap(WalletHoldings.forms)).map(Text.init)
         }
     }
 
@@ -214,31 +216,52 @@ public enum WalletHoldings {
     private static let lookAlikeTargets: [LookAlikeTarget] = Token.core.map { LookAlikeTarget($0, names: [$0.name]) }
         + majors.map { LookAlikeTarget($0.token, names: $0.names) }
 
-    /// Whether `wanted` is in `text` with no letter right before or after it.
-    static func standsApart(_ wanted: String, in text: String) -> Bool {
-        occurrences(of: wanted, in: text).contains { range in
-            !(range.lowerBound > text.startIndex && text[text.index(before: range.lowerBound)].isLetter)
-                && !(range.upperBound < text.endIndex && text[range.upperBound].isLetter)
+    /// The most of a symbol or name `imitated(by:)` judges: its first 128 characters that show (`visible`), or, when a
+    /// direction override can show its end first, its last 128 too. No curated or major token's symbol or name comes
+    /// near that (the longest, "Lombard Staked Bitcoin", has 22), a screen shows fewer, and a DyorHQ coin keeps fewer
+    /// of a name (`DyorCoin.maxStoredName`); so a 40 KB name an airdropped token computes costs what a short one does.
+    static let maxJudged = 128
+
+    /// A form of a symbol or name (`forms`), as scalars, for finding one in another: at most `maxJudged` characters and
+    /// a few more a compatibility form spells out, so each search is short. Letters are what `Character.isLetter` calls
+    /// one (alphabetic).
+    struct Text {
+        let scalars: [Unicode.Scalar]
+        let letters: Int
+
+        init(_ text: String) {
+            scalars = Array(text.unicodeScalars)
+            letters = scalars.reduce(0) { $0 + ($1.properties.isAlphabetic ? 1 : 0) }
+        }
+
+        /// Whether `wanted` is in it with no letter right before or after it.
+        func standsApart(_ wanted: Text) -> Bool {
+            occurrences(of: wanted).contains { start in
+                let end = start + wanted.scalars.count
+                return !(start > 0 && scalars[start - 1].properties.isAlphabetic) && !(end < scalars.count && scalars[end].properties.isAlphabetic)
+            }
+        }
+
+        /// Whether `wanted` is in it with no letter anywhere else in it: every letter it has is one of `wanted`'s.
+        func standsAlone(_ wanted: Text) -> Bool {
+            letters == wanted.letters && !occurrences(of: wanted).isEmpty
+        }
+
+        /// Where `wanted` starts in it, each place, in one pass.
+        private func occurrences(of wanted: Text) -> [Int] {
+            let count = wanted.scalars.count
+            guard count > 0, count <= scalars.count else { return [] }
+            return (0 ... scalars.count - count).filter { start in
+                scalars[start] == wanted.scalars[0] && scalars[start ..< start + count].elementsEqual(wanted.scalars)
+            }
         }
     }
 
-    /// Whether `wanted` is in `text` with no letter anywhere else in it.
-    static func standsAlone(_ wanted: String, in text: String) -> Bool {
-        occurrences(of: wanted, in: text).contains { range in
-            !text[..<range.lowerBound].contains(where: \.isLetter) && !text[range.upperBound...].contains(where: \.isLetter)
-        }
-    }
+    /// Whether `wanted` is in `text` with no letter right before or after it (`Text.standsApart`).
+    static func standsApart(_ wanted: String, in text: String) -> Bool { Text(text).standsApart(Text(wanted)) }
 
-    private static func occurrences(of wanted: String, in text: String) -> [Range<String.Index>] {
-        guard !wanted.isEmpty else { return [] }
-        var found: [Range<String.Index>] = []
-        var from = text.startIndex
-        while from < text.endIndex, let range = text.range(of: wanted, range: from..<text.endIndex) {
-            found.append(range)
-            from = text.index(after: range.lowerBound)
-        }
-        return found
-    }
+    /// Whether `wanted` is in `text` with no letter anywhere else in it (`Text.standsAlone`).
+    static func standsAlone(_ wanted: String, in text: String) -> Bool { Text(text).standsAlone(Text(wanted)) }
 
     /// The ways `text` reads to the eye, for `imitated(by:)`: `visible(text)` ignoring case (tagged "a"); with the digits
     /// and letters that pass for one another made one — 0 as O; 1, I and | as l — keeping case (tagged "b"), so "USDL"
@@ -257,37 +280,52 @@ public enum WalletHoldings {
         shownForms(text).flatMap { [$0.lowercased(), zeroAsO($0.lowercased())] }
     }
 
-    /// `visible(text)`, and backwards too when a direction-changing character can show it so; none for empty text.
+    /// `visible(text)`, and backwards too when a direction-changing character can show it so (its end, then, is what
+    /// shows first); none for empty text.
     private static func shownForms(_ text: String) -> [String] {
         let base = visible(text)
         guard !base.isEmpty else { return [] }
         guard text.unicodeScalars.contains(where: { bidiControls.contains($0.value) }) else { return [base] }
-        return [base, String(base.reversed())]
+        return [base, String(visible(text, fromTheEnd: true).reversed())]
     }
 
     private static func zeroAsO(_ text: String) -> String { text.replacingOccurrences(of: "0", with: "o") }
 
-    /// `text` as it shows: compatibility forms (full-width and mathematical letters) as their plain letters; invisible,
-    /// format and direction characters (zero-width spaces and joiners, soft hyphen, byte-order mark, overrides), control
-    /// characters, combining marks, spaces and the blank Braille pattern U+2800 removed; U+FFFD removed too, which is
-    /// what bytes that aren't text read as (`ABI.StringDecoding.lossy`) and draws as a mark, not a letter, so "USDC" and
-    /// one such byte still reads as "USDC"; letters from other scripts that look like Latin ones (Cyrillic "С", Greek "Ο",
-    /// Armenian "օ", Lisu "ꓟ", small capital "ᴏ": `lookAlikeLetters`) as those Latin letters, before the compatibility
-    /// forms are folded (which would turn a Greek lunate "Ϲ" into a "Σ" nobody mistakes for C) and after; accents and
-    /// width ignored. Case is kept (`readings` decides on it).
-    static func visible(_ text: String) -> String {
-        let lookedAt = String(String.UnicodeScalarView(text.unicodeScalars.map { lookAlikeLetters[$0] ?? $0 }))
-        var scalars = String.UnicodeScalarView()
-        for scalar in lookedAt.precomposedStringWithCompatibilityMapping.unicodeScalars {
-            let properties = scalar.properties
-            switch properties.generalCategory {
-            case .format, .control, .nonspacingMark, .enclosingMark, .spaceSeparator, .lineSeparator, .paragraphSeparator: continue
-            default: break
-            }
-            if properties.isWhitespace || properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) || scalar.value == 0xFFFD || scalar.value == 0x2800 { continue }
-            scalars.append(lookAlikeLetters[scalar] ?? scalar)
+    /// `text` as it shows, at most `maxJudged` characters of it (the first, or `fromTheEnd` the last): compatibility forms
+    /// (full-width and mathematical letters) as their plain letters; invisible, format and direction characters
+    /// (zero-width spaces and joiners, soft hyphen, byte-order mark, overrides), control characters, combining marks,
+    /// spaces and the blank Braille pattern U+2800 removed; U+FFFD removed too, which is what bytes that aren't text
+    /// read as (`ABI.StringDecoding.lossy`) and draws as a mark, not a letter, so "USDC" and one such byte still reads as
+    /// "USDC"; letters from other scripts that look like Latin ones (Cyrillic "С", Greek "Ο", Armenian "օ", Lisu "ꓟ",
+    /// small capital "ᴏ": `lookAlikeLetters`) as those Latin letters, before the compatibility forms are folded (which
+    /// would turn a Greek lunate "Ϲ" into a "Σ" nobody mistakes for C) and after; accents and width ignored. Case is
+    /// kept (`readings` decides on it).
+    static func visible(_ text: String, fromTheEnd: Bool = false) -> String {
+        // What shows, at most `maxJudged` of it, taken before anything else, so a long text costs no more.
+        var shown: [Unicode.Scalar] = []
+        for scalar in fromTheEnd ? AnyIterator(text.unicodeScalars.reversed().makeIterator()) : AnyIterator(text.unicodeScalars.makeIterator()) {
+            if isUnseen(scalar) { continue }
+            shown.append(lookAlikeLetters[scalar] ?? scalar)
+            if shown.count >= maxJudged { break }
         }
-        return String(scalars).folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil).filter { !$0.isWhitespace }
+        if fromTheEnd { shown.reverse() }
+        let composed = String(String.UnicodeScalarView(shown)).precomposedStringWithCompatibilityMapping
+        var scalars = String.UnicodeScalarView()
+        for scalar in composed.unicodeScalars where !isUnseen(scalar) { scalars.append(lookAlikeLetters[scalar] ?? scalar) }
+        let folded = String(scalars).folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil)
+        return String(folded.filter { !$0.isWhitespace }.prefix(maxJudged))
+    }
+
+    /// What doesn't show as a character of its own: spaces, line breaks and tabs; format, control and default-ignorable
+    /// characters; combining marks; the invisible ones `Address.isInvisible` names; U+FFFD and the blank Braille pattern
+    /// U+2800.
+    private static func isUnseen(_ scalar: Unicode.Scalar) -> Bool {
+        let properties = scalar.properties
+        switch properties.generalCategory {
+        case .format, .control, .nonspacingMark, .enclosingMark, .spaceSeparator, .lineSeparator, .paragraphSeparator: return true
+        default: break
+        }
+        return properties.isWhitespace || properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) || scalar.value == 0xFFFD || scalar.value == 0x2800
     }
 
     /// Whether `text` is plain printable ASCII — letters, digits, punctuation and spaces — and not empty.

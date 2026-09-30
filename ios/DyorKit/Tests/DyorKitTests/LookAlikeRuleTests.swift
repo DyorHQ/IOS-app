@@ -85,6 +85,37 @@ final class LookAlikeRuleTests: XCTestCase {
         }
     }
 
+    // MARK: Cost
+
+    /// An airdropped token's `name()` can compute 40 KB of text for a few thousand gas, and the Send list judges each
+    /// row's token several times a draw: a crafted name or symbol costs what a short one does, on its own and through
+    /// the badge. Only what shows is judged, so padding a look-alike with invisible characters, or putting it last
+    /// behind an override that shows it first, hides nothing.
+    func testALongCraftedNameCostsWhatAShortOneDoes() {
+        continueAfterFailure = false
+        let spam = Address(literal: "0x00000000000000000000000000000000000bad01")
+        for size in [10_000, 40_000] {
+            let crafted: [(String, Token)] = [
+                ("dots then mon", Token(address: spam, symbol: "SPAM", name: String(repeating: ".", count: size / 2) + String(repeating: "mon", count: size / 6), decimals: 18)),
+                ("dollars then usdc", Token(address: spam, symbol: "SPAM", name: String(repeating: "$", count: size / 2) + String(repeating: "usdc", count: size / 8), decimals: 18)),
+                ("xmonx symbol", Token(address: spam, symbol: String(repeating: "xmonx", count: size / 5), name: "Spam", decimals: 18)),
+                ("accents then Cyrillic", Token(address: spam, symbol: "SPAM", name: String(repeating: "é", count: size / 2) + String(repeating: "мон", count: size / 6), decimals: 18)),
+                ("override", Token(address: spam, symbol: "SPAM", name: "\u{202E}" + String(repeating: "\u{200B}.", count: size / 2) + "CDSU", decimals: 18)),
+            ]
+            for (label, token) in crafted {
+                let start = Date()
+                _ = WalletHoldings.imitated(by: token)
+                _ = TokenBadge.of(token, coin: nil, receivedUnasked: true)
+                let seconds = Date().timeIntervalSince(start)
+                XCTAssertLessThan(seconds, 0.25, "\(label), \(size) characters: \(seconds) s")
+            }
+        }
+        let padded = token("SAFE", String(repeating: "\u{200B}", count: 40_000) + "USDC")
+        XCTAssertEqual(WalletHoldings.imitated(by: padded), .usdc, "invisible padding hides nothing")
+        let overridden = token("SAFE", "\u{202E}" + String(repeating: ".", count: 40_000) + "CDSU")
+        XCTAssertEqual(WalletHoldings.imitated(by: overridden), .usdc, "an override shows the end first: \"USDC....\"")
+    }
+
     // MARK: Display safety and the create guard (F5, F6)
 
     /// Accented Latin letters are Latin letters: display-safe and allowed ("USDĆ" still reads as USDC).
