@@ -53,6 +53,9 @@ public final class VenueTokenList {
     @ObservationIgnored private var retryAfter = Date.distantPast
     /// The checkpoint the store holds.
     @ObservationIgnored private var saved: UInt64 = 0
+    /// Addresses a run read with no readable symbol (`VenueTokensService.Progress.dropped`), kept for the runs after it in
+    /// this process: a segment a run left short is read again, and what it dropped isn't read again with it.
+    @ObservationIgnored private var dropped: Set<Address> = []
     @ObservationIgnored private var run: Task<Void, Never>?
     /// Which run may change the list and the store: `stop` moves it on, so a run it cancelled, and a save of that run
     /// already on its way, change nothing.
@@ -118,14 +121,14 @@ public final class VenueTokenList {
             saved = stored.checkpoint
             isLoaded = true
         }
-        let result = await service.refresh(tokens: tokens, checkpoint: checkpoint, logos: logos) { [weak self] progress in
+        let result = await service.refresh(tokens: tokens, checkpoint: checkpoint, dropped: dropped, logos: logos) { [weak self] progress in
             guard let self, await self.show(progress, generation) else { return }
             let data = await Task.detached(priority: .utility) { Self.encode(progress.tokens) }.value
             if let data { await self.store(data, checkpoint: progress.checkpoint, generation) }
         }
         guard generation == self.generation else { return }
         // Nothing read (the head couldn't be read): the list is as it was, and so is what the picker says.
-        if let result { head = result.head }
+        if let result { head = result.head; dropped = result.dropped }
         if result?.complete == true {
             shortRuns = 0
         } else {
@@ -143,6 +146,7 @@ public final class VenueTokenList {
         tokens = progress.tokens
         checkpoint = progress.checkpoint
         head = progress.head
+        dropped = progress.dropped
         return progress.checkpoint != saved
     }
 

@@ -32,6 +32,14 @@ public struct VenueTokensService: Sendable {
     /// the checkpoint never passes a block that isn't final or that the node answering hasn't reached.
     public static let headMargin: UInt64 = 100
 
+    /// Requests a refresh may make to read metadata again past each batch's first read (`ERC20.metadataReport`): a token
+    /// whose symbol can't be read in its read, the first read on its own, the others once more together, then one by one.
+    /// A real token that fails costs one. Addresses anyone can put in a Uniswap v4 pool (`initialize` takes any pair) cost
+    /// a request each without it — 3,000 of them 3,060 requests, an out-of-gas call 0.6–0.8 s, on the endpoint Send, Swap
+    /// and prices use — and 260 with it. Past it, what is left is unread: the segment is read again by a later run, which
+    /// leaves out what this one dropped.
+    public static let metadataRereads = 200
+
     /// The longest symbol and name the list keeps: a token's `symbol()` can return a string of any length, and the list is
     /// stored whole.
     public static let maxSymbol = 32
@@ -48,21 +56,23 @@ public struct VenueTokensService: Sendable {
     public struct Scan: Sendable, Equatable {
         public var tokens: [Token]
         /// Whether the window was read in full: every venue's ranges (`RPCClient.chunkedLogsReport`) and the metadata of
-        /// every token found. False when a range was left as a gap, a metadata read got no answer, or the read was
-        /// cancelled.
+        /// every token found. False when a range was left as a gap, a metadata read got no answer or was left for a later
+        /// run past `metadataRereads`, or the read was cancelled.
         public var complete: Bool
         /// Whether more tokens gained a pool than the read's `limit`: the first are here, and a read of the same window
         /// that excludes them, and `dropped`, brings the rest.
         public var capped: Bool
-        /// Addresses with no readable symbol, read on their own (`ERC20.metadataReport`), left out as `ERC20.metadata`
-        /// leaves them out.
+        /// Addresses with no readable symbol (`ERC20.metadataReport`), left out as `ERC20.metadata` leaves them out.
         public var dropped: [Address]
+        /// Metadata requests made past each batch's first read (`metadataRereads`).
+        public var rereads: Int
 
-        public init(tokens: [Token], complete: Bool, capped: Bool = false, dropped: [Address] = []) {
+        public init(tokens: [Token], complete: Bool, capped: Bool = false, dropped: [Address] = [], rereads: Int = 0) {
             self.tokens = tokens
             self.complete = complete
             self.capped = capped
             self.dropped = dropped
+            self.rereads = rereads
         }
     }
 
@@ -71,13 +81,14 @@ public struct VenueTokensService: Sendable {
 
     /// Tokens that gained a pool on any venue between `fromBlock` and `toBlock`, resolved to on-chain metadata, and
     /// whether the window was read in full. Quote/stable/hop assets and anything in `exclude` are dropped; the first
-    /// `limit` are kept (newest pools first), and the read says when there were more. Callers scan the full history from
-    /// genesis in segments (`refresh`), checkpointing each segment once it is read in full.
+    /// `limit` are kept (newest pools first), and the read says when there were more. The metadata is read again past
+    /// each batch's first read at most `rereads` times (`metadataRereads`). Callers scan the full history from genesis in
+    /// segments (`refresh`), checkpointing each segment once it is read in full.
     ///
     /// The venues are read one after the other, one request at a time (`LogScanMode.paced`: a throttle is waited out,
     /// never split), and a venue read in part ends the read there: the window is read again anyway, and the next venue
     /// would meet the same endpoint.
-    public func tokens(fromBlock: UInt64, toBlock: UInt64, exclude: Set<Address> = [], limit: Int = 3000) async -> Scan {
+    public func tokens(fromBlock: UInt64, toBlock: UInt64, exclude: Set<Address> = [], limit: Int = 3000, rereads: Int = Self.metadataRereads) async -> Scan {
         guard fromBlock <= toBlock else { return Scan(tokens: [], complete: true) }
         let created = ABI.eventTopic(Self.poolCreated)
         let initialized = ABI.eventTopic(Self.initialize)
@@ -110,16 +121,18 @@ public struct VenueTokensService: Sendable {
         guard !addresses.isEmpty else { return Scan(tokens: [], complete: read) }
         let capped = addresses.count > max(1, limit)
         if capped { addresses = Array(addresses.prefix(max(1, limit))) }
-        let metadata = await ERC20.metadataReport(addresses, multicall: multicall)
-        let answered = Set(metadata.tokens.map(\.address)).union(metadata.unread)
+        let metadata = await ERC20.metadataReport(addresses, multicall: multicall, rereads: rereads)
         return Scan(tokens: metadata.tokens.map(Self.capped), complete: read && metadata.unread.isEmpty && !Task.isCancelled, capped: capped,
-                    dropped: addresses.filter { !answered.contains($0) })
+                    dropped: metadata.dropped, rereads: metadata.rereads)
     }
 
     /// Where a refresh has got to (`refresh`): the list, and the last block it is read up to in full.
     public struct Progress: Sendable, Equatable {
         public var tokens: [Token]
         public var checkpoint: UInt64
+        /// Addresses read with no readable symbol, by this refresh and those before it that it was handed: left out of
+        /// every read after, as the list's tokens are, so a segment read again doesn't read them again.
+        public var dropped: Set<Address>
         /// The chain head the refresh read.
         public var head: UInt64
         /// The block the refresh reads up to: `headMargin` behind the head.
@@ -127,10 +140,11 @@ public struct VenueTokensService: Sendable {
         /// Whether the list is read up to `target`.
         public var complete: Bool { checkpoint >= target }
 
-        public init(tokens: [Token], checkpoint: UInt64, head: UInt64) {
+        public init(tokens: [Token], checkpoint: UInt64, head: UInt64, dropped: Set<Address> = []) {
             self.tokens = tokens
             self.checkpoint = checkpoint
             self.head = head
+            self.dropped = dropped
         }
     }
 
@@ -143,24 +157,27 @@ public struct VenueTokensService: Sendable {
     /// `save` with its checkpoint. The checkpoint moves past a segment only once every venue was read in it in full, and
     /// every token found was read (`Scan`); a segment read in part keeps what it found, ends the refresh there, and is read
     /// again by the next one. A segment with more new tokens than one read keeps (`limit`) is read again at once, what it
-    /// found or dropped excluded, until the rest are in. Returns where it got to, to the target or short of it; nil when
-    /// the head couldn't be read, so nothing was.
+    /// found or dropped excluded, until the rest are in. What an earlier refresh read with no readable symbol
+    /// (`dropped`, `Progress.dropped`) is left out as the list's tokens are, and the metadata is read again at most
+    /// `rereads` times in all (`metadataRereads`). Returns where it got to, to the target or short of it; nil when the head
+    /// couldn't be read, so nothing was.
     @discardableResult
-    public func refresh(tokens known: [Token], checkpoint: UInt64, logos: @Sendable () async -> [Address: URL], segment: UInt64 = Self.segment,
-                        limit: Int = 3000, save: @Sendable (Progress) async -> Void) async -> Progress? {
-        var progress = Progress(tokens: known, checkpoint: checkpoint, head: await head())
+    public func refresh(tokens known: [Token], checkpoint: UInt64, dropped: Set<Address> = [], logos: @Sendable () async -> [Address: URL],
+                        segment: UInt64 = Self.segment, limit: Int = 3000, rereads: Int = Self.metadataRereads,
+                        save: @Sendable (Progress) async -> Void) async -> Progress? {
+        var progress = Progress(tokens: known, checkpoint: checkpoint, head: await head(), dropped: dropped)
         guard progress.head > 0 else { return nil }
         let target = progress.target
         guard checkpoint < target else { return progress }
         let logos = await logos()
-        // Addresses this refresh read with no readable symbol: left out of a segment's next read, as the list is.
-        var dropped: Set<Address> = []
+        var rereads = rereads
         var from = checkpoint == 0 ? 0 : checkpoint + 1
         while from <= target, !Task.isCancelled {
             let to = min(from + max(1, segment) - 1, target)
-            let exclude = Set(Token.core.map(\.address)).union(progress.tokens.map(\.address)).union(dropped)
-            let scan = await tokens(fromBlock: from, toBlock: to, exclude: exclude, limit: limit)
-            dropped.formUnion(scan.dropped)
+            let exclude = Set(Token.core.map(\.address)).union(progress.tokens.map(\.address)).union(progress.dropped)
+            let scan = await tokens(fromBlock: from, toBlock: to, exclude: exclude, limit: limit, rereads: max(0, rereads))
+            rereads -= scan.rereads
+            progress.dropped.formUnion(scan.dropped)
             progress.tokens += scan.tokens.map { token -> Token in
                 guard token.logoURL == nil, let logo = logos[token.address] else { return token }
                 return Token(address: token.address, symbol: token.symbol, name: token.name, decimals: token.decimals, logoURL: logo, isLaunchpad: token.isLaunchpad)

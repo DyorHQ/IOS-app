@@ -42,43 +42,112 @@ public enum ERC20 {
         await metadataReport(addresses, multicall: multicall).tokens
     }
 
-    /// `metadataBatch`, saying which tokens weren't read at all (`unread`): those whose read got no answer (the connection,
-    /// or a throttle that outlasted the client's retries), so nothing is known of them. Tokens are read 50 a read, so no one
-    /// token can keep the others from being read: a read the node refuses as a whole (one token's return bomb makes the
-    /// aggregate run out of gas) and a token whose symbol can't be read in its read (it has none, it reverts, or a token
-    /// before it starved it of gas, which Multicall3 reports as a failed call) are read again, each token on its own, a
-    /// few at a time. A token whose symbol still can't be read on its own is dropped, as `metadata` drops it: never unread.
-    public static func metadataReport(_ addresses: [Address], multicall: Multicall) async -> (tokens: [Token], unread: [Address]) {
+    /// What `metadataReport` read of a list of addresses, each in the order given.
+    public struct MetadataReport: Sendable, Equatable {
+        /// The tokens with a readable symbol.
+        public var tokens: [Token]
+        /// Addresses nothing is known of: their read got no answer (the connection, or a throttle that outlasted the
+        /// client's retries), or the reads again that could tell them apart were past `rereads`.
+        public var unread: [Address]
+        /// Addresses with no readable symbol, left out as `metadata` leaves them out: never unread.
+        public var dropped: [Address]
+        /// Requests made past each batch's first read.
+        public var rereads: Int
+
+        public init(tokens: [Token], unread: [Address] = [], dropped: [Address] = [], rereads: Int = 0) {
+            self.tokens = tokens
+            self.unread = unread
+            self.dropped = dropped
+            self.rereads = rereads
+        }
+    }
+
+    /// `metadataBatch`, saying what wasn't read (`MetadataReport`). Tokens are read 50 a request, so no one token can keep
+    /// the others from being read:
+    ///
+    /// - A token whose `symbol()` answered with what isn't a symbol (an account with no code answers nothing; a contract
+    ///   may answer any bytes) is dropped at once: a call that returned wasn't starved of gas, so a read on its own would
+    ///   answer the same.
+    /// - A token whose `symbol()` call failed in its read may have been starved of gas by a token before it (Multicall3
+    ///   reports that as a failed call, as it does a revert), and a read the node refuses as a whole (one token's return
+    ///   bomb makes the aggregate run out of gas) holds a token at fault. Of those, the first is read on its own (a token
+    ///   that starves the rest fails first), the others read again once, together, and only what fails again is read one
+    ///   by one, five at a time. A token that fails read on its own is dropped.
+    /// - At most `rereads` requests go past each batch's first read, so addresses anyone can put in a pool can't make one
+    ///   refresh send thousands: what is left to read again past them is unread, and read by a later run.
+    public static func metadataReport(_ addresses: [Address], multicall: Multicall, rereads budget: Int = .max) async -> MetadataReport {
         var found: [Address: Token] = [:]
         var unread = Set<Address>()
-        var alone: [Address] = []
+        var dropped = Set<Address>()
+        var spent = 0
+        func take(_ outcomes: [(Address, SymbolRead)], alone: Bool) -> [Address] {
+            var failed: [Address] = []
+            for (address, outcome) in outcomes {
+                switch outcome {
+                case .token(let token): found[address] = token
+                case .notASymbol: dropped.insert(address)
+                case .failed: if alone { dropped.insert(address) } else { failed.append(address) }
+                case .unanswered: unread.insert(address)
+                }
+            }
+            return failed
+        }
         var index = 0
         while index < addresses.count {
             let batch = Array(addresses[index ..< min(index + 50, addresses.count)])
             index += batch.count
-            switch await captured({ try await multicall.read(try batch.flatMap { try [symbol($0), name($0), decimals($0)] }) }) {
-            case .success(let results):
-                for (offset, address) in batch.enumerated() {
-                    if let token = token(address, results.dropFirst(offset * 3).prefix(3)) { found[address] = token } else { alone.append(address) }
-                }
-            case .failure(let error):
-                if isCallError(error) { alone += batch } else { unread.formUnion(batch) }
-            }
-        }
-        for start in stride(from: 0, to: alone.count, by: 5) {
-            await withTaskGroup(of: (address: Address, outcome: Result<[Result<[ABIValue], Error>], Error>).self) { tasks in
-                for address in alone[start ..< min(start + 5, alone.count)] {
-                    tasks.addTask { (address, await captured { try await multicall.read([try symbol(address), try name(address), try decimals(address)]) }) }
-                }
-                for await (address, outcome) in tasks {
-                    switch outcome {
-                    case .success(let results): found[address] = token(address, results[...])
-                    case .failure(let error): if !isCallError(error) { unread.insert(address) }
+            let failed = take(await symbolReads(batch, multicall: multicall), alone: batch.count == 1)
+            guard let first = failed.first else { continue }
+            guard spent < budget else { unread.formUnion(failed); continue }
+            spent += 1
+            _ = take(await symbolReads([first], multicall: multicall), alone: true)
+            let rest = Array(failed.dropFirst())
+            guard !rest.isEmpty else { continue }
+            guard spent < budget else { unread.formUnion(rest); continue }
+            spent += 1
+            let again = take(await symbolReads(rest, multicall: multicall), alone: rest.count == 1)
+            let affordable = min(again.count, budget - spent)
+            unread.formUnion(again.dropFirst(affordable))
+            spent += affordable
+            for start in stride(from: 0, to: affordable, by: 5) {
+                await withTaskGroup(of: [(Address, SymbolRead)].self) { tasks in
+                    for address in again[start ..< min(start + 5, affordable)] {
+                        tasks.addTask { await symbolReads([address], multicall: multicall) }
                     }
+                    for await outcome in tasks { _ = take(outcome, alone: true) }
                 }
             }
         }
-        return (addresses.compactMap { found[$0] }, addresses.filter(unread.contains))
+        return MetadataReport(tokens: addresses.compactMap { found[$0] }, unread: addresses.filter(unread.contains), dropped: addresses.filter(dropped.contains),
+                              rereads: spent)
+    }
+
+    /// What one read said of a token's symbol.
+    private enum SymbolRead: Sendable {
+        case token(Token)
+        /// The call returned, with what isn't a symbol.
+        case notASymbol
+        /// The call failed — it reverted or ran out of gas — or the read failed as a whole on a call error.
+        case failed
+        /// The read got no answer.
+        case unanswered
+    }
+
+    /// `group`'s symbol, name and decimals in one read, and what it said of each token.
+    private static func symbolReads(_ group: [Address], multicall: Multicall) async -> [(Address, SymbolRead)] {
+        switch await captured({ try await multicall.read(try group.flatMap { try [symbol($0), name($0), decimals($0)] }) }) {
+        case .success(let results):
+            return group.enumerated().map { offset, address in
+                let reads = results.dropFirst(offset * 3).prefix(3)
+                if let token = token(address, reads) { return (address, .token(token)) }
+                // `Multicall.read` reports a call that failed as an `RPCError`, and one that returned bytes that aren't
+                // a string as the decoding's error.
+                if case .failure(let error)? = reads.first, error is RPCError { return (address, .failed) }
+                return (address, .notASymbol)
+            }
+        case .failure(let error):
+            return group.map { ($0, isCallError(error) ? .failed : .unanswered) }
+        }
     }
 
     /// One token from its symbol, name and decimals reads, in that order: nil when the symbol isn't a readable string. The

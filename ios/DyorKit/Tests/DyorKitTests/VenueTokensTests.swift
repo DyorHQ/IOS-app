@@ -211,6 +211,112 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(direct.unread.isEmpty)
     }
 
+    /// Addresses as anyone can put in Uniswap v4 pools (`initialize` takes any pair).
+    private func addresses(_ count: Int) -> [Address] {
+        (1...count).map { Address(data: Data(repeating: 0, count: 16) + Data([0x7e, 0x57, UInt8(($0 >> 8) & 0xff), UInt8($0 & 0xff)]))! }
+    }
+
+    /// `addresses`' metadata, read with the app's budget.
+    private func metadataReport(_ addresses: [Address]) async -> ERC20.MetadataReport {
+        await ERC20.metadataReport(addresses, multicall: Multicall(rpc: MomentsChainStub.rpc()), rereads: VenueTokensService.metadataRereads)
+    }
+
+    /// The finding: every address whose symbol couldn't be read in its read was read again on its own, one request each on
+    /// the endpoint Send, Swap and prices use: 3,000 addresses cost 3,060 requests where they had cost 60 (250 here: 255
+    /// where they had cost 5). An account with no code answers `symbol()` with nothing, a call that returned, so it wasn't
+    /// starved of gas: dropped at once.
+    func testAnAddressThatAnswersWhatIsntASymbolIsDroppedWithoutAnotherRead() async {
+        let all = addresses(250)
+        MomentsChainStub.install { _, _ in Data() }
+        let report = await metadataReport(all)
+        XCTAssertEqual(MomentsChainStub.batches().count, 5, "one request a 50, none again")
+        XCTAssertEqual(report.dropped, all)
+        XCTAssertTrue(report.tokens.isEmpty)
+        XCTAssertTrue(report.unread.isEmpty)
+        XCTAssertEqual(report.rereads, 0)
+    }
+
+    /// A token that burns the gas of its read starves every token after it: the first that failed is read on its own,
+    /// the others once more together, where each was read on its own (51 requests a read).
+    func testATokenThatStarvesItsReadCostsTwoMoreRequests() async {
+        let all = addresses(250)
+        let burners = stride(from: 0, to: 250, by: 50).map { all[$0] }
+        installMetadata(starving: Set(burners))
+        let report = await metadataReport(all)
+        XCTAssertEqual(MomentsChainStub.batches().count, 15, "each read, its burner on its own, and the other 49 together")
+        XCTAssertEqual(report.tokens.count, 245)
+        XCTAssertEqual(report.dropped, burners)
+        XCTAssertTrue(report.unread.isEmpty)
+        XCTAssertEqual(report.rereads, 10)
+    }
+
+    /// Symbols that revert can't be told from starved ones, so they are read again, and one by one only what fails again;
+    /// a real token that reverts costs one request. At most `metadataRereads` requests go past the first reads: the rest
+    /// is unread, for a later run (3,000 such addresses: 260 requests, where they cost 3,060).
+    func testRevertingSymbolsAreReadAgainWithinTheBudget() async {
+        let all = addresses(250)
+        MomentsChainStub.install { _, _ in nil }
+        let report = await metadataReport(all)
+        XCTAssertEqual(MomentsChainStub.batches().count, 5 + VenueTokensService.metadataRereads)
+        XCTAssertEqual(report.rereads, 200)
+        // Three reads in full (1 + 1 + 49 each), then the fourth's first alone, the other 49 together, and 45 of them.
+        XCTAssertEqual(report.dropped, Array(all.prefix(196)))
+        XCTAssertEqual(report.unread, Array(all.dropFirst(196)))
+        XCTAssertTrue(report.tokens.isEmpty)
+
+        let one = all[9]
+        MomentsChainStub.install { to, data in to == one ? nil : Self.symbolAnswer(to, data) }
+        let honest = await metadataReport(Array(all.prefix(100)))
+        XCTAssertEqual(MomentsChainStub.batches().count, 3, "two reads, and the token that reverts on its own")
+        XCTAssertEqual(honest.tokens.count, 99)
+        XCTAssertEqual(honest.dropped, [one])
+    }
+
+    /// Reads that fail as a whole (a return bomb in each) are read again the same way, within the same budget.
+    func testReadsThatBreakAsAWholeAreReadAgainWithinTheBudget() async {
+        let all = addresses(250)
+        MomentsChainStub.install({ _, _ in nil }, breaking: Set(all))
+        let report = await metadataReport(all)
+        XCTAssertEqual(MomentsChainStub.batches().count, 205)
+        XCTAssertEqual(report.dropped, Array(all.prefix(196)))
+        XCTAssertEqual(report.unread, Array(all.dropFirst(196)), "unread, not dropped: a later run reads them")
+        XCTAssertEqual(report.rereads, 200)
+    }
+
+    /// A refresh spends one budget on all its segments, and a run handed what an earlier one dropped doesn't read it again:
+    /// a segment left short by the budget is read in full over a few runs, never paying twice for an address.
+    func testARefreshReadsWithinItsBudgetAndLeavesOutWhatWasDropped() async throws {
+        let bad = Set((1...12).map { token(UInt8($0)) })
+        MomentsChainStub.install { to, data in bad.contains(to) ? nil : Self.symbolAnswer(to, data) }
+        LogsStub.install(head: 1_000, logs: (1...13).map { pool(UInt8($0), at: UInt64($0) * 10) }) { _ in nil }
+        var dropped: Set<Address> = []
+        var runs: [(calls: Int, complete: Bool)] = []
+        for _ in 0..<3 {
+            MomentsChainStub.install { to, data in bad.contains(to) ? nil : Self.symbolAnswer(to, data) }
+            let refreshed = await service().refresh(tokens: [], checkpoint: 0, dropped: dropped, logos: { [:] }, rereads: 5) { _ in }
+            let read = try XCTUnwrap(refreshed)
+            XCTAssertTrue(MomentsChainStub.calls().allSatisfy { !dropped.contains($0.to) }, "what a run before dropped isn't read")
+            XCTAssertTrue(read.dropped.isSuperset(of: dropped))
+            dropped = read.dropped
+            runs.append((MomentsChainStub.batches().count, read.complete))
+            if read.complete {
+                XCTAssertEqual(read.tokens.map(\.symbol), ["T13"])
+                XCTAssertEqual(read.checkpoint, 900)
+            }
+        }
+        XCTAssertEqual(runs.map(\.calls), [6, 6, 6], "a read, then five more at most, each run")
+        XCTAssertEqual(runs.map(\.complete), [false, false, true])
+        XCTAssertEqual(dropped, bad)
+    }
+
+    /// A token's symbol and name ("T" and its last byte) and 18 decimals.
+    private static func symbolAnswer(_ to: Address, _ data: Data) -> Data? {
+        let selector = data.prefix(4)
+        if selector == ABI.selector("symbol()") || selector == ABI.selector("name()") { return try! ABI.encode([.string("T\(to.data.last ?? 0)")], "string") }
+        if selector == ABI.selector("decimals()") { return try! ABI.encode([.uint(18)], "uint8") }
+        return nil
+    }
+
     /// A token whose metadata read got no answer isn't dropped for good: the read is incomplete, so the checkpoint stays
     /// and the segment is read again next time. One with no readable symbol is dropped, as it always was.
     func testAMetadataReadWithNoAnswerLeavesTheSegmentToBeReadAgain() async throws {

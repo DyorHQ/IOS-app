@@ -168,6 +168,38 @@ final class VenueTokenListTests: XCTestCase {
         XCTAssertEqual(decoded.tokens.map(\.name.count), [64])
     }
 
+    /// What a run read with no readable symbol is kept for the runs after it: the segment it left short is read again
+    /// without reading that address again (it used to pay for it at every run).
+    func testWhatARunDroppedIsNotReadAgainByTheNext() async {
+        let bad = VenueFixture.address(3)
+        let answer: MomentsChainStub.Answer = { to, data in
+            let selector = data.prefix(4)
+            guard to != bad else { return nil }
+            if selector == ABI.selector("symbol()") || selector == ABI.selector("name()") { return try! ABI.encode([.string("T\(to.data.last ?? 0)")], "string") }
+            return selector == ABI.selector("decimals()") ? try! ABI.encode([.uint(18)], "uint8") : nil
+        }
+        MomentsChainStub.install(answer)
+        let gap = Flag(true)
+        // The token with no symbol has a Uniswap v3 pool in the second segment; that venue's range past block 8,000,000
+        // isn't answered, so the segment is read again.
+        LogsStub.install(head: 12_000_000, logs: [VenueFixture.pool(1, at: 1_000_000), VenueFixture.pool(3, at: 6_000_000), VenueFixture.pool(4, at: 7_000_000)]) { range in
+            gap.on && range.contains(8_000_000) ? .error(code: -32062, message: "Block range is too large") : nil
+        }
+        let list = MemoryStore(list: [], checkpoint: 0).list()
+        list.refresh()
+        await list.finished()
+        XCTAssertEqual(list.checkpoint, 4_999_999)
+        XCTAssertFalse(MomentsChainStub.calls().filter { $0.to == bad }.isEmpty, "read, and dropped")
+
+        MomentsChainStub.install(answer)
+        gap.set(false)
+        list.refresh()
+        await list.finished()
+        XCTAssertEqual(list.checkpoint, 11_999_900)
+        XCTAssertEqual(list.tokens.map(\.symbol), ["T1", "T4"])
+        XCTAssertTrue(MomentsChainStub.calls().filter { $0.to == bad }.isEmpty, "not read again")
+    }
+
     func testOneRunAtATime() async {
         VenueFixture.installMetadata()
         let store = MemoryStore(list: [], checkpoint: 0)
