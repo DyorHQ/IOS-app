@@ -120,18 +120,25 @@ public actor MomentsService {
         return try await hydrate(try await records(ids))
     }
 
-    /// A retired cohort's Moments (`RetiredMoments.moments`), newest first: ids 1…`pinned`, always, and up to `later` of
-    /// the newest Moments after them. A count below the pin was read on a node behind (the pinned Moments exist), and
-    /// throws.
-    func moments(pinned: Int, later: Int) async throws -> [MomentInfo] {
-        guard isDeployed else { return [] }
+    /// A retired cohort's Moments (`RetiredMoments.list`), newest first: ids 1…`pinned`, always, and up to `later` of
+    /// the newest Moments after them (`retiredIds`), with `cut` true when Moments after the pin were left out. A count
+    /// below the pin was read on a node behind (the pinned Moments exist), and throws.
+    func moments(pinned: Int, later: Int) async throws -> (moments: [MomentInfo], cut: Bool) {
+        guard isDeployed else { return ([], false) }
         let total = MomentsABI.int(try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.momentCount, returns: "uint256")])[0][0])
         guard total >= pinned else { throw ChainListUnread("A Moment") }
+        let read = Self.retiredIds(total: total, pinned: pinned, later: later)
+        guard !read.ids.isEmpty else { return ([], read.cut) }
+        return (try await hydrate(try await records(read.ids.map { BigUInt($0) })), read.cut)
+    }
+
+    /// The ids `moments(pinned:later:)` reads of a cohort that counts `total` Moments, newest first: up to `later` of the
+    /// newest after the pin, then the pinned ones, `pinned` down to 1. `cut` is true when more than `later` Moments were
+    /// published after the pin, so the oldest of them are not among `ids`.
+    static func retiredIds(total: Int, pinned: Int, later: Int) -> (ids: [Int], cut: Bool) {
         let first = max(pinned + 1, total - max(0, later) + 1)
         let newer = total >= first ? Array(stride(from: total, through: first, by: -1)) : []
-        let ids = (newer + Array(stride(from: pinned, through: 1, by: -1))).map { BigUInt($0) }
-        guard !ids.isEmpty else { return [] }
-        return try await hydrate(try await records(ids))
+        return (newer + Array(stride(from: pinned, through: 1, by: -1)), first > pinned + 1)
     }
 
     /// One Moment with the supply identity, or nil when the id is out of range; a Moment in range that can't be read

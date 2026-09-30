@@ -58,9 +58,10 @@ struct MomentsPortfolioView: View {
                 } else {
                     HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading your Moments…").foregroundStyle(.secondary) }
                 }
-                if !past.positions.isEmpty || past.error != nil {
+                if !past.positions.isEmpty || past.error != nil || past.incomplete != nil {
                     Section {
                         if let error = past.error { InlineError(message: "Couldn't read every past cohort (pull to refresh): \(error)") }
+                        if let incomplete = past.incomplete { InlineError(message: incomplete) }
                         ForEach(past.positions) { position in
                             Button { Haptics.tap(); onOpen(position.info) } label: { PastMomentRow(position: position) }.buttonStyle(.plain)
                         }

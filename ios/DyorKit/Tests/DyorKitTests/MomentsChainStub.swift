@@ -195,6 +195,21 @@ final class MomentsChainStub: URLProtocol {
     }
 }
 
+/// `ABI.selector(signature)`, hashed once per signature: a stub answers thousands of calls, and Keccak takes about half a
+/// millisecond in a debug build.
+enum StubSelector {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var hashed: [String: Data] = [:]
+
+    static func of(_ signature: String) -> Data {
+        lock.lock(); defer { lock.unlock() }
+        if let selector = hashed[signature] { return selector }
+        let selector = ABI.selector(signature)
+        hashed[signature] = selector
+        return selector
+    }
+}
+
 /// One Moments stack's getters, answered from fixed values: its factory (policy, counts, Moment #1…), its collect,
 /// vesting and graduation, and each Moment's coin and NFT. v2-only getters are answered only when `addresses` is v2,
 /// so a v1 stack asked for one reverts exactly as the deployed v1 contracts do.
@@ -214,7 +229,7 @@ struct FakeMomentsStack: Sendable {
     func answer(_ to: Address, _ data: Data) -> Data? {
         let selector = data.prefix(4)
         let args = data.dropFirst(4)
-        func is_(_ signature: String) -> Bool { selector == ABI.selector(signature) }
+        func is_(_ signature: String) -> Bool { selector == StubSelector.of(signature) }
         func encode(_ values: [ABIValue], _ types: String) -> Data { try! ABI.encode(values, types) }
         let v2 = addresses.generation >= .v2
         let count = momentCount ?? names.count
@@ -248,20 +263,24 @@ struct FakeMomentsStack: Sendable {
         case addresses.graduation:
             return is_(MomentsABI.Graduation.isGraduated) ? encode([.bool(false)], "bool") : nil
         default:
-            for i in 1...max(1, names.count) {
-                if to == coin(i) {
-                    if is_(MomentsABI.Coin.name) { return encode([.string(names[i - 1])], "string") }
-                    if is_(MomentsABI.Coin.symbol) { return encode([.string("M\(i)")], "string") }
-                    if is_(MomentsABI.Coin.totalSupply) { return encode([.uint(0)], "uint256") }
+            // Moment #i's coin or NFT (`coin(i)`, `nft(i)`), found from the address itself: a stack of a few hundred
+            // Moments is then answered as fast as one of three.
+            let bytes = [UInt8](to.data)
+            guard bytes.count == 20, to.data.prefix(16) == addresses.factory.data.prefix(16), bytes[18] == 0 else { return nil }
+            let i = Int(bytes[19])
+            guard (1...max(1, names.count)).contains(i) else { return nil }
+            if to == coin(i) {
+                if is_(MomentsABI.Coin.name) { return encode([.string(names[i - 1])], "string") }
+                if is_(MomentsABI.Coin.symbol) { return encode([.string("M\(i)")], "string") }
+                if is_(MomentsABI.Coin.totalSupply) { return encode([.uint(0)], "uint256") }
+            }
+            if to == nft(i) {
+                if is_(MomentsABI.NFT.totalMinted) { return encode([.uint(1)], "uint256") }
+                if is_(MomentsABI.NFT.closed) { return encode([.bool(false)], "bool") }
+                if is_(MomentsABI.NFT.provenance) {
+                    return encode([.tuple([.string("ipfs://x"), .bytes(Data(count: 32)), .string("Accra"), .uint(0), .string("")])], MomentsABI.provenanceTuple)
                 }
-                if to == nft(i) {
-                    if is_(MomentsABI.NFT.totalMinted) { return encode([.uint(1)], "uint256") }
-                    if is_(MomentsABI.NFT.closed) { return encode([.bool(false)], "bool") }
-                    if is_(MomentsABI.NFT.provenance) {
-                        return encode([.tuple([.string("ipfs://x"), .bytes(Data(count: 32)), .string("Accra"), .uint(0), .string("")])], MomentsABI.provenanceTuple)
-                    }
-                    if v2, is_(MomentsABI.NFT.externalBaseURI) { return encode([.string(nftBase)], "string") }
-                }
+                if v2, is_(MomentsABI.NFT.externalBaseURI) { return encode([.string(nftBase)], "string") }
             }
             return nil
         }

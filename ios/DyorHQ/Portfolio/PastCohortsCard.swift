@@ -20,22 +20,29 @@ final class PastMomentsModel {
     private(set) var positions: [RetiredMomentPosition] = []
     private(set) var loading = false
     private(set) var error: String?
+    /// Said when a past cohort has more Moments than the app reads at once (`RetiredMoments.list` was cut): its
+    /// positions then come from the Moments read and the wallet's own history, which a Moment it only received by
+    /// transfer is not in.
+    private(set) var incomplete: String?
     private(set) var loadedFor: Address?
     /// The wallet the latest load is for: a slower load for a wallet signed out since never lands.
     private var requested: Address?
 
     func load(env: AppEnvironment, address: Address?, force: Bool) async {
         requested = address
-        guard let address else { positions = []; error = nil; loadedFor = nil; loading = false; return }
+        guard let address else { positions = []; error = nil; incomplete = nil; loadedFor = nil; loading = false; return }
         if !force, loadedFor == address { return }
-        if loadedFor != address { positions = [] }
+        if loadedFor != address { positions = []; incomplete = nil }
         loading = true
         defer { if requested == address { loading = false } }
         var found: [RetiredMomentPosition] = []
         var failure: String?
+        var cut = false
         for cohort in env.retiredMoments {
             do {
-                found += try await cohort.positions(account: address)
+                let read = try await cohort.positions(account: address)
+                found += read.positions
+                if !read.complete { cut = true }
             } catch {
                 // Keep what this cohort showed before rather than dropping a claim on a transient read failure.
                 failure = describe(error)
@@ -45,6 +52,7 @@ final class PastMomentsModel {
         guard requested == address else { return }
         positions = found
         error = failure
+        incomplete = cut ? "A past cohort has more Moments than the app reads at once, so a Moment you only received by transfer may be missing." : nil
         loadedFor = address
     }
 
@@ -57,13 +65,13 @@ final class PastMomentsModel {
 }
 
 /// Past cohorts on the Portfolio: shown when the wallet has something on a retired cohort, or when a cohort could not
-/// be read (a claim is never hidden behind a failed read). Each row opens the Moment's claim-only page; collecting and
-/// trading are closed there.
+/// be read, or not in full (a claim is never hidden behind a failed or partial read). Each row opens the Moment's
+/// claim-only page; collecting and trading are closed there.
 struct PastCohortsCard: View {
     let model: PastMomentsModel
 
     var body: some View {
-        if !model.positions.isEmpty || model.error != nil {
+        if !model.positions.isEmpty || model.error != nil || model.incomplete != nil {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Past Cohorts").font(.headline)
@@ -73,6 +81,7 @@ struct PastCohortsCard: View {
                 Text("Moments from earlier DyorHQ contracts. Collecting is closed; claim your vested coins and, as a creator, withdraw your own proceeds.")
                     .font(.caption).foregroundStyle(.secondary)
                 if let error = model.error { InlineError(message: "Couldn't read every past cohort (pull to refresh): \(error)") }
+                if let incomplete = model.incomplete { InlineError(message: incomplete) }
                 VStack(spacing: 0) {
                     ForEach(Array(model.positions.enumerated()), id: \.element.id) { index, position in
                         NavigationLink(value: PastMomentRoute(info: position.info)) { PastMomentRow(position: position) }

@@ -70,7 +70,7 @@ final class CohortsV2ForkTests: V2ForkCase {
         let expired = try XCTUnwrap(expiredRead)
         XCTAssertEqual(expired.state, .expired)
         XCTAssertEqual(expired.ledger.creatorClaimable, expected)
-        let positions = try await retired.positions(account: creator)
+        let positions = try await retired.positions(account: creator).positions
         XCTAssertEqual(positions.map(\.key), [nature.key])
         XCTAssertEqual(positions.first?.creatorProceeds, expected)
 
@@ -83,7 +83,7 @@ final class CohortsV2ForkTests: V2ForkCase {
         if open.ledger.reserve == 75_000, open.ledger.creatorClaimable == 20_000 {
             XCTAssertEqual(paid, 72_500, "20,000 creator share + 70% of the 75,000 reserve")
         }
-        let settled = try await retired.positions(account: creator)
+        let settled = try await retired.positions(account: creator).positions
         XCTAssertEqual(settled.first?.creatorWithdrawable ?? 0, 0, "nothing left to withdraw")
     }
 
