@@ -154,49 +154,137 @@ public enum WalletHoldings {
         unverified.subtracting(ownCoins(owner: owner, launches: launches, staked: staked))
     }
 
-    /// The curated token `token` could pass for: `token` is not curated, yet its symbol or name reads as a curated
-    /// token's symbol or name (`readings`) — a second "USDC", a "Monad" that isn't MON, a "USDC" with a zero-width space
-    /// or a Cyrillic "С" in it, a "M0N". Being chosen proves nothing here: tapping a search result in Swap stores a token
-    /// as chosen. Nil for MON, the curated tokens and every other name.
+    /// The token `token` could pass for: a curated one, or a widely traded one DyorHQ doesn't list (`majorTokens`).
+    /// `token` is none of them, yet
+    /// - its symbol or name reads as one of their symbols or names (`readings`) — a second "USDC", a "Monad" that isn't
+    ///   MON, a "USDC" with a zero-width space or a Cyrillic "С" in it, "M0N", "m0nad", a Lisu "ꓟꓳꓠ", a "USDT";
+    /// - or its symbol holds one of their symbols or names with no letter right before or after it — "USDC.e", "$MON",
+    ///   "MON2", "USDC" padded with spaces and a dot — while letters around it make another word ("MONKE", "xMON");
+    /// - or its name is one of their symbols or names with nothing but non-letters around it ("$MON", "USDC 2").
+    /// Being chosen proves nothing here: tapping a search result in Swap stores a token as chosen. Nil for MON, the
+    /// curated tokens and every other name. The wallet's warnings, the badge (`TokenBadge`) and the create forms'
+    /// guard (`SymbolSafety.createRefusal`) all go by this one rule.
     public static func imitated(by token: Token) -> Token? {
         guard !token.isNative, Token.core(token.address) == nil else { return nil }
         let own = Set([token.symbol, token.name].flatMap(readings))
         guard !own.isEmpty else { return nil }
-        return curatedReadings.first { !own.isDisjoint(with: $0.readings) }?.token
+        if let target = lookAlikeTargets.first(where: { !own.isDisjoint(with: $0.readings) }) { return target.token }
+        let symbol = forms(token.symbol)
+        let name = forms(token.name)
+        return lookAlikeTargets.first { target in
+            target.forms.contains { wanted in symbol.contains { standsApart(wanted, in: $0) } || name.contains { standsAlone(wanted, in: $0) } }
+        }?.token
     }
 
-    /// Each curated token with the readings of its symbol and name, worked out once.
-    private static let curatedReadings: [(token: Token, readings: Set<String>)] = Token.core.map { ($0, Set([$0.symbol, $0.name].flatMap(readings))) }
+    /// Widely traded tokens DyorHQ doesn't list, which a coin may not pass for either: BTC, ETH, SOL, USDT, DAI and BNB,
+    /// each with its usual name. None has a contract on Monad the app knows, so each carries a placeholder address no key
+    /// or contract has (`placeholder`): it names what a look-alike imitates, and is never read, priced or sent.
+    public static let majorTokens: [Token] = majors.map(\.token)
 
-    /// The ways `text` reads to the eye, for `imitated(by:)`: `visible(text)` ignoring case (tagged "a"), and with the
-    /// digits and letters that pass for one another made one — 0 as O; 1, I and | as l — keeping case (tagged "b"), so
-    /// "USDL" stays apart from "USD1". Text with a direction-changing character is read backwards too: an override can
-    /// show "CDSU" as "USDC". Empty text has no reading.
-    static func readings(_ text: String) -> [String] {
-        let base = visible(text)
-        guard !base.isEmpty else { return [] }
-        var forms = [base]
-        if text.unicodeScalars.contains(where: { bidiControls.contains($0.value) }) { forms.append(String(base.reversed())) }
-        return forms.flatMap { form in
-            ["a:" + form.lowercased(), "b:" + String(String.UnicodeScalarView(form.unicodeScalars.map { lookAlikeDigits[$0] ?? $0 }))]
+    /// Each major token with the names it goes by.
+    private static let majors: [(token: Token, names: [String])] = [
+        (major("BTC", "Bitcoin"), ["Bitcoin"]), (major("ETH", "Ethereum"), ["Ethereum"]), (major("SOL", "Solana"), ["Solana"]),
+        (major("USDT", "Tether USD"), ["Tether", "Tether USD"]), (major("DAI", "Dai"), ["Dai"]), (major("BNB", "BNB"), ["BNB"]),
+    ]
+
+    private static func major(_ symbol: String, _ name: String) -> Token {
+        Token(address: placeholder(symbol), symbol: symbol, name: name, decimals: 18)
+    }
+
+    /// The last 20 bytes of keccak-256("DyorHQ major token <symbol>"): an address nobody holds a key or code for.
+    static func placeholder(_ symbol: String) -> Address {
+        Address(data: Keccak.hash256(Data("DyorHQ major token \(symbol)".utf8)).suffix(20))!
+    }
+
+    /// A token a coin may not pass for, with the readings (`readings`) and lower-case forms (`forms`) of its symbol and
+    /// names, worked out once.
+    private struct LookAlikeTarget {
+        let token: Token
+        let readings: Set<String>
+        let forms: Set<String>
+
+        init(_ token: Token, names: [String]) {
+            self.token = token
+            readings = Set(([token.symbol] + names).flatMap(WalletHoldings.readings))
+            forms = Set(([token.symbol] + names).flatMap(WalletHoldings.forms))
         }
     }
 
+    /// The curated tokens, then the major ones.
+    private static let lookAlikeTargets: [LookAlikeTarget] = Token.core.map { LookAlikeTarget($0, names: [$0.name]) }
+        + majors.map { LookAlikeTarget($0.token, names: $0.names) }
+
+    /// Whether `wanted` is in `text` with no letter right before or after it.
+    static func standsApart(_ wanted: String, in text: String) -> Bool {
+        occurrences(of: wanted, in: text).contains { range in
+            !(range.lowerBound > text.startIndex && text[text.index(before: range.lowerBound)].isLetter)
+                && !(range.upperBound < text.endIndex && text[range.upperBound].isLetter)
+        }
+    }
+
+    /// Whether `wanted` is in `text` with no letter anywhere else in it.
+    static func standsAlone(_ wanted: String, in text: String) -> Bool {
+        occurrences(of: wanted, in: text).contains { range in
+            !text[..<range.lowerBound].contains(where: \.isLetter) && !text[range.upperBound...].contains(where: \.isLetter)
+        }
+    }
+
+    private static func occurrences(of wanted: String, in text: String) -> [Range<String.Index>] {
+        guard !wanted.isEmpty else { return [] }
+        var found: [Range<String.Index>] = []
+        var from = text.startIndex
+        while from < text.endIndex, let range = text.range(of: wanted, range: from..<text.endIndex) {
+            found.append(range)
+            from = text.index(after: range.lowerBound)
+        }
+        return found
+    }
+
+    /// The ways `text` reads to the eye, for `imitated(by:)`: `visible(text)` ignoring case (tagged "a"); with the digits
+    /// and letters that pass for one another made one — 0 as O; 1, I and | as l — keeping case (tagged "b"), so "USDL"
+    /// stays apart from "USD1"; and ignoring case with only 0 read as o (tagged "c"), so "M0n", "wm0n" and "usdto" read as
+    /// MON, WMON and USDT0 while "USDL" still isn't "USD1". Text with a direction-changing character is read backwards
+    /// too: an override can show "CDSU" as "USDC". Empty text has no reading.
+    static func readings(_ text: String) -> [String] {
+        shownForms(text).flatMap { form in
+            ["a:" + form.lowercased(), "b:" + String(String.UnicodeScalarView(form.unicodeScalars.map { lookAlikeDigits[$0] ?? $0 })),
+             "c:" + zeroAsO(form.lowercased())]
+        }
+    }
+
+    /// `text`'s readings "a" and "c" untagged, for finding a token's symbol or name inside other text.
+    static func forms(_ text: String) -> [String] {
+        shownForms(text).flatMap { [$0.lowercased(), zeroAsO($0.lowercased())] }
+    }
+
+    /// `visible(text)`, and backwards too when a direction-changing character can show it so; none for empty text.
+    private static func shownForms(_ text: String) -> [String] {
+        let base = visible(text)
+        guard !base.isEmpty else { return [] }
+        guard text.unicodeScalars.contains(where: { bidiControls.contains($0.value) }) else { return [base] }
+        return [base, String(base.reversed())]
+    }
+
+    private static func zeroAsO(_ text: String) -> String { text.replacingOccurrences(of: "0", with: "o") }
+
     /// `text` as it shows: compatibility forms (full-width and mathematical letters) as their plain letters; invisible,
     /// format and direction characters (zero-width spaces and joiners, soft hyphen, byte-order mark, overrides), control
-    /// characters, combining marks and spaces removed; U+FFFD removed too, which is what bytes that aren't text read as
-    /// (`ABI.StringDecoding.lossy`) and draws as a mark, not a letter, so "USDC" and one such byte still reads as "USDC";
-    /// letters from other scripts that look like Latin ones (Cyrillic "С", Greek "Ο") as those Latin letters; accents and
+    /// characters, combining marks, spaces and the blank Braille pattern U+2800 removed; U+FFFD removed too, which is
+    /// what bytes that aren't text read as (`ABI.StringDecoding.lossy`) and draws as a mark, not a letter, so "USDC" and
+    /// one such byte still reads as "USDC"; letters from other scripts that look like Latin ones (Cyrillic "С", Greek "Ο",
+    /// Armenian "օ", Lisu "ꓟ", small capital "ᴏ": `lookAlikeLetters`) as those Latin letters, before the compatibility
+    /// forms are folded (which would turn a Greek lunate "Ϲ" into a "Σ" nobody mistakes for C) and after; accents and
     /// width ignored. Case is kept (`readings` decides on it).
     static func visible(_ text: String) -> String {
+        let lookedAt = String(String.UnicodeScalarView(text.unicodeScalars.map { lookAlikeLetters[$0] ?? $0 }))
         var scalars = String.UnicodeScalarView()
-        for scalar in text.precomposedStringWithCompatibilityMapping.unicodeScalars {
+        for scalar in lookedAt.precomposedStringWithCompatibilityMapping.unicodeScalars {
             let properties = scalar.properties
             switch properties.generalCategory {
             case .format, .control, .nonspacingMark, .enclosingMark, .spaceSeparator, .lineSeparator, .paragraphSeparator: continue
             default: break
             }
-            if properties.isWhitespace || properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) || scalar.value == 0xFFFD { continue }
+            if properties.isWhitespace || properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) || scalar.value == 0xFFFD || scalar.value == 0x2800 { continue }
             scalars.append(lookAlikeLetters[scalar] ?? scalar)
         }
         return String(scalars).folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil).filter { !$0.isWhitespace }
@@ -210,8 +298,17 @@ public enum WalletHoldings {
     /// U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069: they change the order text shows in.
     private static let bidiControls: Set<UInt32> = Set([0x061C, 0x200E, 0x200F] + Array(0x202A...0x202E) + Array(0x2066...0x2069))
 
+    /// Letters of other scripts drawn like Latin ones, each with the letter it passes for: Unicode's confusables
+    /// (`LookAlikeLetters`, generated from UTS #39 data), with the few below kept as they were written here, case for case
+    /// (Unicode reads a Cyrillic "І" or Greek "Ι" as "l", which `readings` "b" does anyway).
+    static let lookAlikeLetters: [Unicode.Scalar: Unicode.Scalar] = {
+        var map: [Unicode.Scalar: Unicode.Scalar] = [:]
+        for (code, latin) in LookAlikeLetters.confusables { if let scalar = Unicode.Scalar(code) { map[scalar] = latin.unicodeScalars.first! } }
+        return map.merging(handLookAlikes) { _, kept in kept }
+    }()
+
     /// Cyrillic and Greek letters drawn like Latin ones (Unicode's confusables, the unambiguous ones), case for case.
-    private static let lookAlikeLetters: [Unicode.Scalar: Unicode.Scalar] = {
+    private static let handLookAlikes: [Unicode.Scalar: Unicode.Scalar] = {
         let pairs: [(UInt32, Character)] = [
             // Cyrillic capitals, then small letters.
             (0x0410, "A"), (0x0412, "B"), (0x0415, "E"), (0x041A, "K"), (0x041C, "M"), (0x041D, "H"), (0x041E, "O"), (0x0420, "P"),

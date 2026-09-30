@@ -1,20 +1,36 @@
 import Foundation
 
-/// Which coin symbols show as what they are, and which names and symbols a coin made in DyorHQ may not take.
+/// Which coin symbols and names show as what they are, and which names and symbols a coin made in DyorHQ may not take.
 ///
-/// A symbol is display-safe when nothing in it can make it read as another: plain printable ASCII (as MON's and every
-/// curated token's is), or Chinese, Japanese or Korean letters with ASCII digits. Everything else is not: control,
-/// format, direction-changing and zero-width characters, combining marks, full-width Latin, and letters from any other
-/// script — Cyrillic and Greek hold letters drawn exactly like Latin ones — as well as a mix of Latin and CJK letters.
-/// A DyorHQ coin whose symbol isn't display-safe is labelled Unverified, never "DyorHQ Launch" (`TokenBadge`), and the
-/// create forms refuse such a symbol, any name or symbol that reads as a curated token's, and a name with hidden
-/// characters or Latin letters mixed with Cyrillic or Greek ones (`createRefusal`), so a coin made in the app never
-/// carries a warning. One made directly on the contracts still can.
+/// A symbol is display-safe when nothing in it can make it read as another: Latin — printable ASCII (as MON's and every
+/// curated token's is) and the accented letters of the Latin alphabets (CAFÉ, PIÑA, ÇA, ÐOGE; owner decision 5, "Latin
+/// letters stay allowed") — or Chinese, Japanese or Korean letters with ASCII digits (pick 19), never the two mixed.
+/// Everything else is not: control, format, direction-changing and zero-width characters, combining marks left over
+/// once the text is composed, full-width Latin, the Latin letters drawn like others (dotless ı, small capitals, IPA),
+/// and letters from any other script — Cyrillic, Greek, Armenian, Cherokee and Lisu hold letters drawn exactly like
+/// Latin ones. Accents don't hide a look-alike: "USDĆ" reads as USDC (`WalletHoldings.imitated(by:)` folds them).
+///
+/// A name is display-safe when it has no hidden or direction-changing character (`hasHiddenCharacters`) and no word
+/// mixes Latin letters with letters of another script drawn like Latin ones (`mixesLookAlikeAlphabets`); any language
+/// and emoji are fine. A DyorHQ coin whose symbol or name isn't display-safe, or is longer than the create forms allow
+/// (`maxSymbolLength`, `maxLaunchNameLength`, `maxMomentNameLength`), carries a warning, never "DyorHQ Launch"
+/// (`TokenBadge`), and the create forms refuse all of it (`createRefusal`), so a coin made in the app never carries a
+/// warning. One made directly on the contracts still can. Every check reads the chain's text as it is — never
+/// `ChainText.shown`, which removes the direction characters these checks exist to catch.
 public enum SymbolSafety {
+    /// The longest symbol the create forms take, in characters (`LaunchpadView`, `CreateMomentView`).
+    public static let maxSymbolLength = 10
+    /// The longest name a launch may have: the launch form sets none, so this is the app's.
+    public static let maxLaunchNameLength = 32
+    /// The longest name a Moment may have (`CreateMomentView`).
+    public static let maxMomentNameLength = 48
+
     /// Whether `symbol` shows as what it is (see above). False for empty text or spaces alone.
     public static func isDisplaySafe(_ symbol: String) -> Bool {
         guard symbol.unicodeScalars.contains(where: { $0.value != 0x20 }) else { return false }
-        if WalletHoldings.isPlain(symbol) { return true }
+        // Latin, composed (NFC) so an accent typed as a combining mark joins its letter; one left over is not safe.
+        if symbol.precomposedStringWithCanonicalMapping.unicodeScalars.allSatisfy({ (0x20...0x7E).contains($0.value) || isAccentedLatinLetter($0) }) { return true }
+        // Chinese, Japanese or Korean, as written: conjoining jamo are another way to draw a syllable, not one.
         var letters = 0
         for scalar in symbol.unicodeScalars {
             if ("0"..."9").contains(scalar) { continue }
@@ -22,6 +38,40 @@ public enum SymbolSafety {
             letters += 1
         }
         return letters > 0
+    }
+
+    /// Whether `text` fits a form field of `limit` characters: at most that many, and at most four UTF-8 bytes each, so
+    /// a few characters piled with marks don't pass as short.
+    public static func fits(_ text: String, limit: Int) -> Bool {
+        text.count <= limit && text.utf8.count <= 4 * limit
+    }
+
+    /// Whether `name` shows as what it is: nothing hidden or direction-changing in it, and no word mixing Latin letters
+    /// with look-alikes from another script.
+    public static func isNameDisplaySafe(_ name: String) -> Bool {
+        !hasHiddenCharacters(name) && !mixesLookAlikeAlphabets(name)
+    }
+
+    /// Whether a DyorHQ coin's own symbol and name show as what they are and fit the create forms (a launch's name
+    /// `maxLaunchNameLength`, a Moment's `maxMomentNameLength`). An unreadable symbol or name (`ChainText.unreadable`) is
+    /// not.
+    public static func isDisplaySafe(_ coin: DyorCoin) -> Bool {
+        isDisplaySafe(coin.symbol) && fits(coin.symbol, limit: maxSymbolLength)
+            && isNameDisplaySafe(coin.name) && fits(coin.name, limit: coin.isMoment ? maxMomentNameLength : maxLaunchNameLength)
+    }
+
+    /// A precomposed letter of the Latin alphabets beyond ASCII (Latin-1, Extended-A and -B, Extended Additional) that
+    /// has case — É, Ñ, Ç, Ð, Ø, ß, Ș — and isn't drawn like another letter (`WalletHoldings.lookAlikeLetters`: dotless ı,
+    /// long ſ, the click letters and IPA-like forms are left out).
+    static func isAccentedLatinLetter(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0xC0...0x24F, 0x1E00...0x1EFF: break
+        default: return false
+        }
+        switch scalar.properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter: return WalletHoldings.lookAlikeLetters[scalar] == nil
+        default: return false
+        }
     }
 
     /// A letter of the Han (Chinese), Hangul (Korean), Hiragana or Katakana (Japanese) scripts, precomposed: the blocks
@@ -48,59 +98,99 @@ public enum SymbolSafety {
 
     /// Why a create form refuses a coin's name or symbol.
     public enum CreateRefusal: Hashable, Sendable {
-        /// The symbol reads as a curated token's (`WalletHoldings.imitated(by:)`): "USDC", "USDС" with a Cyrillic С, "WM0N".
+        /// The symbol reads as a curated or a major token's (`WalletHoldings.imitated(by:)`): "USDC", "USDС" with a
+        /// Cyrillic С, "WM0N", "MON2", "ETH".
         case symbolImitates(Token)
-        /// The name reads as a curated token's name or symbol: "Monad", "Wrapped MON", "USDC".
+        /// The name reads as a curated or a major token's name or symbol: "Monad", "Wrapped MON", "M0nad", "Bitcoin".
         case nameImitates(Token)
         /// The symbol isn't display-safe (`isDisplaySafe`).
         case symbolNotDisplaySafe
+        /// The symbol is longer than `maxSymbolLength`.
+        case symbolTooLong
         /// The name holds a character that doesn't show as itself (`hasHiddenCharacters`).
         case nameHasHiddenCharacters
-        /// The name mixes Latin letters with Cyrillic or Greek ones (`mixesLookAlikeAlphabets`).
+        /// A word of the name mixes Latin letters with look-alikes from another script (`mixesLookAlikeAlphabets`).
         case nameMixesAlphabets
+        /// The name is longer than the form allows: the limit, in characters.
+        case nameTooLong(Int)
 
         /// What the form says under the field.
         public var message: String {
             switch self {
+            case .symbolImitates(let token) where Token.core(token.address) == nil:
+                return "This symbol looks like \(token.symbol), a widely traded token this coin isn't. Choose another symbol."
             case .symbolImitates(let token): return "This symbol looks like \(token.symbol), a token DyorHQ already lists. Choose another symbol."
+            case .nameImitates(let token) where Token.core(token.address) == nil:
+                return "This name looks like \(token.symbol), a widely traded token this coin isn't. Choose another name."
             case .nameImitates(let token): return "This name looks like \(token.symbol), a token DyorHQ already lists. Choose another name."
-            case .symbolNotDisplaySafe: return "Use Latin letters, or Chinese, Japanese or Korean letters, with digits. Other alphabets and hidden characters aren't allowed."
+            case .symbolNotDisplaySafe:
+                return "A symbol can use A–Z, 0–9 and accented Latin letters, or Chinese, Japanese or Korean characters with 0–9, not mixed."
+            case .symbolTooLong: return "A symbol can be at most \(SymbolSafety.maxSymbolLength) characters."
             case .nameHasHiddenCharacters: return "This name has hidden or direction-changing characters. Remove them."
-            case .nameMixesAlphabets: return "This name mixes Latin letters with Cyrillic or Greek letters that look like them. Use one alphabet."
+            case .nameMixesAlphabets: return "A word in this name mixes Latin letters with letters from another alphabet that look like them. Use one alphabet in each word."
+            case .nameTooLong(let limit): return "A name can be at most \(limit) characters."
             }
         }
 
         /// Whether it is about the symbol field (else the name field).
         public var isAboutSymbol: Bool {
             switch self {
-            case .symbolImitates, .symbolNotDisplaySafe: return true
-            case .nameImitates, .nameHasHiddenCharacters, .nameMixesAlphabets: return false
+            case .symbolImitates, .symbolNotDisplaySafe, .symbolTooLong: return true
+            case .nameImitates, .nameHasHiddenCharacters, .nameMixesAlphabets, .nameTooLong: return false
             }
         }
     }
 
     /// Why a new launch or Moment may not take `name` and `symbol`, or nil when it may: a symbol that reads as a curated
-    /// token's, then a name that does, then a symbol that isn't display-safe, then a name with hidden characters, then a
-    /// name mixing look-alike alphabets. An empty field is the form's own check, not a refusal here.
-    public static func createRefusal(name: String, symbol: String) -> CreateRefusal? {
+    /// or major token's, then a name that does, then a symbol that isn't display-safe or is too long, then a name with
+    /// hidden characters, one mixing look-alike alphabets in a word, or one longer than `maxName` (a launch's
+    /// `maxLaunchNameLength`, a Moment's `maxMomentNameLength`). An empty field is the form's own check, not a refusal
+    /// here. What it allows, the badge never warns about (`TokenBadge`).
+    public static func createRefusal(name: String, symbol: String, maxName: Int = maxLaunchNameLength) -> CreateRefusal? {
         if let token = WalletHoldings.imitated(by: probe(symbol: symbol, name: "")) { return .symbolImitates(token) }
         if let token = WalletHoldings.imitated(by: probe(symbol: "", name: name)) { return .nameImitates(token) }
         if !symbol.isEmpty, !isDisplaySafe(symbol) { return .symbolNotDisplaySafe }
+        if !fits(symbol, limit: maxSymbolLength) { return .symbolTooLong }
         if hasHiddenCharacters(name) { return .nameHasHiddenCharacters }
         if mixesLookAlikeAlphabets(name) { return .nameMixesAlphabets }
+        if !fits(name, limit: maxName) { return .nameTooLong(maxName) }
         return nil
     }
 
+    // MARK: Names
+
     /// Whether `name` holds a character that doesn't show as itself: a control, format or direction-changing character,
-    /// a zero-width or other invisible one (`Address.isInvisible`, default-ignorable code points), a line or paragraph
-    /// separator, a private-use or unassigned code point. The joiner, variation selectors and tags inside an emoji
-    /// sequence ("👨‍👩‍👧", "❤️", a flag) belong to the emoji, and accents to their letters ("Café", "Niño"): neither is hidden.
+    /// a zero-width or other invisible one (`Address.isInvisible`, default-ignorable code points, the blank Braille
+    /// pattern U+2800 and the Hangul fillers), a line or paragraph separator, a private-use or unassigned code point, or
+    /// U+FFFD, which stands for bytes that aren't text. What belongs to an emoji is not hidden, and only where it does:
+    /// - the zero-width joiner between two emoji ("👨‍👩‍👧"), after any variation selector or skin tone on the first;
+    /// - VS15 or VS16 (U+FE0E, U+FE0F) right after an emoji ("❤️") or a keycap's 0–9, # or * followed by U+20E3;
+    /// - U+20E3 COMBINING ENCLOSING KEYCAP right after 0–9, # or *, or after one of those and VS16 ("1️⃣");
+    /// - tag characters (U+E0020–U+E007F) right after 🏴, ending with U+E007F CANCEL TAG, at most `ChainText.maxTags` of
+    ///   them (England's flag).
+    /// Accents belong to their letters ("Café", "Niño"): not hidden.
     public static func hasHiddenCharacters(_ name: String) -> Bool {
-        for character in name {
-            let scalars = character.unicodeScalars
-            let emoji = scalars.count > 1 && (scalars.first?.properties.isEmoji ?? false)
-            for scalar in scalars {
-                if emoji, scalar.value == 0x200D || scalar.value == 0xFE0E || scalar.value == 0xFE0F || (0xE0020...0xE007F).contains(scalar.value) { continue }
+        let scalars = Array(name.unicodeScalars)
+        var i = 0
+        while i < scalars.count {
+            let scalar = scalars[i]
+            let value = scalar.value
+            if value == 0x1F3F4, let end = tagSequenceEnd(scalars, after: i) {
+                i = end + 1
+                continue
+            }
+            switch value {
+            case 0x200D:
+                guard i + 1 < scalars.count, isPictograph(scalars[i + 1]), let base = emojiBase(scalars, before: i), isPictograph(scalars[base]) else { return true }
+            case 0xFE0E, 0xFE0F:
+                guard i > 0, isPictograph(scalars[i - 1]) || (isKeycapBase(scalars[i - 1]) && i + 1 < scalars.count && scalars[i + 1].value == 0x20E3) else { return true }
+            case 0x20E3:
+                guard i > 0, isKeycapBase(scalars[i - 1]) || (scalars[i - 1].value == 0xFE0F && i > 1 && isKeycapBase(scalars[i - 2])) else { return true }
+            case 0x2800, 0x115F, 0x1160, 0x3164, 0xFFA0, 0xFFFD:
+                return true
+            case 0xE0000...0xE007F:
+                return true
+            default:
                 let properties = scalar.properties
                 switch properties.generalCategory {
                 case .control, .format, .lineSeparator, .paragraphSeparator, .privateUse, .unassigned, .surrogate: return true
@@ -108,25 +198,76 @@ public enum SymbolSafety {
                 }
                 if properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) { return true }
             }
+            i += 1
         }
         return false
     }
 
-    /// Whether `name` has Latin letters and Cyrillic or Greek ones, many of which are drawn exactly alike ("Dоge" with a
-    /// Cyrillic о). A name in one of those alphabets alone, or in any other, is fine.
-    public static func mixesLookAlikeAlphabets(_ name: String) -> Bool {
-        var latin = false
-        var lookAlike = false
-        for scalar in name.unicodeScalars where scalar.properties.isAlphabetic {
-            switch scalar.value {
-            // Basic Latin, Latin-1 and Extended-A/B, Latin Extended Additional, full-width Latin.
-            case 0x41...0x5A, 0x61...0x7A, 0xC0...0x24F, 0x1E00...0x1EFF, 0xFF21...0xFF3A, 0xFF41...0xFF5A: latin = true
-            // Greek and Coptic, Greek Extended, Cyrillic and its supplement and extensions.
-            case 0x370...0x3FF, 0x1F00...0x1FFF, 0x400...0x52F, 0x1C80...0x1C8F, 0x2DE0...0x2DFF, 0xA640...0xA69F: lookAlike = true
-            default: break
+    /// An emoji a joiner may join or a variation selector may follow: a pictographic emoji (`isEmoji`, beyond ASCII's
+    /// digits, # and *), not a regional-indicator letter, a skin tone or a tag.
+    private static func isPictograph(_ scalar: Unicode.Scalar) -> Bool {
+        let properties = scalar.properties
+        guard properties.isEmoji, scalar.value > 0x7F, !properties.isEmojiModifier else { return false }
+        switch scalar.value {
+        case 0x1F1E6...0x1F1FF, 0xE0000...0xE007F, 0x20E3, 0xFE0E, 0xFE0F, 0x200D: return false
+        default: return true
+        }
+    }
+
+    private static func isKeycapBase(_ scalar: Unicode.Scalar) -> Bool {
+        ("0"..."9").contains(scalar) || scalar == "#" || scalar == "*"
+    }
+
+    /// The emoji a joiner at `joiner` follows: the scalar before it, past one variation selector and one skin tone.
+    private static func emojiBase(_ scalars: [Unicode.Scalar], before joiner: Int) -> Int? {
+        var at = joiner - 1
+        if at >= 0, scalars[at].properties.isEmojiModifier { at -= 1 }
+        if at >= 0, scalars[at].value == 0xFE0F { at -= 1 }
+        return at >= 0 ? at : nil
+    }
+
+    /// Where the tag sequence after the 🏴 at `flag` ends (its U+E007F): the tags there are letters and digits' tags
+    /// (U+E0020–U+E007E), at most `ChainText.maxTags` with the cancel tag. Nil when what follows isn't such a sequence.
+    private static func tagSequenceEnd(_ scalars: [Unicode.Scalar], after flag: Int) -> Int? {
+        var at = flag + 1
+        while at < scalars.count, at - flag <= ChainText.maxTags {
+            switch scalars[at].value {
+            case 0xE007F: return at > flag + 1 ? at : nil
+            case 0xE0020...0xE007E: at += 1
+            default: return nil
             }
         }
-        return latin && lookAlike
+        return nil
+    }
+
+    /// Whether a word of `name` mixes Latin letters with letters of another script drawn like Latin ones ("Pаypal" with a
+    /// Cyrillic а, "Mօnad" with an Armenian օ, "Mᴏnad" with a small capital): only letters in
+    /// `WalletHoldings.lookAlikeLetters` from outside the everyday Latin blocks count, word by word. So "Ωmega", "πDAO",
+    /// "μSwap", "ΔNeutral", "Lambda λ", "Pepe Пепе" and "Russian Рубль" are fine, as is a name in one alphabet alone,
+    /// and the Turkish "ı" is a Latin letter. Words are split at anything that isn't a letter.
+    public static func mixesLookAlikeAlphabets(_ name: String) -> Bool {
+        for word in name.split(whereSeparator: { !$0.isLetter }) {
+            var latin = false
+            var lookAlike = false
+            for scalar in word.unicodeScalars where scalar.properties.isAlphabetic {
+                if isEverydayLatin(scalar.value) {
+                    latin = true
+                } else if WalletHoldings.lookAlikeLetters[scalar] != nil {
+                    lookAlike = true
+                }
+            }
+            if latin && lookAlike { return true }
+        }
+        return false
+    }
+
+    /// Basic Latin letters, Latin-1, Extended-A and -B, Extended Additional and full-width Latin: the letters Latin
+    /// alphabets are written with.
+    private static func isEverydayLatin(_ value: UInt32) -> Bool {
+        switch value {
+        case 0x41...0x5A, 0x61...0x7A, 0xC0...0x24F, 0x1E00...0x1EFF, 0xFF21...0xFF3A, 0xFF41...0xFF5A: return true
+        default: return false
+        }
     }
 
     /// A token that is neither MON nor curated, carrying the text to check, for `WalletHoldings.imitated(by:)`.

@@ -120,7 +120,9 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: " usdc ", name: "Something", decimals: 6)), .usdc, "case and spaces")
         XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "ＵＳＤＣ", name: "Wide", decimals: 6)), .usdc, "full-width letters")
         XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "MONAD", name: "Monad", decimals: 18)), .mon, "MON's name")
-        XCTAssertNil(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "USDC.e", name: "USD Coin", decimals: 6)), "a different name is its own")
+        XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "USDC.e", name: "USD Coin", decimals: 6)), .usdc,
+                       "\"USDC\" with only non-letters after it (build 17: a bridged-looking USDC is marked too)")
+        XCTAssertNil(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "USDCX", name: "USD Coin", decimals: 6)), "a letter after it makes another word")
         XCTAssertNil(WalletHoldings.imitated(by: .usdc))
         XCTAssertNil(WalletHoldings.imitated(by: .mon))
         XCTAssertNil(WalletHoldings.imitated(by: meme))
@@ -140,7 +142,7 @@ final class WalletHoldingsTests: XCTestCase {
     /// A name that only reads as a curated one is marked as well: invisible characters (zero-width space and joiner, soft
     /// hyphen, byte-order mark), letters from another script drawn like Latin ones (Cyrillic "С", Greek "Ο"), mathematical
     /// letters, digits drawn like letters ("M0N", "USDl" for USD1) and text a direction override turns around. A name that
-    /// merely differs ("USDL", "USDC.e") is its own. Whatever its name, a token whose symbol isn't plain ASCII is never
+    /// merely differs ("USDL") is its own; "USDC.e" reads as USDC with non-letters after it (build 17). Whatever its name, a token whose symbol isn't plain ASCII is never
     /// preselected: it can read as a symbol it isn't.
     func testANameThatOnlyReadsAsACuratedOneIsMarkedAndNeverTheDefault() {
         func token(_ symbol: String, _ name: String = "Something") -> Token { Token(address: spam.address, symbol: symbol, name: name, decimals: 6) }
@@ -153,7 +155,7 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.imitated(by: token("USDl")), Token.core.first { $0.symbol == "USD1" }, "l for 1")
         XCTAssertEqual(WalletHoldings.imitated(by: token("X", "\u{039C}\u{03BF}nad")), .mon, "a Greek name drawn as \"Monad\"")
         XCTAssertNil(WalletHoldings.imitated(by: token("USDL")), "L is not 1")
-        XCTAssertNil(WalletHoldings.imitated(by: token("USDC.e", "USD Coin")))
+        XCTAssertEqual(WalletHoldings.imitated(by: token("USDC.e", "USD Coin")), .usdc)
         XCTAssertNil(WalletHoldings.imitated(by: token("\u{0414}\u{041E}\u{0413}")), "Cyrillic that reads as no curated name")
         XCTAssertNil(WalletHoldings.imitated(by: token("", "")))
 
