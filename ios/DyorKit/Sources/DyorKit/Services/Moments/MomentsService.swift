@@ -428,6 +428,8 @@ public actor MomentsService {
     /// provenance are its creator's: one that can't be read shows a stand-in (`ChainText.unreadable` for the name and
     /// symbol, an empty provenance) and the Moment keeps its numbers and claims. Its ledger, editions, entitlements and
     /// graduation are the protocol's: one that fails means the read didn't happen, and this throws (`ChainListUnread`).
+    /// The name, symbol and place are kept as they show (`ChainText.shown`), so none can reorder or hide the app's text
+    /// around it; the media links are kept as read. Name links read the names as they are (`MomentDirectory`).
     private func hydrate(_ moments: [Moment]) async throws -> [MomentInfo] {
         guard !moments.isEmpty else { return [] }
         let items = moments.map { m in
@@ -447,9 +449,10 @@ public actor MomentsService {
         for (m, r) in zip(moments, results) {
             func value(_ at: Int) throws -> [ABIValue] { try r[at].get() }
             func text(_ at: Int) -> String { (try? r[at].get())?.first?.stringOrNil ?? ChainText.unreadable }
-            let provenance = (try? value(3)).map { MomentsABI.provenance($0[0]) } ?? MomentProvenance(mediaURI: "", mediaHash: Data(), place: "", date: 0, animationURI: "")
+            let read = (try? value(3)).map { MomentsABI.provenance($0[0]) } ?? MomentProvenance(mediaURI: "", mediaHash: Data(), place: "", date: 0, animationURI: "")
+            let provenance = MomentProvenance(mediaURI: read.mediaURI, mediaHash: read.mediaHash, place: ChainText.shown(read.place), date: read.date, animationURI: read.animationURI)
             partial.append((m, MomentsABI.ledger(try value(0)[0]), MomentsABI.int(try value(1)[0]), try value(2)[0].bool, provenance,
-                            text(4), text(5), try value(6)[0].uint, try value(7)[0].bool))
+                            ChainText.shown(text(4)), ChainText.shown(text(5)), try value(6)[0].uint, try value(7)[0].bool))
         }
         let graduatedIds = partial.filter { $0.8 }.map { $0.0.id }
         let pools = try await self.pools(ids: graduatedIds)

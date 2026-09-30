@@ -26,10 +26,11 @@ final class ChainTextForkTests: XCTestCase {
         self.rpc = rpc
     }
 
-    /// `text` as it must read in a list: exactly its bytes when they are UTF-8, else with U+FFFD in place of what isn't.
-    private static func check(_ listed: String, _ raw: Data, _ label: String) {
+    /// `text` as it must read in a list: its bytes when they are UTF-8, as they show (`shown`: `ChainText.shown` for a
+    /// name, symbol, description or place, the text itself for a link), else with U+FFFD in place of what isn't.
+    private static func check(_ listed: String, _ raw: Data, _ label: String, _ shown: (String) -> String = { $0 }) {
         if let exact = String(data: raw, encoding: .utf8) {
-            XCTAssertEqual(listed, exact, label)
+            XCTAssertEqual(listed, shown(exact), label)
         } else {
             XCTAssertTrue(listed.contains("\u{FFFD}"), "\(label): \(listed.debugDescription)")
         }
@@ -72,7 +73,8 @@ final class ChainTextForkTests: XCTestCase {
             guard let i = tokens.firstIndex(of: launch.token) else { continue }
             let fields = [launch.name, launch.symbol, launch.logo, launch.description,
                           launch.socials.twitter, launch.socials.telegram, launch.socials.discord, launch.socials.website, launch.socials.farcaster]
-            for (field, bytes) in zip(fields, texts(i)) { Self.check(field, bytes, launch.token.short) }
+            let shown: [(String) -> String] = [{ ChainText.shown($0) }, { ChainText.shown($0) }, { $0 }, { ChainText.shown($0, multiline: true) }] + Array(repeating: { $0 }, count: 5)
+            for (j, (field, bytes)) in zip(fields, texts(i)).enumerated() { Self.check(field, bytes, launch.token.short, shown[j]) }
             if illFormed.contains(launch.token) { print("ChainTextForkTests listed \(launch.token.short): \(fields.map(\.debugDescription))") }
         }
         let all = await read("allLaunches") { try await service.allLaunches(limit: max(count, 1)) } ?? []
@@ -118,7 +120,8 @@ final class ChainTextForkTests: XCTestCase {
         for info in listed {
             let i = Int(info.id) - 1
             let fields = [info.name, info.symbol, info.provenance.mediaURI, info.provenance.place, info.provenance.animationURI]
-            for (field, bytes) in zip(fields, texts(i)) { Self.check(field, bytes, "Moment \(info.id)") }
+            let shown: [(String) -> String] = [{ ChainText.shown($0) }, { ChainText.shown($0) }, { $0 }, { ChainText.shown($0) }, { $0 }]
+            for (j, (field, bytes)) in zip(fields, texts(i)).enumerated() { Self.check(field, bytes, "Moment \(info.id)", shown[j]) }
             if illFormed.contains(where: { $0.id == info.id }) { print("ChainTextForkTests listed Moment \(info.id): \(fields.map(\.debugDescription))") }
         }
         let infos = await read("infos(ids:)") { try await service.infos(ids: ids) }

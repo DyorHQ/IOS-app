@@ -411,7 +411,9 @@ public actor LaunchpadService {
     /// record, in order. A coin's name, symbol, logo, description and links are its creator's: one that can't be read
     /// shows a stand-in (`ChainText.unreadable`, empty for the rest) and the launch keeps its numbers. Its price, reserve,
     /// state and supply are the protocol's: one that fails means the read didn't happen, and this throws
-    /// (`ChainListUnread`) rather than leave the launch out or show it wrong.
+    /// (`ChainListUnread`) rather than leave the launch out or show it wrong. The name, symbol and description are kept
+    /// as they show (`ChainText.shown`), so none can reorder or hide the app's text around it; the logo and links are
+    /// kept as read (they are only opened, never shown).
     func hydrate(_ records: [LaunchpadABI.LaunchRecord], factory: Address) async throws -> [Launch] {
         guard !records.isEmpty else { return [] }
         typealias T = LaunchpadABI.Token
@@ -447,7 +449,8 @@ public actor LaunchpadService {
                 token: r.token, curve: r.curve, deployer: r.deployer, creatorFeeRecipient: r.creatorFeeRecipient, pairToken: r.pairToken,
                 graduationThreshold: r.graduationThreshold, creatorTaxBps: r.creatorTaxBps, poolFeeBps: r.poolFeeBps, tickSpacing: r.tickSpacing,
                 holderFeeSharing: r.holderFeeSharing, graduationVenue: r.graduationVenue, phase: r.phase, sweptQuote: r.sweptQuote, sweptTokens: r.sweptTokens, sweptAt: r.sweptAt, poolId: r.poolId,
-                name: text(0), symbol: text(1), logo: info?.logo ?? "", description: info?.description ?? "", socials: info?.socials ?? Socials(),
+                name: ChainText.shown(text(0)), symbol: ChainText.shown(text(1)), logo: info?.logo ?? "", description: ChainText.shown(info?.description ?? "", multiline: true),
+                socials: info?.socials ?? Socials(),
                 pair: pairs[r.pairToken] ?? .mon,
                 price: price,
                 realQuoteReserve: graduated ? r.sweptQuote : realQuoteReserve,
