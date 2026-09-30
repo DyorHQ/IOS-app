@@ -231,8 +231,10 @@ enum LaunchpadABI {
 
     // MARK: Decoding
 
-    /// `Types.LaunchedToken`, including `exists`; the service drops records that do not exist. `legacy` decodes the
-    /// 16-field `legacyLaunchedTokenTuple`, whose launches all graduate on Monday Trade.
+    /// `Types.LaunchedToken`, including `exists`, false for a coin the factory never launched: `LaunchpadService.launch`
+    /// answers nil for it and `firstRecord` passes over it, while a coin the factory lists with no record fails the list
+    /// (`launches(limit:factory:)`: it was read on a node behind). `legacy` decodes the 16-field
+    /// `legacyLaunchedTokenTuple`, whose launches all graduate on Monday Trade.
     struct LaunchRecord {
         let token: Address
         let curve: Address

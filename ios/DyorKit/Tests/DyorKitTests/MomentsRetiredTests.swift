@@ -288,4 +288,28 @@ final class MomentsRetiredTests: XCTestCase {
             }
         }
     }
+
+    /// The Portfolio's retired Moments: a cohort that can't be read keeps the Moments an earlier read had, and the read
+    /// says it is incomplete; with nothing earlier, the cohort has none, still said. Every cohort read: complete.
+    func testARetiredCohortThatCantBeReadKeepsItsMomentsAndSaysSo() async throws {
+        let c3 = MomentsAddresses.retiredMainnet.first { $0.factory == MomentLink.Cohort.c3.factory }!
+        let c2 = MomentsAddresses.retiredMainnet.first { $0.factory == MomentLink.Cohort.c2.factory }!
+        let three = FakeMomentsStack(addresses: c3, policy: V2Fixture.policy(termsHash: nil), factoryBase: "", nftBase: "", names: ["Nature"])
+        let two = FakeMomentsStack(addresses: c2, policy: V2Fixture.policy(termsHash: nil), factoryBase: "", nftBase: "", names: ["Two A", "Two B"])
+        MomentsChainStub.install { to, data in three.answer(to, data) ?? two.answer(to, data) }
+        let cohorts = [c3, c2].map { RetiredMoments(rpc: MomentsChainStub.rpc(), addresses: $0) }
+
+        let first = await RetiredMoments.moments(of: cohorts)
+        XCTAssertTrue(first.complete)
+        XCTAssertEqual(first.moments.map(\.key), [MomentKey(factory: c3.factory, id: 1), MomentKey(factory: c2.factory, id: 2), MomentKey(factory: c2.factory, id: 1)])
+
+        MomentsChainStub.install({ to, data in three.answer(to, data) ?? two.answer(to, data) }, breaking: [c2.factory])
+        let second = await RetiredMoments.moments(of: cohorts, keeping: first.moments)
+        XCTAssertFalse(second.complete, "a cohort couldn't be read")
+        XCTAssertEqual(second.moments.map(\.key), first.moments.map(\.key), "its Moments from the earlier read stay")
+
+        let fresh = await RetiredMoments.moments(of: cohorts)
+        XCTAssertFalse(fresh.complete)
+        XCTAssertEqual(fresh.moments.map(\.key), [MomentKey(factory: c3.factory, id: 1)])
+    }
 }

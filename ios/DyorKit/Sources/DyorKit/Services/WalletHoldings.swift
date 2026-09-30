@@ -184,8 +184,10 @@ public enum WalletHoldings {
 
     /// `text` as it shows: compatibility forms (full-width and mathematical letters) as their plain letters; invisible,
     /// format and direction characters (zero-width spaces and joiners, soft hyphen, byte-order mark, overrides), control
-    /// characters, combining marks and spaces removed; letters from other scripts that look like Latin ones (Cyrillic
-    /// "С", Greek "Ο") as those Latin letters; accents and width ignored. Case is kept (`readings` decides on it).
+    /// characters, combining marks and spaces removed; U+FFFD removed too, which is what bytes that aren't text read as
+    /// (`ABI.StringDecoding.lossy`) and draws as a mark, not a letter, so "USDC" and one such byte still reads as "USDC";
+    /// letters from other scripts that look like Latin ones (Cyrillic "С", Greek "Ο") as those Latin letters; accents and
+    /// width ignored. Case is kept (`readings` decides on it).
     static func visible(_ text: String) -> String {
         var scalars = String.UnicodeScalarView()
         for scalar in text.precomposedStringWithCompatibilityMapping.unicodeScalars {
@@ -194,7 +196,7 @@ public enum WalletHoldings {
             case .format, .control, .nonspacingMark, .enclosingMark, .spaceSeparator, .lineSeparator, .paragraphSeparator: continue
             default: break
             }
-            if properties.isWhitespace || properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) { continue }
+            if properties.isWhitespace || properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) || scalar.value == 0xFFFD { continue }
             scalars.append(lookAlikeLetters[scalar] ?? scalar)
         }
         return String(scalars).folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil).filter { !$0.isWhitespace }

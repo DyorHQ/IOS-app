@@ -146,10 +146,11 @@ final class LaunchBoardTests: XCTestCase {
         XCTAssertEqual(LaunchBoard.sellOnlySubtitle([]), plain)
     }
 
-    /// The section is decided only from a read every factory answered (`LaunchesRead.complete`): a retired stack that
-    /// fails leaves its coins out of the read (`LaunchpadService.allLaunchesRead` keeps the others' launches, live first
-    /// then each retired stack newest first, and `allLaunches` is the same list), so recomputing the section from the rest
-    /// would drop a held coin of that stack, as LP on 0x10F3. The read names the stack instead.
+    /// The section is decided only from a listing every factory answered (`LaunchListing.complete`): a retired stack that
+    /// fails leaves its coins out of the listing (`LaunchpadService.launchListing` keeps the others' launches, live first
+    /// then each retired stack newest first, and names the one that failed), so recomputing the section from the rest
+    /// would drop a held coin of that stack, as LP on 0x10F3. `allLaunches` is the same list when every factory answered,
+    /// and throws otherwise.
     func testTheHolderSectionIsDecidedOnlyFromACompleteRead() async throws {
         defer { MomentsChainStub.install { _, _ in nil } }
         let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: V2Fixture.launchpad, logsRPC: MomentsChainStub.rpc())
@@ -160,9 +161,9 @@ final class LaunchBoardTests: XCTestCase {
 
         // Every factory answers: every launchpad's coin, and the section holds every retired one.
         MomentsChainStub.install(BoardChain().answer)
-        let whole = try await service.allLaunchesRead(limit: 60)
+        let whole = await service.launchListing(limit: 60)
         XCTAssertTrue(whole.complete)
-        XCTAssertEqual(whole.unread, [])
+        XCTAssertTrue(whole.unread.isEmpty)
         XCTAssertEqual(whole.launches.map(\.factory), stacks.map(\.factory), "live first, then each retired stack, newest first")
         XCTAssertEqual(whole.launches.map(\.token), stacks.map(BoardChain.coin))
         XCTAssertEqual(whole.launches.filter { !$0.listsOnBoard }.map(\.factory), LaunchpadAddresses.retiredFactories, "on the curve: the retired ones are sell-only")
@@ -170,31 +171,36 @@ final class LaunchBoardTests: XCTestCase {
         XCTAssertEqual(all, whole.launches, "the plain list is the same read")
         XCTAssertEqual(LaunchBoard.heldSellOnly(whole.launches.filter { !$0.listsOnBoard }, balances: holder)?.map(\.factory), LaunchpadAddresses.retiredFactories)
 
-        // LP's stack fails: its coin is missing, and the read says so. Recomputed from what came back, the section would
-        // drop the held coin — so nothing is decided from an incomplete read.
+        // LP's stack fails: its coin is missing, and the listing says so. Recomputed from what came back, the section
+        // would drop the held coin — so nothing is decided from an incomplete listing.
         MomentsChainStub.install(BoardChain(failing: [lpStack.factory]).answer)
-        let partial = try await service.allLaunchesRead(limit: 60)
+        let partial = await service.launchListing(limit: 60)
         XCTAssertFalse(partial.complete)
-        XCTAssertEqual(partial.unread, [lpStack.factory])
+        XCTAssertEqual(Array(partial.unread.keys), [lpStack.factory])
         XCTAssertEqual(partial.launches.map(\.factory), stacks.map(\.factory).filter { $0 != lpStack.factory }, "the other stacks' launches still list")
         XCTAssertFalse(partial.launches.contains { $0.token == BoardChain.coin(lpStack) })
         let dropped = try XCTUnwrap(LaunchBoard.heldSellOnly(partial.launches.filter { !$0.listsOnBoard }, balances: holder))
-        XCTAssertEqual(dropped.map(\.factory), LaunchpadAddresses.retiredFactories.filter { $0 != lpStack.factory }, "what a recompute from the partial read would show")
-        let plain = try await service.allLaunches(limit: 60)
-        XCTAssertEqual(plain, partial.launches)
+        XCTAssertEqual(dropped.map(\.factory), LaunchpadAddresses.retiredFactories.filter { $0 != lpStack.factory }, "what a recompute from the partial listing would show")
+        do {
+            let plain = try await service.allLaunches(limit: 60)
+            XCTFail("a listing a factory didn't answer returned \(plain.count) launches")
+        } catch {}
 
-        // The live factory fails: the retired stacks' launches are still read, and the read names it too.
+        // The live factory fails: the retired stacks' launches are still read, and the listing names it.
         MomentsChainStub.install(BoardChain(failing: [V2Fixture.launchpad.factory]).answer)
-        let noLive = try await service.allLaunchesRead(limit: 60)
+        let noLive = await service.launchListing(limit: 60)
         XCTAssertFalse(noLive.complete)
-        XCTAssertEqual(noLive.unread, [V2Fixture.launchpad.factory])
+        XCTAssertEqual(Array(noLive.unread.keys), [V2Fixture.launchpad.factory])
         XCTAssertEqual(noLive.launches.map(\.factory), LaunchpadAddresses.retiredFactories)
 
-        // Every retired factory fails too: nothing came back, so the live factory's error is thrown, as before.
+        // Every factory fails: nothing came back, and the listing names every one; `allLaunches` throws.
         MomentsChainStub.install(BoardChain(failing: Set(stacks.map(\.factory))).answer)
+        let none = await service.launchListing(limit: 60)
+        XCTAssertEqual(none.launches, [])
+        XCTAssertEqual(Set(none.unread.keys), Set(stacks.map(\.factory)))
         do {
-            let none = try await service.allLaunchesRead(limit: 60)
-            XCTFail("a read nothing answered returned \(none)")
+            let plain = try await service.allLaunches(limit: 60)
+            XCTFail("a listing nothing answered returned \(plain.count) launches")
         } catch {}
     }
 
@@ -227,23 +233,24 @@ final class LaunchBoardTests: XCTestCase {
         let modelEnd = try XCTUnwrap(source.range(of: "struct LaunchDetailView: View {", range: model.upperBound..<source.endIndex))
         let modelSource = String(source[model.upperBound..<modelEnd.lowerBound])
         let cleared = try XCTUnwrap(modelSource.range(of: "if account != loadedFor {\n            heldSellOnly = []\n            loadedFor = account\n        }"))
-        let read = try XCTUnwrap(modelSource.range(of: "let fresh = try await env.launchpad.allLaunchesRead(limit: 60)\n            launches = fresh.launches\n            read = fresh"))
+        let read = try XCTUnwrap(modelSource.range(of: "let listing = await env.launchpad.launchListing(limit: 60)\n        launches = listing.keeping(launches)"))
         XCTAssertLessThan(cleared.lowerBound, read.lowerBound, "cleared before any read")
-        XCTAssertTrue(modelSource.contains("if let read, let held = await Self.heldSellOnly(env: env, account: account, read: read), !Task.isCancelled, account == loadedFor {\n            heldSellOnly = held\n        }"))
-        let complete = try XCTUnwrap(modelSource.range(of: "guard read.complete else { return nil }"))
+        XCTAssertTrue(modelSource.contains("if let held = await Self.heldSellOnly(env: env, account: account, listing: listing), !Task.isCancelled, account == loadedFor {\n            heldSellOnly = held\n        }"))
+        let complete = try XCTUnwrap(modelSource.range(of: "guard listing.complete else { return nil }"))
         let balances = try XCTUnwrap(modelSource.range(of: "guard let balances = try? await ERC20.balances(of: tokens, owner: account, rpc: env.rpc, multicall: env.multicall) else { return nil }"))
         XCTAssertLessThan(complete.lowerBound, balances.lowerBound, "an incomplete read reads no balance: the section keeps what it showed")
-        XCTAssertTrue(modelSource.contains("let sellOnly = read.launches.filter { !$0.listsOnBoard }"))
+        XCTAssertTrue(modelSource.contains("let sellOnly = listing.launches.filter { !$0.listsOnBoard }"))
         XCTAssertTrue(modelSource.contains("return LaunchBoard.heldSellOnly(sellOnly, balances: balances)"))
-        XCTAssertFalse(modelSource.contains("allLaunches(limit"), "the board reads through allLaunchesRead, which says which stacks answered")
+        XCTAssertFalse(modelSource.contains("allLaunches(limit"), "the board reads through launchListing, which says which stacks answered")
         XCTAssertEqual(modelSource.components(separatedBy: "heldSellOnly = ").count - 1, 2, "set only when cleared and when read for this account")
 
         // The Explore card: only on the live launchpad, without a search, after the first load; Launch a Coin needs a
         // wallet that signs.
         XCTAssertTrue(source.contains("if env.config.launchpad.isDeployed, !searching, !firstLoad {\n                exploreEmptyCard"))
         XCTAssertTrue(source.contains("private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }"))
-        // A search that finds nothing (a hidden coin's name, say) says so, instead of "No Launches Yet".
-        XCTAssertTrue(source.contains("if searching { ContentUnavailableView.search(text: query).padding(.top, 40) } else { emptyState }"))
+        // A search that finds nothing (a hidden coin's name, say) says so, instead of "No Launches Yet"; a board with
+        // nothing read shows its error (with Retry), never "No Launches Yet".
+        XCTAssertTrue(source.contains("if searching { ContentUnavailableView.search(text: query).padding(.top, 40) } else if model.error == nil { emptyState }"))
         let card = try XCTUnwrap(source.range(of: "private var exploreEmptyCard: some View {"))
         let cardEnd = try XCTUnwrap(source.range(of: "private func sectionHeader(", range: card.upperBound..<source.endIndex))
         let cardSource = String(source[card.upperBound..<cardEnd.lowerBound])

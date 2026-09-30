@@ -87,11 +87,19 @@ struct LaunchpadView: View {
                     Label("New launches open soon.", systemImage: "clock")
                         .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
+                // A launchpad whose launches couldn't be read says so, with Retry; its last good coins stay listed.
+                if let error = model.error {
+                    HStack(alignment: .firstTextBaseline) {
+                        InlineError(message: error)
+                        Spacer(minLength: 8)
+                        Button("Retry") { Task { await model.load(env: env, account: session.address) } }.font(.footnote.weight(.semibold))
+                    }
+                }
                 if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !firstLoad {
                     // A search that found nothing says so: a coin the board doesn't list (a retired launchpad's sell-only
                     // coin) is reached from Home, the Portfolio or Swap, not found here. Only the first load hides this:
-                    // a poll leaves it on screen.
-                    if searching { ContentUnavailableView.search(text: query).padding(.top, 40) } else { emptyState }
+                    // a poll leaves it on screen. A board with nothing read shows the error above, never "no coins".
+                    if searching { ContentUnavailableView.search(text: query).padding(.top, 40) } else if model.error == nil { emptyState }
                 } else {
                     if !graduated.isEmpty { section(title: "Graduated", count: graduated.count, subtitle: "Cleared the graduation threshold", coins: graduated) }
                     exploreSection
@@ -395,9 +403,10 @@ struct LaunchArtwork: View {
     private var placeholder: some View {
         ZStack {
             LinearGradient(colors: [Color.brand.opacity(0.30), Color.brand.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            // Sized to the frame: a fixed 40 pt shows only "…" in the 34–44 pt rows. Cards and headers keep 40.
+            // Sized to the frame: a fixed 40 pt shows only "…" in the 34–44 pt rows. Cards and headers keep 40. The letters
+            // skip the isolate around right-to-left text (`ChainText.leading`).
             GeometryReader { frame in
-                Text(symbol.prefix(2).uppercased())
+                Text(ChainText.leading(symbol, 2).uppercased())
                     .font(.system(size: min(40, frame.size.width * 0.4), weight: .bold, design: .rounded))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
@@ -445,7 +454,9 @@ final class LaunchpadModel {
         }
     }
 
-    /// `account` is the signed-in wallet: whether it may launch (`canLaunch`) comes with the factory's terms.
+    /// `account` is the signed-in wallet: whether it may launch (`canLaunch`) comes with the factory's terms. A launchpad
+    /// whose launches couldn't be read keeps its last good coins on the board, and the board shows the error with Retry
+    /// (`LaunchListing.keeping`): never a board with that launchpad's coins silently gone.
     func load(env: AppEnvironment, account: Address?) async {
         // Runs while the live stack is pending too: the retired stacks' launches are still read (and `protocolInfo` is nil).
         loading = true
@@ -455,30 +466,26 @@ final class LaunchpadModel {
             heldSellOnly = []
             loadedFor = account
         }
-        var read: LaunchesRead?
-        do {
-            async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets, account: account)
-            let fresh = try await env.launchpad.allLaunchesRead(limit: 60)
-            launches = fresh.launches
-            read = fresh
-            protocolInfo = try? await info
-            error = nil
-        } catch {
-            self.error = describe(error)
-        }
-        if let read, let held = await Self.heldSellOnly(env: env, account: account, read: read), !Task.isCancelled, account == loadedFor {
+        async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets, account: account)
+        let listing = await env.launchpad.launchListing(limit: 60)
+        launches = listing.keeping(launches)
+        // A read cut short because the tab went off screen isn't a failure to show: the board reloads when it's back.
+        guard !Task.isCancelled else { return }
+        protocolInfo = try? await info
+        error = listing.firstError.map(describe)
+        if let held = await Self.heldSellOnly(env: env, account: account, listing: listing), !Task.isCancelled, account == loadedFor {
             heldSellOnly = held
         }
         if let prices = await Self.pairPrices(env: env, launches: launches) { pairUSD = prices }
     }
 
-    /// The sell-only coins among a read's launches that `account` holds, in one balanceOf multicall; none without an
+    /// The sell-only coins among a listing's launches that `account` holds, in one balanceOf multicall; none without an
     /// account or such a coin, and nil when a balance couldn't be read.
-    private static func heldSellOnly(env: AppEnvironment, account: Address?, read: LaunchesRead) async -> [Launch]? {
-        // A factory that didn't answer left its coins out of the read: nothing can be decided from the rest, or a held
-        // coin of a retired stack that failed would drop from the section (RS-10).
-        guard read.complete else { return nil }
-        let sellOnly = read.launches.filter { !$0.listsOnBoard }
+    private static func heldSellOnly(env: AppEnvironment, account: Address?, listing: LaunchListing) async -> [Launch]? {
+        // A factory that couldn't be read left its coins out of the listing: nothing can be decided from the rest, or a
+        // held coin of a retired stack that failed would drop from the section (RS-10).
+        guard listing.complete else { return nil }
+        let sellOnly = listing.launches.filter { !$0.listsOnBoard }
         guard let account, !sellOnly.isEmpty else { return [] }
         let tokens = sellOnly.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
         guard let balances = try? await ERC20.balances(of: tokens, owner: account, rpc: env.rpc, multicall: env.multicall) else { return nil }
@@ -504,6 +511,9 @@ struct LaunchDetailView: View {
     @Environment(Session.self) private var session
     @Environment(Router.self) private var router
     @State private var detail: LaunchDetail?
+    /// The latest read of `detail` failed: its rows (stuck since, the Uniswap v4 fallback, hook fees waiting for a sweep,
+    /// rewards queued for holders) keep the last good read, and the stats section says so, with Retry.
+    @State private var detailUnread = false
     @State private var account: LaunchAccountView?
     @State private var trades: [CurveTrade] = []
     @State private var priceSeries: [PricePoint] = []
@@ -684,6 +694,13 @@ struct LaunchDetailView: View {
                 stat("Holders", holders.map { "\($0)" } ?? "—")
                 Divider().frame(height: 34)
                 stat("Progress", "\(launch.progressBps / 100)%")
+            }
+            if detailUnread {
+                HStack(alignment: .firstTextBaseline) {
+                    InlineError(message: "Some details of this launch couldn't be read just now.")
+                    Spacer(minLength: 8)
+                    Button("Retry") { Task { await load() } }.font(.footnote.weight(.semibold))
+                }
             }
         }
     }
@@ -891,9 +908,19 @@ struct LaunchDetailView: View {
         async let h = env.launchpad.holderCount(token: launch.token, excluding: [launch.curve])
         async let pu = pairUSDPrice()
         if let address = session.address { account = try? await env.launchpad.accountView(launch, account: address) }
-        detail = try? await d
+        // A launch that can't be read keeps the last good detail and says so (`LaunchpadService.launch`); one that isn't
+        // recorded reads as nil, as before.
+        do {
+            detail = try await d
+            detailUnread = false
+        } catch {
+            // A read cut short because the page went off screen (a pushed view) isn't a failure: it reloads on return.
+            if !Task.isCancelled { detailUnread = true }
+        }
         pairUSD = await pu
         let curveTrades = (try? await t) ?? []
+        // Nor are its empty answers: the chart keeps the trades it has.
+        guard !Task.isCancelled else { return }
         trades = curveTrades
         priceSeries = Self.priceSeries(trades: curveTrades, launch: launch, unit: pairUSD ?? 1)
         loadingTrades = false

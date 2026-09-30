@@ -235,8 +235,8 @@ enum MomentsABI {
         do { return try ABI.encodeCall(signature, args) } catch { preconditionFailure("Moments calldata \(signature) failed to encode: \(error)") }
     }
 
-    static func call(_ to: Address, _ signature: String, _ args: [ABIValue] = [], returns: String) -> ContractCall {
-        do { return try ContractCall(to: to, signature, args, returns: returns) } catch { preconditionFailure("Moments call \(signature) failed to encode: \(error)") }
+    static func call(_ to: Address, _ signature: String, _ args: [ABIValue] = [], returns: String, strings: ABI.StringDecoding = .lossy) -> ContractCall {
+        do { return try ContractCall(to: to, signature, args, returns: returns, strings: strings) } catch { preconditionFailure("Moments call \(signature) failed to encode: \(error)") }
     }
 
     static func int(_ value: ABIValue) -> Int { Int(clamping: value.uint) }
