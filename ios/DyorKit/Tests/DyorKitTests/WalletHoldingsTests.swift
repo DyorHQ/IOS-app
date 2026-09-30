@@ -144,6 +144,26 @@ final class WalletHoldingsTests: XCTestCase {
     /// letters, digits drawn like letters ("M0N", "USDl" for USD1) and text a direction override turns around. A name that
     /// merely differs ("USDL") is its own; "USDC.e" reads as USDC with non-letters after it (build 17). Whatever its name, a token whose symbol isn't plain ASCII is never
     /// preselected: it can read as a symbol it isn't.
+    /// The Send sheet says "Not the BTC DyorHQ lists" for any token `imitates` names, so it names curated tokens only: a
+    /// held look-alike of BTC, ETH or USDT (which DyorHQ doesn't list) isn't called one of DyorHQ's, but is still never
+    /// where a send starts. Its badge names it (`TokenBadge`: "Not the real BTC").
+    func testALookAlikeOfAWidelyTradedTokenIsNeverTheDefaultNorCalledOneDyorHQLists() {
+        let fakes = [Token(address: spam.address, symbol: "BTC", name: "BITCOIN", decimals: 8), Token(address: meme.address, symbol: "USDT", name: "Tether USD", decimals: 6),
+                     Token(address: launch.address, symbol: "ETH", name: "Ether", decimals: 18)]
+        let ranked = WalletHoldings.ranked(fakes + [Token.mon], balances: Dictionary(uniqueKeysWithValues: (fakes + [Token.mon]).map { ($0.address, BigUInt(10).power(20)) }),
+                                           prices: Dictionary(uniqueKeysWithValues: fakes.map { ($0.address, 1_000.0) } + [(Monad.native, 0.03)]), unverified: [])
+        for held in ranked where !held.token.isNative {
+            XCTAssertNil(held.imitates, "\(held.token.symbol) is no token DyorHQ lists")
+            XCTAssertTrue(held.looksAlike, held.token.symbol)
+            XCTAssertEqual(WalletHoldings.imitated(by: held.token)?.symbol, held.token.symbol)
+            XCTAssertEqual(TokenBadge.of(held.token, coin: nil, receivedUnasked: false).title, "Not the real \(held.token.symbol)")
+        }
+        XCTAssertEqual(WalletHoldings.defaultChoice(ranked)?.id, Monad.native, "a send starts on MON, below three look-alikes worth more")
+        let usdc = HeldToken(token: fakeUSDC, balance: 1, usd: 1)
+        XCTAssertEqual(usdc.imitates, .usdc, "a curated token's look-alike is still named")
+        XCTAssertTrue(usdc.looksAlike)
+    }
+
     func testANameThatOnlyReadsAsACuratedOneIsMarkedAndNeverTheDefault() {
         func token(_ symbol: String, _ name: String = "Something") -> Token { Token(address: spam.address, symbol: symbol, name: name, decimals: 6) }
         let usdcLike = ["US\u{200B}DC", "U\u{00AD}SDC", "\u{FEFF}USDC", "USDC\u{200D}", "USD\u{0421}", "usd\u{0441}", "\u{202E}CDSU", "U\u{2060}S\u{2063}DC",

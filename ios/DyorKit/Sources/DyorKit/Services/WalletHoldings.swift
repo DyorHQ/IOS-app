@@ -22,8 +22,13 @@ public struct HeldToken: Hashable, Sendable, Identifiable {
 
     public var id: Address { token.address }
     /// The curated token this one could pass for, by its symbol or name (`WalletHoldings.imitated(by:)`); nil for the
-    /// curated tokens and anything named otherwise.
-    public var imitates: Token? { WalletHoldings.imitated(by: token) }
+    /// curated tokens and anything named otherwise, and nil for a look-alike of a widely traded token DyorHQ doesn't list
+    /// (`WalletHoldings.majorTokens`): the Send sheet words this as "Not the USDC DyorHQ lists", which a fake BTC isn't.
+    /// `TokenBadge.title` words both ("Not the real BTC"); until the Send sheet shows it, such a token is kept out of a
+    /// send's default by `looksAlike` alone.
+    public var imitates: Token? { WalletHoldings.imitated(by: token, majors: false) }
+    /// It could pass for a curated token or a widely traded one (`WalletHoldings.imitated(by:)`).
+    public var looksAlike: Bool { WalletHoldings.imitated(by: token) != nil }
     /// Its symbol is plain printable ASCII (`WalletHoldings.isPlain`), as MON's and every curated token's is: one with any
     /// other character — invisible, direction-changing, a letter from another script — can read as a symbol it isn't.
     public var plainSymbol: Bool { token.isNative || Token.core(token.address) != nil || WalletHoldings.isPlain(token.symbol) }
@@ -84,15 +89,16 @@ public enum WalletHoldings {
     }
 
     /// The asset a send starts on: the highest-ranked one the user chose. Never an Unverified token — a fake "USDC"
-    /// with a seeded pool can outrank everything — nor one carrying a curated token's name (`imitates`), even one the
-    /// user tapped in Swap, nor one whose symbol isn't plain (`plainSymbol`): it may be a look-alike, and a send must
+    /// with a seeded pool can outrank everything — nor one carrying a curated or widely traded token's name
+    /// (`looksAlike`), even one the user tapped in Swap, nor one whose symbol isn't plain (`plainSymbol`): it may be a
+    /// look-alike, and a send must
     /// never start on it unasked. So when every held token is one of those, or nothing is held, there is none and the
     /// user picks. None either when the prices couldn't be read (`pricesRead` false), and never a token with no price:
     /// the list below the priced tokens is by amount, not value, and the token with the most units is not the one worth
     /// the most.
     public static func defaultChoice(_ ranked: [HeldToken], pricesRead: Bool = true) -> HeldToken? {
         guard pricesRead else { return nil }
-        return ranked.first { ($0.usd ?? 0) > 0 && !$0.unverified && $0.imitates == nil && $0.plainSymbol }
+        return ranked.first { ($0.usd ?? 0) > 0 && !$0.unverified && !$0.looksAlike && $0.plainSymbol }
     }
 
     /// After the list is read: with nothing chosen yet, the default choice; with a choice, that token while the wallet
@@ -164,14 +170,15 @@ public enum WalletHoldings {
     ///   "xMON");
     /// - or its name is one of their symbols or names with nothing but non-letters around it ("$MON", "USDC 2").
     /// Being chosen proves nothing here: tapping a search result in Swap stores a token as chosen. Nil for MON, the
-    /// curated tokens and every other name. The wallet's warnings, the badge (`TokenBadge`) and the create forms'
-    /// guard (`SymbolSafety.createRefusal`) all go by this one rule. Only the first `maxJudged` characters that show of
-    /// each are judged, so its cost doesn't grow with what a creator writes.
-    public static func imitated(by token: Token) -> Token? {
+    /// curated tokens and every other name. The badge (`TokenBadge`), the create forms' guard
+    /// (`SymbolSafety.createRefusal`) and a send's default go by this one rule; so do the wallet's warnings, the major
+    /// tokens aside (`HeldToken.imitates`). Only the first `maxJudged` characters that show of each are judged, so its
+    /// cost doesn't grow with what a creator writes.
+    public static func imitated(by token: Token, majors: Bool = true) -> Token? {
         guard !token.isNative, Token.core(token.address) == nil else { return nil }
         let own = Set([token.symbol, token.name].flatMap(readings))
         guard !own.isEmpty else { return nil }
-        let targets = lookAlikeTargets
+        let targets = majors ? lookAlikeTargets : curatedTargets
         if let target = targets.first(where: { !own.isDisjoint(with: $0.readings) }) { return target.token }
         let symbol = forms(token.symbol).map(Text.init)
         let name = forms(token.name).map(Text.init)
@@ -215,8 +222,8 @@ public enum WalletHoldings {
     }
 
     /// The curated tokens, then the major ones.
-    private static let lookAlikeTargets: [LookAlikeTarget] = Token.core.map { LookAlikeTarget($0, names: [$0.name]) }
-        + majors.map { LookAlikeTarget($0.token, names: $0.names) }
+    private static let lookAlikeTargets: [LookAlikeTarget] = curatedTargets + majors.map { LookAlikeTarget($0.token, names: $0.names) }
+    private static let curatedTargets: [LookAlikeTarget] = Token.core.map { LookAlikeTarget($0, names: [$0.name]) }
 
     /// The most of a symbol or name `imitated(by:)` judges: its first 128 characters that show (`visible`), or, when a
     /// direction override can show its end first, its last 128 too. No curated or major token's symbol or name comes
