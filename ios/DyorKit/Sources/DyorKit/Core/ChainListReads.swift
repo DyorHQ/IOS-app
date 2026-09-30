@@ -20,25 +20,91 @@ public struct ChainListUnread: Error, LocalizedError, Equatable, Sendable {
 }
 
 public extension Multicall {
+    /// Items per read of a list whose items carry creator text. A launch's text can be about 44 KB (all a transaction
+    /// can store), a Moment's name about 20 KB and its media link 40 KB, and Monad refuses an `eth_call` answering more
+    /// than about 4.1 MB (its memory then costs more gas than a call may use; 20 items of 44 KB, 0.9 MB, need about
+    /// 2.5M gas). 20 such items stay well under it.
+    static let textChunk = 20
+    /// Items per read of a list of one creator name each (about 20 KB at most): 0.8 MB.
+    static let nameChunk = 40
+    /// Items per read of fixed-size records (no text): a Moment's or a launch's record is about 0.5 KB.
+    static let recordChunk = 200
+
     /// The reads of a list, item by item: `items` holds each item's calls, all in the same layout, and `text` the
     /// positions in that layout that read text the item's creator chose. Every other call reads a protocol value, which
     /// the item can't be shown without: if one fails, the read didn't happen as a whole and this throws
     /// (`ChainListUnread`, `what` naming the item). A failed text call is returned as its failure, for the caller to show
     /// a stand-in (`ChainText.unreadable`): the item and its numbers, claims and routing stay. Each item's results come
     /// back in its own layout.
-    func readItems(_ items: [[ContractCall]], text: Set<Int>, what: String) async throws -> [[Result<[ABIValue], Error>]] {
+    ///
+    /// The items are read in reads of at most `chunk` items, all at once, so no creator's text, however long, can make
+    /// one read too large to answer (`textChunk`). A read the node refuses as a whole (an `eth_call` error about the call
+    /// itself: out of gas, a revert), and an item one of whose calls failed inside a read (a long answer before it can
+    /// starve it of gas), are read again one item at a time; an item whose read still fails is read once more without
+    /// its text, which then shows stand-ins. Any other error (no answer, throttling that outlasted the client's retries)
+    /// throws: it would fail item by item too.
+    func readItems(_ items: [[ContractCall]], text: Set<Int>, what: String, chunk: Int = textChunk) async throws -> [[Result<[ABIValue], Error>]] {
         guard !items.isEmpty else { return [] }
-        let results = try await read(items.flatMap { $0 })
-        var out: [[Result<[ABIValue], Error>]] = []
-        var start = 0
-        for item in items {
-            let slice = Array(results[start ..< start + item.count])
-            start += item.count
+        let size = max(1, chunk)
+        let groups = stride(from: 0, to: items.count, by: size).map { $0 ..< min($0 + size, items.count) }
+        var out = [[Result<[ABIValue], Error>]?](repeating: nil, count: items.count)
+        var retry: [Int] = []
+        try await withThrowingTaskGroup(of: (Range<Int>, Result<[Result<[ABIValue], Error>], Error>).self) { tasks in
+            for group in groups {
+                tasks.addTask { (group, await ERC20.captured { try await self.read(group.flatMap { items[$0] }) }) }
+            }
+            for try await (group, outcome) in tasks {
+                switch outcome {
+                case .success(let results):
+                    var start = 0
+                    for index in group {
+                        let slice = Array(results[start ..< start + items[index].count])
+                        start += items[index].count
+                        if slice.allSatisfy(Self.succeeded) { out[index] = slice } else { retry.append(index) }
+                    }
+                case .failure(let error):
+                    guard ERC20.isCallError(error) else { throw error }
+                    retry += group
+                }
+            }
+        }
+        if !retry.isEmpty {
+            try await withThrowingTaskGroup(of: (Int, [Result<[ABIValue], Error>]).self) { tasks in
+                for index in retry {
+                    tasks.addTask { (index, try await self.readAlone(items[index], text: text, what: what)) }
+                }
+                for try await (index, slice) in tasks { out[index] = slice }
+            }
+        }
+        return try out.map { slice in
+            guard let slice else { throw ChainListUnread(what) }
             for (i, result) in slice.enumerated() where !text.contains(i) {
                 if case .failure = result { throw ChainListUnread(what) }
             }
-            out.append(slice)
+            return slice
         }
-        return out
+    }
+
+    /// One item of `readItems`, on its own: all its calls, or, when that read is refused as a whole or a protocol call
+    /// in it fails, its protocol calls alone, its text standing in as unread. Throws when its protocol values can't be read.
+    private func readAlone(_ calls: [ContractCall], text: Set<Int>, what: String) async throws -> [Result<[ABIValue], Error>] {
+        do {
+            let slice = try await read(calls)
+            if slice.indices.allSatisfy({ text.contains($0) || Self.succeeded(slice[$0]) }) { return slice }
+        } catch let error where ERC20.isCallError(error) {}
+        let values = calls.indices.filter { !text.contains($0) }
+        guard !values.isEmpty, !text.isEmpty else { throw ChainListUnread(what) }
+        let read = try await self.read(values.map { calls[$0] })
+        var slice = [Result<[ABIValue], Error>](repeating: .failure(ChainListUnread(what)), count: calls.count)
+        for (i, result) in zip(values, read) {
+            guard Self.succeeded(result) else { throw ChainListUnread(what) }
+            slice[i] = result
+        }
+        return slice
+    }
+
+    private static func succeeded(_ result: Result<[ABIValue], Error>) -> Bool {
+        if case .success = result { return true }
+        return false
     }
 }

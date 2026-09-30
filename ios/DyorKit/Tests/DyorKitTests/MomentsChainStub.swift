@@ -25,6 +25,7 @@ final class MomentsChainStub: URLProtocol {
     nonisolated(unsafe) private static var breaking: Set<Address> = []
     nonisolated(unsafe) private static var breakingSelectors: Set<Data> = []
     nonisolated(unsafe) private static var nativeBalances: [Address: BigUInt] = [:]
+    nonisolated(unsafe) private static var responseCap: Int?
 
     struct Call: Hashable, CustomStringConvertible {
         let to: Address
@@ -42,9 +43,11 @@ final class MomentsChainStub: URLProtocol {
     /// can't serve them. `breaking`: contracts that make any `eth_call` reaching them fail as a whole, out of gas — as a
     /// token whose return bomb exhausts a Multicall3 aggregate does, taking every other call in it down too.
     /// `breakingSelectors` do the same for any call with one of those selectors, whatever it reaches. `native`: what
-    /// `eth_getBalance` answers for each account (any other account reverts).
+    /// `eth_getBalance` answers for each account (any other account reverts). `responseCap`: an aggregate whose answer
+    /// would be longer than this many bytes fails as a whole, out of gas, as Monad refuses one returning more than about
+    /// 4.1 MB (its memory then costs more gas than an `eth_call` may use).
     static func install(_ answer: @escaping Answer, logs: [Log] = [], receipts: [Data: [Log]] = [:], refusing: Set<String> = [], breaking: Set<Address> = [],
-                        breakingSelectors: Set<Data> = [], native: [Address: BigUInt] = [:]) {
+                        breakingSelectors: Set<Data> = [], native: [Address: BigUInt] = [:], responseCap: Int? = nil) {
         lock.lock(); defer { lock.unlock() }
         self.answer = answer
         asked = []
@@ -55,6 +58,7 @@ final class MomentsChainStub: URLProtocol {
         self.breaking = breaking
         self.breakingSelectors = breakingSelectors
         nativeBalances = native
+        self.responseCap = responseCap
     }
 
     /// Every `eth_getLogs` filter asked, in order.
@@ -93,7 +97,7 @@ final class MomentsChainStub: URLProtocol {
 
     private static func reply(_ call: JSON) -> JSON {
         let id = call["id"]
-        func result(_ data: Data) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": .string(data.hexString)]) }
+        func result(_ data: Data) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": .string(hex(data))]) }
         func json(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
         let reverted: JSON = .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(3), "message": .string("execution reverted"), "data": .string("0x")])])
         lock.lock(); let refusedMethods = refused; lock.unlock()
@@ -126,7 +130,7 @@ final class MomentsChainStub: URLProtocol {
         }
         guard call["method"].string == "eth_call", let tx = call["params"].array?.first,
               let to = tx["to"].string.flatMap(Address.init), let data = tx["data"].string.flatMap({ Data(hex: $0) }) else { return reverted }
-        lock.lock(); let answer = self.answer; let breaking = self.breaking; let breakingSelectors = self.breakingSelectors; lock.unlock()
+        lock.lock(); let answer = self.answer; let breaking = self.breaking; let breakingSelectors = self.breakingSelectors; let cap = responseCap; lock.unlock()
         let outOfGas: JSON = .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(-32000), "message": .string("out of gas")])])
         if to == Multicall.address, let inner = try? ABI.decode(data.dropFirst(4), "(address,bool,bytes)[]")[0].elements {
             var batch: [Call] = []
@@ -139,11 +143,30 @@ final class MomentsChainStub: URLProtocol {
             }
             record(batch)
             if batch.contains(where: { breaking.contains($0.to) || breakingSelectors.contains(Data(hex: $0.selector) ?? Data()) }) { return outOfGas }
-            return result((try? ABI.encode([.array(out)], "(bool,bytes)[]")) ?? Data())
+            let encoded = (try? ABI.encode([.array(out)], "(bool,bytes)[]")) ?? Data()
+            if let cap, encoded.count > cap {
+                return .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(-32603), "message": .string("out of gas")])])
+            }
+            return result(encoded)
         }
         if breaking.contains(to) || breakingSelectors.contains(Data(data.prefix(4))) { return outOfGas }
         record([Call(to: to, selector: data.prefix(4).hexString)])
         return answer(to, data).map(result) ?? reverted
+    }
+
+    /// `data.hexString`, fast enough for the megabyte answers the size tests send.
+    private static func hex(_ data: Data) -> String {
+        let digits = Array("0123456789abcdef".utf8)
+        var out = [UInt8](repeating: 0, count: 2 + data.count * 2)
+        out[0] = UInt8(ascii: "0")
+        out[1] = UInt8(ascii: "x")
+        var i = 2
+        for byte in data {
+            out[i] = digits[Int(byte >> 4)]
+            out[i + 1] = digits[Int(byte & 0x0f)]
+            i += 2
+        }
+        return String(decoding: out, as: UTF8.self)
     }
 
     private static func json(_ log: Log) -> JSON {
