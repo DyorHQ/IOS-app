@@ -104,6 +104,8 @@ final class AppEnvironment {
         venueList = VenueTokenList(service: venueTokens, logos: { [kuruTokens] in await kuruTokens.logos() },
                                    read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1) })
         session = Session(config: config, backend: social)
+        // An erase of this device's data saves App Lock as a new install has it, and sets it here too (R4).
+        session.settings = settings
         // A passkey session's scope check trusts only the configured Moments cohorts — v2 (collects, once deployed), then
         // cohorts 3, 2 and 1 (claims and creator withdrawals) — and signs a launchpad trade only against the curve a
         // known factory recorded on-chain (MERA-PLAN §3).

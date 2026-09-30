@@ -15,8 +15,10 @@ final class AppSettings {
     var notifyFills: Bool { didSet { store(notifyFills, "settings.notifyFills") } }
     var notifyPriceAlerts: Bool { didSet { store(notifyPriceAlerts, "settings.notifyPrice") } }
     /// Require Face ID / Touch ID before signing a transaction — a device-side second factor for a self-custodial
-    /// wallet, enforced in the confirmation sheet. On by default for a new install (`appLockDefault`).
-    var requireBiometrics: Bool { didSet { store(requireBiometrics, "settings.biometrics") } }
+    /// wallet, enforced in the confirmation sheet. On by default for a new install (`appLockDefault`), and after this
+    /// device's data is erased (`Session.eraseLocalData`). This device's own: it isn't mirrored to the backend (not in
+    /// `snapshot`), so a change isn't reported (`onChange`), which would mark the settings changed and keep a restore out.
+    var requireBiometrics: Bool { didSet { defaults.set(requireBiometrics, forKey: "settings.biometrics") } }
     /// Default leverage the perps ticket opens on.
     var defaultLeverage: Double { didSet { store(defaultLeverage, "settings.leverage") } }
     /// Max slippage for market orders and swaps, in basis points.
