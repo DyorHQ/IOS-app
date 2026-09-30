@@ -109,12 +109,20 @@ final class RecentActivityModel {
     private var lastLaunches: [Launch] = []
     /// The wallet's launchpad activity last read, which a failed activity read keeps.
     private var lastActivity: [ActivityItem] = []
+    /// Counts loads: only the newest one publishes what it read, so a slower load (for a wallet no longer shown, or a
+    /// pull to refresh overtaken by another) never overwrites a newer one.
+    private var loads = 0
 
     func load(env: AppEnvironment, address: Address?) async {
-        guard let address else { items = []; incomplete = nil; keptFor = nil; lastLaunches = []; lastActivity = []; return }
+        loads += 1
+        let load = loads
+        // Whether this load may still publish: it is the newest, and not cancelled (the screen closed mid-load; reads cut
+        // short that way aren't failures to show).
+        func current() -> Bool { load == loads && !Task.isCancelled }
+        guard let address else { items = []; incomplete = nil; keptFor = nil; lastLaunches = []; lastActivity = []; loading = false; return }
         if keptFor != address { items = []; incomplete = nil; lastLaunches = []; lastActivity = []; keptFor = address }
         loading = true
-        defer { loading = false }
+        defer { if load == loads { loading = false } }
         // Pending rows are re-checked beside the history reads, not ahead of them (each can wait on the RPC); the feed is
         // built once the history answers, and again once they are settled.
         async let rechecked: Void = PendingActivity.recheck(owner: address, rpc: env.rpc)
@@ -138,15 +146,15 @@ final class RecentActivityModel {
             unread = true
         }
         let swaps = await swapsTask
-        // A load for a wallet that is no longer the one shown publishes nothing.
-        guard keptFor == address else { await rechecked; return }
+        // A load for a wallet that is no longer the one shown, or overtaken by a newer one, publishes nothing.
+        guard current() else { await rechecked; return }
         lastLaunches = launches
         lastActivity = lpActivity
         incomplete = unread ? "Some launchpad activity couldn't be read just now. Pull to refresh." : nil
 
         items = Self.merge(ActivityLog.all(owner: address), lpActivity: lpActivity, byToken: byToken, swaps: swaps, tokens: tokenMap)
         await rechecked
-        guard keptFor == address else { return }
+        guard current() else { return }
         items = Self.merge(ActivityLog.all(owner: address), lpActivity: lpActivity, byToken: byToken, swaps: swaps, tokens: tokenMap)
     }
 

@@ -197,7 +197,9 @@ final class MomentsModel {
             policyUnread = board.policyUnread
             error = nil
         } catch {
-            // Every failed read says so, the first or a refresh: the Moments last read stay, never a feed frozen unsaid.
+            // Every failed read says so, the first or a refresh: the Moments last read stay, never a feed frozen unsaid. A
+            // read cut short because the tab went off screen isn't one: the feed reloads when it's back.
+            guard !Task.isCancelled else { return }
             self.error = describe(error)
         }
     }

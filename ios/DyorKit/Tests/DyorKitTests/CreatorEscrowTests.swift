@@ -76,6 +76,25 @@ final class CreatorEscrowTests: XCTestCase {
         XCTAssertEqual(never, [Self.read(Self.escrowA, nil)], "nothing kept: unread, not zero")
     }
 
+    /// A balance just claimed is zero in what the screen keeps, so a reload whose escrow read fails can't bring the
+    /// withdrawn amount back as "As last read"; the escrow's other balances, and other escrows, are as they were.
+    func testAClaimedBalanceIsNotKept() {
+        let token = Address(literal: "0x00000000000000000000000000000000000000c1")
+        let other = Address(literal: "0x00000000000000000000000000000000000000c2")
+        let both = EscrowBalances(native: 5, tokens: [token: 9, other: 4])
+        let reads = [LaunchpadEscrowRead(escrow: Self.escrowA, factory: .zero, retired: false, balances: both),
+                     LaunchpadEscrowRead(escrow: Self.escrowB, factory: .zero, retired: true, balances: both, kept: true)]
+        let afterToken = LaunchpadEscrowRead.claimed(token, escrow: Self.escrowA, in: reads)
+        XCTAssertEqual(afterToken[0].balances, EscrowBalances(native: 5, tokens: [token: 0, other: 4]))
+        XCTAssertEqual(afterToken[1], reads[1], "another escrow is untouched")
+        let afterNative = LaunchpadEscrowRead.claimed(.zero, escrow: Self.escrowB, in: afterToken)
+        XCTAssertEqual(afterNative[1].balances, EscrowBalances(native: 0, tokens: [token: 9, other: 4]))
+        XCTAssertTrue(afterNative[1].kept, "still marked as kept")
+        let later = LaunchpadEscrowRead.keeping([LaunchpadEscrowRead(escrow: Self.escrowA, factory: .zero, retired: false, balances: nil)], previous: afterToken)
+        XCTAssertEqual(later[0].balances?.tokens[token], 0, "a failed read after the claim keeps zero, not the claimed amount")
+        XCTAssertEqual(LaunchpadEscrowRead.claimed(token, escrow: Self.escrowA, in: [Self.read(Self.escrowA, nil)]), [Self.read(Self.escrowA, nil)], "unread stays unread")
+    }
+
     /// My Launchpad keeps an escrow's balances only for the wallet they were read for, never plans Claim All on kept
     /// balances, and says fees couldn't be read (with Retry) rather than "Nothing to claim yet".
     func testMyLaunchpadKeepsFeesForTheSameWalletOnly() throws {
@@ -88,5 +107,11 @@ final class CreatorEscrowTests: XCTestCase {
         XCTAssertTrue(source.contains("for holding in escrows where holding.current && !holding.balances.isEmpty"), "Claim All plans only escrows read in this load")
         XCTAssertTrue(source.contains("Creator fees couldn't be read just now."))
         XCTAssertFalse(source.contains("$0.balances ?? EscrowBalances(native: 0, tokens: [:])"), "a failed read is never zero")
+        // A wallet change clears every figure of the previous wallet, and only the newest load, not cancelled, publishes.
+        XCTAssertTrue(source.contains("if shownFor != address {\n            positions = []; created = []; activity = []; incomplete = nil"))
+        XCTAssertTrue(source.contains("func current() -> Bool { load == loads && !Task.isCancelled }"))
+        XCTAssertGreaterThanOrEqual(source.components(separatedBy: "guard current() else { return }").count - 1, 6, "checked after every read")
+        XCTAssertTrue(source.contains("model.claimed([asset], for: session.address)"), "a claimed balance is forgotten")
+        XCTAssertTrue(source.contains("asset.current ? \"Creator fees\" : \"Creator fees (as last read)\""))
     }
 }

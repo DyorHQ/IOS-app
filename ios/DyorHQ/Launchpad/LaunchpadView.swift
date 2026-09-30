@@ -804,10 +804,13 @@ struct LaunchDetailView: View {
             detail = try await d
             detailUnread = false
         } catch {
-            detailUnread = true
+            // A read cut short because the page went off screen (a pushed view) isn't a failure: it reloads on return.
+            if !Task.isCancelled { detailUnread = true }
         }
         pairUSD = await pu
         let curveTrades = (try? await t) ?? []
+        // Nor are its empty answers: the chart keeps the trades it has.
+        guard !Task.isCancelled else { return }
         trades = curveTrades
         priceSeries = Self.priceSeries(trades: curveTrades, launch: launch, unit: pairUSD ?? 1)
         loadingTrades = false

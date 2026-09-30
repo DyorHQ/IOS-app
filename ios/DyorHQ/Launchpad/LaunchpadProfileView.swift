@@ -230,9 +230,13 @@ struct LaunchpadProfileView: View {
                 title: "Claim \(asset.symbol) Fees", confirmTitle: "Claim \(asset.symbol)",
                 build: { env.launchpad.claimEscrowPlan(native: asset.isNative, tokens: asset.isNative ? [] : [asset.token], escrow: asset.escrow) },
                 onDone: { Task { await model.load(env: env, address: session.address) } },
-                onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected \(asset.symbol) creator fees", subtitle: asset.amountText, hash: hash, section: "launch"), owner: session.address) }
+                onCompleted: { hash in
+                    Activity.record(ActivityRecord(kind: .fees, title: "Collected \(asset.symbol) creator fees", subtitle: asset.current ? asset.amountText : "", hash: hash, section: "launch"), owner: session.address)
+                    model.claimed([asset], for: session.address)
+                }
             ) {
-                DetailRow("Creator fees", asset.amountText)
+                // A balance kept from an earlier read says so: the claim withdraws whatever the escrow holds now.
+                DetailRow(asset.current ? "Creator fees" : "Creator fees (as last read)", asset.amountText)
                 DetailRow("To", session.address?.short ?? "—")
             }
         case .rewards(let reward):
@@ -250,7 +254,10 @@ struct LaunchpadProfileView: View {
                 title: "Claim All Fees", confirmTitle: "Claim All",
                 build: { await model.claimAllPlan(env: env) },
                 onDone: { Task { await model.load(env: env, address: session.address) } },
-                onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Claimed all Launch earnings", subtitle: "\(model.claimAllCount) \(model.claimAllCount == 1 ? "claim" : "claims") · fees and rewards", hash: hash, section: "launch"), owner: session.address) }
+                onCompleted: { hash in
+                    Activity.record(ActivityRecord(kind: .fees, title: "Claimed all Launch earnings", subtitle: "\(model.claimAllCount) \(model.claimAllCount == 1 ? "claim" : "claims") · fees and rewards", hash: hash, section: "launch"), owner: session.address)
+                    model.claimed(model.claimAllCreatorClaimables, for: session.address)
+                }
             ) {
                 ForEach(model.claimAllCreatorClaimables) { asset in DetailRow("Creator · \(asset.symbol)\(asset.retired ? " (retired launchpad)" : "")", asset.amountText) }
                 ForEach(model.rewardClaimables) { reward in DetailRow("\(reward.launch.symbol) rewards", reward.amountText) }
@@ -398,8 +405,11 @@ final class LaunchpadProfileModel {
     /// fails keeps its balances only for that same wallet, never another's.
     private var lastEscrowReads: [LaunchpadEscrowRead] = []
     private var escrowsFor: Address?
-    /// The wallet the latest load is for: a slower load for another wallet publishes no fees.
-    private var requested: Address?
+    /// The wallet whose coins, fees and activity are on screen: another wallet starts from nothing.
+    private var shownFor: Address?
+    /// Counts loads: only the newest one publishes what it read, so a slower load (for a wallet no longer shown, or a
+    /// Retry overtaken by a pull to refresh) never overwrites a newer one.
+    private var loads = 0
 
     // Pair asset → USD price, and pair asset → (symbol, decimals) for escrow display.
     private var pairUSD: [Address: Double] = [:]
@@ -483,20 +493,43 @@ final class LaunchpadProfileModel {
         return steps
     }
 
+    /// The escrows the claim section lists: every one read or kept, marked current when read in the latest load.
+    private static func holdings(_ reads: [LaunchpadEscrowRead]) -> [EscrowHolding] {
+        reads.compactMap { read in read.balances.map { EscrowHolding(escrow: read.escrow, retired: read.retired, balances: $0, current: !read.kept) } }
+    }
+
+    /// Forgets balances just claimed (`LaunchpadEscrowRead.claimed`): the reload after a claim whose escrow read fails
+    /// keeps what is left, never the amount already withdrawn.
+    func claimed(_ assets: [ClaimableAsset], for address: Address?) {
+        guard let address, escrowsFor == address else { return }
+        for asset in assets { lastEscrowReads = LaunchpadEscrowRead.claimed(asset.token, escrow: asset.escrow, in: lastEscrowReads) }
+        escrows = Self.holdings(lastEscrowReads)
+    }
+
     func load(env: AppEnvironment, address: Address?) async {
         // The retired stacks keep serving the wallet's coins and fees while the live (v2) stack is pending.
-        requested = address
+        loads += 1
+        let load = loads
+        // Whether this load may still publish: it is the newest, and not cancelled (the sheet closed mid-load; reads cut
+        // short that way aren't failures to show).
+        func current() -> Bool { load == loads && !Task.isCancelled }
         guard let address else {
-            positions = []; created = []; escrows = []; activity = []
-            lastEscrowReads = []; escrowsFor = nil; feesUnread = false
+            positions = []; created = []; escrows = []; activity = []; incomplete = nil; shownFor = nil
+            lastEscrowReads = []; escrowsFor = nil; feesUnread = false; loading = false
             return
         }
-        // Another wallet's fees never show while this one's load, or a failed read, is under way.
-        if escrowsFor != address { escrows = []; lastEscrowReads = []; escrowsFor = nil; feesUnread = false }
+        // Another wallet's coins, rewards, fees and activity never show while this one's load, or a failed read, is under
+        // way.
+        if shownFor != address {
+            positions = []; created = []; activity = []; incomplete = nil
+            escrows = []; lastEscrowReads = []; escrowsFor = nil; feesUnread = false
+            shownFor = address
+        }
         loading = true
-        defer { loading = false }
+        defer { if load == loads { loading = false } }
 
         let listing = await env.launchpad.launchListing(limit: 100)
+        guard current() else { return }
         let launches = listing.keeping(lastLaunches)
         lastLaunches = launches
         var unread = !listing.complete
@@ -506,11 +539,11 @@ final class LaunchpadProfileModel {
         // keeps the balances last read for this wallet (marked, and left out of Claim All).
         let createdPairs = launches.filter { $0.deployer == address }.map(\.pairToken)
         let escrowReads = await env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)
-        guard requested == address else { return }
+        guard current() else { return }
         let kept = LaunchpadEscrowRead.keeping(escrowReads, previous: escrowsFor == address ? lastEscrowReads : [])
         lastEscrowReads = kept
         escrowsFor = address
-        escrows = kept.compactMap { read in read.balances.map { EscrowHolding(escrow: read.escrow, retired: read.retired, balances: $0, current: !read.kept) } }
+        escrows = Self.holdings(kept)
         feesUnread = escrowReads.contains(where: { $0.balances == nil })
         if escrowReads.contains(where: { $0.balances == nil }) { unread = true }
 
@@ -524,6 +557,7 @@ final class LaunchpadProfileModel {
             return Token.core(addr) ?? Token(address: addr, symbol: "", name: "", decimals: 18)
         }
         let priceMap = (try? await env.prices.prices(for: priceTokens)) ?? [:]
+        guard current() else { return }
         pairUSD = Dictionary(uniqueKeysWithValues: pairTokens.map { ($0, priceMap[$0]?.usd ?? ($0.isZero ? (priceMap[Monad.native]?.usd ?? 0) : 0)) })
         // Multiple launches share a pair asset (MON / USDC / AUSD), so keys repeat — dedupe instead of
         // Dictionary(uniqueKeysWithValues:), which traps on the first duplicate key and crashed this screen. A pair asset
@@ -538,6 +572,7 @@ final class LaunchpadProfileModel {
         // Balances across every launch token in one multicall.
         let tokens = launches.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
         let balances = (try? await ERC20.balances(of: tokens, owner: address, rpc: env.rpc, multicall: env.multicall)) ?? [:]
+        guard current() else { return }
 
         // Coins you created.
         created = launches.filter { $0.deployer == address }.map { launch in
@@ -549,7 +584,7 @@ final class LaunchpadProfileModel {
         // Held coins → position with on-curve PnL and holder rewards, computed concurrently.
         let held = launches.filter { (balances[$0.token] ?? 0) > 0 }
         let usdByPair = pairUSD
-        positions = await withTaskGroup(of: Position?.self) { group in
+        let heldPositions = await withTaskGroup(of: Position?.self) { group in
             for launch in held {
                 let balance = balances[launch.token] ?? 0
                 let price = usdByPair[launch.pairToken] ?? 0
@@ -559,9 +594,12 @@ final class LaunchpadProfileModel {
             for await p in group { if let p { out.append(p) } }
             return out.sorted { $0.valueUSD > $1.valueUSD }
         }
+        guard current() else { return }
+        positions = heldPositions
 
         // Your launchpad activity.
         let lpActivity = ((try? await env.launchpad.activity(limit: 60, lookbackBlocks: Monad.blocksPerDay * 7, launches: launches)) ?? []).filter { $0.actor == address }
+        guard current() else { return }
         let byToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
         activity = lpActivity.map { Self.feedItem(from: $0, launch: byToken[$0.token]) }
     }

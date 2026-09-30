@@ -665,6 +665,18 @@ public struct LaunchpadEscrowRead: Hashable, Sendable {
             return LaunchpadEscrowRead(escrow: read.escrow, factory: read.factory, retired: read.retired, balances: last.balances, kept: true)
         }
     }
+
+    /// `reads` once `token` (native MON when zero) was claimed from `escrow`: its balance there is zero, so a later read
+    /// that fails can't bring the claimed amount back as kept (`keeping`). Every other balance is as it was.
+    public static func claimed(_ token: Address, escrow: Address, in reads: [LaunchpadEscrowRead]) -> [LaunchpadEscrowRead] {
+        reads.map { read in
+            guard read.escrow == escrow, let balances = read.balances else { return read }
+            var tokens = balances.tokens
+            if !token.isZero, tokens[token] != nil { tokens[token] = 0 }
+            let after = EscrowBalances(native: token.isZero ? 0 : balances.native, tokens: tokens)
+            return LaunchpadEscrowRead(escrow: read.escrow, factory: read.factory, retired: read.retired, balances: after, kept: read.kept)
+        }
+    }
 }
 
 /// What one wallet holds and can claim for a launch.
