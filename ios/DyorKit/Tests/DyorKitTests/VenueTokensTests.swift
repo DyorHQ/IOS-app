@@ -254,8 +254,8 @@ final class VenueTokensTests: XCTestCase {
 
     /// The app reads the venues on rpc1, one request at a time, and reads the whole history once more: the list
     /// is kept, and the checkpoint is a new one, since build 16's moved past gaps, under a key that can't mark the install
-    /// as earlier than App Lock's default (`AppSettings`, security audit 2026-09-26, IOSK-4). The swap picker says while
-    /// the list is short.
+    /// as earlier than App Lock's default (`AppSettings`, security audit 2026-09-26, IOSK-4). The list is kept in memory
+    /// (`VenueTokenList`): the swap picker searches it there, never the store, and says while it is short.
     func testTheAppReadsTheVenuesOnRpc1AndReadsTheirHistoryOnceMore() throws {
         var ios = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
@@ -264,12 +264,9 @@ final class VenueTokensTests: XCTestCase {
         let environment = try String(contentsOf: app.appendingPathComponent("App/AppEnvironment.swift"), encoding: .utf8)
         XCTAssertTrue(environment.contains("venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)"))
         XCTAssertFalse(environment.contains("rpc3.monad.xyz"), "no scan on rpc3")
-        XCTAssertTrue(environment.contains("let read = await venueTokens.refresh(tokens: VenueTokenStore.all(), checkpoint: checkpoint,"),
-                      "the checkpoint moves only past a segment read in full")
-        XCTAssertTrue(environment.contains("VenueTokenStore.save(progress.tokens, lastBlock: progress.checkpoint)"))
-        XCTAssertTrue(environment.contains("venueListCatchingUp = checkpoint == 0"))
-        XCTAssertTrue(environment.contains("await MainActor.run { self.venueListCatchingUp = !progress.complete }"))
-        XCTAssertTrue(environment.contains("if let read { venueListCatchingUp = !read.complete }"))
+        XCTAssertTrue(environment.contains("venueList = VenueTokenList(service: venueTokens, logos: { [kuruTokens] in await kuruTokens.logos() },"))
+        XCTAssertTrue(environment.contains("read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1) })"))
+        XCTAssertEqual(environment.components(separatedBy: "VenueTokenStore.").count - 1, 2, "the list reads and writes the store; nothing else does")
         XCTAssertEqual(LaunchpadService.defaultLogsRPC.absoluteString, "https://rpc1.monad.xyz")
         let service = try String(contentsOf: ios.appendingPathComponent("DyorKit/Sources/DyorKit/Services/VenueTokensService.swift"), encoding: .utf8)
         XCTAssertTrue(service.contains("public init(logsRPC: RPCClient, multicall: Multicall) {"))
@@ -292,7 +289,11 @@ final class VenueTokensTests: XCTestCase {
         for key in keys.dropFirst(2) { XCTAssertFalse(prefixes.contains { key.hasPrefix($0) }, "\(key) would mark a fresh install as earlier (R4)") }
 
         let swap = try String(contentsOf: app.appendingPathComponent("Swap/SwapView.swift"), encoding: .utf8)
-        XCTAssertTrue(swap.contains("private var venueListCatchingUp: Bool { !query.isEmpty && env.venueListCatchingUp }"), "said only while searching")
+        XCTAssertFalse(swap.contains("VenueTokenStore"), "the search never reads the store")
+        XCTAssertTrue(swap.contains("let venueHits = env.venueList.tokens.filter {"))
+        XCTAssertTrue(swap.contains("let remote = remoteMatches"), "the matches computed once a render")
+        XCTAssertEqual(swap.components(separatedBy: "remoteMatches").count - 1, 2, "declared, and read once in body")
+        XCTAssertTrue(swap.contains("private var venueListCatchingUp: Bool { !query.isEmpty && env.venueList.isCatchingUp }"), "said only while searching")
         XCTAssertTrue(swap.contains("if venueListCatchingUp { Text(\"Monad's token list is still loading, so a token may be missing for now.\") }"))
     }
 
