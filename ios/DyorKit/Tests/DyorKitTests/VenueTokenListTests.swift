@@ -42,6 +42,47 @@ final class VenueTokenListTests: XCTestCase {
         XCTAssertEqual(saved, list.tokens)
     }
 
+    /// The finding: a run that ended short (a gap, the head unread, the app suspended mid-read) was retried only by a cold
+    /// launch. A return to the app runs it again, after a pause that doubles with each short run in a row; a run that read
+    /// to the head isn't repeated.
+    func testARunThatEndedShortRunsAgainOnAReturnAfterAPause() async {
+        VenueFixture.installMetadata()
+        let store = MemoryStore(list: [], checkpoint: 0)
+        let clock = TestClock()
+        let gap = Flag(true)
+        LogsStub.install(head: 12_000_000, logs: [VenueFixture.pool(1, at: 1_000_000), VenueFixture.pool(4, at: 11_000_000)]) { range in
+            gap.on && range.contains(8_000_000) ? .error(code: -32062, message: "Block range is too large") : nil
+        }
+        let list = store.list(now: { clock.now })
+        list.refresh()
+        await list.finished()
+        XCTAssertEqual(list.shortRuns, 1)
+        XCTAssertEqual(list.checkpoint, 4_999_999)
+
+        list.resume()
+        XCTAssertFalse(list.isRefreshing, "30 s first")
+        clock.advance(31)
+        list.resume()
+        XCTAssertTrue(list.isRefreshing)
+        await list.finished()
+        XCTAssertEqual(list.shortRuns, 2, "still short")
+        clock.advance(31)
+        list.resume()
+        XCTAssertFalse(list.isRefreshing, "a minute after the second")
+        clock.advance(30)
+        gap.set(false)
+        list.resume()
+        await list.finished()
+        XCTAssertEqual(list.shortRuns, 0)
+        XCTAssertEqual(list.checkpoint, 12_000_000)
+        XCTAssertEqual(list.tokens.map(\.symbol), ["T1", "T4"])
+
+        clock.advance(3_600)
+        list.resume()
+        XCTAssertFalse(list.isRefreshing, "read to the head: nothing to resume")
+        XCTAssertEqual((1...8).map(VenueTokenList.retryPause(afterShortRuns:)), [30, 60, 120, 240, 480, 960, 1_800, 1_800])
+    }
+
     func testOneRunAtATime() async {
         VenueFixture.installMetadata()
         let store = MemoryStore(list: [], checkpoint: 0)
@@ -126,10 +167,18 @@ final class MemoryStore: @unchecked Sendable {
 
     /// A list on the stubs (`LogsStub`, named like rpc1, and `MomentsChainStub`) kept in this store.
     @MainActor
-    func list() -> VenueTokenList {
+    func list(now: @escaping @Sendable () -> Date = { Date() }) -> VenueTokenList {
         VenueTokenList(service: VenueTokensService(logsRPC: LogsStub.rpc(), multicall: Multicall(rpc: MomentsChainStub.rpc())), logos: { [:] },
-                       read: { self.read() }, write: { self.write($0, $1) })
+                       read: { self.read() }, write: { self.write($0, $1) }, now: now)
     }
+}
+
+/// A clock a test moves by hand.
+final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date = Date(timeIntervalSince1970: 1_790_000_000)
+    var now: Date { lock.lock(); defer { lock.unlock() }; return date }
+    func advance(_ seconds: TimeInterval) { lock.lock(); date += seconds; lock.unlock() }
 }
 
 /// A switch a stub's rule reads while a test flips it.

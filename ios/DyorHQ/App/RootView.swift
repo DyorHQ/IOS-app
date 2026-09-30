@@ -88,6 +88,10 @@ struct RootView: View {
                 // ready without waiting for the keep-alive loop's next tick. Never a prompt: a passkey account's
                 // socket reconnects only inside a live session, and there is none right after a return.
                 Task { await env.perplTrading.ensureConnected() }
+                // A log scan that was running while iOS suspended the app measures an outage from now, not from its last
+                // answer before; the venue list reads on if its last run ended short (`VenueTokenList.resume`).
+                LogScanClock.resumed()
+                env.venueList.resume()
             }
         }
         // Keep the per-wallet sessions tied to the active wallet: rebind whenever the signed-in address changes, so a

@@ -25,6 +25,8 @@ public final class VenueTokenList {
     public private(set) var checkpoint: UInt64 = 0
     /// Whether a run is reading.
     public private(set) var isRefreshing = false
+    /// Runs in a row that ended short of the chain head: a gap, the head unread, an endpoint down or throttling.
+    public private(set) var shortRuns = 0
     /// Whether the list is still short of the chain head: read from genesis (a fresh install, or the read build 17 makes
     /// once more), or stopped short by a gap. The swap picker says so while a search may miss a token.
     public private(set) var isCatchingUp = false
@@ -33,6 +35,9 @@ public final class VenueTokenList {
     @ObservationIgnored private let logos: @Sendable () async -> [Address: URL]
     @ObservationIgnored private let read: @Sendable () -> Stored
     @ObservationIgnored private let write: @MainActor (Data, UInt64) -> Void
+    @ObservationIgnored private let now: @Sendable () -> Date
+    /// When `resume` may run again after a run that ended short.
+    @ObservationIgnored private var retryAfter = Date.distantPast
     @ObservationIgnored private var loaded = false
     /// The checkpoint the store holds.
     @ObservationIgnored private var saved: UInt64 = 0
@@ -40,11 +45,12 @@ public final class VenueTokenList {
 
     /// `read` and `write` are the store: `read` runs off the main actor, once; `write` on it, with the list encoded.
     public init(service: VenueTokensService, logos: @escaping @Sendable () async -> [Address: URL], read: @escaping @Sendable () -> Stored,
-                write: @escaping @MainActor (Data, UInt64) -> Void) {
+                write: @escaping @MainActor (Data, UInt64) -> Void, now: @escaping @Sendable () -> Date = { Date() }) {
         self.service = service
         self.logos = logos
         self.read = read
         self.write = write
+        self.now = now
     }
 
     /// Brings the list up to the chain head in the background (`VenueTokensService.refresh`), unless a run already is. The
@@ -54,6 +60,19 @@ public final class VenueTokenList {
         guard run == nil else { return }
         isRefreshing = true
         run = Task { await perform() }
+    }
+
+    /// On a return to the app: runs again when the last run ended short of the chain head, which a cold launch alone
+    /// used to retry, after a pause that doubles with each such run in a row (`retryPause`), so an endpoint that is down
+    /// or throttling isn't asked again at every return. Nothing when the last run read to the head, or one is running.
+    public func resume() {
+        guard shortRuns > 0, now() >= retryAfter else { return }
+        refresh()
+    }
+
+    /// The pause before the run after `shortRuns` runs in a row ended short: 30 s, doubling, at most 30 min.
+    nonisolated static func retryPause(afterShortRuns shortRuns: Int) -> TimeInterval {
+        min(30 * pow(2, Double(max(0, shortRuns - 1))), 1_800)
     }
 
     /// Waits for the run under way, if any.
@@ -78,6 +97,12 @@ public final class VenueTokenList {
         }
         // Nothing read (the head couldn't be read): the list is as it was, and so is what the picker says.
         if let result { isCatchingUp = !result.complete }
+        if result?.complete == true {
+            shortRuns = 0
+        } else {
+            shortRuns += 1
+            retryAfter = now().addingTimeInterval(Self.retryPause(afterShortRuns: shortRuns))
+        }
         run = nil
         isRefreshing = false
     }

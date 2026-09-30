@@ -135,6 +135,31 @@ final class LogScanTests: XCTestCase {
         XCTAssertEqual(LogScanLimits(), LogScanLimits(splits: 4_096, failedSplits: 256, outage: 45, pause: 0.25, maxPause: 2))
     }
 
+    /// The finding: the outage was wall-clock time since the last answer, so a scan running when iOS suspended the app
+    /// found the endpoint "down" on its return, however healthy it was, and the venue list's refill ended there until a
+    /// cold launch. The outage is now measured from the later of the last answer and the app's return (`LogScanClock`).
+    func testAScanMeasuresAnOutageFromTheAppsReturn() async throws {
+        let limits = LogScanLimits(outage: 0.3)
+        var returned = LogScan(mode: .paced, limits: limits)
+        var stayed = LogScan(mode: .patient, limits: limits)
+        try await Task.sleep(for: .milliseconds(400)) // the app, suspended
+        LogScanClock.resumed()
+        returned.record([.failed])
+        XCTAssertFalse(returned.down, "the time away doesn't count")
+        try await Task.sleep(for: .milliseconds(400))
+        returned.record([.failed])
+        XCTAssertTrue(returned.down, "an outage since the return does")
+        // A scan that started after the return measures from its start, as before.
+        stayed = LogScan(mode: .patient, limits: limits)
+        try await Task.sleep(for: .milliseconds(400))
+        stayed.record([.failed])
+        XCTAssertTrue(stayed.down)
+        var failFast = LogScan(mode: .failFast, limits: limits)
+        try await Task.sleep(for: .milliseconds(400))
+        failFast.record([.failed])
+        XCTAssertFalse(failFast.down, "fail-fast counts rounds, not time")
+    }
+
     /// Patient halves failed ranges a bounded number of times: an endpoint that answers only small ranges, failing every
     /// other one, gets the first ranges read in halves, then gaps asked twice, never hours of 100-block requests.
     func testAPatientScanHalvesFailedRangesABoundedNumberOfTimes() async {

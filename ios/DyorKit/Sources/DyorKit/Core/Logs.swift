@@ -79,6 +79,26 @@ struct LogScanLimits: Sendable, Equatable {
     var maxThrottlePause: TimeInterval = 16
 }
 
+/// When the app last came back to the foreground, for every log scan's outage (`LogScan`): iOS suspends an app in the
+/// background, and a scan waiting on an answer then hears none, however healthy the endpoint, so a scan that was running
+/// would find the endpoint down on the app's return. A scan measures an outage from the later of its last answer and
+/// the return, on a clock that stops while the device sleeps (`SuspendingClock`). The app calls `resumed()` whenever its
+/// scene becomes active.
+public enum LogScanClock {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var last: SuspendingClock.Instant?
+
+    public static func resumed() {
+        lock.lock(); defer { lock.unlock() }
+        last = .now
+    }
+
+    static var resumedAt: SuspendingClock.Instant? {
+        lock.lock(); defer { lock.unlock() }
+        return last
+    }
+}
+
 /// A scan's running account (`RPCClient.chunkedLogsReport`): what it may still split, and whether the endpoint is
 /// answering.
 struct LogScan {
@@ -89,8 +109,9 @@ struct LogScan {
     /// Requests in a row that got no range answered.
     private(set) var failedInARow = 0
     /// When a range was last answered — with its logs, or a refusal of its size — or the scan started.
-    private var answeredAt = Date()
-    /// Patient: no range has been answered for `limits.outage`. The endpoint is down; the scan stops there, incomplete.
+    private var answeredAt = SuspendingClock.Instant.now
+    /// Patient or paced: no range has been answered for `limits.outage` (since the app's return, when that is later:
+    /// `LogScanClock`). The endpoint is down; the scan stops there, incomplete.
     private(set) var down = false
 
     init(mode: LogScanMode, limits: LogScanLimits) {
@@ -104,11 +125,12 @@ struct LogScan {
     mutating func record(_ answers: [LogsAnswer]) {
         if answers.contains(where: { if case .failed = $0 { return false }; return true }) {
             failedInARow = 0
-            answeredAt = Date()
+            answeredAt = .now
             return
         }
         failedInARow += 1
-        if mode != .failFast, Date().timeIntervalSince(answeredAt) >= limits.outage { down = true }
+        let since = max(answeredAt, LogScanClock.resumedAt ?? answeredAt)
+        if mode != .failFast, SuspendingClock.Instant.now - since >= .seconds(limits.outage) { down = true }
     }
 
     /// Patient or paced, while the endpoint isn't answering: how long the next part waits. 0 otherwise.

@@ -267,6 +267,12 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(environment.contains("venueList = VenueTokenList(service: venueTokens, logos: { [kuruTokens] in await kuruTokens.logos() },"))
         XCTAssertTrue(environment.contains("read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1) })"))
         XCTAssertEqual(environment.components(separatedBy: "VenueTokenStore.").count - 1, 2, "the list reads and writes the store; nothing else does")
+        // A cold launch runs the list; every return to the app resets log scans' outage and resumes a run that ended short.
+        let root = try String(contentsOf: app.appendingPathComponent("App/RootView.swift"), encoding: .utf8)
+        XCTAssertTrue(root.contains(".task { env.refreshVenueTokens() }"))
+        XCTAssertTrue(root.contains("if phase == .active {"))
+        let active = try XCTUnwrap(root.components(separatedBy: "if phase == .active {").last)
+        XCTAssertTrue(active.contains("LogScanClock.resumed()\n                env.venueList.resume()"))
         XCTAssertEqual(LaunchpadService.defaultLogsRPC.absoluteString, "https://rpc1.monad.xyz")
         let service = try String(contentsOf: ios.appendingPathComponent("DyorKit/Sources/DyorKit/Services/VenueTokensService.swift"), encoding: .utf8)
         XCTAssertTrue(service.contains("public init(logsRPC: RPCClient, multicall: Multicall) {"))
