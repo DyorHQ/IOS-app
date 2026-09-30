@@ -89,8 +89,9 @@ public actor RPCClient {
 
     /// POSTs `body` to the preferred endpoint, failing over to the next on a transport error or a 429 / 5xx answer.
     /// When every endpoint is throttling at once (a burst, measured on the live public endpoints) it backs off and tries
-    /// again in bounded rounds; when every endpoint is simply unreachable (offline) it fails at once instead.
-    private func post(_ body: Data) async throws -> Data {
+    /// again in bounded rounds; when every endpoint is simply unreachable (offline) it fails at once instead. Any other
+    /// status is the answer about this request: no other endpoint is asked, and its body is returned with it (`exchange`).
+    private func post(_ body: Data) async throws -> (data: Data, status: Int) {
         if preferred != 0, Date().timeIntervalSince(preferredSince) > Self.stickiness { preferred = 0 }
         var failure: Error = NetworkError.malformedResponse
         for round in 0...Self.throttleRetries {
@@ -116,10 +117,10 @@ public actor RPCClient {
                 if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                     failure = NetworkError.badStatus(http.statusCode)
                     if Self.shouldFailOver(status: http.statusCode) { throttled = true; continue }
-                    throw failure
+                    return (data, http.statusCode)
                 }
                 if index != preferred { preferred = index; preferredSince = Date() }
-                return data
+                return (data, 200)
             }
             if !throttled { break } // nothing answered at all (offline / unreachable): waiting won't help
         }
@@ -157,6 +158,18 @@ public actor RPCClient {
 
     private static let throttleRetries = 4
 
+    /// Whether `body` answers every call of a request with ids `ids` with a JSON-RPC error: one error object for a single
+    /// call, an array of them for a batch.
+    static func isErrorAnswer(_ body: JSON, ids: Range<Int>, single: Bool) -> Bool {
+        let responses = single ? [body] : (body.array ?? [])
+        guard responses.count == ids.count else { return false }
+        let answered = responses.compactMap { response -> Int? in
+            guard response["error"]["code"].number != nil || response["error"]["message"].string != nil else { return nil }
+            return response["id"].number.flatMap { Int(exactly: $0) }
+        }
+        return Set(answered) == Set(ids) && answered.count == ids.count
+    }
+
     /// Sends `calls` as one JSON-RPC request (with endpoint failover) and maps the answers back to request order.
     private func exchange(_ calls: [(method: String, params: [JSON])]) async throws -> [Result<JSON, RPCError>] {
         var payload: [JSON] = []
@@ -166,8 +179,20 @@ public actor RPCClient {
         }
         nextId += calls.count
 
-        let data = try await post(try JSONEncoder().encode(calls.count == 1 ? payload[0] : .array(payload)))
-        let decoded = try JSONDecoder().decode(JSON.self, from: data)
+        let (data, status) = try await post(try JSONEncoder().encode(calls.count == 1 ? payload[0] : .array(payload)))
+        let decoded: JSON
+        if (200..<300).contains(status) {
+            decoded = try JSONDecoder().decode(JSON.self, from: data)
+        } else {
+            // A request error whose body is the JSON-RPC error of every call in it is that error, as an HTTP 200 would carry
+            // it: rpc1 refuses a single-object `eth_getLogs` over its log cap as HTTP 400 (the same call in a one-item
+            // array: HTTP 200), and rpc.monad.xyz and rpc4 a range over theirs as HTTP 413, each naming what it can answer
+            // in the error (`RPCClient.refusesSize`). Any other body is the status.
+            guard (400..<500).contains(status), let body = try? JSONDecoder().decode(JSON.self, from: data),
+                  Self.isErrorAnswer(body, ids: firstId..<(firstId + calls.count), single: calls.count == 1)
+            else { throw NetworkError.badStatus(status) }
+            decoded = body
+        }
         let responses = calls.count == 1 ? [decoded] : (decoded.array ?? [])
         guard responses.count == calls.count else { throw NetworkError.malformedResponse }
 

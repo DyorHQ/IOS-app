@@ -63,6 +63,70 @@ final class RPCFailoverTests: XCTestCase {
         XCTAssertEqual(RPCStub.hosts, ["primary.test"])
     }
 
+    /// A request error whose body is the JSON-RPC error of the call is that error, as rpc1 sends a single-object
+    /// `eth_getLogs` over its log cap (HTTP 400, measured 2026-09-30; the same call in a one-item array: HTTP 200), and
+    /// rpc.monad.xyz a range over its 100 blocks (HTTP 413): the refusal and the range it names reach the scan. No other
+    /// endpoint is asked, as before.
+    func testARequestErrorWhoseBodyIsTheJSONRPCErrorIsThatError() async throws {
+        let refusal = "Log response size exceeded. Based on your parameters and the response size limit, this block range should work: [0x0, 0x5876751]"
+        for (status, code, message) in [(400, -32602, refusal), (413, -32614, "eth_getLogs is limited to a 100 range")] {
+            RPCStub.reset()
+            RPCStub.status["primary.test"] = status
+            RPCStub.statusError["primary.test"] = (code, message)
+            do {
+                _ = try await client().call("eth_getLogs", [.object(["fromBlock": .string("0x0"), "toBlock": .string("latest")])])
+                XCTFail("expected the JSON-RPC error")
+            } catch let error as RPCError {
+                XCTAssertEqual(error, RPCError(code: code, message: message), "\(status)")
+                XCTAssertTrue(RPCClient.refusesSize(error))
+            }
+            XCTAssertEqual(RPCStub.hosts, ["primary.test"], "\(status): never failed over")
+        }
+        // A batch refused the same way: each call its own error, in order.
+        RPCStub.reset()
+        RPCStub.status["primary.test"] = 400
+        RPCStub.statusError["primary.test"] = (-32602, refusal)
+        let results = try await client().batch([(method: "eth_getLogs", params: []), (method: "eth_getLogs", params: [])])
+        XCTAssertEqual(results.map { result -> Int? in if case .failure(let error) = result { return error.code }; return nil }, [-32602, -32602])
+        XCTAssertEqual(RPCStub.hosts, ["primary.test"])
+    }
+
+    /// Anything else in a request error's body is the status, as before: none, text, an error for another id, a result.
+    func testARequestErrorWithoutTheCallsJSONRPCErrorIsItsStatus() async {
+        for body in ["", "Bad Request", #"{"jsonrpc":"2.0","id":999,"error":{"code":-32602,"message":"x"}}"#, #"{"jsonrpc":"2.0","id":1,"result":"0x10"}"#] {
+            RPCStub.reset()
+            RPCStub.status["primary.test"] = 400
+            RPCStub.statusBody["primary.test"] = body
+            do {
+                _ = try await client().blockNumber()
+                XCTFail("expected badStatus(400)")
+            } catch NetworkError.badStatus(let code) {
+                XCTAssertEqual(code, 400, body)
+            } catch { XCTFail("unexpected \(error) for \(body)") }
+            XCTAssertEqual(RPCStub.hosts, ["primary.test"], body)
+        }
+    }
+
+    /// A 429 or a 5xx fails over and backs off as before, whatever its body says.
+    func testAThrottleWithAJSONRPCBodyStillFailsOver() async throws {
+        RPCStub.status["primary.test"] = 429
+        RPCStub.statusError["primary.test"] = (-32005, "rate limit exceeded")
+        let block = try await client().blockNumber()
+        XCTAssertEqual(block, 0x10)
+        XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"])
+
+        RPCStub.reset()
+        RPCStub.status = ["primary.test": 429, "secondary.test": 503]
+        RPCStub.statusError = ["primary.test": (-32005, "rate limit exceeded"), "secondary.test": (-32603, "Internal error")]
+        do {
+            _ = try await client().blockNumber()
+            XCTFail("expected failure")
+        } catch NetworkError.badStatus(let code) {
+            XCTAssertEqual(code, 503)
+        } catch { XCTFail("unexpected \(error)") }
+        XCTAssertEqual(RPCStub.hosts.count, 10, "every endpoint in each of the five rounds, as before")
+    }
+
     func testThrowsWhenEveryEndpointFails() async {
         RPCStub.status["primary.test"] = 429
         RPCStub.status["secondary.test"] = 502
@@ -199,6 +263,10 @@ final class RPCStub: URLProtocol {
     nonisolated(unsafe) static var itemBudget: [String: Int] = [:]
     /// The first N requests to a host answer HTTP 429, then it serves normally.
     nonisolated(unsafe) static var failFirst: [String: Int] = [:]
+    /// A JSON-RPC error a host sends for every call as the body of its `status` (none: an empty body), as rpc1 sends a
+    /// size refusal in an HTTP 400; `statusBody` sends that text instead.
+    nonisolated(unsafe) static var statusError: [String: (code: Int, message: String)] = [:]
+    nonisolated(unsafe) static var statusBody: [String: String] = [:]
     /// Fee answers (hex quantities); nil makes the method fail the way a node without it would.
     nonisolated(unsafe) static var baseFee: String?
     nonisolated(unsafe) static var tip: String?
@@ -208,6 +276,7 @@ final class RPCStub: URLProtocol {
 
     static func reset() {
         status = [:]; transportFailure = []; hosts = []; requestSizes = []; sendError = nil; knownTransactions = []; itemBudget = [:]; failFirst = [:]
+        statusError = [:]; statusBody = [:]
         baseFee = nil; tip = nil; gasPrice = "0x17bfac7c00"; chain = nil
     }
 
@@ -250,6 +319,14 @@ final class RPCStub: URLProtocol {
                 client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
                 return
             }
+        } else if let error = Self.statusError[host] {
+            let decoded = (try? JSONDecoder().decode(JSON.self, from: Self.bodyData(request))) ?? .null
+            let replies = (decoded.array ?? [decoded]).map { call -> JSON in
+                .object(["jsonrpc": .string("2.0"), "id": call["id"], "error": .object(["code": .number(Double(error.code)), "message": .string(error.message)])])
+            }
+            body = (try? JSONEncoder().encode(decoded.array == nil ? replies[0] : .array(replies))) ?? Data()
+        } else if let text = Self.statusBody[host] {
+            body = Data(text.utf8)
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

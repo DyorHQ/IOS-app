@@ -200,6 +200,34 @@ final class LogScanTests: XCTestCase {
         }
     }
 
+    /// rpc1 sends the same refusal as an HTTP 400 when the request is a single object, not an array (measured
+    /// 2026-09-30), and the whole window is asked as one: the refusal, and the range it names, still reach the scan, so
+    /// the wallet's history on Send and the Portfolio reads in full, where it came back with a gap.
+    func testAHistoryOverTheCapIsReadInFullWhenTheRefusalComesAsHTTP400() async {
+        for mode in [LogScanMode.patient, .failFast] {
+            let blocks: [UInt64] = [10, 5_000_000, 20_000_000, 40_000_000, 60_000_000, 80_000_000, 90_000_000, 100_000_000, 105_000_000, 108_000_000, 108_500_000, 108_799_999]
+            LogsStub.install(head: 108_800_000, logs: blocks.map(transfer), singleErrorStatus: 400) { [self] range in
+                let inside = blocks.filter(range.contains)
+                return inside.count > 3 ? rpc1Refusal(range, end: inside[3] - 1) : nil
+            }
+            let report = await LogsStub.rpc().chunkedLogsReport(address: nil, topics: [transferTopic, nil, walletWord], fromBlock: 0, toBlock: 108_800_000, mode: mode)
+            XCTAssertTrue(report.complete, "\(mode)")
+            XCTAssertEqual(report.logs.map(\.blockNumber), blocks, "\(mode)")
+            XCTAssertEqual(LogsStub.queries().count, 7, "\(mode): the whole window once, then each page and what is left after it")
+
+            // Ten transfers inside one 100,000-block range: that range, refused in a batch, is read in the parts rpc1 names,
+            // each asked on its own, where a refusal as HTTP 400 left it a gap.
+            let dense = (0..<10).map { 10_000 + UInt64($0) * 5_000 }
+            LogsStub.install(head: 400_000, logs: dense.map(transfer), singleErrorStatus: 400) { [self] range in
+                let inside = dense.filter(range.contains)
+                return inside.count > 3 ? rpc1Refusal(range, end: inside[3] - 1) : nil
+            }
+            let spammed = await LogsStub.rpc().chunkedLogsReport(address: nil, topics: [transferTopic, nil, walletWord], fromBlock: 0, toBlock: 299_999, mode: mode)
+            XCTAssertTrue(spammed.complete, "\(mode)")
+            XCTAssertEqual(spammed.logs.map(\.blockNumber), dense, "\(mode)")
+        }
+    }
+
     /// An endpoint that names a tiny range every time is followed 200 times, then the rest is read in halves: it can't keep
     /// the scan splitting off a block at a time, in either mode.
     func testTheRangesAnEndpointNamesAreFollowedABoundedNumberOfTimes() async {
@@ -336,7 +364,8 @@ final class LogScanTests: XCTestCase {
 /// it like rpc3: 1,000 blocks): the chain head is `head`, every range asked is recorded (`queries()`), every request
 /// counted (`requests()`), and `rule` refuses a range (an error, or no answer to the whole request) or lets it be answered
 /// from `logs`. With `batchSpan`, a request's ranges share that many blocks, as on rpc3: a range past what the ranges
-/// before it in the request used is refused for its size.
+/// before it in the request used is refused for its size. With `singleErrorStatus`, a single-object request (not an
+/// array) whose call is refused gets that HTTP status, the error still its body, as rpc1 sends a size refusal (400).
 final class LogsStub: URLProtocol {
     struct Range: Hashable, Sendable {
         let from: UInt64
@@ -367,13 +396,15 @@ final class LogsStub: URLProtocol {
     nonisolated(unsafe) private static var rule: Rule = { _ in nil }
     nonisolated(unsafe) private static var asked: [Range] = []
     nonisolated(unsafe) private static var batchSpan: UInt64?
+    nonisolated(unsafe) private static var singleErrorStatus = 200
     nonisolated(unsafe) private static var requestCount = 0
 
-    static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, rule: @escaping Rule) {
+    static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, singleErrorStatus: Int = 200, rule: @escaping Rule) {
         lock.lock(); defer { lock.unlock() }
         self.head = head
         chainLogs = logs
         self.batchSpan = batchSpan
+        self.singleErrorStatus = singleErrorStatus
         self.rule = rule
         asked = []
         requestCount = 0
@@ -414,7 +445,9 @@ final class LogsStub: URLProtocol {
             return
         }
         let body = (try? JSONEncoder().encode(decoded.array == nil ? replies[0] : .array(replies))) ?? Data()
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        Self.lock.lock(); let errorStatus = Self.singleErrorStatus; Self.lock.unlock()
+        let status = decoded.array == nil && !replies[0]["error"].isNull ? errorStatus : 200
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
