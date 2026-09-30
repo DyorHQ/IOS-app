@@ -31,11 +31,48 @@ final class ChainTextDisplayTests: XCTestCase {
     }
 
     func testEmojiAccentsAndEveryScriptStillShow() {
-        for text in ["👨‍👩‍👧 Family", "❤️ Love", "❤️‍🔥", "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "1️⃣", "👍🏽", "Café", "Cafe\u{0301}", "日本語", "שלום", "مرحبا", "Ελληνικά", "Кириллица", "\u{FFFD}", "A\u{FFFD}Z", "$PEPE · 1.5%"] {
+        for text in ["👨‍👩‍👧 Family", "❤️ Love", "❤️‍🔥", "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "1️⃣", "👍🏽", "Café", "Cafe\u{0301}", "日本語", "Ελληνικά", "Кириллица", "\u{FFFD}", "A\u{FFFD}Z", "$PEPE · 1.5%"] {
             XCTAssertEqual(ChainText.shown(text), text, text)
+        }
+        // Right-to-left text keeps every letter, inside an isolate (`testRightToLeftTextIsIsolatedOnceAndOnlyOnOneLine`).
+        for text in ["שלום", "مرحبا"] {
+            XCTAssertEqual(ChainText.shown(text), "\u{2068}\(text)\u{2069}", text)
         }
         // A joiner or variation selector that follows no emoji is dropped like any other.
         XCTAssertEqual(ChainText.shown("A\u{200D}B\u{FE0F}C"), "ABC")
+    }
+
+    /// Single-line text with a right-to-left letter comes back inside one isolate (U+2068 … U+2069), however often it is
+    /// shown; a description never, and text with no right-to-left letter never: every ASCII name and symbol, and every
+    /// name DyorHQ lists today, stays exactly as it is.
+    func testRightToLeftTextIsIsolatedOnceAndOnlyOnOneLine() {
+        for text in ["PEPE", "USDC", "Pepe Coin", "$PEPE · 1.5%", "0N1 Force NFT", "日本語", "Ελληνικά", "Café", "\u{FFFD}", ""] + Self.liveMomentNames + Self.liveLaunchNames {
+            XCTAssertEqual(ChainText.shown(text), text, text)
+            XCTAssertEqual(ChainText.shown(text, multiline: true), text, text)
+        }
+        // Hebrew, Arabic, an Arabic letter before a digit, mixed with Latin, Phoenician and Adlam (supplementary planes).
+        for text in ["אבג", "مرحبا", "ب1", "Pepe שלום", "שלום עולם", "\u{10900}\u{10901}", "\u{1E900}", "\u{FB1D}", "\u{FEFC}"] {
+            let shown = ChainText.shown(text)
+            XCTAssertEqual(shown, "\u{2068}\(text)\u{2069}", text)
+            XCTAssertEqual(ChainText.shown(shown), shown, "shown again, still one isolate: \(text)")
+        }
+        XCTAssertEqual(ChainText.shown("\u{202E}אבג\u{2069}\u{2069}"), "\u{2068}אבג\u{2069}", "the creator's own direction characters are removed first")
+        XCTAssertEqual(ChainText.shown("שלום\u{2029}עולם", multiline: true), "שלום\nעולם", "a description is never isolated")
+        XCTAssertEqual(ChainText.shown("Hello\nשלום", multiline: true), "Hello\nשלום")
+    }
+
+    /// A letter disc's letters (`ChainText.leading`): the isolate around right-to-left text is skipped, and any other
+    /// symbol gives exactly the letters `prefix` gave.
+    func testLeadingSkipsTheIsolate() {
+        for symbol in ["PEPE", "P", "", "USDC", "$PEPE", "1️⃣A", "👨‍👩‍👧X", "日本語", "Café"] + Self.liveMomentNames + Self.liveLaunchNames {
+            XCTAssertEqual(ChainText.leading(symbol, 2), String(symbol.prefix(2)), symbol)
+            XCTAssertEqual(ChainText.leading(ChainText.shown(symbol), 2), String(symbol.prefix(2)), symbol)
+        }
+        XCTAssertEqual(ChainText.leading(ChainText.shown("אבג"), 2), "אב")
+        XCTAssertEqual(ChainText.leading(ChainText.shown("ب1"), 2), "ب1")
+        XCTAssertEqual(ChainText.leading(ChainText.shown("א"), 2), "א")
+        XCTAssertEqual(ChainText.leading("PEPE", 0), "")
+        XCTAssertEqual(ChainText.leading("PEPE", -1), "")
     }
 
     /// No name DyorHQ lists today changes as it shows, so no screen and no link slug changes with this: the six named

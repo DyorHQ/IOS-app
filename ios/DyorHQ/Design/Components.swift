@@ -38,7 +38,7 @@ struct TokenLogo: View {
         let tint = Color(hue: hue, saturation: 0.5, brightness: 0.62)
         return ZStack {
             LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            Text(symbol.prefix(2).uppercased())
+            Text(ChainText.leading(symbol, 2).uppercased())
                 .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
         }

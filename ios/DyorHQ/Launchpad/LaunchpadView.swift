@@ -329,7 +329,7 @@ struct LaunchArtwork: View {
     private var placeholder: some View {
         ZStack {
             LinearGradient(colors: [Color.brand.opacity(0.30), Color.brand.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            Text(symbol.prefix(2).uppercased())
+            Text(ChainText.leading(symbol, 2).uppercased())
                 .font(.system(size: 40, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.brand)
         }
