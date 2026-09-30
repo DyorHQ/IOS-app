@@ -216,21 +216,30 @@ public actor LaunchpadService {
     /// the others; the live factory's error is only thrown when no retired launch came back either. While the live
     /// stack is not deployed (v2 pending) the list is the retired stacks' launches alone.
     public func allLaunches(limit: Int = 48) async throws -> [Launch] {
+        try await allLaunchesRead(limit: limit).launches
+    }
+
+    /// `allLaunches`, naming the factories that failed to answer (`LaunchesRead.unread`): a screen that decides
+    /// something from the whole list (the board's "Your Sell-Only Coins") can tell a complete read from one a stack is
+    /// missing from.
+    public func allLaunchesRead(limit: Int = 48) async throws -> LaunchesRead {
         let retiredStacks = self.retiredStacks
         async let live: [Launch] = addresses.isDeployed ? launches(limit: limit, factory: addresses.factory) : []
-        let retired = await withTaskGroup(of: (Int, [Launch]).self) { group in
+        let retired = await withTaskGroup(of: (Int, [Launch]?).self) { group in
             for (i, stack) in retiredStacks.enumerated() {
-                group.addTask { (i, (try? await self.launches(limit: limit, factory: stack.factory)) ?? []) }
+                group.addTask { (i, try? await self.launches(limit: limit, factory: stack.factory)) }
             }
-            var out = Array(repeating: [Launch](), count: retiredStacks.count)
+            var out = [[Launch]?](repeating: nil, count: retiredStacks.count)
             for await (i, list) in group { out[i] = list }
-            return out.flatMap { $0 }
+            return out
         }
+        let unread = zip(retiredStacks, retired).filter { $0.1 == nil }.map(\.0.factory)
+        let retiredLaunches = retired.flatMap { $0 ?? [] }
         do {
-            return try await live + retired
+            return LaunchesRead(launches: try await live + retiredLaunches, unread: unread)
         } catch {
-            if retired.isEmpty { throw error }
-            return retired
+            if retiredLaunches.isEmpty { throw error }
+            return LaunchesRead(launches: retiredLaunches, unread: [addresses.factory] + unread)
         }
     }
 

@@ -712,7 +712,9 @@ final class HomeModel {
         return launches.compactMap { launch -> LaunchHolding? in
             let balance = balances[launch.token] ?? 0
             let created = launch.deployer == address
-            guard balance > 0 || created else { return nil }
+            // A coin the wallet created shows at a zero balance only while the board lists it: a retired launchpad's
+            // sell-only coin shows only while held (owner decision 2026-09-29).
+            guard balance > 0 || (created && launch.listsOnBoard) else { return nil }
             let pairUSD = launch.pair.isNative ? priceMap[Monad.native]?.usd : priceMap[launch.pairToken]?.usd
             let value = pairUSD.map { Amount.units(balance, decimals: 18) * LaunchpadService.priceNumber(launch) * $0 } ?? 0
             return LaunchHolding(launch: launch, balance: balance, valueUSD: value)
@@ -784,11 +786,9 @@ struct TokenDetailView: View {
                     Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
                 } else if let route = curveRoute, route.isOnCurve, let title = route.actionTitle(row.token.symbol) {
                     // Never Swap: no venue routes a coin still on a launchpad's curve, live or retired. Its curve trades
-                    // on its Launch page (Buy and Sell on the live launchpad, Sell only on a retired one); unread, the
-                    // Launch tab lists it.
-                    Button(title, systemImage: "arrow.up.right.circle") {
-                        if let launch = route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
-                    }
+                    // on its Launch page (Buy and Sell on the live launchpad, Sell only on a retired one), opened by
+                    // reference when its launch couldn't be read.
+                    Button(title, systemImage: "arrow.up.right.circle") { router.openLaunchPage(for: route) }
                 } else {
                     Button("Swap \(row.token.symbol)", systemImage: "arrow.left.arrow.right") {
                         router.openSwap(tokenIn: row.token.symbol == "USDC" ? Token.mon : Token.usdc, tokenOut: row.token)

@@ -93,15 +93,15 @@ final class LogScanTests: XCTestCase {
     /// nothing: every range comes back, and none is split near the smallest size.
     func testAPatientScanRidesOutAMomentsOutage() async {
         let blocks: [UInt64] = [5, 30_000, 99_999, 150_000, 640_000, 1_250_000]
-        for mode in [LogScanMode.patient, .failFast] {
+        for mode in [LogScanMode.patient, .paced, .failFast] {
             let until = Date().addingTimeInterval(2)
             LogsStub.install(head: 1_300_000, logs: blocks.map(transfer)) { _ in
                 Date() < until ? .error(code: -32603, message: "Internal error") : nil
             }
             let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 1_299_999, mode: mode)
             switch mode {
-            case .patient:
-                XCTAssertTrue(report.complete)
+            case .patient, .paced:
+                XCTAssertTrue(report.complete, "\(mode)")
                 XCTAssertEqual(report.logs.map(\.blockNumber), blocks)
                 XCTAssertTrue(LogsStub.queries().allSatisfy { $0.span >= 10_000 }, "no range split near the smallest size")
             case .failFast:
@@ -133,6 +133,61 @@ final class LogScanTests: XCTestCase {
         // The shipped limits: 45 s with no range answered, a pause of 0.25 s more for each failure in a row up to 2 s,
         // 256 splits of failed ranges and 4,096 in all.
         XCTAssertEqual(LogScanLimits(), LogScanLimits(splits: 4_096, failedSplits: 256, outage: 45, pause: 0.25, maxPause: 2))
+    }
+
+    /// The finding: the outage was wall-clock time since the last answer, so a scan running when iOS suspended the app
+    /// found the endpoint "down" on its return, however healthy it was, and the venue list's refill ended there until a
+    /// cold launch. The outage is now measured from the later of the last answer and the app's return (`LogScanClock`).
+    func testAScanMeasuresAnOutageFromTheAppsReturn() async throws {
+        let limits = LogScanLimits(outage: 0.3)
+        var returned = LogScan(mode: .paced, limits: limits)
+        var stayed = LogScan(mode: .patient, limits: limits)
+        LogScanClock.suspended()
+        try await Task.sleep(for: .milliseconds(400)) // the app, suspended
+        XCTAssertTrue(LogScanClock.resumed())
+        returned.record([.failed])
+        XCTAssertFalse(returned.down, "the time away doesn't count")
+        try await Task.sleep(for: .milliseconds(400))
+        returned.record([.failed])
+        XCTAssertTrue(returned.down, "an outage since the return does")
+        // A scan that started after the return measures from its start, as before.
+        stayed = LogScan(mode: .patient, limits: limits)
+        try await Task.sleep(for: .milliseconds(400))
+        stayed.record([.failed])
+        XCTAssertTrue(stayed.down)
+        var failFast = LogScan(mode: .failFast, limits: limits)
+        try await Task.sleep(for: .milliseconds(400))
+        failFast.record([.failed])
+        XCTAssertFalse(failFast.down, "fail-fast counts rounds, not time")
+    }
+
+    /// The re-review's finding: the app reset the outage at every activation of its scene, and App Lock's Face ID prompt,
+    /// a passkey sheet or Control Center each make one without the app leaving the foreground, so while they kept coming a
+    /// scan whose endpoint was down never ended. Only the first activation after the background resets it.
+    func testOnlyAReturnFromTheBackgroundResetsTheOutage() async throws {
+        let limits = LogScanLimits(outage: 0.3)
+        var scan = LogScan(mode: .patient, limits: limits)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertFalse(LogScanClock.resumed(), "the scene was only inactive")
+        scan.record([.failed])
+        XCTAssertTrue(scan.down, "the outage since the scan's start counts")
+        LogScanClock.suspended()
+        XCTAssertTrue(LogScanClock.resumed(), "a return")
+        XCTAssertFalse(LogScanClock.resumed(), "one reset a return")
+
+        // A paced scan throttled throughout ends at its outage, however many activations come meanwhile.
+        LogsStub.install(head: 10_000_000, logs: []) { _ in .error(code: -32005, message: "rate limit exceeded") }
+        let activations = Task.detached {
+            for _ in 0..<16 { LogScanClock.resumed(); try? await Task.sleep(for: .milliseconds(250)) }
+        }
+        let started = Date()
+        let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 4_999_999, chunkSize: 5_000_000,
+                                                             concurrency: 1, mode: .paced, limits: LogScanLimits(outage: 1, throttlePause: 0.05, maxThrottlePause: 0.1))
+        let elapsed = Date().timeIntervalSince(started)
+        activations.cancel()
+        await activations.value
+        XCTAssertFalse(report.complete)
+        XCTAssertLessThan(elapsed, 3, "it ran on for as long as the activations came (4 s)")
     }
 
     /// Patient halves failed ranges a bounded number of times: an endpoint that answers only small ranges, failing every
@@ -200,6 +255,34 @@ final class LogScanTests: XCTestCase {
         }
     }
 
+    /// rpc1 sends the same refusal as an HTTP 400 when the request is a single object, not an array (measured
+    /// 2026-09-30), and the whole window is asked as one: the refusal, and the range it names, still reach the scan, so
+    /// the wallet's history on Send and the Portfolio reads in full, where it came back with a gap.
+    func testAHistoryOverTheCapIsReadInFullWhenTheRefusalComesAsHTTP400() async {
+        for mode in [LogScanMode.patient, .failFast] {
+            let blocks: [UInt64] = [10, 5_000_000, 20_000_000, 40_000_000, 60_000_000, 80_000_000, 90_000_000, 100_000_000, 105_000_000, 108_000_000, 108_500_000, 108_799_999]
+            LogsStub.install(head: 108_800_000, logs: blocks.map(transfer), singleErrorStatus: 400) { [self] range in
+                let inside = blocks.filter(range.contains)
+                return inside.count > 3 ? rpc1Refusal(range, end: inside[3] - 1) : nil
+            }
+            let report = await LogsStub.rpc().chunkedLogsReport(address: nil, topics: [transferTopic, nil, walletWord], fromBlock: 0, toBlock: 108_800_000, mode: mode)
+            XCTAssertTrue(report.complete, "\(mode)")
+            XCTAssertEqual(report.logs.map(\.blockNumber), blocks, "\(mode)")
+            XCTAssertEqual(LogsStub.queries().count, 7, "\(mode): the whole window once, then each page and what is left after it")
+
+            // Ten transfers inside one 100,000-block range: that range, refused in a batch, is read in the parts rpc1 names,
+            // each asked on its own, where a refusal as HTTP 400 left it a gap.
+            let dense = (0..<10).map { 10_000 + UInt64($0) * 5_000 }
+            LogsStub.install(head: 400_000, logs: dense.map(transfer), singleErrorStatus: 400) { [self] range in
+                let inside = dense.filter(range.contains)
+                return inside.count > 3 ? rpc1Refusal(range, end: inside[3] - 1) : nil
+            }
+            let spammed = await LogsStub.rpc().chunkedLogsReport(address: nil, topics: [transferTopic, nil, walletWord], fromBlock: 0, toBlock: 299_999, mode: mode)
+            XCTAssertTrue(spammed.complete, "\(mode)")
+            XCTAssertEqual(spammed.logs.map(\.blockNumber), dense, "\(mode)")
+        }
+    }
+
     /// An endpoint that names a tiny range every time is followed 200 times, then the rest is read in halves: it can't keep
     /// the scan splitting off a block at a time, in either mode.
     func testTheRangesAnEndpointNamesAreFollowedABoundedNumberOfTimes() async {
@@ -241,6 +324,260 @@ final class LogScanTests: XCTestCase {
         XCTAssertTrue(logs.contains("mode: LogScanMode = .patient) async -> (logs: [Log], complete: Bool)"))
     }
 
+    /// The finding (build 17): rpc3 answers 1,000 blocks a request, however many ranges it holds, and refuses the rest,
+    /// yet ranges were sized at 100,000 for it, as for rpc1. Each refused range is split, a request a split, and a scan
+    /// splits at most 4,096 times: a 5M-block segment of the venue scan needed about 6,350, so part of every segment was
+    /// left unread, and never read again. Sized at 1,000, one a request, the same endpoint reads the segment in full, no
+    /// range refused.
+    func testAnEndpointThatAnswers1000BlocksReadsA5MBlockSegmentWithNoGap() async {
+        let blocks: [UInt64] = [100_000_000, 100_000_999, 100_001_000, 101_234_567, 102_500_000, 104_999_999]
+        let rule: LogsStub.Rule = { range in range.span > 1_000 ? .error(code: -32062, message: "Block range is too large") : nil }
+        LogsStub.install(head: 105_000_000, logs: blocks.map(transfer), batchSpan: 1_000, rule: rule)
+        let report = await LogsStub.rpc(url: LogsStub.rpc3).chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 100_000_000, toBlock: 104_999_999)
+        XCTAssertTrue(report.complete)
+        XCTAssertEqual(report.logs.map(\.blockNumber), blocks)
+        XCTAssertEqual(LogsStub.queries().count, 5_000)
+        XCTAssertEqual(LogsStub.requests(), 5_000, "one range a request, the default six a round trip notwithstanding")
+        XCTAssertTrue(LogsStub.queries().allSatisfy { $0.span == 1_000 }, "every range answered as asked")
+
+        // Build 16's range against the same endpoint: 127 splits and 255 requests for 100,000 blocks, so 6,350 splits for
+        // the segment's 50 ranges, past what a scan may make.
+        LogsStub.install(head: 105_000_000, logs: blocks.map(transfer), batchSpan: 1_000, rule: rule)
+        let build16 = await LogsStub.rpc(url: LogsStub.rpc3).chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 100_000_000, toBlock: 100_099_999,
+                                                                              chunkSize: 100_000)
+        XCTAssertTrue(build16.complete)
+        XCTAssertEqual(LogsStub.queries().count, 255)
+        XCTAssertGreaterThan(50 * (LogsStub.queries().count - 1) / 2, LogScanLimits().splits)
+    }
+
+    /// rpc3 counts a request's ranges together, so a round trip there asks one 1,000-block range: six in one would have
+    /// five refused and split, five splits for every 6,000 blocks, and a 5M-block window past the scan's splits again.
+    /// Every other endpoint still asks `concurrency` ranges a round trip.
+    func testARequestOnRpc3AsksOneRange() async {
+        LogsStub.install(head: 20_000, batchSpan: 1_000) { _ in nil }
+        let rpc3 = await LogsStub.rpc(url: LogsStub.rpc3).chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 11_999)
+        XCTAssertTrue(rpc3.complete)
+        XCTAssertEqual(LogsStub.queries().count, 12, "no range refused, so none split")
+        XCTAssertEqual(LogsStub.requests(), 12)
+
+        LogsStub.install(head: 2_000_000) { _ in nil }
+        let rpc1 = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 1_199_999)
+        XCTAssertTrue(rpc1.complete)
+        XCTAssertEqual(LogsStub.queries().count, 12)
+        XCTAssertEqual(LogsStub.requests(), 2, "six ranges a round trip, as before")
+    }
+
+    /// Ranges are sized to what each endpoint answers, as measured on 2026-09-29 (rpc4: what every node behind it answers),
+    /// and only rpc3 counts a request's ranges together. Only rpc1 answers a range of any span, up to its log cap.
+    func testRangesAreSizedToWhatEachEndpointAnswers() {
+        let sizes: [(String, UInt64, UInt64?)] = [("https://rpc1.monad.xyz", 100_000, nil), ("https://rpc3.monad.xyz", 1_000, 1_000),
+                                                  ("https://rpc4.monad.xyz", 1_000, nil), ("https://rpc.monad.xyz", 100, nil),
+                                                  ("http://127.0.0.1:8545", 50_000, nil), ("http://localhost:8545", 50_000, nil)]
+        for (url, size, batch) in sizes {
+            XCTAssertEqual(RPCClient.logChunkSize(for: URL(string: url)!), size, url)
+            XCTAssertEqual(RPCClient.logBatchSpan(for: URL(string: url)!), batch, url)
+            XCTAssertEqual(RPCClient.answersAnyRange(URL(string: url)!), url.contains("rpc1"), url)
+        }
+    }
+
+    /// Paced (the venue token list): a throttle — HTTP 429 once the client's own retries are spent, or a rate-limit error
+    /// in the answer — is waited out and the same range asked again, never split. The venue list's refill split throttled
+    /// ranges, patient: 2,714 requests on rpc1, 1,000 of them answered HTTP 429.
+    func testAPacedScanWaitsOutAThrottleAndNeverSplits() async {
+        let limits = LogScanLimits(throttlePause: 0.05, maxThrottlePause: 0.1)
+        for throttle in [LogsStub.Failure.status(429), .error(code: -32005, message: "rate limit exceeded")] {
+            // The client asks five times (its own retries) before the scan sees a throttle: the first ask is throttled
+            // in full, the next is answered.
+            LogsStub.install(head: 10_000_000, logs: [5, 4_000_000].map(transfer)) { _ in LogsStub.requests() <= 5 ? throttle : nil }
+            let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 4_999_999, chunkSize: 5_000_000,
+                                                                 concurrency: 1, mode: .paced, limits: limits)
+            XCTAssertTrue(report.complete, "\(throttle)")
+            XCTAssertEqual(report.logs.map(\.blockNumber), [5, 4_000_000], "\(throttle)")
+            XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999)], "\(throttle): the same range, never split")
+            XCTAssertEqual(LogsStub.requests(), 6, "\(throttle): the client's five, then the scan's one after its pause")
+        }
+    }
+
+    /// The re-review's finding: paced, only HTTP 429 and rate-limit errors were waited out, so a storm of 503s, or 429s
+    /// that ended in a request with no answer, failed the range and the 5M-block range was halved. An endpoint answering
+    /// 503 is overloaded or restarting, and one that stops answering after a throttle is throttling still: both are waited
+    /// out, the same range asked again, not split (`testAPacedScanReadsARangeThrottledPastItsWaitsInHalvesOnce`).
+    func testAPacedScanWaitsOutServerErrorsAndNoAnswerAfterAThrottle() async {
+        let limits = LogScanLimits(throttlePause: 0.05, maxThrottlePause: 0.1)
+        let scenarios: [(String, LogsStub.Rule)] = [
+            // Two of the client's asks, five requests each, then the scan's after its pause.
+            ("503s", { _ in LogsStub.requests() <= 10 ? .status(503) : nil }),
+            // The client's five asks throttled, then two with no answer, each after the scan's pause.
+            ("429s, then no answer", { _ in LogsStub.requests() <= 5 ? .status(429) : LogsStub.requests() <= 7 ? .noAnswer : nil }),
+            // A 429, then no answer, within each of two of the client's asks: the scan sees only the connection fail.
+            ("a 429, then no answer, in one ask", { _ in LogsStub.requests() <= 4 ? (LogsStub.requests() % 2 == 1 ? .status(429) : .noAnswer) : nil }),
+        ]
+        for (name, rule) in scenarios {
+            LogsStub.install(head: 10_000_000, logs: [5, 4_000_000].map(transfer), rule: rule)
+            let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 4_999_999, chunkSize: 5_000_000,
+                                                                 concurrency: 1, mode: .paced, limits: limits)
+            XCTAssertTrue(report.complete, name)
+            XCTAssertEqual(report.logs.map(\.blockNumber), [5, 4_000_000], name)
+            XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999)], "\(name): the same range, never split")
+        }
+    }
+
+    /// Paced, a throttle that outlasts the outage ends the scan there, incomplete: nothing split, nothing more asked. The
+    /// venue list reads the range on a later run.
+    func testAPacedScanStopsWhenAThrottleOutlastsTheOutage() async {
+        LogsStub.install(head: 10_000_000, logs: [5].map(transfer)) { _ in .error(code: -32005, message: "rate limit exceeded") }
+        let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 9_999_999, chunkSize: 5_000_000,
+                                                             concurrency: 1, mode: .paced,
+                                                             limits: LogScanLimits(outage: 1, throttlePause: 0.05, maxThrottlePause: 0.1))
+        XCTAssertFalse(report.complete)
+        XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999)], "the first range only, never split")
+        XCTAssertEqual(LogsStub.requests(), 5, "one ask, the client's own retries")
+    }
+
+    /// The V1 final check's finding (P2): paced, every HTTP 5xx was a throttle, so a range the endpoint answers 5xx every
+    /// time (a gateway timeout for a heavy range) was waited out, never split, and the venue list stalled on it, run after
+    /// run. Only 429 and 503 (and rate-limit errors) are throttles; a 504 is a failure, and a paced scan reads a failed
+    /// range in halves, as a patient one does.
+    func testAPacedScanReadsARangeAnswered504EveryTimeInHalves() async {
+        LogsStub.install(head: 10_000_000, logs: [5, 4_000_000].map(transfer)) { range in range.span > 2_500_000 ? .status(504) : nil }
+        let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 4_999_999, chunkSize: 5_000_000,
+                                                             concurrency: 1, mode: .paced,
+                                                             limits: LogScanLimits(outage: 15, pause: 0, maxPause: 0, throttlePause: 0.05, maxThrottlePause: 0.1))
+        XCTAssertTrue(report.complete)
+        XCTAssertEqual(report.logs.map(\.blockNumber), [5, 4_000_000])
+        XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999), LogsStub.Range(from: 0, to: 2_499_999), LogsStub.Range(from: 2_500_000, to: 4_999_999)])
+        XCTAssertEqual(LogsStub.requests(), 12, "the range asked twice (the client's five each), then its halves")
+    }
+
+    /// ...and a range the endpoint throttles every time (a 503 for a range too heavy for it) is waited out, then read in
+    /// halves: once a scan, so the requests at most double, and a range throttled after that is waited out until the
+    /// outage, never split.
+    func testAPacedScanReadsARangeThrottledPastItsWaitsInHalvesOnce() async {
+        LogsStub.install(head: 10_000_000, logs: [5, 4_000_000].map(transfer)) { range in range.span > 2_500_000 ? .status(503) : nil }
+        let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 4_999_999, chunkSize: 5_000_000,
+                                                             concurrency: 1, mode: .paced,
+                                                             limits: LogScanLimits(outage: 30, pause: 0, maxPause: 0, throttlePause: 0.05, maxThrottlePause: 0.1,
+                                                                                   throttleWaits: 1))
+        XCTAssertTrue(report.complete)
+        XCTAssertEqual(report.logs.map(\.blockNumber), [5, 4_000_000])
+        XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999), LogsStub.Range(from: 0, to: 2_499_999), LogsStub.Range(from: 2_500_000, to: 4_999_999)])
+        XCTAssertEqual(LogsStub.requests(), 12, "asked, waited out once (the client's five each), then its halves")
+
+        // Once a scan: a range throttled past its waits after the first is not split.
+        var scan = LogScan(mode: .paced, limits: LogScanLimits())
+        var cuts = 200
+        let whole = LogFilter(fromBlock: 0, toBlock: 4_999_999)
+        XCTAssertEqual(scan.divide(whole, after: .throttled, cuts: &cuts, floor: 100)?.map(\.toBlock), [2_499_999, 4_999_999])
+        XCTAssertNil(scan.divide(LogFilter(fromBlock: 0, toBlock: 2_499_999), after: .throttled, cuts: &cuts, floor: 100))
+        XCTAssertNotNil(scan.divide(LogFilter(fromBlock: 0, toBlock: 2_499_999), after: .failed, cuts: &cuts, floor: 100), "a failure is still halved")
+        XCTAssertEqual(scan.throttleSplits, 0)
+        XCTAssertTrue(RPCClient.isThrottle(status: 429) && RPCClient.isThrottle(status: 503))
+        XCTAssertFalse([500, 502, 504].contains(where: RPCClient.isThrottle(status:)))
+    }
+
+    /// The V1 last check's finding (L1): paced, every range still throttled after the waits was given up to be halved,
+    /// even one `LogScan.divide` can't halve (no wider than the floor), which was then a gap, and so was a second range
+    /// in the same request once the scan's one split was spent. Only a range that can be halved, as many as the scan's
+    /// splits, is given up; the rest are waited out, as the limits say.
+    func testAPacedScanWaitsOutAThrottledRangeItCantHalve() async {
+        let blocks: [UInt64] = [50, 150, 250, 350, 450, 550, 650, 750, 850, 950]
+        let limits = LogScanLimits(outage: 30, pause: 0, maxPause: 0, throttlePause: 0.05, maxThrottlePause: 0.1)
+        let scenarios: [(String, UInt64, Int, [UInt64])] = [
+            ("a 100-block range (the floor), throttled for 4 asks", 100, 1, [550]),
+            ("two 200-block ranges in one request, both throttled for 4 asks", 200, 2, [150, 350]),
+        ]
+        for (name, chunk, concurrency, throttledBlocks) in scenarios {
+            // The client asks five times (its own retries) per ask of the scan: throttled for the scan's first four asks.
+            let asked = RangeAsks()
+            LogsStub.install(head: 1_000, logs: blocks.map(transfer)) { range in
+                guard throttledBlocks.contains(where: range.contains) else { return nil }
+                return asked.next(range) <= 20 ? .error(code: -32005, message: "rate limit exceeded") : nil
+            }
+            let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 999, chunkSize: chunk,
+                                                                 concurrency: concurrency, mode: .paced, limits: limits)
+            XCTAssertTrue(report.complete, name)
+            XCTAssertEqual(report.logs.map(\.blockNumber), blocks, "\(name): nothing lost")
+        }
+    }
+
+    /// The re-review's finding (from before V1): rpc1 refuses a range past the head of the node answering it (its nodes
+    /// can be a few blocks apart, the head read from one and the logs from another) with "block range extends beyond
+    /// current head block", and `refusesSize` took that for a size refusal: the range was split, 59 requests for a
+    /// 1M-block range. It is asked again once the node has had time to catch up, not split; if the node still hasn't, it
+    /// is read in halves as before, so everything up to that node's head is read (`testARangeStillPastTheNodesHeadAfterTheWaitsIsReadInHalves`).
+    func testARangePastTheNodesHeadIsAskedAgainBeforeItIsSplit() async {
+        let limits = LogScanLimits(pause: 0, maxPause: 0, headPause: 0.05)
+        let pastHead = LogsStub.Failure.error(code: -32602, message: "block range extends beyond current head block")
+        let whole = LogsStub.Range(from: 0, to: 999_999)
+        for mode in [LogScanMode.patient, .failFast, .paced] {
+            // The node answering catches up by the second ask again.
+            LogsStub.install(head: 1_000_000, logs: [5, 999_990].map(transfer)) { range in range.to > 999_000 && LogsStub.requests() <= 2 ? pastHead : nil }
+            let caughtUp = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 999_999, chunkSize: 1_000_000,
+                                                                  concurrency: 1, mode: mode, limits: limits)
+            XCTAssertTrue(caughtUp.complete, "\(mode)")
+            XCTAssertEqual(caughtUp.logs.map(\.blockNumber), [5, 999_990], "\(mode)")
+            XCTAssertEqual(LogsStub.queries(), [whole, whole, whole], "\(mode): asked again, never split")
+
+            // A node that doesn't catch up: after two more asks, read in halves, each part asked once (the waits are spent).
+            LogsStub.install(head: 1_000_000, logs: [5, 600_000].map(transfer)) { range in range.to > 999_000 ? pastHead : nil }
+            let behind = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 999_999, chunkSize: 1_000_000,
+                                                                concurrency: 1, mode: mode, limits: limits)
+            XCTAssertFalse(behind.complete, "\(mode): the blocks past that node's head are a gap")
+            XCTAssertEqual(behind.logs.map(\.blockNumber), [5, 600_000], "\(mode): everything up to that node's head is read")
+            let asked = LogsStub.queries()
+            XCTAssertEqual(Array(asked.prefix(3)), [whole, whole, whole], "\(mode)")
+            XCTAssertEqual(Set(asked.dropFirst(3)).count, asked.count - 3, "\(mode): each part once")
+            XCTAssertTrue(asked.dropFirst(3).allSatisfy { $0.span < whole.span }, "\(mode)")
+        }
+        // A size refusal is still split.
+        LogsStub.install(head: 1_000_000, logs: [5].map(transfer)) { range in range.span > 500_000 ? .error(code: -32062, message: "Block range is too large") : nil }
+        let split = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 999_999, chunkSize: 1_000_000,
+                                                           concurrency: 1, mode: .paced, limits: limits)
+        XCTAssertTrue(split.complete)
+        XCTAssertEqual(Set(LogsStub.queries()), [whole, LogsStub.Range(from: 0, to: 499_999), LogsStub.Range(from: 500_000, to: 999_999)])
+    }
+
+    /// The V1 final check's finding (P1): a node that stayed behind the head the caller read for longer than the waits left
+    /// the whole last range (up to 100,000 blocks) as a gap, where before, its refusal taken for a size refusal, the range
+    /// was halved and everything up to that node's head read — and the callers that take what a scan read (launches,
+    /// Moments, swaps, NFTs) lost the newest activity. Once the waits are spent the range is read in halves, as before, in
+    /// every mode; the waits are the scan's, two in all, not two for every range it asks.
+    func testARangeStillPastTheNodesHeadAfterTheWaitsIsReadInHalves() async {
+        let pastHead = LogsStub.Failure.error(code: -32602, message: "block range extends beyond current head block")
+        let limits = LogScanLimits(pause: 0, maxPause: 0, headPause: 0.01)
+        for mode in [LogScanMode.patient, .failFast, .paced] {
+            for walletScoped in [false, true] {
+                let name = "\(mode), \(walletScoped ? "wallet-scoped" : "by address")"
+                // The node answering is 10 blocks short of the head the caller read, and stays there.
+                LogsStub.install(head: 1_000_000, logs: [5, 950_000, 999_950].map(transfer)) { range in range.to > 999_989 ? pastHead : nil }
+                let report = await LogsStub.rpc().chunkedLogsReport(address: walletScoped ? nil : token, topics: walletScoped ? [transferTopic, nil, walletWord] : [transferTopic],
+                                                                    fromBlock: 0, toBlock: 999_999, mode: mode, limits: limits)
+                XCTAssertEqual(report.logs.map(\.blockNumber), [5, 950_000], name)
+                XCTAssertFalse(report.complete, "\(name): the last blocks, past that node's head, are a gap the caller reads later")
+                let behind = LogsStub.queries().filter { $0.to > 999_989 }
+                XCTAssertEqual(behind.count - Set(behind).count, 2, "\(name): two asks again in all, then each part once")
+                XCTAssertTrue(behind.contains(LogsStub.Range(from: 999_804, to: 999_999)), "\(name): halved down to the smallest range")
+            }
+        }
+    }
+
+    /// The fallback costs the common case nothing: a node a block or two behind (under a second) costs the wallet's history
+    /// on Send and the Portfolio (fail-fast) the one wait of a second it cost before, with the app's limits, and is read
+    /// in full; the whole window asked twice.
+    func testANodeABlockOrTwoBehindCostsTheWalletsHistoryOneWait() async {
+        let pastHead = LogsStub.Failure.error(code: -32602, message: "block range extends beyond current head block")
+        let caughtUp = Date().addingTimeInterval(0.8)
+        LogsStub.install(head: 1_000_000, logs: [5, 999_990].map(transfer)) { range in range.to > 999_997 && Date() < caughtUp ? pastHead : nil }
+        let started = Date()
+        let report = await LogsStub.rpc().chunkedLogsReport(address: nil, topics: [transferTopic, nil, walletWord], fromBlock: 0, toBlock: 999_999, mode: .failFast)
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertTrue(report.complete)
+        XCTAssertEqual(report.logs.map(\.blockNumber), [5, 999_990])
+        XCTAssertEqual(LogsStub.queries(), [LogsStub.Range(from: 0, to: 999_999), LogsStub.Range(from: 0, to: 999_999)])
+        XCTAssertGreaterThanOrEqual(elapsed, 0.8)
+        XCTAssertLessThan(elapsed, 1.5, "one wait of a second")
+    }
+
     func testTheRangeASizeRefusalNamesIsReadOnlyWhenItFits() {
         let refusal = RPCError(code: -32602, message: "Log response size exceeded. Based on your parameters and the response size limit, this block range should work: [0x6000000, 0x6000b41]")
         XCTAssertEqual(RPCClient.suggestedEnd(refusal, from: 0x6000000, to: 0x6700000), 0x6000b41)
@@ -264,7 +601,14 @@ final class LogScanTests: XCTestCase {
             RPCError(code: -32062, message: "Block range is too large"),
             RPCError(code: -32005, message: "query returned more than 10000 results"),
         ]
-        for error in size { XCTAssertTrue(RPCClient.refusesSize(error), error.message) }
+        for error in size {
+            XCTAssertTrue(RPCClient.refusesSize(error), error.message)
+            XCTAssertFalse(RPCClient.refusesPastHead(error), error.message)
+        }
+        // rpc1's refusal of a range past the head of the node answering it (probed live) says "block range" too.
+        let pastHead = RPCError(code: -32602, message: "block range extends beyond current head block")
+        XCTAssertTrue(RPCClient.refusesPastHead(pastHead))
+        XCTAssertFalse(RPCClient.refusesSize(pastHead))
         let other = [
             RPCError(code: -32603, message: "Internal error"),
             RPCError(code: -32000, message: "header not found"),
@@ -277,9 +621,13 @@ final class LogScanTests: XCTestCase {
     }
 }
 
-/// An `eth_getLogs` endpoint answered from memory, named like rpc1 so ranges are 100,000 blocks: the chain head is
-/// `head`, every range asked is recorded (`queries()`), and `rule` refuses a range (an error, or no answer to the whole
-/// request) or lets it be answered from `logs`.
+/// An `eth_getLogs` endpoint answered from memory, named like rpc1 so ranges are 100,000 blocks (`rpc(url: rpc3)` names
+/// it like rpc3: 1,000 blocks): the chain head is `head`, every range asked is recorded (`queries()`), every request
+/// counted (`requests()`), and `rule` refuses a range (an error, no answer to the whole request, or an HTTP status for it)
+/// or lets it be answered from `logs`. With `batchSpan`, a request's ranges share that many blocks, as on rpc3: a range
+/// past what the ranges before it in the request used is refused for its size. With `singleErrorStatus`, a single-object
+/// request (not an array) whose call is refused gets that HTTP status, the error still its body, as rpc1 sends a size
+/// refusal (400).
 final class LogsStub: URLProtocol {
     struct Range: Hashable, Sendable {
         let from: UInt64
@@ -292,10 +640,13 @@ final class LogsStub: URLProtocol {
         case error(code: Int, message: String)
         /// No answer to the request that asked it: the connection fails.
         case noAnswer
+        /// The request that asked it answered with this HTTP status and no body (429: a throttle).
+        case status(Int)
         var description: String {
             switch self {
             case .error(let code, let message): return "\(code) \(message)"
             case .noAnswer: return "no answer"
+            case .status(let code): return "HTTP \(code)"
             }
         }
     }
@@ -303,18 +654,56 @@ final class LogsStub: URLProtocol {
     typealias Rule = @Sendable (Range) -> Failure?
 
     static let url = URL(string: "https://rpc1.logs-stub.invalid")!
+    static let rpc3 = URL(string: "https://rpc3.logs-stub.invalid")!
     private static let lock = NSLock()
     nonisolated(unsafe) private static var head: UInt64 = 0
     nonisolated(unsafe) private static var chainLogs: [Log] = []
     nonisolated(unsafe) private static var rule: Rule = { _ in nil }
     nonisolated(unsafe) private static var asked: [Range] = []
+    nonisolated(unsafe) private static var batchSpan: UInt64?
+    nonisolated(unsafe) private static var singleErrorStatus = 200
+    nonisolated(unsafe) private static var requestCount = 0
+    nonisolated(unsafe) private static var askedAddresses: [String?] = []
+    nonisolated(unsafe) private static var latency: TimeInterval = 0
+    nonisolated(unsafe) private static var logCap: Int?
+    nonisolated(unsafe) private static var inFlight = 0
+    nonisolated(unsafe) private static var mostInFlight = 0
 
-    static func install(head: UInt64, logs: [Log] = [], rule: @escaping Rule) {
+    /// `latency`: how long each request takes to answer, so requests sent together overlap (`maxInFlight()`). `logCap`: a
+    /// range matching more logs is refused as rpc1 refuses one over its 10K, naming the range from its start that fits.
+    static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, singleErrorStatus: Int = 200, latency: TimeInterval = 0,
+                        logCap: Int? = nil, rule: @escaping Rule) {
         lock.lock(); defer { lock.unlock() }
         self.head = head
         chainLogs = logs
+        self.batchSpan = batchSpan
+        self.singleErrorStatus = singleErrorStatus
+        self.latency = latency
+        self.logCap = logCap
         self.rule = rule
         asked = []
+        askedAddresses = []
+        requestCount = 0
+        inFlight = 0
+        mostInFlight = 0
+    }
+
+    /// The address each range in `queries()` asked for, in the same order.
+    static func addresses() -> [Address?] {
+        lock.lock(); let asked = askedAddresses; lock.unlock()
+        return asked.map { $0.flatMap(Address.init) }
+    }
+
+    /// The most requests that were being answered at once.
+    static func maxInFlight() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return mostInFlight
+    }
+
+    /// How many requests were made.
+    static func requests() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return requestCount
     }
 
     /// Every range asked, in order.
@@ -323,7 +712,7 @@ final class LogsStub: URLProtocol {
         return asked
     }
 
-    static func rpc() -> RPCClient {
+    static func rpc(url: URL = LogsStub.url) -> RPCClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LogsStub.self]
         return RPCClient(url: url, session: URLSession(configuration: configuration))
@@ -336,28 +725,46 @@ final class LogsStub: URLProtocol {
     override func startLoading() {
         let decoded = (try? JSONDecoder().decode(JSON.self, from: Self.body(request))) ?? .null
         let calls = decoded.array ?? [decoded]
+        Self.lock.lock()
+        Self.requestCount += 1
+        Self.inFlight += 1
+        Self.mostInFlight = max(Self.mostInFlight, Self.inFlight)
+        let latency = Self.latency
+        Self.lock.unlock()
+        if latency > 0 { Thread.sleep(forTimeInterval: latency) }
+        defer { Self.lock.lock(); Self.inFlight -= 1; Self.lock.unlock() }
         // Every call is recorded, even in a request that is to get no answer.
-        let answers = calls.map(Self.reply)
+        var spent: UInt64 = 0
+        let answers = calls.map { Self.reply($0, spent: &spent) }
         let replies = answers.compactMap { $0 }
         guard replies.count == answers.count else {
             client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
             return
         }
+        if let code = replies.lazy.compactMap({ $0["httpStatus"].number }).first {
+            let response = HTTPURLResponse(url: request.url!, statusCode: Int(code), httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
         let body = (try? JSONEncoder().encode(decoded.array == nil ? replies[0] : .array(replies))) ?? Data()
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        Self.lock.lock(); let errorStatus = Self.singleErrorStatus; Self.lock.unlock()
+        let status = decoded.array == nil && !replies[0]["error"].isNull ? errorStatus : 200
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    /// The answer to one call; nil when the request is to get no answer at all.
-    private static func reply(_ call: JSON) -> JSON? {
+    /// The answer to one call; nil when the request is to get no answer at all. `spent`: the blocks the ranges answered
+    /// before it in the same request used (`batchSpan`).
+    private static func reply(_ call: JSON, spent: inout UInt64) -> JSON? {
         let id = call["id"]
         func result(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
         func error(_ code: Int, _ message: String) -> JSON {
             .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(Double(code)), "message": .string(message)])])
         }
-        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; lock.unlock()
+        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; let budget = batchSpan; let cap = logCap; lock.unlock()
         switch call["method"].string {
         case "eth_getBlockByNumber":
             return result(.object(["number": .string(BigUInt(head).hexQuantity), "timestamp": .string(BigUInt(1_790_000_000).hexQuantity)]))
@@ -366,10 +773,15 @@ final class LogsStub: URLProtocol {
             let from = filter["fromBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? 0
             let to = filter["toBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? head
             let range = Range(from: from, to: to)
-            lock.lock(); asked.append(range); lock.unlock()
+            lock.lock(); asked.append(range); askedAddresses.append(filter["address"].string); lock.unlock()
+            if let budget {
+                guard spent + range.span <= budget else { return error(-32062, "Block range is too large") }
+                spent += range.span
+            }
             switch rule(range) {
             case .error(let code, let message)?: return error(code, message)
             case .noAnswer?: return nil
+            case .status(let code)?: return .object(["httpStatus": .number(Double(code))])
             case nil: break
             }
             let address = filter["address"].string.flatMap(Address.init)
@@ -377,6 +789,10 @@ final class LogsStub: URLProtocol {
             let matching = logs.filter { log in
                 (address == nil || address == log.address) && range.contains(log.blockNumber)
                     && topics.enumerated().allSatisfy { i, topic in topic == nil || (log.topics.indices.contains(i) && log.topics[i] == topic) }
+            }
+            if let cap, matching.count > cap {
+                let fits = matching.map(\.blockNumber).sorted()[cap] - 1
+                return error(-32602, "Log response size exceeded. Based on your parameters and the response size limit, this block range should work: [\(BigUInt(from).hexQuantity), \(BigUInt(fits).hexQuantity)]")
             }
             return result(.array(matching.map(json)))
         default:
@@ -402,5 +818,17 @@ final class LogsStub: URLProtocol {
             data.append(buffer, count: n)
         }
         return data
+    }
+}
+
+/// How many times each range was asked, for a stub rule (which may run on any thread).
+private final class RangeAsks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var asks: [LogsStub.Range: Int] = [:]
+
+    func next(_ range: LogsStub.Range) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        asks[range, default: 0] += 1
+        return asks[range]!
     }
 }

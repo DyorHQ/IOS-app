@@ -74,7 +74,11 @@ struct RootView: View {
             // next has to present the passkey again. Ending it also closes a passkey account's Perpl socket and drops
             // its trading key. An approved plan or order still running keeps it until it finishes, within the
             // background time iOS grants (GL-1).
-            if phase == .background { session.mera.endWhenIdle() }
+            if phase == .background {
+                session.mera.endWhenIdle()
+                // iOS may suspend the app now: the next activation is a return to it (`LogScanClock`).
+                LogScanClock.suspended()
+            }
             if phase == .active {
                 session.mera.enteredForeground()
                 settings.appearance.apply()
@@ -88,6 +92,11 @@ struct RootView: View {
                 // ready without waiting for the keep-alive loop's next tick. Never a prompt: a passkey account's
                 // socket reconnects only inside a live session, and there is none right after a return.
                 Task { await env.perplTrading.ensureConnected() }
+                // On a return from the background only: a log scan that was running while iOS suspended the app measures
+                // an outage from now, not from its last answer before, and the venue list reads on if its last run ended
+                // short (`VenueTokenList.resume`). Face ID, a passkey sheet or Control Center only make the scene
+                // inactive: after them, a running scan's outage keeps counting (`LogScanClock`).
+                if LogScanClock.resumed() { env.venueList.resume() }
             }
         }
         // Keep the per-wallet sessions tied to the active wallet: rebind whenever the signed-in address changes, so a
@@ -135,7 +144,7 @@ struct RootView: View {
             await env.social.signIn(address: address, wallet: wallet)
         }
         .task { env.alertWatcher.start(env: env, settings: settings, owner: { session.address }) }
-        .task { await env.refreshVenueTokens() }
+        .task { env.refreshVenueTokens() }
     }
 }
 

@@ -62,6 +62,8 @@ final class Session {
     /// What a deletion that finished on this device left to do (a Privy account that couldn't be deleted,
     /// `AccountDeletion.run`), shown by RootView in place of onboarding until closed. Memory only.
     var deletionNotice: String?
+    /// App Lock's setting in memory, set as a new install has it once this device's data is erased (`eraseLocalData`).
+    @ObservationIgnored weak var settings: AppSettings?
 
     var account: Account? { if case .signedIn(let account) = state { return account } else { return nil } }
     var address: Address? { account?.address }
@@ -603,7 +605,11 @@ final class Session {
         mera.forget()
         wallet = nil
         if let bundle = Bundle.main.bundleIdentifier {
-            UserDefaults.standard.removePersistentDomain(forName: bundle)
+            // The store as a new install finds it, with App Lock saved as a new install has it (`AppLockStore`, R4): the
+            // next sign-in in this process writes the keys that tell an earlier install apart, and the next launch would
+            // otherwise start App Lock OFF. The setting in memory follows, for the account signed in next.
+            let appLock = AppLockStore.erase(UserDefaults.standard, domain: bundle, canAuthenticateOwner: BiometricGate.canAuthenticateOwner)
+            settings?.requireBiometrics = appLock
         }
         // Every Keychain item this app created (imported wallet keys, Perpl trading keys, backend session tokens).
         for itemClass in [kSecClassGenericPassword, kSecClassInternetPassword, kSecClassKey] {
