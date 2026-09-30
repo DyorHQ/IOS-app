@@ -4,7 +4,8 @@ import SwiftUI
 
 // Small, reusable pieces that keep every screen on the same system: SF Symbols, text styles, semantic colors.
 
-/// A token or market logo: remote image with a monogram fallback, always circular.
+/// A token or market logo: remote image with a monogram fallback, always circular, with a faint ring that suits the
+/// appearance (`Color.logoRing`), and never colour-inverted by Smart Invert.
 struct TokenLogo: View {
     let symbol: String
     let url: URL?
@@ -43,8 +44,11 @@ struct TokenLogo: View {
         let tint = Color(hue: hue, saturation: 0.5, brightness: 0.62)
         return ZStack {
             LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            // One line, shrunk rather than wrapped: two emoji at 0.4 of the disc would otherwise break onto two lines.
             Text(symbol.prefix(2).uppercased())
                 .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
                 .foregroundStyle(.white)
         }
     }
