@@ -95,13 +95,21 @@ struct MomentsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
-                if let error = model.error { InlineError(message: error) }
+                // A read that failed says so, with Retry; the Moments last read stay listed (as on the Launch board).
+                if let error = model.error {
+                    HStack(alignment: .firstTextBaseline) {
+                        InlineError(message: error)
+                        Spacer(minLength: 8)
+                        Button("Retry") { Task { await model.load(env: env) } }.font(.footnote.weight(.semibold))
+                    }
+                }
                 Picker("Filter", selection: $filter) {
                     ForEach(MomentFilter.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 if shown.isEmpty {
-                    emptyState
+                    // Never "No Moments yet" for a feed that couldn't be read.
+                    if model.error == nil || !model.moments.isEmpty { emptyState }
                 } else {
                     LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(shown) { info in
@@ -189,7 +197,8 @@ final class MomentsModel {
             policyUnread = board.policyUnread
             error = nil
         } catch {
-            if moments.isEmpty { self.error = describe(error) }
+            // Every failed read says so, the first or a refresh: the Moments last read stay, never a feed frozen unsaid.
+            self.error = describe(error)
         }
     }
 }
