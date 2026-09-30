@@ -16,6 +16,13 @@ struct RecentActivityView: View {
             if model.items.isEmpty {
                 if model.loading {
                     HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading activity…").foregroundStyle(.secondary) }
+                } else if let incomplete = model.incomplete {
+                    // Nothing to show because part of it couldn't be read: the error, with Retry, never "No Activity Yet".
+                    HStack(alignment: .firstTextBaseline) {
+                        InlineError(message: incomplete)
+                        Spacer(minLength: 8)
+                        Button("Retry") { Task { await model.load(env: env, address: session.address) } }.font(.footnote.weight(.semibold))
+                    }
                 } else {
                     ContentUnavailableView {
                         Label("No Activity Yet", systemImage: "clock.arrow.circlepath")
@@ -26,6 +33,7 @@ struct RecentActivityView: View {
                     }
                 }
             } else {
+                if let incomplete = model.incomplete { InlineError(message: incomplete) }
                 Section {
                     ForEach(model.items) { RecentActivityRow(item: $0) }
                 } footer: {
@@ -92,9 +100,19 @@ private struct RecentActivityRow: View {
 final class RecentActivityModel {
     private(set) var items: [FeedItem] = []
     private(set) var loading = false
+    /// Said when part of the launchpad activity couldn't be read (a launchpad's launches, or the activity scan): the
+    /// rows last read stay, and the feed says it may be missing some.
+    private(set) var incomplete: String?
+    /// The wallet the kept launches and launchpad activity were read for: another wallet starts from nothing.
+    private var keptFor: Address?
+    /// The last launches read, which a launchpad that can't be read now keeps (`LaunchListing.keeping`).
+    private var lastLaunches: [Launch] = []
+    /// The wallet's launchpad activity last read, which a failed activity read keeps.
+    private var lastActivity: [ActivityItem] = []
 
     func load(env: AppEnvironment, address: Address?) async {
-        guard let address else { items = []; return }
+        guard let address else { items = []; incomplete = nil; keptFor = nil; lastLaunches = []; lastActivity = []; return }
+        if keptFor != address { items = []; incomplete = nil; lastLaunches = []; lastActivity = []; keptFor = address }
         loading = true
         defer { loading = false }
         // Pending rows are re-checked beside the history reads, not ahead of them (each can wait on the RPC); the feed is
@@ -104,15 +122,31 @@ final class RecentActivityModel {
         let tokenMap = Dictionary(KnownTokenStore.universe(owner: address).map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
         async let launchesTask = env.launchpad.launchListing(limit: 60)
         async let swapsTask = env.swapHistory.swaps(wallet: address, window: .week, decimals: tokenMap.mapValues(\.decimals))
-        let launches = await launchesTask.launches
+        // A launchpad whose launches couldn't be read keeps its last good ones, and a failed activity read keeps the rows
+        // last read: the feed says it is incomplete rather than show less as if that were all.
+        let listing = await launchesTask
+        let launches = listing.keeping(lastLaunches)
         async let lpActivityTask = env.launchpad.activity(limit: 100, lookbackBlocks: Monad.blocksPerDay * 7, launches: launches)
 
         let byToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
-        let lpActivity = ((try? await lpActivityTask) ?? []).filter { $0.actor == address }
+        var unread = !listing.complete
+        let lpActivity: [ActivityItem]
+        do {
+            lpActivity = try await lpActivityTask.filter { $0.actor == address }
+        } catch {
+            lpActivity = lastActivity
+            unread = true
+        }
         let swaps = await swapsTask
+        // A load for a wallet that is no longer the one shown publishes nothing.
+        guard keptFor == address else { await rechecked; return }
+        lastLaunches = launches
+        lastActivity = lpActivity
+        incomplete = unread ? "Some launchpad activity couldn't be read just now. Pull to refresh." : nil
 
         items = Self.merge(ActivityLog.all(owner: address), lpActivity: lpActivity, byToken: byToken, swaps: swaps, tokens: tokenMap)
         await rechecked
+        guard keptFor == address else { return }
         items = Self.merge(ActivityLog.all(owner: address), lpActivity: lpActivity, byToken: byToken, swaps: swaps, tokens: tokenMap)
     }
 
