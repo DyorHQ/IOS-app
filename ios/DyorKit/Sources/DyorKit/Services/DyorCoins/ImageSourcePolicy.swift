@@ -12,20 +12,22 @@ public struct RemoteImageSource: Hashable, Sendable {
     }
 }
 
-/// Which hosts a coin's picture may be loaded from (security audit 2026-09-26, RI-5 area). Loading an image tells its
-/// host the viewer's IP address and when they looked, so a picture written on chain by whoever made a coin — a launch
-/// token's logo, a Moment's media — is loaded only from infrastructure DyorHQ runs or content-addressed storage:
+/// Which hosts a coin's picture may be loaded from (security audit 2026-09-26, RI-5 area; pick 6, decision 10). Loading
+/// an image tells its host the viewer's IP address and when they looked, so a coin's picture never loads from a host its
+/// creator chose. A picture written on chain by whoever made a coin — a launch token's logo, a Moment's media — is loaded
+/// only from infrastructure DyorHQ runs or content-addressed storage:
 ///
 /// - DyorHQ's write-once `launch-media` bucket (`https://<project>.supabase.co/storage/v1/object/public/launch-media/…`),
 ///   where the app uploads every launch image and Moment mirror, as it is;
-/// - IPFS, in any form — `ipfs://<cid>[/…]`, `https://<any host>/ipfs/<cid>[/…]`, `https://<cid>.ipfs.<host>/[…]` — always
-///   rewritten onto the app's fixed gateways (`MomentsMath.ipfsGateways`, DyorHQ's dedicated one first), never the host
-///   the creator named.
+/// - IPFS, in any form (`IPFS.path`) — `ipfs://<cid>[/…]`, `https://<any host>/ipfs/<cid>[/…]`,
+///   `https://<cid>.ipfs.<host>/[…]` — with a real CID (`IPFS.isCID`), always rewritten onto the app's fixed gateways
+///   (`MomentsMath.ipfsGateways`, DyorHQ's dedicated one first), never the host the creator named.
 ///
-/// Anything else — another https host, `http:`, `ar:`, `data:`, `javascript:` — gives no source, and the coin shows its
-/// letters. All seven launches on chain today use `launch-media`, so no picture users see goes away. A logo a token list
-/// supplies for a coin that isn't DyorHQ's (Kuru's directory) keeps any https host in build 17: its host is the list's
-/// choice, not a stranger's. The byte, pixel and decode caps (`RemoteMedia`) apply to every source.
+/// Anything else — another https host, `http:`, `ar:`, `data:`, `javascript:`, a link over `maxURLBytes` — gives no
+/// source, and the coin shows its letters. All seven launches on chain today use `launch-media`, so no picture users see
+/// goes away. A logo a token list supplies for a coin that isn't DyorHQ's (`listSources`) loads only from the hosts the
+/// app's lists really use (`listHosts`), or else by the rules above. The byte, pixel and decode caps (`RemoteMedia`)
+/// apply to every source.
 public struct ImageSourcePolicy: Hashable, Sendable {
     /// `https://<project>.supabase.co`: the Supabase project whose `launch-media` bucket is DyorHQ's.
     public let supabaseURL: URL
@@ -36,6 +38,25 @@ public struct ImageSourcePolicy: Hashable, Sendable {
         self.supabaseURL = supabaseURL
         self.ipfsGateways = ipfsGateways
     }
+
+    /// DyorHQ's production project, whose bucket every launch and Moment on chain uses (the app's `SupabaseURL`
+    /// default), for a picture chosen where no app configuration is at hand (`MomentInfo.coinToken`).
+    public static let dyorhq = ImageSourcePolicy(supabaseURL: URL(string: "https://fmnjqrguvopusfufmirs.supabase.co")!)
+
+    /// The longest link any source may be, in UTF-8 bytes: a picture's address is never longer, and a creator's
+    /// 100 KB "URL" costs every screen that parses it.
+    public static let maxURLBytes = 2_048
+
+    /// The hosts a token list's logo may load from, as the app's lists use them (2026-09-30): Kuru's CDN (almost every
+    /// logo in its directory and markets), the logo bucket some of Kuru's rows point at, and nad.fun's storage for its
+    /// coins; and the Monad token list's repository (`Token.core`'s logos). Anything else a list or a stored snapshot
+    /// holds — a build-16 snapshot of a Moment coin carries its creator's link — is held to the creator rules.
+    public static let listHosts: [(host: String, pathPrefix: String)] = [
+        ("dsvxs4ecepqgj.cloudfront.net", "/"),
+        ("crypto-token-logos-production.s3.us-west-2.amazonaws.com", "/"),
+        ("storage.nadapp.net", "/"),
+        ("raw.githubusercontent.com", "/monad-crypto/token-list/"),
+    ]
 
     /// The object path every `launch-media` URL starts with.
     static let launchMediaPath = "/storage/v1/object/public/launch-media/"
@@ -72,15 +93,22 @@ public struct ImageSourcePolicy: Hashable, Sendable {
 
     // MARK: List-supplied logos
 
-    /// Where the logo a token list gave `token` (`Token.logoURL`) may be loaded from: any https URL without credentials in
-    /// it. A launchpad coin's stored logo came from its creator (the Launch page stores it), so it is held to the creator
-    /// rules.
+    /// Where the logo a token list gave `token` (`Token.logoURL`) may be loaded from: an https URL on one of
+    /// `listHosts` (no credentials, no port, under the host's path), or else what the creator rules allow of it —
+    /// DyorHQ's bucket or IPFS through the fixed gateways. A launchpad coin's stored logo came from its creator (the
+    /// Launch page stores it), so it is held to the creator rules alone.
     public func listSources(for token: Token) -> [URL] {
         guard let url = token.logoURL else { return [] }
-        if token.isLaunchpad { return creatorSources(url.absoluteString) }
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false), components.scheme?.lowercased() == "https",
-              components.host?.isEmpty == false, components.user == nil, components.password == nil else { return [] }
-        return [url]
+        let text = url.absoluteString
+        guard text.utf8.count <= Self.maxURLBytes else { return [] }
+        if token.isLaunchpad { return creatorSources(text) }
+        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false), components.scheme?.lowercased() == "https",
+           let host = components.host?.lowercased(), components.user == nil, components.password == nil, components.port == nil,
+           Self.isCleanPath(components.percentEncodedPath),
+           Self.listHosts.contains(where: { $0.host == host && components.percentEncodedPath.hasPrefix($0.pathPrefix) }) {
+            return [url]
+        }
+        return creatorSources(text)
     }
 
     // MARK: Parsing
@@ -92,17 +120,16 @@ public struct ImageSourcePolicy: Hashable, Sendable {
         case ipfs(String)
     }
 
-    /// What a creator-written `uri` points at, or nil when it is nothing this policy loads. Strict: https only (no other
-    /// scheme, userinfo or port), the exact Supabase host, no `..` or `.` segment, no encoded slash, dot or backslash, and
-    /// the query and fragment of an IPFS link are dropped.
+    /// What a creator-written `uri` points at, or nil when it is nothing this policy loads. Strict: at most
+    /// `maxURLBytes`, https only (no other scheme, userinfo or port), the exact Supabase host, no `..` or `.` segment, no
+    /// encoded slash, dot or backslash, a real CID for IPFS, and the query and fragment of an IPFS link dropped.
     private func classify(_ uri: String) -> Kind? {
         let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 0x20 && $0.value != 0x7F }) else { return nil }
+        guard !trimmed.isEmpty, trimmed.utf8.count <= Self.maxURLBytes,
+              trimmed.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 0x20 && $0.value != 0x7F }) else { return nil }
         if trimmed.lowercased().hasPrefix("ipfs://") {
-            var rest = String(trimmed.dropFirst("ipfs://".count))
-            if rest.lowercased().hasPrefix("ipfs/") { rest = String(rest.dropFirst("ipfs/".count)) }
-            rest = String(rest.prefix { $0 != "?" && $0 != "#" })
-            return Self.ipfsPath(rest).map(Kind.ipfs)
+            let path = IPFS.path(trimmed) ?? ""
+            return Self.ipfsPath(String(path.prefix { $0 != "?" && $0 != "#" })).map(Kind.ipfs)
         }
         guard let components = URLComponents(string: trimmed), components.scheme?.lowercased() == "https",
               let host = components.host?.lowercased(), !host.isEmpty, components.user == nil, components.password == nil,
@@ -113,21 +140,16 @@ public struct ImageSourcePolicy: Hashable, Sendable {
            components.percentEncodedQuery == nil, components.fragment == nil, let url = URL(string: trimmed) {
             return .launchMedia(url)
         }
-        // Path form on any host: /ipfs/<cid>[/…].
-        if path.lowercased().hasPrefix("/ipfs/") { return Self.ipfsPath(String(path.dropFirst("/ipfs/".count))).map(Kind.ipfs) }
-        // Subdomain form: <cid>.ipfs.<host>/[…].
-        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
-        if labels.count >= 3, labels[1] == "ipfs" { return Self.ipfsPath(String(labels[0]) + path).map(Kind.ipfs) }
-        return nil
+        // The path form (/ipfs/<cid>[/…] on any host) or the subdomain form (<cid>.ipfs.<host>/[…]).
+        return IPFS.path(components).flatMap(Self.ipfsPath).map(Kind.ipfs)
     }
 
-    /// `<cid>[/path]` when the part before the first slash is a CID (letters and digits, 2–128 of them, as
-    /// `NFTMetadata.gatewayURL` accepts) and the path is clean; nil otherwise.
+    /// `<cid>[/path]` when the part before the first slash is a CID (`IPFS.isCID`) and the path is clean; nil otherwise.
     static func ipfsPath(_ cidAndPath: String) -> String? {
-        let parts = cidAndPath.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
-        let cid = parts.first.map(String.init) ?? ""
-        guard (2...128).contains(cid.count), cid.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { return nil }
-        guard parts.count < 2 || isCleanPath("/" + parts[1]) else { return nil }
+        let cid = IPFS.cid(of: cidAndPath)
+        guard IPFS.isCID(cid) else { return nil }
+        let rest = cidAndPath.dropFirst(cid.count)
+        guard rest.isEmpty || isCleanPath(String(rest)) else { return nil }
         return cidAndPath
     }
 
