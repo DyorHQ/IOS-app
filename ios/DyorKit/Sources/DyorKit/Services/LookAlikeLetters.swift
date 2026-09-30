@@ -104,4 +104,38 @@ enum LookAlikeLetters {
         (0xAB32, "e"), (0xAB35, "f"), (0xAB3D, "o"), (0xAB47, "r"), (0xAB48, "r"), (0xAB4E, "u"), (0xAB52, "u"),
         (0xAB5A, "y"),
     ]
+
+    /// The Latin letters drawn as one ASCII letter or digit with a stroke, bar or hook (Ø, Đ, Ł, Ħ, Ɵ, Ʉ), whose
+    /// decomposition, if any, doesn't start with that letter, so folding accents leaves them as they are: 82 in
+    /// all. They are Latin letters for display safety (`SymbolSafety` doesn't read this table), and
+    /// `WalletHoldings.visible` reads each as that letter, so "MØN" and "USĐC" read as MON and USDC.
+    static let marked: [(UInt32, Character)] = [
+        // Latin-1 Supplement.
+        (0x00D0, "D"), (0x00D8, "O"), (0x00F8, "o"),
+        // Latin Extended-A.
+        (0x0110, "D"), (0x0111, "d"), (0x0126, "H"), (0x0127, "h"), (0x0141, "L"), (0x0142, "l"), (0x0166, "T"),
+        (0x0167, "t"),
+        // Latin Extended-B.
+        (0x0180, "b"), (0x0182, "b"), (0x0183, "b"), (0x0189, "D"), (0x018C, "d"), (0x0191, "F"), (0x0192, "f"),
+        (0x0197, "I"), (0x0199, "k"), (0x019A, "l"), (0x019D, "N"), (0x019E, "n"), (0x019F, "O"), (0x01A5, "p"),
+        (0x01AD, "t"), (0x01AE, "T"), (0x01B4, "y"), (0x01B5, "Z"), (0x01B6, "z"), (0x01BB, "2"), (0x01E4, "G"),
+        (0x01E5, "g"), (0x01EE, "3"), (0x01FE, "O"), (0x01FF, "o"), (0x0224, "Z"), (0x0225, "z"), (0x023C, "c"),
+        (0x023E, "T"), (0x0244, "U"), (0x0246, "E"), (0x0247, "e"), (0x0248, "J"), (0x0249, "j"), (0x024D, "r"),
+        (0x024E, "Y"), (0x024F, "y"),
+        // IPA Extensions.
+        (0x0253, "b"), (0x0256, "d"), (0x0257, "d"), (0x0260, "g"), (0x0266, "h"), (0x0268, "i"), (0x026B, "l"),
+        (0x026D, "l"), (0x0273, "n"), (0x0275, "o"), (0x027C, "r"), (0x027D, "r"), (0x0282, "s"), (0x0290, "z"),
+        (0x02A0, "q"),
+        // Phonetic Extensions.
+        (0x1D6E, "f"), (0x1D70, "n"), (0x1D72, "r"), (0x1D74, "s"), (0x1D75, "t"), (0x1D76, "z"), (0x1D7B, "i"),
+        (0x1D7C, "i"), (0x1D7D, "p"), (0x1D7E, "u"),
+        // Latin Extended Additional.
+        (0x1E9A, "a"), (0x1E9B, "f"),
+        // Latin Extended-C.
+        (0x2C67, "H"), (0x2C69, "K"),
+        // Latin Extended-D.
+        (0xA740, "K"), (0xA74A, "O"), (0xA74B, "o"), (0xA761, "w"),
+        // Latin Extended-E.
+        (0xAB3E, "o"),
+    ]
 }

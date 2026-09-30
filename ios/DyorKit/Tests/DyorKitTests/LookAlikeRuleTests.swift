@@ -19,13 +19,21 @@ final class LookAlikeRuleTests: XCTestCase {
         ("USDC.e", .usdc), ("USDC'", .usdc), ("USDC`", .usdc), ("$MON", .mon), ("MON2", .mon), ("USDC" + String(repeating: " ", count: 40) + ".", .usdc),
         ("USDC e", .usdc), ("USDC E", .usdc), ("USDC  e", .usdc), ("x MON", .mon),
         ("\u{A4F4}\u{A4E2}\u{A4D3}\u{A4DA}", .usdc), ("\u{A4DF}\u{A4F3}\u{A4E0}", .mon), ("USD\u{0106}", .usdc), ("USD\u{03F9}", .usdc), ("USD\u{13DF}", .usdc),
+        // A stroke, bar or hook on a Latin letter (a letter of its own, which accent folding leaves alone).
+        ("M\u{00D8}N", .mon), ("WM\u{00D8}N", .wmon), ("US\u{0110}C", .usdc), ("\u{0244}SDC", .usdc), ("M\u{019F}N", .mon), ("USD\u{0166}0", curated("USDT0")),
+        ("USD\u{023B}", .usdc), ("USD\u{0187}", .usdc), ("\u{0141}BTC", curated("LBTC")), ("\u{0110}AI", major("DAI")), ("\u{00D0}AI", major("DAI")), ("\u{018A}AI", major("DAI")),
+        ("ET\u{0126}", major("ETH")), ("\u{0246}TH", major("ETH")), ("\u{0243}TC", major("BTC")), ("\u{0181}TC", major("BTC")),
     ]
+    static func curated(_ symbol: String) -> Token { Token.core.first { $0.symbol == symbol }! }
+    static func major(_ symbol: String) -> Token { WalletHoldings.majorTokens.first { $0.symbol == symbol }! }
     static let majorSymbols = ["USDT", "ETH", "BTC", "SOL", "DAI", "BNB"]
     static let imitatingNames: [(String, Token)] = [
         ("M0nad", .mon), ("\u{13B7}\u{13BE}NAD", .mon), ("M\u{0585}nad", .mon), ("M\u{1D0F}nad", .mon), ("\u{A4DF}\u{A4F3}\u{A4E0}", .mon),
         ("\u{A4F4}\u{A4E2}\u{A4D3}\u{A4DA}", .usdc), ("$MON", .mon), ("USDC 2", .usdc),
+        ("M\u{00F8}nad", .mon), ("Bitc\u{00F8}in", major("BTC")), ("M\u{019F}NAD", .mon), ("Wrapped M\u{00D8}N", .wmon), ("\u{0246}thereum", major("ETH")),
+        ("USD\u{0166}0", curated("USDT0")), ("\u{1D0D}\u{1D0F}\u{0274}\u{1D00}\u{1D05}", .mon), ("\u{0299}\u{026A}\u{1D1B}\u{1D04}\u{1D0F}\u{026A}\u{0274}", major("BTC")),
     ]
-    static let ownSymbols = ["USDL", "PEPE", "MONKE", "DOGE", "CAFÉ", "xMON", "BTCD", "0N1", "0N1F", "GMGM", "ETHX", "SOLAR", "DAISY"]
+    static let ownSymbols = ["USDL", "PEPE", "MONKE", "DOGE", "CAFÉ", "xMON", "BTCD", "0N1", "0N1F", "GMGM", "ETHX", "SOLAR", "DAISY", "\u{00D0}OGE", "\u{00D8}RE"]
     static let ownNames = ["Pepe Coin", "\u{03A9}mega", "\u{03BC}Swap", "\u{03C0}DAO", "Russian \u{0420}\u{0443}\u{0431}\u{043B}\u{044C}", "Monad Frogs", "Pepe on MON",
                            "Bitcoin Diva", "Good Morning", "\u{0394}Neutral", "Lambda \u{03BB}", "Pepe \u{041F}\u{0435}\u{043F}\u{0435}"]
 
@@ -71,7 +79,8 @@ final class LookAlikeRuleTests: XCTestCase {
 
     /// The look-alike letters come from Unicode's confusables: Armenian, Cherokee, Lisu, Coptic and the Latin small
     /// capitals and IPA letters read as the Latin letters they are drawn like; accented Latin letters are not in the
-    /// table (their accents are folded where a reading needs it).
+    /// table (their accents are folded where a reading needs it, and a stroke, bar or hook is read through
+    /// `LookAlikeLetters.marked`).
     func testTheLookAlikeTableCoversTheScriptsDrawnLikeLatin() {
         let expected: [(UInt32, Unicode.Scalar)] = [(0x0585, "o"), (0x13B7, "M"), (0x13BE, "O"), (0xA4DF, "M"), (0xA4F3, "O"), (0x2C9F, "o"), (0x1D0F, "o"), (0x0261, "g"),
                                                     (0x0421, "C"), (0x0406, "I"), (0x03F9, "C")]
@@ -97,6 +106,31 @@ final class LookAlikeRuleTests: XCTestCase {
         }
         for symbol in ["MONKE X", "xMON y", "PE PE"] {
             XCTAssertNil(WalletHoldings.imitated(by: token(symbol)), symbol)
+        }
+    }
+
+    /// A Latin letter with a stroke, bar or hook (Ø, Đ, Ł, Ħ, Ŧ, Ɵ, Ʉ, Ɇ, Ƀ) or a small capital is its own letter, so a
+    /// symbol with one is display-safe (owner decision 5: ÐOGE and ØRE are fine), but it is drawn as the letter under the
+    /// mark: "MØN", "USĐC" and "ᴍᴏɴᴀᴅ" read as MON, USDC and Monad, so the forms refuse them and a DyorHQ coin carrying
+    /// one warns and shows its letters, never the creator's picture.
+    func testMarkedLatinLettersReadAsTheLettersTheyAreDrawnFrom() {
+        for (symbol, expect) in [("M\u{00D8}N", Token.mon), ("US\u{0110}C", .usdc), ("M\u{019F}N", .mon), ("\u{0141}BTC", Self.curated("LBTC"))] {
+            XCTAssertTrue(SymbolSafety.isDisplaySafe(symbol), "\(symbol) is Latin")
+            XCTAssertEqual(SymbolSafety.createRefusal(name: "Some Coin", symbol: symbol), .symbolImitates(expect), symbol)
+        }
+        for (symbol, name, expect) in [("US\u{0110}C", "US\u{0110} Coin", Token.usdc), ("\u{0244}SDC", "\u{0244}SD Coin", .usdc), ("M\u{019F}N", "M\u{019F}NAD", .mon),
+                                       ("WM\u{00D8}N", "Wrapped M\u{00D8}N", .wmon), ("\u{0246}TH", "\u{0246}thereum", Self.major("ETH")), ("USD\u{0166}0", "USD\u{0166}0", Self.curated("USDT0"))] {
+            XCTAssertEqual(SymbolSafety.createRefusal(name: name, symbol: symbol), .symbolImitates(expect), symbol)
+            let coin = DyorCoin(address: address, origin: .launch(factory: LaunchpadAddresses.monadMainnet.factory, generation: .v2, retired: false), symbol: symbol, name: name,
+                                creator: DyorCoinChain.creator, logo: DyorCoinChain.media(DyorCoinChain.creator, "usdc.png"), pair: .zero)
+            XCTAssertEqual(TokenBadge.of(coin.token, coin: coin, receivedUnasked: true), .imitates(expect), symbol)
+            XCTAssertEqual(CoinIcon.resolve(coin.token, coin: coin, policy: .dyorhq), .letters, symbol)
+        }
+        XCTAssertEqual(WalletHoldings.visible("M\u{00D8}N"), "MON")
+        XCTAssertEqual(WalletHoldings.visible("\u{1D0D}\u{1D0F}\u{0274}\u{1D00}\u{1D05}").lowercased(), "monad")
+        for symbol in ["\u{00D0}OGE", "\u{00D8}RE", "\u{0141}\u{00D3}D\u{0179}"] {
+            XCTAssertTrue(SymbolSafety.isDisplaySafe(symbol), symbol)
+            XCTAssertNil(SymbolSafety.createRefusal(name: "Some Coin", symbol: symbol), symbol)
         }
     }
 

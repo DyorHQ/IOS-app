@@ -302,9 +302,11 @@ public enum WalletHoldings {
     /// the blank Braille pattern U+2800 and spaces removed (or, `keepingSpaces`, each run of spaces as one); U+FFFD
     /// removed too, which is what bytes that aren't text read as (`ABI.StringDecoding.lossy`) and draws as a mark, not a
     /// letter, so "USDC" and one such byte still reads as "USDC"; letters from other scripts that look like Latin ones
-    /// (Cyrillic "С", Greek "Ο", Armenian "օ", Lisu "ꓟ", small capital "ᴏ": `lookAlikeLetters`) as those Latin
-    /// letters, before the compatibility forms are folded (which would turn a Greek lunate "Ϲ" into a "Σ" nobody
-    /// mistakes for C) and after; accents and width ignored. Case is kept (`readings` decides on it).
+    /// (Cyrillic "С", Greek "Ο", Armenian "օ", Lisu "ꓟ", small capital "ᴏ": `lookAlikeLetters`) and Latin letters with a
+    /// stroke, bar or hook (Ø, Đ, Ł, Ɵ, Ʉ: `LookAlikeLetters.marked`) as the letters they are drawn like, before the
+    /// compatibility forms are folded (which would turn a Greek lunate "Ϲ" into a "Σ" nobody mistakes for C) and after;
+    /// accents and width ignored; and every other Latin letter as the ASCII it is written with (ICU's Latin-ASCII: the
+    /// small capitals of "ᴍᴏɴᴀᴅ", Ƀ, Ȼ, Æ). Case is kept (`readings` decides on it).
     static func visible(_ text: String, keepingSpaces: Bool = false, fromTheEnd: Bool = false) -> String {
         // What shows, at most `maxJudged` of it, taken before anything else, so a long text costs no more.
         var shown: [Unicode.Scalar] = []
@@ -317,7 +319,7 @@ public enum WalletHoldings {
             if isUnseen(scalar) { continue }
             if keepingSpaces, space, !shown.isEmpty { shown.append(" ") }
             space = false
-            shown.append(lookAlikeLetters[scalar] ?? scalar)
+            shown.append(readAs[scalar] ?? scalar)
             if shown.count >= maxJudged { break }
         }
         if fromTheEnd { shown.reverse() }
@@ -332,10 +334,11 @@ public enum WalletHoldings {
             if isUnseen(scalar) { continue }
             if keepingSpaces, space, !scalars.isEmpty { scalars.append(" ") }
             space = false
-            scalars.append(lookAlikeLetters[scalar] ?? scalar)
+            scalars.append(readAs[scalar] ?? scalar)
         }
         let folded = String(scalars).folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil)
-        return String((keepingSpaces ? folded : folded.filter { !$0.isWhitespace }).prefix(maxJudged))
+        let ascii = folded.applyingTransform(StringTransform("Latin-ASCII"), reverse: false) ?? folded
+        return String((keepingSpaces ? ascii : ascii.filter { !$0.isWhitespace }).prefix(maxJudged))
     }
 
     /// A space, a line break or a tab: what `visible` removes, or keeps as one space.
@@ -356,6 +359,17 @@ public enum WalletHoldings {
         }
         return properties.isDefaultIgnorableCodePoint || Address.isInvisible(scalar) || scalar.value == 0xFFFD || scalar.value == 0x2800
     }
+
+    /// Every letter `visible` reads as another: `lookAlikeLetters`, and the Latin letters with a stroke, bar or hook
+    /// (`LookAlikeLetters.marked`), which are Latin letters of their own for display safety (`SymbolSafety`: ÐOGE and ØRE
+    /// are fine symbols) but read as the letters they are drawn like.
+    private static let readAs: [Unicode.Scalar: Unicode.Scalar] = {
+        var map = lookAlikeLetters
+        for (code, latin) in LookAlikeLetters.marked {
+            if let scalar = Unicode.Scalar(code), map[scalar] == nil { map[scalar] = latin.unicodeScalars.first! }
+        }
+        return map
+    }()
 
     /// Whether `text` is plain printable ASCII — letters, digits, punctuation and spaces — and not empty.
     public static func isPlain(_ text: String) -> Bool {
