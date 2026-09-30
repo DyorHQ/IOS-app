@@ -398,6 +398,30 @@ final class LogScanTests: XCTestCase {
         }
     }
 
+    /// The re-review's finding: paced, only HTTP 429 and rate-limit errors were waited out, so a storm of 503s, or 429s
+    /// that ended in a request with no answer, failed the range and the 5M-block range was halved. An endpoint answering
+    /// 5xx is overloaded or restarting, and one that stops answering after a throttle is throttling still: both are waited
+    /// out, the same range asked again, never split.
+    func testAPacedScanWaitsOutServerErrorsAndNoAnswerAfterAThrottle() async {
+        let limits = LogScanLimits(throttlePause: 0.05, maxThrottlePause: 0.1)
+        let scenarios: [(String, LogsStub.Rule)] = [
+            // Two of the client's asks, five requests each, then the scan's after its pause.
+            ("503s", { _ in LogsStub.requests() <= 10 ? .status(503) : nil }),
+            // The client's five asks throttled, then two with no answer, each after the scan's pause.
+            ("429s, then no answer", { _ in LogsStub.requests() <= 5 ? .status(429) : LogsStub.requests() <= 7 ? .noAnswer : nil }),
+            // A 429, then no answer, within each of two of the client's asks: the scan sees only the connection fail.
+            ("a 429, then no answer, in one ask", { _ in LogsStub.requests() <= 4 ? (LogsStub.requests() % 2 == 1 ? .status(429) : .noAnswer) : nil }),
+        ]
+        for (name, rule) in scenarios {
+            LogsStub.install(head: 10_000_000, logs: [5, 4_000_000].map(transfer), rule: rule)
+            let report = await LogsStub.rpc().chunkedLogsReport(address: token, topics: [transferTopic], fromBlock: 0, toBlock: 4_999_999, chunkSize: 5_000_000,
+                                                                 concurrency: 1, mode: .paced, limits: limits)
+            XCTAssertTrue(report.complete, name)
+            XCTAssertEqual(report.logs.map(\.blockNumber), [5, 4_000_000], name)
+            XCTAssertEqual(Set(LogsStub.queries()), [LogsStub.Range(from: 0, to: 4_999_999)], "\(name): the same range, never split")
+        }
+    }
+
     /// Paced, a throttle that outlasts the outage ends the scan there, incomplete: nothing split, nothing more asked. The
     /// venue list reads the range on a later run.
     func testAPacedScanStopsWhenAThrottleOutlastsTheOutage() async {

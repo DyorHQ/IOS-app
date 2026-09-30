@@ -54,10 +54,11 @@ public enum LogScanMode: Sendable, Equatable {
     /// requests.
     case failFast
     /// The venue token list's read in the background (`VenueTokensService`), which shares rpc1 with every other reader:
-    /// as patient, except that a throttle (HTTP 429, or a rate-limit error once the client's own retries are spent) is
-    /// waited out, the same ranges asked again after a pause that doubles (`LogScanLimits.throttlePause`), never split:
-    /// a smaller range doesn't ease a throttle, it multiplies the requests. A throttle is no answer, so one that lasts
-    /// past the outage ends the scan there, incomplete, for a later run.
+    /// as patient, except that a throttle — HTTP 429 or 5xx once the client's own retries are spent, a rate-limit error,
+    /// or a request with no answer after one — is waited out, the same ranges asked again after a pause that doubles
+    /// (`LogScanLimits.throttlePause`), never split: a smaller range doesn't ease a throttle or an overloaded endpoint, it
+    /// multiplies the requests. A throttle is no answer, so one that lasts past the outage ends the scan there,
+    /// incomplete, for a later run.
     case paced
 }
 
@@ -454,9 +455,10 @@ public extension RPCClient {
 
     /// Each of `filters` asked once, in one round trip, and recorded in `scan`; every one failed when the request as a
     /// whole got no answer. Paced, those throttled are asked again after a pause while they are throttled, until the
-    /// scan finds the endpoint down (`LogScanMode.paced`).
+    /// scan finds the endpoint down (`LogScanMode.paced`); a request with no answer at all after a throttle is the
+    /// throttle still (a rate limiter drops connections as well as answering 429).
     private func batchAnswers(_ filters: [LogFilter], scan: inout LogScan) async -> [LogsAnswer] {
-        var (answers, throttled) = await ask(filters)
+        var (answers, throttled, _) = await ask(filters)
         scan.record(answers)
         var inARow = 0
         while scan.mode == .paced, !throttled.isEmpty, !scan.down, !Task.isCancelled {
@@ -466,17 +468,20 @@ public extension RPCClient {
             let again = await ask(throttled.map { filters[$0] })
             scan.record(again.answers)
             for (k, i) in throttled.enumerated() { answers[i] = again.answers[k] }
-            throttled = again.throttled.map { throttled[$0] }
+            if !again.unanswered { throttled = again.throttled.map { throttled[$0] } }
         }
         return answers
     }
 
-    /// Each of `filters` asked once, in one round trip, and which of them were throttled — the request answered HTTP 429,
-    /// or the call a rate-limit error, once the client's own retries were spent — themselves `.failed`.
-    private func ask(_ filters: [LogFilter]) async -> (answers: [LogsAnswer], throttled: [Int]) {
+    /// Each of `filters` asked once, in one round trip, which of them were throttled, themselves `.failed`, and whether
+    /// the request got no answer at all. Throttled, once the client's own retries were spent: the request answered HTTP
+    /// 429 or 5xx (an endpoint overloaded or restarting; `RPCClient.shouldFailOver`), the call a rate-limit error, or the
+    /// request got no answer after the endpoint answered it 429 or 5xx on the way (`throttles`).
+    private func ask(_ filters: [LogFilter]) async -> (answers: [LogsAnswer], throttled: [Int], unanswered: Bool) {
+        let throttlesBefore = throttles
         do {
             let results = try await logs(filters)
-            guard results.count == filters.count else { return (filters.map { _ in .failed }, []) }
+            guard results.count == filters.count else { return (filters.map { _ in .failed }, [], true) }
             var throttled: [Int] = []
             let answers = zip(filters, results).enumerated().map { i, pair -> LogsAnswer in
                 let (filter, result) = pair
@@ -488,11 +493,11 @@ public extension RPCClient {
                     return .failed
                 }
             }
-            return (answers, throttled)
+            return (answers, throttled, false)
         } catch {
             let throttle: Bool
-            if case NetworkError.badStatus(429) = error { throttle = true } else { throttle = (error as? RPCError).map(Self.isRateLimited) ?? false }
-            return (filters.map { _ in .failed }, throttle ? Array(filters.indices) : [])
+            if case NetworkError.badStatus(let status) = error { throttle = Self.shouldFailOver(status: status) } else { throttle = (error as? RPCError).map(Self.isRateLimited) ?? false }
+            return (filters.map { _ in .failed }, throttle || throttles > throttlesBefore ? Array(filters.indices) : [], true)
         }
     }
 

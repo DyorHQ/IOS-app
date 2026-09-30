@@ -45,6 +45,9 @@ public actor RPCClient {
     private var preferred = 0
     private var preferredSince = Date.distantPast
     private static let stickiness: TimeInterval = 30
+    /// Answers of HTTP 429 or 5xx this client has had (`post`): a request that then fails with no answer was throttled on
+    /// its way (`chunkedLogsReport`, paced).
+    private(set) var throttles = 0
 
     public init(url: URL, session: URLSession = .shared, maxBatch: Int = 100) {
         self.url = url
@@ -116,7 +119,7 @@ public actor RPCClient {
                 }
                 if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                     failure = NetworkError.badStatus(http.statusCode)
-                    if Self.shouldFailOver(status: http.statusCode) { throttled = true; continue }
+                    if Self.shouldFailOver(status: http.statusCode) { throttled = true; throttles += 1; continue }
                     return (data, http.statusCode)
                 }
                 if index != preferred { preferred = index; preferredSince = Date() }
