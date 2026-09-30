@@ -37,7 +37,8 @@ public struct VenueTokensService: Sendable {
     public static let knownHeight: UInt64 = 109_000_000
 
     /// Requests a refresh may make to read metadata again past each batch's first read (`ERC20.metadataReport`): a token
-    /// whose symbol can't be read in its read, the first read on its own, the others once more together, then one by one.
+    /// whose symbol can't be read in its read, the first read on its own, the others (and what answered what isn't a
+    /// symbol) once more together, then one by one.
     /// A real token that fails costs one. Addresses anyone can put in a Uniswap v4 pool (`initialize` takes any pair) cost
     /// a request each without it — 3,000 of them 3,060 requests, an out-of-gas call 0.6–0.8 s, on the endpoint Send, Swap
     /// and prices use — and 260 with it. Past it, what is left is unread: the segment is read again by a later run, which

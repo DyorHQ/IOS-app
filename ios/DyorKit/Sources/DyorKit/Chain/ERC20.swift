@@ -66,8 +66,9 @@ public enum ERC20 {
     /// the others from being read:
     ///
     /// - A token whose `symbol()` answered with what isn't a symbol (an account with no code answers nothing; a contract
-    ///   may answer any bytes) is dropped at once: a call that returned wasn't starved of gas, so a read on its own would
-    ///   answer the same.
+    ///   may answer any bytes) isn't read on its own: a call that returned wasn't starved of gas. It is read once more,
+    ///   with the others read again together below (a node behind the chain answers a token it hasn't reached as an
+    ///   account with no code), then dropped: one more request a batch at most.
     /// - A token whose `symbol()` call failed in its read may have been starved of gas by a token before it (Multicall3
     ///   reports that as a failed call, as it does a revert), and a read the node refuses as a whole (one token's return
     ///   bomb makes the aggregate run out of gas) holds a token at fault. Of those, the first is read on its own (a token
@@ -96,14 +97,20 @@ public enum ERC20 {
         while index < addresses.count {
             let batch = Array(addresses[index ..< min(index + 50, addresses.count)])
             index += batch.count
-            let failed = take(await symbolReads(batch, multicall: multicall), alone: batch.count == 1)
-            guard let first = failed.first else { continue }
-            guard spent < budget else { unread.formUnion(failed); continue }
-            spent += 1
-            _ = take(await symbolReads([first], multicall: multicall), alone: true)
-            let rest = Array(failed.dropFirst())
+            let outcomes = await symbolReads(batch, multicall: multicall)
+            let odd = outcomes.filter { if case .notASymbol = $0.1 { return true }; return false }.map(\.0)
+            let oddSet = Set(odd)
+            let failed = take(outcomes.filter { !oddSet.contains($0.0) }, alone: batch.count == 1)
+            guard !failed.isEmpty || !odd.isEmpty else { continue }
+            // Past the budget, what answered what isn't a symbol is dropped, as it was before it was read again.
+            guard spent < budget else { unread.formUnion(failed); dropped.formUnion(odd); continue }
+            if let first = failed.first {
+                spent += 1
+                _ = take(await symbolReads([first], multicall: multicall), alone: true)
+            }
+            let rest = Array(failed.dropFirst()) + odd
             guard !rest.isEmpty else { continue }
-            guard spent < budget else { unread.formUnion(rest); continue }
+            guard spent < budget else { unread.formUnion(failed.dropFirst()); dropped.formUnion(odd); continue }
             spent += 1
             let again = take(await symbolReads(rest, multicall: multicall), alone: rest.count == 1)
             let affordable = min(again.count, budget - spent)

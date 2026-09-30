@@ -224,16 +224,35 @@ final class VenueTokensTests: XCTestCase {
     /// The finding: every address whose symbol couldn't be read in its read was read again on its own, one request each on
     /// the endpoint Send, Swap and prices use: 3,000 addresses cost 3,060 requests where they had cost 60 (250 here: 255
     /// where they had cost 5). An account with no code answers `symbol()` with nothing, a call that returned, so it wasn't
-    /// starved of gas: dropped at once.
-    func testAnAddressThatAnswersWhatIsntASymbolIsDroppedWithoutAnotherRead() async {
+    /// starved of gas: it isn't read on its own. The V1 final check's finding: such an address was dropped after that one
+    /// read, so a real token read from a node behind the chain (which answers a token it hasn't reached as an account with
+    /// no code) was lost for good. It is read once more, with the rest of its read, then dropped: one more request a read
+    /// at most.
+    func testAnAddressThatAnswersWhatIsntASymbolIsReadOnceMoreWithTheRestOfItsRead() async {
         let all = addresses(250)
         MomentsChainStub.install { _, _ in Data() }
         let report = await metadataReport(all)
-        XCTAssertEqual(MomentsChainStub.batches().count, 5, "one request a 50, none again")
+        XCTAssertEqual(MomentsChainStub.batches().count, 10, "one request a 50, and one more for the 50 together")
         XCTAssertEqual(report.dropped, all)
         XCTAssertTrue(report.tokens.isEmpty)
         XCTAssertTrue(report.unread.isEmpty)
-        XCTAssertEqual(report.rereads, 0)
+        XCTAssertEqual(report.rereads, 5)
+
+        // A real token that answers nothing the first time, its symbol the next, beside a token whose symbol reverts: found
+        // when the rest of its read is read again.
+        let (lagging, reverting) = (all[7], all[20])
+        let asked = Counter()
+        MomentsChainStub.install { to, data in
+            if to == reverting { return nil }
+            if to == lagging, data.prefix(4) == ABI.selector("symbol()"), asked.next() == 1 { return Data() }
+            return Self.symbolAnswer(to, data)
+        }
+        let found = await metadataReport(Array(all.prefix(50)))
+        XCTAssertEqual(found.tokens.count, 49)
+        XCTAssertTrue(found.tokens.contains { $0.address == lagging }, "found in the read again")
+        XCTAssertEqual(found.dropped, [reverting])
+        XCTAssertTrue(found.unread.isEmpty)
+        XCTAssertEqual(MomentsChainStub.batches().count, 3, "the read, the reverting token on its own, and the rest again")
     }
 
     /// A token that burns the gas of its read starves every token after it: the first that failed is read on its own,
@@ -536,6 +555,14 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(result.complete, "read to the head in full")
         XCTAssertTrue(result.tokens.contains { $0.symbol == "QT" }, "QT, on its Monday Trade pool")
     }
+}
+
+/// A count a stub's answer reads while a test runs.
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    /// The count after this one.
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; value += 1; return value }
 }
 
 /// Real requests, passed through and counted (`VenueTokensTests`' live read): each HTTP request as "<host> http", each
