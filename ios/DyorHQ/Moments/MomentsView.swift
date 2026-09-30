@@ -124,7 +124,10 @@ struct MomentsView: View {
             Text("Make your favorite moments last forever.").font(.system(.title, design: .serif).weight(.semibold)).fixedSize(horizontal: false, vertical: true)
             Text("Publish a photo or video as an NFT on Monad. Share it with everyone and earn every time it's collected.")
                 .font(.subheadline).foregroundStyle(.secondary)
-            if let policy = model.policy {
+            if let unread = model.policyUnread {
+                // The terms couldn't be read: Publish is off (no policy to bind a publish to), the Moments still show.
+                Label(unread, systemImage: "exclamationmark.octagon").font(.caption).foregroundStyle(Color.attention)
+            } else if let policy = model.policy {
                 if let block = policy.publishBlock {
                     // Why Publish is off: a pause (governance's or the guardian's), a link base that isn't DyorHQ's, or terms
                     // the app can't bind a publish to.
@@ -162,6 +165,8 @@ struct MomentsView: View {
 final class MomentsModel {
     private(set) var moments: [MomentInfo] = []
     private(set) var policy: MomentPolicy?
+    /// Why Publish is unavailable when the last policy read failed (`MomentsBoard.policyUnread`).
+    private(set) var policyUnread: String?
     private(set) var loading = false
     private(set) var error: String?
 
@@ -177,11 +182,11 @@ final class MomentsModel {
         loading = true
         defer { loading = false }
         do {
-            async let policyTask = env.moments.policy()
-            async let listTask = env.moments.moments(limit: 60)
-            let (policy, list) = try await (policyTask, listTask)
-            self.policy = policy
-            moments = list
+            // The list never waits on the policy: a policy that can't be read leaves Publish off, with its reason.
+            let board = try await env.moments.board(limit: 60)
+            moments = board.moments
+            policy = try? board.policy.get()
+            policyUnread = board.policyUnread
             error = nil
         } catch {
             if moments.isEmpty { self.error = describe(error) }

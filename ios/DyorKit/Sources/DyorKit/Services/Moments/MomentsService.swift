@@ -99,6 +99,16 @@ public actor MomentsService {
 
     // MARK: - Moments
 
+    /// The Moments tab's read: the newest Moments and, beside them, the policy (`policy()`). The list never waits on the
+    /// policy: a policy that can't be read — a link base that isn't text is refused (`ABI.StringDecoding.strict`), since
+    /// it is compared with DyorHQ's and hashed into `termsHash()` — is returned as its failure, and Publish is then
+    /// unavailable while the Moments still show. Throws only when the Moments can't be read.
+    public func board(limit: Int = 48) async throws -> MomentsBoard {
+        async let policyRead = ERC20.captured { try await self.policy() }
+        let list = try await moments(limit: limit)
+        return MomentsBoard(moments: list, policy: await policyRead)
+    }
+
     /// The newest Moments first: every Moment the cohort counts in that range. One whose text can't be read shows
     /// stand-ins (`hydrate`); a read that doesn't answer for every Moment throws (`ChainListUnread`), never a shorter list.
     public func moments(limit: Int = 48) async throws -> [MomentInfo] {

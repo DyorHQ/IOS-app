@@ -393,6 +393,23 @@ public struct PendingMomentPolicy: Sendable, Hashable {
 }
 
 /// `MomentTypes.Provenance`: what the NFT records about the moment itself.
+/// What the Moments tab reads (`MomentsService.board`): the newest Moments, and the policy or why it couldn't be read.
+public struct MomentsBoard: Sendable {
+    public let moments: [MomentInfo]
+    public let policy: Result<MomentPolicy?, any Error>
+
+    public init(moments: [MomentInfo], policy: Result<MomentPolicy?, any Error>) {
+        self.moments = moments
+        self.policy = policy
+    }
+
+    /// Why Publish is unavailable when the policy couldn't be read; nil when it was.
+    public var policyUnread: String? {
+        guard case .failure = policy else { return nil }
+        return "Publishing is unavailable right now: the Moments terms couldn't be read. Pull to refresh."
+    }
+}
+
 public struct MomentProvenance: Sendable, Hashable {
     public let mediaURI: String
     public let mediaHash: Data
