@@ -6,8 +6,8 @@ import SwiftUI
 /// sized image (`RemoteMedia.caps(forThumbnail:)`) — and only a thumbnail at the size the view asks for is decoded
 /// (`RemoteMedia.thumbnail`), never the full image. Fetches and decodes run a few at a time app-wide
 /// (`RemoteMedia.fetches` / `.decodes`), so a list of hostile images can't all be in memory at once. Thumbnails are
-/// cached for the session under a memory budget, misses for a minute, and one fetch is shared by every view showing
-/// the same URL — and cancelled once none of them is on screen any more.
+/// cached for the session under a memory budget, misses for a minute (`RecentMisses`), and one fetch is shared by every
+/// view showing the same URL — and cancelled once none of them is on screen any more.
 @MainActor
 final class RemoteImageLoader {
     static let shared = RemoteImageLoader()
@@ -16,7 +16,7 @@ final class RemoteImageLoader {
         cache.totalCostLimit = 48 * 1024 * 1024
         return cache
     }()
-    private var misses: [String: Date] = [:]
+    private var misses = RecentMisses()
     private let loads = SharedLoads<UIImage>()
     private let session = RemoteMedia.makeSession()
 
@@ -24,12 +24,15 @@ final class RemoteImageLoader {
 
     func cached(_ url: URL, maxPixelSize: Int) -> UIImage? { images.object(forKey: Self.key(url, maxPixelSize) as NSString) }
 
+    /// Whether `url` failed less than a minute ago: `image` would answer nil without asking.
+    func failedLately(_ url: URL, maxPixelSize: Int) -> Bool { misses.contains(Self.key(url, maxPixelSize)) }
+
     /// The image at `url`, at most `maxPixelSize` pixels on its longer side, or nil when it can't be fetched within
     /// the caps or isn't an image.
     func image(_ url: URL, maxPixelSize: Int) async -> UIImage? {
         let key = Self.key(url, maxPixelSize)
         if let hit = images.object(forKey: key as NSString) { return hit }
-        if let missed = misses[key], Date().timeIntervalSince(missed) < 60 { return nil }
+        if misses.contains(key) { return nil }
         let session = self.session
         let caps = RemoteMedia.caps(forThumbnail: maxPixelSize)
         let result = await loads.value(for: key) { // fetched and decoded off the main thread
@@ -40,9 +43,9 @@ final class RemoteImageLoader {
         }
         if let result {
             images.setObject(result, forKey: key as NSString, cost: Self.cost(result))
-            misses[key] = nil
+            misses.remove(key)
         } else if !Task.isCancelled {
-            misses[key] = Date() // a view that left before the answer came doesn't make it a miss
+            misses.record(key) // a view that left before the answer came doesn't make it a miss
         }
         return result
     }
@@ -55,33 +58,62 @@ final class RemoteImageLoader {
 }
 
 /// A remote image through `RemoteImageLoader`, sized for a view `pointSize` points across (the thumbnail is decoded at
-/// three pixels per point), or `placeholder` while it loads (`true`) and when it can't be shown (`false`).
+/// three pixels per point), or `placeholder` while it loads (`true`) and when it can't be shown (`false`). A view with
+/// letters to stand in for the image passes a `grace` (`RemoteImageWait.grace`): the loading placeholder shows only
+/// that long, then the letters while the image keeps loading, and the letters at once for a URL that failed lately.
+/// Without one, the loading placeholder (a spinner) stays until the answer. A cached image shows from the first frame.
 struct RemoteImage<Placeholder: View>: View {
     let url: URL?
     let pointSize: CGFloat
-    var contentMode: ContentMode = .fill
-    @ViewBuilder let placeholder: (_ loading: Bool) -> Placeholder
+    var contentMode: ContentMode
+    var grace: Duration?
+    let placeholder: (_ loading: Bool) -> Placeholder
     @State private var image: UIImage?
-    @State private var failed = false
+    @State private var failed: Bool
+    @State private var graceOver = false
 
-    private var maxPixelSize: Int { max(64, Int((pointSize * 3).rounded(.up))) }
+    init(url: URL?, pointSize: CGFloat, contentMode: ContentMode = .fill, grace: Duration? = nil,
+         @ViewBuilder placeholder: @escaping (_ loading: Bool) -> Placeholder) {
+        self.url = url
+        self.pointSize = pointSize
+        self.contentMode = contentMode
+        self.grace = grace
+        self.placeholder = placeholder
+        // Read here rather than in `load`, which runs after the first frame: a logo already loaded never shows its
+        // placeholder for a frame, and one that failed lately never shows the disc.
+        let size = Self.maxPixelSize(pointSize)
+        let cached = url.flatMap { RemoteImageLoader.shared.cached($0, maxPixelSize: size) }
+        _image = State(initialValue: cached)
+        _failed = State(initialValue: cached == nil && (url.map { RemoteImageLoader.shared.failedLately($0, maxPixelSize: size) } ?? true))
+    }
+
+    private static func maxPixelSize(_ pointSize: CGFloat) -> Int { max(64, Int((pointSize * 3).rounded(.up))) }
+    private var maxPixelSize: Int { Self.maxPixelSize(pointSize) }
 
     var body: some View {
         Group {
             if let image {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
             } else {
-                placeholder(url != nil && !failed)
+                placeholder(RemoteImageWait.shown(hasImage: false, hasURL: url != nil, failed: failed, graceOver: graceOver) == .loading)
             }
         }
         .task(id: url) { await load() }
+        .task(id: url) {
+            graceOver = false
+            guard let grace, image == nil, await RemoteImageWait.graceElapses(grace) else { return }
+            graceOver = true
+        }
     }
 
     private func load() async {
         guard let url else { image = nil; failed = true; return }
-        if let hit = RemoteImageLoader.shared.cached(url, maxPixelSize: maxPixelSize) { image = hit; failed = false; return }
-        image = nil; failed = false
-        let loaded = await RemoteImageLoader.shared.image(url, maxPixelSize: maxPixelSize)
+        let loader = RemoteImageLoader.shared
+        if let hit = loader.cached(url, maxPixelSize: maxPixelSize) { image = hit; failed = false; return }
+        image = nil
+        failed = loader.failedLately(url, maxPixelSize: maxPixelSize)
+        guard !failed else { return }
+        let loaded = await loader.image(url, maxPixelSize: maxPixelSize)
         guard !Task.isCancelled else { return }
         image = loaded
         failed = loaded == nil

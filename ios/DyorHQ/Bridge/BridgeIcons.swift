@@ -73,14 +73,15 @@ extension AuroraToken {
 }
 
 /// A small circular chain badge: the chain's real logo when Trust Wallet has it, otherwise a brand-coloured monogram.
-/// Like `TokenLogo`, it shows its plain tinted disc while the logo loads, so the letters don't flash first.
+/// Like `TokenLogo`, it shows its plain tinted disc for a moment while the logo loads, so the letters don't flash
+/// first, then the letters until it comes (`RemoteImageWait`).
 struct ChainBadge: View {
     let chain: EVMChain
     var size: CGFloat = 20
 
     var body: some View {
         Group {
-            RemoteImage(url: chain.logoURL, pointSize: size, contentMode: .fit) { loading in
+            RemoteImage(url: chain.logoURL, pointSize: size, contentMode: .fit, grace: RemoteImageWait.grace) { loading in
                 if loading { Color.clear } else { monogram }
             }
         }

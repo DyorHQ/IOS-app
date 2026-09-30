@@ -93,3 +93,68 @@ public final class SharedLoads<Value: Sendable> {
         if loads[key] === load { loads[key] = nil }
     }
 }
+
+/// How a small remote image with letters to stand in for it (a coin logo, a chain badge) waits for its picture. A plain
+/// disc for a short grace period, in which a logo from a live host usually arrives, so the letters don't flash first;
+/// then the letters while the load goes on, since a dead host holds a download for up to 15 s and four run at once
+/// app-wide (`RemoteMedia.fetches`), so a list of them could otherwise sit empty for most of a minute; and the letters at
+/// once for a URL that failed a moment ago (`RecentMisses`). The picture takes the place of either as soon as it
+/// arrives.
+public enum RemoteImageWait {
+    /// How long the plain disc shows before the letters.
+    public static let grace: Duration = .milliseconds(800)
+
+    /// What a view waiting on a remote image shows.
+    public enum Shown: Equatable, Sendable {
+        /// The picture.
+        case image
+        /// The loading placeholder: the plain disc, or a spinner in a view with no letters (and no grace period).
+        case loading
+        /// The letters, or whatever else stands in for a picture there is none of.
+        case standIn
+    }
+
+    /// What to show. `failed`: the load answered nothing, or the URL failed a moment ago. `graceOver`: the load has gone
+    /// on for the view's grace period (never, in a view without one).
+    public static func shown(hasImage: Bool, hasURL: Bool, failed: Bool, graceOver: Bool) -> Shown {
+        if hasImage { return .image }
+        return hasURL && !failed && !graceOver ? .loading : .standIn
+    }
+
+    /// Waits out `grace`: true once it has passed, false when the wait was cancelled first (the view left, or its URL
+    /// changed).
+    public static func graceElapses(_ grace: Duration = grace) async -> Bool {
+        do {
+            try await Task.sleep(for: grace)
+            return true
+        } catch {
+            return false
+        }
+    }
+}
+
+/// The image loads that failed lately, each remembered for `lifetime` seconds: a dead host isn't asked again for every
+/// row that shows its logo, and those rows show their letters at once.
+public struct RecentMisses: Sendable {
+    public let lifetime: TimeInterval
+    private var failedAt: [String: Date] = [:]
+
+    public init(lifetime: TimeInterval = 60) { self.lifetime = lifetime }
+
+    /// Whether `key` failed less than `lifetime` before `now`.
+    public func contains(_ key: String, now: Date = Date()) -> Bool {
+        failedAt[key].map { now.timeIntervalSince($0) < lifetime } ?? false
+    }
+
+    /// Records that `key` failed at `now`, and forgets the failures that have run out.
+    public mutating func record(_ key: String, at now: Date = Date()) {
+        failedAt = failedAt.filter { now.timeIntervalSince($0.value) < lifetime }
+        failedAt[key] = now
+    }
+
+    /// Forgets that `key` failed: it has loaded since.
+    public mutating func remove(_ key: String) { failedAt[key] = nil }
+
+    /// The failures remembered, run out or not.
+    public var count: Int { failedAt.count }
+}

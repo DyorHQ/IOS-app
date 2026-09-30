@@ -18,12 +18,13 @@ struct TokenLogo: View {
         Group {
             // Curated tokens ship a rasterized logo (the token list only publishes SVGs, which the app cannot
             // draw): a transparent disc that fills the square (TokenLogoAssetTests). Anything else tries the remote
-            // image (capped and downsampled, RemoteImage): a neutral disc while it loads, the monogram only when there
-            // is no image or it fails.
+            // image (capped and downsampled, RemoteImage): a neutral disc for a moment while it loads, then the
+            // monogram until it comes; the monogram at once when there is no image or it failed lately
+            // (RemoteImageWait).
             if bundled, let shipped = UIImage(named: "logo-\(symbol)") {
                 Image(uiImage: shipped).resizable().scaledToFit()
             } else {
-                RemoteImage(url: url, pointSize: size, contentMode: .fit) { loading in
+                RemoteImage(url: url, pointSize: size, contentMode: .fit, grace: RemoteImageWait.grace) { loading in
                     if loading { Color.clear } else { monogram }
                 }
             }
