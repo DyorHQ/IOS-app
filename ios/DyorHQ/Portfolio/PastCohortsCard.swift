@@ -52,7 +52,7 @@ final class PastMomentsModel {
         guard requested == address else { return }
         positions = found
         error = failure
-        incomplete = cut ? "A past cohort has more Moments than the app reads at once, so a Moment you only received by transfer may be missing." : nil
+        incomplete = cut ? "A past cohort has more Moments than the app reads at once, so one of yours may be missing here." : nil
         loadedFor = address
     }
 

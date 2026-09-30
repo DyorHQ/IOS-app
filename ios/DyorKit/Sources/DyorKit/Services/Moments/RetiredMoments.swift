@@ -133,7 +133,8 @@ public struct RetiredMoments: Sendable {
     /// Moments out) or, when nil, the cohort's own `list`. When the list was cut, the Moments of this cohort the account
     /// collected, claimed, withdrew from or published (`history`) that aren't in it are read by id and counted too. That
     /// history is a log scan, and a Moment the account only received by transfer is in none of it, so the positions of a
-    /// cut list may still miss one: `complete` is then false. A list that wasn't cut scans nothing.
+    /// cut list may still miss one: `complete` is then false. A scan or a read of those Moments that fails leaves them out
+    /// (the list's positions stay; `complete` is false already). A list that wasn't cut scans nothing.
     public func positions(account: Address, moments: [MomentInfo]? = nil, cut: Bool = false) async throws -> (positions: [RetiredMomentPosition], complete: Bool) {
         let read: (moments: [MomentInfo], cut: Bool)
         if let moments { read = (moments.filter { $0.moment.factory == factory }, cut) } else { read = try await list() }
@@ -141,7 +142,7 @@ public struct RetiredMoments: Sendable {
         if read.cut {
             let missing = Self.ownIds(await history(account: account), factory: factory).subtracting(list.map(\.id))
             if !missing.isEmpty {
-                list += try await service.infos(ids: missing.sorted(by: >))
+                list += (try? await service.infos(ids: missing.sorted(by: >))) ?? []
                 list.sort { $0.id > $1.id }
             }
         }
