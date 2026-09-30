@@ -23,6 +23,8 @@ final class LookAlikeRuleTests: XCTestCase {
         ("M\u{00D8}N", .mon), ("WM\u{00D8}N", .wmon), ("US\u{0110}C", .usdc), ("\u{0244}SDC", .usdc), ("M\u{019F}N", .mon), ("USD\u{0166}0", curated("USDT0")),
         ("USD\u{023B}", .usdc), ("USD\u{0187}", .usdc), ("\u{0141}BTC", curated("LBTC")), ("\u{0110}AI", major("DAI")), ("\u{00D0}AI", major("DAI")), ("\u{018A}AI", major("DAI")),
         ("ET\u{0126}", major("ETH")), ("\u{0246}TH", major("ETH")), ("\u{0243}TC", major("BTC")), ("\u{0181}TC", major("BTC")),
+        // What ASCII writes in a letter's place.
+        ("U$DC", .usdc), ("U$DT0", curated("USDT0")), ("rnUSD", curated("mUSD")), ("WrnON", .wmon), ("VVMON", .wmon),
     ]
     static func curated(_ symbol: String) -> Token { Token.core.first { $0.symbol == symbol }! }
     static func major(_ symbol: String) -> Token { WalletHoldings.majorTokens.first { $0.symbol == symbol }! }
@@ -32,8 +34,10 @@ final class LookAlikeRuleTests: XCTestCase {
         ("\u{A4F4}\u{A4E2}\u{A4D3}\u{A4DA}", .usdc), ("$MON", .mon), ("USDC 2", .usdc),
         ("M\u{00F8}nad", .mon), ("Bitc\u{00F8}in", major("BTC")), ("M\u{019F}NAD", .mon), ("Wrapped M\u{00D8}N", .wmon), ("\u{0246}thereum", major("ETH")),
         ("USD\u{0166}0", curated("USDT0")), ("\u{1D0D}\u{1D0F}\u{0274}\u{1D00}\u{1D05}", .mon), ("\u{0299}\u{026A}\u{1D1B}\u{1D04}\u{1D0F}\u{026A}\u{0274}", major("BTC")),
+        // Letters of scripts beyond the six first covered: Myanmar ဝ, Hebrew ס, Tifinagh ⵔ, Canadian syllabics ᑌ.
+        ("M\u{101D}nad", .mon), ("M\u{05E1}nad", .mon), ("S\u{2D54}lana", major("SOL")), ("Tether \u{144C}SD", major("USDT")), ("B1tcoin", major("BTC")),
     ]
-    static let ownSymbols = ["USDL", "PEPE", "MONKE", "DOGE", "CAFÉ", "xMON", "BTCD", "0N1", "0N1F", "GMGM", "ETHX", "SOLAR", "DAISY", "\u{00D0}OGE", "\u{00D8}RE"]
+    static let ownSymbols = ["USDL", "PEPE", "MONKE", "DOGE", "CAFÉ", "xMON", "BTCD", "0N1", "0N1F", "GMGM", "ETHX", "SOLAR", "DAISY", "\u{00D0}OGE", "\u{00D8}RE", "CORN", "BURN", "VVIP"]
     static let ownNames = ["Pepe Coin", "\u{03A9}mega", "\u{03BC}Swap", "\u{03C0}DAO", "Russian \u{0420}\u{0443}\u{0431}\u{043B}\u{044C}", "Monad Frogs", "Pepe on MON",
                            "Bitcoin Diva", "Good Morning", "\u{0394}Neutral", "Lambda \u{03BB}", "Pepe \u{041F}\u{0435}\u{043F}\u{0435}"]
 
@@ -131,6 +135,25 @@ final class LookAlikeRuleTests: XCTestCase {
         for symbol in ["\u{00D0}OGE", "\u{00D8}RE", "\u{0141}\u{00D3}D\u{0179}"] {
             XCTAssertTrue(SymbolSafety.isDisplaySafe(symbol), symbol)
             XCTAssertNil(SymbolSafety.createRefusal(name: "Some Coin", symbol: symbol), symbol)
+        }
+    }
+
+    /// Unicode's confusables are read for every script, not six: a Myanmar ဝ, a Hebrew ס, a Tifinagh ⵔ, an Ethiopic ዐ, a
+    /// Georgian ჿ and Canadian syllabics ᑌ, ᗪ and ᗷ are drawn as Latin letters. A word mixing one with Latin letters is
+    /// refused even when the name reads as nothing curated ("USD Cဝin"), and a DyorHQ coin named so warns. A name in one
+    /// of those scripts alone is fine.
+    func testEveryScriptsLookAlikes() {
+        let expected: [(UInt32, Unicode.Scalar)] = [(0x101D, "o"), (0x05E1, "o"), (0x0647, "o"), (0x2D54, "O"), (0x12D0, "O"), (0x10FF, "o"), (0x144C, "U"), (0x15EA, "D"), (0x15F7, "B")]
+        for (code, latin) in expected {
+            XCTAssertEqual(WalletHoldings.lookAlikeLetters[Unicode.Scalar(code)!], latin, String(format: "%04X", code))
+        }
+        XCTAssertEqual(SymbolSafety.createRefusal(name: "USD C\u{101D}in", symbol: "USDCE"), .nameMixesAlphabets)
+        let coin = DyorCoin(address: address, origin: .launch(factory: LaunchpadAddresses.monadMainnet.factory, generation: .v2, retired: false), symbol: "USDCE",
+                            name: "USD C\u{101D}in", creator: DyorCoinChain.creator, logo: DyorCoinChain.media(DyorCoinChain.creator, "usdc.png"), pair: .zero)
+        XCTAssertTrue(TokenBadge.of(coin.token, coin: coin, receivedUnasked: true).isWarning)
+        XCTAssertEqual(CoinIcon.resolve(coin.token, coin: coin, policy: .dyorhq), .letters)
+        for name in ["\u{05E9}\u{05DC}\u{05D5}\u{05DD}", "\u{0645}\u{0648}\u{0646}\u{0627}\u{062F}", "\u{1019}\u{102D}\u{102F}\u{1038}", "\u{1403}\u{14C4}\u{1483}"] {
+            XCTAssertNil(SymbolSafety.createRefusal(name: name, symbol: "SAFE"), label(name))
         }
     }
 

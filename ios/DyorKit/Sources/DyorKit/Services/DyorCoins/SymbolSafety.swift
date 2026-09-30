@@ -7,8 +7,9 @@ import Foundation
 /// letters stay allowed") — or Chinese, Japanese or Korean letters with ASCII digits (pick 19), never the two mixed.
 /// Everything else is not: control, format, direction-changing and zero-width characters, combining marks left over
 /// once the text is composed, full-width Latin, the Latin letters drawn like others (dotless ı, small capitals, IPA),
-/// and letters from any other script — Cyrillic, Greek, Armenian, Cherokee and Lisu hold letters drawn exactly like
-/// Latin ones. Accents don't hide a look-alike: "USDĆ" reads as USDC (`WalletHoldings.imitated(by:)` folds them).
+/// and letters from any other script — Cyrillic, Greek, Armenian, Cherokee, Lisu, Myanmar, Hebrew and more hold letters
+/// drawn exactly like Latin ones. Accents don't hide a look-alike: "USDĆ" and "MØN" read as USDC and MON
+/// (`WalletHoldings.imitated(by:)` folds them).
 ///
 /// A name is display-safe when it has no hidden or direction-changing character (`hasHiddenCharacters`) and no word
 /// mixes Latin letters with letters of another script drawn like Latin ones (`mixesLookAlikeAlphabets`); any language
@@ -241,7 +242,7 @@ public enum SymbolSafety {
     }
 
     /// Whether a word of `name` mixes Latin letters with letters of another script drawn like Latin ones ("Pаypal" with a
-    /// Cyrillic а, "Mօnad" with an Armenian օ, "Mᴏnad" with a small capital): only letters in
+    /// Cyrillic а, "Mօnad" with an Armenian օ, "Cဝin" with a Myanmar ဝ, "Mᴏnad" with a small capital): only letters in
     /// `WalletHoldings.lookAlikeLetters` from outside the everyday Latin blocks count, word by word. So "Ωmega", "πDAO",
     /// "μSwap", "ΔNeutral", "Lambda λ", "Pepe Пепе" and "Russian Рубль" are fine, as is a name in one alphabet alone,
     /// and the Turkish "ı" is a Latin letter. Words are split at anything that isn't a letter.

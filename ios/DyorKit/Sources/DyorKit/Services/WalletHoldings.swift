@@ -157,9 +157,11 @@ public enum WalletHoldings {
     /// The token `token` could pass for: a curated one, or a widely traded one DyorHQ doesn't list (`majorTokens`).
     /// `token` is none of them, yet
     /// - its symbol or name reads as one of their symbols or names (`readings`) — a second "USDC", a "Monad" that isn't
-    ///   MON, a "USDC" with a zero-width space or a Cyrillic "С" in it, "M0N", "m0nad", a Lisu "ꓟꓳꓠ", a "USDT";
+    ///   MON, a "USDC" with a zero-width space or a Cyrillic "С" in it, "M0N", "m0nad", "MØN", "U$DC", a Lisu "ꓟꓳꓠ", a
+    ///   Myanmar "Mဝnad", a "USDT";
     /// - or its symbol holds one of their symbols or names with no letter right before or after it — "USDC.e", "$MON",
-    ///   "MON2", "USDC" padded with spaces and a dot — while letters around it make another word ("MONKE", "xMON");
+    ///   "MON2", "USDC e", "USDC" padded with spaces and a dot — while letters around it make another word ("MONKE",
+    ///   "xMON");
     /// - or its name is one of their symbols or names with nothing but non-letters around it ("$MON", "USDC 2").
     /// Being chosen proves nothing here: tapping a search result in Swap stores a token as chosen. Nil for MON, the
     /// curated tokens and every other name. The wallet's warnings, the badge (`TokenBadge`) and the create forms'
@@ -265,23 +267,25 @@ public enum WalletHoldings {
 
     /// The ways `text` reads to the eye, for `imitated(by:)`: `visible(text)` ignoring case (tagged "a"); with the digits
     /// and letters that pass for one another made one — 0 as O; 1, I and | as l — keeping case (tagged "b"), so "USDL"
-    /// stays apart from "USD1"; and ignoring case with only 0 read as o (tagged "c"), so "M0n", "wm0n" and "usdto" read as
-    /// MON, WMON and USDT0 while "USDL" still isn't "USD1". Text with a direction-changing character is read backwards
-    /// too: an override can show "CDSU" as "USDC". Empty text has no reading.
+    /// stays apart from "USD1"; ignoring case with only 0 read as o (tagged "c"), so "M0n", "wm0n" and "usdto" read as
+    /// MON, WMON and USDT0 while "USDL" still isn't "USD1"; and ignoring case with what ASCII writes in a letter's place
+    /// read as that letter (`asciiLookAlikes`, tagged "d"), so "U$DC", "WrnON", "VVMON" and "B1tcoin" read as USDC, WMON
+    /// and Bitcoin. Text with a direction-changing character is read backwards too: an override can show "CDSU" as
+    /// "USDC". Empty text has no reading.
     static func readings(_ text: String) -> [String] {
         shownForms(text).flatMap { form in
             ["a:" + form.lowercased(), "b:" + String(String.UnicodeScalarView(form.unicodeScalars.map { lookAlikeDigits[$0] ?? $0 })),
-             "c:" + zeroAsO(form.lowercased())]
+             "c:" + zeroAsO(form.lowercased()), "d:" + asciiLookAlikes(form.lowercased())]
         }
     }
 
-    /// `text`'s readings "a" and "c" untagged, for finding a token's symbol or name inside other text: each as `visible`
-    /// gives it, and each with its spaces kept, one for each run of them, so a space parts a word as any other character
-    /// that isn't a letter does ("USDC e").
+    /// `text`'s readings "a", "c" and "d" untagged, for finding a token's symbol or name inside other text: each as
+    /// `visible` gives it, and each with its spaces kept, one for each run of them, so a space parts a word as any
+    /// other character that isn't a letter does ("USDC e").
     static func forms(_ text: String) -> [String] {
         Array(Set((shownForms(text) + shownForms(text, keepingSpaces: true)).flatMap { form -> [String] in
             let lower = form.lowercased()
-            return [lower, zeroAsO(lower)]
+            return [lower, zeroAsO(lower), asciiLookAlikes(lower)]
         }))
     }
 
@@ -296,13 +300,32 @@ public enum WalletHoldings {
 
     private static func zeroAsO(_ text: String) -> String { text.replacingOccurrences(of: "0", with: "o") }
 
+    /// Lower-case `text` with what ASCII writes in a letter's place read as that letter, as UTS #39 skeletons do for
+    /// letters of other scripts: "rn" as m, "vv" as w, 0 as o, 1 as i, and $ between two letters as s ("U$DC"; a "$"
+    /// before a ticker is the ticker's sign, and "$MON" reads as MON, not sMON).
+    private static func asciiLookAlikes(_ text: String) -> String {
+        let scalars = Array(text.replacingOccurrences(of: "rn", with: "m").replacingOccurrences(of: "vv", with: "w").unicodeScalars)
+        var out = String.UnicodeScalarView()
+        for (i, scalar) in scalars.enumerated() {
+            if scalar == "$", i > 0, i + 1 < scalars.count, scalars[i - 1].properties.isAlphabetic, scalars[i + 1].properties.isAlphabetic {
+                out.append("s")
+            } else {
+                out.append(asciiLetters[scalar] ?? scalar)
+            }
+        }
+        return String(out)
+    }
+
+    private static let asciiLetters: [Unicode.Scalar: Unicode.Scalar] = ["0": "o", "1": "i"]
+
     /// `text` as it shows, at most `maxJudged` characters of it (the first, or `fromTheEnd` the last): compatibility forms
     /// (full-width and mathematical letters) as their plain letters; invisible, format and direction characters
     /// (zero-width spaces and joiners, soft hyphen, byte-order mark, overrides), control characters, combining marks,
     /// the blank Braille pattern U+2800 and spaces removed (or, `keepingSpaces`, each run of spaces as one); U+FFFD
     /// removed too, which is what bytes that aren't text read as (`ABI.StringDecoding.lossy`) and draws as a mark, not a
     /// letter, so "USDC" and one such byte still reads as "USDC"; letters from other scripts that look like Latin ones
-    /// (Cyrillic "С", Greek "Ο", Armenian "օ", Lisu "ꓟ", small capital "ᴏ": `lookAlikeLetters`) and Latin letters with a
+    /// (Cyrillic "С", Greek "Ο", Armenian "օ", Lisu "ꓟ", Myanmar "ဝ", Hebrew "ס", small capital "ᴏ": `lookAlikeLetters`)
+    /// and Latin letters with a
     /// stroke, bar or hook (Ø, Đ, Ł, Ɵ, Ʉ: `LookAlikeLetters.marked`) as the letters they are drawn like, before the
     /// compatibility forms are folded (which would turn a Greek lunate "Ϲ" into a "Σ" nobody mistakes for C) and after;
     /// accents and width ignored; and every other Latin letter as the ASCII it is written with (ICU's Latin-ASCII: the
@@ -379,9 +402,10 @@ public enum WalletHoldings {
     /// U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069: they change the order text shows in.
     private static let bidiControls: Set<UInt32> = Set([0x061C, 0x200E, 0x200F] + Array(0x202A...0x202E) + Array(0x2066...0x2069))
 
-    /// Letters of other scripts drawn like Latin ones, each with the letter it passes for: Unicode's confusables
-    /// (`LookAlikeLetters`, generated from UTS #39 data), with the few below kept as they were written here, case for case
-    /// (Unicode reads a Cyrillic "І" or Greek "Ι" as "l", which `readings` "b" does anyway).
+    /// Letters and digits of other scripts drawn like Latin ones, each with the letter it passes for: Unicode's
+    /// confusables for every script (`LookAlikeLetters`, generated from UTS #39 data), with the few below kept as they
+    /// were written here, case for case (Unicode reads a Cyrillic "І" or Greek "Ι" as "l", which `readings` "b" does
+    /// anyway).
     static let lookAlikeLetters: [Unicode.Scalar: Unicode.Scalar] = {
         var map: [Unicode.Scalar: Unicode.Scalar] = [:]
         for (code, latin) in LookAlikeLetters.confusables { if let scalar = Unicode.Scalar(code) { map[scalar] = latin.unicodeScalars.first! } }

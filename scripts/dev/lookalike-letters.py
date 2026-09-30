@@ -4,13 +4,15 @@ confusables data (UTS #39, confusables.txt) says are drawn like one ASCII letter
 SymbolSafety's look-alike rules.
 
 The data is the confusables table the system's ICU compiles in, read through its spoof checker (uspoof_getSkeleton), so
-nothing is fetched: the version comes from the ICU the Mac ships (its U_UNICODE_VERSION is printed into the file). Kept
-for each code point below that is a letter (general category L*):
-  - Cyrillic, Greek and Coptic, Armenian, Cherokee, Lisu, Coptic: a skeleton of one ASCII letter or digit, followed by
-    nothing but combining marks (Cherokee NA, U+13BE, is an O with a stroke laid over it; WalletHoldings.visible drops
-    marks, so it reads as that letter);
-  - the Latin letters of the IPA, phonetic, small-capital and other extension blocks, and the Latin-1, Extended-A and
-    Extended-B letters: a skeleton of exactly one ASCII letter or digit and nothing else, so an accented letter (é, whose
+nothing is fetched: the version comes from the ICU the Mac ships (its U_UNICODE_VERSION is printed into the file). Kept:
+  - every letter (general category L*) or decimal digit (Nd) of every script but Latin, in planes 0-3: a skeleton of one
+    ASCII letter or digit, followed by nothing but combining marks (Cherokee NA, U+13BE, is an O with a stroke laid over
+    it; WalletHoldings.visible drops marks, so it reads as that letter). Cyrillic, Greek, Armenian, Cherokee and Lisu,
+    and also Myanmar ဝ, Hebrew ס, Arabic ه, Tifinagh ⵔ, Ethiopic ዐ, Canadian syllabics ᑌ and the rest. A code point whose
+    compatibility form (NFKC) is already one ASCII letter or digit (full-width and mathematical letters) is left out:
+    WalletHoldings.visible folds those itself;
+  - the Latin letters (L*) of the IPA, phonetic, small-capital and other extension blocks, and the Latin-1, Extended-A
+    and Extended-B letters: a skeleton of exactly one ASCII letter or digit and nothing else, so an accented letter (é, whose
     skeleton is e and a combining acute) is never in the table: accents are Latin letters' own, and are folded where a
     reading needs it.
 A skeleton that is the letter itself (Greek μ, π, Ω) is not a look-alike.
@@ -40,6 +42,15 @@ icu.u_getUnicodeVersion.argtypes = [ctypes.POINTER(ctypes.c_uint8)]
 icu.u_getVersion.restype = None
 icu.u_getVersion.argtypes = [ctypes.POINTER(ctypes.c_uint8)]
 
+icu.ublock_getCode.restype = ctypes.c_int
+icu.ublock_getCode.argtypes = [ctypes.c_int32]
+icu.u_getPropertyValueName.restype = ctypes.c_char_p
+icu.u_getPropertyValueName.argtypes = [ctypes.c_int, ctypes.c_int32, ctypes.c_int]
+icu.unorm2_getNFKCInstance.restype = ctypes.c_void_p
+icu.unorm2_getNFKCInstance.argtypes = [ctypes.POINTER(ctypes.c_int)]
+icu.unorm2_normalize.restype = ctypes.c_int32
+icu.unorm2_normalize.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint16), ctypes.c_int32, ctypes.POINTER(ctypes.c_uint16), ctypes.c_int32,
+                                 ctypes.POINTER(ctypes.c_int)]
 icu.unorm2_getNFDInstance.restype = ctypes.c_void_p
 icu.unorm2_getNFDInstance.argtypes = [ctypes.POINTER(ctypes.c_int)]
 icu.unorm2_getDecomposition.restype = ctypes.c_int32
@@ -51,8 +62,9 @@ checker = icu.uspoof_open(ctypes.byref(status))
 if status.value > 0:
     sys.exit(f"uspoof_open failed: {status.value}")
 nfd = icu.unorm2_getNFDInstance(ctypes.byref(status))
+nfkc_instance = icu.unorm2_getNFKCInstance(ctypes.byref(status))
 if status.value > 0:
-    sys.exit(f"unorm2_getNFDInstance failed: {status.value}")
+    sys.exit(f"unorm2 instances failed: {status.value}")
 
 
 def version(fn):
@@ -79,17 +91,14 @@ def skeleton(cp):
     return bytes(bytearray(ctypes.string_at(out, 2 * n))).decode("utf-16-le")
 
 
-# ICU's UCharCategory values for the letter categories (Lu, Ll, Lt, Lm, Lo) and the marks (Mn, Me, Mc).
+# ICU's UCharCategory values for the letter categories (Lu, Ll, Lt, Lm, Lo), the marks (Mn, Me, Mc) and decimal
+# digits (Nd).
 LETTERS = {1, 2, 3, 4, 5}
 MARKS = {6, 7, 8}
+DIGIT = 9
+# UCHAR_BLOCK and U_LONG_PROPERTY_NAME, for a block's name.
+UCHAR_BLOCK, LONG_NAME = 0x1001, 1
 
-OTHER_SCRIPTS = [
-    ("Greek and Coptic", 0x0370, 0x03FF), ("Cyrillic", 0x0400, 0x04FF), ("Cyrillic Supplement", 0x0500, 0x052F),
-    ("Armenian", 0x0530, 0x058F), ("Cherokee", 0x13A0, 0x13FF), ("Cyrillic Extended-C", 0x1C80, 0x1C8F),
-    ("Greek Extended", 0x1F00, 0x1FFF), ("Coptic", 0x2C80, 0x2CFF), ("Cyrillic Extended-A", 0x2DE0, 0x2DFF),
-    ("Cyrillic Extended-B", 0xA640, 0xA69F), ("Lisu", 0xA4D0, 0xA4FF), ("Cherokee Supplement", 0xAB70, 0xABBF),
-    ("Armenian ligatures", 0xFB13, 0xFB17), ("Cyrillic Extended-D", 0x1E030, 0x1E08F), ("Lisu Supplement", 0x11FB0, 0x11FBF),
-]
 LATIN = [
     ("Latin-1 Supplement", 0x00C0, 0x00FF), ("Latin Extended-A", 0x0100, 0x017F), ("Latin Extended-B", 0x0180, 0x024F),
     ("IPA Extensions", 0x0250, 0x02AF), ("Phonetic Extensions", 0x1D00, 0x1D7F), ("Phonetic Extensions Supplement", 0x1D80, 0x1DBF),
@@ -102,8 +111,45 @@ def ascii_alnum(ch):
     return len(ch) == 1 and ch.isascii() and ch.isalnum()
 
 
+def nfkc(cp):
+    units = utf16(cp)
+    source = (ctypes.c_uint16 * len(units))(*units)
+    out = (ctypes.c_uint16 * 64)()
+    st = ctypes.c_int(0)
+    n = icu.unorm2_normalize(nfkc_instance, source, len(units), out, 64, ctypes.byref(st))
+    if st.value > 0:
+        return None
+    return bytes(bytearray(ctypes.string_at(out, 2 * n))).decode("utf-16-le")
+
+
+def block(cp):
+    name = icu.u_getPropertyValueName(UCHAR_BLOCK, icu.ublock_getCode(cp), LONG_NAME)
+    return name.decode().replace("_", " ") if name else "Unnamed block"
+
+
+def is_latin(cp):
+    return cp < 0x80 or any(start <= cp <= end for _, start, end in LATIN)
+
+
+def other_scripts():
+    """Every letter or digit outside ASCII and the Latin blocks that `target` keeps, grouped by block in code point order."""
+    out = []
+    for cp in range(0x80, 0x40000):
+        if 0xD800 <= cp <= 0xDFFF or is_latin(cp) or (icu.u_charType(cp) not in LETTERS and icu.u_charType(cp) != DIGIT):
+            continue
+        t = target(cp, False)
+        if not t or ascii_alnum(nfkc(cp) or ""):
+            continue
+        name = block(cp)
+        if out and out[-1][0] == name:
+            out[-1][1].append((cp, t))
+        else:
+            out.append((name, [(cp, t)]))
+    return out
+
+
 def target(cp, latin):
-    if icu.u_charType(cp) not in LETTERS:
+    if icu.u_charType(cp) not in LETTERS and (latin or icu.u_charType(cp) != DIGIT):
         return None
     s = skeleton(cp)
     if not s or s == chr(cp):
@@ -180,16 +226,18 @@ def emit(sections):
     return "\n".join(lines)
 
 
-others, latin, strokes = rows(OTHER_SCRIPTS, False), rows(LATIN, True), marked_rows(LATIN)
+others, latin, strokes = other_scripts(), rows(LATIN, True), marked_rows(LATIN)
 count = sum(len(f) for _, f in others + latin)
 marked_count = sum(len(f) for _, f in strokes)
 print(f"""// Generated by scripts/dev/lookalike-letters.py: do not edit by hand.
 // Source: Unicode confusables.txt (UTS #39), Unicode {version(icu.u_getUnicodeVersion)}, as compiled into ICU {version(icu.u_getVersion)} (macOS libicucore).
 
 /// The letters of other scripts drawn like one ASCII letter or digit, by Unicode's confusables data (UTS #39): each
-/// letter of Cyrillic, Greek, Coptic, Armenian, Cherokee and Lisu whose skeleton is one ASCII letter or digit (with only
-/// combining marks after it), and each Latin letter outside ASCII whose skeleton is exactly one (dotless ı, small capital
-/// ᴏ, script ɡ; never an accented letter). {count} in all. `WalletHoldings.visible` reads each as that letter, and
+/// letter or digit of every script but Latin whose skeleton is one ASCII letter or digit (with only combining marks after
+/// it) — Cyrillic, Greek, Coptic, Armenian, Cherokee, Lisu, Hebrew, Arabic, Myanmar, Tifinagh, Ethiopic, Canadian
+/// syllabics and more; full-width and mathematical letters, which compatibility folding already makes ASCII, left out —
+/// and each Latin letter outside ASCII whose skeleton is exactly one (dotless ı, small capital ᴏ, script ɡ; never an
+/// accented letter). {count} in all. `WalletHoldings.visible` reads each as that letter, and
 /// `SymbolSafety` counts one from outside the everyday Latin letters as a letter that can pass for a Latin one.
 enum LookAlikeLetters {{
     static let confusables: [(UInt32, Character)] = [
