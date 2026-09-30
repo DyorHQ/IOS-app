@@ -645,12 +645,25 @@ public struct LaunchpadEscrowRead: Hashable, Sendable {
     public let factory: Address
     public let retired: Bool
     public let balances: EscrowBalances?
+    /// The balances are an earlier read's, kept because this one failed (`keeping`).
+    public let kept: Bool
 
-    public init(escrow: Address, factory: Address, retired: Bool, balances: EscrowBalances?) {
+    public init(escrow: Address, factory: Address, retired: Bool, balances: EscrowBalances?, kept: Bool = false) {
         self.escrow = escrow
         self.factory = factory
         self.retired = retired
         self.balances = balances
+        self.kept = kept
+    }
+
+    /// `reads` as a screen shows them: an escrow read now as read, and one whose read failed with the balances `previous`
+    /// had for it, marked `kept` (still unread, never zero, when it had none). `previous` is the screen's last `keeping`
+    /// for the SAME account: a caller passes none once the wallet changed, so no wallet ever sees another's fees.
+    public static func keeping(_ reads: [LaunchpadEscrowRead], previous: [LaunchpadEscrowRead]) -> [LaunchpadEscrowRead] {
+        reads.map { read in
+            guard read.balances == nil, let last = previous.first(where: { $0.escrow == read.escrow && $0.balances != nil }) else { return read }
+            return LaunchpadEscrowRead(escrow: read.escrow, factory: read.factory, retired: read.retired, balances: last.balances, kept: true)
+        }
     }
 }
 

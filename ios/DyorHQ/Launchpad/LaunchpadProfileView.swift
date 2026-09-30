@@ -109,12 +109,21 @@ struct LaunchpadProfileView: View {
 
     @ViewBuilder private var claimSection: some View {
         Section {
+            // An escrow that couldn't be read says so, with Retry, and keeps its last balances read for this wallet: never
+            // "Nothing to claim yet" on a failed read.
+            if model.feesUnread {
+                HStack(alignment: .firstTextBaseline) {
+                    InlineError(message: "Creator fees couldn't be read just now.")
+                    Spacer(minLength: 8)
+                    Button("Retry") { Task { await model.load(env: env, address: session.address) } }.font(.footnote.weight(.semibold))
+                }
+            }
             if !model.hasClaimable {
-                Text("Nothing to claim yet.").font(.subheadline).foregroundStyle(.secondary)
+                if !model.feesUnread { Text("Nothing to claim yet.").font(.subheadline).foregroundStyle(.secondary) }
             } else {
                 // Creator fees — one row per pair asset and launchpad escrow, each claimed on its own.
                 ForEach(model.creatorClaimables) { asset in
-                    claimRow(icon: "banknote", title: "Creator fees · \(asset.symbol)", amount: asset.amountText, usd: asset.usd, caption: asset.retired ? "Retired launchpad" : nil) {
+                    claimRow(icon: "banknote", title: "Creator fees · \(asset.symbol)", amount: asset.amountText, usd: asset.usd, caption: asset.caption) {
                         claimTarget = .creator(asset)
                     }
                 }
@@ -124,7 +133,7 @@ struct LaunchpadProfileView: View {
                         claimTarget = .rewards(reward)
                     }
                 }
-                if session.canSign, model.claimableCount > 1 {
+                if session.canSign, model.claimAllCount > 1 {
                     Button { Haptics.tap(); claimTarget = .all } label: {
                         Text("Claim All").frame(maxWidth: .infinity).fontWeight(.semibold)
                     }
@@ -241,9 +250,9 @@ struct LaunchpadProfileView: View {
                 title: "Claim All Fees", confirmTitle: "Claim All",
                 build: { await model.claimAllPlan(env: env) },
                 onDone: { Task { await model.load(env: env, address: session.address) } },
-                onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Claimed all Launch earnings", subtitle: "\(model.claimableCount) \(model.claimableCount == 1 ? "claim" : "claims") · fees and rewards", hash: hash, section: "launch"), owner: session.address) }
+                onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Claimed all Launch earnings", subtitle: "\(model.claimAllCount) \(model.claimAllCount == 1 ? "claim" : "claims") · fees and rewards", hash: hash, section: "launch"), owner: session.address) }
             ) {
-                ForEach(model.creatorClaimables) { asset in DetailRow("Creator · \(asset.symbol)\(asset.retired ? " (retired launchpad)" : "")", asset.amountText) }
+                ForEach(model.claimAllCreatorClaimables) { asset in DetailRow("Creator · \(asset.symbol)\(asset.retired ? " (retired launchpad)" : "")", asset.amountText) }
                 ForEach(model.rewardClaimables) { reward in DetailRow("\(reward.launch.symbol) rewards", reward.amountText) }
             }
         }
@@ -367,6 +376,9 @@ final class LaunchpadProfileModel {
         let escrow: Address
         let retired: Bool
         let balances: EscrowBalances
+        /// Read in the latest load. False: that read failed, and these are the balances last read for the same wallet
+        /// (`LaunchpadEscrowRead.keeping`), shown until a read succeeds but never claimed by Claim All.
+        let current: Bool
     }
 
     private(set) var positions: [Position] = []
@@ -379,6 +391,15 @@ final class LaunchpadProfileModel {
     private(set) var incomplete: String?
     /// The last launches read, which a launchpad that can't be read now keeps (`LaunchListing.keeping`).
     private var lastLaunches: [Launch] = []
+    /// Some escrow couldn't be read in the latest load: the claim section says so, with Retry, and never says there is
+    /// nothing to claim.
+    private(set) var feesUnread = false
+    /// The escrows as last kept (`LaunchpadEscrowRead.keeping`), and the wallet they were read for: an escrow whose read
+    /// fails keeps its balances only for that same wallet, never another's.
+    private var lastEscrowReads: [LaunchpadEscrowRead] = []
+    private var escrowsFor: Address?
+    /// The wallet the latest load is for: a slower load for another wallet publishes no fees.
+    private var requested: Address?
 
     // Pair asset → USD price, and pair asset → (symbol, decimals) for escrow display.
     private var pairUSD: [Address: Double] = [:]
@@ -394,9 +415,16 @@ final class LaunchpadProfileModel {
         let amount: BigUInt
         let decimals: Int
         let usd: Double
+        /// Read in the latest load (`EscrowHolding.current`).
+        let current: Bool
         var id: String { "\(escrow.hex)-\(token.hex)" }
         var isNative: Bool { token.isZero }
         var amountText: String { "\(NumberStyle.units(amount, decimals: decimals, compact: true)) \(symbol)" }
+        /// Under the row: a retired launchpad's escrow, and balances kept from an earlier read.
+        var caption: String? {
+            let parts = [retired ? "Retired launchpad" : nil, current ? nil : "As last read"].compactMap { $0 }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
     }
 
     /// One coin's claimable holder rewards (fee-sharing coins), in that coin's pair asset.
@@ -416,11 +444,11 @@ final class LaunchpadProfileModel {
         for holding in escrows {
             let escrow = holding.balances
             if escrow.native > 0 {
-                out.append(ClaimableAsset(escrow: holding.escrow, retired: holding.retired, token: .zero, symbol: "MON", amount: escrow.native, decimals: 18, usd: Amount.units(escrow.native, decimals: 18) * (pairUSD[Monad.native] ?? 0)))
+                out.append(ClaimableAsset(escrow: holding.escrow, retired: holding.retired, token: .zero, symbol: "MON", amount: escrow.native, decimals: 18, usd: Amount.units(escrow.native, decimals: 18) * (pairUSD[Monad.native] ?? 0), current: holding.current))
             }
             for (token, amount) in escrow.tokens where amount > 0 {
                 let meta = pairMeta[token] ?? ("", 18)
-                out.append(ClaimableAsset(escrow: holding.escrow, retired: holding.retired, token: token, symbol: meta.symbol, amount: amount, decimals: meta.decimals, usd: Amount.units(amount, decimals: meta.decimals) * (pairUSD[token] ?? 0)))
+                out.append(ClaimableAsset(escrow: holding.escrow, retired: holding.retired, token: token, symbol: meta.symbol, amount: amount, decimals: meta.decimals, usd: Amount.units(amount, decimals: meta.decimals) * (pairUSD[token] ?? 0), current: holding.current))
             }
         }
         return out.sorted { $0.usd > $1.usd }
@@ -434,18 +462,21 @@ final class LaunchpadProfileModel {
     var claimableCount: Int { creatorClaimables.count + rewardClaimables.count }
     var hasClaimable: Bool { claimableCount > 0 }
     var totalClaimableUSD: Double { creatorClaimables.reduce(0) { $0 + $1.usd } }
+    /// The creator fees Claim All claims: those read in the latest load, never balances kept from an earlier one.
+    var claimAllCreatorClaimables: [ClaimableAsset] { creatorClaimables.filter(\.current) }
+    var claimAllCount: Int { claimAllCreatorClaimables.count + rewardClaimables.count }
 
     var claimableSummary: String {
-        guard hasClaimable else { return "Nothing to claim yet" }
+        guard hasClaimable else { return feesUnread ? "Creator fees couldn't be read" : "Nothing to claim yet" }
         if totalClaimableUSD > 0 { return totalClaimableUSD.formatted(.currency(code: "USD")) }
         return "\(claimableCount) to claim"
     }
 
-    /// Claims everything at once: every escrow across every asset, plus every coin's holder rewards (each on its
-    /// launch's own stack).
+    /// Claims everything at once: every escrow read in the latest load, across every asset, plus every coin's holder
+    /// rewards (each on its launch's own stack).
     func claimAllPlan(env: AppEnvironment) async -> [TransactionStep] {
         var steps: [TransactionStep] = []
-        for holding in escrows where !holding.balances.isEmpty {
+        for holding in escrows where holding.current && !holding.balances.isEmpty {
             steps += await env.launchpad.claimEscrowPlan(native: holding.balances.hasNative, tokens: holding.balances.claimableTokens, escrow: holding.escrow)
         }
         for reward in rewardClaimables { steps += await env.launchpad.claimRewardsPlan(launch: reward.launch, view: nil) }
@@ -454,7 +485,14 @@ final class LaunchpadProfileModel {
 
     func load(env: AppEnvironment, address: Address?) async {
         // The retired stacks keep serving the wallet's coins and fees while the live (v2) stack is pending.
-        guard let address else { positions = []; created = []; escrows = []; activity = []; return }
+        requested = address
+        guard let address else {
+            positions = []; created = []; escrows = []; activity = []
+            lastEscrowReads = []; escrowsFor = nil; feesUnread = false
+            return
+        }
+        // Another wallet's fees never show while this one's load, or a failed read, is under way.
+        if escrowsFor != address { escrows = []; lastEscrowReads = []; escrowsFor = nil; feesUnread = false }
         loading = true
         defer { loading = false }
 
@@ -464,10 +502,16 @@ final class LaunchpadProfileModel {
         var unread = !listing.complete
 
         // Escrow (claimable creator fees): every stack's escrow, for MON and every pair asset a launch can use, whether or
-        // not the coins you created are among the launches read (`escrowReads`). A failed read says so, never zero.
+        // not the coins you created are among the launches read (`escrowReads`). A failed read says so, never zero, and
+        // keeps the balances last read for this wallet (marked, and left out of Claim All).
         let createdPairs = launches.filter { $0.deployer == address }.map(\.pairToken)
         let escrowReads = await env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)
-        escrows = escrowReads.map { EscrowHolding(escrow: $0.escrow, retired: $0.retired, balances: $0.balances ?? EscrowBalances(native: 0, tokens: [:])) }
+        guard requested == address else { return }
+        let kept = LaunchpadEscrowRead.keeping(escrowReads, previous: escrowsFor == address ? lastEscrowReads : [])
+        lastEscrowReads = kept
+        escrowsFor = address
+        escrows = kept.compactMap { read in read.balances.map { EscrowHolding(escrow: read.escrow, retired: read.retired, balances: $0, current: !read.kept) } }
+        feesUnread = escrowReads.contains(where: { $0.balances == nil })
         if escrowReads.contains(where: { $0.balances == nil }) { unread = true }
 
         // Pair-asset prices (MON priced live; USDC/AUSD pinned to 1 by the price service), for the launches' pairs and
