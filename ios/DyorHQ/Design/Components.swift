@@ -5,7 +5,8 @@ import SwiftUI
 // Small, reusable pieces that keep every screen on the same system: SF Symbols, text styles, semantic colors.
 
 /// A token or market logo: remote image with a monogram fallback, always circular, with a faint ring that suits the
-/// appearance (`Color.logoRing`), and never colour-inverted by Smart Invert.
+/// appearance (`Color.logoRing`). Smart Invert leaves the logo as it is but inverts the ring with the card, so the ring
+/// still edges the logo on the inverted card.
 struct TokenLogo: View {
     let symbol: String
     let url: URL?
@@ -32,8 +33,8 @@ struct TokenLogo: View {
         .frame(width: size, height: size)
         .background(Color(.tertiarySystemFill))
         .clipShape(Circle())
-        .overlay(Circle().strokeBorder(Color.logoRing, lineWidth: 0.5))
         .accessibilityIgnoresInvertColors()
+        .overlay(Circle().strokeBorder(Color.logoRing, lineWidth: 0.5))
         .accessibilityHidden(true)
     }
 
@@ -86,8 +87,8 @@ struct Avatar: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        .accessibilityIgnoresInvertColors() // the photo; its ring inverts with the card, like TokenLogo's
         .overlay(Circle().strokeBorder(Color(.separator).opacity(0.6), lineWidth: 0.5))
-        .accessibilityIgnoresInvertColors()
         .accessibilityHidden(true)
     }
 
