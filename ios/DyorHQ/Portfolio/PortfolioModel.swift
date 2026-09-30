@@ -324,13 +324,15 @@ final class PortfolioModel {
         async let launchesTask = env.launchpad.launchListing(limit: 200)
         async let momentsTask = env.moments.moments(limit: 200)
         // Moments of the retired cohorts are history too (their collects, claims and withdrawals); keyed by (factory, id).
-        async let retiredMomentsTask = PastMomentsModel.allMoments(env: env)
+        // A cohort that can't be read keeps the Moments the last load read of it, and the load says it is incomplete.
+        let previousMoments = Array(momentsByKey.values)
+        async let retiredMomentsTask = PastMomentsModel.allMoments(env: env, keeping: previousMoments)
         // A launchpad whose launches couldn't be read keeps its last good ones, and the load says it is incomplete.
         let listing = await launchesTask
         let fetchedMoments = try? await momentsTask
-        let retiredMoments = await retiredMomentsTask
+        let retired = await retiredMomentsTask
         let launches = listing.keeping(Array(launchesByCurve.values))
-        let moments = fetchedMoments.map { $0 + retiredMoments } ?? Array(momentsByKey.values)
+        let moments = fetchedMoments.map { $0 + retired.moments } ?? Array(momentsByKey.values)
 
         var universe = KnownTokenStore.universe(owner: address)
         universe += launches.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
@@ -390,7 +392,7 @@ final class PortfolioModel {
 
         loadedFor = address
         hasLoaded = true
-        if !listing.complete || fetchedMoments == nil || head == nil || fetchedPrices == nil {
+        if !listing.complete || fetchedMoments == nil || !retired.complete || head == nil || fetchedPrices == nil {
             error = "Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh."
             updatedAt = nil
         } else {

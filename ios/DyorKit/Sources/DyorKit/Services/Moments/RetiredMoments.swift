@@ -94,6 +94,23 @@ public struct RetiredMoments: Sendable {
     /// cohort in all (its newest 200), so whatever the counts, every id build 16 read is read here too.
     static let laterLimit = 200
 
+    /// Every Moment of `cohorts`, cohort by cohort (`moments`), and whether every cohort was read. A cohort whose read
+    /// fails keeps its Moments from `previous` (an earlier read's, of any cohorts; none when there was none) and makes
+    /// `complete` false: a cohort is never left out unsaid.
+    public static func moments(of cohorts: [RetiredMoments], keeping previous: [MomentInfo] = []) async -> (moments: [MomentInfo], complete: Bool) {
+        var out: [MomentInfo] = []
+        var complete = true
+        for cohort in cohorts {
+            do {
+                out += try await cohort.moments()
+            } catch {
+                complete = false
+                out += previous.filter { $0.moment.factory == cohort.factory }
+            }
+        }
+        return (out, complete)
+    }
+
     /// A refreshed `MomentInfo` for an id of THIS cohort.
     public func info(id: BigUInt) async throws -> MomentInfo? {
         try await service.info(id: id)

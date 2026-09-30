@@ -67,7 +67,7 @@ final class LaunchListingTests: XCTestCase {
         XCTAssertTrue(board.contains("if model.error == nil { emptyState }"))
         let portfolio = try source("Portfolio/PortfolioModel.swift")
         XCTAssertTrue(portfolio.contains("let launches = listing.keeping(Array(launchesByCurve.values))"))
-        XCTAssertTrue(portfolio.contains("if !listing.complete || fetchedMoments == nil || head == nil || fetchedPrices == nil {"))
+        XCTAssertTrue(portfolio.contains("if !listing.complete || fetchedMoments == nil || !retired.complete || head == nil || fetchedPrices == nil {"))
         let profile = try source("Launchpad/LaunchpadProfileView.swift")
         XCTAssertTrue(profile.contains("let launches = listing.keeping(lastLaunches)"))
         XCTAssertTrue(profile.contains("var unread = !listing.complete"))

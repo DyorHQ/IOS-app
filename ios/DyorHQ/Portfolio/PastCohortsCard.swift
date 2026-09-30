@@ -56,11 +56,10 @@ final class PastMomentsModel {
         loadedFor = address
     }
 
-    /// Every Moment of every retired cohort (a cohort that cannot be read is left out, not fatal).
-    static func allMoments(env: AppEnvironment) async -> [MomentInfo] {
-        var out: [MomentInfo] = []
-        for cohort in env.retiredMoments { out += (try? await cohort.moments()) ?? [] }
-        return out
+    /// Every Moment of every retired cohort, and whether every cohort was read (`RetiredMoments.moments(of:keeping:)`):
+    /// a cohort that can't be read keeps its Moments from `previous` and makes `complete` false, for the caller to say.
+    static func allMoments(env: AppEnvironment, keeping previous: [MomentInfo] = []) async -> (moments: [MomentInfo], complete: Bool) {
+        await RetiredMoments.moments(of: env.retiredMoments, keeping: previous)
     }
 }
 

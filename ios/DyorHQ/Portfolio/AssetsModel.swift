@@ -92,14 +92,17 @@ final class AssetsModel {
         // As the list marks them: the DyorHQ coins the wallet launched or collected are its own, not Unverified.
         unverified = read == nil ? KnownTokenStore.unverified(owner: address) : Set(ranked.filter(\.unverified).map(\.id))
         // Known before the token list shows, so a retired Moment coin or a coin on a curve is never offered a swap in between.
-        for info in await retiredTask {
+        // A retired cohort that couldn't be read keeps the Moments already known, and the card says part of the wallet
+        // couldn't be read.
+        let retired = await retiredTask
+        for info in retired.moments {
             retiredByCoin[info.moment.coin] = info
             retiredByNFT[info.moment.nft] = info
         }
         if let found { curve = found }
         pricesFailed = failed
         unpriced = unpricedHeld
-        complete = read?.complete ?? false
+        complete = (read?.complete ?? false) && retired.complete
         balancesUnread = read == nil
         tokens = ranked
 
