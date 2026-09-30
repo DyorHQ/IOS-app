@@ -22,6 +22,23 @@ public struct DyorCoinStore: Sendable {
             self.coins = coins.sorted { $0.address.hex < $1.address.hex }
             self.checkpoints = checkpoints.sorted { $0.factory.hex < $1.factory.hex }
         }
+
+        private enum CodingKeys: String, CodingKey { case version, coins, checkpoints }
+
+        /// The file's contents entry by entry: an entry this build can't read (a launchpad generation a later build added,
+        /// a damaged value) is left out, and every other one kept.
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decode(Int.self, forKey: .version)
+            coins = try container.decode([Entry<DyorCoin>].self, forKey: .coins).compactMap(\.value)
+            checkpoints = try container.decode([Entry<Checkpoint>].self, forKey: .checkpoints).compactMap(\.value)
+        }
+    }
+
+    /// One entry of a list in the file, nil when it can't be read.
+    private struct Entry<Value: Decodable>: Decodable {
+        let value: Value?
+        init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
     }
 
     /// A launchpad's first `count` launches, or a cohort's Moments 1…`count`, have been read.
@@ -51,7 +68,8 @@ public struct DyorCoinStore: Sendable {
         return DyorCoinStore(url: folder.appending(path: fileName(chainId: chainId, fork: fork)))
     }
 
-    /// What the file holds; nil when there is no file, or it can't be read or is of another version.
+    /// What the file holds; nil when there is no file, or it can't be read as a whole or is of another version. An entry
+    /// that can't be read is left out (`Snapshot.init(from:)`).
     public func load() -> Snapshot? {
         guard let data = try? Data(contentsOf: url), let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
               snapshot.version == Snapshot.currentVersion else { return nil }

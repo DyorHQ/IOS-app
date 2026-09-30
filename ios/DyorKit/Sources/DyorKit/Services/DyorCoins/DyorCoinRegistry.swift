@@ -54,7 +54,11 @@ public actor DyorCoinRegistry {
     private(set) var checkpoints: [Address: Int]
     /// Addresses every factory answered for without naming them, this session.
     private var notDyor: Set<Address> = []
-    private var running: Task<Bool, Never>?
+    /// The refresh under way, which another joins, with its number.
+    private var running: (id: Int, task: Task<Bool, Never>)?
+    /// The point proofs under way, by number: `erase` cancels them.
+    private var proving: [Int: Task<Void, Never>] = [:]
+    private var tasksStarted = 0
     private var lastCompleteRefresh: Date?
     /// Bumped by `erase`, so a read that started before it never writes its results back.
     private var epoch = 0
@@ -139,16 +143,20 @@ public actor DyorCoinRegistry {
     /// (what was read is kept either way). A refresh already running is joined, not repeated.
     @discardableResult
     public func refresh() async -> Bool {
-        if let running { return await running.value }
+        if let running { return await running.task.value }
+        tasksStarted += 1
+        let id = tasksStarted
+        let epoch = self.epoch
         let task = Task { await self.enumerate() }
-        running = task
+        running = (id, task)
         let complete = await task.value
-        running = nil
-        if complete { lastCompleteRefresh = Date() }
+        if running?.id == id { running = nil }
+        if complete, epoch == self.epoch { lastCompleteRefresh = Date() }
         return complete
     }
 
-    /// `refresh`, unless a complete one finished less than `maxAge` seconds before `now`.
+    /// `refresh`, unless a complete one finished less than `maxAge` seconds before `now`: one that left anything unread
+    /// doesn't count.
     @discardableResult
     public func refreshIfStale(maxAge: TimeInterval = 300, now: Date = Date()) async -> Bool {
         if let lastCompleteRefresh, now.timeIntervalSince(lastCompleteRefresh) < maxAge { return true }
@@ -186,15 +194,18 @@ public actor DyorCoinRegistry {
         let epoch = self.epoch
         let sources = launchpads.map(Source.launchpad) + cohorts.map(Source.cohort)
         // 1. How many each factory has recorded. A count below what was read before is another chain's (a fork restarted
-        //    under the same file) or a node behind the others: that factory's list is read again from the start.
+        //    under the same file) or a node that answered wrongly: that factory's coins are dropped and its list is read
+        //    again from the start.
         let counts = await read(sources.map(\.countCall))
         var complete = true
         var jobs: [Job] = []
         var reached = checkpoints
+        var dropped: Set<Address> = []
         for (source, result) in zip(sources, counts) {
             guard case .success(let values) = result, let value = values.first else { complete = false; continue }
             let count = LaunchpadABI.int(value)
             let stored = checkpoints[source.factory] ?? 0
+            if stored > count { dropped.insert(source.factory) }
             let done = stored > count ? 0 : stored
             reached[source.factory] = done
             guard count > done else { continue }
@@ -267,7 +278,7 @@ public actor DyorCoinRegistry {
         guard epoch == self.epoch else { return false }
         let checkpointsMoved = reached != checkpoints
         checkpoints = reached
-        commit(found, persistAnyway: checkpointsMoved)
+        commit(found, dropping: dropped, persistAnyway: checkpointsMoved)
         return complete
     }
 
@@ -402,7 +413,12 @@ public actor DyorCoinRegistry {
             if known == .unknown { candidates.append(address) }
         }
         guard !candidates.isEmpty, !launchpads.isEmpty || !cohorts.isEmpty else { return out }
-        await proveReads(candidates)
+        tasksStarted += 1
+        let id = tasksStarted
+        let task = Task { await self.proveReads(candidates) }
+        proving[id] = task
+        await task.value
+        proving[id] = nil
         for address in candidates { out[address] = membership(address) }
         return out
     }
@@ -514,9 +530,14 @@ public actor DyorCoinRegistry {
 
     // MARK: Erase
 
-    /// Forgets everything and deletes the file (account deletion). A read already under way writes nothing back.
+    /// Forgets everything and deletes the file (account deletion). A refresh or proof under way is cancelled and writes
+    /// nothing back, and the next refresh reads the chain afresh rather than joining it.
     public func erase() {
         epoch += 1
+        running?.task.cancel()
+        running = nil
+        for task in proving.values { task.cancel() }
+        proving = [:]
         coins = [:]
         checkpoints = [:]
         notDyor = []
@@ -527,10 +548,16 @@ public actor DyorCoinRegistry {
 
     // MARK: Keeping
 
-    /// Keeps `found` (an entry that differs replaces the old one; MON and the curated tokens never are one), then saves and
-    /// tells the subscribers when anything changed.
-    private func commit(_ found: [DyorCoin], persistAnyway: Bool = false) {
+    /// Keeps `found` (an entry that differs replaces the old one; MON and the curated tokens never are one) after
+    /// dropping every coin of the factories `dropping` names, then saves and tells the subscribers when anything
+    /// changed.
+    private func commit(_ found: [DyorCoin], dropping factories: Set<Address> = [], persistAnyway: Bool = false) {
         var changed = false
+        if !factories.isEmpty {
+            let kept = coins.filter { !factories.contains($0.value.factory) }
+            changed = kept.count != coins.count
+            coins = kept
+        }
         for coin in found where !coin.address.isZero && Token.core(coin.address) == nil && coins[coin.address] != coin {
             coins[coin.address] = coin
             notDyor.remove(coin.address)
