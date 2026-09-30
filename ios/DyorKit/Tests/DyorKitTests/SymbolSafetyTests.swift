@@ -53,5 +53,46 @@ final class SymbolSafetyTests: XCTestCase {
         XCTAssertTrue(SymbolSafety.CreateRefusal.symbolNotDisplaySafe.isAboutSymbol)
         XCTAssertFalse(SymbolSafety.CreateRefusal.nameImitates(.mon).isAboutSymbol)
         XCTAssertEqual(SymbolSafety.CreateRefusal.symbolImitates(.usdc).message, "This symbol looks like USDC, a token DyorHQ already lists. Choose another symbol.")
+        // A name with hidden characters, or Latin letters mixed with Cyrillic or Greek look-alikes.
+        XCTAssertEqual(SymbolSafety.createRefusal(name: "Do\u{200B}ge", symbol: "DOGE"), .nameHasHiddenCharacters)
+        XCTAssertEqual(SymbolSafety.createRefusal(name: "D\u{043E}ge", symbol: "DOGE"), .nameMixesAlphabets, "a Cyrillic о")
+        XCTAssertEqual(SymbolSafety.createRefusal(name: "Quiet", symbol: "Q\u{0422}"), .symbolNotDisplaySafe, "the symbol is said first")
+        XCTAssertFalse(SymbolSafety.CreateRefusal.nameHasHiddenCharacters.isAboutSymbol)
+        XCTAssertFalse(SymbolSafety.CreateRefusal.nameMixesAlphabets.isAboutSymbol)
+        XCTAssertNil(SymbolSafety.createRefusal(name: "ドージコイン", symbol: "ドージ"))
+        XCTAssertNil(SymbolSafety.createRefusal(name: "Café Niño 🐶", symbol: "CAFE"))
+    }
+
+    /// Names may be written in any language, with accents and emoji; what doesn't show as itself is refused.
+    func testNamesWithHiddenCharacters() {
+        let fine = ["Quet", "狗狗币", "강아지 코인", "ドージコイン", "Café Crème", "Niño", "Доге", "Αθηνά", "Doge 🐶", "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} Family",
+                    "\u{2764}\u{FE0F} Love", "1\u{FE0F}\u{20E3} One", "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F} Lions", "Cafe\u{0301}", "Dog\u{00A0}Coin", ""]
+        for name in fine { XCTAssertFalse(SymbolSafety.hasHiddenCharacters(name), name) }
+        let hidden = [
+            "Do\u{200B}ge", // zero-width space
+            "\u{202E}egoD", // right-to-left override
+            "Do\u{2066}ge\u{2069}", // an isolate
+            "Doge\u{0007}", // a control character
+            "Doge\u{2028}Coin", // a line separator
+            "Do\u{2060}ge", // word joiner
+            "Doge\u{E000}", // private use
+            "A\u{200D}B", // a joiner between letters
+            "Do\u{00AD}ge", // soft hyphen
+            "\u{3164}", // the Hangul filler
+            "Doge\u{FE0F}", // a variation selector on a letter
+        ]
+        for name in hidden {
+            XCTAssertTrue(SymbolSafety.hasHiddenCharacters(name), name.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: " "))
+        }
+    }
+
+    /// Latin letters mixed with Cyrillic or Greek ones are refused in a name; one alphabet alone, or any other mix, is not.
+    func testNamesMixingLookAlikeAlphabets() {
+        for name in ["D\u{043E}ge", "P\u{0430}yday", "\u{0391}lpha", "Mo\u{03BD}e", "\u{FF24}\u{043E}ge"] {
+            XCTAssertTrue(SymbolSafety.mixesLookAlikeAlphabets(name), name)
+        }
+        for name in ["Doge", "Доге", "Αθηνά", "狗狗 Doge", "강아지 Coin", "Café", "Doge 2", "μ", ""] {
+            XCTAssertFalse(SymbolSafety.mixesLookAlikeAlphabets(name), name)
+        }
     }
 }
