@@ -485,9 +485,11 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertFalse(store.contains("\"venueTokens.v1.lastBlock\""), "build 16's checkpoint is never read, nor written")
         // The checkpoint is saved only once the list reads back as written (UserDefaults refuses a value past its ceiling).
         let write = squeezed(store)
-        let readBack = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(list, forKey: key) guard UserDefaults.standard.data(forKey: key) == list else { return }"))
-        let checkpoint = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(String(lastBlock), forKey: blockKey)"))
+        // It says whether it saved them, and the list counts a save only then (`VenueTokenList.store`).
+        let readBack = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(list, forKey: key) guard UserDefaults.standard.data(forKey: key) == list else { return false }"))
+        let checkpoint = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(String(lastBlock), forKey: blockKey) return true }"))
         XCTAssertLessThan(readBack.upperBound, checkpoint.lowerBound)
+        XCTAssertTrue(write.contains("static func write(_ list: Data, lastBlock: UInt64) -> Bool {"))
         // R4: every key the store names, beyond build 16's list and stamp, is outside the prefixes that mark an earlier
         // install.
         let theme = try String(contentsOf: app.appendingPathComponent("Design/Theme.swift"), encoding: .utf8)

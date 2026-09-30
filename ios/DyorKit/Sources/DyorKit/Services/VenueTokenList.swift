@@ -49,11 +49,11 @@ public final class VenueTokenList {
     @ObservationIgnored private let service: VenueTokensService
     @ObservationIgnored private let logos: @Sendable () async -> [Address: URL]
     @ObservationIgnored private let read: @Sendable () -> Stored
-    @ObservationIgnored private let write: @MainActor (Data, UInt64) -> Void
+    @ObservationIgnored private let write: @MainActor (Data, UInt64) -> Bool
     @ObservationIgnored private let now: @Sendable () -> Date
     /// When `resume` may run again after a run that ended short.
     @ObservationIgnored private var retryAfter = Date.distantPast
-    /// The checkpoint the store holds.
+    /// The checkpoint the store holds: moved only by a save the store took.
     @ObservationIgnored private var saved: UInt64 = 0
     /// Addresses a run read with no readable symbol (`VenueTokensService.Progress.dropped`), kept for the runs after it in
     /// this process: a segment a run left short is read again, and what it dropped isn't read again with it.
@@ -63,9 +63,10 @@ public final class VenueTokenList {
     /// already on its way, change nothing.
     @ObservationIgnored private var generation = 0
 
-    /// `read` and `write` are the store: `read` runs off the main actor, once; `write` on it, with the list encoded.
+    /// `read` and `write` are the store: `read` runs off the main actor, once; `write` on it, with the list encoded, and
+    /// says whether the store took it (UserDefaults refuses a value past its ceiling, and the checkpoint isn't saved then).
     public init(service: VenueTokensService, logos: @escaping @Sendable () async -> [Address: URL], read: @escaping @Sendable () -> Stored,
-                write: @escaping @MainActor (Data, UInt64) -> Void, now: @escaping @Sendable () -> Date = { Date() }) {
+                write: @escaping @MainActor (Data, UInt64) -> Bool, now: @escaping @Sendable () -> Date = { Date() }) {
         self.service = service
         self.logos = logos
         self.read = read
@@ -153,10 +154,9 @@ public final class VenueTokenList {
     }
 
     /// Checked here, on the main actor with the write: an erase runs there too, so it comes before this save (which then
-    /// writes nothing) or after it (and erases it).
+    /// writes nothing) or after it (and erases it). A save the store declined is tried again with the next progress.
     private func store(_ list: Data, checkpoint: UInt64, _ generation: Int) {
-        guard generation == self.generation else { return }
-        write(list, checkpoint)
+        guard generation == self.generation, write(list, checkpoint) else { return }
         saved = checkpoint
     }
 

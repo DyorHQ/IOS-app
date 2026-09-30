@@ -30,10 +30,13 @@ enum VenueTokenStore {
     /// Saves the list, and its checkpoint only once the list reads back as written: UserDefaults refuses a value past its
     /// ceiling (about 4 MB; the list is about 1.8 MB) and keeps what it had, and a checkpoint saved without its list would
     /// skip every token the list saved before it lacks. The checkpoint then stays where it was, and so does the stamp.
-    static func write(_ list: Data, lastBlock: UInt64) {
+    /// Returns whether it was saved.
+    @discardableResult
+    static func write(_ list: Data, lastBlock: UInt64) -> Bool {
         UserDefaults.standard.set(list, forKey: key)
-        guard UserDefaults.standard.data(forKey: key) == list else { return }
+        guard UserDefaults.standard.data(forKey: key) == list else { return false }
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: stampKey)
         UserDefaults.standard.set(String(lastBlock), forKey: blockKey)
+        return true
     }
 }

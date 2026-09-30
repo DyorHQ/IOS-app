@@ -155,7 +155,7 @@ final class VenueTokenListTests: XCTestCase {
         let slow = VenueTokenList(service: service, logos: { [:] }, read: {
             Thread.sleep(forTimeInterval: 0.3)
             return VenueTokenList.Stored(list: nil, checkpoint: 0)
-        }, write: { _, _ in })
+        }, write: { _, _ in true })
         XCTAssertFalse(slow.isCatchingUp, "nothing reads yet")
         slow.refresh()
         XCTAssertFalse(slow.isLoaded)
@@ -226,6 +226,33 @@ final class VenueTokenListTests: XCTestCase {
         XCTAssertTrue(MomentsChainStub.calls().filter { $0.to == bad }.isEmpty, "not read again")
     }
 
+    /// The V1 final check's finding: a save the store declined (UserDefaults refuses a value past its ceiling, and
+    /// `VenueTokenStore.write` then saves no checkpoint) was taken as saved, so it wasn't tried again until the checkpoint
+    /// moved on. Only a save the store took counts.
+    func testASaveTheStoreDeclinedIsTriedAgain() async {
+        VenueFixture.installMetadata()
+        let store = MemoryStore(list: [], checkpoint: 0)
+        store.refuseWrites(true)
+        let gap = Flag(true)
+        // The second segment is read in part: its checkpoint stays that of the first.
+        LogsStub.install(head: 12_000_000, logs: [VenueFixture.pool(1, at: 1_000_000), VenueFixture.pool(4, at: 11_000_000)]) { range in
+            gap.on && range.contains(8_000_000) ? .error(code: -32062, message: "Block range is too large") : nil
+        }
+        let list = store.list()
+        list.refresh()
+        await list.finished()
+        XCTAssertEqual(list.checkpoint, 4_999_999)
+        XCTAssertEqual(store.attempts, [4_999_999, 4_999_999], "declined, so tried again with the segment read in part")
+        XCTAssertTrue(store.writes.isEmpty)
+
+        store.refuseWrites(false)
+        gap.set(false)
+        list.refresh()
+        await list.finished()
+        XCTAssertEqual(store.writes.map(\.checkpoint), [9_999_999, 11_999_900])
+        XCTAssertEqual(store.writes.last?.symbols, ["T1", "T4"])
+    }
+
     func testOneRunAtATime() async {
         VenueFixture.installMetadata()
         let store = MemoryStore(list: [], checkpoint: 0)
@@ -282,6 +309,8 @@ final class MemoryStore: @unchecked Sendable {
     private var stored: VenueTokenList.Stored
     private var readCount = 0
     private var written: [(symbols: [String], checkpoint: UInt64)] = []
+    private var attempted: [UInt64] = []
+    private var refusing = false
 
     init(list: [Token]?, checkpoint: UInt64) {
         stored = VenueTokenList.Stored(list: list.flatMap { try? JSONEncoder().encode($0) }, checkpoint: checkpoint)
@@ -294,6 +323,11 @@ final class MemoryStore: @unchecked Sendable {
     var reads: Int { lock.lock(); defer { lock.unlock() }; return readCount }
     var writes: [(symbols: [String], checkpoint: UInt64)] { lock.lock(); defer { lock.unlock() }; return written }
     var data: Data? { lock.lock(); defer { lock.unlock() }; return stored.list }
+    /// The checkpoint of every write asked, taken or declined.
+    var attempts: [UInt64] { lock.lock(); defer { lock.unlock() }; return attempted }
+
+    /// Declines every write while `refuse`, as UserDefaults refuses a value past its ceiling: nothing is saved.
+    func refuseWrites(_ refuse: Bool) { lock.lock(); refusing = refuse; lock.unlock() }
 
     func read() -> VenueTokenList.Stored {
         lock.lock(); defer { lock.unlock() }
@@ -301,11 +335,14 @@ final class MemoryStore: @unchecked Sendable {
         return stored
     }
 
-    func write(_ list: Data, _ checkpoint: UInt64) {
+    func write(_ list: Data, _ checkpoint: UInt64) -> Bool {
         let symbols = ((try? JSONDecoder().decode([Token].self, from: list)) ?? []).map(\.symbol)
         lock.lock(); defer { lock.unlock() }
+        attempted.append(checkpoint)
+        guard !refusing else { return false }
         stored = VenueTokenList.Stored(list: list, checkpoint: checkpoint)
         written.append((symbols, checkpoint))
+        return true
     }
 
     /// A list on the stubs (`LogsStub`, named like rpc1, and `MomentsChainStub`) kept in this store.
