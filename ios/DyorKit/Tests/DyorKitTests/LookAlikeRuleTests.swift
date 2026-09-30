@@ -243,6 +243,28 @@ final class LookAlikeRuleTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.imitated(by: token("SAFE", "USDC\u{2800}")), .usdc, "the blank Braille pattern reads as nothing")
     }
 
+    /// Persian spells with the zero-width non-joiner and Indic conjuncts with the joiner after a virama: between two
+    /// letters of such a script they are part of the name, not hidden, so the forms allow the name and a DyorHQ coin
+    /// named so keeps its label. Anywhere else — around Latin letters, doubled, at an end, between two scripts — they are
+    /// still hidden.
+    func testTheJoinersPersianAndIndicScriptsSpellWithAreNotHidden() {
+        let persian = "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}"
+        let conjunct = "\u{0915}\u{094D}\u{200D}\u{0937}"
+        let bengali = "\u{0995}\u{09CD}\u{200C}\u{09B7}"
+        for name in [persian, conjunct, bengali, "\u{0646}\u{0627}\u{0645}\u{0647}\u{200C}\u{0627}\u{06CC} \u{0645}\u{0646}"] {
+            XCTAssertFalse(SymbolSafety.hasHiddenCharacters(name), label(name))
+            XCTAssertNil(SymbolSafety.createRefusal(name: name, symbol: "SAFE", maxName: SymbolSafety.maxMomentNameLength), label(name))
+            let coin = DyorCoin(address: address, origin: .moment(factory: MomentsAddresses.monadMainnet.factory, id: 1, retired: false), symbol: "SAFE", name: name,
+                                creator: DyorCoinChain.creator, logo: "", pair: Monad.usdc)
+            XCTAssertEqual(TokenBadge.of(coin.token, coin: coin, receivedUnasked: true), .dyorMoment, label(name))
+        }
+        for name in ["Pay\u{200C}pal", "USD1\u{200D}", "\u{0645}\u{06CC}\u{200C}\u{200C}\u{062E}", "\u{0645}\u{06CC}\u{200C}", "\u{200C}\u{0645}\u{06CC}",
+                     "\u{0645}\u{200C}\u{0915}", "\u{0915}\u{094D}\u{200D}A", "\u{0645} \u{200C}\u{062E}"] {
+            XCTAssertTrue(SymbolSafety.hasHiddenCharacters(name), label(name))
+        }
+        XCTAssertEqual(WalletHoldings.imitated(by: token("SAFE", "M\u{200C}ON")), .mon, "a joiner still hides nothing")
+    }
+
     /// The create forms refuse a symbol or name longer than they allow: a symbol 10 characters, a launch's name 32 (its
     /// form sets none), a Moment's 48.
     func testTheCreateGuardRefusesWhatTheFormsDont() {

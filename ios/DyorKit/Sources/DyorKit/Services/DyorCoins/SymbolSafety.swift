@@ -13,7 +13,7 @@ import Foundation
 ///
 /// A name is display-safe when it has no hidden or direction-changing character (`hasHiddenCharacters`) and no word
 /// mixes Latin letters with letters of another script drawn like Latin ones (`mixesLookAlikeAlphabets`); any language
-/// and emoji are fine. A DyorHQ coin whose symbol or name isn't display-safe, or whose symbol is longer than the create
+/// and emoji are fine, with the joiners Persian, Indic scripts and emoji spell with. A DyorHQ coin whose symbol or name isn't display-safe, or whose symbol is longer than the create
 /// forms allow (`maxSymbolLength`), carries a warning, never "DyorHQ Launch" (`TokenBadge`), and the create forms refuse
 /// all of it (`createRefusal`), so a coin made in the app never carries a warning. A name's length is the forms' alone
 /// (`maxLaunchNameLength`, `maxMomentNameLength`): the launch form of build 16 and before set none and the Moment form
@@ -167,7 +167,12 @@ public enum SymbolSafety {
     /// Whether `name` holds a character that doesn't show as itself: a control, format or direction-changing character,
     /// a zero-width or other invisible one (`Address.isInvisible`, default-ignorable code points, the blank Braille
     /// pattern U+2800 and the Hangul fillers), a line or paragraph separator, a private-use or unassigned code point, or
-    /// U+FFFD, which stands for bytes that aren't text. What belongs to an emoji is not hidden, and only where it does:
+    /// U+FFFD, which stands for bytes that aren't text. What a script or an emoji writes with is not hidden, and only
+    /// where it does:
+    /// - the zero-width non-joiner and joiner (U+200C, U+200D) between two letters of a script that spells with them
+    ///   (`joinerScripts`: Arabic-script, Syriac, Mongolian and the Indic scripts), the first perhaps ending in a mark
+    ///   such as a virama: Persian "می‌خواهم", a Devanagari conjunct "क्‍ष". `ChainText.shown` keeps them for the same
+    ///   reason, and `WalletHoldings.visible` reads past them, so they hide no look-alike;
     /// - the zero-width joiner between two emoji ("👨‍👩‍👧"), after any variation selector or skin tone on the first;
     /// - VS15 or VS16 (U+FE0E, U+FE0F) right after an emoji ("❤️") or a keycap's 0–9, # or * followed by U+20E3;
     /// - U+20E3 COMBINING ENCLOSING KEYCAP right after 0–9, # or *, or after one of those and VS16 ("1️⃣");
@@ -185,7 +190,10 @@ public enum SymbolSafety {
                 continue
             }
             switch value {
+            case 0x200C:
+                guard joinsLetters(scalars, at: i) else { return true }
             case 0x200D:
+                if joinsLetters(scalars, at: i) { break }
                 guard i + 1 < scalars.count, isPictograph(scalars[i + 1]), let base = emojiBase(scalars, before: i), isPictograph(scalars[base]) else { return true }
             case 0xFE0E, 0xFE0F:
                 guard i > 0, isPictograph(scalars[i - 1]) || (isKeycapBase(scalars[i - 1]) && i + 1 < scalars.count && scalars[i + 1].value == 0x20E3) else { return true }
@@ -207,6 +215,34 @@ public enum SymbolSafety {
         }
         return false
     }
+
+    /// Whether the joiner or non-joiner at `at` stands between two letters of one script in `joinerScripts`: a letter of
+    /// it, or one of its marks (a virama, a vowel sign, a harakat) ending one, right before; a letter of it right after.
+    private static func joinsLetters(_ scalars: [Unicode.Scalar], at: Int) -> Bool {
+        guard at > 0, at + 1 < scalars.count, let script = joinerScript(scalars[at - 1]), joinerScript(scalars[at + 1]) == script else { return false }
+        switch scalars[at - 1].properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter, .nonspacingMark, .spacingMark: break
+        default: return false
+        }
+        switch scalars[at + 1].properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter: return true
+        default: return false
+        }
+    }
+
+    /// Which of `joinerScripts` `scalar` belongs to, by block; nil for any other script.
+    private static func joinerScript(_ scalar: Unicode.Scalar) -> Int? {
+        joinerScripts.firstIndex { blocks in blocks.contains { $0.contains(scalar.value) } }
+    }
+
+    /// The scripts whose spelling uses the zero-width non-joiner and joiner, each as its blocks: Arabic (with its
+    /// supplement, extensions and presentation forms: Persian, Urdu, Pashto), Syriac, Mongolian, Devanagari, Bengali,
+    /// Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam and Sinhala.
+    private static let joinerScripts: [[ClosedRange<UInt32>]] = [
+        [0x0600...0x06FF, 0x0750...0x077F, 0x0870...0x089F, 0x08A0...0x08FF, 0xFB50...0xFDFF, 0xFE70...0xFEFF],
+        [0x0700...0x074F, 0x0860...0x086F], [0x1800...0x18AF], [0x0900...0x097F, 0xA8E0...0xA8FF], [0x0980...0x09FF], [0x0A00...0x0A7F],
+        [0x0A80...0x0AFF], [0x0B00...0x0B7F], [0x0B80...0x0BFF], [0x0C00...0x0C7F], [0x0C80...0x0CFF], [0x0D00...0x0D7F], [0x0D80...0x0DFF],
+    ]
 
     /// An emoji a joiner may join or a variation selector may follow: a pictographic emoji (`isEmoji`, beyond ASCII's
     /// digits, # and *), not a regional-indicator letter, a skin tone or a tag.
