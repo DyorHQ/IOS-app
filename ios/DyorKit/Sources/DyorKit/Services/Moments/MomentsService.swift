@@ -433,7 +433,8 @@ public actor MomentsService {
 
     // MARK: - Hydration
 
-    /// Ledger, NFT and coin metadata, entitlements and graduation for a page of Moments in one multicall, then the
+    /// Ledger, NFT and coin metadata, entitlements and graduation for a page of Moments, in reads of at most
+    /// `Multicall.textChunk` Moments, all at once (`Multicall.readItems`, which retries a refused read Moment by Moment), then the
     /// pool state of the graduated ones, one `MomentInfo` per Moment, in order. A Moment's coin name, symbol and
     /// provenance are its creator's: one that can't be read shows a stand-in (`ChainText.unreadable` for the name and
     /// symbol, an empty provenance) and the Moment keeps its numbers and claims. Its ledger, editions, entitlements and

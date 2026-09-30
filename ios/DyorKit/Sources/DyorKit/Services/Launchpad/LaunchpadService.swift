@@ -406,8 +406,9 @@ public actor LaunchpadService {
 
     // MARK: - Hydration
 
-    /// Token metadata and live curve state for a page of records from `factory`, in one multicall (plus one
-    /// PoolManager read for graduated launches, and one metadata read for pair assets not seen before), one launch per
+    /// Token metadata and live curve state for a page of records from `factory`, in reads of at most
+    /// `Multicall.textChunk` launches, all at once (`Multicall.readItems`, which retries a refused read launch by launch), with one
+    /// PoolManager read for graduated launches and one metadata read for pair assets not seen before; one launch per
     /// record, in order. A coin's name, symbol, logo, description and links are its creator's: one that can't be read
     /// shows a stand-in (`ChainText.unreadable`, empty for the rest) and the launch keeps its numbers. Its price, reserve,
     /// state and supply are the protocol's: one that fails means the read didn't happen, and this throws
