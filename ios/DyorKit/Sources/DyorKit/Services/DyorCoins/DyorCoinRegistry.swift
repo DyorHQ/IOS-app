@@ -313,13 +313,6 @@ public actor DyorCoinRegistry {
         case launch(Address, LaunchpadAddresses)
         case moment(Moment, MomentsAddresses)
 
-        var address: Address {
-            switch self {
-            case .launch(let token, _): return token
-            case .moment(let moment, _): return moment.coin
-            }
-        }
-
         var factory: Address {
             switch self {
             case .launch(_, let stack): return stack.factory
