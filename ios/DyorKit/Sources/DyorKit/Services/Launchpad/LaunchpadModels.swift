@@ -638,6 +638,22 @@ public struct EscrowBalances: Hashable, Sendable {
     public var isEmpty: Bool { native == 0 && tokens.values.allSatisfy { $0 == 0 } }
 }
 
+/// One launchpad's fee escrow and what an account can claim from it (`LaunchpadService.escrowReads`): nil balances when
+/// the read failed.
+public struct LaunchpadEscrowRead: Hashable, Sendable {
+    public let escrow: Address
+    public let factory: Address
+    public let retired: Bool
+    public let balances: EscrowBalances?
+
+    public init(escrow: Address, factory: Address, retired: Bool, balances: EscrowBalances?) {
+        self.escrow = escrow
+        self.factory = factory
+        self.retired = retired
+        self.balances = balances
+    }
+}
+
 /// What one wallet holds and can claim for a launch.
 public struct LaunchAccountView: Hashable, Sendable {
     public let tokenBalance: BigUInt

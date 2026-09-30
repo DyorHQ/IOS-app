@@ -461,22 +461,35 @@ final class LaunchpadProfileModel {
         let listing = await env.launchpad.launchListing(limit: 100)
         let launches = listing.keeping(lastLaunches)
         lastLaunches = launches
-        incomplete = listing.complete ? nil : "Part of your launchpad couldn't be read just now, so some coins or fees may be missing. Pull to refresh."
-        guard !launches.isEmpty else { positions = []; created = []; return }
+        var unread = !listing.complete
 
-        // Pair-asset prices (MON priced live; USDC/AUSD pinned to 1 by the price service).
-        let pairTokens = Set(launches.map(\.pairToken))
+        // Escrow (claimable creator fees): every stack's escrow, for MON and every pair asset a launch can use, whether or
+        // not the coins you created are among the launches read (`escrowReads`). A failed read says so, never zero.
+        let createdPairs = launches.filter { $0.deployer == address }.map(\.pairToken)
+        let escrowReads = await env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)
+        escrows = escrowReads.map { EscrowHolding(escrow: $0.escrow, retired: $0.retired, balances: $0.balances ?? EscrowBalances(native: 0, tokens: [:])) }
+        if escrowReads.contains(where: { $0.balances == nil }) { unread = true }
+
+        // Pair-asset prices (MON priced live; USDC/AUSD pinned to 1 by the price service), for the launches' pairs and
+        // every pair asset an escrow can hold.
+        let pairTokens = Set(launches.map(\.pairToken)).union(Token.launchpadPairAssets).union([Monad.native])
         let priceTokens = pairTokens.map { addr -> Token in
             if let launch = launches.first(where: { $0.pairToken == addr }) {
                 return Token(address: addr, symbol: launch.pair.symbol, name: launch.pair.symbol, decimals: launch.pair.decimals)
             }
-            return Token(address: addr, symbol: "", name: "", decimals: 18)
+            return Token.core(addr) ?? Token(address: addr, symbol: "", name: "", decimals: 18)
         }
         let priceMap = (try? await env.prices.prices(for: priceTokens)) ?? [:]
         pairUSD = Dictionary(uniqueKeysWithValues: pairTokens.map { ($0, priceMap[$0]?.usd ?? ($0.isZero ? (priceMap[Monad.native]?.usd ?? 0) : 0)) })
         // Multiple launches share a pair asset (MON / USDC / AUSD), so keys repeat — dedupe instead of
-        // Dictionary(uniqueKeysWithValues:), which traps on the first duplicate key and crashed this screen.
+        // Dictionary(uniqueKeysWithValues:), which traps on the first duplicate key and crashed this screen. A pair asset
+        // no launch read uses takes its symbol and decimals from the curated list.
         pairMeta = Dictionary(launches.map { ($0.pairToken, ($0.pair.symbol, $0.pair.decimals)) }, uniquingKeysWith: { first, _ in first })
+        for token in Token.launchpadPairAssets where pairMeta[token] == nil {
+            if let core = Token.core(token) { pairMeta[token] = (core.symbol, core.decimals) }
+        }
+        incomplete = unread ? "Part of your launchpad couldn't be read just now, so some coins or fees may be missing. Pull to refresh." : nil
+        guard !launches.isEmpty else { positions = []; created = []; activity = []; return }
 
         // Balances across every launch token in one multicall.
         let tokens = launches.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
@@ -488,26 +501,6 @@ final class LaunchpadProfileModel {
             return Created(launch: launch, mcapUSD: usd)
         }
         .sorted { ($0.mcapUSD ?? 0) > ($1.mcapUSD ?? 0) }
-
-        // Escrow (claimable creator fees): each stack's escrow, keyed by the pair assets of the coins you created on it.
-        var pairsByEscrow: [Address: [Address]] = [:]
-        for item in created {
-            let escrow = await env.launchpad.stack(for: item.launch).escrow
-            pairsByEscrow[escrow, default: []].append(item.launch.pairToken)
-        }
-        let stacks = await env.launchpad.stacks.enumerated().filter { !$0.element.escrow.isZero }
-        let pairs = pairsByEscrow
-        escrows = await withTaskGroup(of: (Int, EscrowHolding).self) { group in
-            for (i, stack) in stacks {
-                group.addTask {
-                    let balances = (try? await env.launchpad.escrowBalances(account: address, pairTokens: pairs[stack.escrow] ?? [], escrow: stack.escrow)) ?? EscrowBalances(native: 0, tokens: [:])
-                    return (i, EscrowHolding(escrow: stack.escrow, retired: LaunchpadAddresses.retiredStack(for: stack.factory) != nil, balances: balances))
-                }
-            }
-            var out: [(Int, EscrowHolding)] = []
-            for await entry in group { out.append(entry) }
-            return out.sorted { $0.0 < $1.0 }.map(\.1)
-        }
 
         // Held coins → position with on-curve PnL and holder rewards, computed concurrently.
         let held = launches.filter { (balances[$0.token] ?? 0) > 0 }

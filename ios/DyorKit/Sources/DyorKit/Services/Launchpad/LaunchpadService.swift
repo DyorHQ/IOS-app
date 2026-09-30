@@ -637,6 +637,29 @@ public actor LaunchpadService {
         return EscrowBalances(native: r[0][0].uint, tokens: byToken)
     }
 
+    /// Every launchpad's fee escrow (the live one's first, then each retired one's, `stacks`) and what `account` can
+    /// claim from it: native MON and every pair asset a launch can be made with (`Token.launchpadPairAssets`), plus
+    /// `extraPairTokens`, whichever launches were read — a creator's fees in USDC or AUSD are never missed because their
+    /// coin isn't among the launches a screen read. An escrow whose read failed has no balances (`LaunchpadEscrowRead`),
+    /// never zero.
+    public func escrowReads(account: Address, extraPairTokens: [Address] = []) async -> [LaunchpadEscrowRead] {
+        var seen = Set<Address>()
+        let pairTokens = (Token.launchpadPairAssets + extraPairTokens).filter { !$0.isZero && seen.insert($0).inserted }
+        let stacks = stacks.filter { !$0.escrow.isZero }
+        return await withTaskGroup(of: (Int, LaunchpadEscrowRead).self) { group in
+            for (i, stack) in stacks.enumerated() {
+                group.addTask {
+                    let balances = try? await self.escrowBalances(account: account, pairTokens: pairTokens, escrow: stack.escrow)
+                    return (i, LaunchpadEscrowRead(escrow: stack.escrow, factory: stack.factory, retired: LaunchpadAddresses.retiredStack(for: stack.factory) != nil,
+                                                   balances: balances))
+                }
+            }
+            var out: [(Int, LaunchpadEscrowRead)] = []
+            for await entry in group { out.append(entry) }
+            return out.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+    }
+
     /// Sweeps the caller's balance in `escrow` (the live stack's when nil): the native balance (when `native` is
     /// true) and each listed token, in one plan — so a creator withdraws their fees across every launch on that stack
     /// in a single confirmation.
