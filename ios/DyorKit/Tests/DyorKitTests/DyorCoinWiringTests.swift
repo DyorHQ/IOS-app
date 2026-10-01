@@ -261,4 +261,23 @@ final class DyorCoinWiringTests: XCTestCase {
         XCTAssertFalse(momentSources.contains("gatewayURLs"), "never the creator's own host")
         XCTAssertTrue(try Self.source("App/AppEnvironment.swift").contains("policy: ImageSourcePolicy(supabaseURL: config.supabaseURL))"))
     }
+
+    /// The token page shows the coin's logo at 44 pt, and for a DyorHQ coin where it was launched in place of the
+    /// Unverified card; a look-alike keeps its warning, before anything else.
+    func testTheTokenPageSaysWhereADyorHQCoinWasLaunched() throws {
+        let home = try Self.source("Home/HomeView.swift")
+        let page = try Self.between(home, "struct TokenDetailView: View {", "struct PriceChart: View {")
+        XCTAssertTrue(page.contains("TokenLogo(token: row.token, size: 44)"))
+        XCTAssertTrue(page.contains("private var badge: TokenBadge { env.dyorCoins.badge(row.token, receivedUnasked: received) }"))
+        let imitation = try XCTUnwrap(page.range(of: "if badge.isImitation, let title = badge.title {"))
+        let dyorHQ = try XCTUnwrap(page.range(of: "} else if badge.isDyorHQ, let coin = env.dyorCoins.coin(row.token.address) { launchedOnDyorHQ(coin) }"))
+        let unverified = try XCTUnwrap(page.range(of: "} else if received || badge == .unverified {"))
+        XCTAssertLessThan(imitation.upperBound, dyorHQ.lowerBound)
+        XCTAssertLessThan(dyorHQ.lowerBound, unverified.lowerBound, "a DyorHQ coin never shows the Unverified card")
+        let section = try Self.between(page, "private func launchedOnDyorHQ(_ coin: DyorCoin) -> some View {", "private var launchPhase")
+        for part in ["AddressRow(title: \"Creator\", address: coin.creator)", "if let link = MomentLink(key: key) {", "router.pendingMomentLink = link",
+                     "router.openLaunch(LaunchReference(token: coin.address, factory: coin.factory))", "Text(\"Launched on DyorHQ\")"] {
+            XCTAssertTrue(section.contains(part), part)
+        }
+    }
 }
