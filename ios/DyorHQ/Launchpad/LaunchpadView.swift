@@ -583,13 +583,13 @@ struct LaunchDetailView: View {
         .sheet(isPresented: $showClaim) {
             ConfirmationSheet(title: "Claim Rewards", confirmTitle: "Claim", build: { await env.launchpad.claimRewardsPlan(launch: launch, view: account) }, onDone: { Task { await load() } },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed \(launch.symbol) rewards", subtitle: account.map { "\(NumberStyle.units($0.pendingRewards, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? "holder rewards", hash: hash, section: "launch"), owner: session.address) }) {
-                if let account { DetailRow("Pending rewards", "\(NumberStyle.units(account.pendingRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
+                if let account { DetailRow("Pending rewards", verbatim: "\(NumberStyle.units(account.pendingRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
         }
         .sheet(isPresented: $showCreatorClaim) {
             ConfirmationSheet(title: "Claim Creator Fees", confirmTitle: "Claim Fees", build: { env.launchpad.claimEscrowPlan(launch: launch) }, onDone: { Task { await load() } },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected \(launch.symbol) creator fees", subtitle: account.map { "\(NumberStyle.units($0.escrowBalance, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? "creator fees", hash: hash, section: "launch"), owner: session.address) }) {
-                if let account { DetailRow("Claimable", "\(NumberStyle.units(account.escrowBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
+                if let account { DetailRow("Claimable", verbatim: "\(NumberStyle.units(account.escrowBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
                 DetailRow("To", session.address?.short ?? "—")
             }
         }
@@ -746,15 +746,15 @@ struct LaunchDetailView: View {
                 amountText = side == .buy ? Amount.exact(buyable, decimals: launch.pair.decimals) : Amount.exact(account.tokenBalance, decimals: 18)
             }
             if side == .buy, let q = buyQuote, rawAmount > 0 {
-                DetailRow("You receive", "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
-                DetailRow("Curve fee", "\(NumberStyle.units(q.fee, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
-                if q.snipe > 0 { DetailRow("Early-buy tax", "\(NumberStyle.units(q.snipe, decimals: launch.pair.decimals)) \(launch.pair.symbol)", tint: Color.attention) }
-                if q.refund > 0 { DetailRow("Refunded (curve full)", "\(NumberStyle.units(q.refund, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
+                DetailRow("You receive", verbatim: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
+                DetailRow("Curve fee", verbatim: "\(NumberStyle.units(q.fee, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
+                if q.snipe > 0 { DetailRow("Early-buy tax", verbatim: "\(NumberStyle.units(q.snipe, decimals: launch.pair.decimals)) \(launch.pair.symbol)", tint: Color.attention) }
+                if q.refund > 0 { DetailRow("Refunded (curve full)", verbatim: "\(NumberStyle.units(q.refund, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
             if side == .sell, let q = sellQuote, rawAmount > 0 {
-                DetailRow("You receive", "\(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
-                DetailRow("Curve fee", "\(NumberStyle.units(q.fee, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
-                if q.tax > 0 { DetailRow("Creator tax", "\(NumberStyle.units(q.tax, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
+                DetailRow("You receive", verbatim: "\(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
+                DetailRow("Curve fee", verbatim: "\(NumberStyle.units(q.fee, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
+                if q.tax > 0 { DetailRow("Creator tax", verbatim: "\(NumberStyle.units(q.tax, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
             PrimaryButton(title: side == .buy ? "Buy \(launch.symbol)" : "Sell \(launch.symbol)",
                           isDisabled: rawAmount == 0 || !session.canSign || (side == .buy ? buyQuote == nil : sellQuote == nil) || shortfall != nil) { showConfirm = true }
@@ -892,16 +892,16 @@ struct LaunchDetailView: View {
                     KnownTokenStore.markChosen(launch.token, owner: session.address)
                     Activity.record(ActivityRecord(kind: .buy, title: "Bought \(launch.symbol)", subtitle: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }, intent: .launchpadBuy(token: launch.token, pay: .init(token: launch.pairToken, amount: rawAmount), usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 })) {
-                    DetailRow("You pay", "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
-                    DetailRow("You receive", "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
+                    DetailRow("You pay", verbatim: "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
+                    DetailRow("You receive", verbatim: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
                     DetailRow("Minimum", "\(NumberStyle.units(q.tokensOut * 99 / 100, decimals: 18, compact: true)) \(launch.symbol) (1% slippage)")
                 }
             } else if side == .sell, let q = sellQuote {
                 ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: q.quoteOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
                     Activity.record(ActivityRecord(kind: .sell, title: "Sold \(launch.symbol)", subtitle: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }, intent: .launchpadSell(token: launch.token, amount: rawAmount, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 })) {
-                    DetailRow("You sell", "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol)")
-                    DetailRow("You receive", "\(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
+                    DetailRow("You sell", verbatim: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol)")
+                    DetailRow("You receive", verbatim: "\(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
                     DetailRow("Minimum", "\(NumberStyle.units(q.quoteOut * 99 / 100, decimals: launch.pair.decimals)) \(launch.pair.symbol) (1% slippage)")
                 }
             }
@@ -1178,15 +1178,15 @@ struct CreateLaunchView: View {
                         },
                         intent: .alwaysAsks(.launch)
                     ) {
-                        DetailRow("Coin", "\(name) ($\(symbol))")
+                        DetailRow("Coin", verbatim: "\(name) ($\(symbol))")
                         DetailRow("Paired with", pairInfo?.symbol ?? "MON")
                         DetailRow("Graduation", pairInfo.map { "\(NumberStyle.units(pairGraduation, decimals: $0.decimals, compact: true)) \($0.symbol)" } ?? "—")
                         DetailRow("Graduation venue", effectiveVenue.title)
                         DetailRow("Creator tax", NumberStyle.basisPoints(creatorTaxBps))
                         DetailRow("Fee sharing", holderFeeSharing ? "On" : "Off")
-                        DetailRow("Launch fee", "\(NumberStyle.units(info.launchFee, decimals: 18)) MON")
+                        DetailRow("Launch fee", verbatim: "\(NumberStyle.units(info.launchFee, decimals: 18)) MON")
                         // The parsed amount — what is signed — not the typed text.
-                        if initialBuy > 0 { DetailRow("Developer buy", "\(NumberStyle.units(initialBuy, decimals: pairInfo?.decimals ?? 18)) \(pairInfo?.symbol ?? "MON")") }
+                        if initialBuy > 0 { DetailRow("Developer buy", verbatim: "\(NumberStyle.units(initialBuy, decimals: pairInfo?.decimals ?? 18)) \(pairInfo?.symbol ?? "MON")") }
                     }
                 }
             }

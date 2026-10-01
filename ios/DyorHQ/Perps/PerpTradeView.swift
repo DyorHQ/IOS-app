@@ -923,12 +923,12 @@ struct PerpTradeView: View {
             Activity.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }, intent: orderIntent) {
             let signed = reviewedInput
-            DetailRow("Market", "\(market.asset)-PERP")
+            DetailRow("Market", verbatim: "\(market.asset)-PERP")
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
             DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(NumberStyle.number(signed.price ?? mark, maximumFractionDigits: market.priceDecimals))")
             // The parsed values this order signs, not the typed text (audit F4), at the market's full precision.
-            DetailRow("Size", "\(NumberStyle.number(signed.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
-            DetailRow("Leverage", "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
+            DetailRow("Size", verbatim: "\(NumberStyle.number(signed.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
+            DetailRow("Leverage", verbatim: "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
             DetailRow("Margin", PriceFormat.usdValue(notional / max(ticket.leverage, 1)))
             // This path (perplTrading not ready) places a bare on-chain entry — it cannot attach TP/SL. Don't advertise
             // triggers the order won't carry; tell the user they need one-click trading for them.
@@ -2241,7 +2241,7 @@ private struct ClosePositionSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Position", "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
+                    DetailRow("Position", verbatim: "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
                     DetailRow("Mark price", NumberStyle.number(mark))
                     DetailRow("Unrealized", PriceFormat.usdValue(position.unrealized, signed: true), tint: position.unrealized < 0 ? .negative : .positive)
                 }
@@ -2371,7 +2371,7 @@ private struct AddMarginSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Position", "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
+                    DetailRow("Position", verbatim: "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
                     DetailRow("Current margin", PriceFormat.usdValue(position.margin))
                     DetailRow("Available", PriceFormat.usdValue(available))
                 }
@@ -2393,7 +2393,7 @@ private struct AddMarginSheet: View {
                 if amount > 0, !overBalance {
                     Section("After") {
                         DetailRow("Margin", PriceFormat.usdValue(projMargin))
-                        DetailRow("Leverage", "\(NumberStyle.number(projLeverage, maximumFractionDigits: 1))×")
+                        DetailRow("Leverage", verbatim: "\(NumberStyle.number(projLeverage, maximumFractionDigits: 1))×")
                         DetailRow("Liq. price", projLiquidation.map { NumberStyle.number($0) } ?? (market.maintMarginFraction == nil ? "Unknown" : "—"))
                     }
                 }
@@ -2506,11 +2506,11 @@ struct AuthedOrderSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Market", "\(market.asset)-PERP")
+                    DetailRow("Market", verbatim: "\(market.asset)-PERP")
                     DetailRow("Side", input.side == .long ? "Long" : "Short", tint: sideColor)
                     DetailRow("Type", input.kind == .market ? "Market · \(NumberStyle.basisPoints(input.slippageBps)) slippage" : "Limit at \(NumberStyle.number(input.price ?? market.mark, maximumFractionDigits: market.priceDecimals))")
-                    DetailRow("Size", "\(NumberStyle.number(input.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
-                    DetailRow("Leverage", "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
+                    DetailRow("Size", verbatim: "\(NumberStyle.number(input.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
+                    DetailRow("Leverage", verbatim: "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
                     DetailRow("Margin", PriceFormat.usdValue(summaryMargin))
                     // Each closes this order's size, fixed when placed (security audit GT-5).
                     if let takeProfit { DetailRow("Take profit", "\(NumberStyle.number(takeProfit)) · closes \(NumberStyle.number(triggerSize ?? input.size)) \(market.asset)", tint: .positive) }

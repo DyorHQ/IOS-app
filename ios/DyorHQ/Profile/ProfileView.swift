@@ -212,21 +212,29 @@ struct ProfileView: View {
     }
 }
 
-/// A settings row: a symbol in the accent tint, then the title. Matches Apple's own settings rows.
+/// A settings row: a symbol in the accent tint, then the title. Matches Apple's own settings rows. The title is a catalog
+/// key when written in the code, or a `String` shown as it is.
 struct SettingsRow: View {
-    let title: String
+    private let title: Text
     let symbol: String
     var tint: Color = .accent
 
-    init(_ title: String, symbol: String, tint: Color = .accent) {
-        self.title = title
+    init(_ title: LocalizedStringKey, symbol: String, tint: Color = .accent) {
+        self.title = Text(title)
+        self.symbol = symbol
+        self.tint = tint
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(_ title: S, symbol: String, tint: Color = .accent) {
+        self.title = Text(verbatim: String(title))
         self.symbol = symbol
         self.tint = tint
     }
 
     var body: some View {
         Label {
-            Text(title).foregroundStyle(.primary)
+            title.foregroundStyle(.primary)
         } icon: {
             Image(systemName: symbol).foregroundStyle(tint)
         }
@@ -447,7 +455,7 @@ struct SendSheet: View {
                 }, intent: .alwaysAsks(.send)) {
                     DetailRow("To", review.to.checksummed, spellsOut: true) // in full: this review is the last check before funds leave
                     if review.toContract { DetailRow("Recipient", "A contract, not a wallet", tint: .attention) }
-                    DetailRow("Amount", "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol)")
+                    DetailRow("Amount", verbatim: "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol)")
                     // In full, like the recipient: a look-alike's contract can be made to match a short form.
                     if !review.token.isNative { DetailRow("Token contract", review.token.address.checksummed, spellsOut: true) }
                     if review.badge.isImitation, let title = review.badge.title { DetailRow("Token", title, tint: .attention) }

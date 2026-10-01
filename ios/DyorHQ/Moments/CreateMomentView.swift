@@ -167,11 +167,11 @@ struct CreateMomentView: View {
                         intent: .alwaysAsks(.launch)
                     ) {
                         let days = input.collectWindow / 86_400
-                        DetailRow("Moment", "\(input.name) ($\(input.symbol))")
+                        DetailRow("Moment", verbatim: "\(input.name) ($\(input.symbol))")
                         DetailRow("Collect price", MomentsFormat.usdc(input.price))
                         DetailRow("Graduates at", "\(MomentsFormat.usdcCents(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: input.creatorAllocBps))) FDV")
-                        DetailRow("Your coins", "\(NumberStyle.basisPoints(input.creatorAllocBps)) · \(MomentsFormat.coins(MomentsConstants.supply * BigUInt(input.creatorAllocBps) / BigUInt(MomentsConstants.bps)))")
-                        DetailRow("Window", "\(days) \(days == 1 ? "day" : "days")")
+                        DetailRow("Your coins", verbatim: "\(NumberStyle.basisPoints(input.creatorAllocBps)) · \(MomentsFormat.coins(MomentsConstants.supply * BigUInt(input.creatorAllocBps) / BigUInt(MomentsConstants.bps)))")
+                        DetailRow("Window", verbatim: "\(days) \(days == 1 ? "day" : "days")")
                         // Every term the publish's terms hash binds, as read with it.
                         DetailRow("Each collect", "\(NumberStyle.basisPoints(policy.creatorBps)) you · \(NumberStyle.basisPoints(policy.platformBps)) DyorHQ · \(NumberStyle.basisPoints(policy.reserveBps)) reserve")
                         DetailRow("Minimum price", MomentsFormat.usdc(policy.minPrice))
@@ -365,7 +365,7 @@ struct CreateMomentView: View {
                     DetailRow("Collect price", MomentsFormat.usdc(price))
                     DetailRow("Graduates at", "\(MomentsFormat.usdcCents(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps))) FDV")
                     DetailRow("Each collect", "\(NumberStyle.basisPoints(policy.reserveBps)) reserve · \(NumberStyle.basisPoints(policy.creatorBps)) you · \(NumberStyle.basisPoints(policy.platformBps)) DyorHQ")
-                    DetailRow("Your coins", "\(MomentsFormat.coins(creatorCoins)) (\(NumberStyle.basisPoints(allocBps)))")
+                    DetailRow("Your coins", verbatim: "\(MomentsFormat.coins(creatorCoins)) (\(NumberStyle.basisPoints(allocBps)))")
                     DetailRow("Collectors + pool", "\(MomentsFormat.coins(MomentsConstants.supply - creatorCoins)) at one price")
                     DetailRow("NFT royalty", NumberStyle.basisPoints(policy.royaltyBps))
                     DetailRow("Trading fee after graduation", "1.5% (0.2% to you)")

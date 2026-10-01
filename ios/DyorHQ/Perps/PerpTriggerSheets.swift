@@ -81,7 +81,7 @@ struct PositionTriggersSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Position", "\(isLong ? "Long" : "Short") \(NumberStyle.number(position.size)) \(market.asset)", tint: isLong ? .positive : .negative)
+                    DetailRow("Position", verbatim: "\(isLong ? "Long" : "Short") \(NumberStyle.number(position.size)) \(market.asset)", tint: isLong ? .positive : .negative)
                     DetailRow("Mark price", NumberStyle.number(mark))
                     DetailRow("Liq. price", position.liquidation.map { NumberStyle.number($0) } ?? "Unknown")
                 }

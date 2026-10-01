@@ -109,7 +109,7 @@ struct TransferSheet: View {
                                       Activity.record(ActivityRecord(kind: direction == .toPerps ? .deposit : .withdraw, title: direction == .toPerps ? "Transferred to Perps" : "Withdrawn to Spot", subtitle: "\(NumberStyle.units(raw, decimals: 6)) AUSD", hash: hash, section: "perps", usd: Amount.units(raw, decimals: 6)), owner: session.address)
                                   },
                                   intent: intent) {
-                    DetailRow("Amount", "\(NumberStyle.units(raw, decimals: 6)) AUSD")
+                    DetailRow("Amount", verbatim: "\(NumberStyle.units(raw, decimals: 6)) AUSD")
                     if direction == .toPerps, needsSwap, let quote {
                         DetailRow("Swap first", "≈ \(NumberStyle.units(quoteMON, decimals: 18, compact: true)) MON → \(NumberStyle.units(quote.amountOut, decimals: 6)) AUSD on \(quote.venue.displayName)")
                     }
