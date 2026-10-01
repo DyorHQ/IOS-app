@@ -37,8 +37,11 @@ enum Notifications {
              body: "Swapped \(NumberStyle.units(amountIn, decimals: tokenIn.decimals, compact: true)) \(tokenIn.symbol) → \(NumberStyle.units(amountOut, decimals: tokenOut.decimals, compact: true)) \(tokenOut.symbol)", route: .trade)
     }
 
-    static func perpOrder(side: String, market: String, filled: Bool) {
-        post(kind: .perp, title: filled ? "Order filled" : "Order placed", body: "\(side) \(market)", route: .perps)
+    /// A perp order the app sent or saw fill. `notice` says which: `PerpOrderNotice(acknowledged:)` for Perpl's
+    /// acknowledgement of an order ("Order submitted" for a market order, "Order placed" for a limit order), `.filled`
+    /// only for a position read that saw the fill.
+    static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String) {
+        post(kind: .perp, title: notice.title, body: "\(side) \(market)", route: .perps)
     }
 
     static func transactionConfirmed(_ label: String) {

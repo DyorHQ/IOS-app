@@ -218,7 +218,7 @@ final class PerpsModel {
         for position in fresh where position.size > (lastPositionSize[position.perpId] ?? 0) + 1e-9 {
             lastFilledPerpId = position.perpId
             fillSignal &+= 1
-            Notifications.perpOrder(side: position.side == .long ? "Long" : "Short", market: position.symbol, filled: true)
+            Notifications.perpOrder(.filled, side: position.side == .long ? "Long" : "Short", market: position.symbol)
         }
     }
 }
