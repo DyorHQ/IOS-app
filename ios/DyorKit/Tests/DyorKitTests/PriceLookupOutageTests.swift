@@ -177,6 +177,12 @@ final class PriceChainStub: URLProtocol {
             return nil
         }
         if selector == ABI.selector("getLiquidity(bytes32)") { return try! ABI.encode([.uint(0)], "uint128") }
+        // No DyorHQ factory recorded the token: an empty record on every launchpad, Moment id 0 on every cohort.
+        if selector == ABI.selector(LaunchpadABI.Factory.getLaunchedToken), let stack = DyorCoinRegistry.launchpads(live: .monadMainnet).first(where: { $0.factory == target }) {
+            let legacy = stack.generation.legacyRecord
+            return try! ABI.encode([.tuple(DyorCoinChain.record(nil, legacy: legacy))], LaunchpadABI.launchedTokenReturns(legacy: legacy))
+        }
+        if selector == ABI.selector(MomentsABI.Factory.momentIdByCoin) { return try! ABI.encode([.uint(0)], "uint256") }
         if selector == ABI.selector("getPair(address,address)") { return try! ABI.encode([.address(.zero)], "address") }
         return nil
     }

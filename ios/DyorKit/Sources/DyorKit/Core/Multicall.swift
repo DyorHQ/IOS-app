@@ -56,4 +56,26 @@ public struct Multicall: Sendable {
     public func readAll(_ calls: [ContractCall], block: BlockTag = .latest) async throws -> [[ABIValue]] {
         try await read(calls, block: block).map { try $0.get() }
     }
+
+    /// Several `read`s, each its calls at its own block, sent as one batched JSON-RPC request (a chart's samples): one
+    /// answer per request, in order, a request the node couldn't serve (a block it no longer holds) as its failure.
+    public func read(_ requests: [(calls: [ContractCall], block: UInt64)]) async throws -> [Result<[Result<[ABIValue], Error>], Error>] {
+        guard !requests.isEmpty else { return [] }
+        let encoded = try requests.map { request -> (CallRequest, BlockTag) in
+            let args: ABIValue = .array(request.calls.map { .tuple([.address($0.to), .bool(true), .bytes($0.data)]) })
+            return (CallRequest(to: Self.address, data: try ABI.encodeCall(Self.signature, [args])), .number(request.block))
+        }
+        let answers = try await rpc.ethCalls(encoded)
+        guard answers.count == requests.count else { throw NetworkError.malformedResponse }
+        return zip(requests, answers).map { request, answer in
+            Result {
+                let decoded = try ABI.decode(try answer.get(), Self.returns)[0].elements
+                guard decoded.count == request.calls.count else { throw NetworkError.malformedResponse }
+                return zip(request.calls, decoded).map { call, item in
+                    guard item[0].bool else { return .failure(RPCError(code: -32000, message: "Call reverted", data: item[1].bytes.hexString)) }
+                    do { return .success(try ABI.decode(item[1].bytes, call.returnTypes, strings: call.strings)) } catch { return .failure(error) }
+                }
+            }
+        }
+    }
 }
