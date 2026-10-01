@@ -116,11 +116,24 @@ async function gasFor(client, req, cap) {
   }
 }
 
+/** The gas price for the sweep threshold (a dry estimate: 0 when unread). */
 async function gasPriceOf(client) {
   try {
     return typeof client.getGasPrice === "function" ? await client.getGasPrice() : 0n;
   } catch {
     return 0n;
+  }
+}
+
+/** The gas price a live send is priced at: `{ ok, price }`, or `{ ok: false, why, rpc }` when it cannot be read or the
+    RPC answers 0. */
+async function liveGasPrice(client) {
+  if (typeof client.getGasPrice !== "function") return { ok: false, why: "this client cannot read it" };
+  try {
+    const price = BigInt(await client.getGasPrice());
+    return price > 0n ? { ok: true, price } : { ok: false, why: `the RPC answered ${price}` };
+  } catch (e) {
+    return { ok: false, why: errText(e), rpc: isTransportError(e) };
   }
 }
 
@@ -153,21 +166,29 @@ async function safeSend({ sender, reporter, client, state, budget, clock = budge
     return null;
   }
   let gasPrice = 0n;
-  if (live && state) {
-    const held = backoffFor(state, targetKey, at);
+  if (live) {
+    const held = state ? backoffFor(state, targetKey, at) : undefined;
     if (held) {
       reporter.info(`not sending ${what}: ${held.failures} failed send(s), backing off until ${new Date(held.until * 1000).toISOString()}`);
       return null;
     }
-    gasPrice = await gasPriceOf(client); // for the cap, and for the worst case of a send whose outcome is unknown
-    const cost = tx.gasLimit ? BigInt(tx.gasLimit) * gasPrice : 0n;
-    const room = spendAllowed(state, { at, costWei: cost, capWei: budget?.capWei });
-    if (!room.ok) {
-      reporter.alert({ job, target: "spend cap", severity: "critical", key: "budget:cap", reason: `--max-spend-per-day ${mon(budget.capWei)} MON reached: ${mon(room.spent)} MON spent in the last 24 h, and ${what} could cost up to ${mon(cost)} MON. Sends are held (simulations go on) until the 24-hour window has room` });
+    // The gas price prices the cap and the worst case of a send whose outcome is unknown: a send it cannot price is
+    // held, never counted as free.
+    const gp = await liveGasPrice(client);
+    if (!gp.ok) {
+      reporter.incomplete?.add(job);
+      reporter.alert({ job, target, severity: "warning", key: `send:gasprice:${targetKey}`, reason: `send held: the gas price could not be read (${gp.why}), so the spend cap could not count ${what}; the next run tries again`, ...(gp.rpc ? { rpc: true } : {}) });
       return null;
     }
-  } else if (live) {
-    gasPrice = await gasPriceOf(client);
+    gasPrice = gp.price;
+    if (state) {
+      const cost = tx.gasLimit ? BigInt(tx.gasLimit) * gasPrice : 0n;
+      const room = spendAllowed(state, { at, costWei: cost, capWei: budget?.capWei });
+      if (!room.ok) {
+        reporter.alert({ job, target: "spend cap", severity: "critical", key: "budget:cap", reason: `--max-spend-per-day ${mon(budget.capWei)} MON reached: ${mon(room.spent)} MON spent in the last 24 h, and ${what} could cost up to ${mon(cost)} MON. Sends are held (simulations go on) until the 24-hour window has room` });
+        return null;
+      }
+    }
   }
   const worst = tx.gasLimit ? BigInt(tx.gasLimit) * gasPrice : 0n;
   const keep = live && !!state;

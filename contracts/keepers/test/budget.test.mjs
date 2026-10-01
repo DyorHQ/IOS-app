@@ -120,6 +120,29 @@ test("E8: over --max-spend-per-day the keeper holds the send, keeps simulating a
   assert.equal(later.alerts.find((x) => x.key === "budget:cap"), undefined);
 });
 
+test("E8: a send whose gas price cannot be read is held, never counted as free (18 of 20 MON spent: no 3 MON send)", async () => {
+  const cases = {
+    "rate limited": async () => {
+      throw Object.assign(new Error("HTTP request failed. Status: 429"), { name: "HttpRequestError", status: 429 });
+    },
+    zero: async () => 0n,
+  };
+  for (const [what, getGasPrice] of Object.entries(cases)) {
+    const state = {};
+    recordSpend(state, { at: T0 - 3_600, wei: parseEther("18"), job: "launchpad-graduation", target: "earlier" });
+    const { sender, spawned } = live([]);
+    const reporter = makeReporter({ log: () => {} });
+    await launchpadGraduationJob({ client: { ...stuckLaunchChain([]), getGasPrice }, launchpads: [pad], sender, reporter, state, budget: { capWei: parseEther("20"), clock: () => T0 } });
+    assert.equal(spawned.length, 0, `${what}: cast never ran`);
+    const held = reporter.alerts.find((x) => x.key.startsWith("send:gasprice:"));
+    assert.ok(held, what);
+    assert.match(held.reason, /send held: the gas price could not be read/);
+    assert.equal(held.rpc === true, what === "rate limited", `${what}: an RPC failure joins the one "RPC degraded" alert`);
+    assert.ok(reporter.incomplete.has("launchpad-graduation"), "nothing of the job resolves");
+    assert.equal(spentSince(state, 0), parseEther("18"), "nothing recorded");
+  }
+});
+
 test("E8: a dry run is never held back by the cap or a backoff", async () => {
   const state = {};
   recordSpend(state, { at: T0, wei: parseEther("100"), job: "j", target: "t" });
