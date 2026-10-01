@@ -52,7 +52,7 @@ enum Notifications {
 
     static func priceAlert(symbol: String, above: Bool, target: Double, price: Double) {
         post(kind: .priceAlert, title: "Price alert: \(symbol)",
-             body: "\(symbol) is now \(NumberStyle.number(price)) — \(above ? "above" : "below") your \(NumberStyle.number(target)) target.", route: .home)
+             body: "\(symbol) is now \(PriceFormat.usdPrice(price)) — \(above ? "above" : "below") your \(PriceFormat.usdPrice(target)) target.", route: .home)
     }
 
     /// Records the notification in the in-app center and delivers it as a system notification (when permitted).

@@ -127,7 +127,8 @@ struct PriceAlertsView: View {
                             TokenLogo(symbol: alert.symbol, url: nil, size: 32)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(alert.symbol).font(.subheadline.weight(.semibold))
-                                Text("\(alert.above ? "Above" : "Below") \(NumberStyle.number(alert.target)) USD").font(.caption).foregroundStyle(.secondary)
+                                Text("\(alert.above ? "Above" : "Below") \(PriceFormat.usdPrice(alert.target))").font(.caption).foregroundStyle(.secondary)
+                                    .accessibilityLabel("\(alert.above ? "Above" : "Below") \(PriceFormat.spoken(alert.target))")
                             }
                             Spacer()
                             Image(systemName: alert.above ? "arrow.up.right" : "arrow.down.right")
@@ -169,7 +170,9 @@ private struct CreateAlertView: View {
     @State private var currentPrice: Double?
 
     private var universe: [Token] { KnownTokenStore.universe(owner: session.address).filter { $0.symbol != "WMON" } }
-    private var target: Double? { Double(targetText) }
+    /// The typed target, read like an amount field (`PriceAlertTarget.parse`): "0,03" from a comma-decimal keypad is
+    /// three cents, and a dust target keeps every digit.
+    private var target: Double? { PriceAlertTarget.parse(targetText) }
 
     var body: some View {
         NavigationStack {
@@ -179,7 +182,7 @@ private struct CreateAlertView: View {
                         ForEach(universe) { Text($0.symbol).tag($0.address) }
                     }
                     if let currentPrice {
-                        LabeledContent("Current price", value: NumberStyle.number(currentPrice) + " USD")
+                        LabeledContent("Current price") { Text(PriceFormat.usdPrice(currentPrice)).accessibilityLabel(PriceFormat.spoken(currentPrice)) }
                     }
                 }
                 Section {
@@ -191,7 +194,9 @@ private struct CreateAlertView: View {
                     HStack {
                         Text("Target")
                         Spacer()
-                        TextField("0.00", text: $targetText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit().frame(maxWidth: 120)
+                        // Takes the row's free width first (up to 220 pt), so a dust target such as 0.00000006 shows in full.
+                        TextField("0.00", text: $targetText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
+                            .frame(minWidth: 120, maxWidth: 220).layoutPriority(1)
                         Text("USD").foregroundStyle(.secondary)
                     }
                 } footer: {
