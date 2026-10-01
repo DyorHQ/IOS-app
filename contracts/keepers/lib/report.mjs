@@ -58,11 +58,15 @@ function stamp(ms) {
   return new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
 
+/** How long sends are held after the state file was reset: the lost spend ledger covered at most the last 24 hours. */
+export const RESET_HOLD_S = 86_400;
+
 /**
- * Reads the state file. A missing file is a first run. A file that does not parse, is not a JSON object, or was
- * written by a newer keeper (`version` above STATE_VERSION) is renamed to `<file>.corrupt-<time>` and `onProblem`
- * gets a sentence for a warning alert; the run then starts from an empty state. A file that cannot be read at all
- * (permissions) throws: the run fails instead of forgetting.
+ * Reads the state file. A missing file is a first run. A file that does not parse or is not a JSON object is renamed
+ * to `<file>.corrupt-<time>` and `onProblem` gets a sentence for a critical alert; the run then starts from an empty
+ * state whose sends are held for RESET_HOLD_S (`budget.heldUntil`), since the spend of the last 24 hours is lost and
+ * the daily cap could otherwise be spent twice. A file written by a newer keeper (`version` above STATE_VERSION, after
+ * a rollback) or one that cannot be read at all (permissions) throws: the run fails instead of forgetting.
  */
 export function loadState(file, { onProblem = () => {}, now = Date.now } = {}) {
   if (!file) return { version: STATE_VERSION };
@@ -78,10 +82,13 @@ export function loadState(file, { onProblem = () => {}, now = Date.now } = {}) {
   try {
     state = JSON.parse(text);
     if (!state || typeof state !== "object" || Array.isArray(state)) why = "not a JSON object";
-    else if (state.version !== undefined && !(Number.isInteger(state.version) && state.version >= 1 && state.version <= STATE_VERSION)) {
+    else if (Number.isInteger(state.version) && state.version > STATE_VERSION) {
+      throw Object.assign(new Error(`state file ${basename(file)} was written by a newer keeper (version ${state.version}; this one reads up to ${STATE_VERSION}): refusing to run, so its spend ledger and cursors are not lost. Run the newer keeper again, or move the file aside by hand`), { newer: true });
+    } else if (state.version !== undefined && !(Number.isInteger(state.version) && state.version >= 1)) {
       why = `version ${JSON.stringify(state.version)}, this keeper reads up to ${STATE_VERSION}`;
     }
   } catch (e) {
+    if (e.newer) throw e;
     why = `invalid JSON: ${e.message.split("\n")[0]}`;
   }
   if (!why) return { ...state, version: STATE_VERSION }; // a file from before build 17 has no version: it is version 1
@@ -92,8 +99,9 @@ export function loadState(file, { onProblem = () => {}, now = Date.now } = {}) {
   } catch {
     moved = false;
   }
-  onProblem(`state file ${basename(file)} was unreadable (${why}); ${moved ? `moved aside to ${basename(aside)}` : "could not be moved aside"}. Failure counters, the spend ledger, alert history and log cursors start over from this run`);
-  return { version: STATE_VERSION };
+  const heldUntil = Math.floor(now() / 1000) + RESET_HOLD_S;
+  onProblem(`state file ${basename(file)} was unreadable (${why}); ${moved ? `moved aside to ${basename(aside)}` : "could not be moved aside"}. Failure counters, the spend ledger, alert history and log cursors start over from this run, and sends are held until ${new Date(heldUntil * 1000).toISOString()} (the spend of the last 24 hours is unknown)`);
+  return { version: STATE_VERSION, budget: { heldUntil } };
 }
 
 /** Writes the state atomically: a crash or a full disk leaves the previous file whole. */

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadState, saveState, STATE_VERSION } from "../lib/report.mjs";
+import { loadState, saveState, STATE_VERSION, RESET_HOLD_S } from "../lib/report.mjs";
 
 const dir = () => mkdtempSync(join(tmpdir(), "keeper-state-"));
 
@@ -40,25 +40,41 @@ test("E6: a state file from before build 17 (no version) is read as version 1", 
   assert.deepEqual(problems, []);
 });
 
-test("E6: a corrupt state file is moved aside and reported, not silently reset", () => {
+test("E6: a corrupt state file is moved aside and reported, not silently reset; sends are held for a day", () => {
+  const at = Date.UTC(2026, 8, 29, 12, 0, 0);
   for (const [body, why] of [
     ['{"moment:0xabc:1": {"failures": 2', /invalid JSON/],
     ["[1,2]", /not a JSON object/],
     ["null", /not a JSON object/],
-    [JSON.stringify({ version: 99 }), /version 99, this keeper reads up to 1/],
+    [JSON.stringify({ version: 0 }), /version 0, this keeper reads up to 1/],
   ]) {
     const d = dir();
     const f = join(d, "state.json");
     writeFileSync(f, body);
     const problems = [];
-    const s = loadState(f, { onProblem: (p) => problems.push(p), now: () => Date.UTC(2026, 8, 29, 12, 0, 0) });
-    assert.deepEqual(s, { version: STATE_VERSION });
+    const s = loadState(f, { onProblem: (p) => problems.push(p), now: () => at });
+    // The spend ledger of the last 24 hours is lost: no send until it would have left the cap's window anyway.
+    assert.deepEqual(s, { version: STATE_VERSION, budget: { heldUntil: at / 1000 + RESET_HOLD_S } });
+    assert.equal(RESET_HOLD_S, 86_400);
     assert.equal(problems.length, 1);
     assert.match(problems[0], why);
     assert.match(problems[0], /moved aside to state\.json\.corrupt-20260929T120000Z/);
+    assert.match(problems[0], /sends are held until 2026-09-30T12:00:00\.000Z/);
     assert.deepEqual(readdirSync(d), ["state.json.corrupt-20260929T120000Z"]);
     assert.equal(readFileSync(join(d, "state.json.corrupt-20260929T120000Z"), "utf8"), body, "the evidence is kept");
   }
+});
+
+test("E6: a state file from a newer keeper (a rollback) stops the run and is left as it is", () => {
+  const d = dir();
+  const f = join(d, "state.json");
+  const body = JSON.stringify({ version: 99, budget: { spend: [{ at: 1, wei: "5" }] } });
+  writeFileSync(f, body);
+  const problems = [];
+  assert.throws(() => loadState(f, { onProblem: (p) => problems.push(p) }), /written by a newer keeper \(version 99; this one reads up to 1\): refusing to run/);
+  assert.deepEqual(problems, []);
+  assert.deepEqual(readdirSync(d), ["state.json"]);
+  assert.equal(readFileSync(f, "utf8"), body);
 });
 
 test("E6: a state file that exists but cannot be read stops the run (it would otherwise forget the spend ledger)", () => {

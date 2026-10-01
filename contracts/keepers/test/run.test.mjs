@@ -25,7 +25,7 @@ const opts = (argv, over = {}) => ({ ...parseKeeperArgs(argv, {}), ...over });
 
 /** A chain with one live Moment stuck in GraduationPending whose retry simulates OK. */
 /** `blockDelay` and `hang` apply to the jobs' block reads, not to the run's own first look at the head. */
-function chain({ balance = 50n * MON, blockDelay = 0, hang = false, headAge = 2 } = {}) {
+function chain({ balance = 50n * MON, blockDelay = 0, hang = false, headAge = 2, clock = NOW } = {}) {
   const reads = {
     momentCount: 1n,
     state: 1,
@@ -44,7 +44,7 @@ function chain({ balance = 50n * MON, blockDelay = 0, hang = false, headAge = 2 
       return balance;
     },
     async getBlock() {
-      if (this.blocks++ === 0) return { number: 1000n, timestamp: NOW - BigInt(headAge) };
+      if (this.blocks++ === 0) return { number: 1000n, timestamp: clock - BigInt(headAge) };
       if (hang) await new Promise(() => {});
       if (blockDelay) await sleep(blockDelay);
       return { timestamp: NOW };
@@ -385,6 +385,35 @@ test("K3: a failed send's alert is saved with its spend, before the run posts (a
   assert.match(onDisk.notify.keys[key].reason, /mined but REVERTED/);
   assert.equal(onDisk.budget.spend[0].wei, "5000000");
   assert.ok(w.posts[0].body.alerts.some((a) => a.key === key), "and posted by this run");
+});
+
+test("K3: after a corrupt state file is reset, sends are held for 24 hours (the cap's lost window), then resume", async () => {
+  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  writeFileSync(stateFile, '{"budget": {"spend": [');
+  // A run `s` seconds after the reset, against a head that is fresh then.
+  const at = (s = 0) => {
+    const w = world({ client: chain({ clock: NOW + BigInt(s) }) });
+    w.deps.now = () => (Number(NOW) + s) * 1000;
+    return w;
+  };
+  const o = opts(["moments-graduation", "--only-live", "--webhook", "https://hooks.example/x", "--state-file", stateFile], { send: true, signer: { account: "k" } });
+  const first = at();
+  await runKeeper(o, first.deps);
+  assert.deepEqual(first.sends, [], "the reset run sends nothing");
+  const reset = first.posts[0].body.alerts.find((a) => a.target === "state file" && /was unreadable/.test(a.reason));
+  assert.equal(reset.severity, "critical");
+  assert.match(reset.reason, /sends are held until/);
+  assert.equal(first.posts[0].body.alerts.find((a) => a.key === "budget:resethold")?.severity, "warning", "a standing warning until the hold ends");
+  // An hour later: still held.
+  const later = at(3_600);
+  await runKeeper(o, later.deps);
+  assert.deepEqual(later.sends, []);
+  assert.ok(later.lines.some((l) => /not sending graduate .*the state file was reset; sends are held until/.test(l)));
+  // A day later the ledger it lost would have left the window anyway: sends resume.
+  const day = at(86_400);
+  await runKeeper(o, day.deps);
+  assert.equal(day.sends.length, 1);
+  assert.equal(JSON.parse(readFileSync(stateFile, "utf8")).budget.heldUntil, undefined);
 });
 
 test("K3: a state file that cannot be written holds every send, and the run still posts its alerts and exits 1", { skip: process.getuid?.() === 0 && "root ignores file modes" }, async () => {

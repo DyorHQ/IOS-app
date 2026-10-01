@@ -80,9 +80,15 @@ export async function runKeeper(o, deps = {}) {
   const work = async () => {
     run.state = loadState(o.stateFile, {
       now,
-      onProblem: (why) => reporter.alert({ job: "keeper", target: "state file", severity: "warning", key: `keeper:state:${now()}`, once: true, reason: why }),
+      onProblem: (why) => reporter.alert({ job: "keeper", target: "state file", severity: "critical", key: `keeper:state:${now()}`, once: true, reason: why }),
     });
     const state = run.state;
+    // After a reset (a corrupt state file) the spend of the last 24 hours is unknown: sends stay held until then.
+    const heldUntil = state.budget?.heldUntil;
+    if (heldUntil !== undefined && Math.floor(now() / 1000) >= heldUntil) delete state.budget.heldUntil;
+    else if (heldUntil !== undefined && o.send) {
+      reporter.alert({ job: "keeper", target: "state file", severity: "warning", key: "budget:resethold", reason: `sends are held until ${new Date(heldUntil * 1000).toISOString()}: the state file was reset, so the spend of the 24 hours before is unknown and the daily cap cannot be kept until then` });
+    }
     // A send the previous run was killed in the middle of: its outcome is unknown. It stays counted at its worst case
     // and its target backed off (both were saved before cast ran); a human checks the explorer.
     for (const e of takeInFlight(state)) {
@@ -137,7 +143,7 @@ export async function runKeeper(o, deps = {}) {
       if (o.stateFile && !run.stopped) saveState(o.stateFile, state);
     };
     const remember = webhookUrl ? (a) => rememberOnce(((state.notify ??= {}).keys ??= {}), a, Math.floor(now() / 1000)) : undefined;
-    const common = { client, sender, reporter, state, simAccount: simFrom, budget: { capWei: o.maxSpendPerDay, persist, remember } };
+    const common = { client, sender, reporter, state, simAccount: simFrom, budget: { capWei: o.maxSpendPerDay, persist, remember, clock: () => Math.floor(now() / 1000) } };
     run.budget = common.budget;
     const logArgs = {
       logsLookback: o.logsLookback,

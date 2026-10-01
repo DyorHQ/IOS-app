@@ -167,6 +167,11 @@ async function safeSend({ sender, reporter, client, state, budget, clock = budge
   }
   let gasPrice = 0n;
   if (live) {
+    const resetHold = state?.budget?.heldUntil;
+    if (resetHold !== undefined && at < resetHold) {
+      reporter.info(`not sending ${what}: the state file was reset; sends are held until ${new Date(resetHold * 1000).toISOString()}`);
+      return null;
+    }
     const held = state ? backoffFor(state, targetKey, at) : undefined;
     if (held) {
       reporter.info(`not sending ${what}: ${held.failures} failed send(s), backing off until ${new Date(held.until * 1000).toISOString()}`);
