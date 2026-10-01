@@ -33,7 +33,8 @@ final class TokenPagePriceTests: XCTestCase {
 
     /// The page and the rows say it: under the price "vs MON" and the source line, "New" in place of the change, and for
     /// a Moment still collecting "Not trading yet" with no price, chart or value; a row with no price shows "—", never
-    /// "$0.00", and a token Home didn't price is priced by its page.
+    /// "$0.00", and a token Home didn't price is priced by its page, a Moment Home saw collecting included, whose page's
+    /// own read then decides.
     func testThePageAndTheRowsSayIt() throws {
         let home = try DocsLinksTests.appSource("Home/HomeView.swift")
         let page = try XCTUnwrap(home.range(of: "struct TokenDetailView: View {")).upperBound
@@ -44,9 +45,14 @@ final class TokenPagePriceTests: XCTestCase {
                      "Text(\"Not trading yet\").font(.system(.title2, design: .rounded).weight(.semibold))",
                      "if !notTradingYet { history = (try? await env.prices.history(for: row.token, points: 48)) ?? [] }",
                      "loaded = (try? await env.prices.prices(for: [row.token]))?[row.token.address]",
-                     "loadedNotTrading = await env.prices.notTradingYet([row.token]).contains(row.token.address)"] {
+                     "loadedNotTrading = await env.prices.notTradingYet([row.token]).contains(row.token.address)",
+                     "private var notTradingYet: Bool { loadedNotTrading ?? row.notTradingYet }",
+                     "@State private var loadedNotTrading: Bool?"] {
             XCTAssertTrue(body.contains(part), part)
         }
+        let reprice = try XCTUnwrap(body.range(of: "            if row.usd == nil {\n                loaded = (try? await env.prices.prices(for: [row.token]))"))
+        XCTAssertLessThan(reprice.lowerBound, try XCTUnwrap(body.range(of: "if !notTradingYet { history =")).lowerBound, "the page reads before it decides on a chart")
+        XCTAssertFalse(body.contains("!row.notTradingYet"), "a Moment Home saw collecting is read again by its page")
         let chart = try XCTUnwrap(body.range(of: "PriceChart(points: history"))
         let notTrading = try XCTUnwrap(body.range(of: "if notTradingYet {\n                        Text(\"Its Moment hasn't graduated yet"))
         XCTAssertLessThan(notTrading.upperBound, chart.lowerBound, "no chart while it collects")

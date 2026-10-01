@@ -817,16 +817,19 @@ struct TokenDetailView: View {
     /// read; `.unchecked` when the check failed, which keeps Swap and offers to check again.
     @State private var curveRoute: CurveRoute?
     @State private var checkingCurve = false
-    /// The price read by the page itself, for a token Home's list didn't price (one opened from search).
+    /// The price read by the page itself, for a token Home's list didn't price (one opened from search, or a Moment Home
+    /// last saw collecting).
     @State private var loaded: PriceInfo?
-    @State private var loadedNotTrading = false
+    /// Whether the page's own read found its Moment still collecting; nil until it has read, and Home's mark stands.
+    @State private var loadedNotTrading: Bool?
 
     /// The price as shown: Home's read, else the page's own (`loaded`).
     private var info: PriceInfo? { row.info ?? loaded }
     private var price: Double? { row.usd ?? loaded.flatMap { DyorPrice.valid($0.usd) } }
     private var change: Double? { row.usd != nil ? row.change24h : loaded?.change24h }
-    /// A Moment still collecting: no price and no chart, "Not trading yet" in their place.
-    private var notTradingYet: Bool { row.notTradingYet || loadedNotTrading }
+    /// A Moment still collecting: no price and no chart, "Not trading yet" in their place. The page's own read decides
+    /// once it has one, so a Moment that graduated since Home's read shows its price.
+    private var notTradingYet: Bool { loadedNotTrading ?? row.notTradingYet }
 
     /// Sent to the wallet rather than chosen in the app (`KnownTokenStore.unverified`).
     private var received: Bool { KnownTokenStore.isUnverified(row.token.address, owner: session.address) }
@@ -926,8 +929,9 @@ struct TokenDetailView: View {
         .navigationTitle(row.token.symbol)
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            // A token Home's list didn't price (opened from search) is priced here, once.
-            if row.usd == nil, !row.notTradingYet {
+            // A token Home's list didn't price (opened from search, or a Moment Home last saw collecting) is priced here,
+            // once: a Moment that graduated since shows its price and chart.
+            if row.usd == nil {
                 loaded = (try? await env.prices.prices(for: [row.token]))?[row.token.address]
                 loadedNotTrading = await env.prices.notTradingYet([row.token]).contains(row.token.address)
             }
