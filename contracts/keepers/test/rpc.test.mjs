@@ -161,6 +161,50 @@ test("K2: an HTTP 413 range refusal (rpc.monad.xyz, or a bare 413 from a proxy) 
   assert.equal(isRangeRefusal(new HttpRequestError({ url: "https://x.example", status: 503, body: {} })), false, "an outage");
 });
 
+// Measured 2026-10-01 on rpc3 and rpc4: a call to a function the contract lacks is code 3 "execution reverted"; a call
+// at a block the answering backend does not have yet is -32602 "Block requested not found…"; rpc4 answers a log range
+// past its head with -32602 "block range extends beyond current head block".
+const BLOCK_NOT_FOUND = "Block requested not found. Request might be querying historical state that is not available. If possible, reformulate query to point to more recent blocks";
+
+test("K2: a lagging backend, a quota or an internal error is an RPC failure, through viem's real transport; a revert is not", async () => {
+  const replies = { revert: { code: 3, message: "execution reverted", data: "0x" }, lag: { code: -32602, message: BLOCK_NOT_FOUND }, internal: { code: -32603, message: "internal error" }, quota: { code: -32001, message: "daily request count exceeded, request rate limited" } };
+  let mode = "revert";
+  const s = await server((req, res) => {
+    if (req.method !== "eth_call") return answer("0x8f")(req, res);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ jsonrpc: "2.0", id: req.id, error: replies[mode] }));
+  });
+  try {
+    const { client } = makeRpcClient([s.url], { timeoutMs: 2_000 });
+    const abi = [{ type: "function", name: "graduate", stateMutability: "nonpayable", inputs: [{ type: "uint256" }], outputs: [] }];
+    const failure = async (m) => {
+      mode = m;
+      return client.simulateContract({ address: ADDRESS, abi, functionName: "graduate", args: [503n], account: "0x000000000000000000000000000000000000dEaD" }).then(() => null, (e) => e);
+    };
+    assert.equal(isTransportError(await failure("revert")), false, "the chain answered: it reverts");
+    for (const m of ["lag", "internal", "quota"]) assert.equal(isTransportError(await failure(m)), true, m);
+  } finally {
+    s.close();
+  }
+  const rpc4Lag = Object.assign(new Error("RPC Request failed."), { code: -32602, details: "block range extends beyond current head block" });
+  assert.equal(isTransportError(rpc4Lag), true);
+  assert.equal(isRangeRefusal(rpc4Lag), false, "no smaller range will do");
+  assert.equal(isRangeRefusal(Object.assign(new Error("RPC Request failed."), { details: "daily request count exceeded" })), false, "a quota is not a range cap");
+  assert.equal(isRangeRefusal(Object.assign(new Error("RPC Request failed."), { code: -32005, details: "query returned more than 10000 results. Try with this block range [0x1, 0x2]." })), true, "a result cap still halves");
+});
+
+test("K2: a log range past a lagging backend's head fails the read at once instead of halving down to one block", async () => {
+  const calls = [];
+  const client = {
+    async getLogs(req) {
+      calls.push(req);
+      throw Object.assign(new Error("RPC Request failed."), { code: -32602, details: "block range extends beyond current head block" });
+    },
+  };
+  await assert.rejects(getLogsChunked(client, { from: 0n, to: 999n, chunk: 1000n }), (e) => isTransportError(e));
+  assert.equal(calls.length, 1);
+});
+
 test("E5: cast sends through the first endpoint that answers as chain 143", async () => {
   const replies = {
     "https://a.example": () => Promise.reject(new Error("fetch failed")),

@@ -8,11 +8,17 @@
 //  - At most --logs-max-blocks per run (200,000, ~17 h); a capped run raises a "scan behind" warning and catches up
 //    over the next runs.
 //  - The cursor never moves past a block that was not scanned: it advances chunk by chunk, only after a chunk's logs
-//    were fetched and alerted, so a failed read or a run that runs out of time resumes where it stopped.
+//    were fetched and alerted, so a failed read or a run that runs out of time resumes where it stopped. A run scans
+//    up to LOGS_HEAD_MARGIN blocks short of the head it read (a lagging backend would otherwise answer the last blocks
+//    with nothing).
 //
 // Without --logs-cursor, --logs-lookback keeps its meaning for ad hoc runs: [head - lookback, head], all or nothing.
 
 export const DEFAULT_LOGS_CHUNK = 1000n; // rpc3 accepts 1,000 blocks (an inclusive span) and refuses 1,001; rpc4 takes 1,001
+/** A cursor scan stops this many blocks (~3 s) short of the head it read. The public RPCs are load-balanced: the head
+    can come from a backend a few blocks ahead of the one that answers eth_getLogs, which returns logs only up to its
+    own head, with no error. Moving the cursor to the head read would then skip the blocks in between for good. */
+export const LOGS_HEAD_MARGIN = 10n;
 export const DEFAULT_LOGS_MAX_BLOCKS = 200_000n;
 
 export function readCursor(state, scanId) {

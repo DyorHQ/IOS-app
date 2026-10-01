@@ -61,7 +61,7 @@ import { formatEther } from "viem";
 import { MinedRevert, SendStatusUnknown } from "./send.mjs";
 import { nowSeconds, recordSpend, backoffFor, noteSendFailure, noteSendSuccess, spendAllowed } from "./budget.mjs";
 import { isRangeRefusal, isTransportError } from "./rpc.mjs";
-import { DEFAULT_LOGS_CHUNK, DEFAULT_LOGS_MAX_BLOCKS, planScan, readCursor, writeCursor } from "./cursor.mjs";
+import { DEFAULT_LOGS_CHUNK, DEFAULT_LOGS_MAX_BLOCKS, LOGS_HEAD_MARGIN, planScan, readCursor, writeCursor } from "./cursor.mjs";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 /** Gas for a Monday graduate / graduateFallback: just under Monad's 30M per-transaction cap. Monad bills the limit
@@ -244,12 +244,14 @@ function shareOf(logs, i, n) {
 
 /**
  * One log scan. Ad hoc (no cursor): [head - lookback, head] in one go, all or nothing. With a cursor: from just after
- * the cursor, chunk by chunk; after each chunk its logs are handed to `onLogs` and only then the cursor moves to the
- * chunk's last block, so no block is ever skipped. A scan that stops before the head (the --logs-max-blocks cap, or
- * `until`: the share of --max-runtime scans may use) raises a "scan behind" warning and the next run continues.
+ * the cursor to LOGS_HEAD_MARGIN blocks short of the head, chunk by chunk; after each chunk its logs are handed to
+ * `onLogs` and only then the cursor moves to the chunk's last block, so no block is ever skipped. A scan that stops
+ * before that (the --logs-max-blocks cap, or `until`: the share of --max-runtime scans may use) raises a "scan behind"
+ * warning and the next run continues.
  */
 async function scanLogs({ client, reporter, state, job, scanId, label, logs, fetchRange, onLogs }) {
-  const head = await client.getBlockNumber();
+  const read = await client.getBlockNumber();
+  const head = logs.cursor ? (read > LOGS_HEAD_MARGIN ? read - LOGS_HEAD_MARGIN : 0n) : read;
   const plan = planScan({ cursor: logs.cursor ? readCursor(state, scanId) : undefined, head, from: logs.from, lookback: logs.lookback, maxBlocks: logs.maxBlocks, useCursor: logs.cursor });
   if (!plan || plan.empty) return;
   if (!logs.cursor) {
@@ -271,7 +273,7 @@ async function scanLogs({ client, reporter, state, job, scanId, label, logs, fet
   }
   if (head > done) {
     const why = outOfTime ? "it used its share of --max-runtime" : `at most --logs-max-blocks ${logs.maxBlocks} per run`;
-    reporter.alert({ job, target: label, severity: "warning", key: `logs:behind:${scanId}`, reason: `log scan is ${head - done} blocks behind the head (scanned through block ${done}, head ${head}; ${why}): it catches up over the next runs` });
+    reporter.alert({ job, target: label, severity: "warning", key: `logs:behind:${scanId}`, reason: `log scan is ${head - done} blocks behind (scanned through block ${done} of ${head}, the head ${read} less a ${LOGS_HEAD_MARGIN}-block margin; ${why}): it catches up over the next runs` });
   }
 }
 

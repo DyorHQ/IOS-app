@@ -17,17 +17,46 @@ export const DEGRADED_CRITICAL_RUNS = 3;
 const TRANSPORT_NAMES = new Set(["HttpRequestError", "TimeoutError", "WebSocketRequestError", "SocketClosedError"]);
 // Phrases only: a bare number such as 429 or 503 could be a Moment id in a call's arguments.
 const TRANSPORT_TEXT = /HTTP request failed|timed out|took too long to respond|fetch failed|socket hang up|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE|network error|rate.?limit|request limit reached|too many requests|status:? ?(408|429|5\d\d)\b/i;
+// A backend behind the others (the public RPCs are load-balanced) asked for a block past its own head. Measured
+// 2026-10-01: rpc3 and rpc4 answer -32602 "Block requested not found…"; rpc4 answers a log range past its head with
+// -32602 "block range extends beyond current head block".
+export const LAG_TEXT = /beyond (the )?current head|block requested not found|header not found|unknown block|block not found/i;
+// A provider's quota: the RPC refusing, not the chain answering, and not a range cap.
+export const QUOTA_TEXT = /quota|request count|capacity limit|credits|(daily|monthly) (request )?limit/i;
+// JSON-RPC errors that are the node failing, never a contract answer (a revert is code 3 on Monad: rpc3 and rpc4).
+const RPC_FAILURE_CODES = new Set([-32602, -32603]);
 
-/** Is `e` (or anything in its cause chain) a failure of the RPC transport rather than an answer from the chain? */
+function textOf(x) {
+  return `${x.shortMessage ?? ""} ${x.details ?? ""} ${x.message ?? ""}`;
+}
+
+/** The network or HTTP layer failing: one level of an error, without its causes. */
+function networkFailure(x, text = textOf(x)) {
+  if (TRANSPORT_NAMES.has(x.name)) return true;
+  if (typeof x.status === "number" && (x.status === 408 || x.status === 429 || x.status >= 500)) return true;
+  if (typeof x.code === "string" && /^(ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE|UND_ERR)/.test(x.code)) return true;
+  // A revert is the chain answering, even when a node words it oddly.
+  if (/execution reverted|revert/i.test(text)) return false;
+  return TRANSPORT_TEXT.test(text);
+}
+
+/** Is `e` (or anything in its cause chain) a failure of the RPC rather than an answer from the chain? The transport
+    failing, a quota, a lagging backend, or an internal / invalid-params JSON-RPC error. */
 export function isTransportError(e) {
+  // The node's own error decides first: viem words a -32603 from eth_call as "reverted with the following reason"
+  // (some dev nodes answer reverts that way), but Monad answers a revert with code 3.
+  let node;
+  for (let x = e, depth = 0; x && depth < 8; x = x.cause, depth++) if (typeof x.code === "number") node = x;
+  if (node) {
+    const text = textOf(node);
+    if (!/revert/i.test(text) && (RPC_FAILURE_CODES.has(node.code) || LAG_TEXT.test(text) || QUOTA_TEXT.test(text))) return true;
+  }
   for (let x = e, depth = 0; x && depth < 8; x = x.cause, depth++) {
-    if (TRANSPORT_NAMES.has(x.name)) return true;
-    if (typeof x.status === "number" && (x.status === 408 || x.status === 429 || x.status >= 500)) return true;
-    if (typeof x.code === "string" && /^(ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE|UND_ERR)/.test(x.code)) return true;
-    const text = `${x.shortMessage ?? ""} ${x.details ?? ""} ${x.message ?? ""}`;
-    // A revert is the chain answering, even when a node words it oddly.
+    const text = textOf(x);
+    if (networkFailure(x, text)) return true;
     if (/execution reverted|revert/i.test(text)) return false;
-    if (TRANSPORT_TEXT.test(text)) return true;
+    if (LAG_TEXT.test(text) || QUOTA_TEXT.test(text)) return true;
+    if (typeof x.code === "number" && RPC_FAILURE_CODES.has(x.code)) return true;
   }
   return false;
 }
@@ -38,14 +67,16 @@ export function isTransportError(e) {
  * HTTP 200; rpc4 (some of its backends, above 1,001 blocks) and rpc.monad.xyz (above 101) answer HTTP 413 with -32614
  * "eth_getLogs is limited to a 1,000 range" / "a 100 range", which viem raises as an RPC error; a proxy in front of
  * an RPC can answer a bare HTTP 413, which viem raises as an HttpRequestError (a transport error by name). A rate
- * limit is never a range refusal.
+ * limit, a quota, or a range past a lagging backend's head is never a range refusal.
  */
 export function isRangeRefusal(e) {
   for (let x = e, depth = 0; x && depth < 8; x = x.cause, depth++) {
-    const text = `${x.shortMessage ?? ""} ${x.details ?? ""} ${x.message ?? ""}`;
-    if (x.status === 429 || /rate.?limit|too many requests|request limit reached/i.test(text)) return false;
+    const text = textOf(x);
+    if (x.status === 429 || /rate.?limit|too many requests|request limit reached/i.test(text) || QUOTA_TEXT.test(text)) return false;
     if (x.status === 413 || x.code === -32062 || x.code === -32614) return true;
-    if (!isTransportError(x) && /range|limit|too many|exceed/i.test(text)) return true;
+    // A range past a lagging backend's head says "range" too, but no smaller range will do.
+    if (LAG_TEXT.test(text)) return false;
+    if (!networkFailure(x, text) && /range|limit|too many|exceed/i.test(text)) return true;
   }
   return false;
 }

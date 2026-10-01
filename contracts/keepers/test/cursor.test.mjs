@@ -4,7 +4,7 @@
 // that was not scanned. Chunks are inclusive spans of 1,000 blocks, which rpc3 accepts (it refuses 1,001).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planScan, readCursor, writeCursor, DEFAULT_LOGS_CHUNK, DEFAULT_LOGS_MAX_BLOCKS } from "../lib/cursor.mjs";
+import { planScan, readCursor, writeCursor, DEFAULT_LOGS_CHUNK, DEFAULT_LOGS_MAX_BLOCKS, LOGS_HEAD_MARGIN } from "../lib/cursor.mjs";
 import { governanceJob, momentsGraduationJob, getLogsChunked } from "../lib/jobs.mjs";
 import { makeReporter } from "../lib/report.mjs";
 import { makeSender } from "../lib/send.mjs";
@@ -123,8 +123,8 @@ test("E2 governance: the first run starts at 108,860,011, so the 13 reviewed set
   const client = govChain({ head: 108_862_500n, getLogs: setup });
   const state = {};
   assert.deepEqual(await gov(client, state), []);
-  assert.deepEqual(client.calls, [[108_860_011n, 108_861_010n], [108_861_011n, 108_862_010n], [108_862_011n, 108_862_500n]]);
-  assert.equal(readCursor(state, "gov:moments"), 108_862_500n);
+  assert.deepEqual(client.calls, [[108_860_011n, 108_861_010n], [108_861_011n, 108_862_010n], [108_862_011n, 108_862_490n]], "up to 10 blocks short of the head");
+  assert.equal(readCursor(state, "gov:moments"), 108_862_490n);
   // The same scan started one block earlier would have raised it: the start block is what keeps it quiet.
   const early = await gov(govChain({ head: 108_862_500n, getLogs: setup }), {}, { logsFrom: LAST_SETUP_EVENT });
   assert.equal(early.length, 1);
@@ -139,11 +139,11 @@ test("E2 governance: the next run starts right after the cursor, however late it
   });
   const alerts = await gov(client, state);
   assert.equal(client.calls[0][0], 108_862_501n, "no gap, no overlap");
-  assert.equal(client.calls.at(-1)[1], 108_875_000n);
+  assert.equal(client.calls.at(-1)[1], 108_874_990n);
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].severity, "critical");
   assert.match(alerts[0].reason, /PolicyProposed in block 108870000/);
-  assert.equal(readCursor(state, "gov:moments"), 108_875_000n);
+  assert.equal(readCursor(state, "gov:moments"), 108_874_990n);
 });
 
 test("E2 governance: a failed read keeps the cursor at the last fully scanned chunk; the next run resumes there", async () => {
@@ -164,7 +164,7 @@ test("E2 governance: a failed read keeps the cursor at the last fully scanned ch
   client.calls.length = 0;
   assert.deepEqual(await gov(client, state), []);
   assert.equal(client.calls[0][0], 11_000n);
-  assert.equal(readCursor(state, "gov:moments"), 13_000n);
+  assert.equal(readCursor(state, "gov:moments"), 12_990n);
 });
 
 test("E2 governance: a run capped by --logs-max-blocks warns that the scan is behind, then catches up", async () => {
@@ -174,10 +174,10 @@ test("E2 governance: a run capped by --logs-max-blocks warns that the scan is be
   assert.equal(first.length, 1);
   assert.equal(first[0].severity, "warning");
   assert.equal(first[0].key, "logs:behind:gov:moments");
-  assert.match(first[0].reason, /1500 blocks behind the head \(scanned through block 1500, head 3000; at most --logs-max-blocks 1500 per run\)/);
+  assert.match(first[0].reason, /1490 blocks behind \(scanned through block 1500 of 2990, the head 3000 less a 10-block margin; at most --logs-max-blocks 1500 per run\)/);
   assert.equal(readCursor(state, "gov:moments"), 1_500n);
   assert.deepEqual(await gov(client, state, { logsMaxBlocks: 1_500n }), [], "caught up");
-  assert.equal(readCursor(state, "gov:moments"), 3_000n);
+  assert.equal(readCursor(state, "gov:moments"), 2_990n);
 });
 
 test("E2 governance: a scan stops starting chunks at its share of --max-runtime and keeps what it finished", async () => {
@@ -188,7 +188,7 @@ test("E2 governance: a scan stops starting chunks at its share of --max-runtime 
   assert.equal(client.calls.length, 3, "started at 0 s, 40 s and 80 s; not at 120 s");
   assert.equal(readCursor(state, "gov:moments"), 3_000n);
   assert.equal(alerts.length, 1);
-  assert.match(alerts[0].reason, /2000 blocks behind .* it used its share of --max-runtime/);
+  assert.match(alerts[0].reason, /1990 blocks behind .* it used its share of --max-runtime/);
 });
 
 test("E2 governance: scans share the time left, so one long catch-up never starves the other contract kinds", async () => {
@@ -223,6 +223,24 @@ test("E2 governance: scans share the time left, so one long catch-up never starv
   assert.equal(reporter.alerts.filter((x) => /blocks behind/.test(x.reason)).length, 3);
 });
 
+// Measured 2026-10-01: rpc3 and rpc4 answer an eth_getLogs range that reaches past their own head with the logs up to
+// that head and no error, and the head read can come from a backend a few blocks ahead of the one that answers.
+test("E2: a cursor scan stops 10 blocks short of the head it read, so a backend a few blocks behind loses no event", async () => {
+  assert.equal(LOGS_HEAD_MARGIN, 10n);
+  const state = { cursors: { "gov:moments": "4000" } };
+  const event = { address: cohort.factory, eventName: "PolicyProposed", blockNumber: 4_998n, transactionHash: "0x04", logIndex: 0 };
+  // getBlockNumber reaches a backend at 5,000; getLogs one at 4,996, which answers for blocks up to its own head only.
+  let backendHead = 4_996n;
+  const client = govChain({ head: 5_000n, getLogs: (req) => (req.fromBlock <= event.blockNumber && event.blockNumber <= req.toBlock && event.blockNumber <= backendHead ? [event] : []) });
+  assert.deepEqual(await gov(client, state), []);
+  assert.equal(readCursor(state, "gov:moments"), 4_990n, "not 5,000: blocks 4,991-5,000 are left for the next run");
+  backendHead = 5_100n;
+  client.head = 5_100n;
+  const next = await gov(client, state);
+  assert.equal(next.length, 1, "the event in block 4,998 is found by the next run");
+  assert.match(next[0].reason, /PolicyProposed in block 4998/);
+});
+
 test("E2: a cursor ahead of the head (a lagging fallback RPC) scans nothing and is left alone", async () => {
   const state = { cursors: { "gov:moments": "5000" } };
   const client = govChain({ head: 4_990n });
@@ -255,7 +273,7 @@ test("E2 MO-1: each cohort's GraduationFailed scan keeps its own cursor", async 
   const state = { cursors: { [`mo1:GraduationFailed:${c1.collect}`]: "20000" } };
   const reporter = makeReporter({ log: () => {} });
   await momentsGraduationJob({ client, cohorts: [c1, c3], sender: makeSender({ rpcUrl: "http://x", log: () => {} }), reporter, state, logsCursor: true });
-  assert.deepEqual(client.calls, [[c1.collect, 20_001n, 20_500n], [c3.collect, 20_500n, 20_500n]], "cohort 3 had no cursor and no --logs-from: it starts at the head");
-  assert.deepEqual(state.cursors, { [`mo1:GraduationFailed:${c1.collect}`]: "20500", [`mo1:GraduationFailed:${c3.collect}`]: "20500" });
+  assert.deepEqual(client.calls, [[c1.collect, 20_001n, 20_490n], [c3.collect, 20_490n, 20_490n]], "cohort 3 had no cursor and no --logs-from: it starts at the head (less the margin)");
+  assert.deepEqual(state.cursors, { [`mo1:GraduationFailed:${c1.collect}`]: "20490", [`mo1:GraduationFailed:${c3.collect}`]: "20490" });
   assert.deepEqual(reporter.alerts, []);
 });
