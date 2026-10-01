@@ -138,8 +138,15 @@ public enum NumberStyle {
             }
         }
         if magnitude >= 1_000 {
+            // The app's one number style (`PriceFormat`): "," between thousands and "." as the decimal point in every
+            // region, so 85,000.5 never reads "85 000,5" or "85.000,5" next to a "$85,000.50" price.
             let formatter = NumberFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.numberStyle = .decimal
+            formatter.usesGroupingSeparator = true
+            formatter.groupingSeparator = ","
+            formatter.groupingSize = 3
+            formatter.decimalSeparator = "."
             formatter.maximumFractionDigits = maximumFractionDigits ?? 2
             return sign + (formatter.string(from: NSNumber(value: magnitude)) ?? String(magnitude))
         }

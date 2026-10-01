@@ -84,8 +84,8 @@ struct SessionScopeSheet: View {
                         LabeledContent("Ends", value: expiresAt.formatted(date: .omitted, time: .shortened))
                     }
                     if let spent = mera.spentUSD, let left = mera.remainingUSD {
-                        LabeledContent("Signed this session", value: spent.formatted(.currency(code: "USD")))
-                        LabeledContent("Left before \(BiometricGate.promptName)", value: left.formatted(.currency(code: "USD")))
+                        LabeledContent("Signed this session", value: PriceFormat.usdValue(spent))
+                        LabeledContent("Left before \(BiometricGate.promptName)", value: PriceFormat.usdValue(left))
                     }
                     if mera.isUnlocked {
                         Button("Lock now", systemImage: "lock") { Haptics.tap(); mera.end() }

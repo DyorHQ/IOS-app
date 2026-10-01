@@ -140,7 +140,7 @@ struct AssetsCard: View {
                 Text("My Holdings").font(.headline)
                 Spacer()
                 if model.loading { ProgressView().controlSize(.mini) }
-                else if kind == .assets, model.showsTotal { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
+                else if kind == .assets, model.showsTotal { Text(PriceFormat.usdValue(model.totalValue)).font(.subheadline.weight(.semibold)).monospacedDigit() }
                 else if kind == .nfts, !model.nfts.isEmpty { Text("\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
 
@@ -269,7 +269,7 @@ struct AssetsCard: View {
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
                 Text(NumberStyle.units(asset.balance, decimals: asset.token.decimals, compact: true)).font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(.primary)
-                if let value = asset.value { Text(value, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+                if let value = asset.value { Text(PriceFormat.usdValue(value)).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
             }
         }
         .padding(.vertical, 8)

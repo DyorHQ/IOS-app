@@ -84,7 +84,7 @@ struct UpdateRequiredView: View {
                                 VStack(alignment: .trailing, spacing: 2) {
                                     Text(NumberStyle.units(asset.balance, decimals: asset.token.decimals)).monospacedDigit()
                                     if let value = asset.value {
-                                        Text(value, format: .currency(code: "USD").precision(.fractionLength(0...2)))
+                                        Text(PriceFormat.usdValue(value))
                                             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                                     }
                                 }

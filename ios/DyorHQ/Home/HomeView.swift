@@ -100,7 +100,7 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(model.totalValue ?? 0, format: .currency(code: "USD"))
+                    Text(PriceFormat.usdValue(model.totalValue ?? 0))
                         .font(.system(size: 40, weight: .semibold, design: .serif))
                         .monospacedDigit()
                         .lineLimit(1)
@@ -108,7 +108,7 @@ struct HomeView: View {
                         .contentTransition(.numericText(value: model.totalValue ?? 0))
                         .redacted(reason: model.totalValue == nil ? .placeholder : [])
                     HStack(spacing: 8) {
-                        Text(changeAmount, format: .currency(code: "USD").sign(strategy: .always()))
+                        Text(PriceFormat.usdValue(changeAmount, signed: true))
                             .font(.subheadline.weight(.medium)).monospacedDigit()
                             .foregroundStyle(changeAmount < 0 ? Color.negative : Color.positive)
                         ChangeBadge(value: model.change24h ?? 0)
@@ -153,7 +153,7 @@ struct HomeView: View {
             Button { Haptics.tap(); router.presented = .portfolio } label: {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("Total Volume").font(.subheadline).foregroundStyle(.secondary)
-                    Text(env.portfolio.totals(router.period).volume, format: .currency(code: "USD").precision(.fractionLength(0...2)))
+                    Text(PriceFormat.usdValue(env.portfolio.totals(router.period).volume))
                         .font(.headline).monospacedDigit().foregroundStyle(.primary)
                         .contentTransition(.numericText(value: env.portfolio.totals(router.period).volume))
                         .redacted(reason: env.portfolio.loading && !env.portfolio.hasLoaded ? .placeholder : [])
@@ -182,7 +182,7 @@ struct HomeView: View {
     private func statColumn(_ title: String, value: Double, tint: Color, alignment: HorizontalAlignment = .leading) -> some View {
         VStack(alignment: alignment, spacing: 2) {
             Text(title).font(.footnote).foregroundStyle(.secondary)
-            Text(value, format: .currency(code: "USD")).font(.headline).monospacedDigit().foregroundStyle(tint)
+            Text(PriceFormat.usdValue(value)).font(.headline).monospacedDigit().foregroundStyle(tint)
         }
     }
 
@@ -192,7 +192,7 @@ struct HomeView: View {
                 Circle().fill(dot).frame(width: 7, height: 7)
                 Text(title).font(.caption).foregroundStyle(.secondary)
             }
-            Text(value, format: .currency(code: "USD").precision(.fractionLength(0...2)))
+            Text(PriceFormat.usdValue(value))
                 .font(.subheadline.weight(.medium)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -391,7 +391,7 @@ struct AllocationDonut: View {
             .overlay {
                 VStack(spacing: 1) {
                     Text("Total").font(.caption2).foregroundStyle(.secondary)
-                    Text(total, format: .currency(code: "USD")).font(.subheadline.weight(.semibold)).monospacedDigit()
+                    Text(PriceFormat.usdValue(total)).font(.subheadline.weight(.semibold)).monospacedDigit()
                         .minimumScaleFactor(0.6).lineLimit(1)
                 }
                 .padding(.horizontal, 8)
@@ -438,7 +438,7 @@ private struct TokenListRow: View {
                 Text(row.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
-            USDText(value: row.usd, font: .subheadline.weight(.medium))
+            USDText(price: row.usd, font: .subheadline.weight(.medium))
             ChangeBadge(value: row.change24h)
         }
         .padding(.vertical, 8)
@@ -467,7 +467,7 @@ private struct HoldingRow: View {
                 USDText(value: row.value, font: .subheadline.weight(.medium))
                 // Always surface the per-unit price next to the 24h change, even for tokens with a small balance.
                 HStack(spacing: 5) {
-                    USDText(value: row.usd, font: .caption2).foregroundStyle(.secondary)
+                    USDText(price: row.usd, font: .caption2).foregroundStyle(.secondary)
                     ChangeText(value: row.change24h, style: .caption2)
                 }
             }
@@ -523,7 +523,7 @@ private struct PositionSummaryRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                Text(position.unrealized, format: .currency(code: "USD").sign(strategy: .always()))
+                Text(PriceFormat.usdValue(position.unrealized, signed: true))
                     .font(.subheadline.weight(.medium)).monospacedDigit()
                     .foregroundStyle(position.unrealized < 0 ? Color.negative : Color.positive)
                 Text("Unrealized").font(.caption2).foregroundStyle(.secondary)
@@ -768,7 +768,7 @@ struct TokenDetailView: View {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        USDText(value: row.usd, font: .system(.largeTitle, design: .rounded).weight(.semibold))
+                        USDText(price: row.usd, font: .system(.largeTitle, design: .rounded).weight(.semibold))
                         ChangeBadge(value: row.change24h)
                     }
                     Text("Past 24 hours").font(.footnote).foregroundStyle(.secondary)
@@ -869,7 +869,13 @@ struct PriceChart: View {
             }
             .chartYScale(domain: domain)
             .chartXAxis { AxisMarks(values: .stride(by: .hour, count: 6)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.hour()) } }
-            .chartYAxis { AxisMarks(position: .trailing) { _ in AxisGridLine(); AxisValueLabel() } }
+            .chartYAxis {
+                // Labels as fine as the plotted range needs (`PriceFormat.axis`), so a dust coin's ticks don't all read "0".
+                AxisMarks(position: .trailing) { value in
+                    AxisGridLine()
+                    AxisValueLabel { if let price = value.as(Double.self) { Text(PriceFormat.axis(price, span: domain.upperBound - domain.lowerBound)) } }
+                }
+            }
             .accessibilityLabel("Price over the past 24 hours")
         } else if isLoading {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)

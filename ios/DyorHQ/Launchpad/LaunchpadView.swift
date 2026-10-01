@@ -638,12 +638,12 @@ struct LaunchDetailView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(NumberStyle.number(LaunchpadService.priceNumber(launch))) \(launch.pair.symbol)")
                             .font(.system(.title, design: .rounded).weight(.semibold)).monospacedDigit()
-                        if let priceUSD { Text(priceUSD, format: .currency(code: "USD").precision(.fractionLength(2...8))).font(.footnote).foregroundStyle(.secondary).monospacedDigit() }
+                        if let priceUSD { Text(PriceFormat.usdPrice(priceUSD)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().accessibilityLabel(PriceFormat.spoken(priceUSD)) }
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
                         Text("\(NumberStyle.units(launch.marketCap, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)").monospacedDigit().fontWeight(.medium)
-                        if let marketCapUSD { Text(marketCapUSD, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+                        if let marketCapUSD { Text(PriceFormat.usdValue(marketCapUSD)).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
                         else { Text("Market cap").font(.caption).foregroundStyle(.secondary) }
                     }
                 }
@@ -689,7 +689,7 @@ struct LaunchDetailView: View {
     private var statsSection: some View {
         Section {
             HStack(spacing: 0) {
-                stat("24h Volume", volume24USD.map { $0.formatted(.currency(code: "USD").precision(.fractionLength(0...2))) } ?? "\(NumberStyle.number(volume24)) \(launch.pair.symbol)")
+                stat("24h Volume", volume24USD.map { PriceFormat.usdValue($0) } ?? "\(NumberStyle.number(volume24)) \(launch.pair.symbol)")
                 Divider().frame(height: 34)
                 stat("Holders", holders.map { "\($0)" } ?? "—")
                 Divider().frame(height: 34)

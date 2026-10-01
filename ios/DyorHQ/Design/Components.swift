@@ -161,15 +161,23 @@ struct ChangeBadge: View {
     }
 }
 
+/// Dollars in the app's one style (`PriceFormat`), "—" when there are none. `USDText(price:)` is a unit price (4
+/// significant digits under $1, the zeros of a dust price counted in subscript, read out in full by VoiceOver);
+/// `USDText(value:)` is an amount of money (2 decimals, "<$0.01" for dust).
 struct USDText: View {
-    let value: Double?
-    var font: Font = .body
+    private let dollars: Double?
+    private let isPrice: Bool
+    private let font: Font
+
+    init(price: Double?, font: Font = .body) { dollars = price; isPrice = true; self.font = font }
+    init(value: Double?, font: Font = .body) { dollars = value; isPrice = false; self.font = font }
 
     var body: some View {
-        if let value {
-            Text(value, format: .currency(code: "USD").precision(.fractionLength(value.magnitude < 1 && value != 0 ? 4 : 2)))
+        if let dollars, dollars.isFinite {
+            Text(isPrice ? PriceFormat.usdPrice(dollars) : PriceFormat.usdValue(dollars))
                 .font(font)
                 .monospacedDigit()
+                .accessibilityLabel(isPrice ? PriceFormat.spoken(dollars) : PriceFormat.usdValue(dollars))
         } else {
             Text("—").font(font).foregroundStyle(.tertiary)
         }

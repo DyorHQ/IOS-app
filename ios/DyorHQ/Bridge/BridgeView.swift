@@ -436,7 +436,7 @@ struct BridgeView: View {
                                 Text(balance).font(.subheadline.weight(.medium)).monospacedDigit()
                                 let usd = model.balanceUSD(token)
                                 if usd > 0 {
-                                    Text(usd.formatted(.currency(code: "USD"))).font(.caption2).foregroundStyle(.secondary)
+                                    Text(PriceFormat.usdValue(usd)).font(.caption2).foregroundStyle(.secondary)
                                 }
                             }
                         } else if token == model.fromToken {
