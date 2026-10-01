@@ -218,7 +218,7 @@ final class PerpsModel {
         for position in fresh where position.size > (lastPositionSize[position.perpId] ?? 0) + 1e-9 {
             lastFilledPerpId = position.perpId
             fillSignal &+= 1
-            Notifications.perpOrder(side: position.side == .long ? "Long" : "Short", market: position.symbol, filled: true)
+            Notifications.perpOrder(.filled, side: position.side == .long ? "Long" : "Short", market: position.symbol)
         }
     }
 }
@@ -286,11 +286,12 @@ struct CollateralSheet: View {
     }
 }
 
-/// Mark price sampled from the Exchange contract at evenly spaced blocks over the past day.
+/// Mark price sampled from the Exchange contract at evenly spaced blocks over the past day, at `clock`'s pace.
 enum MarkPriceHistory {
-    static func load(market: PerpMarket, rpc: RPCClient, points: Int = 48) async -> [PricePoint] {
+    static func load(market: PerpMarket, rpc: RPCClient, clock: BlockClock, points: Int = 48) async -> [PricePoint] {
         guard let data = try? ABI.encodeCall("getPerpetualInfo(uint256)", [.uint(market.id)]), let latest = try? await rpc.blockNumber() else { return [] }
-        let span = Monad.blocksPerDay
+        let secondsPerBlock = await clock.secondsPerBlock()
+        let span = min(latest, BlockClock.blocks(in: 86_400, secondsPerBlock: secondsPerBlock))
         let step = span / UInt64(points)
         let blocks = (0...points).map { latest - span + UInt64($0) * step }
         let call = CallRequest(to: Perpl.exchange, data: data)
@@ -302,7 +303,7 @@ enum MarkPriceHistory {
             guard case .success(let raw) = result, let info = try? ABI.decode(raw, types).first else { return nil }
             let mark = Amount.units(info[11].uint, decimals: market.priceDecimals)
             guard mark > 0 else { return nil }
-            let age = Double(latest - block) * 0.4
+            let age = Double(latest - block) * secondsPerBlock
             return PricePoint(block: block, time: now.addingTimeInterval(-age), usd: mark)
         }
     }

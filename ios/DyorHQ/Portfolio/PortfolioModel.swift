@@ -138,7 +138,7 @@ final class PortfolioModel {
             out.append(Activity(id: "swap-\(swap.id)", section: section, title: kind == .spot ? "Swapped" : "Traded on \(section.title)", subtitle: SwapHistoryItem.describe(swap, tokens: tokens), time: swap.time, usd: swapUSD(swap), hash: swap.hash))
         }
         for fill in fills where fill.time >= since {
-            out.append(Activity(id: "fill-\(fill.id)", section: .perps, title: "\(fill.direction) \(fill.symbol)", subtitle: "\(NumberStyle.number(fill.size)) at \(NumberStyle.number(fill.price)) · fee \(fill.fee.formatted(.currency(code: "USD")))", time: fill.time, usd: fill.notional, hash: nil))
+            out.append(Activity(id: "fill-\(fill.id)", section: .perps, title: "\(fill.direction) \(fill.symbol)", subtitle: "\(NumberStyle.number(fill.size)) at \(NumberStyle.number(fill.price)) · fee \(PriceFormat.usdValue(fill.fee))", time: fill.time, usd: fill.notional, hash: nil))
         }
         for f in launchHistory.fills where f.time >= since {
             let launch = launchesByCurve[f.curve]
@@ -269,7 +269,7 @@ final class PortfolioModel {
             if fill.isBuy { spent += quoteUSD; deltas[launch.token, default: 0] += coins } else { received += quoteUSD; deltas[launch.token, default: 0] -= coins }
         }
         for (token, delta) in deltas where abs(delta) > 0 {
-            if let launch = launchesByToken[token], let price = pairUSD(launch) { stats.pnl += delta * LaunchpadService.priceNumber(launch) * price } else { stats.pnlComplete = false }
+            if let price = prices[token] { stats.pnl += delta * price } else { stats.pnlComplete = false }
         }
         stats.pnl += received - spent
         for claim in launchHistory.claims where claim.time >= since {
@@ -321,15 +321,18 @@ final class PortfolioModel {
 
         // Reference data first: the launch list (curves + pair assets), the Moments list (coins + pools), the token universe.
         // Launches on retired factories are history too: the coins and trades stay part of the wallet's record.
-        async let launchesTask = env.launchpad.allLaunches(limit: 200)
+        async let launchesTask = env.launchpad.launchListing(limit: 200)
         async let momentsTask = env.moments.moments(limit: 200)
         // Moments of the retired cohorts are history too (their collects, claims and withdrawals); keyed by (factory, id).
-        async let retiredMomentsTask = PastMomentsModel.allMoments(env: env)
-        let fetchedLaunches = try? await launchesTask
+        // A cohort that can't be read keeps the Moments the last load read of it, and the load says it is incomplete.
+        let previousMoments = Array(momentsByKey.values)
+        async let retiredMomentsTask = PastMomentsModel.allMoments(env: env, keeping: previousMoments)
+        // A launchpad whose launches couldn't be read keeps its last good ones, and the load says it is incomplete.
+        let listing = await launchesTask
         let fetchedMoments = try? await momentsTask
-        let retiredMoments = await retiredMomentsTask
-        let launches = fetchedLaunches ?? Array(launchesByCurve.values)
-        let moments = fetchedMoments.map { $0 + retiredMoments } ?? Array(momentsByKey.values)
+        let retired = await retiredMomentsTask
+        let launches = listing.keeping(Array(launchesByCurve.values))
+        let moments = fetchedMoments.map { $0 + retired.moments } ?? Array(momentsByKey.values)
 
         var universe = KnownTokenStore.universe(owner: address)
         universe += launches.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }
@@ -377,9 +380,11 @@ final class PortfolioModel {
         var priced: [Address: Double] = fetchedPrices == nil ? prices : [:]
         if let map = fetchedPrices { for (address, info) in map { priced[address] = info.usd } }
         for stable in Self.stables { priced[stable] = 1 }
-        // Launch coins at their curve price; Moment coins at their pool price.
+        // Launch coins at the one decimal price Spot values them at: the price service's for a coin it priced, else the
+        // launch's own live price in its pair asset (`DyorPrice.launch`), never the integer `Launch.price`. Moment coins
+        // at their pool price.
         for launch in launches {
-            if let pair = launch.pair.isNative ? priced[Monad.native] : priced[launch.pairToken] { priced[launch.token] = LaunchpadService.priceNumber(launch) * pair }
+            priced[launch.token] = DyorPrice.launch(launch, spot: fetchedPrices?[launch.token]?.usd, pairUSD: launch.pair.isNative ? priced[Monad.native] : priced[launch.pairToken])
         }
         for info in moments { if let pool = info.pool { priced[info.moment.coin] = pool.usdcPerCoin } }
         prices = priced
@@ -389,7 +394,7 @@ final class PortfolioModel {
 
         loadedFor = address
         hasLoaded = true
-        if fetchedLaunches == nil || fetchedMoments == nil || head == nil || fetchedPrices == nil {
+        if !listing.complete || fetchedMoments == nil || !retired.complete || head == nil || fetchedPrices == nil {
             error = "Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh."
             updatedAt = nil
         } else {

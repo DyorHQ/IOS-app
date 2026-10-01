@@ -241,7 +241,7 @@ struct BridgeView: View {
 
     private func tokenChip(_ token: AuroraToken?) -> some View {
         HStack(spacing: 6) {
-            if let token { TokenLogo(symbol: token.symbol, url: token.logoURL, size: 20) }
+            if let token { MarketLogo(symbol: token.symbol, url: token.logoURL, size: 20) }
             else { Image(systemName: "circle.dashed").font(.subheadline).foregroundStyle(.secondary).frame(width: 20, height: 20) }
             Text(token?.symbol ?? "Token")
                 .font(.subheadline.weight(.semibold))
@@ -436,7 +436,7 @@ struct BridgeView: View {
                                 Text(balance).font(.subheadline.weight(.medium)).monospacedDigit()
                                 let usd = model.balanceUSD(token)
                                 if usd > 0 {
-                                    Text(usd.formatted(.currency(code: "USD"))).font(.caption2).foregroundStyle(.secondary)
+                                    Text(PriceFormat.usdValue(usd)).font(.caption2).foregroundStyle(.secondary)
                                 }
                             }
                         } else if token == model.fromToken {
@@ -468,7 +468,7 @@ struct BridgeView: View {
                     pickingFromToken = false; pickingToToken = false
                 } label: {
                     HStack(spacing: 12) {
-                        TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
+                        MarketLogo(symbol: token.symbol, url: token.logoURL, size: 32)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(token.symbol).fontWeight(.medium)
                             Text(chain.name).font(.caption2).foregroundStyle(.secondary)

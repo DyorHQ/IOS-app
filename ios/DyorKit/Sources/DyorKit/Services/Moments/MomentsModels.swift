@@ -392,6 +392,23 @@ public struct PendingMomentPolicy: Sendable, Hashable {
     public func hasLapsed(at now: Date) -> Bool { lapsesAt.map { now > $0 } ?? false }
 }
 
+/// What the Moments tab reads (`MomentsService.board`): the newest Moments, and the policy or why it couldn't be read.
+public struct MomentsBoard: Sendable {
+    public let moments: [MomentInfo]
+    public let policy: Result<MomentPolicy?, any Error>
+
+    public init(moments: [MomentInfo], policy: Result<MomentPolicy?, any Error>) {
+        self.moments = moments
+        self.policy = policy
+    }
+
+    /// Why Publish is unavailable when the policy couldn't be read; nil when it was.
+    public var policyUnread: String? {
+        guard case .failure = policy else { return nil }
+        return "Publishing is unavailable right now: the Moments terms couldn't be read. Pull to refresh."
+    }
+}
+
 /// `MomentTypes.Provenance`: what the NFT records about the moment itself.
 public struct MomentProvenance: Sendable, Hashable {
     public let mediaURI: String
@@ -614,6 +631,10 @@ public struct MomentInfo: Sendable, Hashable, Identifiable {
 
     /// Whether a collect would be accepted right now (state and deadline), before the terminal clamp.
     public func isCollecting(at now: Int) -> Bool { ledger.state == .collecting && now < moment.deadline }
+    /// Its coin has no market yet: the Moment is still collecting, or waiting to graduate, so there is no pool to price
+    /// it from (`DyorListing.Venue.collecting`). A screen says "Not trading yet" in place of a price or a value. False
+    /// once it graduated, and for one that expired, whose coin will never trade.
+    public var isNotTradingYet: Bool { !graduated && ledger.state != .expired && ledger.state != .graduated }
     /// Seconds until the collect window closes (0 once closed).
     public func secondsLeft(at now: Int) -> Int { max(0, moment.deadline - now) }
     /// Whether anyone may call `expire` now: collecting past the deadline, or stuck in graduation for the grace period.
@@ -642,8 +663,15 @@ public struct MomentInfo: Sendable, Hashable, Identifiable {
         let n = (reserveRemaining + reservePerCollect - 1) / reservePerCollect
         return Int(clamping: n)
     }
-    /// The coin as a swap-able token.
-    public var coinToken: Token { Token(address: moment.coin, symbol: symbol, name: name, decimals: MomentsConstants.coinDecimals, logoURL: provenance.mediaURL) }
+    /// The coin as a swap-able token, its logo the Moment's picture as `ImageSourcePolicy.dyorhq` allows it: DyorHQ's
+    /// bucket as it is, or IPFS on DyorHQ's own gateway — never the creator's host (pick 6), which a stored snapshot of
+    /// this token would otherwise keep and a screen load. Nil when the picture is anywhere else.
+    public var coinToken: Token { coinToken(policy: .dyorhq) }
+
+    /// `coinToken`, its logo as `policy` allows it (a build pointed at another Supabase project).
+    public func coinToken(policy: ImageSourcePolicy) -> Token {
+        Token(address: moment.coin, symbol: symbol, name: name, decimals: MomentsConstants.coinDecimals, logoURL: policy.creatorSources(provenance.mediaURI).first)
+    }
 }
 
 /// The detail page's extras: the supply identity and the coin's minted total.
@@ -1098,8 +1126,7 @@ public enum MomentsMath {
     public static func gatewayURLs(_ uri: String) -> [URL] {
         let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
-        if trimmed.lowercased().hasPrefix("ipfs://") {
-            let path = trimmed.dropFirst("ipfs://".count).replacingOccurrences(of: "ipfs/", with: "", options: [.anchored])
+        if trimmed.lowercased().hasPrefix("ipfs://"), let path = IPFS.path(trimmed) {
             return ipfsGateways.compactMap { URL(string: $0 + path) }
         }
         guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return [] }

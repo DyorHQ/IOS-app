@@ -64,7 +64,7 @@ extension EVMChain {
 
 extension AuroraToken {
     /// Real logo for this asset: the ERC-20's Trust Wallet image (keyed by checksummed address), or — for a native
-    /// asset — the coin's own mark. `nil` where unavailable, which the shared `TokenLogo` turns into a monogram.
+    /// asset — the coin's own mark. `nil` where unavailable, which `MarketLogo` turns into a monogram.
     var logoURL: URL? {
         if isNative { return BridgeLogo.native(symbol) }
         guard let contract = contractAddress, let checksummed = Address(contract)?.checksummed else { return nil }
@@ -73,17 +73,23 @@ extension AuroraToken {
 }
 
 /// A small circular chain badge: the chain's real logo when Trust Wallet has it, otherwise a brand-coloured monogram.
+/// Like `TokenLogo`, it shows its plain tinted disc for a moment while the logo loads, so the letters don't flash
+/// first, then the letters until it comes (`RemoteImageWait`).
 struct ChainBadge: View {
     let chain: EVMChain
     var size: CGFloat = 20
 
     var body: some View {
         Group {
-            RemoteImage(url: chain.logoURL, pointSize: size, contentMode: .fit) { _ in monogram }
+            RemoteImage(url: chain.logoURL, pointSize: size, contentMode: .fit, grace: RemoteImageWait.grace) { loading in
+                if loading { Color.clear } else { monogram }
+            }
         }
         .frame(width: size, height: size)
         .background(chain.brandColor.opacity(0.18))
         .clipShape(Circle())
+        .accessibilityIgnoresInvertColors() // the logo; its ring inverts with the card, like TokenLogo's
+        .overlay(Circle().strokeBorder(Color.logoRing, lineWidth: 0.5))
         .accessibilityHidden(true)
     }
 
@@ -114,6 +120,7 @@ struct ChainDot: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        .accessibilityIgnoresInvertColors() // like the MarketLogo it sits on in AssetGlyph
         .accessibilityHidden(true)
     }
 }
@@ -126,7 +133,7 @@ struct AssetGlyph: View {
     var size: CGFloat = 34
 
     var body: some View {
-        TokenLogo(symbol: token.symbol, url: token.logoURL, size: size)
+        MarketLogo(symbol: token.symbol, url: token.logoURL, size: size)
             .overlay(alignment: .bottomTrailing) {
                 ChainDot(chain: chain, size: size * 0.5)
                     .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))

@@ -152,7 +152,7 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         // The Portfolio says it too, with Retry, rather than present a part of the wallet as all of it: an empty read that
         // couldn't be read is never "No tokens in this wallet yet".
         let assets = try String(contentsOf: app.appendingPathComponent("Portfolio/AssetsModel.swift"), encoding: .utf8)
-        XCTAssertTrue(assets.contains("complete = read?.complete ?? false"))
+        XCTAssertTrue(assets.contains("complete = (read?.complete ?? false) && retired.complete"), "a retired cohort that couldn't be read is said too")
         XCTAssertTrue(assets.contains("balancesUnread = read == nil"))
         XCTAssertTrue(assets.contains("case (false, false): return \"Part of your wallet couldn't be read, so a token may be missing from the list and the total.\""))
         XCTAssertTrue(assets.contains("case (false, _) where tokens.isEmpty: return \"No tokens found, but part of your wallet couldn't be read, so some may be missing.\""))

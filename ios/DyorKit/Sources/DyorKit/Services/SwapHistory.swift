@@ -30,8 +30,13 @@ public struct SwapRecord: Identifiable, Sendable, Hashable {
 /// swaps, or ones made on another device). Uses rpc1's wide `eth_getLogs` ranges.
 public struct SwapHistoryService: Sendable {
     private let rpc: RPCClient
+    /// Turns the 24H, 7D and 30D filters into blocks, and block numbers into the times a swap shows.
+    public let clock: BlockClock
 
-    public init(rpc: RPCClient) { self.rpc = rpc }
+    public init(rpc: RPCClient, clock: BlockClock? = nil) {
+        self.rpc = rpc
+        self.clock = clock ?? BlockClock(rpc: rpc)
+    }
 
     private static let transferSig = "Transfer(address,address,uint256)"
 
@@ -47,14 +52,17 @@ public struct SwapHistoryService: Sendable {
             case .all: return "All"
             }
         }
-        public var blocks: UInt64 {
-            switch self {
-            case .day: return Monad.blocksPerDay
-            case .week: return Monad.blocksPerDay * 7
-            case .month: return Monad.blocksPerDay * 30
-            case .all: return Monad.blocksPerDay * 90
-            }
+        /// The blocks a scan of this window reads at `secondsPerBlock`: the day, the week and the month their true length
+        /// (`seconds`); "All" the fixed budget `allBlocks`, whatever the pace.
+        public func blocks(secondsPerBlock: Double) -> UInt64 {
+            self == .all ? Self.allBlocks : BlockClock.blocks(in: seconds, secondsPerBlock: secondsPerBlock)
         }
+        /// `blocks(secondsPerBlock:)` at `BlockClock.fallbackSecondsPerBlock`, for a reader with no clock: an estimate.
+        /// `swaps(wallet:window:)` uses the session's measured pace.
+        public var blocks: UInt64 { blocks(secondsPerBlock: BlockClock.fallbackSecondsPerBlock) }
+        /// What an "All" scan reads: a block budget, 19,440,000 blocks (about 68 days at Monad's pace), kept as it was
+        /// when it was called 90 days so a scan with no address filter stays bounded on a busy chain.
+        public static let allBlocks: UInt64 = 19_440_000
         /// The matching wall-clock cutoff for filtering recorded rows.
         public var seconds: TimeInterval {
             switch self {
@@ -71,18 +79,21 @@ public struct SwapHistoryService: Sendable {
 
     public func swaps(wallet: Address, window: Window, decimals: [Address: Int] = [:], limit: Int = 100) async -> [SwapRecord] {
         guard let anchor = try? await rpc.block(.latest) else { return [] }
+        let secondsPerBlock = await clock.secondsPerBlock()
         let latest = anchor.number
-        let from = latest > window.blocks ? latest - window.blocks : 0
-        return await scan(wallet: wallet, from: from, to: latest, anchor: anchor, decimals: decimals, limit: limit)
+        let blocks = window.blocks(secondsPerBlock: secondsPerBlock)
+        let from = latest > blocks ? latest - blocks : 0
+        return await scan(wallet: wallet, from: from, to: latest, anchor: anchor, secondsPerBlock: secondsPerBlock, decimals: decimals, limit: limit)
     }
 
     /// Swaps in an explicit block range — e.g. the Portfolio's full-history scan from block 0.
     public func swaps(wallet: Address, fromBlock: UInt64, toBlock: UInt64, decimals: [Address: Int] = [:], limit: Int = 100) async -> [SwapRecord] {
         guard toBlock >= fromBlock, let anchor = try? await rpc.block(.latest) else { return [] }
-        return await scan(wallet: wallet, from: fromBlock, to: toBlock, anchor: anchor, decimals: decimals, limit: limit)
+        return await scan(wallet: wallet, from: fromBlock, to: toBlock, anchor: anchor, secondsPerBlock: await clock.secondsPerBlock(), decimals: decimals, limit: limit)
     }
 
-    private func scan(wallet: Address, from: UInt64, to latest: UInt64, anchor: BlockHeader, decimals: [Address: Int], limit: Int) async -> [SwapRecord] {
+    private func scan(wallet: Address, from: UInt64, to latest: UInt64, anchor: BlockHeader, secondsPerBlock: Double, decimals: [Address: Int], limit: Int) async -> [SwapRecord] {
+        func time(_ block: UInt64) -> Date { BlockClock.time(of: block, anchor: anchor, secondsPerBlock: secondsPerBlock) }
         let topic = ABI.eventTopic(Self.transferSig)
         let walletWord = wallet.data.leftPadded(to: 32)
         // No address filter: one scan for everything the wallet sent, one for everything it received.
@@ -120,7 +131,7 @@ public struct SwapHistoryService: Sendable {
             guard let recvLegs = received[hash] else { continue }
             guard let sold = dominant(sentLegs, excluding: nil) else { continue }
             guard let bought = dominant(recvLegs, excluding: sold.token) else { continue }
-            records.append(SwapRecord(hash: hash, block: sold.block, time: Self.time(anchor: anchor, block: sold.block),
+            records.append(SwapRecord(hash: hash, block: sold.block, time: time(sold.block),
                                       soldToken: sold.token, soldAmount: sold.amount, boughtToken: bought.token, boughtAmount: bought.amount))
         }
 
@@ -137,10 +148,10 @@ public struct SwapHistoryService: Sendable {
                 let to = tx["to"].string.flatMap(Address.init)
                 let value = tx["value"].string.map { BigUInt($0.hasPrefix("0x") ? String($0.dropFirst(2)) : $0, radix: 16) ?? 0 } ?? 0
                 if let recvLegs = received[hash], value > 0, let bought = dominant(recvLegs, excluding: nil) {
-                    records.append(SwapRecord(hash: hash, block: bought.block, time: Self.time(anchor: anchor, block: bought.block),
+                    records.append(SwapRecord(hash: hash, block: bought.block, time: time(bought.block),
                                               soldToken: Monad.native, soldAmount: value, boughtToken: bought.token, boughtAmount: bought.amount))
                 } else if let sentLegs = sent[hash], let to, Self.swapRouters.contains(to), let sold = dominant(sentLegs, excluding: nil) {
-                    records.append(SwapRecord(hash: hash, block: sold.block, time: Self.time(anchor: anchor, block: sold.block),
+                    records.append(SwapRecord(hash: hash, block: sold.block, time: time(sold.block),
                                               soldToken: sold.token, soldAmount: sold.amount, boughtToken: Monad.native, boughtAmount: 0))
                 }
             }
@@ -150,9 +161,4 @@ public struct SwapHistoryService: Sendable {
 
     /// Contracts a swap for native MON is sent to: the routers DyorHQ itself routes through.
     static let swapRouters: Set<Address> = [Uniswap.universalRouter, MondayTrade.swapRouter, Kuru.entrypoint]
-
-    private static func time(anchor: BlockHeader, block: UInt64) -> Date {
-        let delta = Double(anchor.number > block ? anchor.number - block : 0) * 0.4
-        return Date(timeIntervalSince1970: TimeInterval(anchor.timestamp)).addingTimeInterval(-delta)
-    }
 }

@@ -25,9 +25,9 @@ final class AssetsModel {
     /// Held coins still on a launchpad's bonding curve, the live launchpad's or a retired one's, with their launches
     /// (`LaunchpadService.curveHoldings`): no Swap venue routes a curve, so such a coin's row opens its Launch page, where
     /// its curve trades (Buy and Sell on the live launchpad, Sell only on a retired one), as Home's token page does. A
-    /// coin whose launch couldn't be read opens the Launch tab. Known before the token list shows, so such a coin never
-    /// gets a Swap row; a failed check keeps the coins already known, and the rest open Swap, whose "no venue" state
-    /// checks again and points to the Launch page.
+    /// coin whose launch couldn't be read opens its page by reference, which reads it. Known before the token list
+    /// shows, so such a coin never gets a Swap row; a failed check keeps the coins already known, and the rest open Swap,
+    /// whose "no venue" state checks again and points to the Launch page.
     private(set) var curve: CurveHoldings = .none
     /// Prices couldn't all be read (`WalletTokens.Ranked.pricesFailed`): some tokens are unpriced, so the holdings total
     /// would be a part passed off as the whole. It isn't shown, and the card says why.
@@ -92,18 +92,23 @@ final class AssetsModel {
         // As the list marks them: the DyorHQ coins the wallet launched or collected are its own, not Unverified.
         unverified = read == nil ? KnownTokenStore.unverified(owner: address) : Set(ranked.filter(\.unverified).map(\.id))
         // Known before the token list shows, so a retired Moment coin or a coin on a curve is never offered a swap in between.
-        for info in await retiredTask {
+        // A retired cohort that couldn't be read keeps the Moments already known, and the card says part of the wallet
+        // couldn't be read.
+        let retired = await retiredTask
+        for info in retired.moments {
             retiredByCoin[info.moment.coin] = info
             retiredByNFT[info.moment.nft] = info
         }
         if let found { curve = found }
         pricesFailed = failed
         unpriced = unpricedHeld
-        complete = read?.complete ?? false
+        complete = (read?.complete ?? false) && retired.complete
         balancesUnread = read == nil
         tokens = ranked
 
         let moments = (try? await momentsTask) ?? []
+        // Their coins, proven by their cohorts, for the coins' pictures and labels.
+        await env.dyorCoins.ingest(moments + retired.moments)
         momentsByNFT = Dictionary(moments.map { ($0.moment.nft, $0) }, uniquingKeysWith: { first, _ in first })
         nfts = await nftTask
         loadedFor = address
@@ -137,7 +142,7 @@ struct AssetsCard: View {
                 Text("My Holdings").font(.headline)
                 Spacer()
                 if model.loading { ProgressView().controlSize(.mini) }
-                else if kind == .assets, model.showsTotal { Text(model.totalValue, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit() }
+                else if kind == .assets, model.showsTotal { Text(PriceFormat.usdValue(model.totalValue)).font(.subheadline.weight(.semibold)).monospacedDigit() }
                 else if kind == .nfts, !model.nfts.isEmpty { Text("\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
 
@@ -181,9 +186,9 @@ struct AssetsCard: View {
                             tokenRow(asset, note: "Past cohort · trading closed")
                         } else if route.isOnCurve {
                             // Never Swap: no venue routes a coin still on a launchpad's curve, live or retired. It trades
-                            // on its curve, from its Launch page, where Home sends it too; unread, the Launch tab lists it.
+                            // on its curve, from its Launch page, where Home sends it too; by reference when unread.
                             Button {
-                                if let launch = route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
+                                router.openLaunchPage(for: route)
                                 dismiss()
                             } label: {
                                 tokenRow(asset, note: route.rowNote, unverified: model.unverified.contains(asset.token.address))
@@ -239,6 +244,7 @@ struct AssetsCard: View {
                         RemoteImage(url: url, pointSize: 120) { loading in
                             if loading { ProgressView().controlSize(.small) } else { Image(systemName: "photo").foregroundStyle(.secondary) }
                         }
+                        .accessibilityIgnoresInvertColors() // art, left as it is under Smart Invert
                     } else {
                         Image(systemName: "seal").foregroundStyle(.secondary)
                     }
@@ -255,18 +261,18 @@ struct AssetsCard: View {
 
     private func tokenRow(_ asset: AssetsModel.TokenAsset, note: String? = nil, unverified: Bool = false) -> some View {
         HStack(spacing: 12) {
-            TokenLogo(symbol: asset.token.symbol, url: asset.token.logoURL, size: 34)
+            TokenLogo(token: asset.token, size: 34)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(asset.token.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                    if unverified { UnverifiedBadge() }
+                    TokenBadgeView(token: asset.token, receivedUnasked: unverified)
                 }
                 Text(note ?? asset.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
                 Text(NumberStyle.units(asset.balance, decimals: asset.token.decimals, compact: true)).font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(.primary)
-                if let value = asset.value { Text(value, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+                if let value = asset.value { Text(PriceFormat.usdValue(value)).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
             }
         }
         .padding(.vertical, 8)

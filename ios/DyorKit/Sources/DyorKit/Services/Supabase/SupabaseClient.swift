@@ -245,10 +245,17 @@ public actor SupabaseClient {
     /// The minimum supported iOS build (`MinimumBuild`), read with the publishable key alone. Nil when the row is missing
     /// or malformed; throws on a network or HTTP failure. The caller fails open on both.
     public func minimumBuild() async throws -> MinimumBuild? {
+        try await iosAppConfig().minimum
+    }
+
+    /// The public `app_config` row 'ios', read once with the publishable key alone: the minimum supported build (nil
+    /// when the row is missing or malformed) and the owner's remote switches (`RemoteFlags`, every one on unless the row
+    /// turns it off). Throws on a network or HTTP failure; the caller then keeps what it had.
+    public func iosAppConfig() async throws -> (minimum: MinimumBuild?, flags: RemoteFlags) {
         let data = try await send(method: "GET", path: "rest/v1/app_config",
                                   query: [URLQueryItem(name: "key", value: "eq.ios"), URLQueryItem(name: "select", value: "value")],
                                   body: nil, prefer: nil, authed: false)
-        return MinimumBuild.parse(data)
+        return (MinimumBuild.parse(data), RemoteFlags.parse(data))
     }
 
     /// Calls a Postgres function through PostgREST RPC with the current session (or the publishable key).

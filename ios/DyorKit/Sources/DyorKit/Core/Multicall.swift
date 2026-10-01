@@ -6,18 +6,22 @@ public struct ContractCall: Sendable {
     public let to: Address
     public let data: Data
     public let returnTypes: [ABIType]
+    /// How its `string` returns decode (`ABI.StringDecoding`): lossy unless the exact bytes matter.
+    public let strings: ABI.StringDecoding
 
-    public init(to: Address, data: Data, returns: [ABIType]) {
+    public init(to: Address, data: Data, returns: [ABIType], strings: ABI.StringDecoding = .lossy) {
         self.to = to
         self.data = data
         returnTypes = returns
+        self.strings = strings
     }
 
     /// `ContractCall(to: token, "balanceOf(address)", [.address(owner)], returns: "uint256")`
-    public init(to: Address, _ signature: String, _ args: [ABIValue] = [], returns: String) throws {
+    public init(to: Address, _ signature: String, _ args: [ABIValue] = [], returns: String, strings: ABI.StringDecoding = .lossy) throws {
         self.to = to
         data = try ABI.encodeCall(signature, args)
         returnTypes = try ABIType.parseList(returns)
+        self.strings = strings
     }
 }
 
@@ -32,7 +36,9 @@ public struct Multicall: Sendable {
 
     public init(rpc: RPCClient) { self.rpc = rpc }
 
-    /// Runs every call; failed calls come back as `.failure` so one bad read never hides the others.
+    /// Runs every call; failed calls come back as `.failure` so one bad read never hides the others: a call that failed
+    /// (it reverted or ran out of gas) as an `RPCError` carrying what it returned, and one whose return data isn't of its
+    /// `returnTypes` as the decoding's error.
     public func read(_ calls: [ContractCall], block: BlockTag = .latest) async throws -> [Result<[ABIValue], Error>] {
         guard !calls.isEmpty else { return [] }
         let args: ABIValue = .array(calls.map { .tuple([.address($0.to), .bool(true), .bytes($0.data)]) })
@@ -42,12 +48,34 @@ public struct Multicall: Sendable {
         guard decoded.count == calls.count else { throw NetworkError.malformedResponse }
         return zip(calls, decoded).map { call, item in
             guard item[0].bool else { return .failure(RPCError(code: -32000, message: "Call reverted", data: item[1].bytes.hexString)) }
-            do { return .success(try ABI.decode(item[1].bytes, call.returnTypes)) } catch { return .failure(error) }
+            do { return .success(try ABI.decode(item[1].bytes, call.returnTypes, strings: call.strings)) } catch { return .failure(error) }
         }
     }
 
     /// Like `read`, but throws if any call failed.
     public func readAll(_ calls: [ContractCall], block: BlockTag = .latest) async throws -> [[ABIValue]] {
         try await read(calls, block: block).map { try $0.get() }
+    }
+
+    /// Several `read`s, each its calls at its own block, sent as one batched JSON-RPC request (a chart's samples): one
+    /// answer per request, in order, a request the node couldn't serve (a block it no longer holds) as its failure.
+    public func read(_ requests: [(calls: [ContractCall], block: UInt64)]) async throws -> [Result<[Result<[ABIValue], Error>], Error>] {
+        guard !requests.isEmpty else { return [] }
+        let encoded = try requests.map { request -> (CallRequest, BlockTag) in
+            let args: ABIValue = .array(request.calls.map { .tuple([.address($0.to), .bool(true), .bytes($0.data)]) })
+            return (CallRequest(to: Self.address, data: try ABI.encodeCall(Self.signature, [args])), .number(request.block))
+        }
+        let answers = try await rpc.ethCalls(encoded)
+        guard answers.count == requests.count else { throw NetworkError.malformedResponse }
+        return zip(requests, answers).map { request, answer in
+            Result {
+                let decoded = try ABI.decode(try answer.get(), Self.returns)[0].elements
+                guard decoded.count == request.calls.count else { throw NetworkError.malformedResponse }
+                return zip(request.calls, decoded).map { call, item in
+                    guard item[0].bool else { return .failure(RPCError(code: -32000, message: "Call reverted", data: item[1].bytes.hexString)) }
+                    do { return .success(try ABI.decode(item[1].bytes, call.returnTypes, strings: call.strings)) } catch { return .failure(error) }
+                }
+            }
+        }
     }
 }

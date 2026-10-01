@@ -25,6 +25,7 @@ struct MomentArtwork: View {
             else { Color(.tertiarySystemFill); ProgressView().controlSize(.small) }
         }
         .task(id: provenance.mediaURI + "|" + (creator?.hex ?? "")) { await load() }
+        .accessibilityIgnoresInvertColors()
     }
 
     private func load() async {
@@ -48,9 +49,16 @@ struct MomentArtwork: View {
     private var placeholder: some View {
         ZStack {
             LinearGradient(colors: [Color.allocationMoments.opacity(0.35), Color.brand.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            Text(symbol.prefix(2).uppercased())
-                .font(.system(size: 36, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.brand)
+            // Sized to the frame: a fixed 36 pt shows only "…" in the 34–44 pt rows. Cards and headers keep 36. The letters
+            // skip the isolate around right-to-left text (`ChainText.leading`).
+            GeometryReader { frame in
+                Text(ChainText.leading(symbol, 2).uppercased())
+                    .font(.system(size: min(36, frame.size.width * 0.4), weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .foregroundStyle(Color.brand)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 }
@@ -89,9 +97,10 @@ final class MomentMediaLoader {
         return URLSession(configuration: config)
     }()
 
-    /// Where to look for a Moment's image, best first. The Supabase mirror derived from the creator + media hash (only
-    /// meaningful for an `ipfs://` pointer — an https pointer *is* the mirror) is a DyorHQ-hosted object, so it is
-    /// never shown on trust (security audit 2026-09-26, PR-2):
+    /// Where to look for a Moment's image, best first, through `ImageSourcePolicy` (`momentSources`), as a Moment coin's
+    /// icon loads it: only DyorHQ's `launch-media` bucket and the fixed IPFS gateways, never a host the creator chose
+    /// (another https link shows the placeholder). The Supabase mirror derived from the creator + media hash is a
+    /// DyorHQ-hosted object, so it is never shown on trust (security audit 2026-09-26, PR-2):
     /// - a photo Moment's provenance hash is the keccak-256 of the very JPEG in the mirror, so the mirror goes first (it
     ///   is fast and DyorHQ-run) but its bytes count only while they still match that hash;
     /// - a video Moment's hash is the video's, while the mirror holds its poster frame, which nothing on-chain can check
@@ -99,28 +108,21 @@ final class MomentMediaLoader {
     ///   That includes a video Moment whose on-chain image IS that mirror (earlier builds wrote it when pinning failed):
     ///   it shows the placeholder, since until the bucket is write-once (supabase migration 26) the creator can swap
     ///   those bytes.
-    /// Any other https pointer is the creator's own link, shown as it is.
+    /// Without a creator there is no mirror to derive: the pointer alone, held to the same hosts.
     static func imageSources(provenance: MomentProvenance, creator: Address?) -> [MomentImageSource] {
-        let gateways = MomentsMath.gatewayURLs(provenance.mediaURI).map { MomentImageSource(url: $0) }
-        guard let creator,
-              let mirror = MomentsMath.mirrorURL(creator: creator, mediaHash: provenance.mediaHash, supabaseURL: AppConfig.current.supabaseURL) else {
-            return gateways
-        }
-        guard provenance.mediaURI.lowercased().hasPrefix("ipfs://") else {
-            // An https pointer that is this photo's own mirror (published, by the creator's choice, when pinning
-            // failed) is checked the same way.
-            if gateways.count == 1, gateways[0].url == mirror {
-                return provenance.animationURI.isEmpty ? [MomentImageSource(url: mirror, keccak: provenance.mediaHash)] : []
-            }
-            return gateways
-        }
-        if provenance.animationURI.isEmpty {
-            return [MomentImageSource(url: mirror, keccak: provenance.mediaHash)] + gateways
-        }
-        return gateways
+        let policy = ImageSourcePolicy.app
+        guard let creator else { return policy.creatorSources(provenance.mediaURI).map { MomentImageSource(url: $0) } }
+        return policy.momentSources(mediaURI: provenance.mediaURI, mediaHash: provenance.mediaHash, isVideo: !provenance.animationURI.isEmpty, creator: creator)
+            .map { MomentImageSource(url: $0.url, keccak: $0.keccak) }
     }
 
     func cached(_ key: String) -> UIImage? { images.object(forKey: key as NSString) }
+
+    /// Forgets every image and every miss (account deletion).
+    func removeAll() {
+        images.removeAllObjects()
+        misses = [:]
+    }
 
     func load(key: String, sources: [MomentImageSource]) async -> UIImage? {
         if let hit = cached(key) { return hit }
@@ -254,40 +256,45 @@ struct MomentCard: View {
     }
 }
 
-/// Number formatting shared by the Moments screens.
+/// Number formatting shared by the Moments screens, in the app's one dollar style (`PriceFormat`).
 enum MomentsFormat {
     /// USDC units as dollars with every decimal kept (up to 6), e.g. "$1.00", "$0.123456": for amounts that must be
     /// exact, like what a collect pays and approves.
     static func usdc(_ units: BigUInt) -> String {
-        MomentsMath.usdc(units).formatted(.currency(code: "USD").precision(.fractionLength(2...6)))
+        PriceFormat.usdValue(MomentsMath.usdc(units), fractionDigits: 2...6)
     }
 
     /// USDC units rounded to the cent, e.g. "$771.43": for the reserve, the graduation threshold and what is still needed,
-    /// which a policy can set to a sixth decimal (771.428571 USDC for cohort 4). Under a cent but not zero reads "<$0.01".
+    /// which a policy can set to a sixth decimal (771.428571 USDC for cohort 4). Under half a cent but not zero reads
+    /// "<$0.01".
     static func usdcCents(_ units: BigUInt) -> String {
-        let dollars = MomentsMath.usdc(units)
-        if units > 0, dollars < 0.005 { return "<" + 0.01.formatted(.currency(code: "USD")) }
-        return dollars.formatted(.currency(code: "USD").precision(.fractionLength(2)))
+        PriceFormat.usdValue(MomentsMath.usdc(units))
     }
 
     /// Whole coins, compact, e.g. "3.86M".
     static func coins(_ wei: BigUInt) -> String { NumberStyle.number(MomentsMath.coins(wei), compact: true) }
 
-    /// A coin's dollar price with enough precision for small numbers (three significant digits).
+    /// A coin's dollar price (`PriceFormat.usdPrice`: "$0.0₆1234" for a tiny one), "—" when there is none. VoiceOver
+    /// reads `coinPriceSpoken`.
     static func coinPrice(_ usd: Double) -> String {
         guard usd > 0 else { return "—" }
-        return usd.formatted(.currency(code: "USD").precision(.significantDigits(2...3)))
+        return PriceFormat.usdPrice(usd)
     }
 
-    /// A dollar amount, compact ("US$25.9", "US$1.2K").
+    /// `coinPrice` with every zero written out, for VoiceOver.
+    static func coinPriceSpoken(_ usd: Double) -> String {
+        guard usd > 0 else { return "—" }
+        return PriceFormat.spoken(usd)
+    }
+
+    /// A dollar amount, compact ("$25.90", "$1.2K").
     static func usd(_ value: Double) -> String {
-        if value >= 1_000 { return "US$" + NumberStyle.number(value, compact: true) }
-        return value.formatted(.currency(code: "USD").precision(.fractionLength(value < 1 ? 2...4 : 0...2)))
+        PriceFormat.usdValue(value, compact: true)
     }
 
-    /// A valuation stated in full ("$2,000", never "US$2K"): the graduation FDV is a number people quote exactly.
+    /// A valuation stated in full ("$2,000", never "$2K"): the graduation FDV is a number people quote exactly.
     static func fdv(_ value: Double) -> String {
-        value.formatted(.currency(code: "USD").precision(.fractionLength(value < 100 ? 2 : 0)))
+        PriceFormat.usdValue(value, fractionDigits: value < 100 ? 2...2 : 0...0)
     }
 
     /// "2d 3h left", "45m left", "closed"; `short` drops the word for tight spaces ("2d 3h").

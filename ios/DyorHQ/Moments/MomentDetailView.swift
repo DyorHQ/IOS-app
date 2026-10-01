@@ -122,9 +122,9 @@ struct MomentDetailView: View {
         Section {
             HStack(spacing: 0) {
                 if info.graduated, let pool = info.pool {
-                    stat("Coin price", MomentsFormat.coinPrice(pool.usdcPerCoin))
+                    stat("Coin price", MomentsFormat.coinPrice(pool.usdcPerCoin), spoken: MomentsFormat.coinPriceSpoken(pool.usdcPerCoin))
                     Divider().frame(height: 34)
-                    stat("FDV", pool.fdvUSD.formatted(.currency(code: "USD").precision(.fractionLength(0))))
+                    stat("FDV", MomentsFormat.fdv(pool.fdvUSD))
                     Divider().frame(height: 34)
                     stat("Since open", pool.changeSinceOpen.map { NumberStyle.percent($0) } ?? "—")
                 } else {
@@ -141,9 +141,11 @@ struct MomentDetailView: View {
         }
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
+    /// `spoken` is what VoiceOver reads for `value` when the two differ (a subscripted price, `PriceFormat.spoken`).
+    private func stat(_ label: String, _ value: String, spoken: String? = nil) -> some View {
         VStack(spacing: 3) {
             Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+                .accessibilityLabel(spoken ?? value)
             Text(label).font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
@@ -310,8 +312,9 @@ struct MomentDetailView: View {
 
     private func poolSection(_ pool: MomentPool) -> some View {
         Section {
-            LabeledContent("Coin price", value: MomentsFormat.coinPrice(pool.usdcPerCoin))
-            LabeledContent("Opened at", value: MomentsFormat.coinPrice(MomentsMath.usdcPerCoin(sqrtPriceX96: pool.openingSqrtPriceX96, usdcIs0: pool.usdcIs0)))
+            LabeledContent("Coin price") { Text(MomentsFormat.coinPrice(pool.usdcPerCoin)).accessibilityLabel(MomentsFormat.coinPriceSpoken(pool.usdcPerCoin)) }
+            let opened = MomentsMath.usdcPerCoin(sqrtPriceX96: pool.openingSqrtPriceX96, usdcIs0: pool.usdcIs0)
+            LabeledContent("Opened at") { Text(MomentsFormat.coinPrice(opened)).accessibilityLabel(MomentsFormat.coinPriceSpoken(opened)) }
             LabeledContent("Graduated", value: MomentsFormat.date(pool.graduatedAt))
             LabeledContent("Seeded with", value: "\(MomentsFormat.usdc(pool.reserveSeed)) + \(MomentsFormat.coins(pool.poolCoins)) $\(info.symbol)")
             LabeledContent("Position", value: "Full range · locked forever")

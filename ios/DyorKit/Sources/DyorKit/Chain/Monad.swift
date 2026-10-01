@@ -12,7 +12,6 @@ public enum Monad {
     /// IP, so every phone has its own budget — and no provider API key ever ships inside the app.
     public static let publicRPCs = [defaultRPC, URL(string: "https://rpc1.monad.xyz")!]
     public static let explorer = URL(string: "https://monadscan.com")!
-    public static let blocksPerDay: UInt64 = 216_000 // ~0.4 s blocks
     public static let nativeSymbol = "MON"
 
     public static let native = Address.zero

@@ -91,7 +91,7 @@ struct PortfolioView: View {
                     Text(router.period.label).font(.caption.weight(.semibold)).foregroundStyle(Color.brand)
                         .padding(.horizontal, 8).padding(.vertical, 3).background(Color.brand.opacity(0.12), in: Capsule())
                 }
-                Text(totals.volume, format: .currency(code: "USD").precision(.fractionLength(0...2)))
+                Text(PriceFormat.usdValue(totals.volume))
                     .font(.system(size: 38, weight: .semibold, design: .serif))
                     .monospacedDigit()
                     .lineLimit(1).minimumScaleFactor(0.6)
@@ -162,7 +162,7 @@ struct PortfolioView: View {
                         Circle().fill(color(slice.section)).frame(width: 9, height: 9)
                         Text(slice.section.title).font(.subheadline)
                         Spacer(minLength: 8)
-                        Text(slice.volume, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.medium)).monospacedDigit()
+                        Text(PriceFormat.usdValue(slice.volume)).font(.subheadline.weight(.medium)).monospacedDigit()
                         Text(NumberStyle.percent(total > 0 ? slice.volume / total * 100 : 0, fractionDigits: 0, signed: false))
                             .font(.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 42, alignment: .trailing)
                     }
@@ -197,7 +197,7 @@ struct PortfolioView: View {
                         .background(color(section), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     Text(section.title).font(.headline).foregroundStyle(.primary)
                     Spacer()
-                    Text(stats.volume, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.primary)
+                    Text(PriceFormat.usdValue(stats.volume)).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.primary)
                     Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                 }
                 .contentShape(Rectangle())
@@ -266,9 +266,9 @@ struct PortfolioView: View {
         }
     }
 
-    private func usd(_ value: Double) -> String { value.formatted(.currency(code: "USD").precision(.fractionLength(0...2))) }
+    private func usd(_ value: Double) -> String { PriceFormat.usdValue(value) }
     private func signed(_ value: Double) -> String {
-        value == 0 ? usd(0) : value.formatted(.currency(code: "USD").precision(.fractionLength(0...2)).sign(strategy: .always()))
+        PriceFormat.usdValue(value, signed: true)
     }
 }
 
@@ -299,7 +299,7 @@ private struct PortfolioActivityRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-                if let usd = item.usd { Text(usd, format: .currency(code: "USD").precision(.fractionLength(0...2))).font(.subheadline.weight(.medium)).monospacedDigit() }
+                if let usd = item.usd { Text(PriceFormat.usdValue(usd)).font(.subheadline.weight(.medium)).monospacedDigit() }
                 Text(item.time, style: .relative).font(.caption2).foregroundStyle(.tertiary)
             }
         }

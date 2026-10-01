@@ -18,6 +18,11 @@ public struct WalletTokenDiscovery: Sendable {
 
     private static let transferSig = "Transfer(address,address,uint256)"
 
+    /// How far back a scan reads unless it reads the whole history: a block budget, 6,480,000 blocks (about 22.7 days at
+    /// Monad's pace), kept as it was when it was called 30 days. Reading a true 30 days would cost about a third more
+    /// log reads for every wallet scan.
+    public static let defaultWindowBlocks: UInt64 = 6_480_000
+
     /// The tokens to show as Unverified once, after an upgrade from builds that stored every token found in the
     /// wallet's history as if the user had chosen it (security audit 2026-09-26, IOST-12) — discovery skips a token
     /// already stored, so it would never be marked otherwise. That is all of `stored` except native MON and the curated
@@ -27,11 +32,11 @@ public struct WalletTokenDiscovery: Sendable {
         alreadyUnverified.union(stored.filter { !$0.isNative && Token.core($0.address) == nil }.map(\.address))
     }
 
-    /// The ERC-20 tokens the wallet currently holds (balance > 0), resolved to `Token` metadata. `window` bounds how
-    /// far back the incoming-transfer scan looks; `known` addresses (already-surfaced tokens, native MON) are skipped
+    /// The ERC-20 tokens the wallet currently holds (balance > 0), resolved to `Token` metadata. `windowBlocks` bounds
+    /// how far back the incoming-transfer scan looks; `known` addresses (already-surfaced tokens, native MON) are skipped
     /// so only NEW tokens are read.
-    public func heldTokens(wallet: Address, window: UInt64 = Monad.blocksPerDay * 30, known: Set<Address> = [], wholeHistory: Bool = false) async -> [Token] {
-        await scan(wallet: wallet, window: window, known: known, wholeHistory: wholeHistory).tokens
+    public func heldTokens(wallet: Address, windowBlocks: UInt64 = WalletTokenDiscovery.defaultWindowBlocks, known: Set<Address> = [], wholeHistory: Bool = false) async -> [Token] {
+        await scan(wallet: wallet, windowBlocks: windowBlocks, known: known, wholeHistory: wholeHistory).tokens
     }
 
     /// What a scan found, and whether every read it needed answered.
@@ -50,11 +55,11 @@ public struct WalletTokenDiscovery: Sendable {
     /// `heldTokens`, saying whether the scan was complete. `logScan` is how the history meets an endpoint that stops
     /// answering (`LogScanMode`): patient, as every other log scan, unless the caller says what it couldn't read and offers
     /// Retry, as the Send sheet and the Portfolio do (`.failFast`).
-    public func scan(wallet: Address, window: UInt64 = Monad.blocksPerDay * 30, known: Set<Address> = [], wholeHistory: Bool = false,
+    public func scan(wallet: Address, windowBlocks: UInt64 = WalletTokenDiscovery.defaultWindowBlocks, known: Set<Address> = [], wholeHistory: Bool = false,
                      logScan: LogScanMode = .patient) async -> Scan {
         guard let anchor = try? await logsRPC.block(.latest) else { return Scan(tokens: [], complete: false) }
         let latest = anchor.number
-        let from = wholeHistory ? 0 : (latest > window ? latest - window : 0)
+        let from = wholeHistory ? 0 : (latest > windowBlocks ? latest - windowBlocks : 0)
         let topic = ABI.eventTopic(Self.transferSig)
         let walletWord = wallet.data.leftPadded(to: 32)
         // Every ERC-20 that has sent tokens to this wallet in the window; the emitting contract IS the token.

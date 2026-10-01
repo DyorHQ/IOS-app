@@ -68,6 +68,8 @@ enum AccountDeletion {
 
         env.perplTrading.forget(address: account.address)
         NotificationHub.shared.clear()
+        // Before the erase: a venue list save after it would turn App Lock's default off for the next launch (R4).
+        env.venueList.stop()
         await session.eraseLocalData()
         session.deletionNotice = notice
     }
@@ -132,14 +134,16 @@ enum AccountDeletion {
     }
 
     /// This device's copy of an account, gone: the backend session closed, Perpl's token and socket dropped, the
-    /// notification center cleared, then `Session.eraseLocalData`. Nothing on the server is deleted and nothing is
-    /// reported to the passkey provider. A passkey account's deletion does both first; "Forget This Device"
-    /// (`ProfileView`) is only this, so the passkey keeps the account and "I already have a passkey" brings it back.
+    /// notification center cleared, the venue list's reading stopped (nothing it saves may follow the erase, R4), then
+    /// `Session.eraseLocalData`. Nothing on the server is deleted and nothing is reported to the passkey provider. A
+    /// passkey account's deletion does both first; "Forget This Device" (`ProfileView`) is only this, so the passkey keeps
+    /// the account and "I already have a passkey" brings it back.
     @MainActor
     static func eraseThisDevice(address: Address, session: Session, social: SocialSession, env: AppEnvironment) async {
         social.signOut()
         env.perplTrading.forget(address: address)
         NotificationHub.shared.clear()
+        env.venueList.stop()
         await session.eraseLocalData()
     }
 

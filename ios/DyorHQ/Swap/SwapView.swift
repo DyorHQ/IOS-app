@@ -120,7 +120,7 @@ struct SwapView: View {
                     Text("Balance: \(NumberStyle.units(balance, decimals: model.tokenIn.decimals)) \(model.tokenIn.symbol)")
                 }
                 Spacer()
-                if let usd = model.payUSD { Text(usd, format: .currency(code: "USD")) }
+                if let usd = model.payUSD { Text(PriceFormat.usdValue(usd)) }
             }
             // With the header below trimmed to match (`receiveSection`), the flip button sits 10 pt from the balance
             // line and 10 pt from "You Receive".
@@ -211,22 +211,21 @@ struct SwapView: View {
                     Text("Balance: \(NumberStyle.units(balance, decimals: model.tokenOut.decimals)) \(model.tokenOut.symbol)")
                 }
                 Spacer()
-                if let usd = model.receiveUSD { Text(usd, format: .currency(code: "USD")) }
+                if let usd = model.receiveUSD { Text(PriceFormat.usdValue(usd)) }
             }
         }
     }
 
     /// Swap's "no venue" state when a side is still on a launchpad's bonding curve (the live launchpad's or a retired
     /// one's): no venue routes a curve, so rather than a dead end it says where the coin trades and opens its Launch page
-    /// (the Launch tab when its launch couldn't be read), or, when the check failed, offers to check again.
+    /// (by reference when its launch couldn't be read), or, when the check failed, offers to check again or the Launch
+    /// tab, where a retired coin's holder finds it under "Your Sell-Only Coins".
     @ViewBuilder private var curveSection: some View {
         if model.amountIn > 0, let curve = model.currentCurve, let notice = curve.route.notice {
             Section {
                 Label(notice, systemImage: "arrow.up.right.circle").font(.subheadline).foregroundStyle(.secondary)
                 if let title = curve.route.actionTitle(curve.token.symbol) {
-                    Button(title, systemImage: "arrow.up.right.circle") {
-                        if let launch = curve.route.launch { router.openLaunch(launch) } else { router.openLaunchTab() }
-                    }
+                    Button(title, systemImage: "arrow.up.right.circle") { router.openLaunchPage(for: curve.route) }
                 } else {
                     Button("Check Again", systemImage: "arrow.clockwise") { Task { await model.recheckCurve(env: env) } }
                         .disabled(model.checkingCurve)
@@ -290,11 +289,11 @@ struct SwapView: View {
     private func tokenRow(side: SwapModel.Side, token: Token) -> some View {
         Button { Haptics.selection(); picking = side } label: {
             HStack(spacing: 12) {
-                TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
+                TokenLogo(token: token, size: 32)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
                         Text(token.symbol).font(.headline)
-                        if KnownTokenStore.isUnverified(token.address, owner: session.address) { UnverifiedBadge() }
+                        TokenBadgeView(token: token, receivedUnasked: KnownTokenStore.isUnverified(token.address, owner: session.address))
                     }
                     Text(token.name).font(.footnote).foregroundStyle(.secondary)
                 }
@@ -706,7 +705,8 @@ struct TokenPickerSheet: View {
     /// it only opens a token's page, which shows such a coin as "Past cohort · trading closed" with no swap.
     var tradableOnly = true
     /// Tokens found in the wallet rather than chosen (`KnownTokenStore.unverified`): left out of the list, and shown —
-    /// marked — only when a search matches them (security audit 2026-09-26, IOST-12).
+    /// marked — only when a search matches them (security audit 2026-09-26, IOST-12): a DyorHQ coin with its DyorHQ label
+    /// in a section of its own, every other one as Unverified (`TokenPickerList`).
     var unverified: Set<Address> = []
     let onPick: (Token) -> Void
     @Environment(AppEnvironment.self) private var env
@@ -716,40 +716,43 @@ struct TokenPickerSheet: View {
     @State private var lookingUp = false
     @State private var remoteResults: [Token] = []
 
+    /// The main list (`TokenPickerList.main`): never a received token, a DyorHQ coin included; a retired cohort's Moment
+    /// coin is never offered as a swap side, trading it being closed in the app. Assets the wallet holds float to the
+    /// top, keeping the curated order within each group.
     private var tokens: [Token] {
-        // A retired cohort's Moment coin is never offered as a swap side: trading it is closed in the app.
-        let base = (tradableOnly ? universe.filter(SwapEngine.isTradable) : universe).filter { !unverified.contains($0.address) }
-        let filtered = query.isEmpty ? base : base.filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
-        // Assets the wallet holds float to the top, keeping the curated order within each group.
-        return filtered.enumerated().sorted { a, b in
-            let heldA = (balances[a.element.address] ?? 0) > 0
-            let heldB = (balances[b.element.address] ?? 0) > 0
-            return heldA != heldB ? heldA : a.offset < b.offset
-        }.map(\.element)
+        TokenPickerList.main(universe, unverified: unverified, balances: balances, query: query, tradableOnly: tradableOnly)
     }
 
-    /// Unverified tokens in the wallet that match the search, in their own marked section.
-    private var unverifiedMatches: [Token] {
-        guard !query.isEmpty else { return [] }
-        return universe.filter { token in
-            unverified.contains(token.address) && token.address != custom?.address && (!tradableOnly || SwapEngine.isTradable(token))
-                && (token.symbol.localizedCaseInsensitiveContains(query) || token.name.localizedCaseInsensitiveContains(query))
+    /// Received tokens in the wallet that match the search, each kind in its own section: the DyorHQ coins showing their
+    /// DyorHQ label, and every other one, Unverified.
+    private var receivedMatches: (dyorHQ: [Token], unverified: [Token]) {
+        TokenPickerList.received(universe, unverified: unverified, query: query, excluding: custom?.address, tradableOnly: tradableOnly) {
+            env.dyorCoins.badge($0, receivedUnasked: true).isDyorHQ
         }
     }
 
+    /// Whether a search may miss a token because the venue list is still being read (`VenueTokenList.isCatchingUp`).
+    /// Said only while searching by name: the default list is popular-only and never waits for it, and a pasted address
+    /// is looked up on its own.
+    private var venueListCatchingUp: Bool { !query.isEmpty && Address(query) == nil && env.venueList.isCatchingUp }
+
     /// Search hits for tokens not in the popular default list: the Uniswap/Monday venue list (accurate symbols +
-    /// logos, matched locally) plus Kuru's directory. Only while searching — the default list stays popular-only.
+    /// logos, matched locally, in memory) plus Kuru's directory. Only while searching — the default list stays
+    /// popular-only. Computed once a render (`body`).
     private var remoteMatches: [Token] {
         guard !query.isEmpty else { return [] }
-        var seen = Set(tokens.map(\.address)).union(unverifiedMatches.map(\.address))
+        var seen = Set(tokens.map(\.address)).union(universe.filter { unverified.contains($0.address) }.map(\.address))
         if let custom { seen.insert(custom.address) }
-        let venueHits = VenueTokenStore.all().filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
+        let venueHits = env.venueList.tokens.filter { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
         var out: [Token] = []
         for token in venueHits + remoteResults where (!tradableOnly || SwapEngine.isTradable(token)) && seen.insert(token.address).inserted { out.append(token) }
         return out
     }
 
     var body: some View {
+        let remote = remoteMatches
+        let received = receivedMatches
+        let noMatch = tokens.isEmpty && custom == nil && remote.isEmpty && received.dyorHQ.isEmpty && received.unverified.isEmpty
         NavigationStack {
             List {
                 if let custom {
@@ -760,21 +763,43 @@ struct TokenPickerSheet: View {
                 Section {
                     ForEach(tokens) { row($0) }
                 } footer: {
-                    if tokens.isEmpty, custom == nil, remoteMatches.isEmpty, unverifiedMatches.isEmpty {
-                        Text(lookingUp ? "Looking up this token…" : "No token matches. Paste a contract address to add any Monad token.")
+                    if noMatch {
+                        if lookingUp {
+                            Text("Looking up this token…")
+                        } else if venueListCatchingUp {
+                            Text("No token matches yet: Monad's token list is still loading. Paste a contract address to add any Monad token.")
+                        } else {
+                            Text("No token matches. Paste a contract address to add any Monad token.")
+                        }
                     }
                 }
-                if !unverifiedMatches.isEmpty {
+                if !received.dyorHQ.isEmpty {
                     Section {
-                        ForEach(unverifiedMatches) { row($0) }
+                        ForEach(received.dyorHQ) { row($0) }
+                    } header: {
+                        Text("DyorHQ coins in your wallet")
+                    } footer: {
+                        Text("These were launched or published on DyorHQ and sent to your wallet without you choosing them here. Anyone can launch a coin on DyorHQ: check the contract before you trade.")
+                    }
+                }
+                if !received.unverified.isEmpty {
+                    Section {
+                        ForEach(received.unverified) { row($0) }
                     } header: {
                         Text("Unverified — in your wallet")
                     } footer: {
                         Text("These arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you trade.")
                     }
                 }
-                if !remoteMatches.isEmpty {
-                    Section("More Monad tokens") { ForEach(remoteMatches) { row($0) } }
+                // With nothing matched, the "no match" footer says the list is loading: never a second footer under it.
+                if !remote.isEmpty || (venueListCatchingUp && !noMatch) {
+                    Section {
+                        ForEach(remote) { row($0) }
+                    } header: {
+                        if !remote.isEmpty { Text("More Monad tokens") }
+                    } footer: {
+                        if venueListCatchingUp { Text("Monad's token list is still loading, so a token may be missing for now.") }
+                    }
                 }
             }
             .listStyle(.insetGrouped)
@@ -803,7 +828,7 @@ struct TokenPickerSheet: View {
     /// A pasted past-cohort Moment coin: named so the address is not a dead end, never pickable.
     private func closedRow(_ token: Token) -> some View {
         HStack(spacing: 12) {
-            TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
+            TokenLogo(token: token, size: 32)
             VStack(alignment: .leading, spacing: 1) {
                 Text(token.symbol).font(.headline)
                 Text("Past cohort · trading closed").font(.footnote).foregroundStyle(.secondary)
@@ -821,11 +846,11 @@ struct TokenPickerSheet: View {
             dismiss()
         } label: {
             HStack(spacing: 12) {
-                TokenLogo(symbol: token.symbol, url: token.logoURL, size: 32)
+                TokenLogo(token: token, size: 32)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
                         Text(token.symbol).font(.headline)
-                        if unverified.contains(token.address) { UnverifiedBadge() }
+                        TokenBadgeView(token: token, receivedUnasked: unverified.contains(token.address))
                     }
                     // Only Home's search lists a retired coin; its page has no swap either.
                     Text(SwapEngine.isTradable(token) ? token.name : "Past cohort · trading closed").font(.footnote).foregroundStyle(.secondary)

@@ -9,22 +9,33 @@ public actor LaunchpadService {
     public static let defaultLogsRPC = URL(string: "https://rpc1.monad.xyz")!
     /// `LaunchpadFactory.MAX_EXEMPTIONS`.
     public static let maxExemptions = 32
-    /// Monad block time, used to estimate event timestamps from block numbers.
-    public static let blockSeconds = 0.4
+    /// The launchpad activity a profile and the recent-activity feed scan (`activity(limit:lookbackBlocks:launches:)`): a
+    /// block budget, 1,512,000 blocks (about 5.3 days at Monad's pace), kept as it was when it was called seven days so
+    /// the scans cost what they did.
+    public static let recentActivityBlocks: UInt64 = 1_512_000
+    /// How far back `holderCount` reads a coin's transfers: a block budget, 6,480,000 blocks (about 22.7 days).
+    public static let holderScanBlocks: UInt64 = 6_480_000
+    /// The longest a coin's trade history is read for its PnL (`tradeLookback`): 30 days.
+    public static let maxTradeLookback: TimeInterval = 30 * 86_400
+    /// Blocks added to a trade history read from a coin's age (`tradeLookback`), so the launch itself is inside it.
+    public static let tradeLookbackMargin: UInt64 = 20_000
 
     public let rpc: RPCClient
     /// The endpoint used for event history; a local fork keeps logs on the same node.
     public let logsRPC: RPCClient
     public private(set) var addresses: LaunchpadAddresses
+    /// Turns block numbers into the times the history shows, and a day or a coin's age into blocks.
+    public let clock: BlockClock
     let multicall: Multicall
     private var pairCache: [Address: PairInfo] = [:]
 
-    public init(rpc: RPCClient, addresses: LaunchpadAddresses, logsRPC: RPCClient? = nil) {
+    public init(rpc: RPCClient, addresses: LaunchpadAddresses, logsRPC: RPCClient? = nil, clock: BlockClock? = nil) {
         self.rpc = rpc
         self.addresses = addresses
         let text = rpc.url.absoluteString
         let local = text.contains("127.0.0.1") || text.contains("localhost")
         self.logsRPC = logsRPC ?? (local ? rpc : RPCClient(url: Self.defaultLogsRPC))
+        self.clock = clock ?? BlockClock(rpc: rpc)
         multicall = Multicall(rpc: rpc)
     }
 
@@ -197,7 +208,10 @@ public actor LaunchpadService {
         return try await launches(limit: limit, factory: addresses.factory)
     }
 
-    /// Launches recorded by a specific factory — the live one or a retired one whose history still counts.
+    /// Launches recorded by a specific factory — the live one or a retired one whose history still counts. Every coin the
+    /// factory lists is on the page: one whose text can't be read shows stand-ins (`hydrate`), and a read that doesn't
+    /// answer for every coin throws (`ChainListUnread`), never a shorter list. The records hold no text, so they are read
+    /// all or nothing: a listed coin whose record is missing or empty was read on a node behind the one that listed it.
     public func launches(limit: Int = 48, factory: Address) async throws -> [Launch] {
         guard !factory.isZero, limit > 0 else { return [] }
         let legacy = stack(for: factory).generation.legacyRecord
@@ -208,34 +222,46 @@ public actor LaunchpadService {
         guard !page.isEmpty else { return [] }
         let records = try await multicall.readAll(page.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)) })
             .map { LaunchpadABI.LaunchRecord($0[0], legacy: legacy) }
+        for (token, record) in zip(page, records) where !record.exists || record.token != token { throw ChainListUnread("A launch") }
         return try await hydrate(records, factory: factory).reversed()
     }
 
-    /// The newest `limit` launches of the live factory followed by those of each retired factory (newest stack
-    /// first), so the whole list stays newest first. A factory that fails to answer is left out rather than failing
-    /// the others; the live factory's error is only thrown when no retired launch came back either. While the live
-    /// stack is not deployed (v2 pending) the list is the retired stacks' launches alone.
-    public func allLaunches(limit: Int = 48) async throws -> [Launch] {
-        let retiredStacks = self.retiredStacks
-        async let live: [Launch] = addresses.isDeployed ? launches(limit: limit, factory: addresses.factory) : []
-        let retired = await withTaskGroup(of: (Int, [Launch]).self) { group in
-            for (i, stack) in retiredStacks.enumerated() {
-                group.addTask { (i, (try? await self.launches(limit: limit, factory: stack.factory)) ?? []) }
+    /// The newest `limit` launches of the live factory followed by those of each retired factory (newest stack first),
+    /// so the whole list stays newest first, with every factory whose launches couldn't be read (`LaunchListing.unread`):
+    /// one factory's failure never takes the others down, and is never mistaken for a factory with fewer launches. While
+    /// the live stack is not deployed (v2 pending) the list is the retired stacks' launches alone.
+    public func launchListing(limit: Int = 48) async -> LaunchListing {
+        let factories = stacks.map(\.factory)
+        let reads = await withTaskGroup(of: (Int, Result<[Launch], Error>).self) { group in
+            for (i, factory) in factories.enumerated() {
+                group.addTask { (i, await ERC20.captured { try await self.launches(limit: limit, factory: factory) }) }
             }
-            var out = Array(repeating: [Launch](), count: retiredStacks.count)
-            for await (i, list) in group { out[i] = list }
-            return out.flatMap { $0 }
+            var out = Array(repeating: Result<[Launch], Error>.success([]), count: factories.count)
+            for await (i, read) in group { out[i] = read }
+            return out
         }
-        do {
-            return try await live + retired
-        } catch {
-            if retired.isEmpty { throw error }
-            return retired
+        var launches: [Launch] = []
+        var unread: [Address: any Error] = [:]
+        for (factory, read) in zip(factories, reads) {
+            switch read {
+            case .success(let list): launches += list
+            case .failure(let error): unread[factory] = error
+            }
         }
+        return LaunchListing(factories: factories, launches: launches, unread: unread)
+    }
+
+    /// Every factory's launches (`launchListing`), or the error of the first factory (the live one first) whose launches
+    /// couldn't be read: for a reader that must have them all, such as one that totals what they are worth.
+    public func allLaunches(limit: Int = 48) async throws -> [Launch] {
+        let listing = await launchListing(limit: limit)
+        if let error = listing.firstError { throw error }
+        return listing.launches
     }
 
     /// One launch with its curve state, or nil when `token` was not launched on `factory` (the live factory when
-    /// nil) or that stack is not deployed. Every read goes to that factory's own stack.
+    /// nil) or that stack is not deployed. A launch that is recorded but can't be read throws (`hydrate`): its page says
+    /// so, with Retry, never "not found". Every read goes to that factory's own stack.
     public func launch(token: Address, factory: Address? = nil) async throws -> LaunchDetail? {
         let stack = stack(for: factory ?? addresses.factory)
         guard stack.isDeployed else { return nil }
@@ -245,7 +271,8 @@ public actor LaunchpadService {
         let legacy = stack.generation.legacyRecord
         let tuple = try await multicall.readAll([LaunchpadABI.call(factory, F.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy))])[0][0]
         let record = LaunchpadABI.LaunchRecord(tuple, legacy: legacy)
-        guard record.exists, let info = try await hydrate([record], factory: factory).first else { return nil }
+        guard record.exists else { return nil }
+        let info = try await hydrate([record], factory: factory)[0]
         let curve = record.curve
         // Like the web app, "graduated" here includes refund mode: the pool key is reported for both.
         let graduated = record.phase.rawValue >= LaunchPhase.graduated.rawValue
@@ -390,16 +417,22 @@ public actor LaunchpadService {
 
     // MARK: - Hydration
 
-    /// Token metadata and live curve state for a page of records from `factory`, in one multicall (plus one
-    /// PoolManager read for graduated launches, and one metadata read for pair assets not seen before).
+    /// Token metadata and live curve state for a page of records from `factory`, in reads of at most
+    /// `Multicall.textChunk` launches, all at once (`Multicall.readItems`, which retries a refused read launch by launch), with one
+    /// PoolManager read for graduated launches and one metadata read for pair assets not seen before; one launch per
+    /// record, in order. A coin's name, symbol, logo, description and links are its creator's: one that can't be read
+    /// shows a stand-in (`ChainText.unreadable`, empty for the rest) and the launch keeps its numbers. Its price, reserve,
+    /// state and supply are the protocol's: one that fails means the read didn't happen, and this throws
+    /// (`ChainListUnread`) rather than leave the launch out or show it wrong. The name, symbol and description are kept
+    /// as they show (`ChainText.shown`), so none can reorder or hide the app's text around it; the logo and links are
+    /// kept as read (they are only opened, never shown).
     func hydrate(_ records: [LaunchpadABI.LaunchRecord], factory: Address) async throws -> [Launch] {
         guard !records.isEmpty else { return [] }
         typealias T = LaunchpadABI.Token
         typealias C = LaunchpadABI.Curve
         let pairs = try await pairInfos(records.map(\.pairToken))
-        var calls: [ContractCall] = []
-        for r in records {
-            calls += [
+        let items = records.map { r in
+            [
                 LaunchpadABI.call(r.token, T.name, returns: "string"),
                 LaunchpadABI.call(r.token, T.symbol, returns: "string"),
                 LaunchpadABI.call(r.token, T.getTokenInfo, returns: "address,string,string,\(LaunchpadABI.socialsTuple)"),
@@ -409,44 +442,56 @@ public actor LaunchpadService {
                 LaunchpadABI.call(r.curve, C.rescued, returns: "bool"),
                 LaunchpadABI.call(r.curve, C.launchedAt, returns: "uint64"),
                 LaunchpadABI.call(r.token, T.totalSupply, returns: "uint256"),
+                LaunchpadABI.call(r.curve, C.getReserves, returns: "uint256,uint256"),
             ]
         }
-        let stride = 9
         let generation = stack(for: factory).generation
-        let results = try await multicall.readAll(calls)
-        let livePrices = await poolPrices(for: records)
-        return records.enumerated().map { i, r in
-            let base = i * stride
-            let info = LaunchpadABI.TokenInfo(results[base + 2])
-            let curvePrice = results[base + 3][0].uint
-            let realQuoteReserve = results[base + 4][0].uint
-            let supply = results[base + 8][0].uint
+        let results = try await multicall.readItems(items, text: Self.launchTextCalls, what: "A launch")
+        let livePrices = await poolPrices(for: records, pairs: pairs)
+        return try records.enumerated().map { i, r in
+            let item = results[i]
+            func value(_ at: Int) throws -> [ABIValue] { try item[at].get() }
+            func text(_ at: Int) -> String { (try? item[at].get())?.first?.stringOrNil ?? ChainText.unreadable }
+            let info = (try? value(2)).map(LaunchpadABI.TokenInfo.init)
+            let curvePrice = try value(3)[0].uint
+            let realQuoteReserve = try value(4)[0].uint
+            let supply = try value(8)[0].uint
             let graduated = r.phase == .graduated
-            let price = livePrices[r.token] ?? curvePrice
+            let price = livePrices[r.token]?.price ?? curvePrice
+            // The decimal price: the curve's reserves until it graduates, then its pool's — never the curve's last one.
+            let pairPrice = graduated ? livePrices[r.token]?.pairPrice
+                : Self.pairPerCoin(try value(9), graduated: false, token: r.token, pairSide: r.pairToken, pairDecimals: (pairs[r.pairToken] ?? .mon).decimals)
             return Launch(
                 token: r.token, curve: r.curve, deployer: r.deployer, creatorFeeRecipient: r.creatorFeeRecipient, pairToken: r.pairToken,
                 graduationThreshold: r.graduationThreshold, creatorTaxBps: r.creatorTaxBps, poolFeeBps: r.poolFeeBps, tickSpacing: r.tickSpacing,
                 holderFeeSharing: r.holderFeeSharing, graduationVenue: r.graduationVenue, phase: r.phase, sweptQuote: r.sweptQuote, sweptTokens: r.sweptTokens, sweptAt: r.sweptAt, poolId: r.poolId,
-                name: results[base][0].string, symbol: results[base + 1][0].string, logo: info.logo, description: info.description, socials: info.socials,
+                name: ChainText.shown(text(0)), symbol: ChainText.shown(text(1)), logo: info?.logo ?? "", description: ChainText.shown(info?.description ?? "", multiline: true),
+                socials: info?.socials ?? Socials(),
                 pair: pairs[r.pairToken] ?? .mon,
                 price: price,
                 realQuoteReserve: graduated ? r.sweptQuote : realQuoteReserve,
-                completed: results[base + 5][0].bool,
-                rescued: results[base + 6][0].bool,
-                launchedAt: LaunchpadABI.int(results[base + 7][0]),
+                completed: try value(5)[0].bool,
+                rescued: try value(6)[0].bool,
+                launchedAt: LaunchpadABI.int(try value(7)[0]),
                 supply: supply,
                 marketCap: LaunchpadMath.marketCap(price: price, supply: supply),
                 progressBps: LaunchpadMath.progressBps(phase: r.phase, realQuoteReserve: realQuoteReserve, sweptQuote: r.sweptQuote, threshold: r.graduationThreshold),
                 factory: factory,
-                generation: generation
+                generation: generation,
+                pairPrice: pairPrice
             )
         }
     }
 
-    /// Live pool prices for graduated launches, keyed by token. Any failure leaves the curve's final price in place.
-    /// A Uniswap v4 pool's slot0 is read from the PoolManager; a Monday Trade graduation records its v3-style pool
-    /// address as the `poolId`, whose own `slot0()` pairs the token with WMON in place of native MON.
-    private func poolPrices(for records: [LaunchpadABI.LaunchRecord]) async -> [Address: BigUInt] {
+    /// The calls of `hydrate`'s layout that read the creator's text: name, symbol, and getTokenInfo (logo, description,
+    /// links). The others read the protocol's values.
+    static let launchTextCalls: Set<Int> = [0, 1, 2]
+
+    /// Live pool prices for graduated launches, keyed by token: as `Launch.price` counts it, and to a Double's precision
+    /// (`Launch.pairPrice`). Any failure leaves the curve's final price in `price` and no `pairPrice`. A Uniswap v4 pool's
+    /// slot0 is read from the PoolManager; a Monday Trade graduation records its v3-style pool address as the `poolId`,
+    /// whose own `slot0()` pairs the token with WMON in place of native MON.
+    private func poolPrices(for records: [LaunchpadABI.LaunchRecord], pairs: [Address: PairInfo]) async -> [Address: (price: BigUInt, pairPrice: Double?)] {
         var reads: [(record: LaunchpadABI.LaunchRecord, pair: Address, call: ContractCall)] = []
         for record in records where record.phase == .graduated {
             if record.graduationVenue == .monday {
@@ -457,10 +502,11 @@ public actor LaunchpadService {
             }
         }
         guard !reads.isEmpty, let results = try? await multicall.read(reads.map(\.call)) else { return [:] }
-        var out: [Address: BigUInt] = [:]
+        var out: [Address: (price: BigUInt, pairPrice: Double?)] = [:]
         for (read, result) in zip(reads, results) {
             guard case .success(let values) = result, let price = LaunchpadMath.poolPrice(slot0: values[0].bytes, token: read.record.token, pairToken: read.pair) else { continue }
-            out[read.record.token] = price
+            let decimals = (pairs[read.record.pairToken] ?? .mon).decimals
+            out[read.record.token] = (price, Self.pairPerCoin(values, graduated: true, token: read.record.token, pairSide: read.pair, pairDecimals: decimals))
         }
         return out
     }
@@ -610,6 +656,29 @@ public actor LaunchpadService {
         return EscrowBalances(native: r[0][0].uint, tokens: byToken)
     }
 
+    /// Every launchpad's fee escrow (the live one's first, then each retired one's, `stacks`) and what `account` can
+    /// claim from it: native MON and every pair asset a launch can be made with (`Token.launchpadPairAssets`), plus
+    /// `extraPairTokens`, whichever launches were read — a creator's fees in USDC or AUSD are never missed because their
+    /// coin isn't among the launches a screen read. An escrow whose read failed has no balances (`LaunchpadEscrowRead`),
+    /// never zero.
+    public func escrowReads(account: Address, extraPairTokens: [Address] = []) async -> [LaunchpadEscrowRead] {
+        var seen = Set<Address>()
+        let pairTokens = (Token.launchpadPairAssets + extraPairTokens).filter { !$0.isZero && seen.insert($0).inserted }
+        let stacks = stacks.filter { !$0.escrow.isZero }
+        return await withTaskGroup(of: (Int, LaunchpadEscrowRead).self) { group in
+            for (i, stack) in stacks.enumerated() {
+                group.addTask {
+                    let balances = try? await self.escrowBalances(account: account, pairTokens: pairTokens, escrow: stack.escrow)
+                    return (i, LaunchpadEscrowRead(escrow: stack.escrow, factory: stack.factory, retired: LaunchpadAddresses.retiredStack(for: stack.factory) != nil,
+                                                   balances: balances))
+                }
+            }
+            var out: [(Int, LaunchpadEscrowRead)] = []
+            for await entry in group { out.append(entry) }
+            return out.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+    }
+
     /// Sweeps the caller's balance in `escrow` (the live stack's when nil): the native balance (when `native` is
     /// true) and each listed token, in one plan — so a creator withdraws their fees across every launch on that stack
     /// in a single confirmation.
@@ -648,12 +717,6 @@ public actor LaunchpadService {
         return [.call(TransactionRequest(to: stack(for: launch).hook, data: data), label: "Distribute pool fees")]
     }
 
-    // MARK: - Display helpers
-
-    /// Price in pair units per whole token, for display.
-    public nonisolated static func priceNumber(_ launch: Launch) -> Double {
-        Amount.units(launch.price, decimals: launch.pair.decimals)
-    }
 }
 
 /// What a launch transaction created, from its `TokenLaunched` event.
@@ -675,13 +738,13 @@ public extension LaunchpadMath {
         price * supply / BigUInt(10).power(18)
     }
 
-    /// Launches by market cap, largest first, across pair assets: each cap in whole pair units (6 decimals for USDC and
-    /// AUSD, 18 for MON and aBIL) times its pair asset's USD price (`pairUSD`, by pair token; MON under the zero
-    /// address), so a 50,000 USDC coin ranks above a 1 MON one although its raw amount is smaller. A launch whose pair has
-    /// no price yet ranks after every priced one, by its cap in whole pair units. Ties keep the given order.
+    /// Launches by market cap, largest first, across pair assets: each cap in whole pair units (`Launch.marketCapInPair`,
+    /// from its decimal price) times its pair asset's USD price (`pairUSD`, by pair token; MON under the zero address),
+    /// so a 50,000 USDC coin ranks above a 1 MON one. A launch whose pair has no price yet ranks after every priced one,
+    /// by its cap in whole pair units; one whose own price wasn't read counts as no cap. Ties keep the given order.
     static func byMarketCap(_ launches: [Launch], pairUSD: [Address: Double]) -> [Launch] {
         let keyed = launches.enumerated().map { index, launch -> (index: Int, launch: Launch, priced: Bool, value: Double) in
-            let units = Amount.units(launch.marketCap, decimals: launch.pair.decimals)
+            let units = launch.marketCapInPair ?? 0
             if let usd = pairUSD[launch.pairToken], usd > 0 { return (index, launch, true, units * usd) }
             return (index, launch, false, units)
         }

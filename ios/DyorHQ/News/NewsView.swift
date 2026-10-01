@@ -124,6 +124,7 @@ private struct NewsRow: View {
                 RemoteImage(url: image, pointSize: 72) { _ in Color(.tertiarySystemFill) }
                 .frame(width: 72, height: 72)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityIgnoresInvertColors() // a photo, left as it is under Smart Invert
             }
         }
         .contentShape(Rectangle())

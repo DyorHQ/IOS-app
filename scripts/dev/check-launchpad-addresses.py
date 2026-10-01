@@ -35,13 +35,12 @@ deployBlock. The two live factories are also pinned here (LIVE_LAUNCHPAD, LIVE_M
 (LIVE_FACTORIES in contracts/keepers/lib/deployments.mjs): Swift and a record that agree on any other factory refuse on
 every run, chain or not. Move the pins with the records when a new stack goes live.
 
-`--release` also reads the public docs' Contracts & Addresses page, which Get Help opens ("Verify every contract DyorHQ
-uses", and the Help Center links it) and which tells people to confirm an address there before using it outside the
-app. It is fetched at the URL the app opens (DyorKit's DocsLinks.contractsAndAddresses), with a plain HTTPS GET, and must
-show every address in DyorKit's two tables (case-insensitive: the modules, the shared contracts they name, and the
-Moments platform and treasury wallets); its first LaunchpadFactory and MomentsFactory rows, as the page reads, must be
-the tables' factories, so it never presents a retired stack as the current one. A page that cannot be read refuses too.
-Publish the docs update first, then archive.
+`--release` also reads the public docs' Contracts & Addresses page, which Get Help opens, at the URL the app opens
+(DyorKit's DocsLinks.contractsAndAddresses), with a plain HTTPS GET, and compares it with DyorKit's two tables (every
+address, case-insensitive; the first LaunchpadFactory and MomentsFactory rows as the page reads). What it finds is a
+note, never a refusal (owner decision 2026-10-01: the docs page doesn't gate a release, and some addresses are kept off
+it on purpose): an address the page doesn't show, a retired factory it presents as current, or a page that can't be
+read is printed for the release checklist, and the archive goes ahead.
 
 `--chain-fixture FILE` is for DyorKit's RetiredCohortGateTests only: the chain checks alone (the retired cohorts, and the
 live stacks when wired) and the docs check, against canned eth_call and eth_getCode answers and a canned page instead
@@ -484,22 +483,22 @@ def docs_page():
         return reply.read().decode("utf-8")
 
 def check_docs_page():
-    """The published page shows every address in DyorKit's two tables, and its current-release rows are the tables'
-    factories (a retired stack may follow, under previous releases). See the docstring."""
+    """Whether the published page shows every address in DyorKit's two tables, with the tables' factories as its
+    current-release rows (a retired stack may follow, under previous releases). Each difference is a note, never a
+    problem: the page doesn't gate a release (see the docstring). True when it matches."""
     where = f"the docs page {DOCS_CONTRACTS_PAGE}"
     try:
         page = docs_page()
     except Exception as e:  # noqa: BLE001 — unread is not proven
-        problems.append(f"{where} could not be read ({type(e).__name__}: {str(e)[:160]}); a release needs it to list "
-                        "this build's contracts: publish the docs update first, and archive once the page answers")
-        return
+        notes.append(f"{where} could not be read ({type(e).__name__}: {str(e)[:160]}); not compared")
+        return False
+    before = len(notes)
     text = page.lower()
     listed = [(f"LaunchpadAddresses.monadMainnet.{field}", address) for field, address in launchpad_addresses]
     listed += [(f"MomentsAddresses.monadMainnet.{field}", address) for field, address in moments_addresses]
     missing = [f"{name} {address}" for name, address in listed if address not in text]
     if missing:
-        problems.append(f"{where} does not list: {', '.join(missing)}. Publish the docs update first (DyorHQ/docs), then "
-                        "archive")
+        notes.append(f"{where} does not list: {', '.join(missing)}")
     reader = VisibleText()
     reader.feed(page)
     shown = " ".join(reader.parts)
@@ -507,11 +506,11 @@ def check_docs_page():
                                 ("MomentsFactory", moments["factory"], "MomentsAddresses.monadMainnet")):
         first = re.search(rf'\b{row}\b.*?(0x[0-9a-fA-F]{{40}})', shown, re.S)
         if not first:
-            problems.append(f"{where} has no {row} row: publish the docs update first")
+            notes.append(f"{where} has no {row} row")
         elif first.group(1).lower() != factory:
             retired = " (a retired one)" if first.group(1).lower() in RETIRED_FACTORIES | RETIRED_MOMENTS_FACTORIES else ""
-            problems.append(f"{where} presents {first.group(1)}{retired} as the current {row}, not {table}'s {factory}: "
-                            "publish the docs update first")
+            notes.append(f"{where} presents {first.group(1)}{retired} as the current {row}, not {table}'s {factory}")
+    return len(notes) == before
 
 def report(ok_line):
     for note in notes:
@@ -597,15 +596,14 @@ if reader:
         check_live_on_chain(call, code)
         live_checked = True
 docs_checked = (RELEASE or FIXTURE) and launchpad_state == moments_state == "wired"
-if docs_checked:
-    check_docs_page()
+docs_match = check_docs_page() if docs_checked else False
 
 if FIXTURE:
     # Tests only: the chain checks against canned answers (never with --release, and no local config; see the docstring).
     report(f"OK: retired Moments cohorts at their pins at fixture block {chain_block} ({', '.join(f'{c} {pin}' for c, _, pin in retired_cohorts)})"
            + (f"; publishing open on {', '.join(open_cohorts)}" if open_cohorts else "")
            + ("; live stacks as wired" if live_checked else "")
-           + ("; docs page lists them" if docs_checked else ""))
+           + (("; docs page lists them" if docs_match else "; docs page differs (noted)") if docs_checked else ""))
     sys.exit(0)
 
 # Local overrides, when present. An xcconfig/env that sets the keys must set them to the current deployment
@@ -665,5 +663,5 @@ report(f"OK: DyorKit ({summary})"
        + "".join(f", {name}" for name in envs)
        + f"; live records: factory {record['factory']}, Moments factory {moments_record['factory']}"
        + (" (on chain as wired)" if live_checked else "")
-       + ("; the docs page lists them" if docs_checked else "")
+       + (("; the docs page lists them" if docs_match else "; the docs page differs (noted)") if docs_checked else "")
        + retired)

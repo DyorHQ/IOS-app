@@ -1,9 +1,70 @@
 // Seeds a LOCAL anvil fork (anvil --fork-url https://rpc.monad.xyz) with launches so the UI can be exercised.
 // Usage: node scripts/dev/seed-fork.mjs <record.json> [port]   (after deploying to the fork, e.g. the v2 launchpad's
 //   contracts/deployments/pending-143.json; the RPC is always 127.0.0.1, on `port`, default 8545)
-import { createPublicClient, createWalletClient, http, parseEther, parseEventLogs, formatEther, toHex } from "viem";
+//
+//        node scripts/dev/seed-fork.mjs --text [port]
+//   seeds the SHIPPED v2 launchpad (LaunchpadAddresses.monadMainnet, forked, nothing deployed) with the launches
+//   DyorKit's ChainTextForkTests reads: one whose every text field isn't UTF-8, and one whose description is as long as
+//   a 30M-gas transaction stores. The launcher's key is derived at run time from a public label and funded with
+//   anvil_setBalance: fork only.
+import { concat, createPublicClient, createWalletClient, encodeAbiParameters, http, keccak256, parseAbi, parseAbiParameters, parseEther, parseEventLogs, formatEther, toFunctionSelector, toHex, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { readFileSync } from "node:fs";
+
+if (process.argv[2] === "--text") {
+  await seedText(process.argv[3] ?? "8545");
+  process.exit(0);
+}
+
+/** The --text fixture (see the usage above). `bytes` has `string`'s ABI layout, so text that isn't UTF-8 is sent as bytes
+ *  under the real `launchToken` signature. */
+async function seedText(port) {
+  if (!/^[0-9]{2,5}$/.test(port)) throw new Error("the port must be a number");
+  const RPC = `http://127.0.0.1:${port}`; // the local fork only, never a public RPC
+  const chain = { id: 143, name: "Monad fork", nativeCurrency: { name: "Monad", symbol: "MON", decimals: 18 }, rpcUrls: { default: { http: [RPC] } } };
+  const pub = createPublicClient({ chain, transport: http(RPC) });
+  if (await pub.getChainId() !== 143) throw new Error("not a Monad (143) fork");
+  const FACTORY = "0x3B1f5f562f5F61B980aBfDDbebD6cdF9a73b0b5b"; // LaunchpadAddresses.monadMainnet.factory
+  const factoryAbi = parseAbi(["function launchFee() view returns (uint256)", "function launchCount() view returns (uint256)",
+    "function previewLaunchEconomics(uint256 configId, address pairToken) view returns (bytes32)"]);
+  const account = privateKeyToAccount(keccak256(toHex("dyorhq-chain-text-fork-launcher")));
+  const wallet = createWalletClient({ account, chain, transport: http(RPC) });
+  await pub.request({ method: "anvil_setBalance", params: [account.address, toHex(parseEther("100000"))] });
+  const fee = await pub.readContract({ address: FACTORY, abi: factoryAbi, functionName: "launchFee" });
+  const economics = await pub.readContract({ address: FACTORY, abi: factoryAbi, functionName: "previewLaunchEconomics", args: [0n, zeroAddress] });
+  const selector = toFunctionSelector("launchToken((string,string,string,string,(string,string,string,string,string),address,uint16,bool,uint8,bytes32,bytes32),uint256,address,address[])");
+  const layout = parseAbiParameters("(bytes,bytes,bytes,bytes,(bytes,bytes,bytes,bytes,bytes),address,uint16,bool,uint8,bytes32,bytes32),uint256,address,address[]");
+  const MAX_GAS = 29_900_000n; // Monad's per-transaction limit is 30M
+  const data = (t) => concat([selector, encodeAbiParameters(layout, [[t.name, t.symbol, t.logo, t.description, t.links, account.address, 0, false, 0, economics,
+    toHex(crypto.getRandomValues(new Uint8Array(32)))], 0n, zeroAddress, []])]);
+  async function launch(label, t) {
+    const call = { account, to: FACTORY, data: data(t), value: fee };
+    const gas = await pub.estimateGas(call);
+    if (gas > MAX_GAS) throw new Error(`${label}: ${gas} gas is over the limit`);
+    const receipt = await pub.waitForTransactionReceipt({ hash: await wallet.sendTransaction({ ...call, gas: MAX_GAS }) });
+    if (receipt.status !== "success") throw new Error(`${label} reverted ${receipt.transactionHash}`);
+    console.log(`launched ${label} (${receipt.gasUsed} gas)`);
+  }
+  const text = (s) => toHex(s);
+  // 1. Every text field ill-formed UTF-8, each a different way: overlong, truncated, a surrogate, past U+10FFFF, bytes
+  //    that never occur in UTF-8, a lone continuation byte.
+  await launch("text that isn't UTF-8", {
+    name: "0x426164c0af21", symbol: "0xfffe", logo: "0x4180" + "5a", description: "0x41eda080" + "5a",
+    links: ["0x41f4908080" + "5a", "0x41e282" + "5a", "0x41c3" + "5a", "0x41f09f98" + "5a", "0x41bf80bf" + "5a"],
+  });
+  // 2. The longest description a transaction under the limit stores (about 40 KB on the fork's gas prices).
+  for (let length = 44_000; ; length -= 2_000) {
+    if (length < 20_000) throw new Error("no description of 20 KB or more fits under the gas limit");
+    const t = { name: text("Long Story"), symbol: text("LONG"), logo: text(""), description: text("d".repeat(length)), links: ["", "", "", "", ""].map(text) };
+    try {
+      await launch(`a ${length}-byte description`, t);
+      break;
+    } catch (error) {
+      if (!/over the limit|gas|exceeds/i.test(String(error?.message ?? error))) throw error;
+    }
+  }
+  console.log(`launchCount ${await pub.readContract({ address: FACTORY, abi: factoryAbi, functionName: "launchCount" })}`);
+}
 
 const port = process.argv[3] ?? "8545";
 if (!/^[0-9]{2,5}$/.test(port)) throw new Error("the port must be a number");

@@ -168,9 +168,9 @@ public enum LaunchPhase: Int, Sendable, Hashable, CaseIterable {
 
     init(raw: BigUInt) { self = LaunchPhase(rawValue: Int(clamping: raw)) ?? .bonding }
 
-    /// The Launch tab's section that lists a coin in this phase (and finds it by search). Every phase has one, so a screen
-    /// that sends a holder to the Launch tab for a coin (`CurveRoute.launchTab`) never sends them to a board that leaves
-    /// it out: a coin in refund mode, whose holders sell it back into the curve, least of all.
+    /// The Launch tab's section that lists a coin in this phase (and finds it by search), among the coins the board lists
+    /// (`Launch.listsOnBoard`: a retired launchpad's only once graduated). Every phase has one. No screen sends a holder to
+    /// the board for a coin: it opens the coin's page, from its launch or by reference (`CurveRoute.launchUnread`).
     public var boardSection: LaunchBoardSection {
         switch self {
         case .graduated: return .graduated
@@ -189,6 +189,33 @@ public enum LaunchBoardSection: Sendable, Hashable, CaseIterable {
     /// Off the curve's trading side without a pool: in refund mode (holders sell back into the curve) or migrating
     /// (nothing trades until it graduates).
     case refundAndMigrating
+}
+
+/// What the Launch tab's board shows beyond its public sections.
+public enum LaunchBoard {
+    /// The coins among `launches` that the public board leaves out (`Launch.listsOnBoard`: sell-only) and the wallet
+    /// holds, per `balances`, newest first: the board's holder-only "Your Sell-Only Coins", so a holder can always reach
+    /// their page from the Launch tab. Nil when a balance of one of them is missing (its read failed): the section then
+    /// keeps what it last showed, never a coin dropped or added on a failed read. For the same reason `launches` must
+    /// come from a complete listing (`LaunchListing.complete`): a retired factory that couldn't be read leaves its coins
+    /// out, and a held one would drop from the section.
+    public static func heldSellOnly(_ launches: [Launch], balances: [Address: BigUInt]) -> [Launch]? {
+        var held: [Launch] = []
+        for launch in launches where !launch.listsOnBoard {
+            guard let balance = balances[launch.token] else { return nil }
+            if balance > 0 { held.append(launch) }
+        }
+        return held.sorted { $0.launchedAt > $1.launchedAt }
+    }
+
+    /// What "Your Sell-Only Coins" says of `coins`: they sell on their page and can't be bought, and, when one of them
+    /// takes no sell now (`Launch.curveSellsOpen`: its graduation is pending, or it migrates), that a coin waiting to
+    /// graduate can't be sold until it does.
+    public static func sellOnlySubtitle(_ coins: [Launch]) -> String {
+        coins.allSatisfy(\.curveSellsOpen)
+            ? "From retired launchpads: sell them on their page. They can't be bought."
+            : "From retired launchpads: sell them on their page. They can't be bought, and a coin waiting to graduate can't be sold until it does."
+    }
 }
 
 /// `Types.GraduationVenue` in the contracts: where a completed curve graduates. The creator chooses at launch;
@@ -377,6 +404,36 @@ public struct LaunchpadModules: Hashable, Sendable {
     }
 }
 
+/// The launches of every launchpad the app reads (`LaunchpadService.launchListing`), newest first: the live factory's,
+/// then each retired factory's, newest stack first. A factory whose launches couldn't be read is in `unread`, with why,
+/// and has none here: never taken for a factory with none.
+public struct LaunchListing: Sendable {
+    /// Every factory asked, in list order.
+    public let factories: [Address]
+    public let launches: [Launch]
+    /// The factories whose launches couldn't be read, with the error.
+    public let unread: [Address: any Error]
+
+    public init(factories: [Address], launches: [Launch], unread: [Address: any Error] = [:]) {
+        self.factories = factories
+        self.launches = launches
+        self.unread = unread
+    }
+
+    /// Every factory's launches were read.
+    public var complete: Bool { unread.isEmpty }
+
+    /// The error of the first factory, in list order, whose launches couldn't be read.
+    public var firstError: (any Error)? { factories.lazy.compactMap { self.unread[$0] }.first }
+
+    /// `launches`, with each factory that couldn't be read now keeping its launches from `previous` (an earlier read's),
+    /// in its place in the list: what a screen shows beside its error, so a failed read never empties a list it had.
+    public func keeping(_ previous: [Launch]) -> [Launch] {
+        guard !unread.isEmpty else { return launches }
+        return factories.flatMap { factory in (unread[factory] == nil ? launches : previous).filter { $0.factory == factory } }
+    }
+}
+
 /// One launch as the explore list shows it: the factory record plus the token metadata and live curve state.
 public struct Launch: Identifiable, Hashable, Sendable {
     public var id: Address { token }
@@ -403,7 +460,10 @@ public struct Launch: Identifiable, Hashable, Sendable {
     public let description: String
     public let socials: Socials
     public let pair: PairInfo
-    /// Quote per whole token in quote wei (18-decimal fixed point), from the curve or, once graduated, the pool.
+    /// Quote per whole token in quote wei (18-decimal fixed point), from the curve or, once graduated, the pool, as the
+    /// contract's `price()` counts it: whole units of the pair's smallest unit, so on a 6-decimal pair (USDC, AUSD) it
+    /// moves in steps of $0.000001 and is 0 below that. Nothing is valued at it: every price and value on screen comes
+    /// from `pairPrice`.
     public let price: BigUInt
     /// Quote collected by the curve; after graduation, what was swept into the pool.
     public let realQuoteReserve: BigUInt
@@ -418,9 +478,14 @@ public struct Launch: Identifiable, Hashable, Sendable {
     /// The contract generation of that factory's stack: set from the stack when read, else the retired stack's, else
     /// the live table's (`.v2`).
     public let generation: LaunchpadAddresses.Generation
+    /// Pair units per whole coin, to a Double's precision: its curve's reserves while it is on the curve, its pool's sqrt
+    /// price once graduated — the reads Spot prices a DyorHQ coin from (`DyorListing`). Nil when that read didn't answer:
+    /// a graduated coin is never valued at its curve's last price. The one launch price every screen values a coin at
+    /// (`usdPrice(pairUSD:)`, `marketCapInPair`), never `price`.
+    public let pairPrice: Double?
 
     public init(token: Address, curve: Address, deployer: Address, creatorFeeRecipient: Address, pairToken: Address, graduationThreshold: BigUInt, creatorTaxBps: Int, poolFeeBps: Int, tickSpacing: Int, holderFeeSharing: Bool, graduationVenue: GraduationVenue, phase: LaunchPhase, sweptQuote: BigUInt, sweptTokens: BigUInt, sweptAt: Int, poolId: Data, name: String, symbol: String, logo: String, description: String, socials: Socials, pair: PairInfo, price: BigUInt, realQuoteReserve: BigUInt, completed: Bool, rescued: Bool, launchedAt: Int, supply: BigUInt, marketCap: BigUInt, progressBps: Int, factory: Address = .zero,
-                generation: LaunchpadAddresses.Generation? = nil) {
+                generation: LaunchpadAddresses.Generation? = nil, pairPrice: Double? = nil) {
         self.token = token
         self.curve = curve
         self.deployer = deployer
@@ -453,7 +518,19 @@ public struct Launch: Identifiable, Hashable, Sendable {
         self.progressBps = progressBps
         self.factory = factory
         self.generation = generation ?? LaunchpadAddresses.retiredStack(for: factory)?.generation ?? LaunchpadAddresses.monadMainnet.generation
+        self.pairPrice = pairPrice.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
     }
+
+    /// Dollars per whole coin: `pairPrice` times its pair asset's dollar price (`pairUSD`). Nil without either, or for a
+    /// product that isn't a positive finite number.
+    public func usdPrice(pairUSD: Double?) -> Double? {
+        guard let pairPrice, let pairUSD else { return nil }
+        let usd = pairPrice * pairUSD
+        return usd.isFinite && usd > 0 ? usd : nil
+    }
+
+    /// Market cap in whole pair units: `pairPrice` times the whole supply. Nil without a price.
+    public var marketCapInPair: Double? { pairPrice.map { $0 * Amount.units(supply, decimals: 18) } }
 
     /// The launch was made on a retired launchpad: the app launches nothing there, and its curve takes sells only
     /// (`LaunchpadService.buyPlan` refuses a buy on it).
@@ -463,6 +540,12 @@ public struct Launch: Identifiable, Hashable, Sendable {
     /// holders can sell, nobody can buy (`RetiredLaunchpad`). A retired coin that graduated into a pool trades both ways.
     /// The sell goes into the curve, whenever it takes one (`curveSellsOpen`: not while a stuck graduation waits).
     public var isSellOnly: Bool { isRetiredLaunchpad && phase != .graduated }
+
+    /// Listed on the Launch tab's public board: every live-launchpad coin, and a retired launchpad's coin only once it
+    /// graduated into a pool, like QT (owner decision 2026-09-29). The rule follows the phase, so a retired coin that
+    /// graduates later lists by itself. A sell-only coin stays reachable by its page (Home, the Portfolio, Swap, My
+    /// Launchpad, and the board's "Your Sell-Only Coins" for its holders: `LaunchBoard.heldSellOnly`), never by the board.
+    public var listsOnBoard: Bool { !isSellOnly }
 
     /// A stuck Monday graduation that DyorHQ's keepers finish, on every stack with a `graduateFallback` (v1 and v2): they
     /// retry Monday Trade with about 29.9M gas and take the Uniswap v4 fallback when it still fails. The app never sends
@@ -493,6 +576,10 @@ public struct Launch: Identifiable, Hashable, Sendable {
 
     /// The coin page's status line: "Graduation pending" for a completed curve waiting to graduate, else the phase.
     public var statusTitle: String { awaitsGraduation ? "Graduation pending" : phase.title }
+
+    /// A sell-only coin's badge on its card: "Sell only" while its curve takes a sell, else what it waits for
+    /// (`statusTitle`: "Graduation pending" or "Migrating"), when nothing trades until it graduates.
+    public var sellOnlyBadge: String { curveSellsOpen ? "Sell only" : statusTitle }
 }
 
 /// Everything the token page needs beyond the list row.
@@ -608,6 +695,47 @@ public struct EscrowBalances: Hashable, Sendable {
     public var isEmpty: Bool { native == 0 && tokens.values.allSatisfy { $0 == 0 } }
 }
 
+/// One launchpad's fee escrow and what an account can claim from it (`LaunchpadService.escrowReads`): nil balances when
+/// the read failed.
+public struct LaunchpadEscrowRead: Hashable, Sendable {
+    public let escrow: Address
+    public let factory: Address
+    public let retired: Bool
+    public let balances: EscrowBalances?
+    /// The balances are an earlier read's, kept because this one failed (`keeping`).
+    public let kept: Bool
+
+    public init(escrow: Address, factory: Address, retired: Bool, balances: EscrowBalances?, kept: Bool = false) {
+        self.escrow = escrow
+        self.factory = factory
+        self.retired = retired
+        self.balances = balances
+        self.kept = kept
+    }
+
+    /// `reads` as a screen shows them: an escrow read now as read, and one whose read failed with the balances `previous`
+    /// had for it, marked `kept` (still unread, never zero, when it had none). `previous` is the screen's last `keeping`
+    /// for the SAME account: a caller passes none once the wallet changed, so no wallet ever sees another's fees.
+    public static func keeping(_ reads: [LaunchpadEscrowRead], previous: [LaunchpadEscrowRead]) -> [LaunchpadEscrowRead] {
+        reads.map { read in
+            guard read.balances == nil, let last = previous.first(where: { $0.escrow == read.escrow && $0.balances != nil }) else { return read }
+            return LaunchpadEscrowRead(escrow: read.escrow, factory: read.factory, retired: read.retired, balances: last.balances, kept: true)
+        }
+    }
+
+    /// `reads` once `token` (native MON when zero) was claimed from `escrow`: its balance there is zero, so a later read
+    /// that fails can't bring the claimed amount back as kept (`keeping`). Every other balance is as it was.
+    public static func claimed(_ token: Address, escrow: Address, in reads: [LaunchpadEscrowRead]) -> [LaunchpadEscrowRead] {
+        reads.map { read in
+            guard read.escrow == escrow, let balances = read.balances else { return read }
+            var tokens = balances.tokens
+            if !token.isZero, tokens[token] != nil { tokens[token] = 0 }
+            let after = EscrowBalances(native: token.isZero ? 0 : balances.native, tokens: tokens)
+            return LaunchpadEscrowRead(escrow: read.escrow, factory: read.factory, retired: read.retired, balances: after, kept: read.kept)
+        }
+    }
+}
+
 /// What one wallet holds and can claim for a launch.
 public struct LaunchAccountView: Hashable, Sendable {
     public let tokenBalance: BigUInt
@@ -672,7 +800,7 @@ public struct CurveTrade: Identifiable, Hashable, Sendable {
     public let id: String
     public let block: UInt64
     public let logIndex: Int
-    /// Unix seconds, estimated from the latest block and Monad's 0.4 s block time.
+    /// Unix seconds, estimated from the latest block at the session's measured pace (`BlockClock`).
     public let time: Int
     public let trader: Address
     public let isBuy: Bool
@@ -680,7 +808,7 @@ public struct CurveTrade: Identifiable, Hashable, Sendable {
     public let tokenAmount: BigUInt
     /// Decimals of the quote asset, so volumes can be expressed in pair units.
     public let quoteDecimals: Int
-    /// Pair units per whole token (the same scale as `LaunchpadService.priceNumber`).
+    /// Pair units per whole token (the same scale as `Launch.pairPrice`).
     public let price: Double
 
     public init(id: String, block: UInt64, logIndex: Int, time: Int, trader: Address, isBuy: Bool, quoteAmount: BigUInt, tokenAmount: BigUInt, quoteDecimals: Int, price: Double) {

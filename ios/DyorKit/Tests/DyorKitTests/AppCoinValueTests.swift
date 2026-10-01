@@ -37,6 +37,8 @@ final class AppCoinValueTests: XCTestCase {
             let launch = try XCTUnwrap(found.launches[chain.coin])
             XCTAssertEqual(launch.price, coarse, "Launch.price, as the curve's price() rounds it")
             XCTAssertEqual(try XCTUnwrap(found.pairPerCoin[chain.coin]), Double(quote) / 1e6 / 1e9, accuracy: 1e-18)
+            XCTAssertEqual(launch.pairPrice, found.pairPerCoin[chain.coin], "one decimal price: the launch's own")
+            XCTAssertEqual(try XCTUnwrap(launch.usdPrice(pairUSD: 1)), Double(quote) / 1e6 / 1e9, accuracy: 1e-18)
             XCTAssertTrue(found.complete)
             let prices = WalletHoldings.pricing([Monad.usdc: 1], launches: found, moments: [:])
             let ranked = WalletHoldings.ranked([token(chain)], balances: [chain.coin: held], prices: prices, unverified: [])
@@ -68,9 +70,10 @@ final class AppCoinValueTests: XCTestCase {
         XCTAssertNil(prices[chain.coin], "unpriced: not the curve's price, nor another pool's")
     }
 
-    /// Each launch coin's price and record come from one aggregate over every factory, one launch read per factory and one
-    /// live-price read; the coins still on a curve come from the same read (`HeldLaunches.curve`), so a list of holdings
-    /// needs no second aggregate. A factory's answer missing throws: a coin could be missed.
+    /// Each launch coin's price and record come from one aggregate over every factory and one launch read per factory,
+    /// which reads the live price with the launch (`Launch.pairPrice`); the coins still on a curve come from the same read
+    /// (`HeldLaunches.curve`), so a list of holdings needs no second aggregate. A factory's answer missing throws: a coin
+    /// could be missed.
     func testOneReadValuesAndRoutesAndAMissingAnswerThrows() async throws {
         let chain = HeldLaunchChain(deployer: owner, phase: .bonding, pair: .zero, reserves: (BigUInt(3) * BigUInt(10).power(18), BigUInt(10).power(22)))
         MomentsChainStub.install(chain.answer)
@@ -116,7 +119,8 @@ final class AppCoinValueTests: XCTestCase {
         XCTAssertTrue(found.launches.isEmpty)
         XCTAssertNil(found.pairPerCoin[chain.coin])
         XCTAssertFalse(found.complete)
-        XCTAssertEqual(found.curve.route(chain.coin), .launchTab(retired: false, phase: .bonding), "still routed to its curve, from its record")
+        XCTAssertEqual(found.curve.route(chain.coin), .launchUnread(LaunchReference(token: chain.coin, factory: V2Fixture.launchpad.factory), retired: false, phase: .bonding),
+                       "still routed to its curve, from its record: its page opens by reference")
         XCTAssertNil(WalletHoldings.pricing([Monad.native: 0.03, chain.coin: 5], launches: found, moments: [:])[chain.coin])
     }
 
@@ -162,6 +166,38 @@ final class AppCoinValueTests: XCTestCase {
         XCTAssertFalse(pool.livePriceRead)
         XCTAssertEqual(pool.sqrtPriceX96, GraduatedMoments.openingSqrt, "the page still shows the opening price…")
         XCTAssertNil(WalletHoldings.momentPrice(try XCTUnwrap(stale.first)), "…which never values a held coin")
+    }
+
+    /// Every screen that values a launch coin — Home's Launch tab, the Portfolio, the Launch board and page, My Launchpad —
+    /// values it at its decimal price (`Launch.pairPrice`, through `DyorPrice.launch` or `Launch.usdPrice`), the same
+    /// price Spot shows, and no app file values one at the integer `Launch.price` or the market cap made from it.
+    func testEveryScreenValuesALaunchAtItsDecimalPrice() throws {
+        var app = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
+        app.appendPathComponent("DyorHQ")
+        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
+        let integer = try NSRegularExpression(pattern: #"priceNumber|LaunchpadMath\.marketCap\(|\b(launch|\$0|\$1)\.(price|marketCap)\b"#)
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)).compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        XCTAssertGreaterThan(files.count, 50)
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let hits = integer.matches(in: text, range: NSRange(text.startIndex..., in: text)).map { (text as NSString).substring(with: $0.range) }
+            XCTAssertEqual(hits, [], "\(file.lastPathComponent) values a launch at its integer price")
+        }
+        func source(_ path: String) throws -> String { try String(contentsOf: app.appendingPathComponent(path), encoding: .utf8) }
+        let home = try source("Home/HomeView.swift")
+        XCTAssertTrue(home.contains("DyorPrice.launch(launch, spot: priceMap[launch.token]?.usd, pairUSD: pairUSD)"), "Home's Launch tab: Spot's price first")
+        let portfolio = try source("Portfolio/PortfolioModel.swift")
+        XCTAssertTrue(portfolio.contains("priced[launch.token] = DyorPrice.launch(launch, spot: fetchedPrices?[launch.token]?.usd,"))
+        XCTAssertTrue(portfolio.contains("if let price = prices[token] { stats.pnl += delta * price } else { stats.pnlComplete = false }"), "the P&L at the same price")
+        let launchpad = try source("Launchpad/LaunchpadView.swift")
+        XCTAssertTrue(launchpad.contains("private var priceUSD: Double? { launch.usdPrice(pairUSD: pairUSD) }"))
+        XCTAssertTrue(launchpad.contains("private var marketCapUSD: Double? { launch.marketCapInPair.flatMap { cap in pairUSD.map { cap * $0 } } }"))
+        XCTAssertTrue(launchpad.contains("guard let current = launch.pairPrice.map({ $0 * unit }) else { return points }"))
+        XCTAssertEqual(launchpad.components(separatedBy: "launch.marketCapInPair.map {").count - 1, 2, "the board card and the page header")
+        let profile = try source("Launchpad/LaunchpadProfileView.swift")
+        XCTAssertTrue(profile.contains("let valueUSD = DyorPrice.launch(launch, spot: nil, pairUSD: pairUSD).map { Amount.units(balance, decimals: 18) * $0 }"))
+        XCTAssertTrue(profile.contains("let currentValuePair = launch.pairPrice.map { Amount.units(balance, decimals: 18) * $0 }"))
     }
 
     /// The sources wire it in: the wallet's lists value DyorHQ's coins from `heldLaunches` and the Moments' live prices,

@@ -24,7 +24,9 @@ final class MomentsChainStub: URLProtocol {
     nonisolated(unsafe) private static var refused: Set<String> = []
     nonisolated(unsafe) private static var breaking: Set<Address> = []
     nonisolated(unsafe) private static var breakingSelectors: Set<Data> = []
+    nonisolated(unsafe) private static var starving: Set<Address> = []
     nonisolated(unsafe) private static var nativeBalances: [Address: BigUInt] = [:]
+    nonisolated(unsafe) private static var responseCap: Int?
 
     struct Call: Hashable, CustomStringConvertible {
         let to: Address
@@ -41,10 +43,14 @@ final class MomentsChainStub: URLProtocol {
     /// `refusing`: JSON-RPC methods the node answers with an error (not a throttle, so nothing retries), as a node that
     /// can't serve them. `breaking`: contracts that make any `eth_call` reaching them fail as a whole, out of gas — as a
     /// token whose return bomb exhausts a Multicall3 aggregate does, taking every other call in it down too.
-    /// `breakingSelectors` do the same for any call with one of those selectors, whatever it reaches. `native`: what
-    /// `eth_getBalance` answers for each account (any other account reverts).
+    /// `breakingSelectors` do the same for any call with one of those selectors, whatever it reaches. `starving`: contracts
+    /// that burn the gas of the aggregate they are in, which still answers: their sub-call and every one after it fail, as
+    /// Multicall3 reports a sub-call starved of gas (`(false, 0x)`). `native`: what `eth_getBalance` answers for each
+    /// account (any other account reverts). `responseCap`: an aggregate whose answer would be longer than this many bytes
+    /// fails as a whole, out of gas, as Monad refuses one returning more than about 4.1 MB (its memory then costs more gas
+    /// than an `eth_call` may use).
     static func install(_ answer: @escaping Answer, logs: [Log] = [], receipts: [Data: [Log]] = [:], refusing: Set<String> = [], breaking: Set<Address> = [],
-                        breakingSelectors: Set<Data> = [], native: [Address: BigUInt] = [:]) {
+                        breakingSelectors: Set<Data> = [], starving: Set<Address> = [], native: [Address: BigUInt] = [:], responseCap: Int? = nil) {
         lock.lock(); defer { lock.unlock() }
         self.answer = answer
         asked = []
@@ -54,7 +60,9 @@ final class MomentsChainStub: URLProtocol {
         refused = refusing
         self.breaking = breaking
         self.breakingSelectors = breakingSelectors
+        self.starving = starving
         nativeBalances = native
+        self.responseCap = responseCap
     }
 
     /// Every `eth_getLogs` filter asked, in order.
@@ -93,7 +101,7 @@ final class MomentsChainStub: URLProtocol {
 
     private static func reply(_ call: JSON) -> JSON {
         let id = call["id"]
-        func result(_ data: Data) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": .string(data.hexString)]) }
+        func result(_ data: Data) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": .string(hex(data))]) }
         func json(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
         let reverted: JSON = .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(3), "message": .string("execution reverted"), "data": .string("0x")])])
         lock.lock(); let refusedMethods = refused; lock.unlock()
@@ -126,24 +134,45 @@ final class MomentsChainStub: URLProtocol {
         }
         guard call["method"].string == "eth_call", let tx = call["params"].array?.first,
               let to = tx["to"].string.flatMap(Address.init), let data = tx["data"].string.flatMap({ Data(hex: $0) }) else { return reverted }
-        lock.lock(); let answer = self.answer; let breaking = self.breaking; let breakingSelectors = self.breakingSelectors; lock.unlock()
+        lock.lock(); let answer = self.answer; let breaking = self.breaking; let breakingSelectors = self.breakingSelectors; let starving = self.starving; let cap = responseCap; lock.unlock()
         let outOfGas: JSON = .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(-32000), "message": .string("out of gas")])])
         if to == Multicall.address, let inner = try? ABI.decode(data.dropFirst(4), "(address,bool,bytes)[]")[0].elements {
             var batch: [Call] = []
             var out: [ABIValue] = []
+            var starved = false
             for item in inner {
                 let target = item[0].address, calldata = item[2].bytes
                 batch.append(Call(to: target, selector: calldata.prefix(4).hexString))
-                let returned = answer(target, calldata)
+                starved = starved || starving.contains(target)
+                let returned = starved ? nil : answer(target, calldata)
                 out.append(.tuple([.bool(returned != nil), .bytes(returned ?? Data())]))
             }
             record(batch)
             if batch.contains(where: { breaking.contains($0.to) || breakingSelectors.contains(Data(hex: $0.selector) ?? Data()) }) { return outOfGas }
-            return result((try? ABI.encode([.array(out)], "(bool,bytes)[]")) ?? Data())
+            let encoded = (try? ABI.encode([.array(out)], "(bool,bytes)[]")) ?? Data()
+            if let cap, encoded.count > cap {
+                return .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(-32603), "message": .string("out of gas")])])
+            }
+            return result(encoded)
         }
         if breaking.contains(to) || breakingSelectors.contains(Data(data.prefix(4))) { return outOfGas }
         record([Call(to: to, selector: data.prefix(4).hexString)])
         return answer(to, data).map(result) ?? reverted
+    }
+
+    /// `data.hexString`, fast enough for the megabyte answers the size tests send.
+    private static func hex(_ data: Data) -> String {
+        let digits = Array("0123456789abcdef".utf8)
+        var out = [UInt8](repeating: 0, count: 2 + data.count * 2)
+        out[0] = UInt8(ascii: "0")
+        out[1] = UInt8(ascii: "x")
+        var i = 2
+        for byte in data {
+            out[i] = digits[Int(byte >> 4)]
+            out[i + 1] = digits[Int(byte & 0x0f)]
+            i += 2
+        }
+        return String(decoding: out, as: UTF8.self)
     }
 
     private static func json(_ log: Log) -> JSON {
@@ -172,6 +201,21 @@ final class MomentsChainStub: URLProtocol {
     }
 }
 
+/// `ABI.selector(signature)`, hashed once per signature: a stub answers thousands of calls, and Keccak takes about half a
+/// millisecond in a debug build.
+enum StubSelector {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var hashed: [String: Data] = [:]
+
+    static func of(_ signature: String) -> Data {
+        lock.lock(); defer { lock.unlock() }
+        if let selector = hashed[signature] { return selector }
+        let selector = ABI.selector(signature)
+        hashed[signature] = selector
+        return selector
+    }
+}
+
 /// One Moments stack's getters, answered from fixed values: its factory (policy, counts, Moment #1…), its collect,
 /// vesting and graduation, and each Moment's coin and NFT. v2-only getters are answered only when `addresses` is v2,
 /// so a v1 stack asked for one reverts exactly as the deployed v1 contracts do.
@@ -191,7 +235,7 @@ struct FakeMomentsStack: Sendable {
     func answer(_ to: Address, _ data: Data) -> Data? {
         let selector = data.prefix(4)
         let args = data.dropFirst(4)
-        func is_(_ signature: String) -> Bool { selector == ABI.selector(signature) }
+        func is_(_ signature: String) -> Bool { selector == StubSelector.of(signature) }
         func encode(_ values: [ABIValue], _ types: String) -> Data { try! ABI.encode(values, types) }
         let v2 = addresses.generation >= .v2
         let count = momentCount ?? names.count
@@ -225,20 +269,24 @@ struct FakeMomentsStack: Sendable {
         case addresses.graduation:
             return is_(MomentsABI.Graduation.isGraduated) ? encode([.bool(false)], "bool") : nil
         default:
-            for i in 1...max(1, names.count) {
-                if to == coin(i) {
-                    if is_(MomentsABI.Coin.name) { return encode([.string(names[i - 1])], "string") }
-                    if is_(MomentsABI.Coin.symbol) { return encode([.string("M\(i)")], "string") }
-                    if is_(MomentsABI.Coin.totalSupply) { return encode([.uint(0)], "uint256") }
+            // Moment #i's coin or NFT (`coin(i)`, `nft(i)`), found from the address itself: a stack of a few hundred
+            // Moments is then answered as fast as one of three.
+            let bytes = [UInt8](to.data)
+            guard bytes.count == 20, to.data.prefix(16) == addresses.factory.data.prefix(16), bytes[18] == 0 else { return nil }
+            let i = Int(bytes[19])
+            guard (1...max(1, names.count)).contains(i) else { return nil }
+            if to == coin(i) {
+                if is_(MomentsABI.Coin.name) { return encode([.string(names[i - 1])], "string") }
+                if is_(MomentsABI.Coin.symbol) { return encode([.string("M\(i)")], "string") }
+                if is_(MomentsABI.Coin.totalSupply) { return encode([.uint(0)], "uint256") }
+            }
+            if to == nft(i) {
+                if is_(MomentsABI.NFT.totalMinted) { return encode([.uint(1)], "uint256") }
+                if is_(MomentsABI.NFT.closed) { return encode([.bool(false)], "bool") }
+                if is_(MomentsABI.NFT.provenance) {
+                    return encode([.tuple([.string("ipfs://x"), .bytes(Data(count: 32)), .string("Accra"), .uint(0), .string("")])], MomentsABI.provenanceTuple)
                 }
-                if to == nft(i) {
-                    if is_(MomentsABI.NFT.totalMinted) { return encode([.uint(1)], "uint256") }
-                    if is_(MomentsABI.NFT.closed) { return encode([.bool(false)], "bool") }
-                    if is_(MomentsABI.NFT.provenance) {
-                        return encode([.tuple([.string("ipfs://x"), .bytes(Data(count: 32)), .string("Accra"), .uint(0), .string("")])], MomentsABI.provenanceTuple)
-                    }
-                    if v2, is_(MomentsABI.NFT.externalBaseURI) { return encode([.string(nftBase)], "string") }
-                }
+                if v2, is_(MomentsABI.NFT.externalBaseURI) { return encode([.string(nftBase)], "string") }
             }
             return nil
         }

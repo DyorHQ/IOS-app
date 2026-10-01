@@ -10,11 +10,18 @@ import SwiftUI
 /// expired in App Store Connect and TestFlight. Read at launch and on every return to the foreground, at most once
 /// every ten minutes. Fails open: a failed or unreadable check blocks nothing, and a block already seen this run stays
 /// until a check says otherwise.
+///
+/// The same read carries the owner's remote switches (`RemoteFlags`: DyorHQ venue prices, DyorHQ labels), each on
+/// unless the row turns it off; a check that reads the row hands them to `onFlags`, and one that fails keeps them.
 @Observable
 @MainActor
 final class UpdateGate {
     /// The row that retires this build, while it does.
     private(set) var required: MinimumBuild?
+    /// The switches the last check that read the row found; every one on before that.
+    private(set) var flags = RemoteFlags.on
+    /// Applies the switches each time a check reads the row (`AppEnvironment.apply(_:)`).
+    @ObservationIgnored var onFlags: ((RemoteFlags) -> Void)?
     @ObservationIgnored private var lastCheck: Date?
     @ObservationIgnored private var checking = false
     private static let interval: TimeInterval = 10 * 60
@@ -26,8 +33,12 @@ final class UpdateGate {
         checking = true
         defer { checking = false }
         lastCheck = Date()
-        // Fails open: an error or a missing or malformed row leaves things as they were.
-        guard let minimum = try? await client.minimumBuild() else { return }
+        // Fails open: an error leaves things as they were, and so does a missing or malformed minimum. A row read without
+        // flags turns every switch on.
+        guard let config = try? await client.iosAppConfig() else { return }
+        flags = config.flags
+        onFlags?(config.flags)
+        guard let minimum = config.minimum else { return }
         required = minimum.requiresUpdate(bundleVersion: bundleVersion) ? minimum : nil
     }
 }
@@ -84,7 +95,7 @@ struct UpdateRequiredView: View {
                                 VStack(alignment: .trailing, spacing: 2) {
                                     Text(NumberStyle.units(asset.balance, decimals: asset.token.decimals)).monospacedDigit()
                                     if let value = asset.value {
-                                        Text(value, format: .currency(code: "USD").precision(.fractionLength(0...2)))
+                                        Text(PriceFormat.usdValue(value))
                                             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                                     }
                                 }

@@ -120,7 +120,9 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: " usdc ", name: "Something", decimals: 6)), .usdc, "case and spaces")
         XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "ＵＳＤＣ", name: "Wide", decimals: 6)), .usdc, "full-width letters")
         XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "MONAD", name: "Monad", decimals: 18)), .mon, "MON's name")
-        XCTAssertNil(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "USDC.e", name: "USD Coin", decimals: 6)), "a different name is its own")
+        XCTAssertEqual(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "USDC.e", name: "USD Coin", decimals: 6)), .usdc,
+                       "\"USDC\" with only non-letters after it (build 17: a bridged-looking USDC is marked too)")
+        XCTAssertNil(WalletHoldings.imitated(by: Token(address: spam.address, symbol: "USDCX", name: "USD Coin", decimals: 6)), "a letter after it makes another word")
         XCTAssertNil(WalletHoldings.imitated(by: .usdc))
         XCTAssertNil(WalletHoldings.imitated(by: .mon))
         XCTAssertNil(WalletHoldings.imitated(by: meme))
@@ -137,11 +139,31 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.selection(keeping: fakeUSDC.address, in: onlyLookAlike)?.id, fakeUSDC.address, "and keeps their pick")
     }
 
+    /// The Send sheet says "Not the BTC DyorHQ lists" for any token `imitates` names, so it names curated tokens only: a
+    /// held look-alike of BTC, ETH or USDT (which DyorHQ doesn't list) isn't called one of DyorHQ's, but is still never
+    /// where a send starts. Its badge names it (`TokenBadge`: "Not the real BTC").
+    func testALookAlikeOfAWidelyTradedTokenIsNeverTheDefaultNorCalledOneDyorHQLists() {
+        let fakes = [Token(address: spam.address, symbol: "BTC", name: "BITCOIN", decimals: 8), Token(address: meme.address, symbol: "USDT", name: "Tether USD", decimals: 6),
+                     Token(address: launch.address, symbol: "ETH", name: "Ether", decimals: 18)]
+        let ranked = WalletHoldings.ranked(fakes + [Token.mon], balances: Dictionary(uniqueKeysWithValues: (fakes + [Token.mon]).map { ($0.address, BigUInt(10).power(20)) }),
+                                           prices: Dictionary(uniqueKeysWithValues: fakes.map { ($0.address, 1_000.0) } + [(Monad.native, 0.03)]), unverified: [])
+        for held in ranked where !held.token.isNative {
+            XCTAssertNil(held.imitates, "\(held.token.symbol) is no token DyorHQ lists")
+            XCTAssertTrue(held.looksAlike, held.token.symbol)
+            XCTAssertEqual(WalletHoldings.imitated(by: held.token)?.symbol, held.token.symbol)
+            XCTAssertEqual(TokenBadge.of(held.token, coin: nil, receivedUnasked: false).title, "Not the real \(held.token.symbol)")
+        }
+        XCTAssertEqual(WalletHoldings.defaultChoice(ranked)?.id, Monad.native, "a send starts on MON, below three look-alikes worth more")
+        let usdc = HeldToken(token: fakeUSDC, balance: 1, usd: 1)
+        XCTAssertEqual(usdc.imitates, .usdc, "a curated token's look-alike is still named")
+        XCTAssertTrue(usdc.looksAlike)
+    }
+
     /// A name that only reads as a curated one is marked as well: invisible characters (zero-width space and joiner, soft
     /// hyphen, byte-order mark), letters from another script drawn like Latin ones (Cyrillic "С", Greek "Ο"), mathematical
     /// letters, digits drawn like letters ("M0N", "USDl" for USD1) and text a direction override turns around. A name that
-    /// merely differs ("USDL", "USDC.e") is its own. Whatever its name, a token whose symbol isn't plain ASCII is never
-    /// preselected: it can read as a symbol it isn't.
+    /// merely differs ("USDL") is its own; "USDC.e" reads as USDC with non-letters after it (build 17). Whatever its name,
+    /// a token whose symbol isn't plain ASCII is never preselected: it can read as a symbol it isn't.
     func testANameThatOnlyReadsAsACuratedOneIsMarkedAndNeverTheDefault() {
         func token(_ symbol: String, _ name: String = "Something") -> Token { Token(address: spam.address, symbol: symbol, name: name, decimals: 6) }
         let usdcLike = ["US\u{200B}DC", "U\u{00AD}SDC", "\u{FEFF}USDC", "USDC\u{200D}", "USD\u{0421}", "usd\u{0441}", "\u{202E}CDSU", "U\u{2060}S\u{2063}DC",
@@ -153,7 +175,7 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.imitated(by: token("USDl")), Token.core.first { $0.symbol == "USD1" }, "l for 1")
         XCTAssertEqual(WalletHoldings.imitated(by: token("X", "\u{039C}\u{03BF}nad")), .mon, "a Greek name drawn as \"Monad\"")
         XCTAssertNil(WalletHoldings.imitated(by: token("USDL")), "L is not 1")
-        XCTAssertNil(WalletHoldings.imitated(by: token("USDC.e", "USD Coin")))
+        XCTAssertEqual(WalletHoldings.imitated(by: token("USDC.e", "USD Coin")), .usdc)
         XCTAssertNil(WalletHoldings.imitated(by: token("\u{0414}\u{041E}\u{0413}")), "Cyrillic that reads as no curated name")
         XCTAssertNil(WalletHoldings.imitated(by: token("", "")))
 
@@ -360,11 +382,14 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(send.contains("guard case .loaded = assets, choice != nil else { return false }"))
         XCTAssertTrue(send.contains("review = SendReview(asset: choice,"))
         XCTAssertTrue(send.contains("unverified = asset.unverified"))
-        // A look-alike shows its contract and mark in the list, and the review spells out every token contract.
-        XCTAssertTrue(send.contains("imitates = asset.imitates"))
-        XCTAssertTrue(send.contains("if let listed = asset.imitates { return \"Not the \\(listed.symbol) DyorHQ lists · \\(asset.token.address.short)\" }"))
+        // A look-alike shows its contract and its label in the list (`TokenBadge.title`: "Not the real ETH", "Not the USDC
+        // DyorHQ lists"), frozen with the pick for the review, which spells out every token contract.
+        XCTAssertTrue(send.contains("badge: env.dyorCoins.badge(choice.token, receivedUnasked: choice.unverified))"))
+        XCTAssertTrue(send.contains("private var badge: TokenBadge { env.dyorCoins.badge(asset.token, receivedUnasked: asset.unverified) }"))
+        XCTAssertTrue(send.contains("TokenBadgeView(badge)"))
+        XCTAssertFalse(send.contains("DyorHQ lists\""), "the label's own words, never \"Not the ETH DyorHQ lists\" for a token DyorHQ doesn't list")
         XCTAssertTrue(send.contains("DetailRow(\"Token contract\", review.token.address.checksummed, spellsOut: true)"))
-        XCTAssertTrue(send.contains("if let listed = review.imitates { DetailRow(\"Token\", \"Not the \\(listed.symbol) DyorHQ lists\", tint: .attention) }"))
+        XCTAssertTrue(send.contains("if review.badge.isImitation, let title = review.badge.title { DetailRow(\"Token\", title, tint: .attention) }"))
         XCTAssertTrue(assets.contains("WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes)"), "the Portfolio keeps its order")
         // Both lists value DyorHQ's own coins the app's way (`AppCoinValueTests`).
         let tokens = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
@@ -399,14 +424,15 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertFalse(send.contains("No price was found"), "no pool is no gap in the Send list: the row reads No price")
         XCTAssertTrue(send.contains("guard let value = asset.value else { return \"No price\" }"))
         // A token whose symbol isn't plain shows its contract in the list.
-        XCTAssertTrue(send.contains("return asset.unverified || !asset.plainSymbol ?"))
+        XCTAssertTrue(send.contains("return asset.unverified || !asset.plainSymbol || badge.isWarning ?"))
         // After a new read of the list (Retry), Available and Max are the kept pick's balance from that read, then read again.
         XCTAssertTrue(send.contains(".task(id: balanceReadKey)"))
         XCTAssertTrue(send.contains("private var balanceReadKey: String { \"\\(token?.address.hex ?? \"\")#\\(assetsKey ?? \"\")\" }"))
         XCTAssertTrue(send.contains("balance = kept?.balance"))
         // The wallet's own coins are recorded as chosen, so Home marks them as the lists do; a launch records its coin.
         XCTAssertTrue(tokens.contains("let ownCoins = WalletHoldings.ownCoins(owner: read.owner, launches: own.launches, staked: own.staked)"))
-        XCTAssertTrue(tokens.contains("KnownTokenStore.markChosen(token.address, owner: read.owner)"))
+        XCTAssertTrue(tokens.contains("markOwnCoins(ownCoins, among: read.tokens, owner: read.owner)"))
+        XCTAssertTrue(tokens.contains("KnownTokenStore.markChosen(token.address, owner: owner)"), "the shared helper (`WalletTokens.markOwnCoins`)")
         let create = try XCTUnwrap(launchpad.range(of: "title: \"Launch \\(symbol)\", confirmTitle: \"Launch \\(symbol)\""))
         let launched = String(launchpad[create.upperBound...].prefix(2_500))
         XCTAssertTrue(launched.contains("result.deployer == owner"))
@@ -584,8 +610,9 @@ final class AppCoinValuationTests: XCTestCase {
     }
 
     /// A held coin's launch, found in any phase from its factory's record, on the live launchpad or a retired one; MON,
-    /// the curated tokens and coins no factory recorded are left out, and a read that fails throws. (This fixture answers
-    /// no live price: the coin is recorded and read, and unpriced.)
+    /// the curated tokens and coins no factory recorded are left out, and a read that fails throws. A coin on its curve
+    /// is priced from the reserves read with its launch (`Launch.pairPrice`); this fixture answers no pool price, so a
+    /// graduated one is recorded and read, and unpriced.
     func testHeldLaunchesFindHeldCoinsInAnyPhase() async throws {
         let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: V2Fixture.launchpad, logsRPC: MomentsChainStub.rpc())
         let stranger = Token(address: Address(literal: "0x00000000000000000000000000000000000c0300"), symbol: "NEW", name: "New coin", decimals: 18)
@@ -602,8 +629,14 @@ final class AppCoinValuationTests: XCTestCase {
                 let launch = try XCTUnwrap(found.launches[chain.coin], label)
                 XCTAssertEqual(launch.phase, phase, label)
                 XCTAssertEqual(launch.factory, stack.factory, label)
-                XCTAssertNil(found.pairPerCoin[chain.coin], "\(label): no live price answered")
-                XCTAssertFalse(found.complete, label)
+                if phase == .graduated {
+                    XCTAssertNil(found.pairPerCoin[chain.coin], "\(label): no pool price answered")
+                    XCTAssertFalse(found.complete, label)
+                } else {
+                    XCTAssertEqual(try XCTUnwrap(found.pairPerCoin[chain.coin], label), 1e-24, accuracy: 1e-36, "\(label): 1,000 wei per 1e9 coins, read with its launch")
+                    XCTAssertEqual(found.pairPerCoin[chain.coin], launch.pairPrice, label)
+                    XCTAssertTrue(found.complete, label)
+                }
                 XCTAssertEqual(found.curve.coins, phase == .graduated ? [] : [chain.coin], label)
                 let asked = Set(MomentsChainStub.batches().first?.map(\.to) ?? [])
                 XCTAssertEqual(asked, Set(CurveCoinChain.factories.map(\.factory)), "\(label): the coin and the stranger, asked of every factory; MON and USDC never")

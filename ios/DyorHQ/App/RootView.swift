@@ -40,7 +40,9 @@ struct RootView: View {
         // Moment links (universal links on m.dyorhq.fun, and dyorhq://moments/…) arrive here, on the one view that is
         // mounted in every session state; the router only parses and stores. The gate below opens the Moment once the
         // app may navigate — signed in, not behind the update gate, no confirmation on screen or action running — and
-        // re-decides on every change of what it looks at, so a link that arrived signed out opens after the sign-in.
+        // re-decides on every change of what it looks at, so a link that arrived signed out opens after the sign-in. A
+        // tapped banner's screen goes through the same gate (`NotificationRouteGate`), but only for the account signed
+        // in: signed out, or for another account, it is dropped.
         .onOpenURL { router.handle($0) }
         .onChange(of: linkGateInput, initial: true) { _, _ in applyLinkGate() }
         .overlay(alignment: .bottom) {
@@ -67,14 +69,18 @@ struct RootView: View {
         // own above every other, so it also hides a sheet or full-screen cover (Export Wallet, the recovery phrase),
         // which an overlay on this view never reached (IOSK-13).
         .onChange(of: privacyCovered, initial: true) { _, covered in PrivacyShield.update(covered: covered) }
-        .task { session.start(); settings.appearance.apply(); Notifications.configure() }
+        .task { session.start(); settings.appearance.apply() }
         .task { await env.updateGate.check(client: env.social.client) }
         .onChange(of: scenePhase) { _, phase in
             // A passkey (Mera) signing session must not outlive the user leaving the app: whoever picks the phone up
             // next has to present the passkey again. Ending it also closes a passkey account's Perpl socket and drops
             // its trading key. An approved plan or order still running keeps it until it finishes, within the
             // background time iOS grants (GL-1).
-            if phase == .background { session.mera.endWhenIdle() }
+            if phase == .background {
+                session.mera.endWhenIdle()
+                // iOS may suspend the app now: the next activation is a return to it (`LogScanClock`).
+                LogScanClock.suspended()
+            }
             if phase == .active {
                 session.mera.enteredForeground()
                 settings.appearance.apply()
@@ -88,6 +94,11 @@ struct RootView: View {
                 // ready without waiting for the keep-alive loop's next tick. Never a prompt: a passkey account's
                 // socket reconnects only inside a live session, and there is none right after a return.
                 Task { await env.perplTrading.ensureConnected() }
+                // On a return from the background only: a log scan that was running while iOS suspended the app measures
+                // an outage from now, not from its last answer before, and the venue list reads on if its last run ended
+                // short (`VenueTokenList.resume`). Face ID, a passkey sheet or Control Center only make the scene
+                // inactive: after them, a running scan's outage keeps counting (`LogScanClock`).
+                if LogScanClock.resumed() { env.venueList.resume() }
             }
         }
         // Keep the per-wallet sessions tied to the active wallet: rebind whenever the signed-in address changes, so a
@@ -135,7 +146,9 @@ struct RootView: View {
             await env.social.signIn(address: address, wallet: wallet)
         }
         .task { env.alertWatcher.start(env: env, settings: settings, owner: { session.address }) }
-        .task { await env.refreshVenueTokens() }
+        .task { env.refreshVenueTokens() }
+        // The DyorHQ coin registry: read at start, then every 5 minutes while the app is in the foreground.
+        .task(id: scenePhase == .active) { if scenePhase == .active { await env.dyorCoins.keepFresh() } }
     }
 }
 
@@ -149,7 +162,11 @@ extension RootView {
     /// Everything the link gate decides on, as one value to observe.
     private struct LinkGateInput: Hashable {
         var pending: Bool
+        /// A tapped banner's screen, waiting.
+        var route: NotificationTap?
         var phase: MomentLinkGate.Phase
+        /// The account signed in, which a banner's route must name.
+        var signedIn: Address?
         var updateRequired: Bool
         var deletionScreen: Bool
         var busy: Bool
@@ -165,19 +182,29 @@ extension RootView {
         // `runningActions` counts every approved plan (TransactionRun) and Perpl bracket still signing or sending, for
         // every account type. `linkHolds` counts every review sheet on screen (ConfirmationSheet, the Perps order /
         // close / margin / TP/SL reviews, Bridge) — a review not yet confirmed, and the moment a run settles before its
-        // caller records it — and the sends and the account deletion that run outside a sheet.
-        return LinkGateInput(pending: router.pendingLink != nil, phase: phase, updateRequired: env.updateGate.required != nil,
-                             deletionScreen: session.passkeyDeletion != nil || session.deletionNotice != nil,
-                             busy: session.mera.runningActions > 0 || router.linkHolds > 0)
+        // caller records it — and the sends and the account deletion that run outside a sheet. An App Lock (Face ID or
+        // passcode) or passkey prompt on screen holds too, wherever it was asked from (sign-out, Settings, Export).
+        let busy = session.mera.runningActions > 0 || router.linkHolds > 0 || BiometricGate.isPrompting || session.mera.isPrompting
+        return LinkGateInput(pending: router.pendingLink != nil, route: router.pendingNotificationRoute, phase: phase,
+                             signedIn: session.address, updateRequired: env.updateGate.required != nil,
+                             deletionScreen: session.passkeyDeletion != nil || session.deletionNotice != nil, busy: busy)
     }
 
     private func applyLinkGate() {
         let input = linkGateInput
-        guard input.pending else { return }
-        switch MomentLinkGate.decide(phase: input.phase, updateRequired: input.updateRequired, deletionScreen: input.deletionScreen, busy: input.busy) {
-        case .deliver: router.deliverPendingLink()
-        case .drop: router.pendingLink = nil
-        case .hold, .banner: break // OnboardingView shows the banner while a link waits signed out
+        guard input.pending || input.route != nil else { return }
+        let decision = NotificationRouteGate.decide(link: input.pending, route: input.route, routeArrivedLast: router.notificationRouteArrivedLast,
+                                                    phase: input.phase, updateRequired: input.updateRequired,
+                                                    deletionScreen: input.deletionScreen, busy: input.busy, signedIn: input.signedIn)
+        switch decision.link {
+        case .deliver?: router.deliverPendingLink()
+        case .drop?: router.pendingLink = nil
+        case .hold?, .banner?, nil: break // OnboardingView shows the banner while a link waits signed out
+        }
+        switch decision.route {
+        case .deliver?: router.deliverPendingNotificationRoute()
+        case .drop?: router.pendingNotificationRoute = nil
+        case .hold?, nil: break
         }
     }
 }

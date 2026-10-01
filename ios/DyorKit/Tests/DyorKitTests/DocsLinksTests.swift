@@ -251,11 +251,11 @@ final class DocsLinksTests: XCTestCase {
         }
     }
 
-    /// Get Help's "Verify every contract DyorHQ uses" row opens Contracts & Addresses, so the published page must name
-    /// every address in this build's two tables: the v2 launchpad's five modules, the v2 Moments' seven, the Moments
-    /// platform and treasury wallets, and the shared PoolManager, Permit2 and USDC. Off by default: set DYOR_LIVE_DOCS=1
-    /// (the release checklist does). Every archive checks the same page anyway: `check-launchpad-addresses.py --release`
-    /// refuses while it misses one, or presents a retired factory as the current one (`RetiredCohortGateTests`).
+    /// Get Help's "Verify every contract DyorHQ uses" row opens Contracts & Addresses, which names the contracts people
+    /// may check: the v2 launchpad's modules other than its router, the v2 Moments' seven, and the shared PoolManager,
+    /// Permit2 and USDC. The router and the Moments platform and treasury wallets are kept off the page on purpose (owner
+    /// decision 2026-10-01). Off by default: set DYOR_LIVE_DOCS=1. The page never gates a release:
+    /// `check-launchpad-addresses.py --release` only notes what it misses (`RetiredCohortGateTests`).
     func testTheContractsPageListsThisBuildsContracts() async throws {
         guard ProcessInfo.processInfo.environment["DYOR_LIVE_DOCS"] == "1" else { throw XCTSkip("set DYOR_LIVE_DOCS=1") }
         let configuration = URLSessionConfiguration.ephemeral
@@ -268,10 +268,10 @@ final class DocsLinksTests: XCTestCase {
         let l = LaunchpadAddresses.monadMainnet
         let m = MomentsAddresses.monadMainnet
         let called: [(String, Address)] = [
-            ("launchpad factory", l.factory), ("launch router", l.router), ("fee escrow", l.escrow), ("holder fee sharing", l.holderFeeSharing),
+            ("launchpad factory", l.factory), ("fee escrow", l.escrow), ("holder fee sharing", l.holderFeeSharing),
             ("launchpad hook", l.hook), ("Moments factory", m.factory), ("Moments collect", m.collect), ("Moments vesting", m.vesting),
             ("Moments graduation", m.graduation), ("Moments locker", m.locker), ("Moments hook", m.hook), ("Moments buyback", m.buyback),
-            ("Moments platform", m.platform), ("Moments treasury", m.treasury), ("PoolManager", l.poolManager), ("Moments PoolManager", m.poolManager),
+            ("PoolManager", l.poolManager), ("Moments PoolManager", m.poolManager),
             ("Permit2", m.permit2), ("USDC", m.usdc),
         ]
         XCTAssertFalse(called.contains { $0.1.isZero }, "a v2 table is pending")

@@ -91,26 +91,19 @@ public struct NFTMetadata: Sendable {
     public static func gatewayURL(_ uri: String) -> URL? {
         let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
-        if lower.hasPrefix("ipfs://") {
-            let path = trimmed.dropFirst("ipfs://".count).replacingOccurrences(of: "ipfs/", with: "", options: [.anchored])
-            return ipfs(String(path))
-        }
+        if lower.hasPrefix("ipfs://") { return IPFS.path(trimmed).flatMap(ipfs) }
         if lower.hasPrefix("ar://") { return arweave(String(trimmed.dropFirst("ar://".count))) }
         guard let components = URLComponents(string: trimmed), components.scheme?.lowercased() == "https",
               let host = components.host?.lowercased(), components.user == nil, components.password == nil else { return nil }
-        let path = components.percentEncodedPath
-        if host == "arweave.net" { return arweave(String(path.dropFirst())) }
-        // Path form: /ipfs/<cid>[/…] on any gateway.
-        if path.lowercased().hasPrefix("/ipfs/") { return ipfs(String(path.dropFirst("/ipfs/".count))) }
-        // Subdomain form: <cid>.ipfs.<gateway>/[…].
-        let labels = host.split(separator: ".")
-        if labels.count >= 3, labels[1] == "ipfs" { return ipfs(String(labels[0]) + path) }
-        return nil
+        if host == "arweave.net" { return arweave(String(components.percentEncodedPath.dropFirst())) }
+        // The path form (/ipfs/<cid>[/…] on any gateway) or the subdomain form (<cid>.ipfs.<gateway>/[…]).
+        return IPFS.path(components).flatMap(ipfs)
     }
 
-    /// A CID (optionally followed by a path inside it) through `ipfsGateway`, or nil when it isn't one.
+    /// A CID (optionally followed by a path inside it) through `ipfsGateway`, or nil when it isn't one: letters and
+    /// digits, 2–128 of them (a looser test than `IPFS.isCID`, kept as NFT metadata has always read).
     private static func ipfs(_ cidAndPath: String) -> URL? {
-        let cid = cidAndPath.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        let cid = IPFS.cid(of: cidAndPath)
         guard (2...128).contains(cid.count), cid.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { return nil }
         return URL(string: ipfsGateway + cidAndPath)
     }

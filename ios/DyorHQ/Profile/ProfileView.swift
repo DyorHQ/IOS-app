@@ -406,7 +406,8 @@ struct SendSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Review") {
                         guard valid, let choice, let to = recipientAddress, let raw = rawAmount else { return }
-                        review = SendReview(asset: choice, to: to, amount: raw, toContract: recipientIsContract == true)
+                        review = SendReview(asset: choice, to: to, amount: raw, toContract: recipientIsContract == true,
+                                            badge: env.dyorCoins.badge(choice.token, receivedUnasked: choice.unverified))
                     }
                     .disabled(!valid)
                 }
@@ -448,8 +449,8 @@ struct SendSheet: View {
                     DetailRow("Amount", "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol)")
                     // In full, like the recipient: a look-alike's contract can be made to match a short form.
                     if !review.token.isNative { DetailRow("Token contract", review.token.address.checksummed, spellsOut: true) }
-                    if let listed = review.imitates { DetailRow("Token", "Not the \(listed.symbol) DyorHQ lists", tint: .attention) }
-                    if review.unverified { DetailRow("Token", "Unverified: sent to you, not chosen here", tint: .attention) }
+                    if review.badge.isImitation, let title = review.badge.title { DetailRow("Token", title, tint: .attention) }
+                    if review.unverified { DetailRow("Token", review.receivedNote, tint: .attention) }
                     DetailRow("Network", "Monad")
                 }
             }
@@ -651,16 +652,23 @@ private struct SendReview: Identifiable {
     /// The token reached the wallet without being chosen here (`HeldToken.unverified`), as the list marked it when it
     /// was picked.
     var unverified = false
-    /// The curated token this one carries the name of (`HeldToken.imitates`).
-    var imitates: Token?
+    /// Its label when Review was tapped (`TokenBadge`): a look-alike's warning in the label's own words ("Not the real
+    /// ETH"), a DyorHQ coin's DyorHQ label.
+    var badge: TokenBadge
 
-    init(asset: HeldToken, to: Address, amount: BigUInt, toContract: Bool = false) {
+    init(asset: HeldToken, to: Address, amount: BigUInt, toContract: Bool = false, badge: TokenBadge) {
         token = asset.token
         self.to = to
         self.amount = amount
         self.toContract = toContract
         unverified = asset.unverified
-        imitates = asset.imitates
+        self.badge = badge
+    }
+
+    /// What the review says of a token sent to the wallet unasked: a DyorHQ coin by its DyorHQ label, never as Unverified.
+    var receivedNote: String {
+        if badge.isDyorHQ, let title = badge.title { return "\(title): sent to you, not chosen here" }
+        return "Unverified: sent to you, not chosen here"
     }
 
     func request() throws -> TransactionRequest { try TokenTransfer.request(token, to: to, amount: amount) }
@@ -687,10 +695,12 @@ private struct SendAssetPicker: View {
     let readingHistory: Bool
     let onPick: (HeldToken) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppEnvironment.self) private var env
     @State private var query = ""
 
     var body: some View {
         let shown = WalletHoldings.matching(assets, query: query)
+        let badges = shown.map { env.dyorCoins.badge($0.token, receivedUnasked: $0.unverified) }
         List {
             Section {
                 ForEach(shown) { asset in
@@ -711,10 +721,12 @@ private struct SendAssetPicker: View {
                     if readingHistory { Text("Still reading your wallet's history, so more tokens may be added.") }
                     if shown.isEmpty {
                         Text("No token in this wallet matches.")
-                    } else if shown.contains(where: \.unverified) {
+                    } else if zip(shown, badges).contains(where: { $0.unverified && !$1.isDyorHQ }) {
                         Text("Unverified tokens arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you send.")
-                    } else if shown.contains(where: { $0.imitates != nil }) {
-                        Text("Some tokens here carry the name of a token DyorHQ lists but are other contracts. Check the contract before you send.")
+                    } else if shown.contains(where: \.unverified) {
+                        Text("Some DyorHQ coins here were sent to your wallet without you choosing them here. Anyone can launch a coin on DyorHQ: check the contract before you send.")
+                    } else if badges.contains(where: \.isImitation) {
+                        Text("Some tokens here carry the name of another token but are other contracts. Check the contract before you send.")
                     }
                 }
             }
@@ -726,24 +738,28 @@ private struct SendAssetPicker: View {
     }
 }
 
-/// One held token: logo, symbol (marked when Unverified), name, balance and dollar value — or "No price". A token that
-/// could pass for another — Unverified, carrying a listed token's name, or with a symbol that isn't plain text (an
-/// invisible character, a letter from another script) — also shows its contract.
+/// One held token: logo, symbol with its label (`TokenBadge`: DyorHQ Launch or Moment, Unverified, or a look-alike's
+/// "Not the real ETH"), name, balance and dollar value — or "No price". A token that could pass for another — sent to
+/// the wallet, carrying another token's name, or with a symbol that isn't plain text (an invisible character, a letter
+/// from another script) — also shows its contract.
 private struct SendAssetRow: View {
     let asset: HeldToken
+    @Environment(AppEnvironment.self) private var env
+
+    private var badge: TokenBadge { env.dyorCoins.badge(asset.token, receivedUnasked: asset.unverified) }
 
     var body: some View {
         HStack(spacing: 12) {
-            // A shipped logo only for the curated token itself, and no image at all for one carrying a listed token's name
-            // (its own could be the real one's artwork): a monogram.
-            TokenLogo(symbol: asset.token.symbol, url: asset.imitates == nil ? asset.token.logoURL : nil, size: 32, bundled: Token.core(asset.token.address) != nil)
+            // By address (`CoinIcon`): a shipped logo only for the curated token itself, and letters for one carrying another
+            // token's name (its own could be the real one's artwork).
+            TokenLogo(token: asset.token, size: 32)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(asset.token.symbol).font(.headline).lineLimit(1)
-                    if asset.unverified { UnverifiedBadge() }
+                    TokenBadgeView(badge)
                 }
                 // So a look-alike's name is never all there is to go on.
-                Text(subtitle).font(.footnote).foregroundStyle(asset.imitates == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.attention)).lineLimit(1)
+                Text(subtitle).font(.footnote).foregroundStyle(badge.isImitation ? AnyShapeStyle(Color.attention) : AnyShapeStyle(.secondary)).lineLimit(1)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
@@ -756,14 +772,12 @@ private struct SendAssetRow: View {
     }
 
     private var subtitle: String {
-        if let listed = asset.imitates { return "Not the \(listed.symbol) DyorHQ lists · \(asset.token.address.short)" }
-        return asset.unverified || !asset.plainSymbol ? "\(asset.token.name) · \(asset.token.address.short)" : asset.token.name
+        return asset.unverified || !asset.plainSymbol || badge.isWarning ? "\(asset.token.name) · \(asset.token.address.short)" : asset.token.name
     }
 
     private var valueText: String {
         guard let value = asset.value else { return "No price" }
-        if value > 0, value < 0.01 { return "< $0.01" }
-        return value.formatted(.currency(code: "USD").precision(.fractionLength(0...2)))
+        return PriceFormat.usdValue(value)
     }
 }
 

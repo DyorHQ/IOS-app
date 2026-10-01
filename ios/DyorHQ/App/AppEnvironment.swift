@@ -10,6 +10,12 @@ final class AppEnvironment {
     let rpc: RPCClient
     let multicall: Multicall
     let sender: TransactionSender
+    /// Monad's pace, measured once a session (`BlockClock`): the one clock every service that shows or claims a time
+    /// reads — prices (the 24h change and charts), the launchpad, Moments (live and retired), swap history and token
+    /// activity — so the session measures it once.
+    let clock: BlockClock
+    /// Prices. DyorHQ coins are priced on their own curve or pool (`DyorListing`), never another pool, unless the owner's
+    /// remote switch turns that off (`apply(_:)`); Home counts each coin once (`HomeTotals`).
     let prices: PriceService
     let swap: SwapEngine
     let perpl: PerplService
@@ -28,10 +34,17 @@ final class AppEnvironment {
     let activity: TokenActivityService
     let swapHistory: SwapHistoryService
     let walletDiscovery: WalletTokenDiscovery
+    /// Every DyorHQ launchpad and Moments coin, read from the factories (`DyorCoinRegistry`, created here once): what a
+    /// token's picture and label are drawn from (`TokenLogo`, `TokenBadgeView`) and which coins are the wallet's own on
+    /// Home. Kept in Application Support, a fork's apart from mainnet's.
+    let dyorCoins: DyorCoinsModel
     /// Every NFT the wallet holds on Monad, from its own transfer history (Moments and any other collection).
     let nftDiscovery: WalletNFTDiscovery
     let kuruTokens: KuruTokenListClient
     let venueTokens: VenueTokensService
+    /// The swap picker's venue token list, in memory for search, brought up to the chain head in the background
+    /// (`VenueTokenList`).
+    let venueList: VenueTokenList
     let session: Session
     /// Aurora Intents cross-chain bridge (Home "Bridge") + the multi-chain balance reader behind it.
     let aurora: AuroraIntents
@@ -64,15 +77,22 @@ final class AppEnvironment {
         aurora = AuroraIntents(proxy: backend.functionURL("aurora-proxy"), feeRecipient: config.auroraFeeRecipient,
                                authorize: { try await backend.sessionHeaders() })
         bridgeTracker = BridgeTracker(aurora: aurora, balances: MultiChainBalances(), monad: EVMChain.monad(rpc: config.rpcURL))
-        prices = PriceService(rpc: rpc)
+        clock = BlockClock(rpc: rpc)
+        // A local fork (a Debug build pointed at 127.0.0.1) keeps its own logs and its own registry file.
+        let host = config.rpcURL.host() ?? ""
+        let isFork = host == "127.0.0.1" || host == "localhost"
+        // The registry reads every factory on the failover RPC; a Debug build on a local fork keeps its own file. The
+        // price service asks it which tokens are DyorHQ coins, and which factory made each.
+        let registry = DyorCoinRegistry(rpc: rpc, live: config.launchpad, liveMoments: config.moments, store: .applicationSupport(fork: isFork))
+        prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true)
         // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools (once v2 is
         // deployed) and those of the retired factories with the current record (the legacy 0xad3d… launches all
         // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0.
         swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments)
         perpl = PerplService(rpc: rpc)
-        launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad)
-        moments = MomentsService(rpc: rpc, addresses: config.moments)
-        retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc] in RetiredMoments(rpc: rpc, addresses: $0) }
+        launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, clock: clock)
+        moments = MomentsService(rpc: rpc, addresses: config.moments, clock: clock)
+        retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc, clock] in RetiredMoments(rpc: rpc, addresses: $0, clock: clock) }
         #if DEBUG
         // A fork rehearsal (Secrets.xcconfig MOMENTS_*, Debug only): v2 links (c4) and names follow the Moments this build
         // shows. Without the override this is nil, and c4 stays MomentsAddresses.monadMainnet.
@@ -84,18 +104,27 @@ final class AppEnvironment {
         news = NewsService()
         // History reads want the larger log-chunk RPC (rpc1), like the launchpad does. A local fork keeps its own
         // logs, so a development build pointed at 127.0.0.1 scans the fork instead.
-        let host = config.rpcURL.host() ?? ""
-        let logsURL = host == "127.0.0.1" || host == "localhost" ? config.rpcURL : LaunchpadService.defaultLogsRPC
-        activity = TokenActivityService(rpc: RPCClient(url: logsURL))
-        swapHistory = SwapHistoryService(rpc: RPCClient(url: logsURL))
+        let logsURL = isFork ? config.rpcURL : LaunchpadService.defaultLogsRPC
+        activity = TokenActivityService(rpc: RPCClient(url: logsURL), clock: clock)
+        swapHistory = SwapHistoryService(rpc: RPCClient(url: logsURL), clock: clock)
         // Wallet discovery scans logs on rpc1 and reads balances/metadata on the primary multicall.
         walletDiscovery = WalletTokenDiscovery(logsRPC: RPCClient(url: logsURL), multicall: multicall)
         nftDiscovery = WalletNFTDiscovery(logsRPC: RPCClient(url: logsURL), multicall: multicall)
         kuruTokens = KuruTokenListClient()
-        // The venue-wide pool scan (from genesis, no wallet filter) runs on rpc3 so it never crowds out the wallet's
-        // own history scans on rpc1, which answer a whole history in one call.
-        venueTokens = VenueTokensService(logsRPC: RPCClient(url: URL(string: "https://rpc3.monad.xyz")!), multicall: multicall)
+        // The venue-wide pool scan (from genesis, no wallet filter) reads rpc1, which answers a range of any span up to 10K
+        // logs: one range a venue for each 5M-block segment, the venues one after the other, one request at a time, a
+        // throttle waited out rather than split (`VenueTokensService`). About 70 requests from genesis, so it doesn't crowd
+        // out the wallet's own history scans and every other reader there; rpc3 answers 1,000 blocks a request: about
+        // 330,000.
+        venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
+        venueList = VenueTokenList(service: venueTokens, logos: { [kuruTokens] in await kuruTokens.logos() },
+                                   read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1, dropped: $2) })
+        dyorCoins = DyorCoinsModel(registry: registry, policy: ImageSourcePolicy(supabaseURL: config.supabaseURL))
         session = Session(config: config, backend: social)
+        // An erase of this device's data deletes the registry's file and the image caches too.
+        session.dyorCoins = dyorCoins
+        // An erase of this device's data saves App Lock as a new install has it, and sets it here too (R4).
+        session.settings = settings
         // A passkey session's scope check trusts only the configured Moments cohorts — v2 (collects, once deployed), then
         // cohorts 3, 2 and 1 (claims and creator withdrawals) — and signs a launchpad trade only against the curve a
         // known factory recorded on-chain (MERA-PLAN §3).
@@ -118,6 +147,23 @@ final class AppEnvironment {
         }
         sync = BackendSync(social: social)
         sync.install(settings: settings, address: { [weak session] in session?.address })
+        // The owner's remote switches, read with the minimum build: each on until the row turns it off.
+        updateGate.onFlags = { [weak self] flags in self?.apply(flags) }
+    }
+
+    /// The last venue switch handed to the price service, so switches apply in the order they were read.
+    @ObservationIgnored private var venueSwitch: Task<Void, Never>?
+
+    /// Applies the owner's remote switches (`RemoteFlags`, from `UpdateGate`'s read of `app_config` 'ios'): DyorHQ venue
+    /// prices on the price service (off: priced like any token, as build 16 did), and the DyorHQ labels on the coins model
+    /// (off: build 16's labels). Nothing is written anywhere; the next check applies the row again.
+    func apply(_ flags: RemoteFlags) {
+        dyorCoins.showsDyorBadges = flags.dyorBadges
+        let previous = venueSwitch
+        venueSwitch = Task { [prices] in
+            await previous?.value
+            await prices.setUsesDyorVenues(flags.dyorVenuePrices)
+        }
     }
 
     /// A transaction sender for `chain`: Monad reuses the app's configured endpoint (and multicall); every other
@@ -137,28 +183,12 @@ final class AppEnvironment {
 
     /// Builds/refreshes the global venue token list (Uniswap + Monday Trade). The first run scans the FULL history
     /// from genesis in checkpointed segments (rpc1 serves old logs even though it prunes old state), so progress
-    /// survives the app backgrounding; later runs resume from the checkpoint and only read the new tail. Each new
-    /// token is enriched with its accurate Kuru logo and appended to the cache the swap picker browses.
-    func refreshVenueTokens() async {
-        let head = await venueTokens.head()
-        let start = VenueTokenStore.lastBlock()
-        guard head > 0, start < head else { return }
-        let logos = await kuruTokens.logos()
-        let segment: UInt64 = 5_000_000
-        var from = start
-        while from <= head, !Task.isCancelled {
-            let to = min(from + segment, head)
-            let existing = VenueTokenStore.all()
-            let exclude = Set(Token.core.map(\.address)).union(existing.map(\.address))
-            let found = await venueTokens.tokens(fromBlock: from, toBlock: to, exclude: exclude)
-            let enriched = found.map { token -> Token in
-                guard token.logoURL == nil, let logo = logos[token.address] else { return token }
-                return Token(address: token.address, symbol: token.symbol, name: token.name, decimals: token.decimals, logoURL: logo, isLaunchpad: token.isLaunchpad)
-            }
-            // Advance the checkpoint every segment — even an empty one — so an interruption never re-scans it.
-            VenueTokenStore.save(existing + enriched, lastBlock: to)
-            if to >= head { break }
-            from = to + 1
-        }
+    /// survives the app backgrounding; later runs resume from the checkpoint and only read the new tail. The checkpoint
+    /// moves past a segment only once it was read in full; a segment read in part is read again next time
+    /// (`VenueTokensService.refresh`). Each new token is enriched with its accurate Kuru logo and added to the list the
+    /// swap picker searches (`venueList`). Runs after `AppSettings` has decided App Lock (`settings` is built with this
+    /// environment), so what the store writes can't turn it off.
+    func refreshVenueTokens() {
+        venueList.refresh()
     }
 }
