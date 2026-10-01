@@ -11,16 +11,20 @@ import Foundation
 /// - equity = the margin posted + (mark − entry) × size for a long, (entry − mark) × size for a short + the position's
 ///   premium (the funding and settlement carried on it) — the margin plus `PerpPosition.unrealized`.
 ///
-/// It is 100% exactly when the mark reaches the liquidation price; equity at or below zero is past it (`.infinity`). It
-/// is unknown (nil) when the maintenance fraction couldn't be read, or the position can't be valued: never a guess.
+/// It is 100% exactly when the mark reaches the liquidation price. Equity under one AUSD unit (`equityFloor`) is past it
+/// (`.infinity`): a rounding residue next to zero is no equity, not a reading of trillions of percent. It is unknown (nil)
+/// when the maintenance fraction couldn't be read, or the position can't be valued: never a guess.
 public enum PerpRisk {
+    /// The smallest AUSD amount (6 decimals): equity under it is none.
+    public static let equityFloor = 1e-6
+
     public static func marginUsage(side: PositionSide, entry: Double, size: Double, mark: Double, margin: Double, premium: Double,
                                    maintenanceFraction: Double?) -> Double? {
         guard let maintenanceFraction, maintenanceFraction > 0, maintenanceFraction.isFinite,
               size > 0, size.isFinite, entry > 0, entry.isFinite, mark > 0, mark.isFinite, margin.isFinite, premium.isFinite else { return nil }
         let needed = entry * size * maintenanceFraction
         let equity = margin + (side == .long ? mark - entry : entry - mark) * size + premium
-        guard equity > 0 else { return .infinity }
+        guard equity >= equityFloor else { return .infinity }
         return needed / equity
     }
 
@@ -288,7 +292,7 @@ public enum PerpAlertText {
         let name = positionName(asset: asset, side: notice.position.side)
         let mark = PriceFormat.usdPrice(notice.position.mark)
         let liquidation = PriceFormat.usdPrice(notice.position.liquidation)
-        let used = notice.usage.isFinite ? "\(Int((notice.usage * 100).rounded(.down)))%" : "All"
+        let used = usageText(notice.usage)
         let act: String
         switch (notice.level, canAct) {
         case (_, false): act = "You're watching this wallet: DyorHQ can't change its positions."
@@ -303,6 +307,13 @@ public enum PerpAlertText {
         case .nearLiquidation, .normal:
             return ("Near liquidation: \(name)", "The mark, \(mark), is within 10% of the liquidation price, \(liquidation). \(act)")
         }
+    }
+
+    /// Margin usage as an alert says it: a whole percent, rounded down, or "All" once equity is gone or the reading is past
+    /// 1,000% (equity next to nothing), so no reading, however large, can overflow the conversion to a whole number.
+    public static func usageText(_ usage: Double) -> String {
+        guard usage.isFinite, usage < 10 else { return "All" }
+        return "\(Int((max(0, usage) * 100).rounded(.down)))%"
     }
 
     /// The title and body of an ending the watcher posts (`PerpEndingNotice`); nil for `.wait` and `.quiet`.

@@ -43,6 +43,11 @@ final class AppAlertsTests: XCTestCase {
         // Equity gone: past liquidation, never a negative or a division by zero.
         XCTAssertEqual(PerpRisk.marginUsage(side: .long, entry: 100, size: 1, mark: 50, margin: 10, premium: 0, maintenanceFraction: 0.05), .infinity)
         XCTAssertEqual(PerpRisk.marginUsage(side: .short, entry: 100, size: 1, mark: 110, margin: 10, premium: 0, maintenanceFraction: 0.05), .infinity)
+        // A rounding residue where margin, P&L and premium cancel out is no equity: past liquidation, not 5e15 (500 trillion %).
+        XCTAssertEqual(PerpRisk.marginUsage(side: .long, entry: 100, size: 1, mark: 100, margin: 1e-15, premium: 0, maintenanceFraction: 0.05), .infinity)
+        XCTAssertEqual(PerpRisk.marginUsage(side: .short, entry: 100, size: 1, mark: 100, margin: 0.0000009, premium: 0, maintenanceFraction: 0.05), .infinity)
+        XCTAssertEqual(try XCTUnwrap(PerpRisk.marginUsage(side: .long, entry: 100, size: 1, mark: 100, margin: PerpRisk.equityFloor, premium: 0, maintenanceFraction: 0.05)), 5e6, accuracy: 1e-3,
+                       "one AUSD unit is still equity")
         // Unknown, never guessed: no maintenance fraction, or nothing to value.
         XCTAssertNil(PerpRisk.marginUsage(side: .long, entry: 100, size: 1, mark: 99, margin: 10, premium: 0, maintenanceFraction: nil))
         XCTAssertNil(PerpRisk.marginUsage(side: .long, entry: 100, size: 1, mark: 99, margin: 10, premium: 0, maintenanceFraction: 0))
@@ -309,7 +314,7 @@ final class AppAlertsTests: XCTestCase {
     // MARK: - Words
 
     /// Each level's title, the numbers in the one price style, and a watched wallet's alerts never suggest an action.
-    func testRiskText() {
+    func testRiskText() throws {
         let p = position(1, .long, size: 1, entry: 100, mark: 96.2, margin: 10)
         let warning = PerpRiskNotice(position: p, level: .warning, usage: 5 / 6.2, distance: 0.012)
         var text = PerpAlertText.risk(warning, asset: "BTC", canAct: true)
@@ -321,6 +326,21 @@ final class AppAlertsTests: XCTestCase {
         XCTAssertTrue(text.body.hasSuffix("Add margin or reduce the position now."))
         text = PerpAlertText.risk(PerpRiskNotice(position: p, level: .critical, usage: .infinity, distance: 0), asset: "BTC", canAct: true)
         XCTAssertTrue(text.body.hasPrefix("All of its margin is in use"))
+        // No reading, however large, traps converting to a whole percent (Int.max is about 9.2e18).
+        for huge in [1e17, 9.3e16, 1e19, 5e15, 1e300, Double.greatestFiniteMagnitude] {
+            XCTAssertTrue(PerpAlertText.risk(PerpRiskNotice(position: p, level: .critical, usage: huge, distance: 0), asset: "BTC", canAct: true)
+                .body.hasPrefix("All of its margin is in use"), "\(huge)")
+        }
+        XCTAssertEqual(PerpAlertText.usageText(9.999), "999%")
+        XCTAssertEqual(PerpAlertText.usageText(10), "All")
+        XCTAssertEqual(PerpAlertText.usageText(1.5), "150%")
+        XCTAssertEqual(PerpAlertText.usageText(0.899), "89%")
+        // A first reading of a position whose equity is a residue next to zero: critical, said as "All", no crash.
+        var watch = PerpRiskWatch()
+        let residue = position(1, .long, size: 1, entry: 100, mark: 100, margin: 1e-15)
+        let notices = watch.update([residue], maintenance: [1: 0.05])
+        XCTAssertEqual(notices.map(\.level), [.critical])
+        XCTAssertTrue(PerpAlertText.risk(try XCTUnwrap(notices.first), asset: "BTC", canAct: true).body.hasPrefix("All of its margin is in use"))
         text = PerpAlertText.risk(PerpRiskNotice(position: p, level: .nearLiquidation, usage: 0.5, distance: 0.08), asset: "BTC", canAct: true)
         XCTAssertEqual(text.title, "Near liquidation: BTC-PERP long")
         XCTAssertTrue(text.body.hasPrefix("The mark, $96.20, is within 10% of the liquidation price, $95.00."))
