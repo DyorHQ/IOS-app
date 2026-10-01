@@ -5,7 +5,7 @@
 //    never sends and marks its posts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseKeeperArgs } from "../lib/options.mjs";
@@ -235,6 +235,52 @@ test("E9: once the deadline has passed nothing more is sent, even when a late re
   await sleep(600); // the job wakes up, finds the pending Moment and tries to send its retry
   assert.ok(w.client.sims.length > 0, "the job did go on after the deadline");
   assert.deepEqual(w.sends, [], "but its send was refused");
+});
+
+test("E9: after an overrun the run saves and posts what it had at the deadline; a late scan result is left to the next run", async () => {
+  const live = momentsCohorts().find((c) => c.live);
+  const scanId = `mo1:GraduationFailed:${live.collect.toLowerCase()}`;
+  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  writeFileSync(stateFile, JSON.stringify({ version: 1, cursors: { [scanId]: "1000" } }));
+  const event = { args: { momentId: 1n }, blockNumber: 1_500n, transactionHash: `0x${"fa".repeat(32)}`, logIndex: 0 };
+  const client = (logsDelay) => ({
+    ...chain(),
+    async readContract({ functionName }) {
+      if (functionName === "momentCount") return 0n;
+      throw new Error("execution reverted");
+    },
+    async getBlockNumber() {
+      return 2_000n;
+    },
+    async getLogs({ fromBlock, toBlock }) {
+      if (logsDelay) await sleep(logsDelay);
+      return fromBlock <= 1_500n && 1_500n <= toBlock ? [event] : [];
+    },
+  });
+  const slowPost = world({ client: client(400) });
+  // The webhook is slow too: the scan answers (and would move the cursor past the event) while the run posts.
+  slowPost.deps.fetchImpl = async (url, init) => (slowPost.posts.push({ url, body: JSON.parse(init.body) }), await sleep(600), { ok: true, status: 204 });
+  const o = opts(["moments-graduation", "--only-live", "--logs-cursor", "--webhook", "https://hooks.example/x", "--state-file", stateFile], { maxRuntime: 0.2 });
+  assert.equal(await runKeeper(o, slowPost.deps), EXIT.ERROR);
+  await sleep(300);
+  assert.ok(slowPost.lines.some((l) => /GraduationFailed emitted in block 1500/.test(l)), "the late scan did find it (stdout)");
+  assert.ok(!slowPost.posts.some((p) => p.body.alerts.some((x) => /GraduationFailed/.test(x.reason))), "after the posts were planned");
+  assert.equal(JSON.parse(readFileSync(stateFile, "utf8")).cursors[scanId], "1000", "so the saved cursor did not move past it");
+  const next = world({ client: client(0) });
+  await runKeeper({ ...o, maxRuntime: 240 }, next.deps);
+  assert.ok(next.posts[0].body.alerts.some((x) => /GraduationFailed emitted in block 1500/.test(x.reason)), "the next run posts it");
+});
+
+test("E9: a send the job reaches after the deadline is refused without a failure or backoff in the saved state", async () => {
+  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const w = world({ client: chain({ blockDelay: 300 }) });
+  const code = await runKeeper(opts(["moments-graduation", "--only-live", "--state-file", stateFile], { send: true, signer: { account: "k" }, maxRuntime: 0.1 }), w.deps);
+  assert.equal(code, EXIT.ERROR);
+  await sleep(600);
+  assert.deepEqual(w.sends, []);
+  assert.ok(w.lines.some((l) => /not sending graduate .*stopped by --max-runtime/.test(l)));
+  const saved = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.equal(saved.budget?.backoff, undefined, "no backoff for a send that never went out");
 });
 
 test("E9: every send is told the time left before the deadline (send.mjs bounds cast by it)", async () => {

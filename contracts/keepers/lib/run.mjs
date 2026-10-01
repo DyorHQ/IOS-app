@@ -242,16 +242,27 @@ export async function runKeeper(o, deps = {}) {
     run.stopped = true;
     reporter.alert({ job: "keeper", target: "run", severity: "critical", key: "keeper:runtime", reason: `the run exceeded --max-runtime ${o.maxRuntime}s during ${run.current} and was stopped before it finished: check the RPC and the host` });
   }
-  const state = run.state ?? {};
+  // After an overrun the job is not cancelled: while this run posts, it may still move a cursor, record something or
+  // raise an alert. What is saved and posted is what the run had at the deadline (a copy); whatever the job does
+  // later is left to the next run, which does it again. Sends were refused from the deadline on.
+  const frozen = outcome === "overrun";
+  const hasState = !!run.state;
+  const state = !hasState ? {} : frozen ? structuredClone(run.state) : run.state;
+  const alerts = frozen ? reporter.alerts.slice() : reporter.alerts;
+  const holds = new Set(reporter.holds);
+  const raise = (a) => {
+    reporter.alert(a);
+    if (frozen) alerts.push(reporter.alerts[reporter.alerts.length - 1]);
+  };
   // E5: the items an RPC failure skipped stay on stdout one by one, but are posted as a single alert.
-  const rpcFailed = reporter.alerts.filter((a) => a.rpc);
+  const rpcFailed = alerts.filter((a) => a.rpc);
   const skipped = rpcFailed.map((a) => (a.target === "job" ? `${a.job} (the whole job)` : a.target));
   const degraded = rpcDegradedAlert(state, { failures: rpcFailed.length, skipped, stats: run.rpcStats });
-  if (degraded) reporter.alert(degraded);
+  if (degraded) raise(degraded);
   for (const [label, s] of Object.entries(run.rpcStats)) if (s.failed) reporter.info(`rpc ${label} failed ${s.failed}, served ${s.served}`);
   // Save before posting: the spend ledger and the cursors must survive a hung or killed post.
-  if (run.state) saveState(o.stateFile, run.state);
-  const serious = reporter.alerts.filter((a) => a.severity !== "info");
+  if (hasState) saveState(o.stateFile, state);
+  const serious = alerts.filter((a) => a.severity !== "info");
   let undelivered;
   if (webhookUrl) {
     // Keeper-level checks (records, balance, RPC health, the deadline) count as a completed "job" when the run ended
@@ -261,7 +272,7 @@ export async function runKeeper(o, deps = {}) {
     state.notify ??= {};
     state.notify.keys ??= {};
     const at = Math.floor(now() / 1000);
-    const items = planPosts({ alerts: reporter.alerts, holds: reporter.holds, completed, history: state.notify.keys, now: at, repeat: o.repeat });
+    const items = planPosts({ alerts, holds, completed, history: state.notify.keys, now: at, repeat: o.repeat });
     if (items.length) {
       const payloads = buildPayloads({ kind: channel, items, title: `${prefix}DyorHQ keeper (${o.jobs.join(", ")})`, chatId: o.telegramChatId });
       const { delivered, error } = await deliver(webhookUrl, payloads, { kind: channel, fetchImpl });
@@ -271,9 +282,9 @@ export async function runKeeper(o, deps = {}) {
     } else {
       log("nothing new to post");
     }
-    if (run.state) saveState(o.stateFile, run.state);
+    if (hasState) saveState(o.stateFile, state);
   }
-  log(`done: ${reporter.actions.length} action(s), ${reporter.alerts.length} alert(s) (${serious.length} warning/critical)`);
+  log(`done: ${reporter.actions.length} action(s), ${alerts.length} alert(s) (${serious.length} warning/critical)`);
   if (undelivered) {
     log(`keeper: alerts NOT delivered (${undelivered}); the next run posts them again`);
     return EXIT.ERROR;
