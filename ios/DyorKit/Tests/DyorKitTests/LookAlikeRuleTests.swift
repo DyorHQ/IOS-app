@@ -242,6 +242,37 @@ final class LookAlikeRuleTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.imitated(by: overridden), .usdc, "an override shows the end first: \"USDC....\"")
     }
 
+    /// The Send list and every badge judge each row's token on every draw, so judging one is cheap: plain ASCII is
+    /// read as it is written, never run through ICU's Latin-ASCII transform or the look-alike tables (`visible` costs
+    /// less than half of one run of that transform over the same text; it ran it each time, six times a token), and a
+    /// token judged again is answered from the answers kept (`imitated(by:)`), so reading a held token's `imitates` and
+    /// `looksAlike` again costs next to nothing (it judged the token each time: about 0.3 ms each). The costs are this
+    /// thread's CPU time, the best of a few rounds, each compared with what the same thread does in the same round.
+    func testJudgingATokenIsCheapAndJudgingItAgainCheaper() {
+        func cpu(_ work: () -> Void) -> Double {
+            let start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+            work()
+            return Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start) / 1e9
+        }
+        let names = (0 ..< 1_000).map { "Pepe Coin \($0)" }
+        _ = WalletHoldings.imitated(by: token("WARM", "Warm Up")) // the tables are built once, on first use
+        var visible = Double.infinity
+        var transform = Double.infinity
+        for _ in 0 ..< 5 {
+            visible = min(visible, cpu { for name in names { _ = WalletHoldings.visible(name) } })
+            transform = min(transform, cpu { for name in names { _ = name.applyingTransform(StringTransform("Latin-ASCII"), reverse: false) } })
+        }
+        XCTAssertLessThan(visible, transform / 2, "plain ASCII as it shows: \(visible) s of CPU, against \(transform) s for one Latin-ASCII run each")
+        XCTAssertEqual(WalletHoldings.visible("Pepe  Coin 7", keepingSpaces: true), "Pepe Coin 7")
+
+        let held = HeldToken(token: Token(address: address, symbol: "USDC.e", name: "USD Coin", decimals: 6), balance: 1, usd: 1)
+        var again = Double.infinity
+        for _ in 0 ..< 3 { again = min(again, cpu { for _ in 0 ..< 2_000 { _ = (held.imitates, held.looksAlike) } }) }
+        XCTAssertLessThan(again, 0.1, "\(again) s of CPU for 2,000 reads of both")
+        XCTAssertEqual(held.imitates, .usdc)
+        XCTAssertTrue(held.looksAlike)
+    }
+
     // MARK: Display safety and the create guard (F5, F6)
 
     /// Accented Latin letters are Latin letters: display-safe and allowed ("USDĆ" still reads as USDC).
