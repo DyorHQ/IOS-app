@@ -57,7 +57,7 @@ public struct DyorCoin: Hashable, Sendable, Identifiable, Codable {
         self.address = address
         self.origin = origin
         self.symbol = Self.capped(symbol, Self.maxStoredSymbol)
-        self.name = Self.capped(name, Self.maxStoredName)
+        self.name = Self.capped(name, Self.maxStoredName, wholeCharacters: true)
         self.creator = creator
         self.logo = logo.utf8.count <= ImageSourcePolicy.maxURLBytes ? logo : ""
         self.mediaHash = mediaHash.map { Data($0.prefix(32)) }
@@ -85,22 +85,42 @@ public struct DyorCoin: Hashable, Sendable, Identifiable, Codable {
     /// (`SymbolSafety.isDisplaySafe(_:)`), so this only keeps the file small.
     public static let maxStoredName = (characters: 64, bytes: 256)
 
-    /// `text` cut to `cap.characters` characters, then, if still over `cap.bytes` UTF-8 bytes, to that many bytes at a
-    /// scalar's end: a cut symbol is then at least `cap.bytes` - 3 bytes long, never short enough to pass as fitting a form.
-    static func capped(_ text: String, _ cap: (characters: Int, bytes: Int)) -> String {
+    /// `text` cut to `cap.characters` characters, then, if still over `cap.bytes` UTF-8 bytes, to that many bytes. A
+    /// symbol is cut at a scalar's end: a cut symbol is then at least `cap.bytes` - 3 bytes long, never short enough
+    /// to pass as fitting a form. A name (`wholeCharacters`) is cut at a character's end, whole characters dropped
+    /// from its end until it fits, so no emoji is left cut inside its sequence: a family emoji ending in its joiner,
+    /// or a keycap "1️⃣" without its keycap mark, reads as a hidden character (`SymbolSafety.hasHiddenCharacters`),
+    /// and a coin whose whole name has none would show a warning for what was cut. Only a character longer than all
+    /// of `cap.bytes` is cut inside, at a scalar's end, so a name of one such character keeps what fits of it.
+    static func capped(_ text: String, _ cap: (characters: Int, bytes: Int), wholeCharacters: Bool = false) -> String {
         guard text.utf8.count > cap.characters else { return text } // no more characters than bytes
-        var out = String(text.prefix(cap.characters))
+        let out = String(text.prefix(cap.characters))
         guard out.utf8.count > cap.bytes else { return out }
-        var scalars = String.UnicodeScalarView()
+        var kept = String.UnicodeScalarView()
         var used = 0
-        for scalar in out.unicodeScalars {
-            let size = String(scalar).utf8.count
-            guard used + size <= cap.bytes else { break }
-            scalars.append(scalar)
+        // Keeps the scalars of `scalars` that fit, up to the first that doesn't.
+        func keep<Scalars: Sequence<Unicode.Scalar>>(_ scalars: Scalars) {
+            for scalar in scalars {
+                let size = String(scalar).utf8.count
+                guard used + size <= cap.bytes else { return }
+                kept.append(scalar)
+                used += size
+            }
+        }
+        guard wholeCharacters else {
+            keep(out.unicodeScalars)
+            return String(kept)
+        }
+        for character in out {
+            let size = character.utf8.count
+            guard used + size <= cap.bytes else {
+                if size > cap.bytes { keep(character.unicodeScalars) }
+                break
+            }
+            kept.append(contentsOf: character.unicodeScalars)
             used += size
         }
-        out = String(scalars)
-        return out
+        return String(kept)
     }
 
     /// The symbol as a screen shows it (`ChainText.shown`: direction characters and invisible padding removed, right-to-
