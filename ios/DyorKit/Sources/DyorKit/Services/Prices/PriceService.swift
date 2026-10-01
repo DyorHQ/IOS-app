@@ -27,6 +27,32 @@ public struct PriceInfo: Hashable, Sendable {
     }
 }
 
+public extension PriceInfo {
+    /// Whether it is a DyorHQ coin's price, from its own curve or pool (`DyorListing`): only those carry a pair asset.
+    var isDyorVenue: Bool { pairSymbol != nil }
+
+    /// A DyorHQ coin's 24h change in its pair asset, as its token page shows it under the price: "vs MON 0.00%" when only
+    /// MON's dollar price moved. A change under half a hundredth of a percent reads 0.00%. Nil for every other token,
+    /// and without the day-ago read (a coin that is "New" included).
+    var pairChangeText: String? {
+        guard let pairSymbol, let pairChange, pairChange.isFinite else { return nil }
+        return "vs \(pairSymbol) \(NumberStyle.percent(abs(pairChange) < 0.005 ? 0 : pairChange))"
+    }
+
+    /// Where a DyorHQ coin's price comes from, in one line for its token page: "Priced from its DyorHQ curve", "…its
+    /// Uniswap v4 pool", "…its Monday Trade pool" or "…its Moment pool". Nil for every other token.
+    var sourceLine: String? {
+        guard isDyorVenue else { return nil }
+        switch source {
+        case DyorListing.curveLabel: return "Priced from its DyorHQ curve"
+        case DyorListing.v4Label: return "Priced from its Uniswap v4 pool"
+        case DyorListing.mondayLabel: return "Priced from its Monday Trade pool"
+        case DyorListing.momentLabel: return "Priced from its Moment pool"
+        default: return nil
+        }
+    }
+}
+
 public struct PricePoint: Hashable, Sendable, Identifiable {
     public var id: UInt64 { block }
     public let block: UInt64

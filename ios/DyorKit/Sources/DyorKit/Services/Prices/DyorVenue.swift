@@ -58,14 +58,17 @@ struct DyorListing: Hashable, Sendable {
     var label: String {
         switch venue {
         case .curve: return DyorListing.curveLabel
-        case .monday: return "Monday Trade"
-        case .v4: return "Uniswap v4"
-        case .moment: return "DyorHQ Moment pool"
+        case .monday: return DyorListing.mondayLabel
+        case .v4: return DyorListing.v4Label
+        case .moment: return DyorListing.momentLabel
         case .collecting, .closed: return "DyorHQ"
         }
     }
 
     static let curveLabel = "DyorHQ curve"
+    static let mondayLabel = "Monday Trade"
+    static let v4Label = "Uniswap v4"
+    static let momentLabel = "DyorHQ Moment pool"
 
     /// Whether the venue has a price to read.
     var isPriced: Bool {

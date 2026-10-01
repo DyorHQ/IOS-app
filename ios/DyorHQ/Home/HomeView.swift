@@ -469,12 +469,17 @@ private struct HoldingRow: View {
                 AmountText(amount: row.balance, token: row.token, compact: true, font: .caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 1) {
-                USDText(value: row.value, font: .subheadline.weight(.medium))
-                // Always surface the per-unit price next to the 24h change, even for tokens with a small balance.
-                HStack(spacing: 5) {
-                    USDText(price: row.usd, font: .caption2).foregroundStyle(.secondary)
-                    ChangeText(value: row.change24h, style: .caption2)
+            if row.notTradingYet {
+                // A Moment still collecting: no pool yet, so no price, and no value to show.
+                Text("Not trading yet").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .trailing, spacing: 1) {
+                    USDText(value: row.value, font: .subheadline.weight(.medium))
+                    // Always surface the per-unit price next to the 24h change, even for tokens with a small balance.
+                    HStack(spacing: 5) {
+                        USDText(price: row.usd, font: .caption2).foregroundStyle(.secondary)
+                        ChangeText(value: row.change24h, style: .caption2)
+                    }
                 }
             }
         }
@@ -549,12 +554,16 @@ extension View {
     }
 }
 
-/// A token as the Home screen shows it: price, movement, and the signed-in wallet's balance.
+/// A token as the Home screen shows it: price, movement, and the signed-in wallet's balance. `info` is the price read as
+/// it came (a DyorHQ coin's "vs MON", "New" and price source); `notTradingYet` marks a Moment still collecting, which
+/// has no price yet.
 struct MarketRow: Identifiable, Hashable {
     let token: Token
     let usd: Double?
     let change24h: Double?
     let balance: BigUInt
+    var info: PriceInfo? = nil
+    var notTradingYet = false
     var id: Address { token.address }
     var value: Double? { usd.map { Amount.units(balance, decimals: token.decimals) * $0 } }
 }
@@ -695,6 +704,8 @@ final class HomeModel {
         var priceMap: [Address: PriceInfo]?
         var priceError: Error?
         do { priceMap = try await prices } catch { priceError = error }
+        // Moments still collecting, as the read just made found them: "Not trading yet" in place of a price.
+        let notTrading = priceMap == nil ? [] : await env.prices.notTradingYet(tokens)
         let balanceMap = await balances
         // A launchpad whose launches couldn't be read keeps its last good ones, and the screen says so.
         let listing = await launches
@@ -726,8 +737,10 @@ final class HomeModel {
         if let priceMap {
             let previous = Dictionary(rows.map { ($0.id, $0.balance) }, uniquingKeysWith: { first, _ in first })
             rows = tokens.map { token in
-                MarketRow(token: token, usd: priceMap[token.address]?.usd, change24h: priceMap[token.address]?.change24h,
-                          balance: balanceMap?[token.address] ?? previous[token.address] ?? 0)
+                // A price that isn't a positive number is none: the row shows "—", never "$0.00".
+                let info = priceMap[token.address].flatMap { DyorPrice.valid($0.usd) != nil ? $0 : nil }
+                return MarketRow(token: token, usd: info?.usd, change24h: info?.change24h,
+                                 balance: balanceMap?[token.address] ?? previous[token.address] ?? 0, info: info, notTradingYet: notTrading.contains(token.address))
             }
         }
         if let priceError {
@@ -804,6 +817,16 @@ struct TokenDetailView: View {
     /// read; `.unchecked` when the check failed, which keeps Swap and offers to check again.
     @State private var curveRoute: CurveRoute?
     @State private var checkingCurve = false
+    /// The price read by the page itself, for a token Home's list didn't price (one opened from search).
+    @State private var loaded: PriceInfo?
+    @State private var loadedNotTrading = false
+
+    /// The price as shown: Home's read, else the page's own (`loaded`).
+    private var info: PriceInfo? { row.info ?? loaded }
+    private var price: Double? { row.usd ?? loaded.flatMap { DyorPrice.valid($0.usd) } }
+    private var change: Double? { row.usd != nil ? row.change24h : loaded?.change24h }
+    /// A Moment still collecting: no price and no chart, "Not trading yet" in their place.
+    private var notTradingYet: Bool { row.notTradingYet || loadedNotTrading }
 
     /// Sent to the wallet rather than chosen in the app (`KnownTokenStore.unverified`).
     private var received: Bool { KnownTokenStore.isUnverified(row.token.address, owner: session.address) }
@@ -816,14 +839,29 @@ struct TokenDetailView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .center, spacing: 10) {
                         TokenLogo(token: row.token, size: 44)
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            USDText(price: row.usd, font: .system(.largeTitle, design: .rounded).weight(.semibold))
-                            ChangeBadge(value: row.change24h)
+                        if notTradingYet {
+                            Text("Not trading yet").font(.system(.title2, design: .rounded).weight(.semibold)).foregroundStyle(.secondary)
+                        } else {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                USDText(price: price, font: .system(.largeTitle, design: .rounded).weight(.semibold))
+                                if info?.isNew == true { NewBadge() } else { ChangeBadge(value: change) }
+                            }
                         }
                     }
-                    Text("Past 24 hours").font(.footnote).foregroundStyle(.secondary)
-                    PriceChart(points: history, isLoading: loadingHistory, tint: (row.change24h ?? 0) < 0 ? Color.negative : Color.positive)
-                        .frame(height: 180)
+                    // A DyorHQ coin: its move against its pair asset, then where its price comes from.
+                    if !notTradingYet, let pairChange = info?.pairChangeText {
+                        Text(pairChange).font(.footnote.weight(.medium)).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    if !notTradingYet, let source = info?.sourceLine {
+                        Text(source).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if notTradingYet {
+                        Text("Its Moment hasn't graduated yet, so the coin has no market. It trades once the Moment graduates.").font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        Text("Past 24 hours").font(.footnote).foregroundStyle(.secondary)
+                        PriceChart(points: history, isLoading: loadingHistory, tint: (change ?? 0) < 0 ? Color.negative : Color.positive)
+                            .frame(height: 180)
+                    }
                 }
                 .padding(.vertical, 6)
             }
@@ -848,7 +886,9 @@ struct TokenDetailView: View {
             if row.balance > 0 {
                 Section("Your Balance") {
                     LabeledContent("Amount") { AmountText(amount: row.balance, token: row.token) }
-                    LabeledContent("Value") { USDText(value: row.value) }
+                    LabeledContent("Value") {
+                        if notTradingYet { Text("Not trading yet").foregroundStyle(.secondary) } else { USDText(value: price.map { Amount.units(row.balance, decimals: row.token.decimals) * $0 }) }
+                    }
                 }
             }
             Section("About") {
@@ -886,7 +926,12 @@ struct TokenDetailView: View {
         .navigationTitle(row.token.symbol)
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            history = (try? await env.prices.history(for: row.token, points: 48)) ?? []
+            // A token Home's list didn't price (opened from search) is priced here, once.
+            if row.usd == nil, !row.notTradingYet {
+                loaded = (try? await env.prices.prices(for: [row.token]))?[row.token.address]
+                loadedNotTrading = await env.prices.notTradingYet([row.token]).contains(row.token.address)
+            }
+            if !notTradingYet { history = (try? await env.prices.history(for: row.token, points: 48)) ?? [] }
             loadingHistory = false
         }
         .task(id: row.token.address) { await checkCurve() }
@@ -937,6 +982,18 @@ struct TokenDetailView: View {
         let route = await env.launchpad.curveRoute(for: row.token)
         if Task.isCancelled { return }
         curveRoute = route
+    }
+}
+
+/// "New" in place of a 24h change: a DyorHQ coin its factory hadn't recorded 24 hours ago (`PriceInfo.isNew`).
+private struct NewBadge: View {
+    var body: some View {
+        Text("New")
+            .font(.footnote.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.brand.opacity(0.14), in: Capsule())
+            .foregroundStyle(Color.brand)
     }
 }
 
