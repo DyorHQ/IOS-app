@@ -114,6 +114,26 @@ final class HomeTotalsTests: XCTestCase {
         XCTAssertTrue(home.contains("if row.moment.isNotTradingYet {\n                    Text(\"Not trading yet\")"))
     }
 
+    /// A read-only check against mainnet, run with `DYORHQ_LIVE_PRICES=1`: QT's Spot price (its own pool, DyorHQ venues
+    /// on) and its launch's decimal price agree, so Home's Launch tab and Spot show one price, around $6e-8; Home counts
+    /// it once. Nothing is sent.
+    func testLiveQTIsOnePriceAndCountedOnce() async throws {
+        guard ProcessInfo.processInfo.environment["DYORHQ_LIVE_PRICES"] == "1" else { throw XCTSkip("Set DYORHQ_LIVE_PRICES=1 to read mainnet") }
+        let rpc = RPCClient(urls: Monad.publicRPCs)
+        let qt = Token(address: DyorCoinChain.qt, symbol: "QT", name: "Quet", decimals: 18)
+        let prices = try await PriceService(rpc: rpc, dyorVenues: true).prices(for: [qt, .mon])
+        let spot = try XCTUnwrap(prices[qt.address]?.usd)
+        let mon = try XCTUnwrap(prices[Monad.native]?.usd)
+        let held = try await LaunchpadService(rpc: rpc, addresses: .monadMainnet).heldLaunches([qt])
+        let launch = try XCTUnwrap(held.launches[qt.address])
+        let own = try XCTUnwrap(launch.usdPrice(pairUSD: mon))
+        print("QT Spot $\(spot) (\(prices[qt.address]?.source ?? "?")), launch $\(own) (\(launch.pairPrice ?? 0) MON at $\(mon)), integer price() \(launch.price)")
+        XCTAssertEqual(own, spot, accuracy: spot * 0.01, "one price, read twice a moment apart")
+        XCTAssertTrue((1e-8...1e-6).contains(spot), "about $6e-8")
+        let totals = HomeTotals(spot: [.init(address: qt.address, units: 1_000_000, price: spot)], launch: [.init(address: qt.address, units: 1_000_000, price: own)], moments: [])
+        XCTAssertEqual(totals.total, 1_000_000 * spot, accuracy: 1e-12, "counted once, at Spot's price")
+    }
+
     /// A Moment has no market while it collects or waits to graduate; once it graduated it has one, and an expired one
     /// never will.
     func testAMomentIsNotTradingYetUntilItGraduates() {
