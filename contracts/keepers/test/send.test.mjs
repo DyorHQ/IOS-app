@@ -81,6 +81,9 @@ test("redact: URLs shrink to their origin and configured secrets disappear, in l
   assert.equal(rpcLabel("https://user:pw@rpc.example/?apikey=K"), "https://rpc.example/…");
   const text = redact(`HTTP request failed.\nURL: ${keyed}\nRequest body: {}; also FAKE_SECRET_123 alone`, [keyed, "FAKE_SECRET_123"]);
   assert.ok(!text.includes("FAKE_SECRET_123"), text);
+  // Punctuation after a URL is not part of it: it stays, and the key still goes.
+  assert.equal(redact("error sending request for url (http://127.0.0.1:8814/); not retried"), "error sending request for url (http://127.0.0.1:8814); not retried");
+  assert.equal(redact(`failed (${keyed}), then: ${keyed}.`), "failed (https://monad-mainnet.g.alchemy.com/…), then: https://monad-mainnet.g.alchemy.com/….");
   const lines = [];
   const reporter = makeReporter({ log: (l) => lines.push(l), scrub: (s) => redact(s, [keyed]) });
   reporter.alert({ job: "x", target: "y", severity: "critical", reason: `read failed: ${keyed}` });
