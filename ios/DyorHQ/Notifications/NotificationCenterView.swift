@@ -95,9 +95,19 @@ struct NotificationCenterView: View {
         }
     }
 
-    private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func chip(_ title: LocalizedStringKey, selected: Bool, action: @escaping () -> Void) -> some View {
+        chip(Text(title), selected: selected, action: action)
+    }
+
+    /// A kind's chip, named by the model (`AppNotification.Kind.title`).
+    @_disfavoredOverload
+    private func chip<S: StringProtocol>(_ title: S, selected: Bool, action: @escaping () -> Void) -> some View {
+        chip(Text(verbatim: String(title)), selected: selected, action: action)
+    }
+
+    private func chip(_ title: Text, selected: Bool, action: @escaping () -> Void) -> some View {
         Button { Haptics.selection(); action() } label: {
-            Text(title)
+            title
                 .font(.subheadline.weight(selected ? .semibold : .regular))
                 .foregroundStyle(selected ? Color.white : Color.primary)
                 .padding(.horizontal, 14).padding(.vertical, 7)

@@ -142,7 +142,7 @@ struct MomentDetailView: View {
     }
 
     /// `spoken` is what VoiceOver reads for `value` when the two differ (a subscripted price, `PriceFormat.spoken`).
-    private func stat(_ label: String, _ value: String, spoken: String? = nil) -> some View {
+    private func stat(_ label: LocalizedStringKey, _ value: String, spoken: String? = nil) -> some View {
         VStack(spacing: 3) {
             Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
                 .accessibilityLabel(spoken ?? value)
@@ -416,10 +416,10 @@ struct MomentDetailView: View {
                 onView: { _ in openURL(OpenSea.item(contract: m.nft, tokenId: BigUInt((detail?.supply.collects ?? 0) + quantity))) },
                 intent: .momentsCollect(pay: .init(token: env.config.moments.usdc, amount: collectGross), usd: MomentsMath.usdc(collectGross))
             ) {
-                DetailRow("Moment", "\(info.name) ($\(info.symbol))")
-                DetailRow("Editions", "\(quantity)")
+                DetailRow("Moment", verbatim: "\(info.name) ($\(info.symbol))")
+                DetailRow("Editions", verbatim: "\(quantity)")
                 DetailRow("You pay", MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))
-                DetailRow("Coins owed", "\(MomentsFormat.coins(quote?.entitlement ?? 0)) $\(info.symbol)")
+                DetailRow("Coins owed", verbatim: "\(MomentsFormat.coins(quote?.entitlement ?? 0)) $\(info.symbol)")
                 DetailRow("Your NFT", "On OpenSea once it settles")
                 if quote?.terminal == true { DetailRow("Graduates", "Yes, in this transaction", tint: .brand) }
             }
@@ -427,7 +427,7 @@ struct MomentDetailView: View {
             ConfirmationSheet(title: "Claim \(info.symbol)", confirmTitle: "Claim", build: { await env.moments.claimPlan(momentId: m.id, symbol: info.symbol) }, onDone: { finished() },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed $\(info.symbol)", subtitle: "\(MomentsFormat.coins(account?.claimable ?? 0)) vested coins", hash: hash, section: "moments", reference: m.id.description), owner: session.address) },
                               intent: .momentsClaim) {
-                DetailRow("Claimable", "\(MomentsFormat.coins(account?.claimable ?? 0)) $\(info.symbol)")
+                DetailRow("Claimable", verbatim: "\(MomentsFormat.coins(account?.claimable ?? 0)) $\(info.symbol)")
             }
         case .creatorProceeds:
             ConfirmationSheet(title: "Withdraw Proceeds", confirmTitle: "Withdraw", build: { await env.moments.withdrawCreatorProceedsPlan(momentId: m.id) }, onDone: { finished() },

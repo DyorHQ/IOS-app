@@ -87,7 +87,7 @@ struct GetHelpContent: View {
         }
     }
 
-    private func group<Content: View>(_ title: String, @ViewBuilder rows: () -> Content) -> some View {
+    private func group<Content: View>(_ title: LocalizedStringKey, @ViewBuilder rows: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title).font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 4)
             rows()
@@ -101,12 +101,29 @@ struct GetHelpContent: View {
 
 }
 
-/// One support row: a symbol on a tinted square, a title and a one-line description, a chevron.
+/// One support row: a symbol on a tinted square, a title and a one-line description, a chevron. The description is a
+/// catalog key when written in the code, or a `String` shown as it is (the support address, the X handle, the tagline).
 private struct HelpRow: View {
     let symbol: String
-    let title: String
-    let detail: String
+    let title: LocalizedStringKey
+    private let detail: Text
     let action: () -> Void
+
+    init(symbol: String, title: LocalizedStringKey, detail: LocalizedStringKey, action: @escaping () -> Void) {
+        self.init(symbol: symbol, title: title, detail: Text(detail), action: action)
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(symbol: String, title: LocalizedStringKey, detail: S, action: @escaping () -> Void) {
+        self.init(symbol: symbol, title: title, detail: Text(verbatim: String(detail)), action: action)
+    }
+
+    private init(symbol: String, title: LocalizedStringKey, detail: Text, action: @escaping () -> Void) {
+        self.symbol = symbol
+        self.title = title
+        self.detail = detail
+        self.action = action
+    }
 
     var body: some View {
         Button { Haptics.tap(); action() } label: {
@@ -118,7 +135,7 @@ private struct HelpRow: View {
                     .background(Color.brand.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.body.weight(.semibold)).foregroundStyle(.primary)
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                    detail.font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
@@ -129,6 +146,6 @@ private struct HelpRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title). \(detail)")
+        .accessibilityLabel(Text("\(Text(title)). \(detail)"))
     }
 }

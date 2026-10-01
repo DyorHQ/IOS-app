@@ -299,22 +299,54 @@ struct AmountText: View {
     var font: Font = .body
 
     var body: some View {
-        Text("\(NumberStyle.units(amount, decimals: token.decimals, compact: compact)) \(token.symbol)")
+        // An amount with its symbol, nothing to translate: shown as it is, never the key "%@ %@".
+        Text(verbatim: "\(NumberStyle.units(amount, decimals: token.decimals, compact: compact)) \(token.symbol)")
             .font(font)
             .monospacedDigit()
     }
 }
 
 /// Decimal entry for token amounts. Keeps the raw string so typing feels native; the parsed value is derived.
+///
+/// The placeholder is localized when it is written in the code (a catalog key) and shown as it is when it is a `String`
+/// built at run time, as `Text` does: the generic `String` initializer is disfavored, so a literal always picks the key.
 struct AmountField: View {
-    let title: String
+    private let title: Placeholder
     @Binding var text: String
     let token: Token?
     var onMax: (() -> Void)?
 
+    private enum Placeholder {
+        case localized(LocalizedStringKey)
+        case verbatim(String)
+    }
+
+    init(title: LocalizedStringKey, text: Binding<String>, token: Token?, onMax: (() -> Void)? = nil) {
+        self.init(.localized(title), text: text, token: token, onMax: onMax)
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(title: S, text: Binding<String>, token: Token?, onMax: (() -> Void)? = nil) {
+        self.init(.verbatim(String(title)), text: text, token: token, onMax: onMax)
+    }
+
+    private init(_ title: Placeholder, text: Binding<String>, token: Token?, onMax: (() -> Void)?) {
+        self.title = title
+        _text = text
+        self.token = token
+        self.onMax = onMax
+    }
+
+    @ViewBuilder private var field: some View {
+        switch title {
+        case .localized(let titleKey): TextField(titleKey, text: $text)
+        case .verbatim(let string): TextField(string, text: $text)
+        }
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            TextField(title, text: $text)
+            field
                 .keyboardType(.decimalPad)
                 .font(.title2.weight(.medium))
                 .monospacedDigit()
@@ -334,17 +366,30 @@ struct AmountField: View {
     }
 }
 
-/// Copyable address row.
+/// Copyable address row. Its title is a catalog key when written in the code, or a `String` shown as it is.
 struct AddressRow: View {
-    let title: String
+    private let title: Text
     let address: Address
 
+    init(title: LocalizedStringKey, address: Address) {
+        self.title = Text(title)
+        self.address = address
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(title: S, address: Address) {
+        self.title = Text(verbatim: String(title))
+        self.address = address
+    }
+
     var body: some View {
-        LabeledContent(title) {
+        LabeledContent {
             Text(address.short)
                 .speechSpellsOutCharacters()
                 .font(.body.monospaced())
                 .foregroundStyle(.secondary)
+        } label: {
+            title
         }
         .contextMenu {
             Button("Copy Address", systemImage: "doc.on.doc") { UIPasteboard.general.string = address.checksummed }
@@ -353,16 +398,26 @@ struct AddressRow: View {
     }
 }
 
-/// Inline error under a form, in sentence case with a symbol.
+/// Inline error under a form, in sentence case with a symbol. A message written in the code is a catalog key; most come
+/// at run time (a thrown error's description, a server's message, a model's text) and are shown as they are.
 struct InlineError: View {
-    let message: String
+    private let message: Text
+
+    init(message: LocalizedStringKey) {
+        self.message = Text(message)
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(message: S) {
+        self.message = Text(verbatim: String(message))
+    }
 
     var body: some View {
-        Label(message, systemImage: "exclamationmark.triangle.fill")
+        Label { message } icon: { Image(systemName: "exclamationmark.triangle.fill") }
             .font(.footnote)
             .foregroundStyle(Color.attention)
             .symbolRenderingMode(.hierarchical)
-            .accessibilityLabel("Error: \(message)")
+            .accessibilityLabel(Text("Error: \(message)"))
     }
 }
 
@@ -382,9 +437,10 @@ struct LearnMoreLink: View {
     }
 }
 
-/// Full-width primary action at the bottom of a screen.
+/// Full-width primary action at the bottom of a screen. Its title is a catalog key when written in the code, a `String`
+/// built at run time shown as it is, or a `Text` the caller already made.
 struct PrimaryButton: View {
-    let title: String
+    private let title: Text
     var systemImage: String?
     /// A custom symbol from the asset catalog, used when no `systemImage` fits (e.g. the balance scale).
     var image: String?
@@ -396,6 +452,29 @@ struct PrimaryButton: View {
     var foreground: Color = .white
     let action: () -> Void
 
+    init(title: LocalizedStringKey, systemImage: String? = nil, image: String? = nil, isBusy: Bool = false, isDisabled: Bool = false,
+         foreground: Color = .white, action: @escaping () -> Void) {
+        self.init(title: Text(title), systemImage: systemImage, image: image, isBusy: isBusy, isDisabled: isDisabled, foreground: foreground, action: action)
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(title: S, systemImage: String? = nil, image: String? = nil, isBusy: Bool = false, isDisabled: Bool = false,
+                            foreground: Color = .white, action: @escaping () -> Void) {
+        self.init(title: Text(verbatim: String(title)), systemImage: systemImage, image: image, isBusy: isBusy, isDisabled: isDisabled,
+                  foreground: foreground, action: action)
+    }
+
+    init(title: Text, systemImage: String? = nil, image: String? = nil, isBusy: Bool = false, isDisabled: Bool = false,
+         foreground: Color = .white, action: @escaping () -> Void) {
+        self.title = title
+        self.systemImage = systemImage
+        self.image = image
+        self.isBusy = isBusy
+        self.isDisabled = isDisabled
+        self.foreground = foreground
+        self.action = action
+    }
+
     var body: some View {
         let unavailable = isDisabled && !isBusy
         let button = Button {
@@ -406,7 +485,7 @@ struct PrimaryButton: View {
                 if isBusy { ProgressView().controlSize(.small).tint(foreground) }
                 else if let systemImage { Image(systemName: systemImage) }
                 else if let image { Image(image) }
-                Text(title).fontWeight(.semibold)
+                title.fontWeight(.semibold)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
@@ -450,14 +529,32 @@ struct DetailRows<Content: View>: View {
     }
 }
 
+/// One label/value line of `DetailRows`. The label is a catalog key. The value is a key when it is words written in the
+/// code ("Locked forever", "Market · \(slippage) slippage"); a `String` built at run time (an amount, a symbol, an
+/// address) is shown as it is, and so is an interpolated literal passed as `verbatim:` (an amount with its symbol, which
+/// has nothing to translate). A literal always picks the key: the `String` initializer is disfavored, as `Text`'s is.
 struct DetailRow: View {
-    let label: String
-    let value: String
+    private let label: Text
+    private let value: Text
     var tint: Color = .primary
     /// VoiceOver reads the value character by character: an address, a hash (AI-13).
     var spellsOut = false
 
-    init(_ label: String, _ value: String, tint: Color = .primary, spellsOut: Bool = false) {
+    init(_ label: LocalizedStringKey, _ value: LocalizedStringKey, tint: Color = .primary, spellsOut: Bool = false) {
+        self.init(Text(label), Text(value), tint: tint, spellsOut: spellsOut)
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(_ label: LocalizedStringKey, _ value: S, tint: Color = .primary, spellsOut: Bool = false) {
+        self.init(Text(label), Text(verbatim: String(value)), tint: tint, spellsOut: spellsOut)
+    }
+
+    init(_ label: LocalizedStringKey, verbatim value: String, tint: Color = .primary, spellsOut: Bool = false) {
+        self.init(Text(label), Text(verbatim: value), tint: tint, spellsOut: spellsOut)
+    }
+
+    /// Either side already made: a label built at run time is `Text(verbatim:)`.
+    init(_ label: Text, _ value: Text, tint: Color = .primary, spellsOut: Bool = false) {
         self.label = label
         self.value = value
         self.tint = tint
@@ -466,9 +563,9 @@ struct DetailRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(label).foregroundStyle(.secondary)
+            label.foregroundStyle(.secondary)
             Spacer(minLength: 16)
-            Text(value).speechSpellsOutCharacters(spellsOut).monospacedDigit().foregroundStyle(tint).multilineTextAlignment(.trailing)
+            value.speechSpellsOutCharacters(spellsOut).monospacedDigit().foregroundStyle(tint).multilineTextAlignment(.trailing)
         }
     }
 }

@@ -582,7 +582,7 @@ struct PerpTradeView: View {
         }
     }
 
-    private func checkRow(_ label: String, isOn: Binding<Bool>) -> some View {
+    private func checkRow(_ label: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
         Button {
             Haptics.selection(); isOn.wrappedValue.toggle()
         } label: {
@@ -602,7 +602,7 @@ struct PerpTradeView: View {
         .accessibilityAddTraits(isOn.wrappedValue ? [.isButton, .isSelected] : .isButton)
     }
 
-    private func summaryRow(_ label: String, _ value: String, tint: Color? = nil) -> some View {
+    private func summaryRow(_ label: LocalizedStringKey, _ value: String, tint: Color? = nil) -> some View {
         HStack {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
             Spacer(minLength: 8)
@@ -624,7 +624,7 @@ struct PerpTradeView: View {
         }
     }
 
-    private func sideButton(_ side: PositionSide, _ label: String, _ color: Color) -> some View {
+    private func sideButton(_ side: PositionSide, _ label: LocalizedStringKey, _ color: Color) -> some View {
         Button {
             attemptOrder(side)
         } label: {
@@ -808,7 +808,7 @@ struct PerpTradeView: View {
         }
     }
 
-    private func emptyRow(_ text: String) -> some View {
+    private func emptyRow(_ text: LocalizedStringKey) -> some View {
         Text(text).font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 30)
     }
 
@@ -856,7 +856,7 @@ struct PerpTradeView: View {
         .padding(.vertical, 10)
     }
 
-    private func historyStat(_ label: String, _ value: String, align: HorizontalAlignment) -> some View {
+    private func historyStat(_ label: LocalizedStringKey, _ value: String, align: HorizontalAlignment) -> some View {
         VStack(alignment: align, spacing: 1) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
             Text(value).font(.caption.weight(.medium)).monospacedDigit()
@@ -923,12 +923,12 @@ struct PerpTradeView: View {
             Activity.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }, intent: orderIntent) {
             let signed = reviewedInput
-            DetailRow("Market", "\(market.asset)-PERP")
+            DetailRow("Market", verbatim: "\(market.asset)-PERP")
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
             DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(NumberStyle.number(signed.price ?? mark, maximumFractionDigits: market.priceDecimals))")
             // The parsed values this order signs, not the typed text (audit F4), at the market's full precision.
-            DetailRow("Size", "\(NumberStyle.number(signed.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
-            DetailRow("Leverage", "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
+            DetailRow("Size", verbatim: "\(NumberStyle.number(signed.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
+            DetailRow("Leverage", verbatim: "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
             DetailRow("Margin", PriceFormat.usdValue(notional / max(ticket.leverage, 1)))
             // This path (perplTrading not ready) places a bare on-chain entry — it cannot attach TP/SL. Don't advertise
             // triggers the order won't carry; tell the user they need one-click trading for them.
@@ -1078,9 +1078,10 @@ struct PerpTradeView: View {
     private var tpMetrics: (pct: Double, pnl: Double)? { triggerMetrics(tpValue, isProfit: true) }
     private var slMetrics: (pct: Double, pnl: Double)? { triggerMetrics(slValue, isProfit: false) }
 
-    private func triggerMetricRow(_ label: String, _ m: (pct: Double, pnl: Double)) -> some View {
+    private func triggerMetricRow(_ label: LocalizedStringKey, _ m: (pct: Double, pnl: Double)) -> some View {
         HStack {
-            Text("\(label) \(PriceFormat.usdValue(m.pnl, signed: true))")
+            // The label is a key, the amount is shown as it is: one line, never a placeholder-only key.
+            Text(label) + Text(verbatim: " \(PriceFormat.usdValue(m.pnl, signed: true))")
             Spacer()
             Text(NumberStyle.percent(m.pct))
         }
@@ -1088,7 +1089,7 @@ struct PerpTradeView: View {
         .foregroundStyle(m.pnl >= 0 ? Color.positive : Color.negative)
     }
 
-    private func fieldRow(_ title: String, text: Binding<String>, unit: String, placeholder: String) -> some View {
+    private func fieldRow(_ title: LocalizedStringKey, text: Binding<String>, unit: String, placeholder: LocalizedStringKey) -> some View {
         HStack {
             Text(title).font(.subheadline).foregroundStyle(.secondary)
             Spacer()
@@ -1397,7 +1398,7 @@ struct SideOrderBook: View {
         return levels.map { running += $0.size; return Level(price: $0.price, total: running) }
     }
 
-    private func bookRow(_ level: Level, side: String, tint: Color, maxTotal: Double) -> some View {
+    private func bookRow(_ level: Level, side: LocalizedStringKey, tint: Color, maxTotal: Double) -> some View {
         ZStack(alignment: .leading) {
             GeometryReader { geo in
                 Rectangle().fill(tint.opacity(0.16))
@@ -1413,7 +1414,7 @@ struct SideOrderBook: View {
         }
         .frame(height: wide ? 22 : 19)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(side) \(NumberStyle.number(level.price)), total \(NumberStyle.number(level.total, compact: true)) \(symbol)")
+        .accessibilityLabel(Text("\(Text(side)) \(NumberStyle.number(level.price)), total \(NumberStyle.number(level.total, compact: true)) \(symbol)"))
     }
 
     private var ratioBar: some View {
@@ -1752,7 +1753,7 @@ struct OrderTypeSheet: View {
         .presentationDragIndicator(.visible)
     }
 
-    private func optionRow(_ value: OrderKind, icon: String, title: String, subtitle: String) -> some View {
+    private func optionRow(_ value: OrderKind, icon: String, title: LocalizedStringKey, subtitle: LocalizedStringKey) -> some View {
         let selected = kind == value
         return Button {
             Haptics.selection(); onSelect(value); dismiss()
@@ -1799,7 +1800,8 @@ struct UnitPreferenceSheet: View {
         .presentationDragIndicator(.visible)
     }
 
-    private func optionRow(_ value: OrderTicket.AmountUnit, symbol: String, title: String, subtitle: String) -> some View {
+    /// `title` is the unit's symbol (the market's asset, or AUSD), shown as it is.
+    private func optionRow(_ value: OrderTicket.AmountUnit, symbol: String, title: String, subtitle: LocalizedStringKey) -> some View {
         let selected = unit == value
         return Button {
             Haptics.selection(); onSelect(value); dismiss()
@@ -1807,7 +1809,7 @@ struct UnitPreferenceSheet: View {
             HStack(spacing: 14) {
                 MarketLogo(symbol: symbol, url: nil, size: 30)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.body.weight(.semibold))
+                    Text(verbatim: title).font(.body.weight(.semibold))
                     Text(subtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
@@ -1842,7 +1844,7 @@ struct PriceTypeSheet: View {
         .presentationDragIndicator(.visible)
     }
 
-    private func optionRow(_ value: PerpTradeView.PriceType, title: String, subtitle: String) -> some View {
+    private func optionRow(_ value: PerpTradeView.PriceType, title: LocalizedStringKey, subtitle: LocalizedStringKey) -> some View {
         let isSel = selected == value
         return Button {
             Haptics.selection(); onSelect(value); dismiss()
@@ -1929,7 +1931,7 @@ struct SelectPerpetualSheet: View {
 }
 
 /// Shared sheet header: a bold title on the left and a round close button on the right.
-private func sheetHeader(_ title: String, onClose: @escaping () -> Void) -> some View {
+private func sheetHeader(_ title: LocalizedStringKey, onClose: @escaping () -> Void) -> some View {
     HStack {
         Text(title).font(.title2.weight(.bold))
         Spacer()
@@ -2045,7 +2047,7 @@ private struct PositionCard: View {
         return parts.joined(separator: " · ") + (verified ? "" : " · unverified")
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
+    private func stat(_ label: LocalizedStringKey, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
             Text(value).font(.caption.weight(.medium)).monospacedDigit()
@@ -2055,7 +2057,7 @@ private struct PositionCard: View {
 
 /// A small labelled figure used across the order / trigger cards.
 private struct MiniStat: View {
-    let label: String
+    let label: LocalizedStringKey
     let value: String
     var tint: Color = .primary
     var body: some View {
@@ -2187,12 +2189,12 @@ private struct TriggerCard: View {
     }
 }
 
-/// Which triggers a Cancel sheet is for.
+/// Which triggers a Cancel sheet is for, and the sheet's title and note, written where the request is made.
 struct TriggerCancelRequest: Identifiable {
     let id = UUID()
     let orders: [PerplOpenOrder]
-    let title: String
-    let note: String?
+    let title: LocalizedStringResource
+    let note: LocalizedStringResource?
 }
 
 /// Closes a position at market or with a resting reduce-only limit order (optionally post-only).
@@ -2241,7 +2243,7 @@ private struct ClosePositionSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Position", "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
+                    DetailRow("Position", verbatim: "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
                     DetailRow("Mark price", NumberStyle.number(mark))
                     DetailRow("Unrealized", PriceFormat.usdValue(position.unrealized, signed: true), tint: position.unrealized < 0 ? .negative : .positive)
                 }
@@ -2371,7 +2373,7 @@ private struct AddMarginSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Position", "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
+                    DetailRow("Position", verbatim: "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
                     DetailRow("Current margin", PriceFormat.usdValue(position.margin))
                     DetailRow("Available", PriceFormat.usdValue(available))
                 }
@@ -2393,7 +2395,7 @@ private struct AddMarginSheet: View {
                 if amount > 0, !overBalance {
                     Section("After") {
                         DetailRow("Margin", PriceFormat.usdValue(projMargin))
-                        DetailRow("Leverage", "\(NumberStyle.number(projLeverage, maximumFractionDigits: 1))×")
+                        DetailRow("Leverage", verbatim: "\(NumberStyle.number(projLeverage, maximumFractionDigits: 1))×")
                         DetailRow("Liq. price", projLiquidation.map { NumberStyle.number($0) } ?? (market.maintMarginFraction == nil ? "Unknown" : "—"))
                     }
                 }
@@ -2506,11 +2508,11 @@ struct AuthedOrderSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Market", "\(market.asset)-PERP")
+                    DetailRow("Market", verbatim: "\(market.asset)-PERP")
                     DetailRow("Side", input.side == .long ? "Long" : "Short", tint: sideColor)
                     DetailRow("Type", input.kind == .market ? "Market · \(NumberStyle.basisPoints(input.slippageBps)) slippage" : "Limit at \(NumberStyle.number(input.price ?? market.mark, maximumFractionDigits: market.priceDecimals))")
-                    DetailRow("Size", "\(NumberStyle.number(input.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
-                    DetailRow("Leverage", "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
+                    DetailRow("Size", verbatim: "\(NumberStyle.number(input.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
+                    DetailRow("Leverage", verbatim: "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
                     DetailRow("Margin", PriceFormat.usdValue(summaryMargin))
                     // Each closes this order's size, fixed when placed (security audit GT-5).
                     if let takeProfit { DetailRow("Take profit", "\(NumberStyle.number(takeProfit)) · closes \(NumberStyle.number(triggerSize ?? input.size)) \(market.asset)", tint: .positive) }

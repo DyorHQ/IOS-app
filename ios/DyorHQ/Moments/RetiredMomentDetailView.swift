@@ -172,7 +172,7 @@ struct RetiredMomentDetailView: View {
             ConfirmationSheet(title: "Claim \(info.symbol)", confirmTitle: "Claim", build: { plan }, onDone: { finished() },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed $\(info.symbol)", subtitle: "\(MomentsFormat.coins(account?.claimable ?? 0)) vested coins · past cohort", hash: hash, section: "moments", reference: info.key.description), owner: session.address) },
                               intent: .momentsClaim) {
-                DetailRow("Claimable", "\(MomentsFormat.coins(account?.claimable ?? 0)) $\(info.symbol)")
+                DetailRow("Claimable", verbatim: "\(MomentsFormat.coins(account?.claimable ?? 0)) $\(info.symbol)")
             }
         case .withdrawCreatorProceeds:
             ConfirmationSheet(title: "Withdraw Proceeds", confirmTitle: "Withdraw", build: { plan }, onDone: { finished() },

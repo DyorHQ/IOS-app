@@ -148,7 +148,7 @@ struct LaunchpadProfileView: View {
         }
     }
 
-    private func claimRow(icon: String, title: String, amount: String, usd: Double?, caption: String? = nil, action: @escaping () -> Void) -> some View {
+    private func claimRow(icon: String, title: LocalizedStringKey, amount: String, usd: Double?, caption: String? = nil, action: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon).font(.subheadline.weight(.semibold)).frame(width: 30, height: 30)
                 .background(Color.brand.opacity(0.14), in: Circle()).foregroundStyle(Color.brand)
@@ -162,7 +162,7 @@ struct LaunchpadProfileView: View {
         }
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
+    private func stat(_ label: LocalizedStringKey, _ value: String) -> some View {
         VStack(spacing: 3) {
             Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
             Text(label).font(.caption2).foregroundStyle(.secondary)
@@ -210,7 +210,7 @@ struct LaunchpadProfileView: View {
         } header: { Text("Your Launchpad Activity") }
     }
 
-    private func emptyRow(_ title: String, _ detail: String) -> some View {
+    private func emptyRow(_ title: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.subheadline.weight(.medium))
             Text(detail).font(.caption).foregroundStyle(.secondary)

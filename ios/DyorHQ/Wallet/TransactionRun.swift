@@ -140,9 +140,12 @@ extension TransactionSender.FeePreview {
 /// The standard confirm → progress → done sheet used by every write in the app. The step plan is built by an
 /// async closure (some builders read the chain or an actor-isolated service), so the sheet shows a brief
 /// "Preparing" state, then the confirm button, then live progress.
+///
+/// The title and the confirm button's title are localizable resources written in the code ("Buy \(symbol)"): the
+/// confirm title is also the App Lock prompt's reason, which iOS takes as a `String`, so both resolve through `tr()`.
 struct ConfirmationSheet<Details: View>: View {
-    let title: String
-    let confirmTitle: String
+    let title: LocalizedStringResource
+    let confirmTitle: LocalizedStringResource
     var build: () async throws -> [TransactionStep]
     /// The caller's cleanup (clear the form, reload) once the plan settled: on Done, or when the settled sheet is
     /// swiped away.
@@ -157,6 +160,19 @@ struct ConfirmationSheet<Details: View>: View {
     /// for Face ID every time; other accounts ignore it.
     var intent: Mera.Intent = .ask
     @ViewBuilder var details: Details
+
+    init(title: LocalizedStringResource, confirmTitle: LocalizedStringResource, build: @escaping () async throws -> [TransactionStep],
+         onDone: @escaping () -> Void, onCompleted: ((Data) -> Void)? = nil, onView: ((Data) -> Void)? = nil, intent: Mera.Intent = .ask,
+         @ViewBuilder details: () -> Details) {
+        self.title = title
+        self.confirmTitle = confirmTitle
+        self.build = build
+        self.onDone = onDone
+        self.onCompleted = onCompleted
+        self.onView = onView
+        self.intent = intent
+        self.details = details()
+    }
 
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
@@ -178,8 +194,8 @@ struct ConfirmationSheet<Details: View>: View {
     /// Who the plan's exact approvals take a standing unlimited allowance away from, read once the plan is built (IOST-14).
     @State private var replacedUnlimited: [String] = []
 
-    private var confirmLabel: String {
-        session.isPasskeyAccount && assessment?.needsFaceID == true ? "Confirm with \(BiometricGate.promptName)" : confirmTitle
+    private var confirmLabel: Text {
+        session.isPasskeyAccount && assessment?.needsFaceID == true ? Text("Confirm with \(BiometricGate.promptName)") : Text(verbatim: tr(confirmTitle))
     }
 
     var body: some View {
@@ -224,7 +240,7 @@ struct ConfirmationSheet<Details: View>: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle(title)
+            .navigationTitle(tr(title))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -329,7 +345,7 @@ struct ConfirmationSheet<Details: View>: View {
         if settings.appLockApplies(to: session.account) {
             // App Lock fails closed. Without a device passcode nothing can confirm the owner: say so, not a dead button.
             guard BiometricGate.canAuthenticateOwner else { run.fail("App Lock needs a device passcode. Set one in iOS Settings, then try again."); return }
-            guard await BiometricGate.authenticate(reason: "Confirm \(confirmTitle)") else { return }
+            guard await BiometricGate.authenticate(reason: "Confirm \(tr(confirmTitle))") else { return }
         }
         guard session.isPasskeyAccount else {
             run.start(steps, session: session, sender: env.sender)

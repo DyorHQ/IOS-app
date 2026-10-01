@@ -302,7 +302,7 @@ struct BridgeView: View {
         }
     }
 
-    private func summaryRow(_ label: String, _ value: String, tint: Color = .primary, bold: Bool = false) -> some View {
+    private func summaryRow(_ label: LocalizedStringKey, _ value: String, tint: Color = .primary, bold: Bool = false) -> some View {
         HStack {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
             Spacer(minLength: 8)

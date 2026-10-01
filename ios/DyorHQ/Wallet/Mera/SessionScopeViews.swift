@@ -137,7 +137,7 @@ struct SessionScopeSheet: View {
         .presentationDetents([.medium, .large])
     }
 
-    private func row(_ symbol: String, _ text: String) -> some View {
+    private func row(_ symbol: String, _ text: LocalizedStringKey) -> some View {
         Label(text, systemImage: symbol).font(.subheadline)
     }
 

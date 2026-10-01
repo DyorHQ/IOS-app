@@ -120,9 +120,9 @@ private struct BrandGlow: View {
 
 private struct Feature {
     let symbol: String
-    let title: String
-    let detail: String
-    init(_ symbol: String, _ title: String, _ detail: String) { self.symbol = symbol; self.title = title; self.detail = detail }
+    let title: LocalizedStringKey
+    let detail: LocalizedStringKey
+    init(_ symbol: String, _ title: LocalizedStringKey, _ detail: LocalizedStringKey) { self.symbol = symbol; self.title = title; self.detail = detail }
 }
 
 /// A gentle, swipeable carousel of the four things DyorHQ does. Auto-advances — unless the user prefers reduced motion,
@@ -321,8 +321,8 @@ struct SignInView: View {
 
 /// The primary sign-in affordance: a filled brand-purple card that draws the eye first.
 private struct HeroAuthCard: View {
-    let title: String
-    let subtitle: String
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey
     let symbol: String
     let action: () -> Void
 
@@ -351,8 +351,8 @@ private struct HeroAuthCard: View {
 
 /// A quiet, neutral alternative sign-in row.
 private struct SecondaryAuthRow: View {
-    let title: String
-    let subtitle: String
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey
     let symbol: String
     let action: () -> Void
 
@@ -382,7 +382,7 @@ private struct SecondaryAuthRow: View {
 
 /// A bordered full-width social/passkey button, matched to the hub's card language.
 private struct SocialButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let symbol: String
     var busy = false
     let action: () -> Void
@@ -494,8 +494,8 @@ private struct GoogleSignInButton: View {
 
 /// A hairline rule with a small centered caption ("or continue with").
 private struct LabeledDivider: View {
-    let text: String
-    init(_ text: String) { self.text = text }
+    let text: LocalizedStringKey
+    init(_ text: LocalizedStringKey) { self.text = text }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1234,14 +1234,15 @@ enum EmailAuthError: LocalizedError {
 /// autocorrection, autocapitalization, spell checking or inline predictions, revealed or not. The password is the
 /// wallet, so its characters must be exactly the keys pressed.
 private struct PasswordField: View {
-    let title: String
+    /// The placeholder and VoiceOver label: a UIKit field takes a `String`, so it is resolved in the app's language.
+    let title: LocalizedStringResource
     @Binding var text: String
     @Binding var focused: Bool
     @State private var reveal = false
 
     var body: some View {
         HStack {
-            PlainTextField(title: title, text: $text, secure: !reveal, focused: $focused)
+            PlainTextField(title: tr(title), text: $text, secure: !reveal, focused: $focused)
             Button { reveal.toggle() } label: {
                 Image(systemName: reveal ? "eye.slash" : "eye").foregroundStyle(.secondary)
             }

@@ -367,9 +367,9 @@ private struct SwapConfirmation: View {
             guard let address = session.address else { throw SessionError.readOnly }
             return try await quote.build(address)
         }, onDone: onDone, onCompleted: onCompleted, intent: intent) {
-            DetailRow("You pay", "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals)) \(review.tokenIn.symbol)")
-            DetailRow("You receive", "\(NumberStyle.units(quote.amountOut, decimals: review.tokenOut.decimals)) \(review.tokenOut.symbol)")
-            DetailRow("Minimum received", "\(NumberStyle.units(quote.minOut, decimals: review.tokenOut.decimals)) \(review.tokenOut.symbol)")
+            DetailRow("You pay", verbatim: "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals)) \(review.tokenIn.symbol)")
+            DetailRow("You receive", verbatim: "\(NumberStyle.units(quote.amountOut, decimals: review.tokenOut.decimals)) \(review.tokenOut.symbol)")
+            DetailRow("Minimum received", verbatim: "\(NumberStyle.units(quote.minOut, decimals: review.tokenOut.decimals)) \(review.tokenOut.symbol)")
             DetailRow("Venue", quote.venue.displayName)
             DetailRow("Route", quote.route)
             DetailRow("Slippage", NumberStyle.basisPoints(review.slippageBps))

@@ -487,7 +487,7 @@ struct AppearanceSheet: View {
         .presentationBackground(Color(uiColor: .systemGroupedBackground.resolvedColor(with: UITraitCollection(userInterfaceStyle: settings.appearance.resolved == .dark ? .dark : .light))))
     }
 
-    private func swatch(_ color: Color, _ label: String) -> some View {
+    private func swatch(_ color: Color, _ label: LocalizedStringKey) -> some View {
         HStack(spacing: 8) {
             Circle().fill(color).frame(width: 12, height: 12)
             Text(label).font(.subheadline)
