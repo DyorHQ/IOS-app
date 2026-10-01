@@ -38,6 +38,10 @@ enum PresentedScreen: String, Identifiable {
 @Observable
 @MainActor
 final class Router {
+    /// The app's one router. Shared so the notification delegate can hand it a tapped banner (`receive`), which at a cold
+    /// start arrives before any view is on screen.
+    static let shared = Router()
+
     var tab: AppTab = .home
     /// The side menu (the three-line button on Home) is open.
     var menuOpen = false
@@ -61,6 +65,13 @@ final class Router {
     var pendingLink: MomentLink?
     /// A Moment link to open on the Moments tab: MomentsView pushes `MomentLinkView`, which resolves and loads it.
     var pendingMomentLink: MomentLink?
+    /// A tapped banner's screen, waiting like `pendingLink` until RootView's gate (`NotificationRouteGate`) says the app
+    /// may navigate. Only the latest tap waits: a banner tapped while another's screen waits replaces it, so the app
+    /// navigates once.
+    var pendingNotificationRoute: NotificationTap?
+    /// Whether the waiting banner's route arrived after the waiting Moment link: when both may open at once, only the
+    /// one that arrived last does.
+    private(set) var notificationRouteArrivedLast = false
     /// A short notice about the last link handed to the app (not a Moment), shown once by RootView.
     var linkNotice: String?
     /// What holds a Moment link back right now: every review sheet on screen (`holdsMomentLinks()` — ConfirmationSheet,
@@ -74,9 +85,25 @@ final class Router {
     func handle(_ url: URL) {
         if let link = MomentLink(url: url) {
             pendingLink = link
+            notificationRouteArrivedLast = false
         } else if MomentLink.isOurs(url) {
             linkNotice = "That link isn't a Moment."
         }
+    }
+
+    /// A tapped banner (`Notifications.tapped`). Nothing navigates until the gate delivers it. A banner that names no
+    /// screen opens the app as it was, and drops a screen still waiting from an earlier tap: the latest tap wins.
+    func receive(_ tap: NotificationTap) {
+        pendingNotificationRoute = tap.route == .none ? nil : tap
+        notificationRouteArrivedLast = true
+    }
+
+    /// Opens the waiting banner's screen: the menu and whatever is presented close, as for a Moment link.
+    func deliverPendingNotificationRoute() {
+        guard let tap = pendingNotificationRoute else { return }
+        pendingNotificationRoute = nil
+        menuOpen = false
+        open(route: tap.route)
     }
 
     /// Runs `work` — an approved send or a deletion that no review sheet covers — holding Moment links until it ends.
@@ -149,10 +176,16 @@ final class Router {
         tab = .moments
     }
 
-    /// Follows a tapped notification to its screen.
+    /// Follows a tapped row of the notification center to its screen.
     func open(_ notification: AppNotification) {
+        open(route: notification.route)
+    }
+
+    /// Follows a tapped notification, a row of the center or a banner, to its screen. `.none` opens nothing.
+    func open(route: NotificationRoute) {
+        guard route != .none else { return }
         presented = nil
-        switch notification.route {
+        switch route {
         case .none: break
         case .home: tab = .home
         case .trade: tradeMode = .swap; tab = .trade

@@ -5,7 +5,7 @@ import UIKit
 struct DyorHQApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var environment = AppEnvironment(config: .current)
-    @State private var router = Router()
+    @State private var router = Router.shared
 
     var body: some Scene {
         WindowGroup {
