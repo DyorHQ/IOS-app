@@ -25,6 +25,26 @@ final class VenueChainStub: URLProtocol {
         var failHeaders = false
         var headersAsked: [UInt64?] = []
         var calls: [Call] = []
+        /// The request held next (`hold`).
+        var gate: Gate?
+    }
+
+    /// Holds the answer to the first request that asks `selector` until `release` is signalled: a slow node, so a test
+    /// can act while a reader is suspended on it.
+    final class Gate: @unchecked Sendable {
+        let selector: Data
+        let arrived = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        init(_ selector: Data) { self.selector = selector }
+
+        /// Waits, without blocking a thread, until the request is held.
+        func arrival() async throws {
+            for _ in 0 ..< 2_000 {
+                if arrived.wait(timeout: .now()) == .success { return }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            throw URLError(.timedOut)
+        }
     }
 
     private static let lock = NSLock()
@@ -52,6 +72,21 @@ final class VenueChainStub: URLProtocol {
 
     static func header(_ number: UInt64, _ timestamp: Int) { update { $0.headers[number] = timestamp } }
 
+    /// Holds the next request that asks `selector` (`Gate`).
+    static func hold(_ selector: Data) -> Gate {
+        let gate = Gate(selector)
+        update { $0.gate = gate }
+        return gate
+    }
+
+    /// The gate for a request that asked `selectors`, taken so that it holds one request only.
+    private static func takeGate(asked selectors: Set<Data>) -> Gate? {
+        lock.lock(); defer { lock.unlock() }
+        guard let gate = state.gate, selectors.contains(gate.selector) else { return nil }
+        state.gate = nil
+        return gate
+    }
+
     static func rpc() -> RPCClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [VenueChainStub.self]
@@ -67,7 +102,12 @@ final class VenueChainStub: URLProtocol {
 
     override func startLoading() {
         let json = (try? JSONDecoder().decode(JSON.self, from: Self.body(of: request))) ?? .null
-        let response: JSON = json.array.map { .array($0.map(Self.reply)) } ?? Self.reply(json)
+        var asked: Set<Data> = []
+        let response: JSON = json.array.map { .array($0.map { Self.reply($0, asked: &asked) }) } ?? Self.reply(json, asked: &asked)
+        if let gate = Self.takeGate(asked: asked) {
+            gate.arrived.signal()
+            _ = gate.release.wait(timeout: .now() + 30)
+        }
         let http = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["content-type": "application/json"])!
         client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: try! JSONEncoder().encode(response))
@@ -89,7 +129,8 @@ final class VenueChainStub: URLProtocol {
         return data
     }
 
-    private static func reply(_ request: JSON) -> JSON {
+    /// The answer to one JSON-RPC request; `asked` gains the selector of every call in it.
+    private static func reply(_ request: JSON, asked: inout Set<Data>) -> JSON {
         let id = request["id"]
         func result(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
         func error(_ code: Int, _ message: String) -> JSON {
@@ -115,11 +156,13 @@ final class VenueChainStub: URLProtocol {
                   let data = tx["data"].string.flatMap({ Data(hex: $0) }) else { return error(-32602, "bad call") }
             if to == Multicall.address, let inner = try? ABI.decode(data.dropFirst(4), "(address,bool,bytes)[]")[0].elements {
                 let items: [ABIValue] = inner.map { call in
+                    asked.insert(Data(call[2].bytes.prefix(4)))
                     let answer = Self.answer(at: at, to: call[0].address, call[2].bytes)
                     return .tuple([.bool(answer != nil), .bytes(answer ?? Data())])
                 }
                 return result(.string(try! ABI.encode([.array(items)], "(bool,bytes)[]").hexString))
             }
+            asked.insert(Data(data.prefix(4)))
             guard let answer = Self.answer(at: at, to: to, data) else { return error(3, "execution reverted") }
             return result(.string(answer.hexString))
         default:

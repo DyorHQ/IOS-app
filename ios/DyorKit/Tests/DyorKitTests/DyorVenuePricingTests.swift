@@ -341,4 +341,36 @@ final class DyorVenuePricingTests: XCTestCase {
         XCTAssertEqual(before.source, "Uniswap v3")
         XCTAssertNil(before.pairSymbol)
     }
+
+    /// The switch turned off while a discovery reads the factories' records: what it found is dropped and looked up again
+    /// without venues, rather than kept for 30 minutes in spite of the switch.
+    func testTurningVenuesOffDuringADiscoveryIsNotUndone() async throws {
+        let token = try curveCoinWithAPool()
+        let prices = service()
+        let records = VenueChainStub.hold(ABI.selector(LaunchpadABI.Factory.getLaunchedToken))
+        async let offRead = prices.prices(for: [token])
+        try await records.arrival()
+        await prices.setUsesDyorVenues(false)
+        records.release.signal()
+        let off = try await offRead
+        XCTAssertEqual(try XCTUnwrap(off[token.address]).source, "Uniswap v3", "found under the old setting: dropped")
+        let offAgain = try await prices.prices(for: [token])
+        XCTAssertEqual(try XCTUnwrap(offAgain[token.address]).usd, 4e-6, accuracy: 1e-12, "and not cached")
+    }
+
+    /// The switch turned on while a discovery reads the third-party pools: the coin is looked up on its own venue, never
+    /// cached on the pool beside it.
+    func testTurningVenuesOnDuringADiscoveryIsNotUndone() async throws {
+        let token = try curveCoinWithAPool()
+        let prices = PriceService(rpc: VenueChainStub.rpc())
+        let pools = VenueChainStub.hold(ABI.selector("getPool(address,address,uint24)"))
+        async let onRead = prices.prices(for: [token])
+        try await pools.arrival()
+        await prices.setUsesDyorVenues(true)
+        pools.release.signal()
+        let on = try await onRead
+        XCTAssertEqual(try XCTUnwrap(on[token.address]).source, "DyorHQ curve", "the pool found under the old setting: dropped")
+        let onAgain = try await prices.prices(for: [token])
+        XCTAssertEqual(try XCTUnwrap(onAgain[token.address]).usd, 5e-6, accuracy: 1e-15, "and not cached")
+    }
 }

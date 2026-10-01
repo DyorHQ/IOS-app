@@ -110,6 +110,9 @@ public actor PriceService {
     nonisolated let cohorts: [MomentsAddresses]
     /// Off, DyorHQ coins are priced like any token, as build 16 did (`setUsesDyorVenues`).
     private var usesDyorVenues: Bool
+    /// Counts the changes to `usesDyorVenues`: a discovery that began before one drops what it found, since it belongs
+    /// to the other setting.
+    private var venueGeneration = 0
 
     /// `registry` (DyorHQ's coins) reads the launchpads and cohorts it was made with; without one, `launchpads` and
     /// `cohorts`. `dyorVenues` prices DyorHQ coins on their own venues from the start, and is off unless asked for: on,
@@ -135,6 +138,7 @@ public actor PriceService {
     public func setUsesDyorVenues(_ on: Bool) {
         guard on != usesDyorVenues else { return }
         usesDyorVenues = on
+        venueGeneration += 1
         pools = PoolLookupCache<Source>()
     }
 
@@ -152,6 +156,8 @@ public actor PriceService {
         async let nowRead = Self.readPrices(multicall: multicall, sources, block: .latest)
         async let beforeRead = before(sources, block: dayAgo)
         let (now, before) = try await (nowRead, beforeRead)
+        // Each token's source as read, not as the cache holds it after the reads (a switch change empties it).
+        let sourceOf = Dictionary(sources.map { ($0.token.address, $0.source) }, uniquingKeysWith: { first, _ in first })
         var map: [Address: PriceInfo] = [:]
         for token in tokens {
             if Self.isUSD(token) {
@@ -159,7 +165,7 @@ public actor PriceService {
                 continue
             }
             guard let usd = now.usd[token.address] else { continue }
-            let source = pools.source(token.address)
+            let source = sourceOf[token.address]
             func change(_ now: Double?, _ then: Double?) -> Double? {
                 guard let now, let then, then != 0 else { return nil }
                 return (now - then) / then * 100
@@ -289,9 +295,11 @@ public actor PriceService {
     /// Finds where each token not looked up lately trades. A DyorHQ coin first: its venue from its factory's record
     /// (`listings`), and a token whose records couldn't be read is left for the next read, never priced from another
     /// pool meanwhile. Then the deepest pool for each other token: for MON/WMON the v4 native/USDC pool (falling back to
-    /// v3), for everything else the v3 pool against USDC, or against WMON when no USDC pool has liquidity.
+    /// v3), for everything else the v3 pool against USDC, or against WMON when no USDC pool has liquidity. When the
+    /// switch changes while it reads, what it found belongs to the other setting: it is dropped and looked up again.
     private func discover(_ tokens: [Token]) async throws {
         let time = now()
+        let generation = venueGeneration
         var todo: [Token] = []
         for token in tokens where self.pools.needsLookup(token.address, now: time) && !Self.isUSD(token) && !todo.contains(where: { $0.address == token.address }) {
             todo.append(token)
@@ -299,6 +307,7 @@ public actor PriceService {
         guard !todo.isEmpty else { return }
         if usesDyorVenues {
             let (listed, unsettled) = await listings(todo.map(\.address))
+            guard generation == venueGeneration else { return try await discover(tokens) }
             for (coin, listing) in listed { pools.found(coin, .dyor(listing), now: time) }
             todo.removeAll { listed[$0.address] != nil || unsettled.contains($0.address) }
             guard !todo.isEmpty else { return }
@@ -374,6 +383,7 @@ public actor PriceService {
             }
         }
 
+        guard generation == venueGeneration else { return try await discover(tokens) }
         for token in todo {
             let source: Source?
             let base = token.isNative ? Monad.wmon : token.address
