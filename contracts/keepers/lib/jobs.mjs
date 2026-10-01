@@ -265,6 +265,9 @@ async function safeSend({ sender, reporter, client, state, budget, clock = budge
   return result;
 }
 
+/** Did safeSend send for real and get a successful receipt? */
+const sentOk = (r) => !!r && r.dryRun !== true && r.receipt?.status === 1;
+
 async function now(client) {
   return (await client.getBlock()).timestamp;
 }
@@ -384,12 +387,15 @@ async function retryMoment({ client, c, id, t, sender, reporter, state, budget, 
   });
   state[key] = { failures: d.failures, lastSeen: Number(t) };
   const target = `${c.label} moment #${id}`;
-  reporter.alert({ job: "moments-graduation", target, severity: d.severity, key: `mo1:pending:${c.collect.toLowerCase()}:${id}`, reason: `${d.reason}; expirable at ${d.expirableAt} (${d.secondsLeft}s left)` });
+  const pending = { job: "moments-graduation", target, severity: d.severity, key: `mo1:pending:${c.collect.toLowerCase()}:${id}`, reason: `${d.reason}; expirable at ${d.expirableAt} (${d.secondsLeft}s left)` };
   if (d.action === "graduate") {
     reporter.action({ job: "moments-graduation", target, what: "graduate(id)" });
     const gas = await gasFor(client, req, gasLimit);
-    await safeSend({ sender, reporter, client, state, budget }, "moments-graduation", target, { to: c.graduation, signature: "graduate(uint256)", args: [id], gasLimit: gas, label: `graduate ${target}` });
+    const sent = await safeSend({ sender, reporter, client, state, budget }, "moments-graduation", target, { to: c.graduation, signature: "graduate(uint256)", args: [id], gasLimit: gas, label: `graduate ${target}` });
+    // Graduated by this run: nothing for a human (an earlier post of it resolves; a new one is never posted).
+    if (sentOk(sent)) pending.severity = "info";
   }
+  reporter.alert(pending);
 }
 
 /**
@@ -646,19 +652,23 @@ async function checkLaunch({ client, lp, token, monday, t, sender, reporter, sta
   const d = decideStuckLaunch({ phase: Number(l.phase), venue, completed, rescued, stuckSince, now: t, simGraduate: simG.ok, simFallback: simF.ok, mondayOnly, v4FallbackAllowed: fallbackAllowed, valveDelay });
   if (d.action === "none") return;
   const extra = squat && squat.level !== "none" ? ` [Monday pool: ${squat.reason}]` : "";
-  reporter.alert({ job: "launchpad-graduation", target, severity: d.severity, key: `lp1:stuck:${lp.factory.toLowerCase()}:${token.toLowerCase()}`, reason: `${d.reason}${d.rescueAt ? `; owner rescue possible from ${d.rescueAt}` : ""}${extra}` });
+  const stuck = { job: "launchpad-graduation", target, severity: d.severity, key: `lp1:stuck:${lp.factory.toLowerCase()}:${token.toLowerCase()}`, reason: `${d.reason}${d.rescueAt ? `; owner rescue possible from ${d.rescueAt}` : ""}${extra}` };
   // Monday graduation and the fallback keep a fixed, high gas limit on purpose: the realign swap must get as much gas
   // as one transaction allows. With less, a squat that more gas would realign moves to Uniswap v4 and the creator
   // loses the venue (the live fallback gives its Monday retry 63/64 of the gas; the v2 one everything above its v4
   // reserve, and refuses less than ~22.1M).
+  let sent;
   if (d.action === "graduate") {
     reporter.action({ job: "launchpad-graduation", target, what: "graduate(token)" });
     const gas = venue === VENUE.Monday ? mondayGas : await gasFor(client, { address: lp.factory, abi: launchpadFactoryAbi, functionName: "graduate", args: [token], account: simAccount }, v4Gas);
-    await safeSend({ sender, reporter, client, state, budget }, "launchpad-graduation", target, { to: lp.factory, signature: "graduate(address)", args: [token], gasLimit: gas, label: `graduate ${target}` });
+    sent = await safeSend({ sender, reporter, client, state, budget }, "launchpad-graduation", target, { to: lp.factory, signature: "graduate(address)", args: [token], gasLimit: gas, label: `graduate ${target}` });
   } else if (d.action === "graduateFallback") {
     reporter.action({ job: "launchpad-graduation", target, what: "graduateFallback(token)" });
-    await safeSend({ sender, reporter, client, state, budget }, "launchpad-graduation", target, { to: lp.factory, signature: "graduateFallback(address)", args: [token], gasLimit: mondayGas, label: `fallback ${target}` });
+    sent = await safeSend({ sender, reporter, client, state, budget }, "launchpad-graduation", target, { to: lp.factory, signature: "graduateFallback(address)", args: [token], gasLimit: mondayGas, label: `fallback ${target}` });
   }
+  // Graduated by this run: nothing for a human (an earlier post of it resolves; a new one is never posted).
+  if (sentOk(sent)) stuck.severity = "info";
+  reporter.alert(stuck);
 }
 
 /**

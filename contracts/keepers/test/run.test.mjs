@@ -66,11 +66,13 @@ function chain({ balance = 50n * MON, blockDelay = 0, hang = false, headAge = 2,
   };
 }
 
+/** A sender whose live sends (`calls`) all succeed; in a dry run it sends nothing, as makeSender. */
 function fakeSender(calls) {
-  return () => ({
+  return ({ send }) => ({
     sent: [],
-    live: true,
+    live: send === true,
     async call(tx) {
+      if (send !== true) return { dryRun: true };
       calls.push(tx);
       return { dryRun: false, receipt: { status: 1, transactionHash: `0x${"cd".repeat(32)}` }, spentWei: 1n };
     },
@@ -176,7 +178,8 @@ test("K2: an RPC whose head is stale is an alert (warning from 2 min, critical f
       assert.ok(!w.posts[0].body.alerts.some((x) => /send failed/.test(x.reason)), "no failed-send alert, so no backoff");
     }
   }
-  assert.deepEqual(seen, { 30: [EXIT.ALERT, "none", 1], 180: [EXIT.ALERT, "warning", 0], 3600: [EXIT.ALERT, "critical", 0] });
+  // Fresh: the retry is sent and succeeds, so the Moment it graduated is nothing for a human (exit 0, nothing posted).
+  assert.deepEqual(seen, { 30: [EXIT.OK, "none", 1], 180: [EXIT.ALERT, "warning", 0], 3600: [EXIT.ALERT, "critical", 0] });
 });
 
 test("K2: a stale RPC resolves nothing: a posted alert its job no longer raises stays open", async () => {
@@ -296,6 +299,21 @@ test("E9: a normal run finishes well inside the deadline and exits by its alerts
   const code = await runKeeper(opts(["moments-graduation", "--only-live"]), w.deps);
   assert.equal(code, EXIT.ALERT, "the pending Moment is a warning");
   assert.equal(momentsCohorts().filter((c) => c.live).length, 1);
+});
+
+test("K3: a Moment the run itself graduates is nothing for a human: a new one is never posted, an earlier post resolves", async () => {
+  const fresh = world();
+  const o = (stateFile, send) => opts(["moments-graduation", "--only-live", "--webhook", "https://hooks.example/x", "--state-file", stateFile], send ? { send: true, signer: { account: "k" } } : {});
+  assert.equal(await runKeeper(o(join(tempDir("keeper-run-"), "state.json"), true), fresh.deps), EXIT.OK);
+  assert.equal(fresh.sends.length, 1);
+  assert.deepEqual(fresh.posts, [], "not posted as pending, then as resolved");
+  const stateFile = join(tempDir("keeper-run-"), "state.json");
+  const dry = world();
+  await runKeeper(o(stateFile, false), dry.deps);
+  assert.equal(dry.posts[0].body.alerts.find((a) => a.key.startsWith("mo1:pending:"))?.severity, "warning", "a dry run leaves it to a human");
+  const live = world();
+  await runKeeper(o(stateFile, true), live.deps);
+  assert.deepEqual(live.posts[0].body.alerts.map((a) => `${a.kind} ${a.key.split(":")[0]}`), ["resolved mo1"]);
 });
 
 // ---------------------------------------------------------------- K3: sends are saved as they go
