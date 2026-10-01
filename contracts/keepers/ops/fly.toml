@@ -1,0 +1,46 @@
+# DyorHQ keepers on Fly.io (build 17 K4; owner decision 2026-09-29). One always-on Machine running supercronic, with no
+# public services and its state on one volume. Deployed only through ops/deploy-fly.sh, from a bundle of a reviewed
+# commit (ops/bundle.sh); the owner steps are in DyorHQ/internal (ios-app/docs/RUNBOOK-keepers-fly.md).
+#
+# Exactly one Machine, always: two would send from the same keys (nonce clashes, double spend). The volume enforces it
+# (a volume attaches to one Machine, and fly deploy starts a single Machine for a process group with a volume), the
+# entrypoint refuses to run without it, and deploy-fly.sh passes --ha=false and checks the Machine count.
+#
+# No [http_service], [[services]] or [checks]: nothing listens, so the app has no public or Flycast address, Fly Proxy
+# never routes to it and never auto-stops it (auto stop/start is a Fly Proxy feature for Machines with services).
+# Liveness is healthchecks.io, pinged by run-keeper.sh. Secrets (keystores, passwords, the webhook, the ping URLs and
+# the send flags) are Fly secrets, never [env]: see keeper.env.example for their names.
+
+app = "dyorhq-keepers"
+# Ashburn, Virginia: next to rpc4 (Infura's Monad gateway runs in AWS us-east-1) and to rpc3 (Ankr) in the US East, and
+# Fly's base price region.
+primary_region = "iad"
+# supercronic lets running jobs finish on SIGTERM; 300 s is Fly's maximum and covers a signing run's 240 s deadline
+# (run-keeper.sh), so a deploy or a secrets change never stops a send half way in practice.
+kill_signal = "SIGTERM"
+kill_timeout = 300
+# Two keeper runs can overlap (about 105 MB each, plus cast): swap absorbs a spike instead of the OOM killer.
+swap_size_mb = 512
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  strategy = "rolling"
+  max_unavailable = 1
+
+[env]
+  TZ = "UTC"
+
+[mounts]
+  source = "keeper_state"
+  destination = "/data"
+  initial_size = "1gb"
+  snapshot_retention = 14
+
+[[restart]]
+  policy = "always"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
