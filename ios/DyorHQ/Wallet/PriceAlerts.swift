@@ -192,12 +192,14 @@ private struct CreateAlertView: View {
                     }
                     .pickerStyle(.segmented)
                     HStack {
-                        Text("Target")
+                        // The labels keep their full width; the field takes the rest of the row (up to 220 pt), so a dust
+                        // target such as 0.00000006 shows in full on a small phone, and at large text sizes the field
+                        // narrows instead of cutting "Target" short.
+                        Text("Target").fixedSize()
                         Spacer()
-                        // Takes the row's free width first (up to 220 pt), so a dust target such as 0.00000006 shows in full.
                         TextField("0.00", text: $targetText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
-                            .frame(minWidth: 120, maxWidth: 220).layoutPriority(1)
-                        Text("USD").foregroundStyle(.secondary)
+                            .frame(maxWidth: 220).layoutPriority(1)
+                        Text("USD").foregroundStyle(.secondary).fixedSize()
                     }
                 } footer: {
                     Text("DyorHQ notifies you when it finds \(token.symbol) \(above ? "above" : "below") this price. It checks about once a minute, only while the app is open.")
