@@ -161,8 +161,9 @@ final class LookAlikeRuleTests: XCTestCase {
 
     /// An airdropped token's `name()` can compute 40 KB of text for a few thousand gas, and the Send list judges each
     /// row's token several times a draw: a crafted name or symbol costs what a short one does, on its own and through
-    /// the badge. Only what shows is judged, so padding a look-alike with invisible characters, or putting it last
-    /// behind an override that shows it first, hides nothing.
+    /// the badge. The cost is this thread's CPU time, which a busy machine doesn't inflate (the rule as it was took
+    /// seconds of it for 10,000 characters). Only what shows is judged, so padding a look-alike with invisible
+    /// characters, or putting it last behind an override that shows it first, hides nothing.
     func testALongCraftedNameCostsWhatAShortOneDoes() {
         continueAfterFailure = false
         let spam = Address(literal: "0x00000000000000000000000000000000000bad01")
@@ -175,11 +176,11 @@ final class LookAlikeRuleTests: XCTestCase {
                 ("override", Token(address: spam, symbol: "SPAM", name: "\u{202E}" + String(repeating: "\u{200B}.", count: size / 2) + "CDSU", decimals: 18)),
             ]
             for (label, token) in crafted {
-                let start = Date()
+                let start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
                 _ = WalletHoldings.imitated(by: token)
                 _ = TokenBadge.of(token, coin: nil, receivedUnasked: true)
-                let seconds = Date().timeIntervalSince(start)
-                XCTAssertLessThan(seconds, 0.25, "\(label), \(size) characters: \(seconds) s")
+                let seconds = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start) / 1e9
+                XCTAssertLessThan(seconds, 0.25, "\(label), \(size) characters: \(seconds) s of CPU")
             }
         }
         let padded = token("SAFE", String(repeating: "\u{200B}", count: 40_000) + "USDC")
