@@ -4,7 +4,8 @@
 // new or its severity rose; a standing critical is repeated every --repeat-critical (1 h), a standing warning every
 // --repeat-warning (12 h); a posted key that clears is posted as "resolved", but only after a job that completed saw it
 // clear (a skipped read proves nothing). One-off events (a governance log, a failed send) are posted once and never
-// resolve. Info alerts are never posted; stdout keeps every alert. The history lives in the state file
+// resolve; one whose post was not delivered is posted by the next runs from its history (the event itself is never
+// raised again: its log cursor has moved on), until it is delivered or a week has passed. Info alerts are never posted; stdout keeps every alert. The history lives in the state file
 // (`state.notify.keys`), so dedup needs --state-file.
 //
 // E4: the payload is chosen from the webhook URL: Slack `{text}`; Discord native `{content, allowed_mentions:{parse:[]}}`
@@ -59,7 +60,15 @@ export function planPosts({ alerts, holds = new Set(), completed = new Set(), hi
       continue;
     }
     if (h.once) {
-      if (now - (h.lastSeen ?? now) > ONCE_KEEP_S) delete history[key];
+      if (now - (h.lastSeen ?? now) > ONCE_KEEP_S) {
+        delete history[key];
+        continue;
+      }
+      // A one-off event is never raised again (its log cursor moved on; a failed send's key carries its time), so one
+      // whose post was not delivered is posted from its history until it is (or a week has passed).
+      if (!h.posted && (h.severity === "warning" || h.severity === "critical")) {
+        items.push({ key, kind: "new", late: true, job: h.job, target: h.target, severity: h.severity, reason: h.reason ?? "", firstSeen: h.firstSeen });
+      }
       continue;
     }
     if (!completed.has(h.job)) continue; // not checked this run (or not fully): it may still stand
@@ -118,7 +127,7 @@ export function formatItem(i) {
   const where = `${i.job} · ${i.target}`;
   if (i.kind === "resolved") return `[resolved, was ${i.was}] ${where}: ${i.reason}`;
   const sev = i.severity === "critical" ? "CRITICAL" : "warning";
-  const tag = i.kind === "escalated" ? `${sev}, was ${i.was}` : i.kind === "repeat" ? `${sev}, still, since ${iso(i.firstSeen)}` : sev;
+  const tag = i.kind === "escalated" ? `${sev}, was ${i.was}` : i.kind === "repeat" ? `${sev}, still, since ${iso(i.firstSeen)}` : i.late ? `${sev}, raised ${iso(i.firstSeen)}, not delivered then` : sev;
   return `[${tag}] ${where}: ${i.reason}`;
 }
 

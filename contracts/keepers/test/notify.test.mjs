@@ -86,6 +86,50 @@ test("E3: one-off events (a governance log, a failed send) post once, never repe
   assert.deepEqual(h, {});
 });
 
+test("E3: a one-off event whose post failed is posted by the next run, which no longer raises it; then never again", () => {
+  const h = {};
+  const ev = alert("gov:event:0xabc:3", "critical", { once: true, job: "governance" });
+  assert.deepEqual(cycle(h, [ev], { now: T0, deliveredAll: false }), ["new:gov:event:0xabc:3"]);
+  assert.equal(h["gov:event:0xabc:3"].posted, undefined);
+  const items = planPosts({ alerts: [], completed: new Set(), history: h, now: T0 + 300 });
+  assert.deepEqual(items.map((i) => `${i.kind}:${i.key}:${i.severity}`), ["new:gov:event:0xabc:3:critical"], "posted from its history, even by a run whose job did not complete");
+  assert.equal(formatItem(items[0]), "[CRITICAL, raised 2026-09-21T14:13:20Z, not delivered then] governance · t gov:event:0xabc:3: r gov:event:0xabc:3");
+  commitPosts(h, items, new Set(), T0 + 300); // still down
+  assert.equal(cycle(h, [], { now: T0 + 600 }).length, 1, "and again");
+  assert.deepEqual(cycle(h, [], { now: T0 + 900 }), [], "delivered: never again");
+  assert.ok(h["gov:event:0xabc:3"].posted);
+  // Undelivered for a week: forgotten (the run's exit code and the keeper log have said so all week).
+  const lost = {};
+  cycle(lost, [ev], { now: T0, deliveredAll: false });
+  assert.deepEqual(cycle(lost, [], { now: T0 + 8 * 86_400, deliveredAll: false }), []);
+  assert.deepEqual(lost, {});
+});
+
+test("E3 through the governance scan: an event found while the webhook was down is posted when it is back", async () => {
+  const fac = "0x00000000000000000000000000000000000000f4";
+  const cohort = { label: "cohort4 (live)", factory: fac, live: false, governance: fac };
+  const reads = { governance: fac, pendingGovernance: "0x0000000000000000000000000000000000000000", pendingPolicyAt: 0n, publishingPaused: true };
+  const event = { address: fac, eventName: "PolicyProposed", blockNumber: 1_500n, transactionHash: `0x${"ee".repeat(32)}`, logIndex: 4 };
+  const client = (head) => ({
+    getBlock: async () => ({ timestamp: 1_790_000_000n }),
+    getBlockNumber: async () => head,
+    readContract: async ({ functionName }) => reads[functionName],
+    getLogs: async ({ fromBlock, toBlock }) => (fromBlock <= event.blockNumber && event.blockNumber <= toBlock ? [event] : []),
+  });
+  const state = { cursors: { "gov:moments": "1000" } };
+  const history = {};
+  const run = async (head, now, delivered) => {
+    const reporter = makeReporter({ log: () => {} });
+    await governanceJob({ client: client(head), launchpads: [], cohorts: [cohort], reporter, state, expected: { momentsGovernance: fac }, logsCursor: true });
+    return cycle(history, reporter.alerts, { now, completed: new Set(["governance"]), deliveredAll: delivered });
+  };
+  const key = `gov:event:${event.transactionHash}:4`;
+  assert.deepEqual(await run(2_000n, T0, false), [`new:${key}`], "found; Discord is down");
+  assert.ok(BigInt(state.cursors["gov:moments"]) >= 1_500n, "the cursor moved past the event");
+  assert.deepEqual(await run(3_000n, T0 + 900, true), [`new:${key}`], "not raised again, but posted");
+  assert.deepEqual(await run(4_000n, T0 + 1_800, true), []);
+});
+
 test("E3: a held key (a throttled condition confirmed again) is not taken as resolved", () => {
   const h = {};
   cycle(h, [alert("gov:unfrozen:0xf", "warning", { job: "governance" })], { now: T0 });
