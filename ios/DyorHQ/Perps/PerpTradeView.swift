@@ -2602,7 +2602,7 @@ struct AuthedOrderSheet: View {
             // notification here would double it.
             Activity.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address, notify: false)
             if settings.notificationsEnabled, settings.notifyFills {
-                Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP")
+                Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP", perpId: market.id)
             }
         } catch is MeraSession.StepUpRequired where approval == nil {
             // A passkey account whose session can't place this order prompt-free (locked, over a cap, a reduce-only

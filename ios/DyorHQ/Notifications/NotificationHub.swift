@@ -139,6 +139,9 @@ final class NotificationHub {
         post(AppNotification(kind: kind, title: title, body: body, route: route, reference: reference), deliver: deliver, owner: account)
     }
 
+    /// The record `id` in the center on screen, if it is there.
+    func item(_ id: UUID) -> AppNotification? { items.first { $0.id == id } }
+
     func markRead(_ id: UUID) {
         guard let i = items.firstIndex(where: { $0.id == id }), !items[i].read else { return }
         items[i].read = true

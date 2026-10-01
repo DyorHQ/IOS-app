@@ -50,9 +50,9 @@ enum Notifications {
 
     /// A perp order the app sent or saw fill. `notice` says which: `PerpOrderNotice(acknowledged:)` for Perpl's
     /// acknowledgement of an order ("Order submitted" for a market order, "Order placed" for a limit order), `.filled`
-    /// only for a position read that saw the fill.
-    static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String) {
-        post(kind: .perp, title: notice.title, body: "\(side) \(market)", route: .perps)
+    /// only for a position read that saw the fill. With `perpId`, a tap opens that market.
+    static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String, perpId: Int? = nil) {
+        post(kind: .perp, title: notice.title, body: "\(side) \(market)", route: .perps, reference: perpId.map { PerpAlertText.reference(perpId: $0) })
     }
 
     static func transactionConfirmed(_ label: String) {

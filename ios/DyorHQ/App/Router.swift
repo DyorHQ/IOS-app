@@ -98,12 +98,14 @@ final class Router {
         notificationRouteArrivedLast = true
     }
 
-    /// Opens the waiting banner's screen: the menu and whatever is presented close, as for a Moment link.
+    /// Opens the waiting banner's screen: the menu and whatever is presented close, as for a Moment link. A Perps alert
+    /// opens its market, named by its record in the center (`NotificationHub.item`), which the gate has checked is the
+    /// account signed in.
     func deliverPendingNotificationRoute() {
         guard let tap = pendingNotificationRoute else { return }
         pendingNotificationRoute = nil
         menuOpen = false
-        open(route: tap.route)
+        open(route: tap.route, reference: tap.item.flatMap { NotificationHub.shared.item($0)?.reference })
     }
 
     /// Runs `work` — an approved send or a deletion that no review sheet covers — holding Moment links until it ends.
@@ -178,18 +180,22 @@ final class Router {
 
     /// Follows a tapped row of the notification center to its screen.
     func open(_ notification: AppNotification) {
-        open(route: notification.route)
+        open(route: notification.route, reference: notification.reference)
     }
 
-    /// Follows a tapped notification, a row of the center or a banner, to its screen. `.none` opens nothing.
-    func open(route: NotificationRoute) {
+    /// Follows a tapped notification, a row of the center or a banner, to its screen. `.none` opens nothing. A Perps
+    /// alert's `reference` names its market (`PerpAlertText.reference`), which then opens; any other reference opens
+    /// Perps as it was.
+    func open(route: NotificationRoute, reference: String? = nil) {
         guard route != .none else { return }
         presented = nil
         switch route {
         case .none: break
         case .home: tab = .home
         case .trade: tradeMode = .swap; tab = .trade
-        case .perps: tradeMode = .perps; tab = .trade
+        case .perps:
+            if let market = PerpAlertText.market(reference: reference) { pendingPerpMarket = market }
+            tradeMode = .perps; tab = .trade
         case .launch: tab = .launch
         case .moments: tab = .moments
         case .portfolio: presented = .portfolio
