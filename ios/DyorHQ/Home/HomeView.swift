@@ -445,6 +445,7 @@ private struct TokenListRow: View {
             }
             Spacer(minLength: 8)
             USDText(price: row.usd, font: .subheadline.weight(.medium))
+                .layoutPriority(1) // the price keeps its width; the name truncates first
             ChangeBadge(value: row.change24h)
         }
         .padding(.vertical, 8)

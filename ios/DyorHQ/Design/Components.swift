@@ -278,9 +278,12 @@ struct USDText: View {
 
     var body: some View {
         if let dollars, dollars.isFinite {
+            // One line, shrunk a little rather than wrapped: "$83,952.46" beside a change badge broke onto two lines.
             Text(isPrice ? PriceFormat.usdPrice(dollars) : PriceFormat.usdValue(dollars))
                 .font(font)
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 .accessibilityLabel(isPrice ? PriceFormat.spoken(dollars) : PriceFormat.usdValue(dollars))
         } else {
             Text("—").font(font).foregroundStyle(.tertiary)
