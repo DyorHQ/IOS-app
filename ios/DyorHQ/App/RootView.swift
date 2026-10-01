@@ -145,6 +145,8 @@ struct RootView: View {
         }
         .task { env.alertWatcher.start(env: env, settings: settings, owner: { session.address }) }
         .task { env.refreshVenueTokens() }
+        // The DyorHQ coin registry: read at start, then every 5 minutes while the app is in the foreground.
+        .task(id: scenePhase == .active) { if scenePhase == .active { await env.dyorCoins.keepFresh() } }
     }
 }
 

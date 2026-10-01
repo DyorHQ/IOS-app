@@ -380,7 +380,8 @@ struct LaunchCard: View {
 }
 
 /// A coin's artwork: its uploaded image, or a monogram on a tinted ground when it has none. The logo is whatever string
-/// the coin's launcher wrote on-chain, so only an https link is loaded, through the capped loader (RemoteImage).
+/// the coin's launcher wrote on-chain, so it is loaded only from DyorHQ's bucket or through the fixed IPFS gateways
+/// (`ImageSourcePolicy`), never a host the launcher chose, through the capped loader (RemoteImage).
 struct LaunchArtwork: View {
     let symbol: String
     let logo: String
@@ -389,8 +390,9 @@ struct LaunchArtwork: View {
 
     var body: some View {
         Group {
-            if let url = URL(string: logo), url.scheme?.lowercased() == "https" {
-                RemoteImage(url: url, pointSize: pointSize) { loading in
+            let sources = ImageSourcePolicy.app.creatorSources(logo).map { RemoteImageSource(url: $0) }
+            if !sources.isEmpty {
+                RemoteImage(sources: sources, pointSize: pointSize) { loading in
                     if loading { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } } else { placeholder }
                 }
             } else {

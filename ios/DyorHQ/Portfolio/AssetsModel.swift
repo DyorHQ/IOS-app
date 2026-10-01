@@ -242,6 +242,7 @@ struct AssetsCard: View {
                         RemoteImage(url: url, pointSize: 120) { loading in
                             if loading { ProgressView().controlSize(.small) } else { Image(systemName: "photo").foregroundStyle(.secondary) }
                         }
+                        .accessibilityIgnoresInvertColors() // art, left as it is under Smart Invert
                     } else {
                         Image(systemName: "seal").foregroundStyle(.secondary)
                     }

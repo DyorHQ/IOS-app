@@ -108,4 +108,71 @@ final class DyorCoinWiringTests: XCTestCase {
         XCTAssertEqual(LaunchImage.centreSquare(.zero), .zero)
         XCTAssertEqual(LaunchImage.centreSquare(CGSize(width: CGFloat.nan, height: 10)), .zero)
     }
+
+    // MARK: The app's wiring
+
+    /// The app's sources (ios/DyorHQ), whitespace squeezed to single spaces, or a skip when this checkout has only the
+    /// package.
+    private static func app() throws -> URL {
+        var app = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
+        app.appendPathComponent("DyorHQ")
+        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
+        return app
+    }
+
+    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+
+    private static func source(_ path: String) throws -> String {
+        squeezed(try String(contentsOf: try app().appendingPathComponent(path), encoding: .utf8))
+    }
+
+    /// Every Swift file of the app, by its path under ios/DyorHQ, squeezed.
+    private static func sources() throws -> [(path: String, text: String)] {
+        let root = try app()
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
+        return try files.filter { $0.pathExtension == "swift" }.map { file in
+            (String(file.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1)), squeezed(try String(contentsOf: file, encoding: .utf8)))
+        }
+    }
+
+    /// The text of `source` from `start` to `end`.
+    private static func between(_ source: String, _ start: String, _ end: String) throws -> String {
+        let from = try XCTUnwrap(source.range(of: start), start)
+        let to = try XCTUnwrap(source.range(of: end, range: from.upperBound..<source.endIndex), end)
+        return String(source[from.lowerBound..<to.lowerBound])
+    }
+
+    /// Deleting the account (or this device's data) clears every image cache — the logo loader's, the Moments loader's
+    /// and URLCache's, on disk — and deletes the registry's file, before the sign-out.
+    func testErasingThisDeviceClearsTheImageCachesAndTheRegistry() throws {
+        let session = try Self.source("Wallet/Session.swift")
+        let erase = try Self.between(session, "func eraseLocalData() async {", "private var relyingParty")
+        let signedOut = try XCTUnwrap(erase.range(of: "state = .signedOut"))
+        for step in ["RemoteImageLoader.shared.removeAll()", "MomentMediaLoader.shared.removeAll()", "URLCache.shared.removeAllCachedResponses()",
+                     "await dyorCoins?.erase()"] {
+            let found = try XCTUnwrap(erase.range(of: step), step)
+            XCTAssertLessThan(found.upperBound, signedOut.lowerBound, step)
+        }
+        XCTAssertTrue(try Self.source("App/AppEnvironment.swift").contains("session.dyorCoins = dyorCoins"))
+        let model = try Self.source("App/DyorCoinsModel.swift")
+        XCTAssertTrue(try Self.between(model, "func erase() async {", "extension ImageSourcePolicy").contains("await registry.erase() coins = [:]"))
+        let images = try Self.source("Design/RemoteImage.swift")
+        XCTAssertTrue(try Self.between(images, "func removeAll() {", "static func cost(").contains("images.removeAllObjects() misses = RecentMisses()"))
+        let moments = try Self.source("Moments/MomentsUI.swift")
+        XCTAssertTrue(try Self.between(moments, "func removeAll() {", "func load(key:").contains("images.removeAllObjects() misses = [:]"))
+    }
+
+    /// The registry erase deletes its file.
+    func testTheRegistrysEraseDeletesItsFile() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "b2-erase-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = DyorCoinStore(url: folder.appending(path: DyorCoinStore.fileName()))
+        try store.save(DyorCoinStore.Snapshot(coins: [], checkpoints: [.init(factory: DyorCoinChain.legacy, count: 1)]))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.url.path))
+        let registry = DyorCoinRegistry(rpc: MomentsChainStub.rpc(), store: store)
+        await registry.erase()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.url.path))
+        XCTAssertEqual(DyorCoinStore.fileName(), "dyor-coins-143.json")
+    }
 }
