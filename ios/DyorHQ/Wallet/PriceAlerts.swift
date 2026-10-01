@@ -124,7 +124,7 @@ struct PriceAlertsView: View {
                 } else {
                     ForEach(alerts) { alert in
                         HStack(spacing: 12) {
-                            TokenLogo(symbol: alert.symbol, url: nil, size: 32)
+                            TokenLogo(token: Token(address: alert.token, symbol: alert.symbol, name: alert.symbol, decimals: alert.decimals), size: 32)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(alert.symbol).font(.subheadline.weight(.semibold))
                                 Text("\(alert.above ? "Above" : "Below") \(PriceFormat.usdPrice(alert.target))").font(.caption).foregroundStyle(.secondary)

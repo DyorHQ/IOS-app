@@ -380,7 +380,8 @@ struct LaunchCard: View {
 }
 
 /// A coin's artwork: its uploaded image, or a monogram on a tinted ground when it has none. The logo is whatever string
-/// the coin's launcher wrote on-chain, so only an https link is loaded, through the capped loader (RemoteImage).
+/// the coin's launcher wrote on-chain, so it is loaded only from DyorHQ's bucket or through the fixed IPFS gateways
+/// (`ImageSourcePolicy`), never a host the launcher chose, through the capped loader (RemoteImage).
 struct LaunchArtwork: View {
     let symbol: String
     let logo: String
@@ -389,8 +390,9 @@ struct LaunchArtwork: View {
 
     var body: some View {
         Group {
-            if let url = URL(string: logo), url.scheme?.lowercased() == "https" {
-                RemoteImage(url: url, pointSize: pointSize) { loading in
+            let sources = ImageSourcePolicy.app.creatorSources(logo).map { RemoteImageSource(url: $0) }
+            if !sources.isEmpty {
+                RemoteImage(sources: sources, pointSize: pointSize) { loading in
                     if loading { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } } else { placeholder }
                 }
             } else {
@@ -628,7 +630,10 @@ struct LaunchDetailView: View {
         Section {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
-                    TokenLogo(symbol: launch.symbol, url: URL(string: launch.logo), size: 48)
+                    // By address: its art once the registry knows the coin, its launch's own logo (held to the same hosts)
+                    // until then.
+                    TokenLogo(token: Token(address: launch.token, symbol: launch.symbol, name: launch.name, decimals: 18,
+                                           logoURL: URL(string: launch.logo), isLaunchpad: true), size: 48)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(launch.name).font(.title3.weight(.semibold))
                         Text(launch.isSellOnly ? "\(launch.statusTitle) · Retired launchpad" : launch.statusTitle).font(.subheadline).foregroundStyle(.secondary)
@@ -1038,7 +1043,13 @@ struct CreateLaunchView: View {
     @State private var imageError: String?
 
     private var symbolValid: Bool { symbol.count >= 2 && symbol.count <= 10 && symbol.allSatisfy { $0.isLetter || $0.isNumber } }
-    private var valid: Bool { name.trimmingCharacters(in: .whitespaces).count >= 2 && symbolValid }
+    /// Why this name or ticker can't be launched (`SymbolSafety.createRefusal`): one that reads as a token DyorHQ lists or a
+    /// widely traded one, a ticker that doesn't show as itself, a name with hidden characters or longer than 32. Said under
+    /// its field, and Review stays off, so a coin made here never carries a warning.
+    private var refusal: SymbolSafety.CreateRefusal? {
+        SymbolSafety.createRefusal(name: name.trimmingCharacters(in: .whitespaces), symbol: symbol, maxName: SymbolSafety.maxLaunchNameLength)
+    }
+    private var valid: Bool { name.trimmingCharacters(in: .whitespaces).count >= 2 && symbolValid && refusal == nil }
     /// Why the factory would refuse this launch (v2's unsealed or unexpected modules, template 0 switched off, or a
     /// whitelist this wallet isn't on): Review stays off, so nothing, not even a developer buy's approval, is signed.
     /// The launch plan checks again from a fresh read.
@@ -1067,10 +1078,15 @@ struct CreateLaunchView: View {
 
                 Section("Coin") {
                     TextField("Name", text: $name)
+                        .onChange(of: name) { _, v in if v.count > SymbolSafety.maxLaunchNameLength { name = String(v.prefix(SymbolSafety.maxLaunchNameLength)) } }
+                    if let refusal, !refusal.isAboutSymbol { InlineError(message: refusal.message) }
+                    // Letters of any script and digits: accented Latin, Chinese, Japanese and Korean pass; the guard says
+                    // what doesn't show as itself.
                     TextField("Ticker", text: $symbol)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                         .onChange(of: symbol) { _, v in symbol = String(v.uppercased().filter { $0.isLetter || $0.isNumber }.prefix(10)) }
+                    if let refusal, refusal.isAboutSymbol { InlineError(message: refusal.message) }
                     TextField("Description", text: $description, axis: .vertical).lineLimit(2...5)
                 }
                 Section("Links") {
@@ -1128,6 +1144,8 @@ struct CreateLaunchView: View {
                         onDone: { dismiss(); onLaunched() },
                         onCompleted: { hash in
                             Activity.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
+                            // The new coin's picture and DyorHQ label, without waiting for the next 5-minute read.
+                            Task { [coins = env.dyorCoins] in await coins.refresh() }
                             // Launched here, so chosen here: its coin is never shown as Unverified, on Home either (whose
                             // discovery would otherwise store it as merely found in the wallet's history). The coin is the
                             // one the live factory's event names for this wallet, never one a caller supplied.
@@ -1247,9 +1265,10 @@ struct CreateLaunchView: View {
             // Uploading needs a DyorHQ Social session (same wallet); connect on demand.
             if !social.isSignedIn { await social.signIn(session: session) }
             guard social.isSignedIn else { imageError = "Connect DyorHQ Social to upload an image."; return }
+            // The middle square, 512 pixels a side (`LaunchImage`): what the preview shows is what every screen shows.
             guard let data = try await item.loadTransferable(type: Data.self),
                   let image = UIImage(data: data),
-                  let jpeg = image.avatarJPEG(maxDimension: 640) else {
+                  let jpeg = image.launchJPEG() else {
                 imageError = "That image could not be read."
                 return
             }

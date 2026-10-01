@@ -28,6 +28,10 @@ final class AppEnvironment {
     let activity: TokenActivityService
     let swapHistory: SwapHistoryService
     let walletDiscovery: WalletTokenDiscovery
+    /// Every DyorHQ launchpad and Moments coin, read from the factories (`DyorCoinRegistry`, created here once): what a
+    /// token's picture and label are drawn from (`TokenLogo`, `TokenBadgeView`) and which coins are the wallet's own on
+    /// Home. Kept in Application Support, a fork's apart from mainnet's.
+    let dyorCoins: DyorCoinsModel
     /// Every NFT the wallet holds on Monad, from its own transfer history (Moments and any other collection).
     let nftDiscovery: WalletNFTDiscovery
     let kuruTokens: KuruTokenListClient
@@ -88,7 +92,8 @@ final class AppEnvironment {
         // History reads want the larger log-chunk RPC (rpc1), like the launchpad does. A local fork keeps its own
         // logs, so a development build pointed at 127.0.0.1 scans the fork instead.
         let host = config.rpcURL.host() ?? ""
-        let logsURL = host == "127.0.0.1" || host == "localhost" ? config.rpcURL : LaunchpadService.defaultLogsRPC
+        let isFork = host == "127.0.0.1" || host == "localhost"
+        let logsURL = isFork ? config.rpcURL : LaunchpadService.defaultLogsRPC
         activity = TokenActivityService(rpc: RPCClient(url: logsURL))
         swapHistory = SwapHistoryService(rpc: RPCClient(url: logsURL))
         // Wallet discovery scans logs on rpc1 and reads balances/metadata on the primary multicall.
@@ -103,7 +108,13 @@ final class AppEnvironment {
         venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
         venueList = VenueTokenList(service: venueTokens, logos: { [kuruTokens] in await kuruTokens.logos() },
                                    read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1, dropped: $2) })
+        // The registry reads every factory on the failover RPC; a Debug build on a local fork keeps its own file.
+        dyorCoins = DyorCoinsModel(registry: DyorCoinRegistry(rpc: rpc, live: config.launchpad, liveMoments: config.moments,
+                                                              store: .applicationSupport(fork: isFork)),
+                                   policy: ImageSourcePolicy(supabaseURL: config.supabaseURL))
         session = Session(config: config, backend: social)
+        // An erase of this device's data deletes the registry's file and the image caches too.
+        session.dyorCoins = dyorCoins
         // An erase of this device's data saves App Lock as a new install has it, and sets it here too (R4).
         session.settings = settings
         // A passkey session's scope check trusts only the configured Moments cohorts — v2 (collects, once deployed), then

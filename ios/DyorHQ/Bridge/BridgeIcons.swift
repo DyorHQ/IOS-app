@@ -64,7 +64,7 @@ extension EVMChain {
 
 extension AuroraToken {
     /// Real logo for this asset: the ERC-20's Trust Wallet image (keyed by checksummed address), or — for a native
-    /// asset — the coin's own mark. `nil` where unavailable, which the shared `TokenLogo` turns into a monogram.
+    /// asset — the coin's own mark. `nil` where unavailable, which `MarketLogo` turns into a monogram.
     var logoURL: URL? {
         if isNative { return BridgeLogo.native(symbol) }
         guard let contract = contractAddress, let checksummed = Address(contract)?.checksummed else { return nil }
@@ -120,7 +120,7 @@ struct ChainDot: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-        .accessibilityIgnoresInvertColors() // like the TokenLogo it sits on in AssetGlyph
+        .accessibilityIgnoresInvertColors() // like the MarketLogo it sits on in AssetGlyph
         .accessibilityHidden(true)
     }
 }
@@ -133,7 +133,7 @@ struct AssetGlyph: View {
     var size: CGFloat = 34
 
     var body: some View {
-        TokenLogo(symbol: token.symbol, url: token.logoURL, size: size)
+        MarketLogo(symbol: token.symbol, url: token.logoURL, size: size)
             .overlay(alignment: .bottomTrailing) {
                 ChainDot(chain: chain, size: size * 0.5)
                     .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))

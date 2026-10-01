@@ -23,9 +23,9 @@ public struct HeldToken: Hashable, Sendable, Identifiable {
     public var id: Address { token.address }
     /// The curated token this one could pass for, by its symbol or name (`WalletHoldings.imitated(by:)`); nil for the
     /// curated tokens and anything named otherwise, and nil for a look-alike of a widely traded token DyorHQ doesn't list
-    /// (`WalletHoldings.majorTokens`): the Send sheet words this as "Not the USDC DyorHQ lists", which a fake BTC isn't.
-    /// `TokenBadge.title` words both ("Not the real BTC"); until the Send sheet shows it, such a token is kept out of a
-    /// send's default by `looksAlike` alone. Read again, it costs a look-up (`imitated(by:)` keeps its answers).
+    /// (`WalletHoldings.majorTokens`). The screens word both kinds through `TokenBadge.title` ("Not the USDC DyorHQ lists",
+    /// "Not the real BTC"), and a send's default leaves both out (`looksAlike`). Read again, it costs a look-up
+    /// (`imitated(by:)` keeps its answers).
     public var imitates: Token? { WalletHoldings.imitated(by: token, majors: false) }
     /// It could pass for a curated token or a widely traded one (`WalletHoldings.imitated(by:)`); as cheap to read
     /// again.

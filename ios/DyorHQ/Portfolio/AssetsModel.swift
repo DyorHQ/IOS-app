@@ -107,6 +107,8 @@ final class AssetsModel {
         tokens = ranked
 
         let moments = (try? await momentsTask) ?? []
+        // Their coins, proven by their cohorts, for the coins' pictures and labels.
+        await env.dyorCoins.ingest(moments + retired.moments)
         momentsByNFT = Dictionary(moments.map { ($0.moment.nft, $0) }, uniquingKeysWith: { first, _ in first })
         nfts = await nftTask
         loadedFor = address
@@ -242,6 +244,7 @@ struct AssetsCard: View {
                         RemoteImage(url: url, pointSize: 120) { loading in
                             if loading { ProgressView().controlSize(.small) } else { Image(systemName: "photo").foregroundStyle(.secondary) }
                         }
+                        .accessibilityIgnoresInvertColors() // art, left as it is under Smart Invert
                     } else {
                         Image(systemName: "seal").foregroundStyle(.secondary)
                     }
@@ -258,11 +261,11 @@ struct AssetsCard: View {
 
     private func tokenRow(_ asset: AssetsModel.TokenAsset, note: String? = nil, unverified: Bool = false) -> some View {
         HStack(spacing: 12) {
-            TokenLogo(symbol: asset.token.symbol, url: asset.token.logoURL, size: 34)
+            TokenLogo(token: asset.token, size: 34)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(asset.token.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                    if unverified { UnverifiedBadge() }
+                    TokenBadgeView(token: asset.token, receivedUnasked: unverified)
                 }
                 Text(note ?? asset.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }

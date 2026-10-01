@@ -204,7 +204,7 @@ struct PerpTradeView: View {
                 Haptics.selection(); showSelect = true
             } label: {
                 HStack(spacing: 10) {
-                    TokenLogo(symbol: market.asset, url: nil, size: 34)
+                    MarketLogo(symbol: market.asset, url: nil, size: 34)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 5) {
                             Text(market.asset).font(.title3.weight(.bold))
@@ -1800,7 +1800,7 @@ struct UnitPreferenceSheet: View {
             Haptics.selection(); onSelect(value); dismiss()
         } label: {
             HStack(spacing: 14) {
-                TokenLogo(symbol: symbol, url: nil, size: 30)
+                MarketLogo(symbol: symbol, url: nil, size: 30)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title).font(.body.weight(.semibold))
                     Text(subtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -1905,7 +1905,7 @@ struct SelectPerpetualSheet: View {
     private func marketRow(_ market: PerpMarket) -> some View {
         let selected = market.id == currentId
         return HStack(spacing: 12) {
-            TokenLogo(symbol: market.asset, url: nil, size: 38)
+            MarketLogo(symbol: market.asset, url: nil, size: 38)
             VStack(alignment: .leading, spacing: 2) {
                 Text(market.asset).font(.body.weight(.bold))
                 Text(market.name).font(.caption).foregroundStyle(.secondary)

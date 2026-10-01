@@ -123,7 +123,8 @@ final class DyorCoinBadgeTests: XCTestCase {
             XCTAssertTrue(SymbolSafety.isDisplaySafe(entry), label(name))
         }
         XCTAssertEqual(SymbolSafety.createRefusal(name: "Monad Community Appreciation Token", symbol: "MCAT"), .nameTooLong(32), "a new launch is still held to 32")
-        XCTAssertEqual(SymbolSafety.createRefusal(name: flags, symbol: "USA", maxName: SymbolSafety.maxMomentNameLength), .nameTooLong(48))
+        XCTAssertEqual(SymbolSafety.createRefusal(name: flags, symbol: "USA", maxName: SymbolSafety.maxMomentNameLength), .nameTooLongToStore,
+                       "29 characters, but 204 bytes")
         let huge = coin(String(repeating: "A", count: 12_000), String(repeating: "B", count: 12_000), logo: "https://x.example/" + String(repeating: "a", count: 3_000))
         XCTAssertEqual(huge.symbol.count, DyorCoin.maxStoredSymbol.characters, "kept cut")
         XCTAssertEqual(huge.name.count, DyorCoin.maxStoredName.characters)

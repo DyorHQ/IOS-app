@@ -432,9 +432,13 @@ private struct TokenListRow: View {
     var body: some View {
         HStack(spacing: Self.spacing) {
             Text("\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: rankWidth, alignment: .center)
-            TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: Self.logoSize)
+            TokenLogo(token: row.token, size: Self.logoSize)
             VStack(alignment: .leading, spacing: 1) {
-                Text(row.token.symbol).font(.subheadline.weight(.semibold))
+                HStack(spacing: 6) {
+                    Text(row.token.symbol).font(.subheadline.weight(.semibold))
+                    // Top Tokens lists no token the wallet was sent unasked (`HomeModel.topTokens`).
+                    TokenBadgeView(token: row.token, receivedUnasked: false)
+                }
                 Text(row.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -454,11 +458,11 @@ private struct HoldingRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: 34)
+            TokenLogo(token: row.token, size: 34)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(row.token.symbol).font(.subheadline.weight(.semibold))
-                    if unverified { UnverifiedBadge() }
+                    TokenBadgeView(token: row.token, receivedUnasked: unverified)
                 }
                 AmountText(amount: row.balance, token: row.token, compact: true, font: .caption).foregroundStyle(.secondary)
             }
@@ -577,6 +581,8 @@ final class HomeModel {
     private(set) var unverified: Set<Address> = []
     /// Whose data the model holds.
     private var loadedFor: Address?
+    /// The registry taking in the coins of the launches and Moments the last load read (`DyorCoinsModel.ingest`).
+    @ObservationIgnored private var ingesting: Task<Void, Never>?
 
     var holdings: [MarketRow] { rows.filter { $0.balance > 0 }.sorted { ($0.value ?? 0) > ($1.value ?? 0) } }
 
@@ -661,7 +667,9 @@ final class HomeModel {
         // The curated list plus anything the wallet has acquired (swapped into, launched), so held tokens like an
         // RWA or a launched coin still show up with a balance and a price.
         let tokens = KnownTokenStore.universe(owner: address).filter { $0.symbol != "WMON" }
-        unverified = KnownTokenStore.unverified(owner: address)
+        // Which of them are DyorHQ coins, from their factories (MON, the curated tokens and coins already known cost
+        // nothing): their pictures and labels, and the wallet's own coins below.
+        async let proven: Void = env.dyorCoins.prove(tokens)
         async let prices = env.prices.prices(for: tokens)
         async let balances = walletBalances(env: env, address: address, tokens: tokens)
         async let launches = env.launchpad.launchListing(limit: 30)
@@ -676,10 +684,28 @@ final class HomeModel {
         let launchList = listing.keeping(self.launches)
         let perpState = await perps
         let momentState = await moments
+        // The registry takes in the coins of the launches and Moments just read without holding the rows back: their
+        // pictures and labels follow once they are proven, as the coins model re-renders the rows. One at a time, so a
+        // slow node never stacks them up across refreshes.
+        if ingesting == nil {
+            let readMoments = momentState?.map(\.moment) ?? []
+            ingesting = Task {
+                await env.dyorCoins.ingest(launchList)
+                await env.dyorCoins.ingest(readMoments)
+                ingesting = nil
+            }
+        }
         let holdings = await loadLaunchHoldings(env: env, address: address, launches: launchList, priceMap: priceMap ?? [:])
+        await proven
+        let ownCoins = address == nil ? [] : await env.dyorCoins.created(by: address ?? .zero)
         // A read that failed keeps what the last good one showed, and says so; a load cancelled part-way (the screen
         // went away, the account changed) publishes nothing (security audit 2026-09-26, RS-10).
         guard !Task.isCancelled, address == loadedFor else { return }
+        // The coins the registry says this wallet made are its own, not Unverified: recorded as chosen through the helper
+        // the Portfolio and the Send sheet use (`WalletTokens.markOwnCoins`). A coin it was only sent stays Unverified, out
+        // of Top Tokens (IOST-12).
+        if let address { WalletTokens.markOwnCoins(ownCoins, among: tokens, owner: address) }
+        unverified = KnownTokenStore.unverified(owner: address)
         if let priceMap {
             let previous = Dictionary(rows.map { ($0.id, $0.balance) }, uniquingKeysWith: { first, _ in first })
             rows = tokens.map { token in
@@ -763,13 +789,21 @@ struct TokenDetailView: View {
     @State private var curveRoute: CurveRoute?
     @State private var checkingCurve = false
 
+    /// Sent to the wallet rather than chosen in the app (`KnownTokenStore.unverified`).
+    private var received: Bool { KnownTokenStore.isUnverified(row.token.address, owner: session.address) }
+    /// Its label (`TokenBadge`): a DyorHQ coin's, a look-alike's warning, Unverified, or none.
+    private var badge: TokenBadge { env.dyorCoins.badge(row.token, receivedUnasked: received) }
+
     var body: some View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        USDText(price: row.usd, font: .system(.largeTitle, design: .rounded).weight(.semibold))
-                        ChangeBadge(value: row.change24h)
+                    HStack(alignment: .center, spacing: 10) {
+                        TokenLogo(token: row.token, size: 44)
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            USDText(price: row.usd, font: .system(.largeTitle, design: .rounded).weight(.semibold))
+                            ChangeBadge(value: row.change24h)
+                        }
                     }
                     Text("Past 24 hours").font(.footnote).foregroundStyle(.secondary)
                     PriceChart(points: history, isLoading: loadingHistory, tint: (row.change24h ?? 0) < 0 ? Color.negative : Color.positive)
@@ -777,10 +811,21 @@ struct TokenDetailView: View {
                 }
                 .padding(.vertical, 6)
             }
-            if KnownTokenStore.isUnverified(row.token.address, owner: session.address) {
+            if badge.isImitation, let title = badge.title {
+                // A look-alike keeps its warning, whatever made it (a DyorHQ launch called USDC included).
+                Section {
+                    Label(title, systemImage: "exclamationmark.shield").font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
+                    Text("This token carries the name of another token but is a different contract. Check the contract below before you trade it, and never follow a link or site its name points to.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            } else if badge.isDyorHQ, let coin = env.dyorCoins.coin(row.token.address) {
+                launchedOnDyorHQ(coin)
+            } else if received || badge == .unverified {
                 Section {
                     Label("Unverified token", systemImage: "exclamationmark.shield").font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
-                    Text("This token arrived in your wallet without you choosing it in DyorHQ. Anyone can send any token to any wallet, with any name — including a real token's. Check the contract below before you trade it, and never follow a link or site its name points to.")
+                    Text(received
+                         ? "This token arrived in your wallet without you choosing it in DyorHQ. Anyone can send any token to any wallet, with any name — including a real token's. Check the contract below before you trade it, and never follow a link or site its name points to."
+                         : "This token's name or symbol has characters that can make it read as another. Check the contract below before you trade it, and never follow a link or site its name points to.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -829,6 +874,43 @@ struct TokenDetailView: View {
             loadingHistory = false
         }
         .task(id: row.token.address) { await checkCurve() }
+    }
+
+    /// Where a DyorHQ coin was made, from its factory's record (`DyorCoinsModel`): a launchpad or a Moments cohort, live
+    /// or retired, the launch's phase once known (`curveRoute`), its creator, and a way to its Launch page or its Moment.
+    /// It stands in for the Unverified card: a DyorHQ coin sent to the wallet is labelled for what it is, and anyone can
+    /// launch one, which the footer says.
+    private func launchedOnDyorHQ(_ coin: DyorCoin) -> some View {
+        Section {
+            LabeledContent("Made on", value: coin.isMoment ? (coin.retired ? "A past Moments cohort" : "DyorHQ Moments") : (coin.retired ? "A retired DyorHQ launchpad" : "The DyorHQ launchpad"))
+            if let phase = launchPhase { LabeledContent("Phase", value: phase.title) }
+            AddressRow(title: "Creator", address: coin.creator)
+            if let key = coin.momentKey {
+                if let link = MomentLink(key: key) {
+                    Button("Open the Moment", systemImage: "photo.on.rectangle") {
+                        router.pendingMomentLink = link
+                        router.tab = .moments
+                    }
+                }
+            } else {
+                Button("Open the Launch Page", systemImage: "arrow.up.right.circle") {
+                    if let launch = curveRoute?.launch { router.openLaunch(launch) } else { router.openLaunch(LaunchReference(token: coin.address, factory: coin.factory)) }
+                }
+            }
+        } header: {
+            Text("Launched on DyorHQ")
+        } footer: {
+            Text("Anyone can launch a coin or publish a Moment on DyorHQ: this says where the coin was made, not that DyorHQ vouches for it.")
+        }
+    }
+
+    /// A launch coin's phase, when the curve check read it: its launch's, or its factory's record's.
+    private var launchPhase: LaunchPhase? {
+        switch curveRoute {
+        case .launchPage(let launch): return launch.phase
+        case .launchUnread(_, _, let phase): return phase
+        default: return nil
+        }
     }
 
     /// Asks whether the coin is still on a launchpad's curve, and where it trades (one read of every known factory's

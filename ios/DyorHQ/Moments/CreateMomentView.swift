@@ -83,8 +83,13 @@ struct CreateMomentView: View {
         if allocBps > maxAllocBps { return "At most \(NumberStyle.basisPoints(maxAllocBps)) of the supply." }
         return nil
     }
+    /// Why this name or ticker can't be published (`SymbolSafety.createRefusal`), as the launch form says it: said under its
+    /// field, and Review stays off.
+    private var refusal: SymbolSafety.CreateRefusal? {
+        SymbolSafety.createRefusal(name: trimmedName, symbol: symbol, maxName: SymbolSafety.maxMomentNameLength)
+    }
     private var valid: Bool {
-        trimmedName.count >= 2 && trimmedName.count <= 48 && symbolValid && !place.trimmingCharacters(in: .whitespaces).isEmpty && place.count <= 64
+        trimmedName.count >= 2 && trimmedName.count <= 48 && symbolValid && refusal == nil && !place.trimmingCharacters(in: .whitespaces).isEmpty && place.count <= 64
             && mediaValid && animationValid && priceProblem == nil && allocProblem == nil && !uploading && policy?.canPublish == true
     }
 
@@ -110,10 +115,12 @@ struct CreateMomentView: View {
                 Section("Moment") {
                     TextField("Name", text: $name)
                         .onChange(of: name) { _, v in if v.count > 48 { name = String(v.prefix(48)) } }
+                    if let refusal, !refusal.isAboutSymbol { InlineError(message: refusal.message) }
                     TextField("Coin ticker", text: $symbol)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                         .onChange(of: symbol) { _, v in symbol = String(v.uppercased().filter { $0.isLetter || $0.isNumber }.prefix(10)) }
+                    if let refusal, refusal.isAboutSymbol { InlineError(message: refusal.message) }
                     TextField("Place", text: $place)
                         .onChange(of: place) { _, v in if v.count > 64 { place = String(v.prefix(64)) } }
                     DatePicker("When", selection: $date, in: ...Date(), displayedComponents: [.date, .hourAndMinute])
@@ -148,6 +155,8 @@ struct CreateMomentView: View {
                         onDone: { dismiss(); onPublished(nil) },
                         onCompleted: { hash in
                             Activity.record(ActivityRecord(kind: .moment, title: "Published \(input.name)", subtitle: "$\(input.symbol) · \(MomentsFormat.usdc(input.price)) per edition", hash: hash, section: "moments"), owner: session.address)
+                            // The new coin's picture and DyorHQ label, without waiting for the next 5-minute read.
+                            Task { [coins = env.dyorCoins] in await coins.refresh() }
                             Task {
                                 // Resolve the new Moment from the receipt and open it.
                                 guard let result = (try? await env.moments.publishResult(transaction: hash)) ?? nil,
