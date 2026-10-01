@@ -153,7 +153,8 @@ struct SecurityView: View {
 }
 
 /// Notification preferences. Turning them on requests the system permission. Every notification is made on the
-/// device while DyorHQ runs — there is no push server — and the copy says so (security audit 2026-09-26, GL-4).
+/// device while DyorHQ runs — there is no push server — and the copy says so (security audit 2026-09-26, GL-4): alerts
+/// arrive while DyorHQ is open, on any screen (`AlertCenter`), and never while it is closed.
 struct NotificationsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(Session.self) private var session
@@ -167,7 +168,7 @@ struct NotificationsView: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     if denied { Text("Notifications are turned off for DyorHQ in iOS Settings. Enable them there to receive alerts.").foregroundStyle(Color.attention) }
-                    else { Text("DyorHQ notices fills and price alerts only while it's open. iOS pauses the app in the background, so they can't reach your lock screen while DyorHQ is closed.") }
+                    else { Text("Alerts arrive while DyorHQ is open. iOS pauses the app in the background, so nothing reaches your lock screen while DyorHQ is closed.") }
                     LearnMoreLink(.notificationsAndPriceAlerts)
                 }
             }
@@ -185,7 +186,7 @@ struct NotificationsView: View {
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("Order fills are noticed while the Perps screen is open, and price alerts while DyorHQ is open. Don't rely on either to protect a position: set a stop-loss on it. Everything is also kept in the in-app center.")
+                Text("Alerts arrive while DyorHQ is open, on any screen: order fills, a Perps position at 80% and 90% of its margin in use or within 10% of its liquidation price, and price alerts. Nothing arrives while DyorHQ is closed, so don't rely on them to protect a position: set a stop-loss on it. Everything is also kept in the in-app center.")
             }
             .disabled(!settings.notificationsEnabled)
         }

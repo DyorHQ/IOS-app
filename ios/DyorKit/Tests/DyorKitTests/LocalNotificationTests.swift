@@ -65,8 +65,9 @@ final class LocalNotificationTests: XCTestCase {
         }
     }
 
-    /// The app posts the notice from the order's kind at acknowledgement and `.filled` only from `detectFills`, and the
-    /// old `filled:` flag (which made a market order say "Order filled" at acknowledgement) is gone.
+    /// The app posts the notice from the order's kind at acknowledgement and `.filled` only from the app-wide watcher's
+    /// position read (`AlertCenter.checkPerps`, build 17 N2), and the old `filled:` flag (which made a market order say
+    /// "Order filled" at acknowledgement) is gone.
     func testTheAppPostsTheNoticeByKind() throws {
         let notifications = try appSource("Wallet/Notifications.swift")
         XCTAssertTrue(notifications.contains("static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String, perpId: Int? = nil) {"))
@@ -75,9 +76,9 @@ final class LocalNotificationTests: XCTestCase {
 
         let trade = try appSource("Perps/PerpTradeView.swift")
         XCTAssertTrue(trade.contains("Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side:"))
-        let fills = try appSource("Perps/PerpsView.swift")
-        let detect = try function("private func detectFills(", in: fills)
-        XCTAssertTrue(detect.contains("Notifications.perpOrder(.filled, side:"), "the fill notice comes from detectFills")
+        let fills = try appSource("Notifications/AlertCenter.swift")
+        let detect = try function("private func checkPerps(", in: fills)
+        XCTAssertTrue(detect.contains("Notifications.perpOrder(.filled, side:"), "the fill notice comes from the watcher's position read")
 
         for (path, text) in try appSources() {
             XCTAssertFalse(text.contains("filled: input.kind == .market"), path)
@@ -85,7 +86,7 @@ final class LocalNotificationTests: XCTestCase {
             let calls = text.components(separatedBy: "Notifications.perpOrder(").dropFirst()
             for call in calls {
                 let notice = call.prefix { $0 != "," }
-                XCTAssertTrue(notice == "PerpOrderNotice(acknowledged: input.kind)" || (notice == ".filled" && path == "Perps/PerpsView.swift"),
+                XCTAssertTrue(notice == "PerpOrderNotice(acknowledged: input.kind)" || (notice == ".filled" && path == "Notifications/AlertCenter.swift"),
                               "\(path): perpOrder(\(notice), …)")
             }
         }
