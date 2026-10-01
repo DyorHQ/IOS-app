@@ -163,6 +163,23 @@ final class LanguageResolutionTests: XCTestCase {
         XCTAssertEqual(AppLanguage.shipped(in: all), AppLanguage.allCases)
     }
 
+    /// The System row names the device's own language, shipped or not: a French phone reads "Français" while only
+    /// English ships, and a German phone "Deutsch", not the English it falls back to.
+    func testTheSystemRowNamesTheDeviceLanguage() {
+        let cases: [([String], String)] = [
+            (["fr-CA"], "Français"), (["fr-FR", "en-US"], "Français"), (["es-419"], "Español"), (["ko-KR"], "한국어"),
+            (["zh-CN"], "简体中文"), (["zh-Hans-CN"], "简体中文"), (["en-GB"], "English"), (["en-US", "fr-FR"], "English"),
+            (["de-DE"], "Deutsch"), (["de", "fr"], "Deutsch"), (["pt-BR"], "Português"), (["it"], "Italiano"),
+            (["zh-Hant-TW"], "繁體中文"), (["zh-HK"], "繁體中文"), (["ja-JP"], "日本語"), (["nb-NO"], "Norsk bokmål"),
+            (["sr-Latn-RS"], "Srpski (latinica)"), ([], "English"), (["xx"], "xx"),
+        ]
+        for (device, expected) in cases {
+            XCTAssertEqual(LanguageResolution.deviceLanguageName(device: device), expected, "\(device)")
+        }
+        // What System then shows is a separate matter: English while only English ships.
+        XCTAssertEqual(LanguageResolution.systemLanguage(device: ["fr-CA"], shipped: ["en"]), .en)
+    }
+
     /// The locale keeps the device's region and its format settings; a device already in the language keeps its own
     /// locale untouched, so nothing about dates moves for an English phone in English.
     func testTheLocaleKeepsTheDeviceRegion() {

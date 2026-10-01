@@ -381,7 +381,7 @@ struct LanguageView: View {
                 row(.system) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("System")
-                        Text("Uses your device language (\(language.systemLanguage.endonym))")
+                        Text("Uses your device language (\(language.deviceLanguageName))")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }

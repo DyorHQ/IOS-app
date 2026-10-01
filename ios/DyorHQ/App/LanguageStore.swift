@@ -41,9 +41,9 @@ final class LanguageStore {
         L10n.locale = locale
     }
 
-    /// The language System gives on this device: the System row's subtitle.
-    var systemLanguage: AppLanguage {
-        LanguageResolution.systemLanguage(device: Self.deviceLanguages(defaults), shipped: shipped)
+    /// The device's language in its own name, shipped or not: the System row's subtitle.
+    var deviceLanguageName: String {
+        LanguageResolution.deviceLanguageName(device: Self.deviceLanguages(defaults))
     }
 
     /// Applies and saves a choice from the Language screen or the onboarding menu.

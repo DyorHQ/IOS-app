@@ -91,12 +91,14 @@ final class LanguageWiringTests: XCTestCase {
         let settings = try Self.source("DyorHQ/Profile/Settings.swift")
         let screen = Self.squeezed(try Self.between(settings, "struct LanguageView: View {", "struct LanguageMenu: View {"))
         XCTAssertTrue(screen.contains("ForEach(language.available) { option in row(.language(option)) { Text(verbatim: option.endonym) } }"))
-        XCTAssertTrue(screen.contains("Text(\"Uses your device language (\\(language.systemLanguage.endonym))\")"))
+        XCTAssertTrue(screen.contains("Text(\"Uses your device language (\\(language.deviceLanguageName))\")"))
         XCTAssertTrue(screen.contains("if language.available.count < 2 { Text(\"More languages are coming in the next update.\") }"))
         XCTAssertTrue(screen.contains("Button { language.select(choice) }"))
         let store = Self.squeezed(try Self.source("DyorHQ/App/LanguageStore.swift"))
         XCTAssertTrue(store.contains("available = AppLanguage.shipped(in: shipped)"))
         XCTAssertTrue(store.contains("shipped = bundle.localizations"))
+        XCTAssertTrue(store.contains("var deviceLanguageName: String { LanguageResolution.deviceLanguageName(device: Self.deviceLanguages(defaults)) }"),
+                      "the System row names the device's language, not the one System falls back to")
 
         let profile = try Self.source("DyorHQ/Profile/ProfileView.swift")
         XCTAssertTrue(profile.contains("SettingsRow(\"Language\", symbol: \"globe\", tint: .accent); Spacer(); Text(language.resolved.endonym)"))

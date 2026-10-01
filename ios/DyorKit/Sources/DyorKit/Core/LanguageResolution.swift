@@ -110,6 +110,23 @@ public struct LanguageResolution: Equatable, Sendable {
         match(device, shipped: shipped)
     }
 
+    /// The device's language in its own name, for the System row: the first of the device's ordered list, whether or
+    /// not this build ships it. One of the app's languages is named as the picker names it ("Français" for fr-CA,
+    /// "简体中文" for zh-CN); any other as iOS names it in itself, capitalized ("Deutsch", "Português", "繁體中文"),
+    /// with its script only when it is not the language's usual one. A code iOS has no name for is shown as it is.
+    public static func deviceLanguageName(device: [String]) -> String {
+        guard let first = device.first, !first.isEmpty else { return AppLanguage.en.endonym }
+        let language = Locale.Language(identifier: first)
+        let app = match([first], shipped: AppLanguage.allCases.map(\.code))
+        if app != .en || language.languageCode == .english { return app.endonym }
+        guard let code = language.languageCode?.identifier else { return first }
+        let usualScript = Locale.Language(identifier: code).script
+        let identifier = language.script.map { $0 == usualScript ? code : "\(code)-\($0.identifier)" } ?? code
+        let locale = Locale(identifier: identifier)
+        guard let name = locale.localizedString(forIdentifier: identifier), !name.isEmpty else { return first }
+        return name.prefix(1).uppercased(with: locale) + name.dropFirst()
+    }
+
     /// iOS's own match of a preference list against the shipped languages (`Bundle.preferredLocalizations`), English
     /// last so a list with no match falls back to it.
     private static func match(_ preferences: [String], shipped: [String]) -> AppLanguage {
