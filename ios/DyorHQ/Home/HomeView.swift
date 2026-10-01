@@ -581,6 +581,8 @@ final class HomeModel {
     private(set) var unverified: Set<Address> = []
     /// Whose data the model holds.
     private var loadedFor: Address?
+    /// The registry taking in the coins of the launches and Moments the last load read (`DyorCoinsModel.ingest`).
+    @ObservationIgnored private var ingesting: Task<Void, Never>?
 
     var holdings: [MarketRow] { rows.filter { $0.balance > 0 }.sorted { ($0.value ?? 0) > ($1.value ?? 0) } }
 
@@ -682,10 +684,19 @@ final class HomeModel {
         let launchList = listing.keeping(self.launches)
         let perpState = await perps
         let momentState = await moments
+        // The registry takes in the coins of the launches and Moments just read without holding the rows back: their
+        // pictures and labels follow once they are proven, as the coins model re-renders the rows. One at a time, so a
+        // slow node never stacks them up across refreshes.
+        if ingesting == nil {
+            let readMoments = momentState?.map(\.moment) ?? []
+            ingesting = Task {
+                await env.dyorCoins.ingest(launchList)
+                await env.dyorCoins.ingest(readMoments)
+                ingesting = nil
+            }
+        }
         let holdings = await loadLaunchHoldings(env: env, address: address, launches: launchList, priceMap: priceMap ?? [:])
         await proven
-        await env.dyorCoins.ingest(launchList)
-        if let momentState { await env.dyorCoins.ingest(momentState.map(\.moment)) }
         let ownCoins = address == nil ? [] : await env.dyorCoins.created(by: address ?? .zero)
         // A read that failed keeps what the last good one showed, and says so; a load cancelled part-way (the screen
         // went away, the account changed) publishes nothing (security audit 2026-09-26, RS-10).

@@ -169,6 +169,20 @@ final class DyorCoinWiringTests: XCTestCase {
         XCTAssertTrue(swap.contains("Text(\"Unverified — in your wallet\")"))
     }
 
+    /// Home's balances and prices never wait on the registry taking in the launches and Moments it read: those reads run
+    /// on their own, one at a time, and only the proof of the wallet's tokens (which the own-coin mark needs) is awaited
+    /// before the rows are published.
+    func testHomesRowsNeverWaitOnTheRegistrysIngests() throws {
+        let home = try Self.source("Home/HomeView.swift")
+        let load = try Self.between(home, "func load(env: AppEnvironment, address: Address?) async {", "/// The wallet's Moments stakes")
+        let publish = try XCTUnwrap(load.range(of: "guard !Task.isCancelled, address == loadedFor else { return }"))
+        let started = try XCTUnwrap(load.range(of: "if ingesting == nil { let readMoments = momentState?.map(\\.moment) ?? [] ingesting = Task { await env.dyorCoins.ingest(launchList) await env.dyorCoins.ingest(readMoments) ingesting = nil } }"))
+        XCTAssertLessThan(started.upperBound, publish.lowerBound)
+        XCTAssertEqual(load.components(separatedBy: "dyorCoins.ingest(").count - 1, 2, "only inside the task")
+        XCTAssertTrue(load[..<publish.lowerBound].contains("await proven"), "the wallet's tokens are proven before the own-coin mark")
+        XCTAssertTrue(home.contains("@ObservationIgnored private var ingesting: Task<Void, Never>?"))
+    }
+
     /// Home marks the coins the registry says this wallet made as chosen through the helper the Portfolio and the Send
     /// sheet use, before it reads the Unverified mark it shows and ranks by.
     func testHomeMarksTheWalletsOwnCoinsThroughTheSharedHelper() throws {
