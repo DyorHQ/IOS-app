@@ -659,8 +659,15 @@ public struct MomentInfo: Sendable, Hashable, Identifiable {
         let n = (reserveRemaining + reservePerCollect - 1) / reservePerCollect
         return Int(clamping: n)
     }
-    /// The coin as a swap-able token.
-    public var coinToken: Token { Token(address: moment.coin, symbol: symbol, name: name, decimals: MomentsConstants.coinDecimals, logoURL: provenance.mediaURL) }
+    /// The coin as a swap-able token, its logo the Moment's picture as `ImageSourcePolicy.dyorhq` allows it: DyorHQ's
+    /// bucket as it is, or IPFS on DyorHQ's own gateway — never the creator's host (pick 6), which a stored snapshot of
+    /// this token would otherwise keep and a screen load. Nil when the picture is anywhere else.
+    public var coinToken: Token { coinToken(policy: .dyorhq) }
+
+    /// `coinToken`, its logo as `policy` allows it (a build pointed at another Supabase project).
+    public func coinToken(policy: ImageSourcePolicy) -> Token {
+        Token(address: moment.coin, symbol: symbol, name: name, decimals: MomentsConstants.coinDecimals, logoURL: policy.creatorSources(provenance.mediaURI).first)
+    }
 }
 
 /// The detail page's extras: the supply identity and the coin's minted total.
@@ -1115,8 +1122,7 @@ public enum MomentsMath {
     public static func gatewayURLs(_ uri: String) -> [URL] {
         let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
-        if trimmed.lowercased().hasPrefix("ipfs://") {
-            let path = trimmed.dropFirst("ipfs://".count).replacingOccurrences(of: "ipfs/", with: "", options: [.anchored])
+        if trimmed.lowercased().hasPrefix("ipfs://"), let path = IPFS.path(trimmed) {
             return ipfsGateways.compactMap { URL(string: $0 + path) }
         }
         guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return [] }
