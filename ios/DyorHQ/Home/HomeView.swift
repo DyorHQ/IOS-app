@@ -295,10 +295,11 @@ struct HomeView: View {
                 if model.launchHoldings.isEmpty { holdingsEmpty("No launch holdings", "Buy or launch a coin on the Launch tab.") }
                 else {
                     VStack(spacing: 0) {
+                        let totals = model.totals
                         ForEach(Array(model.launchHoldings.enumerated()), id: \.element.id) { index, holding in
                             // Every launch holding opens its own Launch page, never Swap: a coin still on a curve (the
                             // live launchpad's or a retired one's) trades there, and a graduated one's page leads to Swap.
-                            Button { router.openLaunch(holding.launch) } label: { LaunchHoldingRow(holding: holding) }
+                            Button { router.openLaunch(holding.launch) } label: { LaunchHoldingRow(holding: holding, value: totals.value(of: holding.id, units: holding.units)) }
                                 .buttonStyle(.plain)
                             if index < model.launchHoldings.count - 1 { Divider().padding(.leading, 44) }
                         }
@@ -308,8 +309,9 @@ struct HomeView: View {
                 if model.momentRows.isEmpty { holdingsEmpty("No Moments yet", "Collect a Moment on the Moments tab and your editions and coins appear here.") }
                 else {
                     VStack(spacing: 0) {
+                        let totals = model.totals
                         ForEach(Array(model.momentRows.enumerated()), id: \.element.id) { index, row in
-                            Button { router.openMoment(row.moment) } label: { MomentHoldingRow(row: row) }
+                            Button { router.openMoment(row.moment) } label: { MomentHoldingRow(row: row, value: totals.value(of: row.moment.moment.coin, units: HomeModel.coins(row))) }
                                 .buttonStyle(.plain)
                             if index < model.momentRows.count - 1 { Divider().padding(.leading, 44) }
                         }
@@ -467,12 +469,17 @@ private struct HoldingRow: View {
                 AmountText(amount: row.balance, token: row.token, compact: true, font: .caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 1) {
-                USDText(value: row.value, font: .subheadline.weight(.medium))
-                // Always surface the per-unit price next to the 24h change, even for tokens with a small balance.
-                HStack(spacing: 5) {
-                    USDText(price: row.usd, font: .caption2).foregroundStyle(.secondary)
-                    ChangeText(value: row.change24h, style: .caption2)
+            if row.notTradingYet {
+                // A Moment still collecting: no pool yet, so no price, and no value to show.
+                Text("Not trading yet").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .trailing, spacing: 1) {
+                    USDText(value: row.value, font: .subheadline.weight(.medium))
+                    // Always surface the per-unit price next to the 24h change, even for tokens with a small balance.
+                    HStack(spacing: 5) {
+                        USDText(price: row.usd, font: .caption2).foregroundStyle(.secondary)
+                        ChangeText(value: row.change24h, style: .caption2)
+                    }
                 }
             }
         }
@@ -481,9 +488,11 @@ private struct HoldingRow: View {
     }
 }
 
-/// A launch-coin holding row: artwork, the held amount, and its USD value — the user's position, not the market cap.
+/// A launch-coin holding row: artwork, the held amount, and its USD value — the user's position, not the market cap —
+/// at the price Home counts it at (`HomeTotals`), "—" without one.
 private struct LaunchHoldingRow: View {
     let holding: HomeModel.LaunchHolding
+    let value: Double?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -497,7 +506,7 @@ private struct LaunchHoldingRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                USDText(value: holding.valueUSD, font: .subheadline.weight(.medium))
+                USDText(value: value, font: .subheadline.weight(.medium))
                 Text(holding.launch.phase == .bonding ? "\(holding.launch.progressBps / 100)% to graduation" : holding.launch.phase.title)
                     .font(.caption2).foregroundStyle(.secondary)
             }
@@ -545,12 +554,16 @@ extension View {
     }
 }
 
-/// A token as the Home screen shows it: price, movement, and the signed-in wallet's balance.
+/// A token as the Home screen shows it: price, movement, and the signed-in wallet's balance. `info` is the price read as
+/// it came (a DyorHQ coin's "vs MON", "New" and price source); `notTradingYet` marks a Moment still collecting, which
+/// has no price yet.
 struct MarketRow: Identifiable, Hashable {
     let token: Token
     let usd: Double?
     let change24h: Double?
     let balance: BigUInt
+    var info: PriceInfo? = nil
+    var notTradingYet = false
     var id: Address { token.address }
     var value: Double? { usd.map { Amount.units(balance, decimals: token.decimals) * $0 } }
 }
@@ -558,12 +571,16 @@ struct MarketRow: Identifiable, Hashable {
 @Observable
 @MainActor
 final class HomeModel {
-    /// A launch coin the wallet holds (or created), valued at its curve price in USD.
+    /// A launch coin the wallet holds (or created), with the Launch tab's price for it: Spot's, else its own decimal
+    /// price (`DyorPrice.launch`); nil when neither is known.
     struct LaunchHolding: Identifiable, Hashable {
         let launch: Launch
         let balance: BigUInt
-        let valueUSD: Double
+        let priceUSD: Double?
         var id: Address { launch.token }
+        /// Whole coins held.
+        var units: Double { Amount.units(balance, decimals: 18) }
+        var valueUSD: Double? { priceUSD.map { units * $0 } }
     }
 
     private(set) var rows: [MarketRow] = []
@@ -586,24 +603,33 @@ final class HomeModel {
 
     var holdings: [MarketRow] { rows.filter { $0.balance > 0 }.sorted { ($0.value ?? 0) > ($1.value ?? 0) } }
 
-    var spotValue: Double { holdings.compactMap(\.value).reduce(0, +) }
-    var perpsValue: Double { perpEquity ?? 0 }
-    /// Value of the wallet's launch-coin holdings, priced from each curve. Feeds the allocation ring and total.
-    var launchpadValue: Double { launchHoldings.reduce(0) { $0 + $1.valueUSD } }
-    /// Value of the wallet's Moment coins (held plus still owed) at each pool's live price; pre-graduation
-    /// entitlements have no market yet and count at zero.
-    var momentsValue: Double {
-        momentRows.reduce(0) { total, row in
-            guard let pool = row.moment.pool else { return total }
-            let owed = row.entitlement > row.claimed ? row.entitlement - row.claimed : 0
-            return total + (MomentsMath.coins(row.coinBalance) + MomentsMath.coins(owed)) * pool.usdcPerCoin
-        }
+    /// Spot, Launch and Moments with every address counted once (`HomeTotals`): a DyorHQ coin stays listed in Spot but
+    /// counts under Launch or Moments when that tab lists it, at the one price Spot shows for it.
+    var totals: HomeTotals {
+        HomeTotals(spot: holdings.map { HomeTotals.Line(address: $0.id, units: Amount.units($0.balance, decimals: $0.token.decimals), price: $0.usd) },
+                   launch: launchHoldings.map { HomeTotals.Line(address: $0.id, units: $0.units, price: $0.priceUSD) },
+                   moments: momentRows.map { HomeTotals.Line(address: $0.moment.moment.coin, units: Self.coins($0), price: WalletHoldings.momentPrice($0.moment)) })
     }
+
+    /// A Moments stake's coins: held, plus still owed (entitled, not yet claimed).
+    nonisolated static func coins(_ row: MomentPortfolioRow) -> Double {
+        let owed = row.entitlement > row.claimed ? row.entitlement - row.claimed : 0
+        return MomentsMath.coins(row.coinBalance) + MomentsMath.coins(owed)
+    }
+
+    /// The tokens no other tab counts (`HomeTotals.spot`).
+    var spotValue: Double { totals.spot }
+    var perpsValue: Double { perpEquity ?? 0 }
+    /// Value of the launch coins the Launch tab lists. Feeds the allocation ring and total.
+    var launchpadValue: Double { totals.launch }
+    /// Value of the wallet's Moment coins (held plus still owed) at Spot's price or each pool's live one; a Moment with no
+    /// market yet counts at zero.
+    var momentsValue: Double { totals.moments }
     var availableBalance: Double { spotValue }
     var inUse: Double { perpsValue }
 
     var totalValue: Double? {
-        rows.isEmpty ? nil : spotValue + perpsValue + launchpadValue + momentsValue
+        rows.isEmpty ? nil : totals.total + perpsValue
     }
 
     /// Value-weighted 24h change of the wallet, when every priced holding has a change.
@@ -678,6 +704,8 @@ final class HomeModel {
         var priceMap: [Address: PriceInfo]?
         var priceError: Error?
         do { priceMap = try await prices } catch { priceError = error }
+        // Moments still collecting, as the read just made found them: "Not trading yet" in place of a price.
+        let notTrading = priceMap == nil ? [] : await env.prices.notTradingYet(tokens)
         let balanceMap = await balances
         // A launchpad whose launches couldn't be read keeps its last good ones, and the screen says so.
         let listing = await launches
@@ -709,8 +737,10 @@ final class HomeModel {
         if let priceMap {
             let previous = Dictionary(rows.map { ($0.id, $0.balance) }, uniquingKeysWith: { first, _ in first })
             rows = tokens.map { token in
-                MarketRow(token: token, usd: priceMap[token.address]?.usd, change24h: priceMap[token.address]?.change24h,
-                          balance: balanceMap?[token.address] ?? previous[token.address] ?? 0)
+                // A price that isn't a positive number is none: the row shows "—", never "$0.00".
+                let info = priceMap[token.address].flatMap { DyorPrice.valid($0.usd) != nil ? $0 : nil }
+                return MarketRow(token: token, usd: info?.usd, change24h: info?.change24h,
+                                 balance: balanceMap?[token.address] ?? previous[token.address] ?? 0, info: info, notTradingYet: notTrading.contains(token.address))
             }
         }
         if let priceError {
@@ -757,10 +787,9 @@ final class HomeModel {
             // sell-only coin shows only while held (owner decision 2026-09-29).
             guard balance > 0 || (created && launch.listsOnBoard) else { return nil }
             let pairUSD = launch.pair.isNative ? priceMap[Monad.native]?.usd : priceMap[launch.pairToken]?.usd
-            let value = pairUSD.map { Amount.units(balance, decimals: 18) * LaunchpadService.priceNumber(launch) * $0 } ?? 0
-            return LaunchHolding(launch: launch, balance: balance, valueUSD: value)
+            return LaunchHolding(launch: launch, balance: balance, priceUSD: DyorPrice.launch(launch, spot: priceMap[launch.token]?.usd, pairUSD: pairUSD))
         }
-        .sorted { $0.valueUSD > $1.valueUSD }
+        .sorted { ($0.valueUSD ?? 0) > ($1.valueUSD ?? 0) }
     }
 
     /// The Perpl account's positions and equity: none without an account, nil when a read failed.
@@ -788,6 +817,19 @@ struct TokenDetailView: View {
     /// read; `.unchecked` when the check failed, which keeps Swap and offers to check again.
     @State private var curveRoute: CurveRoute?
     @State private var checkingCurve = false
+    /// The price read by the page itself, for a token Home's list didn't price (one opened from search, or a Moment Home
+    /// last saw collecting).
+    @State private var loaded: PriceInfo?
+    /// Whether the page's own read found its Moment still collecting; nil until it has read, and Home's mark stands.
+    @State private var loadedNotTrading: Bool?
+
+    /// The price as shown: Home's read, else the page's own (`loaded`).
+    private var info: PriceInfo? { row.info ?? loaded }
+    private var price: Double? { row.usd ?? loaded.flatMap { DyorPrice.valid($0.usd) } }
+    private var change: Double? { row.usd != nil ? row.change24h : loaded?.change24h }
+    /// A Moment still collecting: no price and no chart, "Not trading yet" in their place. The page's own read decides
+    /// once it has one, so a Moment that graduated since Home's read shows its price.
+    private var notTradingYet: Bool { loadedNotTrading ?? row.notTradingYet }
 
     /// Sent to the wallet rather than chosen in the app (`KnownTokenStore.unverified`).
     private var received: Bool { KnownTokenStore.isUnverified(row.token.address, owner: session.address) }
@@ -800,14 +842,29 @@ struct TokenDetailView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .center, spacing: 10) {
                         TokenLogo(token: row.token, size: 44)
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            USDText(price: row.usd, font: .system(.largeTitle, design: .rounded).weight(.semibold))
-                            ChangeBadge(value: row.change24h)
+                        if notTradingYet {
+                            Text("Not trading yet").font(.system(.title2, design: .rounded).weight(.semibold)).foregroundStyle(.secondary)
+                        } else {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                USDText(price: price, font: .system(.largeTitle, design: .rounded).weight(.semibold))
+                                if info?.isNew == true { NewBadge() } else { ChangeBadge(value: change) }
+                            }
                         }
                     }
-                    Text("Past 24 hours").font(.footnote).foregroundStyle(.secondary)
-                    PriceChart(points: history, isLoading: loadingHistory, tint: (row.change24h ?? 0) < 0 ? Color.negative : Color.positive)
-                        .frame(height: 180)
+                    // A DyorHQ coin: its move against its pair asset, then where its price comes from.
+                    if !notTradingYet, let pairChange = info?.pairChangeText {
+                        Text(pairChange).font(.footnote.weight(.medium)).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    if !notTradingYet, let source = info?.sourceLine {
+                        Text(source).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if notTradingYet {
+                        Text("Its Moment hasn't graduated yet, so the coin has no market. It trades once the Moment graduates.").font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        Text("Past 24 hours").font(.footnote).foregroundStyle(.secondary)
+                        PriceChart(points: history, isLoading: loadingHistory, tint: (change ?? 0) < 0 ? Color.negative : Color.positive)
+                            .frame(height: 180)
+                    }
                 }
                 .padding(.vertical, 6)
             }
@@ -832,7 +889,9 @@ struct TokenDetailView: View {
             if row.balance > 0 {
                 Section("Your Balance") {
                     LabeledContent("Amount") { AmountText(amount: row.balance, token: row.token) }
-                    LabeledContent("Value") { USDText(value: row.value) }
+                    LabeledContent("Value") {
+                        if notTradingYet { Text("Not trading yet").foregroundStyle(.secondary) } else { USDText(value: price.map { Amount.units(row.balance, decimals: row.token.decimals) * $0 }) }
+                    }
                 }
             }
             Section("About") {
@@ -870,7 +929,13 @@ struct TokenDetailView: View {
         .navigationTitle(row.token.symbol)
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            history = (try? await env.prices.history(for: row.token, points: 48)) ?? []
+            // A token Home's list didn't price (opened from search, or a Moment Home last saw collecting) is priced here,
+            // once: a Moment that graduated since shows its price and chart.
+            if row.usd == nil {
+                loaded = (try? await env.prices.prices(for: [row.token]))?[row.token.address]
+                loadedNotTrading = await env.prices.notTradingYet([row.token]).contains(row.token.address)
+            }
+            if !notTradingYet { history = (try? await env.prices.history(for: row.token, points: 48)) ?? [] }
             loadingHistory = false
         }
         .task(id: row.token.address) { await checkCurve() }
@@ -921,6 +986,18 @@ struct TokenDetailView: View {
         let route = await env.launchpad.curveRoute(for: row.token)
         if Task.isCancelled { return }
         curveRoute = route
+    }
+}
+
+/// "New" in place of a 24h change: a DyorHQ coin its factory hadn't recorded 24 hours ago (`PriceInfo.isNew`).
+private struct NewBadge: View {
+    var body: some View {
+        Text("New")
+            .font(.footnote.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.brand.opacity(0.14), in: Capsule())
+            .foregroundStyle(Color.brand)
     }
 }
 
@@ -1059,13 +1136,13 @@ struct HomeHeader: View {
     }
 }
 
-/// A Moments stake row for the holdings list: media, name, editions and coins, then the value at the pool price.
+/// A Moments stake row for the holdings list: media, name, editions and coins, then the value at the price Home counts
+/// it at (`HomeTotals`); a Moment still collecting says "Not trading yet" in its place.
 private struct MomentHoldingRow: View {
     let row: MomentPortfolioRow
+    let value: Double?
 
-    private var owed: BigUInt { row.entitlement > row.claimed ? row.entitlement - row.claimed : 0 }
-    private var coins: Double { MomentsMath.coins(row.coinBalance) + MomentsMath.coins(owed) }
-    private var value: Double? { row.moment.pool.map { coins * $0.usdcPerCoin } }
+    private var coins: Double { HomeModel.coins(row) }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1079,7 +1156,11 @@ private struct MomentHoldingRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                USDText(value: value, font: .subheadline.weight(.medium))
+                if row.moment.isNotTradingYet {
+                    Text("Not trading yet").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                } else {
+                    USDText(value: value, font: .subheadline.weight(.medium))
+                }
                 Text(row.moment.graduated ? "Graduated" : row.moment.state == .expired ? "Expired" : "\(row.moment.progressBps / 100)% to graduation")
                     .font(.caption2).foregroundStyle(row.moment.graduated ? Color.positive : .secondary)
             }

@@ -3,7 +3,8 @@ import Foundation
 
 /* Where a DyorHQ coin trades, as its own factory's record says, and nothing else: a DyorHQ coin is never priced from any
    other pool, so a thin pool anyone plants beside it can't move its price. `PriceService` reads the record (re-read every
-   30 minutes), then the venue, and turns the price into dollars at the same block:
+   30 minutes, and every minute while a curve or a collecting Moment can still graduate), then the venue, and turns the
+   price into dollars at the same block:
 
      | Venue           | When                               | Read                                              |
      |-----------------|------------------------------------|---------------------------------------------------|
@@ -58,14 +59,27 @@ struct DyorListing: Hashable, Sendable {
     var label: String {
         switch venue {
         case .curve: return DyorListing.curveLabel
-        case .monday: return "Monday Trade"
-        case .v4: return "Uniswap v4"
-        case .moment: return "DyorHQ Moment pool"
+        case .monday: return DyorListing.mondayLabel
+        case .v4: return DyorListing.v4Label
+        case .moment: return DyorListing.momentLabel
         case .collecting, .closed: return "DyorHQ"
         }
     }
 
     static let curveLabel = "DyorHQ curve"
+    static let mondayLabel = "Monday Trade"
+    static let v4Label = "Uniswap v4"
+    static let momentLabel = "DyorHQ Moment pool"
+
+    /// Whether its market is final: a pool, or none ever (`closed`). A curve graduates into a pool, and a collecting
+    /// Moment graduates or expires, so `PriceService` reads their records again within a minute
+    /// (`PoolLookupCache.unsettledTTL`) rather than after 30.
+    var isSettled: Bool {
+        switch venue {
+        case .monday, .v4, .moment, .closed: return true
+        case .curve, .collecting: return false
+        }
+    }
 
     /// Whether the venue has a price to read.
     var isPriced: Bool {

@@ -631,6 +631,10 @@ public struct MomentInfo: Sendable, Hashable, Identifiable {
 
     /// Whether a collect would be accepted right now (state and deadline), before the terminal clamp.
     public func isCollecting(at now: Int) -> Bool { ledger.state == .collecting && now < moment.deadline }
+    /// Its coin has no market yet: the Moment is still collecting, or waiting to graduate, so there is no pool to price
+    /// it from (`DyorListing.Venue.collecting`). A screen says "Not trading yet" in place of a price or a value. False
+    /// once it graduated, and for one that expired, whose coin will never trade.
+    public var isNotTradingYet: Bool { !graduated && ledger.state != .expired && ledger.state != .graduated }
     /// Seconds until the collect window closes (0 once closed).
     public func secondsLeft(at now: Int) -> Int { max(0, moment.deadline - now) }
     /// Whether anyone may call `expire` now: collecting past the deadline, or stuck in graduation for the grace period.

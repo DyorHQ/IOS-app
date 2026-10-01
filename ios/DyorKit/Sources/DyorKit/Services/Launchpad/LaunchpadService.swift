@@ -442,11 +442,12 @@ public actor LaunchpadService {
                 LaunchpadABI.call(r.curve, C.rescued, returns: "bool"),
                 LaunchpadABI.call(r.curve, C.launchedAt, returns: "uint64"),
                 LaunchpadABI.call(r.token, T.totalSupply, returns: "uint256"),
+                LaunchpadABI.call(r.curve, C.getReserves, returns: "uint256,uint256"),
             ]
         }
         let generation = stack(for: factory).generation
         let results = try await multicall.readItems(items, text: Self.launchTextCalls, what: "A launch")
-        let livePrices = await poolPrices(for: records)
+        let livePrices = await poolPrices(for: records, pairs: pairs)
         return try records.enumerated().map { i, r in
             let item = results[i]
             func value(_ at: Int) throws -> [ABIValue] { try item[at].get() }
@@ -456,7 +457,10 @@ public actor LaunchpadService {
             let realQuoteReserve = try value(4)[0].uint
             let supply = try value(8)[0].uint
             let graduated = r.phase == .graduated
-            let price = livePrices[r.token] ?? curvePrice
+            let price = livePrices[r.token]?.price ?? curvePrice
+            // The decimal price: the curve's reserves until it graduates, then its pool's — never the curve's last one.
+            let pairPrice = graduated ? livePrices[r.token]?.pairPrice
+                : Self.pairPerCoin(try value(9), graduated: false, token: r.token, pairSide: r.pairToken, pairDecimals: (pairs[r.pairToken] ?? .mon).decimals)
             return Launch(
                 token: r.token, curve: r.curve, deployer: r.deployer, creatorFeeRecipient: r.creatorFeeRecipient, pairToken: r.pairToken,
                 graduationThreshold: r.graduationThreshold, creatorTaxBps: r.creatorTaxBps, poolFeeBps: r.poolFeeBps, tickSpacing: r.tickSpacing,
@@ -473,7 +477,8 @@ public actor LaunchpadService {
                 marketCap: LaunchpadMath.marketCap(price: price, supply: supply),
                 progressBps: LaunchpadMath.progressBps(phase: r.phase, realQuoteReserve: realQuoteReserve, sweptQuote: r.sweptQuote, threshold: r.graduationThreshold),
                 factory: factory,
-                generation: generation
+                generation: generation,
+                pairPrice: pairPrice
             )
         }
     }
@@ -482,10 +487,11 @@ public actor LaunchpadService {
     /// links). The others read the protocol's values.
     static let launchTextCalls: Set<Int> = [0, 1, 2]
 
-    /// Live pool prices for graduated launches, keyed by token. Any failure leaves the curve's final price in place.
-    /// A Uniswap v4 pool's slot0 is read from the PoolManager; a Monday Trade graduation records its v3-style pool
-    /// address as the `poolId`, whose own `slot0()` pairs the token with WMON in place of native MON.
-    private func poolPrices(for records: [LaunchpadABI.LaunchRecord]) async -> [Address: BigUInt] {
+    /// Live pool prices for graduated launches, keyed by token: as `Launch.price` counts it, and to a Double's precision
+    /// (`Launch.pairPrice`). Any failure leaves the curve's final price in `price` and no `pairPrice`. A Uniswap v4 pool's
+    /// slot0 is read from the PoolManager; a Monday Trade graduation records its v3-style pool address as the `poolId`,
+    /// whose own `slot0()` pairs the token with WMON in place of native MON.
+    private func poolPrices(for records: [LaunchpadABI.LaunchRecord], pairs: [Address: PairInfo]) async -> [Address: (price: BigUInt, pairPrice: Double?)] {
         var reads: [(record: LaunchpadABI.LaunchRecord, pair: Address, call: ContractCall)] = []
         for record in records where record.phase == .graduated {
             if record.graduationVenue == .monday {
@@ -496,10 +502,11 @@ public actor LaunchpadService {
             }
         }
         guard !reads.isEmpty, let results = try? await multicall.read(reads.map(\.call)) else { return [:] }
-        var out: [Address: BigUInt] = [:]
+        var out: [Address: (price: BigUInt, pairPrice: Double?)] = [:]
         for (read, result) in zip(reads, results) {
             guard case .success(let values) = result, let price = LaunchpadMath.poolPrice(slot0: values[0].bytes, token: read.record.token, pairToken: read.pair) else { continue }
-            out[read.record.token] = price
+            let decimals = (pairs[read.record.pairToken] ?? .mon).decimals
+            out[read.record.token] = (price, Self.pairPerCoin(values, graduated: true, token: read.record.token, pairSide: read.pair, pairDecimals: decimals))
         }
         return out
     }
@@ -710,12 +717,6 @@ public actor LaunchpadService {
         return [.call(TransactionRequest(to: stack(for: launch).hook, data: data), label: "Distribute pool fees")]
     }
 
-    // MARK: - Display helpers
-
-    /// Price in pair units per whole token, for display.
-    public nonisolated static func priceNumber(_ launch: Launch) -> Double {
-        Amount.units(launch.price, decimals: launch.pair.decimals)
-    }
 }
 
 /// What a launch transaction created, from its `TokenLaunched` event.
@@ -737,13 +738,13 @@ public extension LaunchpadMath {
         price * supply / BigUInt(10).power(18)
     }
 
-    /// Launches by market cap, largest first, across pair assets: each cap in whole pair units (6 decimals for USDC and
-    /// AUSD, 18 for MON and aBIL) times its pair asset's USD price (`pairUSD`, by pair token; MON under the zero
-    /// address), so a 50,000 USDC coin ranks above a 1 MON one although its raw amount is smaller. A launch whose pair has
-    /// no price yet ranks after every priced one, by its cap in whole pair units. Ties keep the given order.
+    /// Launches by market cap, largest first, across pair assets: each cap in whole pair units (`Launch.marketCapInPair`,
+    /// from its decimal price) times its pair asset's USD price (`pairUSD`, by pair token; MON under the zero address),
+    /// so a 50,000 USDC coin ranks above a 1 MON one. A launch whose pair has no price yet ranks after every priced one,
+    /// by its cap in whole pair units; one whose own price wasn't read counts as no cap. Ties keep the given order.
     static func byMarketCap(_ launches: [Launch], pairUSD: [Address: Double]) -> [Launch] {
         let keyed = launches.enumerated().map { index, launch -> (index: Int, launch: Launch, priced: Bool, value: Double) in
-            let units = Amount.units(launch.marketCap, decimals: launch.pair.decimals)
+            let units = launch.marketCapInPair ?? 0
             if let usd = pairUSD[launch.pairToken], usd > 0 { return (index, launch, true, units * usd) }
             return (index, launch, false, units)
         }

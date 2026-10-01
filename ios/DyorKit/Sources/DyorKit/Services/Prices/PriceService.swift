@@ -27,6 +27,32 @@ public struct PriceInfo: Hashable, Sendable {
     }
 }
 
+public extension PriceInfo {
+    /// Whether it is a DyorHQ coin's price, from its own curve or pool (`DyorListing`): only those carry a pair asset.
+    var isDyorVenue: Bool { pairSymbol != nil }
+
+    /// A DyorHQ coin's 24h change in its pair asset, as its token page shows it under the price: "vs MON 0.00%" when only
+    /// MON's dollar price moved. A change under half a hundredth of a percent reads 0.00%. Nil for every other token,
+    /// and without the day-ago read (a coin that is "New" included).
+    var pairChangeText: String? {
+        guard let pairSymbol, let pairChange, pairChange.isFinite else { return nil }
+        return "vs \(pairSymbol) \(NumberStyle.percent(abs(pairChange) < 0.005 ? 0 : pairChange))"
+    }
+
+    /// Where a DyorHQ coin's price comes from, in one line for its token page: "Priced from its DyorHQ curve", "…its
+    /// Uniswap v4 pool", "…its Monday Trade pool" or "…its Moment pool". Nil for every other token.
+    var sourceLine: String? {
+        guard isDyorVenue else { return nil }
+        switch source {
+        case DyorListing.curveLabel: return "Priced from its DyorHQ curve"
+        case DyorListing.v4Label: return "Priced from its Uniswap v4 pool"
+        case DyorListing.mondayLabel: return "Priced from its Monday Trade pool"
+        case DyorListing.momentLabel: return "Priced from its Moment pool"
+        default: return nil
+        }
+    }
+}
+
 public struct PricePoint: Hashable, Sendable, Identifiable {
     public var id: UInt64 { block }
     public let block: UInt64
@@ -44,8 +70,9 @@ public struct PricePoint: Hashable, Sendable, Identifiable {
 /// serve historical state) for the 24h change. Nothing here depends on an indexer.
 ///
 /// With DyorHQ venues on (`setUsesDyorVenues`), a DyorHQ coin — one the registry knows, or one a DyorHQ factory's own
-/// record names — is priced only on the venue its factory's record names (`DyorListing`), re-read every 30 minutes: never
-/// from any other pool, so a thin pool anyone plants beside it is ignored. Every other token, and every token with them
+/// record names — is priced only on the venue its factory's record names (`DyorListing`), re-read every 30 minutes, and
+/// every minute while it is on its curve or its Moment collects (`DyorListing.isSettled`): never from any other pool, so
+/// a thin pool anyone plants beside it is ignored. Every other token, and every token with them
 /// off, is priced from the deepest pool found for it. Times come from the
 /// session's measured block pace (`BlockClock`): the day-ago block is the one mined 24 hours before the latest, and a
 /// chart's span and labels are true times.
@@ -99,7 +126,8 @@ public actor PriceService {
     public let clock: BlockClock
     private let multicall: Multicall
     /// Each token's pool as last looked up, and the tokens without one — both for a while only (`PoolLookupCache`). A
-    /// DyorHQ coin's entry is its venue, from its factory's record, looked up again after the same 30 minutes.
+    /// DyorHQ coin's entry is its venue, from its factory's record, looked up again after the same 30 minutes, or after a
+    /// minute while it can still graduate.
     private var pools = PoolLookupCache<Source>()
     private let now: @Sendable () -> Date
     /// What says, without a read, that an address is or isn't a DyorHQ coin and which factory recorded it. Without it,
@@ -308,7 +336,7 @@ public actor PriceService {
         if usesDyorVenues {
             let (listed, unsettled) = await listings(todo.map(\.address))
             guard generation == venueGeneration else { return try await discover(tokens) }
-            for (coin, listing) in listed { pools.found(coin, .dyor(listing), now: time) }
+            for (coin, listing) in listed { pools.found(coin, .dyor(listing), now: time, settled: listing.isSettled) }
             todo.removeAll { listed[$0.address] != nil || unsettled.contains($0.address) }
             guard !todo.isEmpty else { return }
         }
@@ -666,18 +694,23 @@ public actor PriceService {
 
 /// Which tokens' pools are known, and for how long (security audit 2026-09-26, RS-12). A chosen pool is looked up again
 /// after `hitTTL` — liquidity moves, and a deeper pool can appear — and a token with no pool after `missTTL`, rather than
-/// either lasting as long as the app runs. The pool last found keeps pricing its token until a new lookup says
-/// otherwise, and a lookup whose reads failed records nothing, so an outage is never remembered as "no pool".
+/// either lasting as long as the app runs. A market that is about to move elsewhere is looked up again after
+/// `unsettledTTL`. The pool last found keeps pricing its token until a new lookup says otherwise, and a lookup whose
+/// reads failed records nothing, so an outage is never remembered as "no pool".
 struct PoolLookupCache<Source: Sendable>: Sendable {
     var hitTTL: TimeInterval = 30 * 60
     var missTTL: TimeInterval = 5 * 60
-    private var hits: [Address: (source: Source, at: Date)] = [:]
+    /// How soon a market found `settled: false` is looked up again: a DyorHQ launch on its curve, which graduates into a
+    /// pool, and a Moment still collecting, which graduates or expires (`DyorListing.isSettled`). Within a minute of a
+    /// graduation the coin is priced from its pool, and no screen keeps saying "Not trading yet" for a coin that trades.
+    var unsettledTTL: TimeInterval = 60
+    private var hits: [Address: (source: Source, at: Date, settled: Bool)] = [:]
     private var misses: [Address: Date] = [:]
 
-    /// Whether `token` is due a lookup: never looked up, its pool is older than `hitTTL`, or its miss older than
-    /// `missTTL`.
+    /// Whether `token` is due a lookup: never looked up, its pool is older than `hitTTL` (`unsettledTTL` for a market
+    /// that is about to move), or its miss older than `missTTL`.
     func needsLookup(_ token: Address, now: Date) -> Bool {
-        if let hit = hits[token] { return now.timeIntervalSince(hit.at) >= hitTTL }
+        if let hit = hits[token] { return now.timeIntervalSince(hit.at) >= (hit.settled ? hitTTL : unsettledTTL) }
         if let missed = misses[token] { return now.timeIntervalSince(missed) >= missTTL }
         return true
     }
@@ -689,8 +722,9 @@ struct PoolLookupCache<Source: Sendable>: Sendable {
     /// or only by lookups whose reads failed.
     func hasNoPool(_ token: Address) -> Bool { hits[token] == nil && misses[token] != nil }
 
-    mutating func found(_ token: Address, _ source: Source, now: Date) {
-        hits[token] = (source, now)
+    /// `source` prices `token`; `settled: false` for a market that is about to move elsewhere (`unsettledTTL`).
+    mutating func found(_ token: Address, _ source: Source, now: Date, settled: Bool = true) {
+        hits[token] = (source, now, settled)
         misses[token] = nil
     }
 

@@ -323,6 +323,7 @@ struct BoardChain: Sendable {
         }
         if Self.factories.contains(where: { Self.curve($0) == to }) {
             if is_(C.price) || is_(C.realQuoteReserve) { return encode([.uint(1_000)], "uint256") }
+            if is_(C.getReserves) { return encode([.uint(1_000), .uint(BigUInt(10).power(18))], "uint256,uint256") }
             if is_(C.completed) || is_(C.rescued) { return encode([.bool(false)], "bool") }
             if is_(C.launchedAt) { return encode([.uint(1_789_000_000)], "uint64") }
         }

@@ -118,7 +118,7 @@ final class FormattedTextIsolationTests: XCTestCase {
         XCTAssertTrue(home.contains("Text(PriceFormat.axis(price, span: domain.upperBound - domain.lowerBound))"))
         XCTAssertFalse(home.contains("AxisValueLabel() }"), "no default axis label, which reads 0 for every dust tick")
         for price in ["USDText(price: row.usd, font: .subheadline.weight(.medium))", "USDText(price: row.usd, font: .caption2)",
-                      "USDText(price: row.usd, font: .system(.largeTitle, design: .rounded).weight(.semibold))"] {
+                      "USDText(price: price, font: .system(.largeTitle, design: .rounded).weight(.semibold))"] {
             XCTAssertTrue(home.contains(price), price)
         }
         XCTAssertFalse(home.contains("USDText(value: row.usd"), "a unit price is a price")

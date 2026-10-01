@@ -600,12 +600,13 @@ struct CurveCoinChain: Sendable {
             if is_(C.completed) { return encode([.bool(completed)], "bool") }
             if is_(C.rescued) { return encode([.bool(rescued)], "bool") }
             if is_(C.launchedAt) { return encode([.uint(1_789_000_000)], "uint64") }
+            // Read with the launch, for its decimal price (`Launch.pairPrice`), and again by its page.
+            if is_(C.getReserves) { return encode([.uint(1_000), .uint(BigUInt(10).power(27))], "uint256,uint256") }
             guard pageReads else { return nil }
             if is_(C.sellableTokens) || is_(C.phantomQuote) || is_(C.reservedTokens) { return encode([.uint(1_000)], "uint256") }
             if is_(C.swept) { return encode([.bool(phase == .migrating)], "bool") }
             if is_(C.feeBps) { return encode([.uint(100)], "uint16") }
             if is_(C.snipeTaxSchedule) { return encode([.array([])], "uint16[]") }
-            if is_(C.getReserves) { return encode([.uint(1_000), .uint(BigUInt(10).power(27))], "uint256,uint256") }
         }
         return nil
     }

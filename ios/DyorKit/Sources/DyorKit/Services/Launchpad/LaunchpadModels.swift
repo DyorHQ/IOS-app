@@ -460,7 +460,10 @@ public struct Launch: Identifiable, Hashable, Sendable {
     public let description: String
     public let socials: Socials
     public let pair: PairInfo
-    /// Quote per whole token in quote wei (18-decimal fixed point), from the curve or, once graduated, the pool.
+    /// Quote per whole token in quote wei (18-decimal fixed point), from the curve or, once graduated, the pool, as the
+    /// contract's `price()` counts it: whole units of the pair's smallest unit, so on a 6-decimal pair (USDC, AUSD) it
+    /// moves in steps of $0.000001 and is 0 below that. Nothing is valued at it: every price and value on screen comes
+    /// from `pairPrice`.
     public let price: BigUInt
     /// Quote collected by the curve; after graduation, what was swept into the pool.
     public let realQuoteReserve: BigUInt
@@ -475,9 +478,14 @@ public struct Launch: Identifiable, Hashable, Sendable {
     /// The contract generation of that factory's stack: set from the stack when read, else the retired stack's, else
     /// the live table's (`.v2`).
     public let generation: LaunchpadAddresses.Generation
+    /// Pair units per whole coin, to a Double's precision: its curve's reserves while it is on the curve, its pool's sqrt
+    /// price once graduated — the reads Spot prices a DyorHQ coin from (`DyorListing`). Nil when that read didn't answer:
+    /// a graduated coin is never valued at its curve's last price. The one launch price every screen values a coin at
+    /// (`usdPrice(pairUSD:)`, `marketCapInPair`), never `price`.
+    public let pairPrice: Double?
 
     public init(token: Address, curve: Address, deployer: Address, creatorFeeRecipient: Address, pairToken: Address, graduationThreshold: BigUInt, creatorTaxBps: Int, poolFeeBps: Int, tickSpacing: Int, holderFeeSharing: Bool, graduationVenue: GraduationVenue, phase: LaunchPhase, sweptQuote: BigUInt, sweptTokens: BigUInt, sweptAt: Int, poolId: Data, name: String, symbol: String, logo: String, description: String, socials: Socials, pair: PairInfo, price: BigUInt, realQuoteReserve: BigUInt, completed: Bool, rescued: Bool, launchedAt: Int, supply: BigUInt, marketCap: BigUInt, progressBps: Int, factory: Address = .zero,
-                generation: LaunchpadAddresses.Generation? = nil) {
+                generation: LaunchpadAddresses.Generation? = nil, pairPrice: Double? = nil) {
         self.token = token
         self.curve = curve
         self.deployer = deployer
@@ -510,7 +518,19 @@ public struct Launch: Identifiable, Hashable, Sendable {
         self.progressBps = progressBps
         self.factory = factory
         self.generation = generation ?? LaunchpadAddresses.retiredStack(for: factory)?.generation ?? LaunchpadAddresses.monadMainnet.generation
+        self.pairPrice = pairPrice.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
     }
+
+    /// Dollars per whole coin: `pairPrice` times its pair asset's dollar price (`pairUSD`). Nil without either, or for a
+    /// product that isn't a positive finite number.
+    public func usdPrice(pairUSD: Double?) -> Double? {
+        guard let pairPrice, let pairUSD else { return nil }
+        let usd = pairPrice * pairUSD
+        return usd.isFinite && usd > 0 ? usd : nil
+    }
+
+    /// Market cap in whole pair units: `pairPrice` times the whole supply. Nil without a price.
+    public var marketCapInPair: Double? { pairPrice.map { $0 * Amount.units(supply, decimals: 18) } }
 
     /// The launch was made on a retired launchpad: the app launches nothing there, and its curve takes sells only
     /// (`LaunchpadService.buyPlan` refuses a buy on it).
@@ -788,7 +808,7 @@ public struct CurveTrade: Identifiable, Hashable, Sendable {
     public let tokenAmount: BigUInt
     /// Decimals of the quote asset, so volumes can be expressed in pair units.
     public let quoteDecimals: Int
-    /// Pair units per whole token (the same scale as `LaunchpadService.priceNumber`).
+    /// Pair units per whole token (the same scale as `Launch.pairPrice`).
     public let price: Double
 
     public init(id: String, block: UInt64, logIndex: Int, time: Int, trader: Address, isBuy: Bool, quoteAmount: BigUInt, tokenAmount: BigUInt, quoteDecimals: Int, price: Double) {

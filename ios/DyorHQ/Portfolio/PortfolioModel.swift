@@ -269,7 +269,7 @@ final class PortfolioModel {
             if fill.isBuy { spent += quoteUSD; deltas[launch.token, default: 0] += coins } else { received += quoteUSD; deltas[launch.token, default: 0] -= coins }
         }
         for (token, delta) in deltas where abs(delta) > 0 {
-            if let launch = launchesByToken[token], let price = pairUSD(launch) { stats.pnl += delta * LaunchpadService.priceNumber(launch) * price } else { stats.pnlComplete = false }
+            if let price = prices[token] { stats.pnl += delta * price } else { stats.pnlComplete = false }
         }
         stats.pnl += received - spent
         for claim in launchHistory.claims where claim.time >= since {
@@ -380,9 +380,11 @@ final class PortfolioModel {
         var priced: [Address: Double] = fetchedPrices == nil ? prices : [:]
         if let map = fetchedPrices { for (address, info) in map { priced[address] = info.usd } }
         for stable in Self.stables { priced[stable] = 1 }
-        // Launch coins at their curve price; Moment coins at their pool price.
+        // Launch coins at the one decimal price Spot values them at: the price service's for a coin it priced, else the
+        // launch's own live price in its pair asset (`DyorPrice.launch`), never the integer `Launch.price`. Moment coins
+        // at their pool price.
         for launch in launches {
-            if let pair = launch.pair.isNative ? priced[Monad.native] : priced[launch.pairToken] { priced[launch.token] = LaunchpadService.priceNumber(launch) * pair }
+            priced[launch.token] = DyorPrice.launch(launch, spot: fetchedPrices?[launch.token]?.usd, pairUSD: launch.pair.isNative ? priced[Monad.native] : priced[launch.pairToken])
         }
         for info in moments { if let pool = info.pool { priced[info.moment.coin] = pool.usdcPerCoin } }
         prices = priced

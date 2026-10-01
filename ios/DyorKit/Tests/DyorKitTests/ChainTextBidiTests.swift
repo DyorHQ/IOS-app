@@ -110,6 +110,7 @@ final class ChainTextBidiTests: XCTestCase {
             }
             if to == curve {
                 if is_(LaunchpadABI.Curve.completed) || is_(LaunchpadABI.Curve.rescued) { return enc([.bool(false)], "bool") }
+                if is_(LaunchpadABI.Curve.getReserves) { return enc([.uint(1), .uint(BigUInt(10).power(18))], "uint256,uint256") }
                 return enc([.uint(1)], "uint256")
             }
             return nil

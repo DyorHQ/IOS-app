@@ -26,8 +26,8 @@ final class DyorVenuePricingTests: XCTestCase {
     }
 
     /// A price service with DyorHQ venues on, as the app turns them on.
-    private func service(registry: DyorCoinRegistry? = nil) -> PriceService {
-        PriceService(rpc: VenueChainStub.rpc(), registry: registry, dyorVenues: true)
+    private func service(registry: DyorCoinRegistry? = nil, clock: StubClock = StubClock()) -> PriceService {
+        PriceService(rpc: VenueChainStub.rpc(), registry: registry, dyorVenues: true, now: { clock.now })
     }
 
     // MARK: Fixtures
@@ -201,6 +201,62 @@ final class DyorVenuePricingTests: XCTestCase {
         XCTAssertTrue(expiredNotTrading.isEmpty)
         let expiredWithout = await prices.withoutPool([expired])
         XCTAssertEqual(expiredWithout, [expired.address])
+    }
+
+    /// A Moment that graduates is priced from its pool within a minute of its last lookup, not 30: Home's row and its
+    /// page stop saying "Not trading yet" while the Moments tab already values it.
+    func testAMomentThatGraduatesIsPricedWithinAMinute() async throws {
+        let token = coin("b1")
+        moment(token.address, id: 6, graduated: nil, state: .collecting)
+        let clock = StubClock()
+        let prices = service(clock: clock)
+        _ = try await prices.prices(for: [token])
+        let collecting = await prices.notTradingYet([token])
+        XCTAssertEqual(collecting, [token.address])
+
+        let key = PoolKey(currency0: token.address, currency1: Monad.usdc, fee: 10_000, tickSpacing: 200, hooks: Self.cohort.hook)
+        moment(token.address, id: 6, graduated: key, state: .graduated)
+        let sqrt = BigUInt((5e-16).squareRoot() * pow(2, 96))
+        VenueChainStub.answer(Self.cohort.poolManager, MomentsABI.call(Self.cohort.poolManager, MomentsABI.PoolManager.extsload, [.bytes(MomentsABI.slot0(of: key.id))], returns: "bytes32"),
+                              with: sqrt.serialize().leftPadded(to: 32))
+        clock.now = clock.now.addingTimeInterval(30)
+        let soon = try await prices.prices(for: [token])
+        XCTAssertNil(soon[token.address], "inside the minute the last record stands")
+        clock.now = clock.now.addingTimeInterval(PoolLookupCache<Int>().unsettledTTL)
+        let after = try await prices.prices(for: [token])
+        XCTAssertEqual(try XCTUnwrap(after[token.address]).usd, 0.0005, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(after[token.address]).source, "DyorHQ Moment pool")
+        let trading = await prices.notTradingYet([token])
+        XCTAssertTrue(trading.isEmpty, "no longer Not trading yet")
+    }
+
+    /// A launch that graduates leaves its frozen curve price within a minute for its pool's; a coin already on its pool
+    /// keeps its record for 30 minutes.
+    func testALaunchThatGraduatesLeavesItsCurveWithinAMinute() async throws {
+        let token = coin("b2"), curve = address("d2")
+        let poolId = Data(repeating: 0x72, count: 32)
+        record(token.address, curve: curve, phase: .bonding)
+        reserves(curve, quote: 2 * BigUInt(10).power(18), tokens: BigUInt(10).power(24)) // 2e-6 MON a coin
+        let clock = StubClock()
+        let prices = service(clock: clock)
+        let onCurve = try await prices.prices(for: [token])
+        XCTAssertEqual(try XCTUnwrap(onCurve[token.address]).source, "DyorHQ curve")
+
+        record(token.address, curve: curve, phase: .graduated, venue: .uniswapV4, poolId: poolId, sweptAt: Self.head.timestamp - 10)
+        v4Slot(Self.live.poolManager, poolId: poolId, ratio: 1 / 3e-6) // 3e-6 MON a coin
+        clock.now = clock.now.addingTimeInterval(PoolLookupCache<Int>().unsettledTTL + 1)
+        let graduated = try await prices.prices(for: [token])
+        XCTAssertEqual(try XCTUnwrap(graduated[token.address]).source, "Uniswap v4")
+        XCTAssertEqual(try XCTUnwrap(graduated[token.address]).usd, 3e-6 * 0.03, accuracy: 1e-15)
+
+        // On its pool it is settled: no record read at the latest block for the next 30 minutes.
+        func recordReads() -> Int {
+            VenueChainStub.asked(at: Self.head.number).filter { $0.to == Self.live.factory && $0.data.prefix(4) == ABI.selector(LaunchpadABI.Factory.getLaunchedToken) }.count
+        }
+        let reads = recordReads()
+        clock.now = clock.now.addingTimeInterval(PoolLookupCache<Int>().hitTTL - 60)
+        _ = try await prices.prices(for: [token])
+        XCTAssertEqual(recordReads(), reads)
     }
 
     /// Graduated an hour ago: the 24h change compares its pool price now with its curve price a day ago, as its factory

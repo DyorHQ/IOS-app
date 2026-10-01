@@ -610,8 +610,9 @@ final class AppCoinValuationTests: XCTestCase {
     }
 
     /// A held coin's launch, found in any phase from its factory's record, on the live launchpad or a retired one; MON,
-    /// the curated tokens and coins no factory recorded are left out, and a read that fails throws. (This fixture answers
-    /// no live price: the coin is recorded and read, and unpriced.)
+    /// the curated tokens and coins no factory recorded are left out, and a read that fails throws. A coin on its curve
+    /// is priced from the reserves read with its launch (`Launch.pairPrice`); this fixture answers no pool price, so a
+    /// graduated one is recorded and read, and unpriced.
     func testHeldLaunchesFindHeldCoinsInAnyPhase() async throws {
         let service = LaunchpadService(rpc: MomentsChainStub.rpc(), addresses: V2Fixture.launchpad, logsRPC: MomentsChainStub.rpc())
         let stranger = Token(address: Address(literal: "0x00000000000000000000000000000000000c0300"), symbol: "NEW", name: "New coin", decimals: 18)
@@ -628,8 +629,14 @@ final class AppCoinValuationTests: XCTestCase {
                 let launch = try XCTUnwrap(found.launches[chain.coin], label)
                 XCTAssertEqual(launch.phase, phase, label)
                 XCTAssertEqual(launch.factory, stack.factory, label)
-                XCTAssertNil(found.pairPerCoin[chain.coin], "\(label): no live price answered")
-                XCTAssertFalse(found.complete, label)
+                if phase == .graduated {
+                    XCTAssertNil(found.pairPerCoin[chain.coin], "\(label): no pool price answered")
+                    XCTAssertFalse(found.complete, label)
+                } else {
+                    XCTAssertEqual(try XCTUnwrap(found.pairPerCoin[chain.coin], label), 1e-24, accuracy: 1e-36, "\(label): 1,000 wei per 1e9 coins, read with its launch")
+                    XCTAssertEqual(found.pairPerCoin[chain.coin], launch.pairPrice, label)
+                    XCTAssertTrue(found.complete, label)
+                }
                 XCTAssertEqual(found.curve.coins, phase == .graduated ? [] : [chain.coin], label)
                 let asked = Set(MomentsChainStub.batches().first?.map(\.to) ?? [])
                 XCTAssertEqual(asked, Set(CurveCoinChain.factories.map(\.factory)), "\(label): the coin and the stranger, asked of every factory; MON and USDC never")
