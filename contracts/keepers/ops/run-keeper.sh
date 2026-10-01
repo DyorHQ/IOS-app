@@ -10,8 +10,9 @@
 # Every scheduled run is a dry run unless the unit's own flag is exactly 1 (KEEPER_SEND_GRAD, KEEPER_SEND_SWEEPS,
 # KEEPER_SEND_BUYBACKS: Fly secrets, unset = 0), entrypoint.sh left it a usable keystore that derives the address
 # keeper-signers.json pins, and this is the Machine KEEPER_MACHINE_ID names, so the 7-day dry run and the staged
-# enables (grad, then buybacks, then sweeps) are secret flips. Governance never sends. A flag that asks to send when the unit may not still runs the dry run, then fails.
-# No unit ever passes --only-live: the retired stacks keep their holders.
+# enables (grad, then buybacks, then sweeps) are secret flips. Governance never sends. A flag that asks to send when
+# the unit may not still runs the dry run, then fails. No unit ever passes --only-live: the retired stacks keep their
+# holders.
 #
 # healthchecks.io: /start before the run; the plain ping after keeper exit 0 (nothing for a human) or 2 (alerts, which
 # the keeper already posted); /fail after 1 or anything else. The ping URL reaches curl on stdin (-K -), never argv,
@@ -44,10 +45,11 @@ RPC_URLS=${KEEPER_RPC_URLS:-https://rpc3.monad.xyz https://rpc4.monad.xyz}
 # The unit table (build 17 plan, decision 14; keepers report 3.3 and 3.4). The funding is 30 / 10 / 5 MON for
 # grad / buybacks / sweeps; --min-balance warns (every 12 h) below 10 / 3 / 1; --max-spend-per-day holds sends above
 # 20 / 10 / 3 MON (the same numbers as keeper-signers.json; ops.test.mjs keeps them equal). A signing unit's
-# --max-runtime is 240 s: below the grad cadence and inside fly.toml's kill_timeout, so a deploy lets a run finish. The
-# key-less governance scan gets 600 s for a catch-up (a deploy that stops it costs only that run's progress: its cursor
-# is saved at the end of a run, so the next run scans those blocks again and misses none). The log cursors start where the plan says (governance after the 13 reviewed v2 setup events; later
-# runs resume from the cursor in the state file).
+# --max-runtime is 240 s: below the grad cadence and inside fly.toml's kill_timeout, and a send never outlasts it, so a
+# deploy lets a run finish. The key-less governance scan gets 600 s for a catch-up (a deploy that stops it costs only
+# that run's progress: its cursor is saved at the end of a run, so the next run scans those blocks again and misses
+# none). The log cursors start where the plan says (governance after the 13 reviewed v2 setup events; later runs
+# resume from the cursor in the state file).
 flag=
 min_balance=
 cap=

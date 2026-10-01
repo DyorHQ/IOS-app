@@ -159,7 +159,8 @@ async function safeSend({ sender, reporter, client, state, budget, clock = budge
   const at = clock();
   const what = tx.label ?? tx.signature;
   const targetKey = `${job}:${target}`;
-  // The run refuses every send (stale RPC, past its deadline, state not saved): nothing is read, recorded or backed off.
+  // The run refuses every send (stale RPC, past its deadline, state not saved): nothing is read, recorded or backed
+  // off.
   const blocked = live ? sender.blocked?.() ?? budget?.held : undefined;
   if (blocked) {
     reporter.info(`not sending ${what}: ${blocked}`);

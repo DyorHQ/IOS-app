@@ -5,8 +5,9 @@
 // --repeat-warning (12 h); a posted key that clears is posted as "resolved", but only after a job that completed saw it
 // clear (a skipped read proves nothing). One-off events (a governance log, a failed send) are posted once and never
 // resolve; one whose post was not delivered is posted by the next runs from its history (the event itself is never
-// raised again: its log cursor has moved on), until it is delivered or a week has passed. Info alerts are never posted; stdout keeps every alert. The history lives in the state file
-// (`state.notify.keys`), so dedup needs --state-file.
+// raised again: its log cursor has moved on), until it is delivered or a week has passed. Info alerts are never
+// posted; stdout keeps every alert. The history lives in the state file (`state.notify.keys`), so dedup needs
+// --state-file.
 //
 // E4: the payload is chosen from the webhook URL: Slack `{text}`; Discord native `{content, allowed_mentions:{parse:[]}}`
 // in chunks of at most 1,900 characters (Discord refuses more than 2,000, and `{text}` only works on its /slack URL);
