@@ -43,9 +43,10 @@ public struct PricePoint: Hashable, Sendable, Identifiable {
 /// Spot prices straight from on-chain pools, quoted in USDC, plus the same read 24 hours earlier (Monad's public RPCs
 /// serve historical state) for the 24h change. Nothing here depends on an indexer.
 ///
-/// A DyorHQ coin — one the registry knows, or one a DyorHQ factory's own record names — is priced only on the venue its
-/// factory's record names (`DyorListing`), re-read every 30 minutes: never from any other pool, so a thin pool anyone
-/// plants beside it is ignored. Every other token is priced from the deepest pool found for it. Times come from the
+/// With DyorHQ venues on (`setUsesDyorVenues`), a DyorHQ coin — one the registry knows, or one a DyorHQ factory's own
+/// record names — is priced only on the venue its factory's record names (`DyorListing`), re-read every 30 minutes: never
+/// from any other pool, so a thin pool anyone plants beside it is ignored. Every other token, and every token with them
+/// off, is priced from the deepest pool found for it. Times come from the
 /// session's measured block pace (`BlockClock`): the day-ago block is the one mined 24 hours before the latest, and a
 /// chart's span and labels are true times.
 public actor PriceService {
@@ -108,13 +109,16 @@ public actor PriceService {
     nonisolated let launchpads: [LaunchpadAddresses]
     nonisolated let cohorts: [MomentsAddresses]
     /// Off, DyorHQ coins are priced like any token, as build 16 did (`setUsesDyorVenues`).
-    private var usesDyorVenues = true
+    private var usesDyorVenues: Bool
 
     /// `registry` (DyorHQ's coins) reads the launchpads and cohorts it was made with; without one, `launchpads` and
-    /// `cohorts`.
+    /// `cohorts`. `dyorVenues` prices DyorHQ coins on their own venues from the start, and is off unless asked for: on,
+    /// a curve, Uniswap v4 or Moment coin the wallet holds has a spot price, so a screen that also values it as a
+    /// launch or Moment holding must count each coin once before turning it on.
     public init(rpc: RPCClient, registry: DyorCoinRegistry? = nil, clock: BlockClock? = nil,
                 launchpads: [LaunchpadAddresses] = DyorCoinRegistry.launchpads(live: .monadMainnet),
                 cohorts: [MomentsAddresses] = DyorCoinRegistry.cohorts(live: .monadMainnet),
+                dyorVenues: Bool = false,
                 now: @escaping @Sendable () -> Date = Date.init) {
         self.rpc = rpc
         self.clock = clock ?? BlockClock(rpc: rpc)
@@ -122,11 +126,12 @@ public actor PriceService {
         self.registry = registry
         self.launchpads = registry?.launchpads ?? launchpads
         self.cohorts = registry?.cohorts ?? cohorts
+        usesDyorVenues = dyorVenues
         self.now = now
     }
 
-    /// Whether DyorHQ coins are priced on their own venues (the default) or like any other token, as before. A change
-    /// forgets every pool and venue found, so the next read looks them up the new way.
+    /// Whether DyorHQ coins are priced on their own venues or like any other token, as before (the default, `init`'s
+    /// `dyorVenues`). A change forgets every pool and venue found, so the next read looks them up the new way.
     public func setUsesDyorVenues(_ on: Bool) {
         guard on != usesDyorVenues else { return }
         usesDyorVenues = on

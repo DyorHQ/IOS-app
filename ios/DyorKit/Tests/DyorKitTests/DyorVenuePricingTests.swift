@@ -25,8 +25,9 @@ final class DyorVenuePricingTests: XCTestCase {
         monPrice(0.025, at: Self.dayAgo)
     }
 
+    /// A price service with DyorHQ venues on, as the app turns them on.
     private func service(registry: DyorCoinRegistry? = nil) -> PriceService {
-        PriceService(rpc: VenueChainStub.rpc(), registry: registry)
+        PriceService(rpc: VenueChainStub.rpc(), registry: registry, dyorVenues: true)
     }
 
     // MARK: Fixtures
@@ -116,7 +117,7 @@ final class DyorVenuePricingTests: XCTestCase {
             VenueChainStub.update { $0.liquidity[id] = BigUInt(Data(hex: tier["liquidity"].string!)!) }
         }
 
-        let prices = try await PriceService(rpc: VenueChainStub.rpc()).prices(for: [qt, .mon])
+        let prices = try await service().prices(for: [qt, .mon])
         let price = try XCTUnwrap(prices[qt.address])
         let mon = try XCTUnwrap(prices[Monad.native])
         XCTAssertEqual(price.usd, 6.124e-8, accuracy: 0.001e-8, "about $6.12e-8")
@@ -184,7 +185,7 @@ final class DyorVenuePricingTests: XCTestCase {
     func testACollectingMomentHasNoPrice() async throws {
         let token = coin("a4")
         moment(token.address, id: 4, graduated: nil, state: .collecting)
-        let prices = PriceService(rpc: VenueChainStub.rpc())
+        let prices = service()
         let read = try await prices.prices(for: [token])
         XCTAssertNil(read[token.address], "no pool yet")
         let notTrading = await prices.notTradingYet([token])
@@ -212,7 +213,7 @@ final class DyorVenuePricingTests: XCTestCase {
         record(token.address, curve: curve, phase: .bonding, at: Self.dayAgo)
         v4Slot(Self.live.poolManager, poolId: poolId, ratio: 1 / 3e-6, at: Self.head.number) // 3e-6 MON a coin
         reserves(curve, quote: 2 * BigUInt(10).power(18), tokens: BigUInt(10).power(24)) // 2e-6 MON a coin on the curve
-        let prices = PriceService(rpc: VenueChainStub.rpc())
+        let prices = service()
         let priceRead = try await prices.prices(for: [token])
         let price = try XCTUnwrap(priceRead[token.address])
         XCTAssertEqual(price.usd, 3e-6 * 0.03, accuracy: 1e-15)
@@ -276,7 +277,7 @@ final class DyorVenuePricingTests: XCTestCase {
         let other = coin("a9"), otherCurve = address("c9")
         record(other.address, curve: otherCurve, pair: Monad.usdc, phase: .bonding)
         VenueChainStub.answer(Uniswap.v3Factory, try SwapCalldata.v3GetPool(factory: Uniswap.v3Factory, other.address, Monad.usdc, fee: 3000), with: try ABI.encode([.address(planted)], "address"))
-        let blind = PriceService(rpc: VenueChainStub.rpc(), launchpads: [LaunchpadAddresses(factory: address("dead"), poolManager: Uniswap.poolManager)], cohorts: [])
+        let blind = PriceService(rpc: VenueChainStub.rpc(), launchpads: [LaunchpadAddresses(factory: address("dead"), poolManager: Uniswap.poolManager)], cohorts: [], dyorVenues: true)
         let unread = try await blind.prices(for: [other])
         XCTAssertNil(unread[other.address], "a coin whose records couldn't be read is not priced from any pool")
         let without = await blind.withoutPool([other])
@@ -287,7 +288,7 @@ final class DyorVenuePricingTests: XCTestCase {
     /// printed, priced on its own Monday pool.
     func testLiveQTPrice() async throws {
         guard ProcessInfo.processInfo.environment["DYORHQ_LIVE_PRICES"] == "1" else { throw XCTSkip("Set DYORHQ_LIVE_PRICES=1 to read mainnet") }
-        let service = PriceService(rpc: RPCClient(urls: Monad.publicRPCs))
+        let service = PriceService(rpc: RPCClient(urls: Monad.publicRPCs), dyorVenues: true)
         let qt = Token(address: DyorCoinChain.qt, symbol: "QT", name: "Quet", decimals: 18)
         let prices = try await service.prices(for: [qt, .mon])
         let price = try XCTUnwrap(prices[qt.address])
@@ -299,8 +300,8 @@ final class DyorVenuePricingTests: XCTestCase {
         XCTAssertFalse(price.isNew)
     }
 
-    /// Off (the remote switch), a DyorHQ coin is priced as before: from the deepest pool found for it.
-    func testTheSwitchPricesDyorHQCoinsAsBefore() async throws {
+    /// A USDC-paired DyorHQ curve coin at $5e-6 on its curve, with a third-party USDC pool beside it at $4e-6.
+    private func curveCoinWithAPool() throws -> Token {
         let token = coin("aa"), curve = address("ca")
         let pool = address("ba")
         record(token.address, curve: curve, pair: Monad.usdc, phase: .bonding)
@@ -311,6 +312,24 @@ final class DyorVenuePricingTests: XCTestCase {
         VenueChainStub.answer(pool, try SwapCalldata.v3Slot0(pool: pool),
                               with: try ABI.encode([.uint(BigUInt((4e-6 * 1e6 / 1e18).squareRoot() * pow(2, 96))), .int(0), .uint(0), .uint(0), .uint(0), .uint(0), .bool(true)],
                                                    "uint160,int24,uint16,uint16,uint16,uint8,bool"))
+        return token
+    }
+
+    /// Off unless asked for: until a screen counts each holding once, a new price service prices a DyorHQ coin as before
+    /// and reads no factory record for it.
+    func testVenuesAreOffUnlessAskedFor() async throws {
+        let token = try curveCoinWithAPool()
+        let read = try await PriceService(rpc: VenueChainStub.rpc()).prices(for: [token])
+        let price = try XCTUnwrap(read[token.address])
+        XCTAssertEqual(price.usd, 4e-6, accuracy: 1e-12)
+        XCTAssertEqual(price.source, "Uniswap v3")
+        XCTAssertNil(price.pairSymbol)
+        XCTAssertFalse(VenueChainStub.snapshot.calls.contains { $0.data.prefix(4) == ABI.selector(LaunchpadABI.Factory.getLaunchedToken) }, "no record read")
+    }
+
+    /// Off (the remote switch), a DyorHQ coin is priced as before: from the deepest pool found for it.
+    func testTheSwitchPricesDyorHQCoinsAsBefore() async throws {
+        let token = try curveCoinWithAPool()
         let prices = service()
         let venueRead = try await prices.prices(for: [token])
         let venue = try XCTUnwrap(venueRead[token.address])
