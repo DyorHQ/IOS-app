@@ -157,6 +157,59 @@ final class LookAlikeRuleTests: XCTestCase {
         }
     }
 
+    /// A digit of any script and a sign are no letters: one right beside "MON" or "USDC" leaves it an imitation, as a
+    /// 0 or a dot does ("MON०" with a Devanagari zero, "USDC©", "MON₹", "USDC®"). A digit drawn like a letter is still
+    /// read as that letter where a whole symbol or name is compared ("M०N" is MON), and a sign is never spelled with
+    /// letters ("©" is no "(C)", "₹" no "INR").
+    func testADigitOrASignBesideASymbolIsNoLetter() {
+        for (text, expect) in [("MON\u{0966}", Token.mon), ("USDC\u{00A9}", .usdc), ("MON\u{20B9}", .mon), ("USDC\u{00AE}", .usdc), ("M\u{0966}N", .mon),
+                               ("\u{0966}MON", .mon), ("MON\u{0665}", .mon), ("USDC\u{0E50}", .usdc), ("MON\u{20BA}", .mon), ("USDC\u{2117}", .usdc)] {
+            XCTAssertEqual(WalletHoldings.imitated(by: token(text)), expect, "symbol \(label(text))")
+            XCTAssertEqual(WalletHoldings.imitated(by: token("SAFE", text)), expect, "name \(label(text))")
+            XCTAssertEqual(SymbolSafety.createRefusal(name: "Some Coin", symbol: text), .symbolImitates(expect), label(text))
+        }
+        XCTAssertEqual(WalletHoldings.visible("M\u{0966}N"), "MoN", "a Devanagari zero drawn like o, where whole names are compared")
+        XCTAssertEqual(WalletHoldings.visible("MON\u{0966}", digits: .value), "MON0", "and a digit where one is found inside another")
+        XCTAssertEqual(WalletHoldings.visible("USDC\u{00A9}\u{20B9}\u{00C6}\u{1D0D}"), "USDC\u{00A9}\u{20B9}AEM", "signs stay signs; Latin letters are spelled in ASCII")
+    }
+
+    /// Nothing that made a symbol or name an imitation before every script's look-alike digits and ICU's Latin-ASCII
+    /// were read (commit da90e7a) is lost: each character of the Basic Multilingual Plane that, right after or right
+    /// before MON or USDC in a symbol or a name, made it MON's or USDC's look-alike then still does
+    /// (`Fixtures/lookalike-affixes.json`, worked out by running `imitated(by:)` at that commit on every such text).
+    func testEveryCharacterBesideMONOrUSDCThatMadeAnImitationStillDoes() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "lookalike-affixes", withExtension: "json", subdirectory: "Fixtures"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var cases: [(placement: String, scalars: [Unicode.Scalar])] = []
+        for placement in ["symbolAfter", "symbolBefore", "nameAfter", "nameBefore"] {
+            let ranges = try XCTUnwrap(fixture[placement] as? [String], placement)
+            let scalars = ranges.flatMap { range -> [Unicode.Scalar] in
+                let ends = range.split(separator: "-").compactMap { UInt32($0, radix: 16) }
+                return (ends[0] ... ends[ends.count - 1]).compactMap(Unicode.Scalar.init)
+            }
+            XCTAssertGreaterThan(scalars.count, 13_000, placement)
+            cases.append((placement, scalars))
+        }
+        let jobs = cases.flatMap { item in [Token.mon, Token.usdc].map { (item.placement, item.scalars, $0) } }
+        var lost = [[String]](repeating: [], count: jobs.count)
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: jobs.count) { index in
+            let (placement, scalars, ticker) = jobs[index]
+            var found: [String] = []
+            for scalar in scalars {
+                let text = placement.hasSuffix("After") ? ticker.symbol + String(scalar) : String(scalar) + ticker.symbol
+                let probe = placement.hasPrefix("symbol") ? token(text) : token("SAFE", text)
+                if WalletHoldings.imitated(by: probe) != ticker { found.append(String(format: "%04X", scalar.value)) }
+            }
+            lock.lock()
+            lost[index] = found
+            lock.unlock()
+        }
+        for (index, job) in jobs.enumerated() {
+            XCTAssertEqual(lost[index], [], "\(job.0), \(job.2.symbol): no longer an imitation")
+        }
+    }
+
     // MARK: Cost
 
     /// An airdropped token's `name()` can compute 40 KB of text for a few thousand gas, and the Send list judges each

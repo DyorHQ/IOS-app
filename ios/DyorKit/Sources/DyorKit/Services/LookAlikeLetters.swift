@@ -6,8 +6,10 @@
 /// it) — Cyrillic, Greek, Coptic, Armenian, Cherokee, Lisu, Hebrew, Arabic, Myanmar, Tifinagh, Ethiopic, Canadian
 /// syllabics and more; full-width and mathematical letters, which compatibility folding already makes ASCII, left out —
 /// and each Latin letter outside ASCII whose skeleton is exactly one (dotless ı, small capital ᴏ, script ɡ; never an
-/// accented letter). 833 in all. `WalletHoldings.visible` reads each as that letter, and
-/// `SymbolSafety` counts one from outside the everyday Latin letters as a letter that can pass for a Latin one.
+/// accented letter). 833 in all. `WalletHoldings.visible` reads each as that letter, a digit (a Devanagari ०, an
+/// Arabic-Indic ٥) only where whole symbols and names are compared: where one is found inside other text, a digit is
+/// read as its value, which is no letter (`WalletHoldings.Digits`). `SymbolSafety` counts a letter from outside the
+/// everyday Latin letters as a letter that can pass for a Latin one.
 enum LookAlikeLetters {
     static let confusables: [(UInt32, Character)] = [
         // Greek And Coptic.

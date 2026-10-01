@@ -165,9 +165,10 @@ public enum WalletHoldings {
     ///   MON, a "USDC" with a zero-width space or a Cyrillic "С" in it, "M0N", "m0nad", "MØN", "U$DC", a Lisu "ꓟꓳꓠ", a
     ///   Myanmar "Mဝnad", a "USDT";
     /// - or its symbol holds one of their symbols or names with no letter right before or after it — "USDC.e", "$MON",
-    ///   "MON2", "USDC e", "USDC" padded with spaces and a dot — while letters around it make another word ("MONKE",
-    ///   "xMON");
-    /// - or its name is one of their symbols or names with nothing but non-letters around it ("$MON", "USDC 2").
+    ///   "MON2", "MON०" with a Devanagari zero, "USDC©", "USDC e", "USDC" padded with spaces and a dot — while letters
+    ///   around it make another word ("MONKE", "xMON"). A digit of any script and a sign are no letters here (`forms`);
+    /// - or its name is one of their symbols or names with nothing but non-letters around it ("$MON", "USDC 2",
+    ///   "MON₹").
     /// Being chosen proves nothing here: tapping a search result in Swap stores a token as chosen. Nil for MON, the
     /// curated tokens and every other name. The badge (`TokenBadge`), the create forms' guard
     /// (`SymbolSafety.createRefusal`) and a send's default go by this one rule; so do the wallet's warnings, the major
@@ -279,7 +280,7 @@ public enum WalletHoldings {
     /// and Bitcoin. Text with a direction-changing character is read backwards too: an override can show "CDSU" as
     /// "USDC". Empty text has no reading.
     static func readings(_ text: String) -> [String] {
-        shownForms(text).flatMap { form in
+        shownForms(text, digits: .lookAlike).flatMap { form in
             ["a:" + form.lowercased(), "b:" + String(String.UnicodeScalarView(form.unicodeScalars.map { lookAlikeDigits[$0] ?? $0 })),
              "c:" + zeroAsO(form.lowercased()), "d:" + asciiLookAlikes(form.lowercased())]
         }
@@ -287,9 +288,11 @@ public enum WalletHoldings {
 
     /// `text`'s readings "a", "c" and "d" untagged, for finding a token's symbol or name inside other text: each as
     /// `visible` gives it, and each with its spaces kept, one for each run of them, so a space parts a word as any
-    /// other character that isn't a letter does ("USDC e").
+    /// other character that isn't a letter does ("USDC e"). A digit of another script is read as its value here,
+    /// never as the letter it is drawn like (`Digits.value`): the rule asks whether a letter stands right beside a
+    /// symbol, and a Devanagari "०" or an Arabic-Indic "٥" after "MON" is a digit, as the 0 in "MON0" is.
     static func forms(_ text: String) -> [String] {
-        Array(Set((shownForms(text) + shownForms(text, keepingSpaces: true)).flatMap { form -> [String] in
+        Array(Set((shownForms(text, digits: .value) + shownForms(text, keepingSpaces: true, digits: .value)).flatMap { form -> [String] in
             let lower = form.lowercased()
             return [lower, zeroAsO(lower), asciiLookAlikes(lower)]
         }))
@@ -297,11 +300,11 @@ public enum WalletHoldings {
 
     /// `visible(text)`, and backwards too when a direction-changing character can show it so (its end, then, is what
     /// shows first); none for empty text.
-    private static func shownForms(_ text: String, keepingSpaces: Bool = false) -> [String] {
-        let base = visible(text, keepingSpaces: keepingSpaces)
+    private static func shownForms(_ text: String, keepingSpaces: Bool = false, digits: Digits) -> [String] {
+        let base = visible(text, keepingSpaces: keepingSpaces, digits: digits)
         guard !base.isEmpty else { return [] }
         guard changesDirection(text) else { return [base] }
-        return [base, String(visible(text, keepingSpaces: keepingSpaces, fromTheEnd: true).reversed())]
+        return [base, String(visible(text, keepingSpaces: keepingSpaces, fromTheEnd: true, digits: digits).reversed())]
     }
 
     /// Whether `text` holds a character that can change the order it shows in (`bidiControls`), leaving out a first
@@ -344,8 +347,11 @@ public enum WalletHoldings {
     /// and Latin letters with a stroke, bar or hook (Ø, Đ, Ł, Ɵ, Ʉ: `LookAlikeLetters.marked`) as the letters they are
     /// drawn like, before the compatibility forms are folded (which would turn a Greek lunate "Ϲ" into a "Σ" nobody
     /// mistakes for C) and after; accents and width ignored; and every other Latin letter as the ASCII it is written
-    /// with (ICU's Latin-ASCII: the small capitals of "ᴍᴏɴᴀᴅ", Ƀ, Ȼ, Æ). Case is kept (`readings` decides on it).
-    static func visible(_ text: String, keepingSpaces: Bool = false, fromTheEnd: Bool = false) -> String {
+    /// with (`latinASCII`: the small capitals of "ᴍᴏɴᴀᴅ", Ƀ, Ȼ, Æ). A digit of another script is read as `digits`
+    /// says: as the letter it is drawn like (a Devanagari "०" as o), or as its value. Signs and symbols stay as they
+    /// are: none is spelled with letters ("©" is no "(C)", "₹" no "INR"), so one beside a symbol is still no letter.
+    /// Case is kept (`readings` decides on it).
+    static func visible(_ text: String, keepingSpaces: Bool = false, fromTheEnd: Bool = false, digits: Digits = .lookAlike) -> String {
         // What shows, at most `maxJudged` of it, taken before anything else, so a long text costs no more.
         var shown: [Unicode.Scalar] = []
         var space = false
@@ -357,7 +363,7 @@ public enum WalletHoldings {
             if isUnseen(scalar) { continue }
             if keepingSpaces, space, !shown.isEmpty { shown.append(" ") }
             space = false
-            shown.append(readAs[scalar] ?? scalar)
+            shown.append(read(scalar, digits))
             if shown.count >= maxJudged { break }
         }
         if fromTheEnd { shown.reverse() }
@@ -372,12 +378,60 @@ public enum WalletHoldings {
             if isUnseen(scalar) { continue }
             if keepingSpaces, space, !scalars.isEmpty { scalars.append(" ") }
             space = false
-            scalars.append(readAs[scalar] ?? scalar)
+            scalars.append(read(scalar, digits))
         }
         let folded = String(scalars).folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil)
-        let ascii = folded.applyingTransform(StringTransform("Latin-ASCII"), reverse: false) ?? folded
-        return String((keepingSpaces ? ascii : ascii.filter { !$0.isWhitespace }).prefix(maxJudged))
+        var ascii = String.UnicodeScalarView()
+        for scalar in folded.unicodeScalars {
+            if let spelled = latinASCII[scalar] { ascii.append(contentsOf: spelled.unicodeScalars) } else { ascii.append(scalar) }
+        }
+        let shownText = String(ascii)
+        return String((keepingSpaces ? shownText : shownText.filter { !$0.isWhitespace }).prefix(maxJudged))
     }
+
+    /// How `visible` reads a decimal digit of another script that is drawn like a Latin letter (a Devanagari or Thai
+    /// zero like o, an Arabic-Indic one like l, seven like V: `lookAlikeLetters`).
+    enum Digits {
+        /// As that letter, for `readings`, which compare whole symbols and names: "M०N" reads as MON.
+        case lookAlike
+        /// As the ASCII digit of its value, which is no letter, for `forms`, which find a symbol or name inside other
+        /// text: "MON०" is MON with a digit after it, as "MON0" is.
+        case value
+    }
+
+    /// `scalar` as `visible` reads it: a letter or digit of `readAs` as the one it is drawn like, and with `digits`
+    /// `.value` every decimal digit (Unicode's Nd) as the ASCII digit of its value; anything else as it is.
+    private static func read(_ scalar: Unicode.Scalar, _ digits: Digits) -> Unicode.Scalar {
+        if digits == .value, scalar.properties.generalCategory == .decimalNumber, let value = scalar.properties.numericValue,
+           let ascii = Unicode.Scalar(UInt32(0x30) + UInt32(value)) {
+            return ascii
+        }
+        return readAs[scalar] ?? scalar
+    }
+
+    /// Each Latin letter beyond ASCII that ICU's Latin-ASCII transform writes with ASCII, with what it writes: the
+    /// small capitals and IPA letters, Æ as AE, ß as ss, and the spacing modifier letters, ʼ as an apostrophe. Letters
+    /// only: the transform also spells signs with letters (© as "(C)", ₹ as "INR", ₺ as "TL"), which would put a letter
+    /// beside a symbol that has none. Built once, from the Latin blocks, with one run of the transform.
+    static let latinASCII: [Unicode.Scalar: String] = {
+        let blocks: [ClosedRange<UInt32>] = [
+            0x00AA...0x00AA, 0x00BA...0x00BA, 0x00C0...0x024F, 0x0250...0x02AF, 0x02B0...0x02FF, 0x1D00...0x1D7F, 0x1D80...0x1DBF,
+            0x1E00...0x1EFF, 0x2C60...0x2C7F, 0xA720...0xA7FF, 0xAB30...0xAB6F, 0x10780...0x107BF, 0x1DF00...0x1DFFF,
+        ]
+        let letters = blocks.joined().compactMap(Unicode.Scalar.init).filter { scalar in
+            switch scalar.properties.generalCategory {
+            case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter: return true
+            default: return false
+            }
+        }
+        // One letter a line, so no letter is spelled by the one after it.
+        let spelled = letters.map(String.init).joined(separator: "\n").applyingTransform(StringTransform("Latin-ASCII"), reverse: false)?
+            .components(separatedBy: "\n")
+        guard let spelled, spelled.count == letters.count else { return [:] }
+        var table: [Unicode.Scalar: String] = [:]
+        for (letter, ascii) in zip(letters, spelled) where ascii != String(letter) && !ascii.isEmpty { table[letter] = ascii }
+        return table
+    }()
 
     /// A space, a line break or a tab: what `visible` removes, or keeps as one space.
     private static func isSpace(_ scalar: Unicode.Scalar) -> Bool {
