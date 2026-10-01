@@ -13,6 +13,11 @@ const FORBIDDEN_ENV = ["PRIVATE_KEY", "KEEPER_PRIVATE_KEY", "ETH_PRIVATE_KEY", "
 /** How long cast waits for a receipt (`cast send --timeout`, seconds), and when the keeper kills cast itself. */
 export const CAST_RECEIPT_TIMEOUT_S = 120;
 export const CAST_KILL_AFTER_MS = 180_000;
+/** What cast needs besides the receipt wait (decrypting the keystore, fees, nonce, the broadcast): the kill timer is the
+    receipt wait plus this. A send with less than this plus MIN_RECEIPT_WAIT_S left before the run's deadline is not
+    started: a Monad receipt takes about a second, but cast killed after its broadcast is an unknown outcome. */
+export const CAST_SEND_OVERHEAD_S = 60;
+export const MIN_RECEIPT_WAIT_S = 15;
 /** `cast wallet address` only decrypts a keystore (or asks a Ledger): it never needs long. */
 export const CAST_ADDRESS_KILL_AFTER_MS = 60_000;
 
@@ -117,11 +122,11 @@ export function assertNoKeyEnv(env = process.env) {
 
 /** The exact `cast send` argv for one call. `args` are already-stringified Solidity arguments. The RPC URL is not in
     it: `castEnv` hands it to cast as ETH_RPC_URL. */
-export function castSendArgv({ to, signature, args = [], gasLimit, signer, allowUnlocked, receipt = false }) {
+export function castSendArgv({ to, signature, args = [], gasLimit, signer, allowUnlocked, receipt = false, receiptTimeoutS = CAST_RECEIPT_TIMEOUT_S }) {
   const argv = ["send", to, signature, ...args.map(String)];
   if (gasLimit) argv.push("--gas-limit", String(gasLimit));
   // --json: print the receipt, whose status is the only proof of success. --timeout: stop waiting for it.
-  if (receipt) argv.push("--json", "--timeout", String(CAST_RECEIPT_TIMEOUT_S));
+  if (receipt) argv.push("--json", "--timeout", String(receiptTimeoutS));
   argv.push(...signerArgs(signer, { allowUnlocked }));
   return argv;
 }
@@ -176,9 +181,21 @@ export function makeSender({ send = false, rpcUrl, signer, allowUnlocked = false
   return {
     sent,
     live: send,
-    async call({ to, signature, args = [], gasLimit, label }) {
+    async call({ to, signature, args = [], gasLimit, label, timeLeftMs }) {
+      // A run's send never outlasts its deadline (--max-runtime): cast's receipt wait and kill timer shrink to the time
+      // left, and with too little left the send is not started (the next run sends it). Fly stops a Machine 300 s
+      // after a deploy starts; a cast killed after its broadcast would be an unknown outcome.
+      let killMs = killAfterMs;
+      let receiptS = CAST_RECEIPT_TIMEOUT_S;
+      if (send && timeLeftMs !== undefined) {
+        killMs = Math.min(killAfterMs, Math.floor(timeLeftMs));
+        receiptS = Math.min(CAST_RECEIPT_TIMEOUT_S, Math.floor(killMs / 1000) - CAST_SEND_OVERHEAD_S);
+        if (receiptS < MIN_RECEIPT_WAIT_S) {
+          throw new SendNotStarted(`only ${Math.max(0, Math.floor(timeLeftMs / 1000))}s left before --max-runtime, too little for a send and its receipt; the next run sends it`);
+        }
+      }
       const argv = send
-        ? castSendArgv({ to, signature, args, gasLimit, signer, allowUnlocked, receipt: true })
+        ? castSendArgv({ to, signature, args, gasLimit, signer, allowUnlocked, receipt: true, receiptTimeoutS: receiptS })
         : ["send", to, signature, ...args.map(String), ...(gasLimit ? ["--gas-limit", String(gasLimit)] : []), "<signer>"];
       const printable = `ETH_RPC_URL=<rpc> ${[castBin, ...argv].map(quote).join(" ")}`;
       if (!send) {
@@ -187,11 +204,11 @@ export function makeSender({ send = false, rpcUrl, signer, allowUnlocked = false
         return { dryRun: true };
       }
       log(`[send] ${label ?? signature}: ${printable}`);
-      const r = spawn(castBin, argv, { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8", env: castEnv(rpcUrl), timeout: killAfterMs, killSignal: "SIGKILL" });
+      const r = spawn(castBin, argv, { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8", env: castEnv(rpcUrl), timeout: killMs, killSignal: "SIGKILL" });
       const entry = { dryRun: false, argv, ok: false, stdout: r.stdout, stderr: r.stderr };
       sent.push(entry);
       if (r.error?.code === "ETIMEDOUT" || r.signal) {
-        throw new SendStatusUnknown(`cast was killed after ${Math.round(killAfterMs / 1000)}s (${r.signal ?? "timeout"}): the transaction may still be mined`, { gasLimit });
+        throw new SendStatusUnknown(`cast was killed after ${Math.round(killMs / 1000)}s (${r.signal ?? "timeout"}): the transaction may still be mined`, { gasLimit });
       }
       if (r.error) throw new Error(`cast could not be started (${r.error.code ?? r.error.message})`);
       if (r.status !== 0) {

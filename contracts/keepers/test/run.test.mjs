@@ -237,6 +237,13 @@ test("E9: once the deadline has passed nothing more is sent, even when a late re
   assert.deepEqual(w.sends, [], "but its send was refused");
 });
 
+test("E9: every send is told the time left before the deadline (send.mjs bounds cast by it)", async () => {
+  const w = world();
+  await runKeeper(opts(["moments-graduation", "--only-live"], { send: true, signer: { account: "k" }, maxRuntime: 240 }), w.deps);
+  assert.equal(w.sends.length, 1);
+  assert.ok(w.sends[0].timeLeftMs > 230_000 && w.sends[0].timeLeftMs <= 240_000, String(w.sends[0].timeLeftMs));
+});
+
 test("E9: a normal run finishes well inside the deadline and exits by its alerts", async () => {
   const w = world();
   const code = await runKeeper(opts(["moments-graduation", "--only-live"]), w.deps);

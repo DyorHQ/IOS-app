@@ -4,7 +4,7 @@
 // and what it cost must reach the spend ledger.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseCastReceipt, castSendArgv, makeSender, spentWei, MinedRevert, SendStatusUnknown, CAST_KILL_AFTER_MS } from "../lib/send.mjs";
+import { parseCastReceipt, castSendArgv, makeSender, spentWei, MinedRevert, SendStatusUnknown, SendNotStarted, CAST_KILL_AFTER_MS } from "../lib/send.mjs";
 import { makeReporter } from "../lib/report.mjs";
 import { momentsGraduationJob } from "../lib/jobs.mjs";
 import { spentSince } from "../lib/budget.mjs";
@@ -48,6 +48,34 @@ test("E1: cast runs with a kill timer (SIGKILL) so a hung send cannot block ever
   assert.equal(CAST_KILL_AFTER_MS, 180_000);
   assert.equal(calls[0].opts.killSignal, "SIGKILL");
   assert.ok(calls[0].argv.includes("--json"));
+});
+
+test("E1: a send never outlasts the run's deadline: cast's receipt wait and kill timer shrink to the time left", async () => {
+  const calls = [];
+  const tx = { to: TO, signature: "graduate(uint256)", args: [1n], gasLimit: 100_000n };
+  await liveSender({ status: 0, stdout: receiptJson("0x1") }, calls).call({ ...tx, timeLeftMs: 600_000 });
+  assert.equal(calls[0].opts.timeout, CAST_KILL_AFTER_MS, "plenty of time: the usual 180 s");
+  assert.equal(calls[0].argv[calls[0].argv.indexOf("--timeout") + 1], "120");
+  await liveSender({ status: 0, stdout: receiptJson("0x1") }, calls).call({ ...tx, timeLeftMs: 100_000 });
+  assert.equal(calls[1].opts.timeout, 100_000, "killed by the deadline at the latest");
+  assert.equal(calls[1].argv[calls[1].argv.indexOf("--timeout") + 1], "40", "and cast stops waiting 60 s before that");
+  // 74 s left: not enough for cast's 60 s and a 15 s receipt wait. Not started: nothing broadcast, nothing to count.
+  await assert.rejects(liveSender({ status: 0, stdout: receiptJson("0x1") }, calls).call({ ...tx, timeLeftMs: 74_000 }), (e) => e instanceof SendNotStarted && /only 74s left before --max-runtime/.test(e.message));
+  assert.equal(calls.length, 2, "cast never ran");
+});
+
+test("E1 via safeSend: a send not started for lack of time is not a failed send (no alert, no backoff, no spend)", async () => {
+  const reporter = makeReporter({ log: () => {} });
+  const lines = [];
+  reporter.info = (m) => lines.push(m);
+  const state = {};
+  const inner = liveSender({ status: 0, stdout: receiptJson("0x1") });
+  const sender = { ...inner, call: (tx) => inner.call({ ...tx, timeLeftMs: 30_000 }) };
+  await momentsGraduationJob({ client: pendingMomentClient(), cohorts: [cohort], sender, reporter, state });
+  assert.deepEqual(reporter.alerts.filter((x) => /send failed/.test(x.reason)), []);
+  assert.ok(lines.some((l) => /not sending graduate .*only 30s left before --max-runtime/.test(l)), lines.join("\n"));
+  assert.equal(state.budget?.backoff?.[`moments-graduation:${cohort.label} moment #1`], undefined);
+  assert.equal(spentSince(state, 0), 0n);
 });
 
 test("E1: status 0x1 resolves with the receipt and its cost; 0x0 throws MinedRevert with the hash and the cost", async () => {

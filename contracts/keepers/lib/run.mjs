@@ -57,6 +57,7 @@ export async function runKeeper(o, deps = {}) {
   const pickRpc = deps.pickRpc ?? ((urls) => firstHealthy(urls, { fetchImpl, now }));
   const rpcUrls = o.rpcUrls ?? [o.rpcUrl];
   const startedAt = now();
+  const deadlineAt = Date.now() + o.maxRuntime * 1000;
   if (o.role === "watchdog" && o.send) throw new Error("--role watchdog never sends: drop --send");
   assertNoKeyEnv(env); // even in dry-run: a key in the environment is a mistake worth stopping on
   // The webhook URL is a token: from --webhook-file it never sits in argv or the environment.
@@ -104,7 +105,8 @@ export async function runKeeper(o, deps = {}) {
       call: (tx) => {
         const why = blocked();
         if (why) throw new SendNotStarted(`${why}: not sending`);
-        return inner.call(tx);
+        // The time left before the deadline (real time, as the deadline's timer): a send never outlasts it.
+        return inner.call({ ...tx, timeLeftMs: deadlineAt - Date.now() });
       },
     };
     let simFrom = o.simFrom;
@@ -224,7 +226,8 @@ export async function runKeeper(o, deps = {}) {
   };
 
   // E9: a hung RPC read (or anything else) must not hold the unit forever. The deadline cannot interrupt a running
-  // `cast send` (it is synchronous and has its own kill timer), but it fires as soon as that returns.
+  // `cast send` (it is synchronous), but cast's own kill timer never runs past the deadline (send.mjs), so it fires as
+  // soon as that returns.
   let timer;
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => resolve("overrun"), o.maxRuntime * 1000);
