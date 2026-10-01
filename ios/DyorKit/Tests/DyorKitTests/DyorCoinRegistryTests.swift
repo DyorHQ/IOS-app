@@ -111,7 +111,8 @@ final class DyorCoinRegistryTests: XCTestCase {
             XCTAssertEqual(coin.origin, .moment(factory: factory, id: 1, retired: factory != c4))
             XCTAssertEqual(coin.pair, Monad.usdc)
         }
-        XCTAssertEqual(MomentsChainStub.batches().count, 4, "every factory's record; then, at once, the launches' records and text and the Moments; then the Moments' text")
+        XCTAssertEqual(MomentsChainStub.batches().count, 5,
+                       "the counts; every factory's record; then, at once, the launches' records and text and the Moments; then the Moments' text")
         let known = await registry.all
         XCTAssertEqual(known.count, 9, "a coin proven is kept")
     }
@@ -461,6 +462,54 @@ final class DyorCoinRegistryTests: XCTestCase {
         XCTAssertFalse(DyorCoinRegistry.claims(candidate, launchpads: stacks, cohorts: cohorts, answers: [empty, empty]).complete, "an answer short")
         let claimed = DyorCoinRegistry.claims(candidate, launchpads: stacks, cohorts: cohorts, answers: [empty, empty, .success([.uint(7)])])
         XCTAssertEqual(claimed.moments.map(\.1), [7])
+    }
+
+    /// After a complete refresh every factory's list is known, so a new session proving a wallet full of airdropped
+    /// tokens asks the factories' counts and nothing else: 1,000 addresses no factory made, JAMES and QT cost one read.
+    /// A coin launched since is asked of the one factory whose count moved past what was read, and nothing else.
+    func testAProofAfterACompleteRefreshAsksOnlyTheCounts() async throws {
+        var chain = DyorCoinChain.mainnet
+        let first = registry(chain, store: store)
+        let complete = await first.refresh()
+        XCTAssertTrue(complete)
+        let spam = (1...1_000).map { Address(literal: String(format: "0x00000000000000000000000000000000%08x", 0x5a000000 + $0)) }
+        chain.install()
+        let session = DyorCoinRegistry(rpc: MomentsChainStub.rpc(), store: store)
+        let proof = await session.prove(spam + [DyorCoinChain.james, DyorCoinChain.qt])
+        XCTAssertEqual(MomentsChainStub.batches().count, 1, "the counts alone")
+        XCTAssertEqual(MomentsChainStub.batches().first?.count, DyorCoinChain.stacks.count + DyorCoinChain.cohortTable.count)
+        XCTAssertEqual(Set(spam.map { proof[$0] }), [.notDyor])
+        XCTAssertEqual(proof[DyorCoinChain.james], .notDyor)
+        guard case .dyor? = proof[DyorCoinChain.qt] else { return XCTFail("QT is known from the file") }
+
+        let fresh = launch("0x0000000000000000000000000000000000000f40", "LATE")
+        chain.launches[LaunchpadAddresses.monadMainnet.factory] = [fresh]
+        chain.install()
+        let other = Address(literal: "0x0000000000000000000000000000000000000f41")
+        let late = await session.prove([fresh.token, other])
+        guard case .dyor(let coin)? = late[fresh.token] else { return XCTFail("a coin launched since is proven") }
+        XCTAssertEqual(coin.symbol, "LATE")
+        XCTAssertEqual(late[other], .notDyor)
+        let batches = MomentsChainStub.batches()
+        XCTAssertEqual(Set(batches[1].map(\.to)), [LaunchpadAddresses.monadMainnet.factory], "only the launchpad whose count moved is asked")
+    }
+
+    /// Before any list is read, a proof of many addresses asks every factory with coins about each, in reads of at most
+    /// 200 calls sent a few at a time; every answer lands with its own address.
+    func testAProofBeforeAnyRefreshAsksEveryFactoryWithCoins() async throws {
+        let registry = registry(.mainnet)
+        let spam = (1...100).map { Address(literal: String(format: "0x00000000000000000000000000000000%08x", 0x5b000000 + $0)) }
+        let proof = await registry.prove(spam + [DyorCoinChain.qt])
+        guard case .dyor(let qt)? = proof[DyorCoinChain.qt] else { return XCTFail("QT is proven among 100 others") }
+        XCTAssertEqual(qt.symbol, "QT")
+        XCTAssertEqual(Set(spam.map { proof[$0] }), [.notDyor])
+        let batches = MomentsChainStub.batches()
+        XCTAssertEqual(batches.first?.count, DyorCoinChain.stacks.count + DyorCoinChain.cohortTable.count, "the counts first")
+        XCTAssertEqual(batches.dropFirst().filter { $0.count == 200 }.count, 3, "then 101 addresses asked of the 6 factories with coins: 606 calls, 200 a read")
+        XCTAssertTrue(batches.allSatisfy { $0.count <= 200 })
+        let asked = Set(batches.dropFirst().flatMap { $0 }.map(\.to))
+        XCTAssertFalse(asked.contains(LaunchpadAddresses.monadMainnet.factory), "v2 has no launches yet: nothing to ask it")
+        XCTAssertFalse(asked.contains(MomentsAddresses.monadMainnet.factory), "nor cohort 4")
     }
 
     /// MON and the curated tokens are never DyorHQ coins, and never asked.
