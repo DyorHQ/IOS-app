@@ -5,6 +5,8 @@ import PackageDescription
 // venues and Perpl lives here so it can be unit-tested with `swift test` on macOS without a simulator.
 let package = Package(
     name: "DyorKit",
+    // DyorKit's own text (step labels, errors) is in English in code and translated in Resources/Localizable.xcstrings.
+    defaultLocalization: "en",
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
         .library(name: "DyorKit", targets: ["DyorKit"]),
@@ -18,7 +20,7 @@ let package = Package(
         .target(name: "DyorKit", dependencies: [
             .product(name: "BigInt", package: "BigInt"),
             .product(name: "P256K", package: "swift-secp256k1"),
-        ]),
+        ], resources: [.process("Resources")]),
         .testTarget(name: "DyorKitTests", dependencies: ["DyorKit"], resources: [.copy("Fixtures")]),
     ]
 )

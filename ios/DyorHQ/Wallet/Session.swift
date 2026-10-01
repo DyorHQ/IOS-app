@@ -66,6 +66,8 @@ final class Session {
     @ObservationIgnored weak var settings: AppSettings?
     /// The DyorHQ coin registry, whose file an erase of this device's data deletes (`eraseLocalData`).
     @ObservationIgnored weak var dyorCoins: DyorCoinsModel?
+    /// The app's language, English again once this device's data is erased (`eraseLocalData`).
+    @ObservationIgnored weak var language: LanguageStore?
 
     var account: Account? { if case .signedIn(let account) = state { return account } else { return nil } }
     var address: Address? { account?.address }
@@ -616,6 +618,9 @@ final class Session {
             let appLock = AppLockStore.erase(UserDefaults.standard, domain: bundle, canAuthenticateOwner: BiometricGate.canAuthenticateOwner)
             settings?.requireBiometrics = appLock
         }
+        // The erase removed the saved language with the rest: English again, saved as a new install has it, on screen
+        // at once.
+        language?.reset()
         // Every Keychain item this app created (imported wallet keys, Perpl trading keys, backend session tokens).
         for itemClass in [kSecClassGenericPassword, kSecClassInternetPassword, kSecClassKey] {
             SecItemDelete([kSecClass as String: itemClass] as CFDictionary)

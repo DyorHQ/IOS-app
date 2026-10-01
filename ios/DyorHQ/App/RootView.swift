@@ -60,6 +60,10 @@ struct RootView: View {
         // The appearance lives on a View, not on the App's scene body: a scene body does not re-evaluate reliably on
         // an observable change, and the stale scheme it left on the root view controller shadowed the window.
         .preferredColorScheme(settings.appearance.colorScheme)
+        // The app's language (`LanguageStore`) as SwiftUI's locale: every `Text` under here follows a choice at once, and
+        // every screen keeps its place. Never an `.id` on this view to force it: rebuilding RootView would restart its
+        // `.task(id:)` jobs (the backend sign-in, the restore, the per-account binding).
+        .environment(\.locale, env.language.locale)
         // Privacy cover for the app-switcher snapshot: iOS screenshots the UI whenever the app leaves the foreground,
         // and that image is written to the app container. If a recovery phrase / private key were on screen (Import
         // Wallet), it would land in that snapshot. Covering the whole hierarchy the instant we're not active means the

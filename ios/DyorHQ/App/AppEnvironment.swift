@@ -52,6 +52,9 @@ final class AppEnvironment {
     /// Every bridge deposit sent, tracked until it settles — across relaunches, for the account that sent it.
     let bridgeTracker: BridgeTracker
     let settings = AppSettings()
+    /// The app's language, decided before any screen: English on an install's first launch, then what the user chose
+    /// (`LanguageStore`).
+    let language = LanguageStore()
     /// The minimum supported build: below it, "Update required" replaces the app (GP-2).
     let updateGate = UpdateGate()
     /// Authenticated Perpl trading. A passkey account's trading key lives and dies with its session (`session.mera`).
@@ -127,6 +130,8 @@ final class AppEnvironment {
         session.dyorCoins = dyorCoins
         // An erase of this device's data saves App Lock as a new install has it, and sets it here too (R4).
         session.settings = settings
+        // An erase of this device's data sets the language back to English, as on a new install.
+        session.language = language
         // A passkey session's scope check trusts only the configured Moments cohorts — v2 (collects, once deployed), then
         // cohorts 3, 2 and 1 (claims and creator withdrawals) — and signs a launchpad trade only against the curve a
         // known factory recorded on-chain (MERA-PLAN §3).

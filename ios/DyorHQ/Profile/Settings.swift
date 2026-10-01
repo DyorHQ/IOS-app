@@ -371,17 +371,71 @@ struct PerplTradingView: View {
     }
 }
 
+/// The Language screen: System (the device's language, among those this build ships), then each language this build
+/// ships, in its own name. A choice applies at once and is saved as iOS's per-app language (`LanguageStore`), which
+/// Settings › Apps › DyorHQ › Language shows too. While English is the only language, the footer says more are coming.
 struct LanguageView: View {
+    @Environment(LanguageStore.self) private var language
+
     var body: some View {
         List {
             Section {
-                LabeledContent("Language", value: "English")
+                row(.system) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("System")
+                        Text("Uses your device language (\(language.deviceLanguageName))")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(language.available) { option in
+                    row(.language(option)) { Text(verbatim: option.endonym) }
+                }
             } footer: {
-                Text("DyorHQ follows your device language. More languages are coming.")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Screens iOS draws itself, such as Face ID and permission prompts, change the next time you open DyorHQ.")
+                    if language.available.count < 2 { Text("More languages are coming in the next update.") }
+                }
             }
         }
         .navigationTitle("Language")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// A choice, checked while it is the one in use.
+    private func row(_ choice: LanguageChoice, @ViewBuilder label: () -> some View) -> some View {
+        Button { language.select(choice) } label: {
+            HStack {
+                label()
+                Spacer()
+                if language.choice == choice {
+                    Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(.tint)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .foregroundStyle(.primary)
+        .accessibilityAddTraits(language.choice == choice ? .isSelected : [])
+    }
+}
+
+/// The onboarding hub's globe menu (owner decision 21): the Language screen's choices, before sign-in, through the same
+/// store. Offered once a second language ships; until then there is nothing to choose.
+struct LanguageMenu: View {
+    @Environment(LanguageStore.self) private var language
+
+    var body: some View {
+        Menu {
+            Picker("Language", selection: Binding(get: { language.choice }, set: { language.select($0) })) {
+                Text("System").tag(LanguageChoice.system)
+                ForEach(language.available) { option in
+                    Text(verbatim: option.endonym).tag(LanguageChoice.language(option))
+                }
+            }
+        } label: {
+            Image(systemName: "globe")
+        }
+        .accessibilityLabel("Language")
     }
 }
 
