@@ -67,7 +67,7 @@ struct RootView: View {
         // own above every other, so it also hides a sheet or full-screen cover (Export Wallet, the recovery phrase),
         // which an overlay on this view never reached (IOSK-13).
         .onChange(of: privacyCovered, initial: true) { _, covered in PrivacyShield.update(covered: covered) }
-        .task { session.start(); settings.appearance.apply(); Notifications.configure() }
+        .task { session.start(); settings.appearance.apply() }
         .task { await env.updateGate.check(client: env.social.client) }
         .onChange(of: scenePhase) { _, phase in
             // A passkey (Mera) signing session must not outlive the user leaving the app: whoever picks the phone up

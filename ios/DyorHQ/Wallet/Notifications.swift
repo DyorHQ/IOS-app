@@ -9,11 +9,14 @@ import UserNotifications
 /// nothing is noticed, so nothing is posted.
 @MainActor
 enum Notifications {
-    /// Installs the delegate that lets our notifications appear while the app is in the foreground — call once at
-    /// launch. Without it, iOS suppresses the banner whenever the app is open, which is exactly when these on-device
-    /// notifications fire, so nothing ever shows on screen.
+    /// Installs the delegate that lets our notifications appear while the app is in the foreground. Without it, iOS
+    /// suppresses the banner whenever the app is open, which is exactly when these on-device notifications fire, so
+    /// nothing ever shows on screen. Called from the app delegate's `didFinishLaunching`, before iOS hands over the tap
+    /// that launched the app (a banner tapped while it was closed): a delegate set any later misses that tap. Calling it
+    /// again changes nothing.
     static func configure() {
-        UNUserNotificationCenter.current().delegate = NotificationForegroundDelegate.shared
+        let center = UNUserNotificationCenter.current()
+        if center.delegate !== NotificationForegroundDelegate.shared { center.delegate = NotificationForegroundDelegate.shared }
     }
 
     /// Asks for permission (alert + sound). Called when the user turns notifications on in Settings, and once on

@@ -1,7 +1,7 @@
 import XCTest
 @testable import DyorKit
 
-/// The app's local notifications (build 17, N1): what a perp order's notice says.
+/// The app's local notifications (build 17, N1): what a perp order's notice says, and the delegate installed at launch.
 final class LocalNotificationTests: XCTestCase {
     /// The app's sources, or a skip when this checkout has no app.
     private func appSource(_ path: String) throws -> String {
@@ -22,6 +22,11 @@ final class LocalNotificationTests: XCTestCase {
         return try files.filter { $0.pathExtension == "swift" }.map { file in
             (String(file.path.dropFirst(app.path.count + 1)), try String(contentsOf: file, encoding: .utf8))
         }
+    }
+
+    /// `text` with every run of whitespace as one space: the checks pin the code, not its indentation.
+    private func squeeze(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     /// The text of the function that starts at `signature` in `text`, up to its closing brace at the indentation it
@@ -72,6 +77,36 @@ final class LocalNotificationTests: XCTestCase {
                 XCTAssertTrue(notice == "PerpOrderNotice(acknowledged: input.kind)" || (notice == ".filled" && path == "Perps/PerpsView.swift"),
                               "\(path): perpOrder(\(notice), …)")
             }
+        }
+    }
+
+    // MARK: - The delegate, at launch
+
+    /// The notification delegate is installed in the app delegate's `didFinishLaunching`, before iOS hands over the tap
+    /// that launched the app, and nowhere else: not in RootView's `.task`, which runs too late for a cold start.
+    /// Banners keep showing while the app is open.
+    func testTheDelegateIsSetAtLaunch() throws {
+        let app = try appSource("App/DyorHQApp.swift")
+        let delegate = try XCTUnwrap(app.range(of: "final class AppDelegate: NSObject, UIApplicationDelegate {"))
+        let launch = try function("func application(_ application: UIApplication,\n                     didFinishLaunchingWithOptions", in: String(app[delegate.upperBound...]))
+        XCTAssertTrue(launch.contains("Notifications.configure()"))
+        XCTAssertTrue(launch.contains("return true"))
+
+        let root = try appSource("App/RootView.swift")
+        XCTAssertFalse(root.contains("Notifications.configure()"))
+        XCTAssertTrue(squeeze(root).contains(".task { session.start(); settings.appearance.apply() }"))
+
+        let notifications = try appSource("Wallet/Notifications.swift")
+        let configure = squeeze(try function("static func configure() {", in: notifications))
+        XCTAssertTrue(configure.contains("if center.delegate !== NotificationForegroundDelegate.shared { center.delegate = NotificationForegroundDelegate.shared }"),
+                      "set once; a second call changes nothing")
+        let willPresent = try function("func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent", in: notifications)
+        XCTAssertTrue(willPresent.contains("completionHandler([.banner, .list, .sound])"))
+
+        for (path, text) in try appSources() {
+            XCTAssertEqual(text.components(separatedBy: "Notifications.configure()").count - 1, path == "App/DyorHQApp.swift" ? 1 : 0, path)
+            let delegates = text.components(separatedBy: "delegate = NotificationForegroundDelegate.shared").count - 1
+            XCTAssertEqual(delegates, path == "Wallet/Notifications.swift" ? 1 : 0, path)
         }
     }
 }
