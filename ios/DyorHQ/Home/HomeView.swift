@@ -665,7 +665,9 @@ final class HomeModel {
         // The curated list plus anything the wallet has acquired (swapped into, launched), so held tokens like an
         // RWA or a launched coin still show up with a balance and a price.
         let tokens = KnownTokenStore.universe(owner: address).filter { $0.symbol != "WMON" }
-        unverified = KnownTokenStore.unverified(owner: address)
+        // Which of them are DyorHQ coins, from their factories (MON, the curated tokens and coins already known cost
+        // nothing): their pictures and labels, and the wallet's own coins below.
+        async let proven: Void = env.dyorCoins.prove(tokens)
         async let prices = env.prices.prices(for: tokens)
         async let balances = walletBalances(env: env, address: address, tokens: tokens)
         async let launches = env.launchpad.launchListing(limit: 30)
@@ -681,9 +683,18 @@ final class HomeModel {
         let perpState = await perps
         let momentState = await moments
         let holdings = await loadLaunchHoldings(env: env, address: address, launches: launchList, priceMap: priceMap ?? [:])
+        await proven
+        await env.dyorCoins.ingest(launchList)
+        if let momentState { await env.dyorCoins.ingest(momentState.map(\.moment)) }
+        let ownCoins = address == nil ? [] : await env.dyorCoins.created(by: address ?? .zero)
         // A read that failed keeps what the last good one showed, and says so; a load cancelled part-way (the screen
         // went away, the account changed) publishes nothing (security audit 2026-09-26, RS-10).
         guard !Task.isCancelled, address == loadedFor else { return }
+        // The coins the registry says this wallet made are its own, not Unverified: recorded as chosen through the helper
+        // the Portfolio and the Send sheet use (`WalletTokens.markOwnCoins`). A coin it was only sent stays Unverified, out
+        // of Top Tokens (IOST-12).
+        if let address { WalletTokens.markOwnCoins(ownCoins, among: tokens, owner: address) }
+        unverified = KnownTokenStore.unverified(owner: address)
         if let priceMap {
             let previous = Dictionary(rows.map { ($0.id, $0.balance) }, uniquingKeysWith: { first, _ in first })
             rows = tokens.map { token in

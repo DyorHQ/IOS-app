@@ -431,7 +431,8 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(send.contains("balance = kept?.balance"))
         // The wallet's own coins are recorded as chosen, so Home marks them as the lists do; a launch records its coin.
         XCTAssertTrue(tokens.contains("let ownCoins = WalletHoldings.ownCoins(owner: read.owner, launches: own.launches, staked: own.staked)"))
-        XCTAssertTrue(tokens.contains("KnownTokenStore.markChosen(token.address, owner: read.owner)"))
+        XCTAssertTrue(tokens.contains("markOwnCoins(ownCoins, among: read.tokens, owner: read.owner)"))
+        XCTAssertTrue(tokens.contains("KnownTokenStore.markChosen(token.address, owner: owner)"), "the shared helper (`WalletTokens.markOwnCoins`)")
         let create = try XCTUnwrap(launchpad.range(of: "title: \"Launch \\(symbol)\", confirmTitle: \"Launch \\(symbol)\""))
         let launched = String(launchpad[create.upperBound...].prefix(2_500))
         XCTAssertTrue(launched.contains("result.deployer == owner"))

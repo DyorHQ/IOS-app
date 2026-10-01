@@ -96,6 +96,8 @@ enum WalletTokens {
     /// what the token store marks, agrees.
     static func ranked(_ read: Read, env: AppEnvironment, by order: (HeldToken, HeldToken) -> Bool = WalletHoldings.precedes) async -> Ranked {
         async let coins = appCoins(read, env: env)
+        // Which tokens are DyorHQ coins, from their factories, for their pictures and labels: known before the list shows.
+        async let proven: Void = env.dyorCoins.prove(read.tokens)
         // The launchpad's pair assets too (MON, USDC, AUSD, aBIL), whether held or not: a launch coin's price is in one.
         var seen = Set<Address>()
         let priced = (read.tokens + [Token.mon] + Token.core.filter { Token.launchpadPairAssets.contains($0.address) }).filter { seen.insert($0.address).inserted }
@@ -114,13 +116,23 @@ enum WalletTokens {
         let valued = WalletHoldings.pricing(pooled, launches: own.launches, moments: own.momentPrices)
         let unverified = WalletHoldings.unverified(read.unverified, owner: read.owner, launches: own.launches, staked: own.staked)
         let ownCoins = WalletHoldings.ownCoins(owner: read.owner, launches: own.launches, staked: own.staked)
-        for token in read.tokens where ownCoins.contains(token.address) {
-            KnownTokenStore.add(token, owner: read.owner)
-            KnownTokenStore.markChosen(token.address, owner: read.owner)
-        }
+        markOwnCoins(ownCoins, among: read.tokens, owner: read.owner)
         let unpriced = WalletHoldings.unpricedCurated(read.tokens, prices: valued, noPool: noPool)
+        await proven
         return Ranked(tokens: WalletHoldings.ranked(read.tokens, balances: read.balances, prices: valued, unverified: unverified, by: order),
                       pricesFailed: failed || !own.complete || !unpriced.unread.isEmpty, unpriced: unpriced.noPool, curve: own.curve)
+    }
+
+    /// Records the coins of `own` among `tokens` — DyorHQ coins that are `owner`'s own (`WalletHoldings.ownCoins`: a launch
+    /// it deployed, a Moment it collected or created) — as chosen, so no list marks them Unverified. The one way every
+    /// screen does it: the Portfolio and the Send sheet from the launchpads' and cohorts' records (`ranked`), Home from the
+    /// coins the registry says the wallet made (`DyorCoinsModel.created`). A coin the wallet was only sent is never in
+    /// `own`, and stays Unverified (IOST-12).
+    static func markOwnCoins(_ own: Set<Address>, among tokens: [Token], owner: Address) {
+        for token in tokens where own.contains(token.address) {
+            KnownTokenStore.add(token, owner: owner)
+            KnownTokenStore.markChosen(token.address, owner: owner)
+        }
     }
 
     /// DyorHQ's own coins among a read's tokens, as their factories record them.

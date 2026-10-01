@@ -169,6 +169,28 @@ final class DyorCoinWiringTests: XCTestCase {
         XCTAssertTrue(swap.contains("Text(\"Unverified — in your wallet\")"))
     }
 
+    /// Home marks the coins the registry says this wallet made as chosen through the helper the Portfolio and the Send
+    /// sheet use, before it reads the Unverified mark it shows and ranks by.
+    func testHomeMarksTheWalletsOwnCoinsThroughTheSharedHelper() throws {
+        let home = try Self.source("Home/HomeView.swift")
+        let load = try Self.between(home, "func load(env: AppEnvironment, address: Address?) async {", "/// The wallet's Moments stakes")
+        let own = try XCTUnwrap(load.range(of: "let ownCoins = address == nil ? [] : await env.dyorCoins.created(by: address ?? .zero)"))
+        let mark = try XCTUnwrap(load.range(of: "if let address { WalletTokens.markOwnCoins(ownCoins, among: tokens, owner: address) }"))
+        let read = try XCTUnwrap(load.range(of: "unverified = KnownTokenStore.unverified(owner: address)"))
+        XCTAssertLessThan(own.upperBound, mark.lowerBound)
+        XCTAssertLessThan(mark.upperBound, read.lowerBound, "marked before the mark is read")
+        XCTAssertFalse(load.contains("KnownTokenStore.markChosen"), "no way of its own")
+
+        let tokens = try Self.source("Wallet/WalletTokens.swift")
+        let helper = try Self.between(tokens, "static func markOwnCoins(_ own: Set<Address>, among tokens: [Token], owner: Address) {", "/// DyorHQ's own coins among")
+        XCTAssertTrue(helper.contains("for token in tokens where own.contains(token.address) { KnownTokenStore.add(token, owner: owner) KnownTokenStore.markChosen(token.address, owner: owner) }"))
+        XCTAssertTrue(tokens.contains("markOwnCoins(ownCoins, among: read.tokens, owner: read.owner)"))
+        XCTAssertEqual(tokens.components(separatedBy: "KnownTokenStore.markChosen").count - 1, 1, "the helper is the one way")
+
+        let model = try Self.source("App/DyorCoinsModel.swift")
+        XCTAssertTrue(model.contains("Set(await registry.coins(createdBy: owner).map(\\.address))"), "the coins the factories record it made")
+    }
+
     /// Deleting the account (or this device's data) clears every image cache — the logo loader's, the Moments loader's
     /// and URLCache's, on disk — and deletes the registry's file, before the sign-out.
     func testErasingThisDeviceClearsTheImageCachesAndTheRegistry() throws {

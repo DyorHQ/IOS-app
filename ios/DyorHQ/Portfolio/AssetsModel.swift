@@ -107,6 +107,8 @@ final class AssetsModel {
         tokens = ranked
 
         let moments = (try? await momentsTask) ?? []
+        // Their coins, proven by their cohorts, for the coins' pictures and labels.
+        await env.dyorCoins.ingest(moments + retired.moments)
         momentsByNFT = Dictionary(moments.map { ($0.moment.nft, $0) }, uniquingKeysWith: { first, _ in first })
         nfts = await nftTask
         loadedFor = address
