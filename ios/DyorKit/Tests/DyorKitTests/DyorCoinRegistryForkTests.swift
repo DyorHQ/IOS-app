@@ -7,9 +7,9 @@ import XCTest
 /// and cohort 4 (`MomentsAddresses.monadMainnet`) hold a launch and a Moment whose name and symbol aren't text (bytes
 /// such as ff fe fd fc), with ordinary ones listed after them: build 17's review launched exactly that on the real v2
 /// launchpad and stalled the registry's reading of it for good. The repository's seed scripts put such a launch and
-/// Moment there, each followed by another (the Moment after it has a name longer than the form allows, so it warns
-/// too); then make one ordinary launch and one ordinary Moment after them, in the app or with `cast` and a key derived
-/// from a label (never anvil's own keys: they carry EIP-7702 code on Monad):
+/// Moment there, each followed by another (the Moment after it has a name longer than the form allows: a long name alone
+/// is no warning); then make one ordinary launch and one ordinary Moment after them, in the app or with `cast` and a key
+/// derived from a label (never anvil's own keys: they carry EIP-7702 code on Monad):
 ///
 ///   anvil --fork-url https://rpc3.monad.xyz --no-rate-limit --disable-code-size-limit --port 8751
 ///   node scripts/dev/seed-fork.mjs --text 8751 && node scripts/dev/seed-moments-fork.mjs --text 8751
