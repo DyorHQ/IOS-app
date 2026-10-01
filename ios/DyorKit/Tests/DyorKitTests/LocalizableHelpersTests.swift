@@ -205,6 +205,9 @@ final class LocalizableHelpersTests: XCTestCase {
             }
         }
         XCTAssertEqual(placeholderOnly, [], "a literal with nothing to translate goes as verbatim:")
+        // The scan reads a closure that gives the value its result, and leaves one whose result feeds something else.
+        XCTAssertEqual(Self.literals(in: Array(#"pair.map { "\(units) \($0.symbol)" } ?? "—""#)).map { $0.source }, [#""\(units) \($0.symbol)""#, #""—""#])
+        XCTAssertEqual(Self.literals(in: Array(#"names.map { "\($0)" }.joined(separator: ", ")"#)).map { $0.source }, [])
         XCTAssertGreaterThan(checked, 400, "the scan reads the helpers' calls")
         XCTAssertGreaterThanOrEqual(verbatim, 40, "amounts with their symbols are shown as they are")
     }
@@ -303,7 +306,9 @@ final class LocalizableHelpersTests: XCTestCase {
     }
 
     /// The string literals at the top level of a value (a ternary's branches included, in parentheses or not; not those
-    /// inside a call, a subscript or a closure), each with its text outside the interpolations.
+    /// inside a call or a subscript), each with its text outside the interpolations. A closure whose result is the value
+    /// itself, or one side of its `??` or ternary (`pair.map { "\(units) \($0.symbol)" } ?? "—"`), is read too: Swift
+    /// infers the closure's literal from the helper's parameter, so at a key parameter it is a key like any other.
     private static func literals(in chars: [Character]) -> [(source: String, words: String, interpolated: Bool)] {
         var found: [(String, String, Bool)] = []
         var depth = 0
@@ -332,7 +337,8 @@ final class LocalizableHelpersTests: XCTestCase {
             }
             if "([{".contains(char) {
                 let previous = index > 0 ? chars[index - 1] : " "
-                let nests = char != "(" || previous.isLetter || previous.isNumber || "_)]>?!".contains(previous)
+                let nests = char == "{" ? !isValueClosure(chars, index)
+                    : char != "(" || previous.isLetter || previous.isNumber || "_)]>?!".contains(previous)
                 nesting.append(nests)
                 if nests { depth += 1 }
             } else if ")]}".contains(char), nesting.popLast() == true {
@@ -341,6 +347,15 @@ final class LocalizableHelpersTests: XCTestCase {
             index += 1
         }
         return found
+    }
+
+    /// Whether the closure opening at `open` gives the value its result: nothing follows it but the end of the value (or
+    /// of its parentheses), a `??` or a ternary's `:`. A closure followed by more (`.joined()`, a call, a subscript, a
+    /// ternary's `?`) feeds something else, which decides its literals' type.
+    private static func isValueClosure(_ chars: [Character], _ open: Int) -> Bool {
+        guard let close = closing(chars, open) else { return false }
+        let rest = String(chars[(close + 1)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty || rest.hasPrefix("??") || rest.hasPrefix(":") || rest.hasPrefix(")")
     }
 
     #if canImport(SwiftUI)
@@ -368,6 +383,7 @@ final class LocalizableHelpersTests: XCTestCase {
         XCTAssertEqual(Helper("Side", long ? "Long" : "Short").value, .key)
         XCTAssertEqual(Helper("Venue", symbol).value, .string)
         XCTAssertEqual(Helper("To", Optional<String>.none ?? "—").value, .string)
+        XCTAssertEqual(Helper("Graduation", Optional(symbol).map { "100 \($0)" } ?? "—").value, .key, "a closure's literal is inferred from the parameter")
         XCTAssertEqual(Helper("Amount", verbatim: "1 \(symbol)").value, .verbatim)
         XCTAssertEqual(Helper("Venue", symbol).label, .key, "the label stays a key whatever the value")
         XCTAssertEqual(Undecorated("Locked forever").picked, .string, "without the attribute a literal skips the catalog")

@@ -1194,7 +1194,7 @@ struct CreateLaunchView: View {
                     ) {
                         DetailRow("Coin", verbatim: "\(name) ($\(symbol))")
                         DetailRow("Paired with", pairInfo?.symbol ?? "MON")
-                        DetailRow("Graduation", pairInfo.map { "\(NumberStyle.units(pairGraduation, decimals: $0.decimals, compact: true)) \($0.symbol)" } ?? "—")
+                        DetailRow("Graduation", verbatim: pairInfo.map { "\(NumberStyle.units(pairGraduation, decimals: $0.decimals, compact: true)) \($0.symbol)" } ?? "—")
                         DetailRow("Graduation venue", effectiveVenue.title)
                         DetailRow("Creator tax", NumberStyle.basisPoints(creatorTaxBps))
                         DetailRow("Fee sharing", holderFeeSharing ? "On" : "Off")
