@@ -68,6 +68,15 @@ public enum TokenBadge: Hashable, Sendable {
         }
     }
 
+    /// A DyorHQ label: DyorHQ Launch or DyorHQ Moment. A DyorHQ coin with a warning is not one.
+    public var isDyorHQ: Bool { self == .dyorLaunch || self == .dyorMoment }
+
+    /// A look-alike's warning (`imitates`).
+    public var isImitation: Bool {
+        if case .imitates = self { return true }
+        return false
+    }
+
     /// A warning (Unverified or a look-alike), shown in the attention colour; the DyorHQ labels are facts, not warnings.
     public var isWarning: Bool {
         switch self {
