@@ -13,7 +13,9 @@
 #     <address>" for it. A forbidden key, or one the check did not clear (it failed, crashed or said nothing), is
 #     removed (its unit runs dry runs with no signer); an unpinned one may run dry runs as its address but never sends;
 #     either way a send flag at 1 makes the unit's runs fail loudly (healthchecks /fail) instead of sending;
-#  4. starts supercronic on ops/crontab as keeper, with an environment holding no secret and no capabilities. Given a
+#  4. only on the Machine KEEPER_MACHINE_ID names (FLY_MACHINE_ID) may a unit send: a second or replaced Machine runs
+#     dry runs, and a send flag at 1 there fails its runs;
+#  5. starts supercronic on ops/crontab as keeper, with an environment holding no secret and no capabilities. Given a
 #     command instead (a local test: `docker run … IMAGE /app/contracts/keepers/ops/run-keeper.sh grad`), it runs that
 #     command as keeper after the same preparation.
 # Never add `set -x` to this file. KEEPER_APP_DIR, KEEPER_DATA_DIR and KEEPER_SECRETS_DIR exist for ops.test.mjs only;
@@ -134,6 +136,21 @@ for unit in $UNITS; do
   signers+=("$unit=$addr")
 done
 
+# ---- one Machine sends: the one KEEPER_MACHINE_ID names (a Fly secret, set once after the first deploy). Fly gives a
+# second Machine (fly scale count, fly machine clone) its own empty volume, which the mount check above cannot tell
+# from the first: it would send from the same keys with no spend ledger. Every Machine gets the same secrets, so the
+# pin is checked against this Machine's own FLY_MACHINE_ID, and only then may a unit here send.
+if [ -n "${KEEPER_MACHINE_ID-}" ] && [ -n "${FLY_MACHINE_ID-}" ] && [ "$KEEPER_MACHINE_ID" = "$FLY_MACHINE_ID" ]; then
+  printf '%s\n' "$FLY_MACHINE_ID" > "$SECRETS_DIR/machine.ok"
+  chown "$KEEPER_UID:$KEEPER_GID" "$SECRETS_DIR/machine.ok"
+  chmod 0444 "$SECRETS_DIR/machine.ok"
+  say "machine: $FLY_MACHINE_ID is the keeper Machine (KEEPER_MACHINE_ID): its units may send"
+elif [ -n "${KEEPER_MACHINE_ID-}" ]; then
+  say "machine: ${FLY_MACHINE_ID:-unknown} is NOT the keeper Machine $KEEPER_MACHINE_ID: no unit sends here (a second Machine must be destroyed; a replaced one needs KEEPER_MACHINE_ID updated)"
+else
+  say "machine: KEEPER_MACHINE_ID is not set: no unit sends until it names this Machine (${FLY_MACHINE_ID:-unknown})"
+fi
+
 if [ -n "${KEEPER_WEBHOOK_URL-}" ]; then
   put_secret KEEPER_WEBHOOK_URL "$SECRETS_DIR/webhook"
   say "webhook: set"
@@ -186,7 +203,7 @@ for unit in $UNITS; do
   flag_var="KEEPER_SEND_$U"
   flag="${!flag_var:-0}"
   case "$flag" in 0 | 1) ;; *) say "$unit: $flag_var must be 0 or 1: its runs will fail until that is fixed" ;; esac
-  if [ -s "$SECRETS_DIR/$unit.address" ] && [ ! -e "$SECRETS_DIR/$unit.nosend" ]; then
+  if [ -s "$SECRETS_DIR/$unit.address" ] && [ ! -e "$SECRETS_DIR/$unit.nosend" ] && [ -s "$SECRETS_DIR/machine.ok" ]; then
     say "$unit: signer $(cat "$SECRETS_DIR/$unit.address"), sends $([ "$flag" = 1 ] && echo ON || echo "off (dry run)")"
   elif [ "$flag" = 1 ]; then
     say "$unit: $flag_var=1 but the unit may not send (see above): its runs will fail until that is fixed"

@@ -51,6 +51,9 @@ contracts/keepers/ops/make-keeper-secrets.sh --app $a --keys none              #
 # Apply the staged secrets (restarts the Machine); list names and digests (never values):
 fly secrets deploy --app $a
 fly secrets list --app $a
+# Once, before the first send flag: pin the one Machine that may send (deploy-fly.sh prints its id). A second Machine,
+# or a replaced one, sends nothing until this names it:
+fly secrets set KEEPER_MACHINE_ID=<MACHINE_ID> --app $a
 # After the 7-day dry run, one unit at a time, a day apart (each restarts the Machine):
 fly secrets set KEEPER_SEND_GRAD=1 --app $a
 fly secrets set KEEPER_SEND_BUYBACKS=1 --app $a

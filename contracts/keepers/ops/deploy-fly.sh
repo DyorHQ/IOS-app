@@ -108,5 +108,9 @@ case "$ips" in "" | "[]" | "null") ;; *)
   echo "deploy: WARNING: the app has IP addresses; the keepers need none (fly ips list --app $app, then fly ips release <ip> --app $app)." >&2
   status=1 ;;
 esac
+ids=$(fly machine list --app "$app" --quiet 2>/dev/null | grep -E '^[0-9a-f]{8,}$' || true)
+if [ "$machines" = 1 ]; then
+  echo "deploy: the keeper Machine is $ids. Only the Machine KEEPER_MACHINE_ID names may send; on the first deploy (or after replacing the Machine) pin it once: fly secrets set KEEPER_MACHINE_ID=$ids --app $app"
+fi
 echo "deploy: done: commit $short on $app ($machines Machine). Watch it: fly logs --app $app"
 exit "$status"

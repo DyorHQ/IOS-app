@@ -98,10 +98,12 @@ function runScript(script, ctx, argv) {
 }
 const runUnit = (ctx, argv) => runScript("run-keeper.sh", ctx, argv);
 
-function signer(ctx, unit = "grad") {
+/** A usable keystore for `unit` as entrypoint.sh leaves it, on the Machine KEEPER_MACHINE_ID names (`machine`). */
+function signer(ctx, unit = "grad", { machine = true } = {}) {
   writeFileSync(join(ctx.secrets, `${unit}.keystore`), '{"crypto":{}}');
   writeFileSync(join(ctx.secrets, `${unit}.password`), "pw");
   writeFileSync(join(ctx.secrets, `${unit}.address`), `${ADDR}\n`);
+  if (machine) writeFileSync(join(ctx.secrets, "machine.ok"), "machine-test-1\n");
 }
 const pings = (curl) => curl.split("\n").filter((l) => l.startsWith("STDIN url")).map((l) => l.slice(`STDIN url = "${HC}`.length, -1));
 const argAfter = (args, flag) => args[args.indexOf(flag) + 1];
@@ -268,6 +270,23 @@ test("sending asked for when the unit may not: a dry run, then a failed run that
   // With the flag off the same unit is a plain, successful dry run.
   delete unpinned.env.KEEPER_SEND_GRAD;
   assert.equal(runUnit(unpinned, ["grad"]).code, 0);
+});
+
+test("only the Machine KEEPER_MACHINE_ID names sends: on any other one a send flag at 1 runs dry and fails the run", () => {
+  const ctx = unitEnv({ KEEPER_SEND_GRAD: "1", FLY_MACHINE_ID: "machine-test-2" });
+  signer(ctx, "grad", { machine: false });
+  writeFileSync(join(ctx.secrets, "hc-grad"), HC);
+  const r = runUnit(ctx, ["grad"]);
+  assert.equal(r.code, 1);
+  assert.ok(!r.args.includes("--send") && !r.args.includes("--keystore"));
+  assert.equal(argAfter(r.args, "--sim-from"), ADDR, "a dry run as its address");
+  assert.match(r.out, /the grad key may not send \(this is not the keeper Machine KEEPER_MACHINE_ID names \(machine-test-2\)\): ran dry/);
+  assert.deepEqual(pings(r.curl), ["/start", "/fail"]);
+  const manual = runScript("grad-now.sh", ctx, ["--send"]);
+  assert.equal(manual.code, 1, "not by hand either");
+  assert.ok(!manual.args.includes("--send"));
+  delete ctx.env.KEEPER_SEND_GRAD;
+  assert.equal(runUnit(ctx, ["grad"]).code, 0, "with the flag off it is a plain dry run");
 });
 
 test("a malformed flag fails the run and pings /fail; a non-https ping URL is not used", () => {
@@ -649,9 +668,12 @@ async function boot({ app, secrets = flySecrets(), over = {}, rpcBalances = {}, 
     KEEPER_DATA_DIR: join(dir, "data"),
     KEEPER_SECRETS_DIR: join(dir, "run", "dyor-keeper"),
     KEEPER_RPC_URLS: chain.url,
+    FLY_MACHINE_ID: "machine-test-1",
+    KEEPER_MACHINE_ID: "machine-test-1",
     ...secrets,
     ...over,
   };
+  for (const [k, v] of Object.entries(env)) if (v === undefined) delete env[k];
   mkdirSync(env.KEEPER_DATA_DIR);
   // Files an earlier boot left (a restarted local container keeps /dev/shm).
   if (Object.keys(stale).length) mkdirSync(env.KEEPER_SECRETS_DIR, { recursive: true });
@@ -769,6 +791,27 @@ test("entrypoint: the signer check fails closed, also when the app path runs thr
     assert.equal(b.code, 0, `${what}: ${b.out}`);
     assert.match(readFileSync(join(b.secretsDir, "grad.error"), "utf8"), /the signer check did not clear this key/, what);
     assert.ok(!existsSync(join(b.secretsDir, "grad.keystore")), `${what}: the key was removed`);
+    assert.doesNotMatch(b.out, /sends ON/, what);
+    assert.match(b.out, /grad: KEEPER_SEND_GRAD=1 but the unit may not send/, what);
+  }
+});
+
+test("entrypoint: only the Machine KEEPER_MACHINE_ID names may send; a second one (scale-out, clone) or an unset pin may not", async () => {
+  const app = appCopy({ grad: GRAD_KEY });
+  const gradOnly = Object.fromEntries(Object.entries(flySecrets()).filter(([k]) => !/^KEEPER_(SWEEPS|BUYBACKS)_/.test(k)));
+  const pinned = await boot({ app, secrets: gradOnly });
+  assert.equal(readFileSync(join(pinned.secretsDir, "machine.ok"), "utf8").trim(), "machine-test-1");
+  assert.match(pinned.out, /machine: machine-test-1 is the keeper Machine/);
+  assert.match(pinned.out, new RegExp(`grad: signer ${GRAD_KEY}, sends ON`));
+  for (const [what, over, said] of [
+    ["a second Machine", { FLY_MACHINE_ID: "machine-test-2" }, /machine: machine-test-2 is NOT the keeper Machine machine-test-1: no unit sends here/],
+    ["no pin", { KEEPER_MACHINE_ID: undefined }, /machine: KEEPER_MACHINE_ID is not set: no unit sends until it names this Machine \(machine-test-1\)/],
+    ["not on Fly", { FLY_MACHINE_ID: undefined }, /machine: unknown is NOT the keeper Machine/],
+  ]) {
+    const b = await boot({ app, secrets: gradOnly, over });
+    assert.equal(b.code, 0, `${what}: ${b.out}`);
+    assert.ok(!existsSync(join(b.secretsDir, "machine.ok")), what);
+    assert.match(b.out, said, what);
     assert.doesNotMatch(b.out, /sends ON/, what);
     assert.match(b.out, /grad: KEEPER_SEND_GRAD=1 but the unit may not send/, what);
   }
@@ -918,6 +961,8 @@ test("make-keeper-secrets.sh --print-commands: templates with placeholders, no s
     assert.doesNotMatch(l, /_B64=|_URL=|PASSWORD|KEYSTORE|https?:/, `a secret on a command line: ${l}`);
   }
   for (const u of ["GRAD", "BUYBACKS", "SWEEPS"]) assert.ok(fly.includes(`fly secrets set KEEPER_SEND_${u}=1 --app <APP>`), u);
+  assert.ok(fly.indexOf("fly secrets set KEEPER_MACHINE_ID=<MACHINE_ID> --app <APP>") < fly.indexOf("fly secrets set KEEPER_SEND_GRAD=1 --app <APP>"), "the Machine is pinned before the first send flag");
+  assert.ok(fly.includes("fly secrets set KEEPER_MACHINE_ID=<MACHINE_ID> --app <APP>"));
   assert.ok(fly.includes("fly secrets deploy --app <APP>"));
   // Without --print-commands and without --app it is a usage error.
   assert.equal(spawnSync("bash", [join(OPS, "make-keeper-secrets.sh")], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" } }).status, 64);
@@ -985,6 +1030,7 @@ test(
         // The real keeper, through run-keeper.sh, on the fork: the grad unit with its key, sending allowed by hand. Its
         // RPC is the fork only (KEEPER_RPC_URLS), so any transaction stays on 127.0.0.1.
         writeFileSync(join(secrets, "grad.address"), `${address.grad}\n`);
+        writeFileSync(join(secrets, "machine.ok"), "fork-rehearsal\n"); // as entrypoint.sh writes it on the pinned Machine
         const data = join(dir, "data");
         mkdirSync(data);
         // macOS has no flock(1): a stand-in that takes no lock (the image has the real one).
