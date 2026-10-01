@@ -179,7 +179,9 @@ public actor PerplService {
                 volume24h: state.dv / sizeScale,
                 openInterest: state.oi / sizeScale,
                 fundingRate: fundingRate,
-                isOpen: config.isOpen
+                isOpen: config.isOpen,
+                fundingIntervalSeconds: market.fundingIntervalSec ?? 0,
+                fundingIntervalBlocks: market.fundingIntervalBlocks ?? 0
             )
         }
     }
@@ -385,4 +387,13 @@ private struct ContextMarket: Decodable {
     let config: Config?
     let state: State?
     let funding: Funding?
+    /// The market's own funding interval, in seconds and in blocks.
+    let fundingIntervalSec: Int?
+    let fundingIntervalBlocks: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, config, state, funding
+        case fundingIntervalSec = "funding_interval_sec"
+        case fundingIntervalBlocks = "funding_interval_blocks"
+    }
 }
