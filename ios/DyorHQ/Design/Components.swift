@@ -212,6 +212,21 @@ extension UIImage {
         }
         return resized.jpegData(compressionQuality: quality)
     }
+
+    /// A launch's picture as the create form uploads it (`LaunchImage`): the largest centred square, drawn
+    /// `LaunchImage.side` pixels a side, as JPEG bytes. Nil for an image with no size.
+    func launchJPEG(quality: CGFloat = 0.85) -> Data? {
+        let crop = LaunchImage.centreSquare(size)
+        guard crop.width > 0 else { return nil }
+        let side = CGFloat(LaunchImage.side)
+        let scale = side / crop.width
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let square = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
+            draw(in: CGRect(x: -crop.minX * scale, y: -crop.minY * scale, width: size.width * scale, height: size.height * scale))
+        }
+        return square.jpegData(compressionQuality: quality)
+    }
 }
 
 /// Signed percentage in the semantic color, with a text sign so color is never the only cue.

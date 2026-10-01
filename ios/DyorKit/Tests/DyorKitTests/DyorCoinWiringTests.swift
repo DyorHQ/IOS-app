@@ -224,6 +224,47 @@ final class DyorCoinWiringTests: XCTestCase {
         XCTAssertEqual(DyorCoinStore.fileName(), "dyor-coins-143.json")
     }
 
+    /// The registry is made once, by `AppEnvironment`, and only `DyorCoinsModel` holds it. Its reads start from loads
+    /// (Home's, the Portfolio's and the Send sheet's), a settled launch or publish, and RootView's foreground loop — never
+    /// from a view appearing.
+    func testTheRegistryIsMadeOnceAndNoViewAsksIt() throws {
+        let files = try Self.sources()
+        let made = files.filter { $0.text.contains("DyorCoinRegistry(") }
+        XCTAssertEqual(made.map(\.path), ["App/AppEnvironment.swift"])
+        XCTAssertEqual(made.first?.text.components(separatedBy: "DyorCoinRegistry(").count, 2, "once")
+        XCTAssertTrue(made.first?.text.contains("DyorCoinRegistry(rpc: rpc, live: config.launchpad, liveMoments: config.moments, store: .applicationSupport(fork: isFork))") == true)
+        let model = try Self.source("App/DyorCoinsModel.swift")
+        XCTAssertTrue(model.contains("@ObservationIgnored private let registry: DyorCoinRegistry"), "no one else can ask it")
+        for file in files where file.path != "App/DyorCoinsModel.swift" {
+            XCTAssertFalse(file.text.contains("DyorCoinRegistry") && file.path != "App/AppEnvironment.swift", file.path)
+        }
+
+        // Where each read starts.
+        let reads = ["dyorCoins.prove(", "dyorCoins.ingest(", "dyorCoins.created(", "dyorCoins.refresh(", "dyorCoins.keepFresh(", "coins.refresh("]
+        var where_: [String: Int] = [:]
+        for file in files {
+            for read in reads { where_[file.path, default: 0] += file.text.components(separatedBy: read).count - 1 }
+        }
+        XCTAssertEqual(where_.filter { $0.value > 0 }.keys.sorted(), ["App/RootView.swift", "Home/HomeView.swift", "Launchpad/LaunchpadView.swift",
+                                                                     "Moments/CreateMomentView.swift", "Portfolio/AssetsModel.swift", "Wallet/WalletTokens.swift"])
+        let home = try Self.source("Home/HomeView.swift")
+        let homeModel = try Self.between(home, "final class HomeModel {", "struct TokenDetailView: View {")
+        for read in reads { XCTAssertEqual(home.components(separatedBy: read).count, homeModel.components(separatedBy: read).count, "Home reads only in its model's load: \(read)") }
+        let assets = try Self.source("Portfolio/AssetsModel.swift")
+        let assetsModel = try Self.between(assets, "final class AssetsModel {", "struct AssetsCard: View {")
+        XCTAssertEqual(assets.components(separatedBy: "dyorCoins.").count, assetsModel.components(separatedBy: "dyorCoins.").count)
+        let root = try Self.source("App/RootView.swift")
+        XCTAssertTrue(root.contains(".task(id: scenePhase == .active) { if scenePhase == .active { await env.dyorCoins.keepFresh() } }"))
+        XCTAssertTrue(model.contains("await registry.refreshIfStale(maxAge: Self.refreshInterval)"))
+        XCTAssertTrue(model.contains("static let refreshInterval: TimeInterval = 300"))
+        for path in ["Launchpad/LaunchpadView.swift", "Moments/CreateMomentView.swift"] {
+            let text = try Self.source(path)
+            let settled = try XCTUnwrap(text.range(of: "Task { [coins = env.dyorCoins] in await coins.refresh() }"), path)
+            let completed = try XCTUnwrap(text.range(of: "onCompleted: { hash in", options: .backwards, range: text.startIndex..<settled.lowerBound), path)
+            XCTAssertLessThan(text.distance(from: completed.upperBound, to: settled.lowerBound), 800, "in the settle hook: \(path)")
+        }
+    }
+
     /// Every Monad token's logo is decided by its address (`TokenLogo(token:)` through `CoinIcon`); a symbol-keyed logo is
     /// Perps' and Bridge's alone (`MarketLogo`). Launch and Moment artwork load through `ImageSourcePolicy`. News and NFT
     /// art stay as they are under Smart Invert.
@@ -279,5 +320,30 @@ final class DyorCoinWiringTests: XCTestCase {
                      "router.openLaunch(LaunchReference(token: coin.address, factory: coin.factory))", "Text(\"Launched on DyorHQ\")"] {
             XCTAssertTrue(section.contains(part), part)
         }
+    }
+
+    /// The create forms say the guard's refusal under the field it is about and keep Review off; a launch's name is held to
+    /// 32 characters, a Moment's to 48. The upload is the middle 512-pixel square, under the object name migration 26 pins.
+    func testTheCreateFormsSayTheGuard() throws {
+        let launchpad = try Self.source("Launchpad/LaunchpadView.swift")
+        let create = try Self.between(launchpad, "struct CreateLaunchView: View {", "private struct LaunchPreviewCard")
+        XCTAssertTrue(create.contains("SymbolSafety.createRefusal(name: name.trimmingCharacters(in: .whitespaces), symbol: symbol, maxName: SymbolSafety.maxLaunchNameLength)"))
+        XCTAssertTrue(create.contains("private var valid: Bool { name.trimmingCharacters(in: .whitespaces).count >= 2 && symbolValid && refusal == nil }"))
+        XCTAssertTrue(create.contains(".onChange(of: name) { _, v in if v.count > SymbolSafety.maxLaunchNameLength { name = String(v.prefix(SymbolSafety.maxLaunchNameLength)) } }"))
+        XCTAssertTrue(create.contains(".onChange(of: symbol) { _, v in symbol = String(v.uppercased().filter { $0.isLetter || $0.isNumber }.prefix(10)) }"))
+        XCTAssertTrue(create.contains(".disabled(!valid || blocker != nil)"))
+        XCTAssertTrue(create.contains("let jpeg = image.launchJPEG() else {"))
+        XCTAssertTrue(create.contains("logo = try await social.uploadLaunchImage(jpeg: jpeg).absoluteString"))
+        let moment = try Self.source("Moments/CreateMomentView.swift")
+        XCTAssertTrue(moment.contains("SymbolSafety.createRefusal(name: trimmedName, symbol: symbol, maxName: SymbolSafety.maxMomentNameLength)"))
+        XCTAssertTrue(moment.contains("symbolValid && refusal == nil &&"))
+        XCTAssertTrue(moment.contains(".disabled(!valid || !session.canSign)"))
+        for form in [create, moment] {
+            XCTAssertTrue(form.contains("if let refusal, !refusal.isAboutSymbol { InlineError(message: refusal.message) }"))
+            XCTAssertTrue(form.contains("if let refusal, refusal.isAboutSymbol { InlineError(message: refusal.message) }"))
+        }
+        let components = try Self.source("Design/Components.swift")
+        XCTAssertTrue(components.contains("let crop = LaunchImage.centreSquare(size)"))
+        XCTAssertTrue(components.contains("UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)"))
     }
 }
