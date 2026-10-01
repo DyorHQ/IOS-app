@@ -1,8 +1,9 @@
 // Opt-in (KEEPER_ANVIL=1; needs Foundry's anvil and cast, found on PATH, in ~/.foundry/bin, or via ANVIL_BIN /
 // CAST_BIN): the case the build-17 keepers research reproduced, end to end. A real `cast send` with a gas limit to a
 // contract that always reverts exits 0 with "status":"0x0"; driven through makeSender -> safeSend (the MO-1 retry)
-// it must raise a critical alert and record what it cost. A plain local anvil (no fork) and a sender address derived
-// from a label: never anvil's default accounts, which carry EIP-7702 code on Monad.
+// it must raise a critical alert and record what it cost. A plain local anvil (no fork) on 127.0.0.1 (KEEPER_ANVIL_PORT
+// picks the port, else a random one) and a sender address derived from a label: never anvil's default accounts, which
+// carry EIP-7702 code on Monad.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -32,9 +33,9 @@ async function rpc(url, method, params = []) {
 }
 
 test("E1 on anvil: a real mined-but-reverted cast send is a critical alert and its cost is recorded", { skip: !enabled && "set KEEPER_ANVIL=1 to run (needs anvil and cast)" }, async () => {
-  const port = 21000 + Math.floor(Math.random() * 20000);
+  const port = Number(process.env.KEEPER_ANVIL_PORT ?? 21000 + Math.floor(Math.random() * 20000));
   const url = `http://127.0.0.1:${port}`;
-  const anvil = spawn(foundry("anvil"), ["--port", String(port), "--silent"], { stdio: "ignore" });
+  const anvil = spawn(foundry("anvil"), ["--host", "127.0.0.1", "--port", String(port), "--silent"], { stdio: "ignore" });
   try {
     let up = false;
     for (let i = 0; i < 50 && !up; i++) {
