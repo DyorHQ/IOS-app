@@ -51,6 +51,10 @@ struct PerpTradeView: View {
     /// The order as it stood when Review was tapped: the review renders it and the plan signs it, so a mark that moves
     /// under an open review (a USD-sized order re-derives its size from the price) can't change one without the other.
     @State private var reviewInput: OrderInput?
+    /// The side of the position the order under review closes, as the account held it when Review was tapped
+    /// (`PerpCloseOrder.closes`): a reduce-only order, or one on the other side of the position, which Perpl nets against
+    /// it. Noted once the order is sent, so its ending is not reported as a close from elsewhere.
+    @State private var reviewCloses: PositionSide?
     @State private var showLeverage = false
     @State private var showOrderType = false
     @State private var showUnitPref = false
@@ -139,7 +143,7 @@ struct PerpTradeView: View {
         .onChange(of: ticket.reduceOnly) { _, on in if on { ticket.tpslEnabled = false } }
         .onChange(of: bottomTab) { _, tab in if tab == .history { Task { await loadFills() } } }
         .onChange(of: model.fillSignal) { _, _ in if model.lastFilledPerpId == market.id { Task { await loadFills() } } }
-        .sheet(isPresented: $showConfirm, onDismiss: { reviewInput = nil }) { orderConfirmSheet }
+        .sheet(isPresented: $showConfirm, onDismiss: { reviewInput = nil; reviewCloses = nil }) { orderConfirmSheet }
         .sheet(isPresented: $showLeverage) {
             LeverageSheet(leverage: ticket.leverage, maxLeverage: maxLeverage) { chosen in
                 ticket.leverage = chosen
@@ -180,7 +184,7 @@ struct PerpTradeView: View {
         .sheet(isPresented: $showPortfolio) { PerpsPortfolioView(model: model) }
         .sheet(item: $closingPosition) { position in
             ClosePositionSheet(market: market, position: position, mark: mark, leftoverTriggers: triggersProtecting(position),
-                               onSending: { model.noteUserClose(market.id) }, onNotSent: { model.forgetUserClose(market.id) }) {
+                               onSending: { model.noteUserClose(market.id, closing: position.side) }, onNotSent: { model.forgetUserClose(market.id) }) {
                 Task { await model.load(env: env, address: session.address) }
             }
         }
@@ -647,6 +651,7 @@ struct PerpTradeView: View {
         }
         ticketError = nil
         reviewInput = ticket.input(market: market, refPrice: refPrice)
+        reviewCloses = PerpCloseOrder.closes(orderSide: side, reduceOnly: ticket.effectiveReduceOnly, held: position?.side)
         Haptics.commit()
         // Use the authenticated path when the socket is live, OR when the wallet has an enrolled key and the user wants
         // TP/SL (its submit awaits ensureConnected()); otherwise the on-chain path. Decided here, once per confirmation.
@@ -903,7 +908,7 @@ struct PerpTradeView: View {
         if let accountId = authedOrderAccount {
             AuthedOrderSheet(market: market, input: reviewedInput, takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1),
                              triggerSize: invertedSize(side: ticket.side), triggerNote: turnaroundNote, onChainPositions: model.positions, onChainOrders: model.orders,
-                             onSent: { if ticket.effectiveReduceOnly { model.noteUserClose(market.id) } }) {
+                             onSent: { if let reviewCloses { model.noteUserClose(market.id, closing: reviewCloses) } }) {
                 ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""; sizePercent = 0
                 Task { await model.load(env: env, address: session.address) }
             }
@@ -914,7 +919,7 @@ struct PerpTradeView: View {
 
     private var confirmSheet: some View {
         ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { try await checkedOrderPlan() }, onDone: { ticket.sizeText = ""; sizePercent = 0; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
-            if ticket.effectiveReduceOnly { model.noteUserClose(market.id) }
+            if let reviewCloses { model.noteUserClose(market.id, closing: reviewCloses) }
             Activity.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }, intent: orderIntent) {
             let signed = reviewedInput

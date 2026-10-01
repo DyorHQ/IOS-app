@@ -37,7 +37,7 @@ final class AppAlertsWiringTests: XCTestCase {
         XCTAssertTrue(bind.contains("switch loop.bind(owner) { case .keep: return case .stop: stopRun() case .start(let run): stopRun() guard let owner else { return } task = Task { [weak self] in await self?.watch(run: run, owner: owner) }"))
         let stop = try function("private func stopRun() {", in: raw)
         XCTAssertTrue(stop.contains("task?.cancel() task = nil sleeper?.task.cancel()"))
-        for field in ["positions = PerpPositionWatch()", "risk = PerpRiskWatch()", "pendingEndings = [:]", "userCloses = [:]", "firedPriceAlerts = []"] {
+        for field in ["positions = PerpPositionWatch()", "risk = PerpRiskWatch()", "pendingEndings = [:]", "userCloses = PerpUserCloses()", "firedPriceAlerts = []"] {
             XCTAssertTrue(stop.contains(field), "a new run starts with nothing of the last one's: \(field)")
         }
         let watch = try function("private func watch(run: Int, owner: Address) async {", in: raw)
@@ -85,6 +85,10 @@ final class AppAlertsWiringTests: XCTestCase {
         XCTAssertTrue(perps.contains("if preferences.postsFills { for position in changes.filled { Notifications.perpOrder(.filled,"))
         XCTAssertTrue(perps.contains("explainedByStream: env.perplTrading.endingExplained(marketId: perpId), streamLive: env.perplTrading.positionsAreLive"))
         XCTAssertTrue(perps.contains("if notice == .wait { continue } pendingEndings[perpId] = nil"))
+        // A close is any order that closes the position: reduce-only, or on its other side (Perpl nets them).
+        XCTAssertTrue(perps.contains("resting = PerpCloseOrder.restingCloseMarkets(orders: orders, positions: fresh)"))
+        XCTAssertTrue(perps.contains("userClosedAt: userCloses.closedAt(ending.position),"))
+        XCTAssertFalse(perps.contains("filter(\\.reduceOnly)"), "not only reduce-only orders")
         XCTAssertTrue(perps.contains("guard preferences.checksMargin else { risk.reset(); return }"))
         XCTAssertTrue(perps.contains("canAct: canAct()"))
         XCTAssertTrue(perps.contains("route: .perps, reference: PerpAlertText.reference(perpId: notice.position.perpId), owner: owner)"))
@@ -96,9 +100,17 @@ final class AppAlertsWiringTests: XCTestCase {
         XCTAssertTrue(model.contains("trading.positionClosedOnChain(marketId: ended.perpId, isLong: ended.side == .long)"))
         XCTAssertTrue(model.contains("fillSignal &+= 1"))
         let squeezed = try app("Perps/PerpsView.swift")
-        XCTAssertTrue(squeezed.contains("func noteUserClose(_ perpId: Int) { alerts?.noteUserClose(perpId) }"))
+        XCTAssertTrue(squeezed.contains("func noteUserClose(_ perpId: Int, closing side: PositionSide) { alerts?.noteUserClose(perpId, closing: side) }"))
         XCTAssertTrue(squeezed.contains("func forgetUserClose(_ perpId: Int) { alerts?.forgetUserClose(perpId) }"))
         XCTAssertFalse(squeezed.contains("sawEnding"))
+        // The ticket notes every order that closes the position, reduce-only or on its other side, decided at Review.
+        let ticket = try app("Perps/PerpTradeView.swift")
+        XCTAssertTrue(ticket.contains("reviewCloses = PerpCloseOrder.closes(orderSide: side, reduceOnly: ticket.effectiveReduceOnly, held: position?.side)"))
+        XCTAssertEqual(ticket.components(separatedBy: "if let reviewCloses { model.noteUserClose(market.id, closing: reviewCloses) }").count - 1, 2,
+                       "the one-click sheet and the on-chain sheet")
+        XCTAssertTrue(ticket.contains("onSending: { model.noteUserClose(market.id, closing: position.side) }"))
+        XCTAssertFalse(ticket.contains("if ticket.effectiveReduceOnly { model.noteUserClose"))
+        XCTAssertEqual(ticket.components(separatedBy: "model.noteUserClose(").count - 1, 3)
 
         let trading = try DocsLinksTests.appSource("Wallet/PerplTrading.swift")
         let ended = try function("private func positionEnded(_ position: PerplLivePosition) {", in: trading)

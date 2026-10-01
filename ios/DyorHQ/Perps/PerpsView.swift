@@ -104,10 +104,11 @@ final class PerpsModel {
         }
     }
 
-    /// The user closed this market's position, or sent a close for it, from this app: its disappearance is expected, and
+    /// The user closed this market's position on `side`, or sent an order that closes it (`PerpCloseOrder.closes`: a
+    /// reduce-only order, or one on the other side of the position), from this app: its disappearance is expected, and
     /// the app-wide watcher stays quiet about it. Noted when the close is sent, before the next poll can see the position
     /// gone (GT-9).
-    func noteUserClose(_ perpId: Int) { alerts?.noteUserClose(perpId) }
+    func noteUserClose(_ perpId: Int, closing side: PositionSide) { alerts?.noteUserClose(perpId, closing: side) }
 
     /// A close noted as sent never left the device: the position's disappearance is news again.
     func forgetUserClose(_ perpId: Int) { alerts?.forgetUserClose(perpId) }

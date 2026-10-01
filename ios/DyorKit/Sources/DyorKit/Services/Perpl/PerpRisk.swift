@@ -199,7 +199,7 @@ public enum PerpEndingNotice: Hashable, Sendable {
     case wait
     /// Nothing to post: the user closed it from this app, or the stream already said how it ended.
     case quiet
-    /// A reduce-only (close) order was resting on that market at the last read: it filled.
+    /// An order that closes the position (`PerpCloseOrder`) was resting on that market at the last read: it filled.
     case closeOrderFilled
     /// It closed some other way: on another device, or by the protocol while the stream wasn't live to say so.
     case closed
@@ -211,17 +211,67 @@ public enum PerpEndingNotice: Hashable, Sendable {
 
     /// - Parameters:
     ///   - endedAt: when the watcher first saw it gone.
-    ///   - userClosedAt: when the user closed that market's position, or sent a close for it, from this app.
+    ///   - userClosedAt: when the user closed that position, or sent an order that closes it, from this app
+    ///     (`PerpUserCloses.closedAt`).
     ///   - explainedByStream: the stream reported that market's position liquidated, deleveraged or unwound, or a TP/SL
     ///     on it triggered, recently (`PerplTrading.endingExplained`).
     ///   - streamLive: the trading stream is signed in with its positions list, so it would report a protocol ending.
-    ///   - restingClose: a reduce-only order rested on that market at the last read of its orders.
+    ///   - restingClose: an order that closes the position (`PerpCloseOrder`) rested on that market at the last read of
+    ///     its orders.
     public static func decide(endedAt: Date, now: Date, userClosedAt: Date?, explainedByStream: Bool, streamLive: Bool,
                               restingClose: Bool) -> PerpEndingNotice {
         if let userClosedAt, now.timeIntervalSince(userClosedAt) < userCloseWindow { return .quiet }
         if explainedByStream { return .quiet }
         if streamLive, now.timeIntervalSince(endedAt) < streamGrace { return .wait }
         return restingClose ? .closeOrderFilled : .closed
+    }
+}
+
+/// Which orders close a position. Perpl nets an order against the position on its market: a Short against a long (or a
+/// Long against a short) closes it as far as the order's size goes, reduce-only or not, and one bigger than the position
+/// turns it around. So an order closes a position when it is reduce-only or on the other side of it.
+public enum PerpCloseOrder {
+    /// The side of the position an order sent from this app closes, given the side the account holds on that market
+    /// (`held`, nil for none): a reduce-only order closes the side opposite its own; any other order closes the position
+    /// it is on the other side of. Nil for an order that opens a position or adds to one.
+    public static func closes(orderSide: PositionSide, reduceOnly: Bool, held: PositionSide?) -> PositionSide? {
+        (reduceOnly || held == orderSide.opposite) ? orderSide.opposite : nil
+    }
+
+    /// Whether a resting order closes the position held on its market: it is reduce-only, or a sell against a long, or
+    /// a buy against a short.
+    public static func closes(_ order: PerpOrder, held: PositionSide?) -> Bool {
+        if order.reduceOnly { return true }
+        guard let held else { return false }
+        return order.side == (held == .long ? .sell : .buy)
+    }
+
+    /// The markets where a resting order closes the position held (`closes(_:held:)`), from one read of the account's
+    /// orders and its positions.
+    public static func restingCloseMarkets(orders: [PerpOrder], positions: [PerpPosition]) -> Set<Int> {
+        let held = Dictionary(positions.map { ($0.perpId, $0.side) }, uniquingKeysWith: { first, _ in first })
+        return Set(orders.filter { closes($0, held: held[$0.perpId]) }.map(\.perpId))
+    }
+}
+
+/// The closes the user sent from this app, by market, with the side of the position each closes
+/// (`PerpCloseOrder.closes`) and when. A noted close keeps that position's ending quiet
+/// (`PerpEndingNotice.userCloseWindow`). A position on the other side of the same market is a new one (the order was
+/// bigger than the position and turned it around), so its ending is still news.
+public struct PerpUserCloses: Sendable {
+    private var notes: [Int: (side: PositionSide, at: Date)] = [:]
+
+    public init() {}
+
+    /// The user sent an order at `at` that closes `perpId`'s position on `side`.
+    public mutating func note(_ perpId: Int, closing side: PositionSide, at: Date) { notes[perpId] = (side, at) }
+
+    /// The close noted for `perpId` never left the device.
+    public mutating func forget(_ perpId: Int) { notes[perpId] = nil }
+
+    /// When the user sent a close for `position` (its market and its side) from this app, if they did.
+    public func closedAt(_ position: PerpPosition) -> Date? {
+        notes[position.perpId].flatMap { $0.side == position.side ? $0.at : nil }
     }
 }
 

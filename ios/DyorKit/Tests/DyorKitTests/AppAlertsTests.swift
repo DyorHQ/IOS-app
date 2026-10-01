@@ -252,6 +252,60 @@ final class AppAlertsTests: XCTestCase {
         XCTAssertTrue(PerpAlertText.ending(.closed, position: gone, asset: "BTC")!.body.contains("It may have hit a take-profit or stop-loss, been liquidated"))
     }
 
+    /// An order closes a position when it is reduce-only or on the other side of it: Perpl nets a Short against a long
+    /// (and a Long against a short), so a plain opposite order sent from this app is the user's own close, never "closed
+    /// from elsewhere", and a resting one that fills is a close order filled. One bigger than the position turns it
+    /// around: the new position's ending is news.
+    func testOppositeOrdersAreCloses() {
+        // Sent from the ticket.
+        XCTAssertEqual(PerpCloseOrder.closes(orderSide: .short, reduceOnly: false, held: .long), .long, "a Short market order against a long")
+        XCTAssertEqual(PerpCloseOrder.closes(orderSide: .long, reduceOnly: false, held: .short), .short)
+        XCTAssertNil(PerpCloseOrder.closes(orderSide: .short, reduceOnly: false, held: .short), "adds to the position")
+        XCTAssertNil(PerpCloseOrder.closes(orderSide: .long, reduceOnly: false, held: nil), "opens one")
+        XCTAssertEqual(PerpCloseOrder.closes(orderSide: .short, reduceOnly: true, held: .long), .long)
+        XCTAssertEqual(PerpCloseOrder.closes(orderSide: .long, reduceOnly: true, held: nil), .short, "reduce-only always closes")
+
+        // Resting on the account.
+        func order(_ perpId: Int, _ type: PerpOrderType) -> PerpOrder {
+            PerpOrder(perpId: perpId, orderId: perpId * 10, symbol: "M\(perpId)", type: type, side: type == .openLong || type == .closeShort ? .buy : .sell,
+                      price: 100, size: 1, leverage: 5, expiryBlock: 0, reduceOnly: type == .closeLong || type == .closeShort)
+        }
+        let held = [position(1, .long, size: 1, entry: 100, mark: 100, margin: 10), position(2, .long, size: 1, entry: 100, mark: 100, margin: 10),
+                    position(3, .long, size: 1, entry: 100, mark: 100, margin: 10), position(4, .short, size: 1, entry: 100, mark: 100, margin: 10)]
+        let orders = [order(1, .closeLong), order(2, .openShort), order(3, .openLong), order(4, .openLong), order(5, .openShort)]
+        XCTAssertEqual(PerpCloseOrder.restingCloseMarkets(orders: orders, positions: held), [1, 2, 4],
+                       "reduce-only, a sell against a long, a buy against a short; not one that adds (3) or one with no position (5)")
+        XCTAssertTrue(PerpCloseOrder.closes(order(6, .closeShort), held: nil))
+        XCTAssertFalse(PerpCloseOrder.closes(order(6, .openLong), held: nil))
+
+        // The reviewer's case: a 1 BTC long, the stream live, a 1 BTC Short market order (not reduce-only) from the ticket.
+        var closes = PerpUserCloses()
+        let long = position(1, .long, size: 1, entry: 100, mark: 100, margin: 10)
+        closes.note(1, closing: PerpCloseOrder.closes(orderSide: .short, reduceOnly: false, held: .long)!, at: t0)
+        var watch = PerpPositionWatch()
+        _ = watch.update([long], stillOpen: [1])
+        let ended = watch.update([], stillOpen: []).ended
+        XCTAssertEqual(ended, [long])
+        XCTAssertEqual(closes.closedAt(long), t0)
+        XCTAssertEqual(PerpEndingNotice.decide(endedAt: t0.addingTimeInterval(5), now: t0.addingTimeInterval(20), userClosedAt: closes.closedAt(ended[0]),
+                                               explainedByStream: false, streamLive: true, restingClose: false), .quiet,
+                       "the user's own close: no 'wasn't closed from this app'")
+
+        // A 2 BTC Short against the 1 BTC long turned it around: the short that ends later (another device) is news.
+        let short = position(1, .short, size: 1, entry: 100, mark: 100, margin: 10)
+        XCTAssertNil(closes.closedAt(short))
+        XCTAssertEqual(PerpEndingNotice.decide(endedAt: t0.addingTimeInterval(60), now: t0.addingTimeInterval(75), userClosedAt: closes.closedAt(short),
+                                               explainedByStream: false, streamLive: true, restingClose: false), .closed)
+        XCTAssertNil(closes.closedAt(position(2, .long, size: 1, entry: 100, mark: 100, margin: 10)), "another market")
+        closes.forget(1)
+        XCTAssertNil(closes.closedAt(long), "a close that never left the device")
+
+        // An opposite limit that rested and filled after the window: a close order filled, not "closed".
+        XCTAssertEqual(PerpEndingNotice.decide(endedAt: t0, now: t0.addingTimeInterval(15), userClosedAt: nil, explainedByStream: false, streamLive: true,
+                                               restingClose: PerpCloseOrder.restingCloseMarkets(orders: [order(1, .openShort)], positions: [long]).contains(1)),
+                       .closeOrderFilled)
+    }
+
     // MARK: - Words
 
     /// Each level's title, the numbers in the one price style, and a watched wallet's alerts never suggest an action.

@@ -29,12 +29,13 @@ final class AlertCenter {
     private var risk = PerpRiskWatch()
     private var markets: [PerpMarket] = []
     private var marketsReadAt: Date?
-    /// Markets with a reduce-only (close) order resting at the last read of the account's orders.
+    /// Markets with an order resting at the last read of the account's orders that closes the position held there
+    /// (`PerpCloseOrder`): reduce-only, or on the other side of the position.
     private var restingCloseMarkets: Set<Int> = []
     /// Positions seen ended whose notice waits for the trading stream (`PerpEndingNotice.wait`).
     private var pendingEndings: [Int: (position: PerpPosition, since: Date, restingClose: Bool)] = [:]
-    /// Markets the user closed, or sent a close for, from this app — and when.
-    private var userCloses: [Int: Date] = [:]
+    /// Positions the user closed, or sent an order that closes, from this app — and when.
+    private var userCloses = PerpUserCloses()
     /// Price alerts this run fired: never fired twice, even before their removal is read back.
     private var firedPriceAlerts: Set<UUID> = []
     private var lastPerps: Date?
@@ -70,11 +71,12 @@ final class AlertCenter {
         sleeper?.task.cancel()
     }
 
-    /// The user closed `perpId`'s position, or sent a close for it, from this app: its ending is expected, not news.
-    func noteUserClose(_ perpId: Int) { userCloses[perpId] = Date() }
+    /// The user closed `perpId`'s position on `side`, or sent an order that closes it (`PerpCloseOrder.closes`), from this
+    /// app: its ending is expected, not news.
+    func noteUserClose(_ perpId: Int, closing side: PositionSide) { userCloses.note(perpId, closing: side, at: Date()) }
 
     /// A close noted as sent never left the device: the position's ending is news again.
-    func forgetUserClose(_ perpId: Int) { userCloses[perpId] = nil }
+    func forgetUserClose(_ perpId: Int) { userCloses.forget(perpId) }
 
     private func stopRun() {
         task?.cancel()
@@ -88,7 +90,7 @@ final class AlertCenter {
         marketsReadAt = nil
         restingCloseMarkets = []
         pendingEndings = [:]
-        userCloses = [:]
+        userCloses = PerpUserCloses()
         firedPriceAlerts = []
         lastPerps = nil
         lastPrices = nil
@@ -181,9 +183,10 @@ final class AlertCenter {
                 env.perplTrading.noteMarkets(read)
             }
             do { fresh = try await perpl.positions(account, markets: markets) } catch { return }
-            // Only a market with a position can hold a close order that matters here.
+            // Only a market with a position can hold a close order that matters here: reduce-only, or on the other side
+            // of the position, which Perpl nets against it.
             let held = markets.filter { account.positionPerpIds.contains($0.id) }
-            if let orders = try? await perpl.openOrders(account, markets: held) { resting = Set(orders.filter(\.reduceOnly).map(\.perpId)) }
+            if let orders = try? await perpl.openOrders(account, markets: held) { resting = PerpCloseOrder.restingCloseMarkets(orders: orders, positions: fresh) }
         }
         guard loop.mayPost(run: run, owner: owner), signedIn() == owner, let preferences else { return }
         let now = Date()
@@ -204,7 +207,7 @@ final class AlertCenter {
         }
 
         for (perpId, ending) in pendingEndings.sorted(by: { $0.key < $1.key }) {
-            let notice = PerpEndingNotice.decide(endedAt: ending.since, now: now, userClosedAt: userCloses[perpId],
+            let notice = PerpEndingNotice.decide(endedAt: ending.since, now: now, userClosedAt: userCloses.closedAt(ending.position),
                                                  explainedByStream: env.perplTrading.endingExplained(marketId: perpId),
                                                  streamLive: env.perplTrading.positionsAreLive, restingClose: ending.restingClose)
             if notice == .wait { continue }
