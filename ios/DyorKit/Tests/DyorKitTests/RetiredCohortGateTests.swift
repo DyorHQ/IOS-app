@@ -362,35 +362,38 @@ final class RetiredCohortGateTests: XCTestCase {
 
     // MARK: The docs page
 
-    /// The page as published on 2026-09-29: the retired 0x6B1C and cohort 3 as the current factories, none of v2's
-    /// contracts. Refused, naming each missing address (the wallets too) and each retired factory it presents as current.
-    func testAPageListingTheRetiredStacksRefuses() throws {
+    /// A page that lists the retired 0x6B1C and cohort 3 as the current factories and none of v2's contracts is noted,
+    /// naming each missing address (the wallets too) and each retired factory it presents as current, and the gate still
+    /// passes: the docs page doesn't gate a release (owner decision 2026-10-01).
+    func testAPageListingTheRetiredStacksIsNoted() throws {
         let l = LaunchpadAddresses.monadMainnet
         let m = MomentsAddresses.monadMainnet
         let page = Self.docsPage(current: [("LaunchpadFactory", V2WiringTests.relaunchFactory), ("MomentsFactory", V2WiringTests.cohort3Factory),
                                            ("Uniswap v4 PoolManager", l.poolManager), ("Permit2", m.permit2), ("USDC", m.usdc)])
         let (status, output) = try check(Self.current(), docs: page)
-        XCTAssertEqual(status, 1, output)
-        XCTAssertTrue(output.contains("does not list: LaunchpadAddresses.monadMainnet.factory \(l.factory.hex), LaunchpadAddresses.monadMainnet.router \(l.router.hex)"), output)
+        XCTAssertEqual(status, 0, output)
+        XCTAssertTrue(output.contains("note: the docs page \(DocsLinks.contractsAndAddresses.url.absoluteString) does not list: LaunchpadAddresses.monadMainnet.factory \(l.factory.hex), LaunchpadAddresses.monadMainnet.router \(l.router.hex)"), output)
         XCTAssertTrue(output.contains("MomentsAddresses.monadMainnet.buyback \(m.buyback.hex), MomentsAddresses.monadMainnet.platform \(m.platform.hex), "
-                                      + "MomentsAddresses.monadMainnet.treasury \(m.treasury.hex). Publish the docs update first"), output)
+                                      + "MomentsAddresses.monadMainnet.treasury \(m.treasury.hex)\n"), output)
+        XCTAssertFalse(output.contains("check failed"), output)
+        XCTAssertTrue(output.contains("; docs page differs (noted)\n"), output)
         XCTAssertFalse(output.contains("poolManager"), "listed, in another case: \(output)")
         XCTAssertTrue(output.contains("presents \(V2WiringTests.relaunchFactory.checksummed) (a retired one) as the current LaunchpadFactory, not LaunchpadAddresses.monadMainnet's \(l.factory.hex)"), output)
         XCTAssertTrue(output.contains("presents \(V2WiringTests.cohort3Factory.checksummed) (a retired one) as the current MomentsFactory, not MomentsAddresses.monadMainnet's \(m.factory.hex)"), output)
     }
 
-    /// Every address listed is not enough: a page whose first factory rows, as a reader sees it, are the retired ones
-    /// still refuses, and so does a page that cannot be read (a site that does not answer).
-    func testThePagesCurrentFactoriesMustBeThisBuilds() throws {
+    /// Every address listed is not enough for the page to match: one whose first factory rows, as a reader sees it, are
+    /// the retired ones is noted, and so is a page that cannot be read (a site that does not answer). Neither refuses.
+    func testThePagesCurrentFactoriesAreNotedWhenTheyAreNotThisBuilds() throws {
         let reordered = try check(Self.current(), docs: Self.docsPage(previousFirst: true))
-        XCTAssertEqual(reordered.status, 1, reordered.output)
+        XCTAssertEqual(reordered.status, 0, reordered.output)
         XCTAssertFalse(reordered.output.contains("does not list"), reordered.output)
-        XCTAssertTrue(reordered.output.contains("presents \(V2WiringTests.relaunchFactory.checksummed) (a retired one) as the current LaunchpadFactory"), reordered.output)
-        XCTAssertTrue(reordered.output.contains("publish the docs update first"), reordered.output)
+        XCTAssertTrue(reordered.output.contains("note: the docs page \(DocsLinks.contractsAndAddresses.url.absoluteString) presents \(V2WiringTests.relaunchFactory.checksummed) (a retired one) as the current LaunchpadFactory"), reordered.output)
+        XCTAssertTrue(reordered.output.contains("; docs page differs (noted)\n"), reordered.output)
         let unread = try check(Self.current(), docs: nil)
-        XCTAssertEqual(unread.status, 1, unread.output)
-        XCTAssertTrue(unread.output.contains("the docs page \(DocsLinks.contractsAndAddresses.url.absoluteString) could not be read"), unread.output)
-        XCTAssertTrue(unread.output.contains("publish the docs update first"), unread.output)
+        XCTAssertEqual(unread.status, 0, unread.output)
+        XCTAssertTrue(unread.output.contains("note: the docs page \(DocsLinks.contractsAndAddresses.url.absoluteString) could not be read"), unread.output)
+        XCTAssertFalse(unread.output.contains("check failed"), unread.output)
     }
 
     /// The gate reads the page Get Help's Contracts & Addresses row opens, at that URL.
