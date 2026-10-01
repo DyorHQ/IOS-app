@@ -25,7 +25,8 @@ export class MinedRevert extends Error {
   }
 }
 
-/** cast was killed or printed no readable receipt: the transaction may or may not have been broadcast and mined. */
+/** cast was killed, printed no readable receipt, or failed in a way that may have followed the broadcast: the
+    transaction may or may not have been broadcast and mined. */
 export class SendStatusUnknown extends Error {
   constructor(message, { gasLimit } = {}) {
     super(message);
@@ -46,6 +47,10 @@ export class SendNotStarted extends Error {
 }
 
 const HASH = /^0x[0-9a-fA-F]{64}$/;
+/** cast errors that come before anything is broadcast: its own arguments and keystore, or the node refusing the
+    transaction at submission (it is then not in any pool). With --gas-limit given cast estimates nothing, so "execution
+    reverted" only comes from a send that had to estimate. */
+export const NOT_BROADCAST = /insufficient funds|nonce too (low|high)|replacement transaction underpriced|transaction underpriced|intrinsic gas too low|exceeds block gas limit|max fee per gas less than block base fee|fee cap less than block base fee|invalid sender|execution reverted|Mac Mismatch|Failed to decrypt|keystore|password|No such file or directory|unexpected argument|invalid value '[^']*' for/i;
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
 function quantity(v, field) {
@@ -159,7 +164,8 @@ function quote(a) {
  * In send mode `call` resolves only when cast exited 0; it then returns the parsed receipt and what the transaction
  * cost (`spentWei`), or `receipt: null` with `receiptError` when cast's output could not be read (the caller must treat
  * that as an unknown outcome: see jobs.mjs `safeSend`). It throws `MinedRevert` for a mined, reverted transaction,
- * `SendStatusUnknown` when cast had to be killed, and a plain Error when cast failed.
+ * `SendStatusUnknown` when cast had to be killed or failed in a way that may have followed the broadcast, and a plain
+ * Error only when cast failed before it could broadcast (NOT_BROADCAST).
  */
 export function makeSender({ send = false, rpcUrl, signer, allowUnlocked = false, castBin = process.env.CAST_BIN || "cast", log = console.log, spawn = spawnSync, killAfterMs = CAST_KILL_AFTER_MS }) {
   if (send) {
@@ -190,12 +196,16 @@ export function makeSender({ send = false, rpcUrl, signer, allowUnlocked = false
       if (r.error) throw new Error(`cast could not be started (${r.error.code ?? r.error.message})`);
       if (r.status !== 0) {
         const out = `${r.stderr ?? ""}\n${r.stdout ?? ""}`;
+        const first = (r.stderr || "").trim().split("\n")[0];
         // cast gives up waiting for a receipt (its --timeout) or loses the RPC after broadcasting with a non-zero exit
         // too: when its output names a transaction hash or a timeout, the transaction may be pending or mined.
         if (/0x[0-9a-fA-F]{64}\b|time[d ]?out|not confirmed|dropped/i.test(out)) {
-          throw new SendStatusUnknown(`cast send exited ${r.status} after it may have broadcast: ${(r.stderr || "").trim().split("\n")[0]}`, { gasLimit });
+          throw new SendStatusUnknown(`cast send exited ${r.status} after it may have broadcast: ${first}`, { gasLimit });
         }
-        throw new Error(`cast send failed (${r.status}): ${(r.stderr || "").trim()}`);
+        // Only an error that cannot follow a broadcast is a plain failure. Anything else (cast 1.7.1 prints just "error
+        // sending request for url (…)" when the RPC goes away while it waits for the receipt) may have sent it.
+        if (NOT_BROADCAST.test(r.stderr ?? "")) throw new Error(`cast send failed (${r.status}): ${(r.stderr || "").trim()}`);
+        throw new SendStatusUnknown(`cast send exited ${r.status} with an error that does not show it stopped before broadcasting (${first || "no output"}): the transaction may have been sent`, { gasLimit });
       }
       let receipt;
       try {

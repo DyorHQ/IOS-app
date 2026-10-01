@@ -68,6 +68,32 @@ test("E1: a killed cast, or a non-zero exit that names a transaction or a timeou
   await assert.rejects(liveSender({ status: 1, stderr: "Error: insufficient funds for gas * price + value" }).call({ to: TO, signature: "g()", gasLimit: 1n }), (e) => !(e instanceof SendStatusUnknown) && /insufficient funds/.test(e.message));
 });
 
+test("E1: a non-zero exit is an unknown outcome unless cast says it stopped before broadcasting", async () => {
+  const call = (stderr) => liveSender({ status: 1, stderr }).call({ to: TO, signature: "g()", gasLimit: 1n }).then(() => "ok", (e) => (e instanceof SendStatusUnknown ? "unknown" : "failed"));
+  // What cast 1.7.1 prints when the RPC goes away while it waits for the receipt: no hash, no "timeout".
+  assert.equal(await call("Error: error sending request for url (http://127.0.0.1:8545/)\n"), "unknown");
+  assert.equal(await call(""), "unknown", "no output at all");
+  assert.equal(await call("Error: server returned an error response: error code -32603: internal error"), "unknown");
+  for (const pre of [
+    "Error: server returned an error response: error code -32003: Insufficient funds for gas * price + value",
+    "Error: server returned an error response: error code -32000: nonce too low",
+    "Error: Failed to decrypt keystore: Mac Mismatch",
+    "Error: No such file or directory (os error 2)",
+    "error: unexpected argument '--bogus' found",
+  ]) {
+    assert.equal(await call(pre), "failed", pre);
+  }
+});
+
+test("E1 via safeSend: a send whose RPC went away after it may have broadcast is counted at its worst case", async () => {
+  const { alerts, state } = await sendThroughJob({ status: 1, stderr: "Error: error sending request for url (http://127.0.0.1:8545/)\n" });
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].severity, "critical");
+  assert.match(alerts[0].reason, /outcome UNKNOWN .*error sending request for url .*counted as up to 0\.51 MON spent/);
+  assert.equal(spentSince(state, 0), 5_000_000n * 102_000_000_000n);
+  assert.equal(state.budget.spend[0].estimated, true);
+});
+
 test("E1: exit 0 with an unreadable receipt resolves with receipt null (the job treats it as unknown)", async () => {
   const r = await liveSender({ status: 0, stdout: "ok" }).call({ to: TO, signature: "g()", gasLimit: 1n });
   assert.equal(r.receipt, null);
