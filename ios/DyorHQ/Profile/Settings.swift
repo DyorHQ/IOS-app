@@ -173,6 +173,7 @@ struct NotificationsView: View {
             }
             Section {
                 Toggle("Swaps & Fills", isOn: $settings.notifyFills)
+                Toggle("Perps Margin Warnings", isOn: $settings.notifyMargin)
                 Toggle("Price Alerts", isOn: $settings.notifyPriceAlerts)
                 NavigationLink { PriceAlertsView() } label: {
                     HStack {

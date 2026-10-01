@@ -31,15 +31,17 @@ public enum BackendRestore {
         public var notificationsEnabled: Bool?
         public var notifyFills: Bool?
         public var notifyPriceAlerts: Bool?
+        public var notifyMargin: Bool?
         public var defaultLeverage: Double?
         public var slippageBps: Int?
 
         public init(appearance: String? = nil, notificationsEnabled: Bool? = nil, notifyFills: Bool? = nil, notifyPriceAlerts: Bool? = nil,
-                    defaultLeverage: Double? = nil, slippageBps: Int? = nil) {
+                    notifyMargin: Bool? = nil, defaultLeverage: Double? = nil, slippageBps: Int? = nil) {
             self.appearance = appearance
             self.notificationsEnabled = notificationsEnabled
             self.notifyFills = notifyFills
             self.notifyPriceAlerts = notifyPriceAlerts
+            self.notifyMargin = notifyMargin
             self.defaultLeverage = defaultLeverage
             self.slippageBps = slippageBps
         }
@@ -53,6 +55,7 @@ public enum BackendRestore {
         out.notificationsEnabled = bool(snapshot["notificationsEnabled"])
         out.notifyFills = bool(snapshot["notifyFills"])
         out.notifyPriceAlerts = bool(snapshot["notifyPriceAlerts"])
+        out.notifyMargin = bool(snapshot["notifyMargin"])
         if snapshot.keys.contains("defaultLeverage") { out.defaultLeverage = leverage(snapshot["defaultLeverage"]) }
         if snapshot.keys.contains("slippageBps") { out.slippageBps = slippageBps(snapshot["slippageBps"]) }
         return out
