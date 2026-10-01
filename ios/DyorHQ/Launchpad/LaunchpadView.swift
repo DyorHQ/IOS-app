@@ -123,7 +123,17 @@ struct LaunchpadView: View {
         .background(Color(.systemGroupedBackground))
     }
 
-    private func section(title: String, count: Int, subtitle: String, coins: [Launch]) -> some View {
+    private func section(title: LocalizedStringKey, count: Int, subtitle: LocalizedStringKey, coins: [Launch]) -> some View {
+        section(title: title, count: count, subtitle: Text(subtitle), coins: coins)
+    }
+
+    /// A section whose subtitle is built at run time (`LaunchBoard.sellOnlySubtitle`), shown as it is.
+    @_disfavoredOverload
+    private func section<S: StringProtocol>(title: LocalizedStringKey, count: Int, subtitle: S, coins: [Launch]) -> some View {
+        section(title: title, count: count, subtitle: Text(verbatim: String(subtitle)), coins: coins)
+    }
+
+    private func section(title: LocalizedStringKey, count: Int, subtitle: Text, coins: [Launch]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader(title, count: count, subtitle: subtitle)
             LazyVGrid(columns: columns, spacing: 12) {
@@ -188,7 +198,11 @@ struct LaunchpadView: View {
     }
 
     /// A section's title with its count (none for an empty section), and what it lists.
-    private func sectionHeader(_ title: String, count: Int?, subtitle: String) -> some View {
+    private func sectionHeader(_ title: LocalizedStringKey, count: Int?, subtitle: LocalizedStringKey) -> some View {
+        sectionHeader(title, count: count, subtitle: Text(subtitle))
+    }
+
+    private func sectionHeader(_ title: LocalizedStringKey, count: Int?, subtitle: Text) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 Text(title).font(.title3.weight(.semibold))
@@ -198,7 +212,7 @@ struct LaunchpadView: View {
                         .background(Color.brand.opacity(0.14), in: Capsule()).foregroundStyle(Color.brand)
                 }
             }
-            Text(subtitle).font(.footnote).foregroundStyle(.secondary)
+            subtitle.font(.footnote).foregroundStyle(.secondary)
         }
     }
 
@@ -711,7 +725,7 @@ struct LaunchDetailView: View {
         }
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
+    private func stat(_ label: LocalizedStringKey, _ value: String) -> some View {
         VStack(spacing: 3) {
             Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
             Text(label).font(.caption2).foregroundStyle(.secondary)

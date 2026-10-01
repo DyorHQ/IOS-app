@@ -232,7 +232,7 @@ struct AssetsCard: View {
         .cardBackground()
     }
 
-    private func nftTile(_ nft: NFTAsset, caption: String, unverified: Bool = false) -> some View {
+    private func nftTile(_ nft: NFTAsset, caption: LocalizedStringKey, unverified: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Color(.tertiarySystemFill)
                 .aspectRatio(1, contentMode: .fit)
@@ -259,7 +259,18 @@ struct AssetsCard: View {
         .contentShape(Rectangle())
     }
 
+    private func tokenRow(_ asset: AssetsModel.TokenAsset, note: LocalizedStringKey, unverified: Bool = false) -> some View {
+        tokenRow(asset, note: Text(note), unverified: unverified)
+    }
+
+    /// A row whose note is worded at run time (a curve route's `rowNote`), shown as it is: the token's name when there is
+    /// none.
+    @_disfavoredOverload
     private func tokenRow(_ asset: AssetsModel.TokenAsset, note: String? = nil, unverified: Bool = false) -> some View {
+        tokenRow(asset, note: note.map { Text(verbatim: $0) }, unverified: unverified)
+    }
+
+    private func tokenRow(_ asset: AssetsModel.TokenAsset, note: Text?, unverified: Bool) -> some View {
         HStack(spacing: 12) {
             TokenLogo(token: asset.token, size: 34)
             VStack(alignment: .leading, spacing: 2) {
@@ -267,7 +278,7 @@ struct AssetsCard: View {
                     Text(asset.token.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                     TokenBadgeView(token: asset.token, receivedUnasked: unverified)
                 }
-                Text(note ?? asset.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                (note ?? Text(verbatim: asset.token.name)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {

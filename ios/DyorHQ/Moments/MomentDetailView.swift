@@ -142,7 +142,7 @@ struct MomentDetailView: View {
     }
 
     /// `spoken` is what VoiceOver reads for `value` when the two differ (a subscripted price, `PriceFormat.spoken`).
-    private func stat(_ label: String, _ value: String, spoken: String? = nil) -> some View {
+    private func stat(_ label: LocalizedStringKey, _ value: String, spoken: String? = nil) -> some View {
         VStack(spacing: 3) {
             Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
                 .accessibilityLabel(spoken ?? value)

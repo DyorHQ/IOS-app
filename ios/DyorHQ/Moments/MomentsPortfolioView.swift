@@ -90,7 +90,7 @@ struct MomentsPortfolioView: View {
         }
     }
 
-    private func tile(_ title: String, _ coins: BigUInt, _ subtitle: String, tint: Color = .primary) -> some View {
+    private func tile(_ title: LocalizedStringKey, _ coins: BigUInt, _ subtitle: LocalizedStringKey, tint: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(MomentsFormat.coins(coins)).font(.headline).monospacedDigit().foregroundStyle(tint)

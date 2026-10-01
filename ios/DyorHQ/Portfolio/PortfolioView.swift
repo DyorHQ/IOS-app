@@ -118,7 +118,7 @@ struct PortfolioView: View {
         .cardBackground()
     }
 
-    private func metric(_ title: String, _ value: String, tint: Color) -> some View {
+    private func metric(_ title: LocalizedStringKey, _ value: String, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.headline).monospacedDigit().foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7)
@@ -220,7 +220,7 @@ struct PortfolioView: View {
         .cardBackground()
     }
 
-    private func small(_ title: String, _ value: String, tint: Color = .primary) -> some View {
+    private func small(_ title: LocalizedStringKey, _ value: String, tint: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.caption2).foregroundStyle(.secondary)
             Text(value).font(.footnote.weight(.semibold)).monospacedDigit().foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.6)

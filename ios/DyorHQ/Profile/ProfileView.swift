@@ -523,9 +523,19 @@ struct SendSheet: View {
     }
 
     /// What a read that came back partly empty-handed left out, with Retry: never passed off as all the wallet holds.
-    private func readNotice(_ text: String) -> some View {
+    private func readNotice(_ text: LocalizedStringKey) -> some View {
+        readNotice(Text(text))
+    }
+
+    /// A notice worded at run time (`readGap`), shown as it is.
+    @_disfavoredOverload
+    private func readNotice<S: StringProtocol>(_ text: S) -> some View {
+        readNotice(Text(verbatim: String(text)))
+    }
+
+    private func readNotice(_ text: Text) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(text).font(.footnote).foregroundStyle(.secondary)
+            text.font(.footnote).foregroundStyle(.secondary)
             Button("Retry", systemImage: "arrow.clockwise") { attempt += 1 }
         }
     }

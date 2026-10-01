@@ -179,14 +179,14 @@ struct HomeView: View {
         }
     }
 
-    private func statColumn(_ title: String, value: Double, tint: Color, alignment: HorizontalAlignment = .leading) -> some View {
+    private func statColumn(_ title: LocalizedStringKey, value: Double, tint: Color, alignment: HorizontalAlignment = .leading) -> some View {
         VStack(alignment: alignment, spacing: 2) {
             Text(title).font(.footnote).foregroundStyle(.secondary)
             Text(PriceFormat.usdValue(value)).font(.headline).monospacedDigit().foregroundStyle(tint)
         }
     }
 
-    private func splitStat(_ title: String, _ value: Double, _ dot: Color) -> some View {
+    private func splitStat(_ title: LocalizedStringKey, _ value: Double, _ dot: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 Circle().fill(dot).frame(width: 7, height: 7)
@@ -323,7 +323,7 @@ struct HomeView: View {
         .cardBackground()
     }
 
-    private func holdingsEmpty(_ title: String, _ detail: String) -> some View {
+    private func holdingsEmpty(_ title: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
         VStack(spacing: 4) {
             Text(title).font(.subheadline.weight(.medium))
             Text(detail).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -349,7 +349,7 @@ enum HoldingCategory: String, CaseIterable, Identifiable {
 
 /// One of the four home actions: an SF Symbol over a label, filling its share of the row.
 private struct HomeAction: View {
-    let title: String
+    let title: LocalizedStringKey
     let symbol: String
     let action: () -> Void
 

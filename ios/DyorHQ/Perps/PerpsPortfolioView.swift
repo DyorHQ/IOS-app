@@ -83,7 +83,7 @@ struct PerpsPortfolioView: View {
         }
     }
 
-    private func statTile(_ label: String, _ value: String, tint: Color = .primary) -> some View {
+    private func statTile(_ label: LocalizedStringKey, _ value: String, tint: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(tint).contentTransition(.numericText())
@@ -93,7 +93,7 @@ struct PerpsPortfolioView: View {
         .cardBackground()
     }
 
-    private func miniStat(_ label: String, _ value: String, tint: Color = .primary, alignment: HorizontalAlignment = .leading) -> some View {
+    private func miniStat(_ label: LocalizedStringKey, _ value: String, tint: Color = .primary, alignment: HorizontalAlignment = .leading) -> some View {
         VStack(alignment: alignment, spacing: 2) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
             Text(value).font(.subheadline.weight(.medium).monospacedDigit()).foregroundStyle(tint)
@@ -195,7 +195,7 @@ struct PerpsPortfolioView: View {
         .padding(.vertical, 9)
     }
 
-    private func emptyRow(_ text: String) -> some View {
+    private func emptyRow(_ text: LocalizedStringKey) -> some View {
         Text(text).font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 24)
     }
 

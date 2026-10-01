@@ -269,8 +269,9 @@ struct PositionTriggersSheet: View {
 struct CancelTriggersSheet: View {
     let market: PerpMarket
     let orders: [PerplOpenOrder]
-    let title: String
-    var note: String?
+    /// The sheet's title and the note under the list, resolved in the app's language (`tr()`).
+    let title: LocalizedStringResource
+    var note: LocalizedStringResource?
     let onDone: () -> Void
 
     @Environment(PerplTrading.self) private var perplTrading
@@ -301,7 +302,7 @@ struct CancelTriggersSheet: View {
                 } header: {
                     Text("\(market.asset)-PERP · on \(orders.first?.protectsLong == false ? "Short" : "Long")")
                 } footer: {
-                    if let note { Text(note) }
+                    if let note { Text(verbatim: tr(note)) }
                 }
                 if session.isPasskeyAccount, !finished {
                     Section { SessionScopeBadge(assessment: .faceID(Mera.AlwaysAsk.cancelOrder.summary)) }
@@ -312,7 +313,7 @@ struct CancelTriggersSheet: View {
                 TriggerSheetOutcomeSection(phase: phase)
             }
             .listStyle(.insetGrouped)
-            .navigationTitle(title)
+            .navigationTitle(tr(title))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
