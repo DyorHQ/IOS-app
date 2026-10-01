@@ -13,13 +13,14 @@ import Foundation
 ///
 /// A name is display-safe when it has no hidden or direction-changing character (`hasHiddenCharacters`) and no word
 /// mixes Latin letters with letters of another script drawn like Latin ones (`mixesLookAlikeAlphabets`); any language
-/// and emoji are fine, with the joiners Persian, Indic scripts and emoji spell with. A DyorHQ coin whose symbol or name isn't display-safe, or whose symbol is longer than the create
-/// forms allow (`maxSymbolLength`), carries a warning, never "DyorHQ Launch" (`TokenBadge`), and the create forms refuse
-/// all of it (`createRefusal`), so a coin made in the app never carries a warning. A name's length is the forms' alone
-/// (`maxLaunchNameLength`, `maxMomentNameLength`): the launch form of build 16 and before set none and the Moment form
-/// no byte limit, so a long name is no reason to warn, and what the registry keeps of one is cut
-/// (`DyorCoin.maxStoredName`). One made directly on the contracts can still carry a warning. Every check reads the
-/// chain's text as it is — never `ChainText.shown`, which removes the direction characters these checks exist to catch.
+/// and emoji are fine, with the joiners Persian, Indic scripts and emoji spell with. A DyorHQ coin whose symbol or name
+/// isn't display-safe, or whose symbol is longer than the create forms allow (`maxSymbolLength`), carries a warning,
+/// never "DyorHQ Launch" (`TokenBadge`), and the create forms refuse all of it (`createRefusal`), so a coin made in the
+/// app never carries a warning. A name's length is the forms' alone (`maxLaunchNameLength`, `maxMomentNameLength`): the
+/// launch form of build 16 and before set none and the Moment form no byte limit, so a long name is no reason to warn,
+/// and what the registry keeps of one is cut (`DyorCoin.maxStoredName`). One made directly on the contracts can still
+/// carry a warning. Every check reads the chain's text as it is — never `ChainText.shown`, which removes the direction
+/// characters these checks exist to catch.
 public enum SymbolSafety {
     /// The longest symbol the create forms take, in characters (`LaunchpadView`, `CreateMomentView`).
     public static let maxSymbolLength = 10

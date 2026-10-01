@@ -91,11 +91,10 @@ public enum WalletHoldings {
     /// The asset a send starts on: the highest-ranked one the user chose. Never an Unverified token — a fake "USDC"
     /// with a seeded pool can outrank everything — nor one carrying a curated or widely traded token's name
     /// (`looksAlike`), even one the user tapped in Swap, nor one whose symbol isn't plain (`plainSymbol`): it may be a
-    /// look-alike, and a send must
-    /// never start on it unasked. So when every held token is one of those, or nothing is held, there is none and the
-    /// user picks. None either when the prices couldn't be read (`pricesRead` false), and never a token with no price:
-    /// the list below the priced tokens is by amount, not value, and the token with the most units is not the one worth
-    /// the most.
+    /// look-alike, and a send must never start on it unasked. So when every held token is one of those, or nothing is
+    /// held, there is none and the user picks. None either when the prices couldn't be read (`pricesRead` false), and
+    /// never a token with no price: the list below the priced tokens is by amount, not value, and the token with the
+    /// most units is not the one worth the most.
     public static func defaultChoice(_ ranked: [HeldToken], pricesRead: Bool = true) -> HeldToken? {
         guard pricesRead else { return nil }
         return ranked.first { ($0.usd ?? 0) > 0 && !$0.unverified && !$0.looksAlike && $0.plainSymbol }
@@ -342,11 +341,10 @@ public enum WalletHoldings {
     /// removed too, which is what bytes that aren't text read as (`ABI.StringDecoding.lossy`) and draws as a mark, not a
     /// letter, so "USDC" and one such byte still reads as "USDC"; letters from other scripts that look like Latin ones
     /// (Cyrillic "С", Greek "Ο", Armenian "օ", Lisu "ꓟ", Myanmar "ဝ", Hebrew "ס", small capital "ᴏ": `lookAlikeLetters`)
-    /// and Latin letters with a
-    /// stroke, bar or hook (Ø, Đ, Ł, Ɵ, Ʉ: `LookAlikeLetters.marked`) as the letters they are drawn like, before the
-    /// compatibility forms are folded (which would turn a Greek lunate "Ϲ" into a "Σ" nobody mistakes for C) and after;
-    /// accents and width ignored; and every other Latin letter as the ASCII it is written with (ICU's Latin-ASCII: the
-    /// small capitals of "ᴍᴏɴᴀᴅ", Ƀ, Ȼ, Æ). Case is kept (`readings` decides on it).
+    /// and Latin letters with a stroke, bar or hook (Ø, Đ, Ł, Ɵ, Ʉ: `LookAlikeLetters.marked`) as the letters they are
+    /// drawn like, before the compatibility forms are folded (which would turn a Greek lunate "Ϲ" into a "Σ" nobody
+    /// mistakes for C) and after; accents and width ignored; and every other Latin letter as the ASCII it is written
+    /// with (ICU's Latin-ASCII: the small capitals of "ᴍᴏɴᴀᴅ", Ƀ, Ȼ, Æ). Case is kept (`readings` decides on it).
     static func visible(_ text: String, keepingSpaces: Bool = false, fromTheEnd: Bool = false) -> String {
         // What shows, at most `maxJudged` of it, taken before anything else, so a long text costs no more.
         var shown: [Unicode.Scalar] = []

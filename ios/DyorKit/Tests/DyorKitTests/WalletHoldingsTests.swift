@@ -139,11 +139,6 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.selection(keeping: fakeUSDC.address, in: onlyLookAlike)?.id, fakeUSDC.address, "and keeps their pick")
     }
 
-    /// A name that only reads as a curated one is marked as well: invisible characters (zero-width space and joiner, soft
-    /// hyphen, byte-order mark), letters from another script drawn like Latin ones (Cyrillic "С", Greek "Ο"), mathematical
-    /// letters, digits drawn like letters ("M0N", "USDl" for USD1) and text a direction override turns around. A name that
-    /// merely differs ("USDL") is its own; "USDC.e" reads as USDC with non-letters after it (build 17). Whatever its name, a token whose symbol isn't plain ASCII is never
-    /// preselected: it can read as a symbol it isn't.
     /// The Send sheet says "Not the BTC DyorHQ lists" for any token `imitates` names, so it names curated tokens only: a
     /// held look-alike of BTC, ETH or USDT (which DyorHQ doesn't list) isn't called one of DyorHQ's, but is still never
     /// where a send starts. Its badge names it (`TokenBadge`: "Not the real BTC").
@@ -164,6 +159,11 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(usdc.looksAlike)
     }
 
+    /// A name that only reads as a curated one is marked as well: invisible characters (zero-width space and joiner, soft
+    /// hyphen, byte-order mark), letters from another script drawn like Latin ones (Cyrillic "С", Greek "Ο"), mathematical
+    /// letters, digits drawn like letters ("M0N", "USDl" for USD1) and text a direction override turns around. A name that
+    /// merely differs ("USDL") is its own; "USDC.e" reads as USDC with non-letters after it (build 17). Whatever its name,
+    /// a token whose symbol isn't plain ASCII is never preselected: it can read as a symbol it isn't.
     func testANameThatOnlyReadsAsACuratedOneIsMarkedAndNeverTheDefault() {
         func token(_ symbol: String, _ name: String = "Something") -> Token { Token(address: spam.address, symbol: symbol, name: name, decimals: 6) }
         let usdcLike = ["US\u{200B}DC", "U\u{00AD}SDC", "\u{FEFF}USDC", "USDC\u{200D}", "USD\u{0421}", "usd\u{0441}", "\u{202E}CDSU", "U\u{2060}S\u{2063}DC",
