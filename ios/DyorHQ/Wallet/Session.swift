@@ -602,6 +602,9 @@ final class Session {
         if let privy, case .authenticated(let user) = await privy.getAuthState() {
             await user.logout()
         }
+        // The DyorHQ coins this device read, file and memory, before anything below: the wipe and the sign-out run with
+        // no suspension between them, so no load in flight resumes for the erased wallet and writes its keys back.
+        await dyorCoins?.erase()
         WatchOnlyStore.clear()
         ImportedWalletStore.clear()
         mera.forget()
@@ -617,12 +620,11 @@ final class Session {
         for itemClass in [kSecClassGenericPassword, kSecClassInternetPassword, kSecClassKey] {
             SecItemDelete([kSecClass as String: itemClass] as CFDictionary)
         }
-        // Every picture this device loaded, in memory and on disk, and the DyorHQ coins it read: nothing on this phone
-        // shows which coins it looked at once the account is gone.
+        // Every picture this device loaded, in memory and on disk: nothing on this phone shows which coins it looked at
+        // once the account is gone.
         RemoteImageLoader.shared.removeAll()
         MomentMediaLoader.shared.removeAll()
         URLCache.shared.removeAllCachedResponses()
-        await dyorCoins?.erase()
         lastError = nil
         state = .signedOut
     }

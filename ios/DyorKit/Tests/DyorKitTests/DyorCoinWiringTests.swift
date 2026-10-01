@@ -192,7 +192,9 @@ final class DyorCoinWiringTests: XCTestCase {
     }
 
     /// Deleting the account (or this device's data) clears every image cache — the logo loader's, the Moments loader's
-    /// and URLCache's, on disk — and deletes the registry's file, before the sign-out.
+    /// and URLCache's, on disk — and deletes the registry's file, before the sign-out. The registry's erase (a hop to its
+    /// actor) runs before the wipe of the settings, so nothing suspends between the wipe and the sign-out: a Home load in
+    /// flight can't resume for the erased wallet and write its token keys back.
     func testErasingThisDeviceClearsTheImageCachesAndTheRegistry() throws {
         let session = try Self.source("Wallet/Session.swift")
         let erase = try Self.between(session, "func eraseLocalData() async {", "private var relyingParty")
@@ -202,6 +204,9 @@ final class DyorCoinWiringTests: XCTestCase {
             let found = try XCTUnwrap(erase.range(of: step), step)
             XCTAssertLessThan(found.upperBound, signedOut.lowerBound, step)
         }
+        let wipe = try XCTUnwrap(erase.range(of: "WatchOnlyStore.clear()"))
+        XCTAssertLessThan(try XCTUnwrap(erase.range(of: "await dyorCoins?.erase()")).upperBound, wipe.lowerBound, "the registry before the wipe")
+        XCTAssertFalse(erase[wipe.lowerBound..<signedOut.lowerBound].contains("await"), "no suspension between the wipe and the sign-out")
         XCTAssertTrue(try Self.source("App/AppEnvironment.swift").contains("session.dyorCoins = dyorCoins"))
         let model = try Self.source("App/DyorCoinsModel.swift")
         XCTAssertTrue(try Self.between(model, "func erase() async {", "extension ImageSourcePolicy").contains("await registry.erase() coins = [:]"))
