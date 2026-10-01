@@ -9,11 +9,22 @@ import UserNotifications
 /// nothing is noticed, so nothing is posted.
 @MainActor
 enum Notifications {
-    /// Installs the delegate that lets our notifications appear while the app is in the foreground — call once at
-    /// launch. Without it, iOS suppresses the banner whenever the app is open, which is exactly when these on-device
-    /// notifications fire, so nothing ever shows on screen.
+    /// Installs the delegate that lets our notifications appear while the app is in the foreground, and hears a tap on
+    /// one. Without it, iOS suppresses the banner whenever the app is open, which is exactly when these on-device
+    /// notifications fire, so nothing ever shows on screen. Called from the app delegate's `didFinishLaunching`, before
+    /// iOS hands over the tap that launched the app (a banner tapped while it was closed): a delegate set any later
+    /// misses that tap. Calling it again changes nothing.
     static func configure() {
-        UNUserNotificationCenter.current().delegate = NotificationForegroundDelegate.shared
+        let center = UNUserNotificationCenter.current()
+        if center.delegate !== NotificationForegroundDelegate.shared { center.delegate = NotificationForegroundDelegate.shared }
+    }
+
+    /// A tapped banner: its record is marked read in the center of the account it was recorded for, and its screen
+    /// waits on the router until RootView's gate lets it open (`NotificationRouteGate`): never behind a review sheet, a
+    /// signing run or a Face ID prompt, and never for an account other than the one signed in.
+    static func tapped(_ tap: NotificationTap) {
+        if let item = tap.item { NotificationHub.shared.markRead(item, account: tap.account) }
+        Router.shared.receive(tap)
     }
 
     /// Asks for permission (alert + sound). Called when the user turns notifications on in Settings, and once on
@@ -37,8 +48,11 @@ enum Notifications {
              body: "Swapped \(NumberStyle.units(amountIn, decimals: tokenIn.decimals, compact: true)) \(tokenIn.symbol) → \(NumberStyle.units(amountOut, decimals: tokenOut.decimals, compact: true)) \(tokenOut.symbol)", route: .trade)
     }
 
-    static func perpOrder(side: String, market: String, filled: Bool) {
-        post(kind: .perp, title: filled ? "Order filled" : "Order placed", body: "\(side) \(market)", route: .perps)
+    /// A perp order the app sent or saw fill. `notice` says which: `PerpOrderNotice(acknowledged:)` for Perpl's
+    /// acknowledgement of an order ("Order submitted" for a market order, "Order placed" for a limit order), `.filled`
+    /// only for a position read that saw the fill.
+    static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String) {
+        post(kind: .perp, title: notice.title, body: "\(side) \(market)", route: .perps)
     }
 
     static func transactionConfirmed(_ label: String) {
@@ -61,9 +75,9 @@ enum Notifications {
     }
 }
 
-/// Presents DyorHQ's on-device notifications as banners while the app is open. The app has no push server, so every
-/// notification is generated while the user is in the app; without this delegate iOS would only file them silently in
-/// Notification Center and never surface a banner.
+/// Presents DyorHQ's on-device notifications as banners while the app is open, and follows a tap on one. The app has
+/// no push server, so every notification is generated while the user is in the app; without this delegate iOS would
+/// only file them silently in Notification Center and never surface a banner.
 final class NotificationForegroundDelegate: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     static let shared = NotificationForegroundDelegate()
 
@@ -72,8 +86,15 @@ final class NotificationForegroundDelegate: NSObject, UNUserNotificationCenterDe
         completionHandler([.banner, .list, .sound])
     }
 
+    /// A tap on the banner itself (not a dismissal) reads what the banner names (`NotificationTap`: a banner from an
+    /// older build, or one that names nothing usable, opens Home) and hands it to the app (`Notifications.tapped`).
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        completionHandler()
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return completionHandler() }
+        let tap = NotificationTap(userInfo: response.notification.request.content.userInfo)
+        Task { @MainActor in
+            Notifications.tapped(tap)
+            completionHandler()
+        }
     }
 }

@@ -37,15 +37,8 @@ struct AppNotification: Codable, Identifiable, Hashable {
         }
     }
 
-    /// Where a tap should take the user.
-    enum Route: String, Codable, Hashable {
-        case none, home, trade, perps, launch, moments, portfolio
-
-        /// Tolerates routes written by older builds (e.g. the removed strategy routes) — they resolve to no-op.
-        init(from decoder: Decoder) throws {
-            self = Route(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .none
-        }
-    }
+    /// Where a tap should take the user (DyorKit's `NotificationRoute`, which a tapped banner's `userInfo` carries too).
+    typealias Route = NotificationRoute
 
     var id = UUID()
     let kind: Kind
@@ -122,7 +115,7 @@ final class NotificationHub {
                notification.time.timeIntervalSince(recent.time) < 8 { return }
             list.insert(notification, at: 0)
             NotificationStore.save(list, owner: account, mirror: false)
-            if deliver, Self.bannersEnabled { Self.deliverLocally(title: notification.title, body: notification.body, id: notification.id.uuidString) }
+            if deliver, Self.bannersEnabled { Self.deliverLocally(notification, account: account) }
             return
         }
         // Dedupe: a settled action recorded through two paths, or a retried transaction, can post twice. The activity
@@ -135,7 +128,7 @@ final class NotificationHub {
         NotificationStore.save(items, owner: owner)
         // The system BANNER respects the in-app "Enable Notifications" toggle (Profile → Notifications), not just OS
         // permission — so turning notifications off silences banners while the center still logs every event.
-        if deliver, Self.bannersEnabled { Self.deliverLocally(title: notification.title, body: notification.body, id: notification.id.uuidString) }
+        if deliver, Self.bannersEnabled { Self.deliverLocally(notification, account: owner) }
     }
 
     /// The in-app notifications master toggle, persisted by AppSettings under this key (default on).
@@ -152,6 +145,18 @@ final class NotificationHub {
         NotificationStore.save(items, owner: owner)
     }
 
+    /// Marks a tapped banner's record read in the center of `account`, the account it was recorded for. That is the
+    /// center on screen, or one the app isn't showing (a banner from before an account switch, or a tap at a cold start
+    /// that arrives before the center is bound): that account's stored center is updated, without the backend mirror,
+    /// as `post` files a notification there. Nothing is written when the record isn't there (cleared, or never stored).
+    func markRead(_ id: UUID, account: Address?) {
+        guard account != owner else { return markRead(id) }
+        var list = NotificationStore.all(owner: account)
+        guard let i = list.firstIndex(where: { $0.id == id }), !list[i].read else { return }
+        list[i].read = true
+        NotificationStore.save(list, owner: account, mirror: false)
+    }
+
     func markAllRead() {
         guard items.contains(where: { !$0.read }) else { return }
         for i in items.indices { items[i].read = true }
@@ -163,8 +168,12 @@ final class NotificationHub {
         NotificationStore.save(items, owner: owner)
     }
 
-    /// Delivers a system notification now (no trigger). Silently no-ops unless the user granted permission.
-    nonisolated static func deliverLocally(title: String, body: String, id: String) {
+    /// Delivers a system notification now (no trigger). Silently no-ops unless the user granted permission. Its
+    /// `userInfo` names the record, its route and `account`, the account whose center recorded it, so a tap on the banner
+    /// marks the record read and opens its screen for that account only (`NotificationTap`, `NotificationRouteGate`).
+    nonisolated static func deliverLocally(_ notification: AppNotification, account: Address?) {
+        let title = notification.title, body = notification.body, id = notification.id.uuidString
+        let userInfo = NotificationTap.userInfo(item: notification.id, route: notification.route, account: account)
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
@@ -172,6 +181,7 @@ final class NotificationHub {
             content.title = title
             content.body = body
             content.sound = .default
+            content.userInfo = userInfo
             center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
         }
     }
