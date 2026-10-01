@@ -2,8 +2,9 @@ import Foundation
 import XCTest
 @testable import DyorKit
 
-/// The app's wiring of its language (build 18, L1), read from the app's sources and project: the catalogs agree with
-/// the project, and no source resolves text with a locale argument.
+/// The app's wiring of its language (build 18, L1), read from the app's sources and project: the store writes only
+/// `LanguageResolution`'s keys (R4), the locale reaches every screen without rebuilding RootView, Delete Account brings
+/// English back, the screens read the store, and the catalogs agree with the project.
 final class LanguageWiringTests: XCTestCase {
     private static func ios() throws -> URL {
         var ios = URL(fileURLWithPath: #filePath)
@@ -22,6 +23,88 @@ final class LanguageWiringTests: XCTestCase {
         let from = try XCTUnwrap(text.range(of: start), start).upperBound
         let to = try XCTUnwrap(text.range(of: end, range: from..<text.endIndex), end).lowerBound
         return String(text[from..<to])
+    }
+
+    /// R4: the language's two keys don't start with a prefix that marks an install as one from before App Lock's default
+    /// (`Theme.swift`'s `earlierRun`), so writing them on the first launch leaves App Lock ON for a new install. The
+    /// app's store writes no key of its own.
+    func testNoLanguageKeyMarksAnEarlierInstall() throws {
+        let theme = try Self.source("DyorHQ/Design/Theme.swift")
+        let earlierRun = try XCTUnwrap(theme.range(of: "let earlierRun = [")).upperBound
+        let quotesAndSpace = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\""))
+        let prefixes = theme[earlierRun...].prefix { $0 != "]" }.split(separator: ",").map { $0.trimmingCharacters(in: quotesAndSpace) }
+        XCTAssertTrue(prefixes.contains("settings.") && prefixes.contains("perp."), "\(prefixes)")
+        XCTAssertEqual(LanguageResolution.appleLanguagesKey, "AppleLanguages")
+        XCTAssertEqual(LanguageResolution.initializedKey, "language.initialized")
+        for key in [LanguageResolution.appleLanguagesKey, LanguageResolution.initializedKey] {
+            for prefix in prefixes { XCTAssertFalse(key.hasPrefix(prefix), "\(key) would mark a new install as earlier (\(prefix))") }
+        }
+
+        let store = try Self.source("DyorHQ/App/LanguageStore.swift")
+        XCTAssertFalse(store.contains("forKey: \""), "no key literal: LanguageResolution's two keys only")
+        XCTAssertFalse(store.contains(".set("), "every write goes through LanguageResolution.save")
+        XCTAssertFalse(store.contains("removeObject"))
+        XCTAssertTrue(Self.squeezed(store).contains("if let write = launch.write { LanguageResolution.save(write, to: defaults) }"))
+        XCTAssertTrue(Self.squeezed(store).contains("if let write = resolution.write { LanguageResolution.save(write, to: defaults) }"))
+        for prefix in prefixes { XCTAssertFalse(store.contains("\"\(prefix)"), prefix) }
+    }
+
+    /// The language reaches every screen through the environment's locale, set on RootView, which is never rebuilt with an
+    /// `.id`: its `.task(id:)` jobs (the backend sign-in, the restore, the per-account binding) must not restart.
+    func testTheLocaleReachesEveryScreenWithoutRebuildingRootView() throws {
+        let root = try Self.source("DyorHQ/App/RootView.swift")
+        let rootView = try Self.between(root, "struct RootView: View {", "extension RootView {")
+        XCTAssertFalse(rootView.contains(".id("), "never an .id on RootView")
+        XCTAssertTrue(rootView.contains(".environment(\\.locale, env.language.locale)"))
+        let app = try Self.source("DyorHQ/App/DyorHQApp.swift")
+        XCTAssertFalse(app.contains(".id("))
+        XCTAssertTrue(app.contains(".environment(environment.language)"))
+        let environment = Self.squeezed(try Self.source("DyorHQ/App/AppEnvironment.swift"))
+        XCTAssertTrue(environment.contains("let language = LanguageStore()"))
+        XCTAssertEqual(environment.components(separatedBy: "LanguageStore(").count - 1, 1, "one store")
+
+        // The store sets both locales from one value.
+        let store = Self.squeezed(try Self.source("DyorHQ/App/LanguageStore.swift"))
+        XCTAssertEqual(store.components(separatedBy: "L10n.locale = locale").count - 1, 2, "at launch and on every change")
+        XCTAssertTrue(store.contains("func tr(_ resource: LocalizedStringResource) -> String { L10n.string(resource) }"))
+    }
+
+    /// Delete Account and Forget This Device erase the app's defaults, the saved language with them; the erase then sets
+    /// the language back to English, saved and on screen, before the sign-out.
+    func testTheEraseSetsTheLanguageBackToEnglish() throws {
+        let session = try Self.source("DyorHQ/Wallet/Session.swift")
+        let erase = try Self.between(session, "func eraseLocalData() async {", "private var relyingParty")
+        let wipe = try XCTUnwrap(erase.range(of: "AppLockStore.erase(UserDefaults.standard"))
+        let reset = try XCTUnwrap(erase.range(of: "language?.reset()"))
+        let signedOut = try XCTUnwrap(erase.range(of: "state = .signedOut"))
+        XCTAssertLessThan(wipe.upperBound, reset.lowerBound, "after the defaults are erased")
+        XCTAssertLessThan(reset.upperBound, signedOut.lowerBound, "before the sign-out")
+        XCTAssertTrue(session.contains("@ObservationIgnored weak var language: LanguageStore?"))
+        XCTAssertTrue(try Self.source("DyorHQ/App/AppEnvironment.swift").contains("session.language = language"))
+        let store = Self.squeezed(try Self.source("DyorHQ/App/LanguageStore.swift"))
+        XCTAssertTrue(store.contains("func reset() { apply(LanguageResolution.erased(device: Self.deviceLanguages(defaults), shipped: shipped)) }"))
+    }
+
+    /// The Language screen offers System and the languages the bundle ships, in their own names; Profile shows the
+    /// language in use; the onboarding menu uses the same store and appears once a second language ships.
+    func testTheScreensReadTheStore() throws {
+        let settings = try Self.source("DyorHQ/Profile/Settings.swift")
+        let screen = Self.squeezed(try Self.between(settings, "struct LanguageView: View {", "struct LanguageMenu: View {"))
+        XCTAssertTrue(screen.contains("ForEach(language.available) { option in row(.language(option)) { Text(verbatim: option.endonym) } }"))
+        XCTAssertTrue(screen.contains("Text(\"Uses your device language (\\(language.systemLanguage.endonym))\")"))
+        XCTAssertTrue(screen.contains("if language.available.count < 2 { Text(\"More languages are coming in the next update.\") }"))
+        XCTAssertTrue(screen.contains("Button { language.select(choice) }"))
+        let store = Self.squeezed(try Self.source("DyorHQ/App/LanguageStore.swift"))
+        XCTAssertTrue(store.contains("available = AppLanguage.shipped(in: shipped)"))
+        XCTAssertTrue(store.contains("shipped = bundle.localizations"))
+
+        let profile = try Self.source("DyorHQ/Profile/ProfileView.swift")
+        XCTAssertTrue(profile.contains("SettingsRow(\"Language\", symbol: \"globe\", tint: .accent); Spacer(); Text(language.resolved.endonym)"))
+
+        let onboarding = Self.squeezed(try Self.source("DyorHQ/Onboarding/OnboardingView.swift"))
+        XCTAssertTrue(onboarding.contains("if language.available.count > 1 { ToolbarItem(placement: .topBarTrailing) { LanguageMenu() } }"))
+        let menu = Self.squeezed(try Self.between(settings, "struct LanguageMenu: View {", "struct AppearanceSheet: View {"))
+        XCTAssertTrue(menu.contains("set: { language.select($0) }"))
     }
 
     /// The catalogs and the project: English is the development language everywhere, the bundle lists only the languages

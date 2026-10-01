@@ -13,6 +13,7 @@ struct DyorHQApp: App {
                 .environment(environment)
                 .environment(environment.session)
                 .environment(environment.settings)
+                .environment(environment.language)
                 .environment(environment.perplTrading)
                 .environment(environment.social)
                 .environment(router)

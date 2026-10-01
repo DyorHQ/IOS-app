@@ -13,6 +13,7 @@ struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
+    @Environment(LanguageStore.self) private var language
     @Environment(PerplTrading.self) private var perplTrading
     @Environment(SocialSession.self) private var social
     @State private var showReceive = false
@@ -81,7 +82,7 @@ struct ProfileView: View {
                         }
                     }
                     NavigationLink { LanguageView() } label: {
-                        HStack { SettingsRow("Language", symbol: "globe", tint: .accent); Spacer(); Text("English").foregroundStyle(.secondary) }
+                        HStack { SettingsRow("Language", symbol: "globe", tint: .accent); Spacer(); Text(language.resolved.endonym).foregroundStyle(.secondary) }
                     }
                     NavigationLink {
                         ScrollView { GetHelpContent().padding(16) }

@@ -214,6 +214,7 @@ private struct FeatureCard: View {
 
 struct SignInView: View {
     @Environment(Session.self) private var session
+    @Environment(LanguageStore.self) private var language
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var path: [OnboardingStep]
     @State private var busy: String?
@@ -274,6 +275,12 @@ struct SignInView: View {
         .background(Color(.systemBackground))
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        // The app's language before sign-in, once there is a second one to choose.
+        .toolbar {
+            if language.available.count > 1 {
+                ToolbarItem(placement: .topBarTrailing) { LanguageMenu() }
+            }
+        }
         .disabled(busy != nil)
         .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.45)) { appeared = true } }
     }
