@@ -19,17 +19,24 @@ public struct TokenActivity: Identifiable, Sendable, Hashable {
 /// just swapped) resolves in a round trip or two rather than sweeping the whole window.
 public struct TokenActivityService: Sendable {
     private let rpc: RPCClient
+    /// Turns block numbers into the times a movement shows.
+    public let clock: BlockClock
 
-    public init(rpc: RPCClient) { self.rpc = rpc }
+    public init(rpc: RPCClient, clock: BlockClock? = nil) {
+        self.rpc = rpc
+        self.clock = clock ?? BlockClock(rpc: rpc)
+    }
 
     private static let transferSig = "Transfer(address,address,uint256)"
 
-    /// The default "recent" window: ~6 hours of Monad blocks. Wide enough to catch a day's trading, narrow enough
-    /// that a wallet with no activity in it still finishes quickly.
-    public static let defaultLookback: UInt64 = Monad.blocksPerDay / 4
+    /// The default "recent" window: a block budget, 54,000 blocks (about 4.5 hours at Monad's pace). Wide enough to
+    /// catch a session's trading, narrow enough that a wallet with no activity in it still finishes quickly.
+    public static let defaultLookbackBlocks: UInt64 = 54_000
 
-    public func recent(token: Address, wallet: Address, lookbackBlocks: UInt64 = TokenActivityService.defaultLookback, limit: Int = 30) async -> [TokenActivity] {
+    public func recent(token: Address, wallet: Address, lookbackBlocks: UInt64 = TokenActivityService.defaultLookbackBlocks, limit: Int = 30) async -> [TokenActivity] {
         guard let anchor = try? await rpc.block(.latest) else { return [] }
+        let secondsPerBlock = await clock.secondsPerBlock()
+        func time(_ block: UInt64) -> Date { BlockClock.time(of: block, anchor: anchor, secondsPerBlock: secondsPerBlock) }
         let latest = anchor.number
         let floor = latest > lookbackBlocks ? latest - lookbackBlocks : 0
         // Native MON emits no ERC-20 Transfer events; its swap movements surface as WMON transfers, so scan WMON.
@@ -67,20 +74,14 @@ public struct TokenActivityService: Sendable {
                 let outgoing = idx % 2 == 0 // filters alternate outgoing (sender) / incoming (recipient)
                 for log in logs {
                     if outgoing, let to = log.indexedAddress(1) {
-                        items.append(TokenActivity(hash: log.transactionHash, direction: .outgoing, counterparty: to, amount: BigUInt(log.data), blockNumber: log.blockNumber, time: Self.time(anchor: anchor, block: log.blockNumber)))
+                        items.append(TokenActivity(hash: log.transactionHash, direction: .outgoing, counterparty: to, amount: BigUInt(log.data), blockNumber: log.blockNumber, time: time(log.blockNumber)))
                     } else if !outgoing, let sender = log.indexedAddress(0) {
-                        items.append(TokenActivity(hash: log.transactionHash, direction: .incoming, counterparty: sender, amount: BigUInt(log.data), blockNumber: log.blockNumber, time: Self.time(anchor: anchor, block: log.blockNumber)))
+                        items.append(TokenActivity(hash: log.transactionHash, direction: .incoming, counterparty: sender, amount: BigUInt(log.data), blockNumber: log.blockNumber, time: time(log.blockNumber)))
                     }
                 }
             }
         }
         // Newest first; a mint/burn shows as a transfer to/from the zero address, which the UI can label.
         return Array(items.sorted { $0.blockNumber > $1.blockNumber }.prefix(limit))
-    }
-
-    /// Estimates a block's time from the latest block, at Monad's ~0.4s cadence — the launchpad history does the same.
-    private static func time(anchor: BlockHeader, block: UInt64) -> Date {
-        let delta = Double(anchor.number > block ? anchor.number - block : 0) * 0.4
-        return Date(timeIntervalSince1970: TimeInterval(anchor.timestamp)).addingTimeInterval(-delta)
     }
 }

@@ -3,7 +3,8 @@ import Foundation
 
 public struct PriceInfo: Hashable, Sendable {
     public let usd: Double
-    /// Percent change over the last 24 hours; nil when the historical read was not available.
+    /// Percent change over the last 24 hours, measured from the block mined 24 hours before the latest (`BlockClock`);
+    /// nil when the historical read was not available.
     public let change24h: Double?
     /// "Uniswap v4", "Uniswap v3" or "USDC".
     public let source: String
@@ -29,11 +30,10 @@ public struct PricePoint: Hashable, Sendable, Identifiable {
 }
 
 /// Spot prices straight from the deepest on-chain pool for each token, quoted in USDC, plus the same read 24 hours
-/// earlier (Monad's public RPCs serve historical state) for the 24h change. Nothing here depends on an indexer.
+/// earlier (Monad's public RPCs serve historical state) for the 24h change. Nothing here depends on an indexer. Times
+/// come from the session's measured block pace (`BlockClock`): the day-ago block is the one mined 24 hours before the
+/// latest, and a chart's span and labels are true times.
 public actor PriceService {
-    /// Monad's block cadence, used to turn block numbers into times for price history.
-    public static let secondsPerBlock: TimeInterval = 0.4
-
     enum Source: Hashable, Sendable {
         case v4(poolId: Data)
         case v3(pool: Address, token: Address, quote: Address, token0: Address)
@@ -68,24 +68,28 @@ public actor PriceService {
     }
 
     public let rpc: RPCClient
+    /// Turns 24 hours into the day-ago block, and a chart's blocks into times.
+    public let clock: BlockClock
     private let multicall: Multicall
     /// Each token's pool as last looked up, and the tokens without one — both for a while only (`PoolLookupCache`).
     private var pools = PoolLookupCache<Source>()
     private let now: @Sendable () -> Date
 
-    public init(rpc: RPCClient, now: @escaping @Sendable () -> Date = Date.init) {
+    public init(rpc: RPCClient, clock: BlockClock? = nil, now: @escaping @Sendable () -> Date = Date.init) {
         self.rpc = rpc
+        self.clock = clock ?? BlockClock(rpc: rpc)
         multicall = Multicall(rpc: rpc)
         self.now = now
     }
 
     // MARK: Public
 
-    /// USD price and 24h change for every token that has a discoverable pool. USDC is 1 by definition.
+    /// USD price and 24h change for every token that has a discoverable pool. USDC is 1 by definition. The 24h change
+    /// compares with the block mined 24 hours before the latest one (`BlockClock.block(at:)`).
     public func prices(for tokens: [Token]) async throws -> [Address: PriceInfo] {
         try await discover(tokens)
-        let latest = try await rpc.blockNumber()
-        let dayAgo: UInt64? = latest > Monad.blocksPerDay ? latest - Monad.blocksPerDay : nil
+        let head = try await rpc.block(.latest)
+        let dayAgo = head.timestamp > 86_400 ? try? await clock.block(at: Date(timeIntervalSince1970: TimeInterval(head.timestamp - 86_400)), head: head) : nil
         let sources = resolve(tokens)
         async let nowRead = Self.readPrices(multicall: multicall, sources, block: .latest)
         async let beforeRead = Self.readPricesOrEmpty(multicall: multicall, sources, dayAgo: dayAgo)
@@ -119,13 +123,15 @@ public actor PriceService {
         return map
     }
 
-    /// Samples the token's pool at `points` evenly spaced blocks over `span`, ending at the latest block, in one
-    /// batched JSON-RPC request. Samples the node cannot serve are dropped, so fewer than `points` may come back.
+    /// Samples the token's pool at `points` evenly spaced blocks over `span` seconds (blocks from the session's measured
+    /// pace), ending at the latest block, in one batched JSON-RPC request; each sample's time is estimated from the latest
+    /// block's own timestamp. Samples the node cannot serve are dropped, so fewer than `points` may come back.
     public func history(for token: Token, points: Int = 48, span: TimeInterval = 86_400) async throws -> [PricePoint] {
         guard points > 0 else { return [] }
-        let latest = try await rpc.blockNumber()
-        let latestTime = Date()
-        let spanBlocks = UInt64(max(0, span) / Self.secondsPerBlock)
+        let head = try await rpc.block(.latest)
+        let latest = head.number
+        let secondsPerBlock = await clock.secondsPerBlock()
+        let spanBlocks = BlockClock.blocks(in: max(0, span), secondsPerBlock: secondsPerBlock)
         let step = points > 1 ? spanBlocks / UInt64(points - 1) : 0
         var blocks: [UInt64] = []
         for i in 0..<points {
@@ -133,7 +139,7 @@ public actor PriceService {
             let block = latest > back ? latest - back : 0
             if blocks.last != block { blocks.append(block) }
         }
-        func time(_ block: UInt64) -> Date { latestTime.addingTimeInterval(-Double(latest - block) * Self.secondsPerBlock) }
+        func time(_ block: UInt64) -> Date { BlockClock.time(of: block, anchor: head, secondsPerBlock: secondsPerBlock) }
         if Self.isUSD(token) { return blocks.map { PricePoint(block: $0, time: time($0), usd: 1) } }
 
         try await discover([token])

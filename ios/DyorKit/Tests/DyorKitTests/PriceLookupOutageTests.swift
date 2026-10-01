@@ -137,6 +137,9 @@ final class PriceChainStub: URLProtocol {
         switch request["method"].string {
         case "eth_blockNumber":
             return .object(["jsonrpc": .string("2.0"), "id": id, "result": .string("0x1000000")])
+        case "eth_getBlockByNumber":
+            // One header for every block asked: the clock can't measure a pace from it, and keeps the fallback.
+            return .object(["jsonrpc": .string("2.0"), "id": id, "result": .object(["number": .string("0x1000000"), "timestamp": .string("0x6b49d200")])])
         case "eth_call":
             guard let dataHex = request["params"][0]["data"].string, let data = Data(hex: dataHex) else { break }
             let inner = try! ABI.decode(data.dropFirst(4), "(address,bool,bytes)[]")[0].elements

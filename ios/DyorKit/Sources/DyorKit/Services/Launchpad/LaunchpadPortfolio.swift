@@ -89,6 +89,7 @@ public extension LaunchpadService {
     /// and fee-sharing contracts of the live stack (once deployed) and of every retired one.
     func walletHistory(wallet: Address, lookbackBlocks: UInt64, curves: Set<Address>) async -> LaunchpadWalletHistory {
         guard !stacks.isEmpty, let anchor = try? await logsRPC.block(.latest) else { return .empty }
+        let secondsPerBlock = await clock.secondsPerBlock()
         let from = anchor.number > lookbackBlocks ? anchor.number - lookbackBlocks : 0
         let word = wallet.data.leftPadded(to: 32)
         let escrows = Self.unique(stacks.map(\.escrow))
@@ -100,7 +101,8 @@ public extension LaunchpadService {
         async let escrowToken = logs(from: escrows, topics: [LaunchpadABI.Events.escrowClaimedTokenTopic, word], fromBlock: from, toBlock: anchor.number)
         async let sharing = logs(from: sharings, topics: [LaunchpadABI.Events.sharingClaimedTopic, nil, word], fromBlock: from, toBlock: anchor.number)
         let (buyLogs, sellLogs, escrowNativeLogs, escrowTokenLogs, sharingLogs) = await (buys, sells, escrowNative, escrowToken, sharing)
-        return Self.walletHistory(buys: buyLogs, sells: sellLogs, escrowNative: escrowNativeLogs, escrowToken: escrowTokenLogs, sharing: sharingLogs, anchor: anchor, curves: curves)
+        return Self.walletHistory(buys: buyLogs, sells: sellLogs, escrowNative: escrowNativeLogs, escrowToken: escrowTokenLogs, sharing: sharingLogs, anchor: anchor,
+                                  secondsPerBlock: secondsPerBlock, curves: curves)
     }
 
     /// `chunkedLogs` over each of `contracts`, merged.
@@ -120,9 +122,10 @@ public extension LaunchpadService {
         return list.filter { !$0.isZero && seen.insert($0).inserted }
     }
 
-    /// Pure half of `walletHistory`.
-    nonisolated static func walletHistory(buys: [Log], sells: [Log], escrowNative: [Log], escrowToken: [Log], sharing: [Log], anchor: BlockHeader, curves: Set<Address>) -> LaunchpadWalletHistory {
-        func when(_ log: Log) -> Date { Date(timeIntervalSince1970: TimeInterval(time(anchor: anchor, block: log.blockNumber))) }
+    /// Pure half of `walletHistory`, each row's time estimated from `anchor` at `secondsPerBlock`.
+    nonisolated static func walletHistory(buys: [Log], sells: [Log], escrowNative: [Log], escrowToken: [Log], sharing: [Log], anchor: BlockHeader, secondsPerBlock: Double,
+                                          curves: Set<Address>) -> LaunchpadWalletHistory {
+        func when(_ log: Log) -> Date { Date(timeIntervalSince1970: TimeInterval(time(anchor: anchor, block: log.blockNumber, secondsPerBlock: secondsPerBlock))) }
         var fills: [WalletCurveFill] = []
         for log in buys where curves.contains(log.address) {
             guard let fill = LaunchpadABI.fill(log) else { continue }

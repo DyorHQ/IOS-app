@@ -9,22 +9,33 @@ public actor LaunchpadService {
     public static let defaultLogsRPC = URL(string: "https://rpc1.monad.xyz")!
     /// `LaunchpadFactory.MAX_EXEMPTIONS`.
     public static let maxExemptions = 32
-    /// Monad block time, used to estimate event timestamps from block numbers.
-    public static let blockSeconds = 0.4
+    /// The launchpad activity a profile and the recent-activity feed scan (`activity(limit:lookbackBlocks:launches:)`): a
+    /// block budget, 1,512,000 blocks (about 5.3 days at Monad's pace), kept as it was when it was called seven days so
+    /// the scans cost what they did.
+    public static let recentActivityBlocks: UInt64 = 1_512_000
+    /// How far back `holderCount` reads a coin's transfers: a block budget, 6,480,000 blocks (about 22.7 days).
+    public static let holderScanBlocks: UInt64 = 6_480_000
+    /// The longest a coin's trade history is read for its PnL (`tradeLookback`): 30 days.
+    public static let maxTradeLookback: TimeInterval = 30 * 86_400
+    /// Blocks added to a trade history read from a coin's age (`tradeLookback`), so the launch itself is inside it.
+    public static let tradeLookbackMargin: UInt64 = 20_000
 
     public let rpc: RPCClient
     /// The endpoint used for event history; a local fork keeps logs on the same node.
     public let logsRPC: RPCClient
     public private(set) var addresses: LaunchpadAddresses
+    /// Turns block numbers into the times the history shows, and a day or a coin's age into blocks.
+    public let clock: BlockClock
     let multicall: Multicall
     private var pairCache: [Address: PairInfo] = [:]
 
-    public init(rpc: RPCClient, addresses: LaunchpadAddresses, logsRPC: RPCClient? = nil) {
+    public init(rpc: RPCClient, addresses: LaunchpadAddresses, logsRPC: RPCClient? = nil, clock: BlockClock? = nil) {
         self.rpc = rpc
         self.addresses = addresses
         let text = rpc.url.absoluteString
         let local = text.contains("127.0.0.1") || text.contains("localhost")
         self.logsRPC = logsRPC ?? (local ? rpc : RPCClient(url: Self.defaultLogsRPC))
+        self.clock = clock ?? BlockClock(rpc: rpc)
         multicall = Multicall(rpc: rpc)
     }
 

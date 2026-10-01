@@ -603,7 +603,7 @@ final class LaunchpadProfileModel {
         positions = heldPositions
 
         // Your launchpad activity.
-        let lpActivity = ((try? await env.launchpad.activity(limit: 60, lookbackBlocks: Monad.blocksPerDay * 7, launches: launches)) ?? []).filter { $0.actor == address }
+        let lpActivity = ((try? await env.launchpad.activity(limit: 60, lookbackBlocks: LaunchpadService.recentActivityBlocks, launches: launches)) ?? []).filter { $0.actor == address }
         guard current() else { return }
         let byToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
         activity = lpActivity.map { Self.feedItem(from: $0, launch: byToken[$0.token]) }
@@ -618,8 +618,7 @@ final class LaunchpadProfileModel {
 
         // Bound the trade scan to the coin's age (plus a buffer), capped at 30 days, so PnL uses the full history
         // without sweeping a month of blocks for a coin launched an hour ago.
-        let ageSeconds = max(0, Int(Date().timeIntervalSince1970) - launch.launchedAt)
-        let lookback = UInt64(min(Double(Monad.blocksPerDay) * 30, Double(ageSeconds) / 0.4 + 20_000))
+        let lookback = await env.launchpad.tradeLookback(launchedAt: launch.launchedAt)
         var pnlUSD: Double?
         var pnlPercent: Double?
         if let trades = try? await env.launchpad.trades(curve: launch.curve, pair: launch.pair, lookbackBlocks: lookback) {

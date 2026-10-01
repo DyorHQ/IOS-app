@@ -17,15 +17,17 @@ public actor MomentsService {
     /// Where event history is read; a local fork keeps logs on the same node.
     public let logsRPC: RPCClient
     public let addresses: MomentsAddresses
+    /// Turns block numbers into the times the history shows, and a Moment's age into blocks.
+    public let clock: BlockClock
     let multicall: Multicall
-    public static let blockSeconds = 0.4
 
-    public init(rpc: RPCClient, addresses: MomentsAddresses, logsRPC: RPCClient? = nil) {
+    public init(rpc: RPCClient, addresses: MomentsAddresses, logsRPC: RPCClient? = nil, clock: BlockClock? = nil) {
         self.rpc = rpc
         self.addresses = addresses
         let text = rpc.url.absoluteString
         let local = text.contains("127.0.0.1") || text.contains("localhost")
         self.logsRPC = logsRPC ?? (local ? rpc : RPCClient(url: LaunchpadService.defaultLogsRPC))
+        self.clock = clock ?? BlockClock(rpc: rpc)
         multicall = Multicall(rpc: rpc)
     }
 
@@ -542,9 +544,8 @@ public actor MomentsService {
         return out
     }
 
-    /// Estimated timestamp of `block` from the latest block and Monad's 0.4 s block time.
-    nonisolated static func time(anchor: BlockHeader, block: UInt64) -> Date {
-        let delta = Double(anchor.number > block ? anchor.number - block : 0) * blockSeconds
-        return Date(timeIntervalSince1970: TimeInterval(anchor.timestamp)).addingTimeInterval(-delta)
+    /// Estimated timestamp of `block` from a later block's and the pace (`BlockClock.time(of:anchor:secondsPerBlock:)`).
+    nonisolated static func time(anchor: BlockHeader, block: UInt64, secondsPerBlock: Double) -> Date {
+        BlockClock.time(of: block, anchor: anchor, secondsPerBlock: secondsPerBlock)
     }
 }

@@ -150,7 +150,8 @@ final class MomentsRetiredTests: XCTestCase {
         let claimed = Log(address: cohort1.vesting, topics: [MomentsABI.Events.claimedTopic, BigUInt(1).word, wallet.data.leftPadded(to: 32)],
                           data: Data(hex: "0x00000000000000000000000000000000000000000003599ef09f245bff400000000000000000000000000000000000000000000000108b2a2c28029094000000")!,
                           blockNumber: 105_400_000, transactionHash: hash, logIndex: 0)
-        let parsed = MomentsService.history(collected: [], claimed: [claimed], withdrawn: [], feesWithdrawn: [], published: [], anchor: BlockHeader(number: 105_400_100, timestamp: 1_758_000_000), factory: cohort1.factory)
+        let parsed = MomentsService.history(collected: [], claimed: [claimed], withdrawn: [], feesWithdrawn: [], published: [], anchor: BlockHeader(number: 105_400_100, timestamp: 1_758_000_000),
+                                            secondsPerBlock: BlockClockFixture.secondsPerBlock, factory: cohort1.factory)
         XCTAssertEqual(parsed.claims.first?.key, MomentKey(factory: cohort1.factory, id: 1))
     }
 
