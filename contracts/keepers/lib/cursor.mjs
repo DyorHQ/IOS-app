@@ -12,7 +12,7 @@
 //
 // Without --logs-cursor, --logs-lookback keeps its meaning for ad hoc runs: [head - lookback, head], all or nothing.
 
-export const DEFAULT_LOGS_CHUNK = 1000n; // rpc3 and rpc4 accept 1,000 blocks (an inclusive span), refuse 1,001
+export const DEFAULT_LOGS_CHUNK = 1000n; // rpc3 accepts 1,000 blocks (an inclusive span) and refuses 1,001; rpc4 takes 1,001
 export const DEFAULT_LOGS_MAX_BLOCKS = 200_000n;
 
 export function readCursor(state, scanId) {

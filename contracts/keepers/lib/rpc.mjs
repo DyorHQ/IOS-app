@@ -33,6 +33,24 @@ export function isTransportError(e) {
 }
 
 /**
+ * Is `e` an RPC refusing an eth_getLogs block range (so a smaller range will do), rather than failing? Measured
+ * 2026-10-01: rpc3 answers a span of more than 1,000 blocks (inclusive) with -32062 "Block range is too large" in an
+ * HTTP 200; rpc4 (some of its backends, above 1,001 blocks) and rpc.monad.xyz (above 101) answer HTTP 413 with -32614
+ * "eth_getLogs is limited to a 1,000 range" / "a 100 range", which viem raises as an RPC error; a proxy in front of
+ * an RPC can answer a bare HTTP 413, which viem raises as an HttpRequestError (a transport error by name). A rate
+ * limit is never a range refusal.
+ */
+export function isRangeRefusal(e) {
+  for (let x = e, depth = 0; x && depth < 8; x = x.cause, depth++) {
+    const text = `${x.shortMessage ?? ""} ${x.details ?? ""} ${x.message ?? ""}`;
+    if (x.status === 429 || /rate.?limit|too many requests|request limit reached/i.test(text)) return false;
+    if (x.status === 413 || x.code === -32062 || x.code === -32614) return true;
+    if (!isTransportError(x) && /range|limit|too many|exceed/i.test(text)) return true;
+  }
+  return false;
+}
+
+/**
  * A viem public client over `urls` (in order). `stats` counts, per endpoint label, the requests that failed on it
  * (whether or not the next endpoint then answered), for the run summary.
  */

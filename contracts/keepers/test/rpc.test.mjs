@@ -9,7 +9,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HttpRequestError, TimeoutError } from "viem";
-import { isTransportError, makeRpcClient, firstHealthy, rpcDegradedAlert, DEFAULT_RPC_URLS } from "../lib/rpc.mjs";
+import { isRangeRefusal, isTransportError, makeRpcClient, firstHealthy, rpcDegradedAlert, DEFAULT_RPC_URLS } from "../lib/rpc.mjs";
 import { getLogsChunked, momentsGraduationJob } from "../lib/jobs.mjs";
 import { makeReporter, EXIT } from "../lib/report.mjs";
 import { makeSender } from "../lib/send.mjs";
@@ -17,6 +17,7 @@ import { parseKeeperArgs } from "../lib/options.mjs";
 import { runKeeper } from "../lib/run.mjs";
 import { redact } from "../lib/redact.mjs";
 
+const ADDRESS = "0x00000000000000000000000000000000000000f4";
 const http429 = () => new HttpRequestError({ url: "https://rpc1.monad.xyz/?key=FAKE_KEY_123", status: 429, body: {} });
 
 test("E5: RPC failures are told apart from chain answers", () => {
@@ -75,6 +76,89 @@ test("E5: reads fall back to the next endpoint when the first fails, and each en
     down.close();
     up.close();
   }
+});
+
+// ---------------------------------------------------------------- the getLogs range caps, through viem's real transport
+
+/** An endpoint that answers eth_getLogs like a Monad RPC measured on 2026-10-01; `spans` records each request's
+    inclusive span and whether it was served. */
+async function logsEndpoint(refuse) {
+  const spans = [];
+  const s = await server((req, res) => {
+    if (req.method !== "eth_getLogs") return answer("0x10")(req, res);
+    const span = BigInt(req.params[0].toBlock) - BigInt(req.params[0].fromBlock) + 1n;
+    const r = refuse(span, req);
+    spans.push([span, r ? "refused" : "served"]);
+    if (!r) return answer([])(req, res);
+    res.writeHead(r.status, { "content-type": r.json ? "application/json" : "text/html" });
+    res.end(r.json ? JSON.stringify({ jsonrpc: "2.0", id: req.id, error: r.json }) : r.text);
+  });
+  return { ...s, spans };
+}
+// rpc3: more than 1,000 blocks (inclusive) -> HTTP 200 with -32062.
+const rpc3Like = () => logsEndpoint((span) => span > 1000n && { status: 200, json: { code: -32062, message: "Block range is too large" } });
+// rpc4: more than 1,001 -> HTTP 413 with -32614 (some of its backends; others take far more).
+const rpc4Like = () => logsEndpoint((span) => span > 1001n && { status: 413, json: { code: -32614, message: "eth_getLogs is limited to a 1,000 range" } });
+// rpc.monad.xyz: more than 101 -> HTTP 413 with -32614.
+const monadLike = () => logsEndpoint((span) => span > 101n && { status: 413, json: { code: -32614, message: "eth_getLogs is limited to a 100 range" } });
+
+test("K2 boundary through viem: the default --logs-chunk asks rpc3 for 1,000-block inclusive spans, so nothing is refused or falls back", async () => {
+  const { logsChunk } = parseKeeperArgs(["governance"], {});
+  assert.equal(logsChunk, 1000n);
+  const rpc3 = await rpc3Like();
+  const rpc4 = await rpc4Like();
+  try {
+    const { client } = makeRpcClient([rpc3.url, rpc4.url]);
+    await getLogsChunked(client, { address: ADDRESS, from: 108_860_011n, to: 108_863_010n, chunk: logsChunk });
+    assert.deepEqual(rpc3.spans, [[1000n, "served"], [1000n, "served"], [1000n, "served"]]);
+    assert.deepEqual(rpc4.spans, [], "rpc4 is never needed");
+    // One block more per request and rpc3 refuses every one: each chunk then costs a refusal and a fallback.
+    rpc3.spans.length = 0;
+    await getLogsChunked(client, { address: ADDRESS, from: 0n, to: 2_001n, chunk: 1001n });
+    assert.deepEqual(rpc3.spans, [[1001n, "refused"], [1001n, "refused"]]);
+    assert.deepEqual(rpc4.spans, [[1001n, "served"], [1001n, "served"]]);
+  } finally {
+    rpc3.close();
+    rpc4.close();
+  }
+});
+
+test("K2 fallback through viem: with rpc3 down, rpc4 serves the same 1,000-block spans and rpc3's failures are counted", async () => {
+  const down = await server((req, res) => (res.writeHead(503), res.end("down")));
+  const rpc4 = await rpc4Like();
+  try {
+    const { client, stats } = makeRpcClient([down.url, rpc4.url]);
+    await getLogsChunked(client, { address: ADDRESS, from: 0n, to: 1_999n });
+    assert.deepEqual(rpc4.spans, [[1000n, "served"], [1000n, "served"]]);
+    assert.ok(stats[down.url].failed >= 2);
+    assert.equal(stats[rpc4.url].served, 2);
+  } finally {
+    down.close();
+    rpc4.close();
+  }
+});
+
+test("K2: an HTTP 413 range refusal (rpc.monad.xyz, or a bare 413 from a proxy) halves the chunk; it is never an RPC failure", async () => {
+  const monad = await monadLike();
+  const proxy = await logsEndpoint((span) => span > 250n && { status: 413, text: "<html>413 Request Entity Too Large</html>" });
+  try {
+    await getLogsChunked(makeRpcClient([monad.url]).client, { address: ADDRESS, from: 0n, to: 999n });
+    assert.deepEqual(monad.spans.slice(0, 5).map(([s, r]) => `${s} ${r}`), ["1000 refused", "500 refused", "250 refused", "125 refused", "62 served"]);
+    assert.ok(monad.spans.every(([s, r]) => (r === "served") === s <= 101n));
+    assert.equal(monad.spans.filter(([, r]) => r === "served").reduce((n, [s]) => n + s, 0n), 1000n, "every block once");
+
+    await getLogsChunked(makeRpcClient([proxy.url]).client, { address: ADDRESS, from: 0n, to: 999n });
+    assert.deepEqual([...new Set(proxy.spans.map(([s, r]) => `${s} ${r}`))], ["1000 refused", "500 refused", "250 served"]);
+  } finally {
+    monad.close();
+    proxy.close();
+  }
+  assert.equal(isRangeRefusal(new HttpRequestError({ url: "https://x.example", status: 413, body: {} })), true);
+  assert.equal(isRangeRefusal(Object.assign(new Error("RPC Request failed."), { code: -32614, details: "eth_getLogs is limited to a 100 range" })), true);
+  assert.equal(isRangeRefusal(Object.assign(new Error("RPC Request failed."), { code: -32062, details: "Block range is too large" })), true);
+  assert.equal(isRangeRefusal(http429()), false, "a rate limit");
+  assert.equal(isRangeRefusal(new Error("429 Too Many Requests")), false);
+  assert.equal(isRangeRefusal(new HttpRequestError({ url: "https://x.example", status: 503, body: {} })), false, "an outage");
 });
 
 test("E5: cast sends through the first endpoint that answers as chain 143", async () => {

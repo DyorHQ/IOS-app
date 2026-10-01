@@ -60,7 +60,7 @@ import {
 import { formatEther } from "viem";
 import { MinedRevert, SendStatusUnknown } from "./send.mjs";
 import { nowSeconds, recordSpend, backoffFor, noteSendFailure, noteSendSuccess, spendAllowed } from "./budget.mjs";
-import { isTransportError } from "./rpc.mjs";
+import { isRangeRefusal, isTransportError } from "./rpc.mjs";
 import { DEFAULT_LOGS_CHUNK, DEFAULT_LOGS_MAX_BLOCKS, planScan, readCursor, writeCursor } from "./cursor.mjs";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -196,9 +196,10 @@ async function now(client) {
 
 /**
  * eth_getLogs over [from, to] in chunks of at most `chunk` blocks, each an inclusive span (end = start + chunk - 1:
- * rpc3 and rpc4 accept 1,000 blocks that way and refuse 1,001 with -32062 / -32614). An RPC that caps the range
- * (rpc.monad.xyz answers more than 100 blocks with -32614 "eth_getLogs is limited to a 100 range") makes the chunk
- * halve and retry, down to one block; an RPC failure (rate limit, timeout) or any other error is thrown.
+ * rpc3 accepts 1,000 blocks that way and refuses 1,001 with -32062; rpc4 accepts at least 1,001). An RPC that caps
+ * the range lower (rpc.monad.xyz answers more than 101 blocks with HTTP 413, -32614 "eth_getLogs is limited to a 100
+ * range") makes the chunk halve and retry, down to one block (rpc.mjs isRangeRefusal); an RPC failure (rate limit,
+ * timeout, outage) or any other error is thrown.
  */
 export async function getLogsChunked(client, { from, to, chunk = DEFAULT_LOGS_CHUNK, ...filter }) {
   const out = [];
@@ -209,8 +210,7 @@ export async function getLogsChunked(client, { from, to, chunk = DEFAULT_LOGS_CH
       out.push(...(await client.getLogs({ ...filter, fromBlock: start, toBlock: end })));
       start = end + 1n;
     } catch (e) {
-      const text = `${e?.shortMessage ?? ""} ${e?.details ?? ""} ${e?.message ?? ""}`;
-      if (size > 1n && !isTransportError(e) && /range|limit|too many|exceed/i.test(text)) {
+      if (size > 1n && isRangeRefusal(e)) {
         size /= 2n;
         continue;
       }
