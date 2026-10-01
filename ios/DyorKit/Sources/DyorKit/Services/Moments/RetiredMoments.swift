@@ -64,9 +64,10 @@ public struct RetiredMoments: Sendable {
     public let addresses: MomentsAddresses
     let service: MomentsService
 
-    public init(rpc: RPCClient, addresses: MomentsAddresses, logsRPC: RPCClient? = nil) {
+    /// `clock` turns its history's blocks into times: the app's one session clock, or its own when nil.
+    public init(rpc: RPCClient, addresses: MomentsAddresses, logsRPC: RPCClient? = nil, clock: BlockClock? = nil) {
         self.addresses = addresses
-        service = MomentsService(rpc: rpc, addresses: addresses, logsRPC: logsRPC)
+        service = MomentsService(rpc: rpc, addresses: addresses, logsRPC: logsRPC, clock: clock)
     }
 
     public var factory: Address { addresses.factory }

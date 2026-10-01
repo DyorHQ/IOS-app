@@ -18,6 +18,10 @@ final class DyorCoinsModel {
     @ObservationIgnored let policy: ImageSourcePolicy
     /// Every DyorHQ coin known, by address.
     private(set) var coins: [Address: DyorCoin] = [:]
+    /// Whether DyorHQ coins carry their DyorHQ labels: the owner's remote switch `RemoteFlags.dyorBadges`, on unless the
+    /// backend turns it off (`AppEnvironment.apply(_:)`). Off, `badge` judges every token as build 16 did, with no
+    /// registry entry: no DyorHQ label, and a coin sent to the wallet Unverified. Pictures are unchanged.
+    var showsDyorBadges = true
     @ObservationIgnored private var following: Task<Void, Never>?
 
     /// How often the registry is read again while the app is in the foreground: every 5 minutes.
@@ -41,9 +45,10 @@ final class DyorCoinsModel {
     func icon(_ token: Token) -> CoinIcon { CoinIcon.resolve(token, coin: coins[token.address], policy: policy) }
 
     /// The label `token` shows (`TokenBadge.of`), `receivedUnasked` being whether it reached the wallet without being
-    /// chosen in the app.
+    /// chosen in the app. Every screen's label comes from here, so the DyorHQ labels' switch (`showsDyorBadges`) is
+    /// applied in this one place.
     func badge(_ token: Token, receivedUnasked: Bool) -> TokenBadge {
-        TokenBadge.of(token, coin: coins[token.address], receivedUnasked: receivedUnasked)
+        TokenBadge.of(token, coin: showsDyorBadges ? coins[token.address] : nil, receivedUnasked: receivedUnasked)
     }
 
     /// Reads what the factories recorded since the last complete read (`refreshIfStale`), then again every
