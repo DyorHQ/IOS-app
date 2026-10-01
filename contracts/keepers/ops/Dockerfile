@@ -55,10 +55,11 @@ RUN supercronic -test contracts/keepers/ops/crontab \
  && touch /tests-passed
 
 FROM ${NODE_IMAGE}
-# curl for the healthchecks.io pings (and ca-certificates for it and cast). npm, npx, corepack and yarn are not needed
-# to run the keepers, so they are removed. /app is root's: the keeper user can read it and write nothing there.
+# curl for the healthchecks.io pings (and ca-certificates for it and cast); procps for the owner's `ps` check during the
+# dry run (no password or URL on any command line). npm, npx, corepack and yarn are not needed to run the keepers, so
+# they are removed. /app is root's: the keeper user can read it and write nothing there.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl procps \
  && rm -rf /var/lib/apt/lists/* \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx \
       /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-* \
