@@ -358,9 +358,14 @@ final class LookAlikeRuleTests: XCTestCase {
         XCTAssertEqual(SymbolSafety.createRefusal(name: String(repeating: "n", count: 33), symbol: "SAFE"), .nameTooLong(32))
         XCTAssertNil(SymbolSafety.createRefusal(name: String(repeating: "n", count: 48), symbol: "SAFE", maxName: SymbolSafety.maxMomentNameLength))
         XCTAssertEqual(SymbolSafety.createRefusal(name: String(repeating: "n", count: 49), symbol: "SAFE", maxName: SymbolSafety.maxMomentNameLength), .nameTooLong(48))
-        XCTAssertEqual(SymbolSafety.createRefusal(name: "A" + String(repeating: "\u{0301}", count: 200), symbol: "SAFE"), .nameTooLong(32),
+        XCTAssertEqual(SymbolSafety.createRefusal(name: "A" + String(repeating: "\u{0301}", count: 200), symbol: "SAFE"), .nameTooLongToStore,
                        "one character piled with marks is not short")
         XCTAssertEqual(SymbolSafety.CreateRefusal.nameTooLong(32).message, "A name can be at most 32 characters.")
+        // Characters that fit but bytes that don't are said plainly, never as "at most 32 characters" to a name of 10.
+        XCTAssertEqual(SymbolSafety.createRefusal(name: String(repeating: "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", count: 10), symbol: "FAM"),
+                       .nameTooLongToStore)
+        XCTAssertEqual(SymbolSafety.CreateRefusal.nameTooLongToStore.message, "This name is too long to store: use fewer emoji or symbols.")
+        XCTAssertFalse(SymbolSafety.CreateRefusal.nameTooLongToStore.isAboutSymbol)
         XCTAssertTrue(SymbolSafety.CreateRefusal.symbolTooLong.isAboutSymbol)
         XCTAssertFalse(SymbolSafety.CreateRefusal.nameTooLong(32).isAboutSymbol)
     }

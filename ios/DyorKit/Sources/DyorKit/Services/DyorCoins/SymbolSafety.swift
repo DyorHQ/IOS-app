@@ -119,6 +119,9 @@ public enum SymbolSafety {
         case nameMixesAlphabets
         /// The name is longer than the form allows: the limit, in characters.
         case nameTooLong(Int)
+        /// The name has no more characters than the form allows, but more than four UTF-8 bytes each on average (`fits`):
+        /// emoji and symbols stored as many bytes each, which a count of characters doesn't show.
+        case nameTooLongToStore
 
         /// What the form says under the field.
         public var message: String {
@@ -135,6 +138,7 @@ public enum SymbolSafety {
             case .nameHasHiddenCharacters: return "This name has hidden or direction-changing characters. Remove them."
             case .nameMixesAlphabets: return "A word in this name mixes Latin letters with letters from another alphabet that look like them. Use one alphabet in each word."
             case .nameTooLong(let limit): return "A name can be at most \(limit) characters."
+            case .nameTooLongToStore: return "This name is too long to store: use fewer emoji or symbols."
             }
         }
 
@@ -142,7 +146,7 @@ public enum SymbolSafety {
         public var isAboutSymbol: Bool {
             switch self {
             case .symbolImitates, .symbolNotDisplaySafe, .symbolTooLong: return true
-            case .nameImitates, .nameHasHiddenCharacters, .nameMixesAlphabets, .nameTooLong: return false
+            case .nameImitates, .nameHasHiddenCharacters, .nameMixesAlphabets, .nameTooLong, .nameTooLongToStore: return false
             }
         }
     }
@@ -150,8 +154,9 @@ public enum SymbolSafety {
     /// Why a new launch or Moment may not take `name` and `symbol`, or nil when it may: a symbol that reads as a curated
     /// or major token's, then a name that does, then a symbol that isn't display-safe or is too long, then a name with
     /// hidden characters, one mixing look-alike alphabets in a word, or one longer than `maxName` (a launch's
-    /// `maxLaunchNameLength`, a Moment's `maxMomentNameLength`). An empty field is the form's own check, not a refusal
-    /// here. What it allows, the badge never warns about (`TokenBadge`).
+    /// `maxLaunchNameLength`, a Moment's `maxMomentNameLength`) in characters, or in bytes (`fits`: said as too long to
+    /// store, since its characters fit). An empty field is the form's own check, not a refusal here. What it allows, the
+    /// badge never warns about (`TokenBadge`).
     public static func createRefusal(name: String, symbol: String, maxName: Int = maxLaunchNameLength) -> CreateRefusal? {
         if let token = WalletHoldings.imitated(by: probe(symbol: symbol, name: "")) { return .symbolImitates(token) }
         if let token = WalletHoldings.imitated(by: probe(symbol: "", name: name)) { return .nameImitates(token) }
@@ -159,7 +164,8 @@ public enum SymbolSafety {
         if !fits(symbol, limit: maxSymbolLength) { return .symbolTooLong }
         if hasHiddenCharacters(name) { return .nameHasHiddenCharacters }
         if mixesLookAlikeAlphabets(name) { return .nameMixesAlphabets }
-        if !fits(name, limit: maxName) { return .nameTooLong(maxName) }
+        if name.count > maxName { return .nameTooLong(maxName) }
+        if !fits(name, limit: maxName) { return .nameTooLongToStore }
         return nil
     }
 
