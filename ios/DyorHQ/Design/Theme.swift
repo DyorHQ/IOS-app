@@ -14,6 +14,11 @@ final class AppSettings {
     /// permission).
     var notifyFills: Bool { didSet { store(notifyFills, "settings.notifyFills") } }
     var notifyPriceAlerts: Bool { didSet { store(notifyPriceAlerts, "settings.notifyPrice") } }
+    /// Notify when an open Perps position's margin usage reaches 80% or 90%, or its mark comes within 10% of the
+    /// liquidation price (`PerpRiskLevel`), on any screen while the app is open. On by default. Like every switch here it
+    /// is saved only when changed (`didSet`), never by `init`, so it can't make a new install look like an earlier one
+    /// before App Lock's default is decided (rule R4).
+    var notifyMargin: Bool { didSet { store(notifyMargin, "settings.notifyMargin") } }
     /// Require Face ID / Touch ID before signing a transaction — a device-side second factor for a self-custodial
     /// wallet, enforced in the confirmation sheet. On by default for a new install (`appLockDefault`), and after this
     /// device's data is erased (`Session.eraseLocalData`). This device's own: it isn't mirrored to the backend (not in
@@ -32,6 +37,7 @@ final class AppSettings {
         notificationsEnabled = defaults.object(forKey: "settings.notifications") as? Bool ?? true
         notifyFills = defaults.object(forKey: "settings.notifyFills") as? Bool ?? true
         notifyPriceAlerts = defaults.object(forKey: "settings.notifyPrice") as? Bool ?? false
+        notifyMargin = defaults.object(forKey: "settings.notifyMargin") as? Bool ?? true
         requireBiometrics = defaults.object(forKey: "settings.biometrics") as? Bool ?? Self.appLockDefault(defaults)
         defaultLeverage = defaults.object(forKey: "settings.leverage") as? Double ?? TradingDefaults.leverage
         slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? TradingDefaults.slippageBps
@@ -66,7 +72,7 @@ final class AppSettings {
     /// The settings as a JSON object, for the backend copy (no keys, no addresses).
     var snapshot: [String: Any] {
         ["appearance": appearance.rawValue, "notificationsEnabled": notificationsEnabled, "notifyFills": notifyFills,
-         "notifyPriceAlerts": notifyPriceAlerts, "defaultLeverage": defaultLeverage, "slippageBps": slippageBps]
+         "notifyPriceAlerts": notifyPriceAlerts, "notifyMargin": notifyMargin, "defaultLeverage": defaultLeverage, "slippageBps": slippageBps]
     }
 
     /// Applies a backend copy of the settings (a fresh device after sign-in). The copy is checked first
@@ -78,6 +84,7 @@ final class AppSettings {
         if let v = restored.notificationsEnabled { notificationsEnabled = v }
         if let v = restored.notifyFills { notifyFills = v }
         if let v = restored.notifyPriceAlerts { notifyPriceAlerts = v }
+        if let v = restored.notifyMargin { notifyMargin = v }
         if let v = restored.defaultLeverage { defaultLeverage = v }
         if let v = restored.slippageBps { slippageBps = v }
     }

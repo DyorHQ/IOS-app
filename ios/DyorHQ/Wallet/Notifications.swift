@@ -3,10 +3,10 @@ import DyorKit
 import Foundation
 import UserNotifications
 
-/// On-device notifications for completed actions and triggered price alerts, via the system UserNotifications
-/// framework. There is no push server (that would need APNs): these are local notifications, posted by the app while
-/// it runs — in the foreground, or in the few seconds before iOS suspends it. While the app is suspended or closed
-/// nothing is noticed, so nothing is posted.
+/// On-device notifications for completed actions, triggered price alerts and Perps margin warnings, via the system
+/// UserNotifications framework. There is no push server (that would need APNs): these are local notifications, posted by
+/// the app while it runs — in the foreground, or in the few seconds before iOS suspends it. While the app is suspended or
+/// closed nothing is noticed, so nothing is posted: alerts arrive while DyorHQ is open (`AlertCenter`).
 @MainActor
 enum Notifications {
     /// Installs the delegate that lets our notifications appear while the app is in the foreground, and hears a tap on
@@ -50,9 +50,10 @@ enum Notifications {
 
     /// A perp order the app sent or saw fill. `notice` says which: `PerpOrderNotice(acknowledged:)` for Perpl's
     /// acknowledgement of an order ("Order submitted" for a market order, "Order placed" for a limit order), `.filled`
-    /// only for a position read that saw the fill.
-    static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String) {
-        post(kind: .perp, title: notice.title, body: "\(side) \(market)", route: .perps)
+    /// only for a position read that saw the fill (the app-wide watcher, `AlertCenter`). With `perpId`, a tap opens that
+    /// market.
+    static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String, perpId: Int? = nil) {
+        post(kind: .perp, title: notice.title, body: "\(side) \(market)", route: .perps, reference: perpId.map { PerpAlertText.reference(perpId: $0) })
     }
 
     static func transactionConfirmed(_ label: String) {

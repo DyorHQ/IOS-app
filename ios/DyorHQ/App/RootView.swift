@@ -80,10 +80,15 @@ struct RootView: View {
                 session.mera.endWhenIdle()
                 // iOS may suspend the app now: the next activation is a return to it (`LogScanClock`).
                 LogScanClock.suspended()
+                // Alerts arrive while the app is open: checks pause until it is back.
+                env.alerts.enteredBackground()
             }
             if phase == .active {
                 session.mera.enteredForeground()
                 settings.appearance.apply()
+                // Back from the background: price alerts and open positions are checked at once (a Face ID or passkey
+                // prompt, which only makes the scene inactive, changes nothing).
+                env.alerts.enteredForeground()
                 // The minimum supported build, at most every ten minutes (GP-2).
                 Task { await env.updateGate.check(client: env.social.client) }
                 // Transactions sent before the app left the foreground: settle their pending rows (GL-2), and pick up
@@ -112,6 +117,10 @@ struct RootView: View {
             // round-trip below, so nothing meanwhile trades for or is filed under the previous account (RS-9).
             env.perplTrading.refresh(account: session.account)
             NotificationHub.shared.bind(owner: session.address)
+            // The one alert watcher follows the account with the notification center: started for it, kept while it stays
+            // signed in, stopped on a sign-out or a switch (`AlertCenter`). A watched wallet gets its alerts too, worded
+            // for someone who can't act on it.
+            env.alerts.bind(owner: session.address, env: env, signedIn: { session.address }, canAct: { session.canSign })
             // A wallet that can sign connects to the backend by itself (one signature), so activity and settings are
             // recorded — and restored on a fresh device — without a separate step. Not a passkey account restored
             // locked at launch: that signature would be a passkey prompt nobody asked for. `signInWithMera` starts its
@@ -145,7 +154,6 @@ struct RootView: View {
                   let address = session.address, env.social.isBound(to: address), let wallet = session.backgroundWallet else { return }
             await env.social.signIn(address: address, wallet: wallet)
         }
-        .task { env.alertWatcher.start(env: env, settings: settings, owner: { session.address }) }
         .task { env.refreshVenueTokens() }
         // The DyorHQ coin registry: read at start, then every 5 minutes while the app is in the foreground.
         .task(id: scenePhase == .active) { if scenePhase == .active { await env.dyorCoins.keepFresh() } }

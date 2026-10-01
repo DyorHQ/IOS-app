@@ -65,19 +65,20 @@ final class LocalNotificationTests: XCTestCase {
         }
     }
 
-    /// The app posts the notice from the order's kind at acknowledgement and `.filled` only from `detectFills`, and the
-    /// old `filled:` flag (which made a market order say "Order filled" at acknowledgement) is gone.
+    /// The app posts the notice from the order's kind at acknowledgement and `.filled` only from the app-wide watcher's
+    /// position read (`AlertCenter.checkPerps`, build 17 N2), and the old `filled:` flag (which made a market order say
+    /// "Order filled" at acknowledgement) is gone.
     func testTheAppPostsTheNoticeByKind() throws {
         let notifications = try appSource("Wallet/Notifications.swift")
-        XCTAssertTrue(notifications.contains("static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String) {"))
+        XCTAssertTrue(notifications.contains("static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String, perpId: Int? = nil) {"))
         XCTAssertTrue(notifications.contains("post(kind: .perp, title: notice.title,"))
         XCTAssertFalse(notifications.contains("\"Order filled\""), "the titles live in PerpOrderNotice")
 
         let trade = try appSource("Perps/PerpTradeView.swift")
         XCTAssertTrue(trade.contains("Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side:"))
-        let fills = try appSource("Perps/PerpsView.swift")
-        let detect = try function("private func detectFills(", in: fills)
-        XCTAssertTrue(detect.contains("Notifications.perpOrder(.filled, side:"), "the fill notice comes from detectFills")
+        let fills = try appSource("Notifications/AlertCenter.swift")
+        let detect = try function("private func checkPerps(", in: fills)
+        XCTAssertTrue(detect.contains("Notifications.perpOrder(.filled, side:"), "the fill notice comes from the watcher's position read")
 
         for (path, text) in try appSources() {
             XCTAssertFalse(text.contains("filled: input.kind == .market"), path)
@@ -85,7 +86,7 @@ final class LocalNotificationTests: XCTestCase {
             let calls = text.components(separatedBy: "Notifications.perpOrder(").dropFirst()
             for call in calls {
                 let notice = call.prefix { $0 != "," }
-                XCTAssertTrue(notice == "PerpOrderNotice(acknowledged: input.kind)" || (notice == ".filled" && path == "Perps/PerpsView.swift"),
+                XCTAssertTrue(notice == "PerpOrderNotice(acknowledged: input.kind)" || (notice == ".filled" && path == "Notifications/AlertCenter.swift"),
                               "\(path): perpOrder(\(notice), …)")
             }
         }
@@ -368,13 +369,17 @@ final class LocalNotificationTests: XCTestCase {
         let handle = squeeze(try function("func handle(_ url: URL) {", in: router))
         XCTAssertTrue(handle.contains("pendingLink = link notificationRouteArrivedLast = false"))
         let deliverRoute = squeeze(try function("func deliverPendingNotificationRoute() {", in: router))
-        XCTAssertTrue(deliverRoute.contains("guard let tap = pendingNotificationRoute else { return } pendingNotificationRoute = nil menuOpen = false open(route: tap.route)"),
-                      "cleared before it opens: it opens once")
-        XCTAssertTrue(squeeze(router).contains("func open(_ notification: AppNotification) { open(route: notification.route) }"), "the center's mapping")
-        let open = try function("func open(route: NotificationRoute) {", in: router)
+        XCTAssertTrue(deliverRoute.contains("guard let tap = pendingNotificationRoute else { return } pendingNotificationRoute = nil menuOpen = false open(route: tap.route, reference: tap.item.flatMap { NotificationHub.shared.item($0)?.reference })"),
+                      "cleared before it opens: it opens once, at the market its record names")
+        XCTAssertTrue(squeeze(router).contains("func open(_ notification: AppNotification) { open(route: notification.route, reference: notification.reference) }"), "the center's mapping")
+        let open = try function("func open(route: NotificationRoute, reference: String? = nil) {", in: router)
         XCTAssertTrue(open.contains("guard route != .none else { return }"))
         XCTAssertFalse(open.contains("default"), "exhaustive: a new route is a compile error here")
         for route in NotificationRoute.allCases { XCTAssertTrue(open.contains("case .\(route.rawValue):"), "\(route)") }
+        // A Perps notice opens the market its record names (`PerpAlertText.reference`); any other reference opens Perps.
+        XCTAssertTrue(squeeze(open).contains("case .perps: if let market = PerpAlertText.market(reference: reference) { pendingPerpMarket = market } tradeMode = .perps; tab = .trade"))
+        XCTAssertTrue(hub.contains("func item(_ id: UUID) -> AppNotification? { items.first { $0.id == id } }"))
+        XCTAssertTrue(squeeze(try appSource("Perps/PerpTradeView.swift")).contains("market: \"\\(market.asset)-PERP\", perpId: market.id)"), "the acknowledgement names its market too")
         for (path, text) in try appSources() where path != "App/Router.swift" && path != "App/RootView.swift" {
             XCTAssertFalse(text.contains("deliverPendingNotificationRoute()"), path)
             XCTAssertFalse(text.contains("pendingNotificationRoute ="), path)

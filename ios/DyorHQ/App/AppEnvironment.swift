@@ -58,7 +58,9 @@ final class AppEnvironment {
     let perplTrading: PerplTrading
     /// The wallet's cross-section volume / fees / P&L model, shared by Home's Total Volume and the Portfolio page.
     let portfolio = PortfolioModel()
-    let alertWatcher = AlertWatcher()
+    /// The one alert watcher while the app is open: price alerts, Perps margin warnings, fills and closes, on any screen
+    /// (`AlertCenter`). RootView binds it to the account signed in.
+    let alerts = AlertCenter()
     let social: SocialSession
     /// Mirrors activity, notifications, alerts and settings to Supabase, and restores them on a new device.
     let sync: BackendSync

@@ -47,8 +47,10 @@ final class PerplTrading: MeraSessionLifecycle {
     private var cancelsSent: Set<PerplOpenOrder.Key> = []
     /// Sides of markets an entry was sent to recently: its triggers may be on the stream before the entry is.
     private var recentEntries: [PerplMarketSide: Date] = [:]
-    /// Markets whose position the trading stream saw end (any way), so the positions poll doesn't report it again.
-    private var endingsSeen: [Int: Date] = [:]
+    /// Markets whose position the trading stream explained as it happened — liquidated, deleveraged or unwound by Perpl,
+    /// or a take-profit / stop-loss on it triggered — and when, so the app-wide watcher doesn't report the ending again
+    /// (`endingExplained`, `PerpEndingNotice`).
+    private var explainedEndings: [Int: Date] = [:]
     private var client: PerplTradeClient?
     /// The wallet (checksummed address) the trading session is bound to, so a wallet change tears the session down.
     private var boundAddress: String?
@@ -860,10 +862,12 @@ final class PerplTrading: MeraSessionLifecycle {
         for market in list { markets[market.id] = market }
     }
 
-    /// The trading stream saw this market's position end in the last few minutes (by an order, a trigger or the
-    /// protocol) and has already said so — the positions poll then stays quiet about it.
-    func sawEnding(marketId: Int, within window: TimeInterval = 300) -> Bool {
-        endingsSeen[marketId].map { Date().timeIntervalSince($0) < window } ?? false
+    /// The trading stream already said, in the last few minutes, how this market's position ended or was closing: Perpl
+    /// liquidated, deleveraged or unwound it, or a take-profit / stop-loss on it triggered. The app-wide watcher then
+    /// stays quiet about the position's ending, so it is one notice, not two. An ending the stream saw but didn't explain
+    /// (an order closed it, on this device or another) is the watcher's to report.
+    func endingExplained(marketId: Int, within window: TimeInterval = 300) -> Bool {
+        explainedEndings[marketId].map { Date().timeIntervalSince($0) < window } ?? false
     }
 
     func dismissProtectionNotice() { protectionNotice = nil }
@@ -891,7 +895,7 @@ final class PerplTrading: MeraSessionLifecycle {
         protectionNotice = nil
         cancelsSent = []
         recentEntries = [:]
-        endingsSeen = [:]
+        explainedEndings = [:]
     }
 
     /// The bound wallet, for owner-keyed records.
@@ -921,6 +925,7 @@ final class PerplTrading: MeraSessionLifecycle {
             title = "\(kind) triggered"
             body = "\(detail). Perpl is closing that part of the position."
             warning = false
+            explainedEndings[order.marketId] = Date()
         case .failed(let reason):
             // 64/67/68: it fired but couldn't execute; otherwise Perpl refused it after admitting it.
             let fired = [64, 67, 68].contains(reason)
@@ -938,8 +943,8 @@ final class PerplTrading: MeraSessionLifecycle {
     /// A position ended on the stream. Liquidation, deleveraging or an unwind is reported like a fired trigger; any
     /// ending then cancels the TP/SL left over for that side (below).
     private func positionEnded(_ position: PerplLivePosition) {
-        endingsSeen[position.marketId] = Date()
         if position.endedByProtocol {
+            explainedEndings[position.marketId] = Date()
             let how = position.wasLiquidated ? "liquidated" : position.statusRaw == 4 ? "deleveraged" : "unwound"
             publish(ProtectionNotice(marketId: position.marketId, title: "Position \(how)",
                                      body: "Your \(marketName(position.marketId)) \(position.isLong ? "long" : "short") was \(how) by Perpl.", warning: true))
@@ -950,7 +955,9 @@ final class PerplTrading: MeraSessionLifecycle {
     private func publish(_ notice: ProtectionNotice) {
         protectionNotice = notice
         guard let owner = boundOwner else { return }
-        Activity.record(ActivityRecord(kind: .perp, title: notice.title, subtitle: notice.body, hash: nil, section: "perps"), owner: owner)
+        // A tap opens that market's position (`PerpAlertText.reference`).
+        Activity.record(ActivityRecord(kind: .perp, title: notice.title, subtitle: notice.body, hash: nil, section: "perps",
+                                       reference: PerpAlertText.reference(perpId: notice.marketId)), owner: owner)
     }
 
     /// Cancels the TP/SL that were closing `ended`'s side of its market, once it has closed (security audit GT-2).
