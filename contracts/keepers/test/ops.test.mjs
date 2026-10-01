@@ -62,7 +62,8 @@ function stubs(dir) {
   putExe(bin, "id", 'if [ "$1" = "-u" ]; then echo 501; else /usr/bin/id "$@"; fi');
   // Records its arguments and what it read on stdin (the -K - config).
   putExe(bin, "curl", 'printf "ARGS %s\\n" "$*" >> "$CURL_LOG"; while IFS= read -r l; do printf "STDIN %s\\n" "$l" >> "$CURL_LOG"; done; exit 0');
-  putExe(bin, "fake-node", 'for a in "$@"; do printf "%s\\n" "$a"; done > "$FAKE_ARGS"; echo "keeper output line"; exit "${FAKE_EXIT:-0}"');
+  // Records its arguments, and the RPC list it was handed through its environment.
+  putExe(bin, "fake-node", 'for a in "$@"; do printf "%s\\n" "$a"; done > "$FAKE_ARGS"; printf "%s" "${KEEPER_RPC_URLS-<unset>}" > "$FAKE_RPC"; echo "keeper output line"; exit "${FAKE_EXIT:-0}"');
   return bin;
 }
 
@@ -84,6 +85,7 @@ function unitEnv(over = {}) {
     KEEPER_NODE: join(bin, "fake-node"),
     KEEPER_MJS: "/nonexistent/keeper.mjs",
     FAKE_ARGS: join(dir, "args"),
+    FAKE_RPC: join(dir, "rpc"),
     CURL_LOG: join(dir, "curl.log"),
     ...over,
   };
@@ -94,7 +96,8 @@ function runScript(script, ctx, argv) {
   const r = spawnSync("bash", [join(OPS, script), ...argv], { env: ctx.env, encoding: "utf8" });
   const args = existsSync(ctx.env.FAKE_ARGS) ? readFileSync(ctx.env.FAKE_ARGS, "utf8").trim().split("\n") : null;
   const curl = existsSync(ctx.env.CURL_LOG) ? readFileSync(ctx.env.CURL_LOG, "utf8") : "";
-  return { code: r.status, out: `${r.stdout}${r.stderr}`, args, curl };
+  const rpc = existsSync(ctx.env.FAKE_RPC) ? readFileSync(ctx.env.FAKE_RPC, "utf8") : null;
+  return { code: r.status, out: `${r.stdout}${r.stderr}`, args, curl, rpc };
 }
 const runUnit = (ctx, argv) => runScript("run-keeper.sh", ctx, argv);
 
@@ -149,7 +152,8 @@ test("grad dry run with no secrets: the plan's flags, no send, no signer, no pin
   assert.equal(argAfter(r.args, "--max-runtime"), "240");
   assert.equal(argAfter(r.args, "--min-balance"), "10");
   assert.equal(argAfter(r.args, "--max-spend-per-day"), "20");
-  assert.deepEqual(r.args.filter((a, i) => r.args[i - 1] === "--rpc-url"), ["https://rpc3.monad.xyz", "https://rpc4.monad.xyz"]);
+  assert.ok(!r.args.includes("--rpc-url"), "the RPC list never goes on the command line");
+  assert.equal(r.rpc, "https://rpc3.monad.xyz https://rpc4.monad.xyz", "rpc3 then rpc4, through the environment");
   assert.ok(r.args.includes("--logs-cursor"));
   for (const f of ["--send", "--sim-from", "--keystore", "--webhook-file", "--only-live"]) assert.ok(!r.args.includes(f), f);
   assert.equal(r.curl, "");
@@ -342,6 +346,23 @@ test("grad-now.sh is the grad unit's manual one-shot: dry by default, --send sen
   const refused = runScript("grad-now.sh", ctx, ["--send"]);
   assert.equal(refused.code, 1);
   assert.ok(!refused.args.includes("--send"));
+});
+
+// Fork rehearsal 2026-10-01: `ps` on the Machine showed every RPC URL on the keeper's command line for the whole run,
+// so a restricted provider key in KEEPER_RPC_URLS would have shown there. The list now reaches the keeper only through
+// its environment, on scheduled and manual runs alike.
+test("a restricted RPC key in KEEPER_RPC_URLS reaches the keeper through its environment, never its command line or the log", () => {
+  const urls = "https://monad-mainnet.example/v2/FAKE-RPC-KEY-0123 https://rpc3.monad.xyz https://rpc4.monad.xyz";
+  const ctx = unitEnv({ KEEPER_SEND_GRAD: "1", KEEPER_RPC_URLS: urls });
+  signer(ctx);
+  const runs = { scheduled: runUnit(ctx, ["grad"]), manual: runScript("grad-now.sh", ctx, ["--send"]) };
+  for (const [kind, r] of Object.entries(runs)) {
+    assert.equal(r.code, 0, `${kind}: ${r.out}`);
+    assert.ok(r.args.includes("--send"), `${kind}: a sending run`);
+    assert.equal(r.rpc, urls, `${kind}: the whole list, in order`);
+    for (const a of r.args) assert.doesNotMatch(a, /FAKE-RPC-KEY|https?:\/\//, `${kind}: a URL on the command line: ${a}`);
+    assert.doesNotMatch(r.out, /FAKE-RPC-KEY/, kind);
+  }
 });
 
 test("usage errors: unknown unit, --send outside a manual run, a manual run of governance", () => {
@@ -919,8 +940,10 @@ exit 9`,
     "/bin/bash",
   );
   putExe(bin, "fly", `case "$1 $2" in "auth whoami") echo owner@example.invalid ;; "secrets import") printf '%s\\n' "$*" > "$FLY_ARGS"; cat > "$FLY_STDIN" ;; *) exit 9 ;; esac`, "/bin/bash");
-  // The owner's answers: a wrong password once for sweeps, then the right ones; the webhook and 4 ping URLs.
-  const answers = ["pw-dyor-keeper-grad", "wrong", "pw-dyor-keeper-sweeps", "pw-dyor-keeper-buybacks", HOOK, `${HC}/grad`, `${HC}/sweeps`, "", `${HC}/governance`].join("\n") + "\n";
+  // The owner's answers: a wrong password once for sweeps, then the right ones; the webhook, 4 ping URLs and a
+  // restricted RPC URL.
+  const RPC_KEYED = "https://monad-mainnet.example/v2/FAKE-RPC-KEY-0123";
+  const answers = ["pw-dyor-keeper-grad", "wrong", "pw-dyor-keeper-sweeps", "pw-dyor-keeper-buybacks", HOOK, `${HC}/grad`, `${HC}/sweeps`, "", `${HC}/governance`, RPC_KEYED].join("\n") + "\n";
   const r = spawnSync("bash", [join(OPS, "make-keeper-secrets.sh"), "--app", "dyorhq-keepers"], {
     input: answers,
     encoding: "utf8",
@@ -932,16 +955,18 @@ exit 9`,
   const imported = Object.fromEntries(readFileSync(join(dir, "fly-stdin"), "utf8").trim().split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
   assert.deepEqual(Object.keys(imported).sort(), [
     "KEEPER_BUYBACKS_KEYSTORE_B64", "KEEPER_BUYBACKS_PASSWORD_B64", "KEEPER_GRAD_KEYSTORE_B64", "KEEPER_GRAD_PASSWORD_B64",
-    "KEEPER_HC_GOVERNANCE_URL", "KEEPER_HC_GRAD_URL", "KEEPER_HC_SWEEPS_URL", "KEEPER_SEND_BUYBACKS", "KEEPER_SEND_GRAD",
-    "KEEPER_SEND_SWEEPS", "KEEPER_SWEEPS_KEYSTORE_B64", "KEEPER_SWEEPS_PASSWORD_B64", "KEEPER_WEBHOOK_URL",
+    "KEEPER_HC_GOVERNANCE_URL", "KEEPER_HC_GRAD_URL", "KEEPER_HC_SWEEPS_URL", "KEEPER_RPC_URLS", "KEEPER_SEND_BUYBACKS",
+    "KEEPER_SEND_GRAD", "KEEPER_SEND_SWEEPS", "KEEPER_SWEEPS_KEYSTORE_B64", "KEEPER_SWEEPS_PASSWORD_B64", "KEEPER_WEBHOOK_URL",
   ]);
+  // The restricted RPC first, the public ones as fallbacks.
+  assert.equal(imported.KEEPER_RPC_URLS, `${RPC_KEYED} https://rpc3.monad.xyz https://rpc4.monad.xyz`);
   const decode = (v) => Buffer.from(v, "base64").toString("utf8");
   assert.equal(decode(imported.KEEPER_GRAD_PASSWORD_B64), "pw-dyor-keeper-grad");
   assert.equal(JSON.parse(decode(imported.KEEPER_SWEEPS_KEYSTORE_B64)).name, "dyor-keeper-sweeps");
   assert.equal(imported.KEEPER_WEBHOOK_URL, HOOK);
   assert.equal(imported.KEEPER_SEND_GRAD, "0");
   // Only the public addresses, the names and the flag templates are printed.
-  for (const secret of ["pw-dyor-keeper", "wrong", "hc-ping", "test-token", imported.KEEPER_GRAD_KEYSTORE_B64.slice(0, 16), imported.KEEPER_GRAD_PASSWORD_B64]) {
+  for (const secret of ["pw-dyor-keeper", "wrong", "hc-ping", "test-token", "FAKE-RPC-KEY", imported.KEEPER_GRAD_KEYSTORE_B64.slice(0, 16), imported.KEEPER_GRAD_PASSWORD_B64]) {
     assert.ok(!out.includes(secret), `printed: ${secret}`);
   }
   assert.match(out, /dyor-keeper-grad 0x1111111111111111111111111111111111111111/);

@@ -39,8 +39,10 @@ DATA_DIR=${KEEPER_DATA_DIR:-/data}
 SECRETS_DIR=${KEEPER_SECRETS_DIR:-/run/dyor-keeper}
 NODE_BIN=${KEEPER_NODE:-node}
 KEEPER_MJS=${KEEPER_MJS:-$APP_DIR/contracts/keepers/keeper.mjs}
-# rpc3 (Ankr) then rpc4 (Infura): rpc1 rate-limits a full run. KEEPER_RPC_URLS (space-separated) is for a fork rehearsal.
-RPC_URLS=${KEEPER_RPC_URLS:-https://rpc3.monad.xyz https://rpc4.monad.xyz}
+# The RPC list in fallback order: KEEPER_RPC_URLS (space-separated; a Fly secret, with a restricted provider key's URL
+# first when there is one), else rpc3 (Ankr) then rpc4 (Infura); rpc1 rate-limits a full run. The keeper reads it from
+# its environment, never its command line: `ps` shows a process's arguments to anyone on the Machine for the whole run.
+export KEEPER_RPC_URLS="${KEEPER_RPC_URLS:-https://rpc3.monad.xyz https://rpc4.monad.xyz}"
 
 # The unit table (build 17 plan, decision 14; keepers report 3.3 and 3.4). The funding is 30 / 10 / 5 MON for
 # grad / buybacks / sweeps; --min-balance warns (every 12 h) below 10 / 3 / 1; --max-spend-per-day holds sends above
@@ -131,8 +133,6 @@ if [ -n "$flag" ]; then
 fi
 
 args=("$NODE_BIN" "$KEEPER_MJS" "${jobs[@]}" --state-file "$DATA_DIR/state-$unit.json" --max-runtime "$runtime")
-read -r -a rpc_urls <<< "$RPC_URLS" # split on spaces, never globbed
-for url in "${rpc_urls[@]}"; do args+=(--rpc-url "$url"); done
 if [ ${#extra[@]} -gt 0 ]; then args+=("${extra[@]}"); fi
 [ -n "$min_balance" ] && args+=(--min-balance "$min_balance")
 [ -n "$cap" ] && args+=(--max-spend-per-day "$cap")

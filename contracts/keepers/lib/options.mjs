@@ -46,6 +46,17 @@ function positiveNumber(name, v) {
 }
 
 /**
+ * The RPC list when no --rpc-url is given: KEEPER_RPC_URLS (space-separated, in fallback order), else MONAD_RPC_URL,
+ * else rpc3 then rpc4. The environment keeps a keyed URL (a restricted provider key) off every command line, where `ps`
+ * would show it for the whole run; ops/run-keeper.sh hands the list over this way.
+ */
+export function defaultRpcUrls(env = process.env) {
+  const listed = String(env.KEEPER_RPC_URLS ?? "").split(/\s+/).filter(Boolean);
+  if (listed.length) return listed;
+  return env.MONAD_RPC_URL ? [env.MONAD_RPC_URL] : [...DEFAULT_RPC_URLS];
+}
+
+/**
  * Parses keeper arguments. Returns `{ help: true, ok }` when only usage should be printed (`ok`: it was asked for),
  * else the options. Throws on a usage error.
  */
@@ -55,8 +66,8 @@ export function parseKeeperArgs(argv, env = process.env) {
     allowPositionals: true,
     options: {
       // Repeatable: reads fall back in order (rpc.mjs). rpc3 then rpc4 by default: rpc1 rate-limits a full run, and
-      // rpc.monad.xyz caps eth_getLogs at 100 blocks (the scans adapt to that).
-      "rpc-url": { type: "string", multiple: true, default: env.MONAD_RPC_URL ? [env.MONAD_RPC_URL] : [...DEFAULT_RPC_URLS] },
+      // rpc.monad.xyz caps eth_getLogs at 100 blocks (the scans adapt to that). Without it: defaultRpcUrls(env).
+      "rpc-url": { type: "string", multiple: true, default: defaultRpcUrls(env) },
       send: { type: "boolean", default: false },
       role: { type: "string", default: "keeper" },
       keystore: { type: "string" },

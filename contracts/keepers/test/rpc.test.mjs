@@ -48,6 +48,18 @@ test("E5: --rpc-url repeats; the default is rpc3 then rpc4, or MONAD_RPC_URL alo
   assert.equal(o.rpcUrl, "https://a.example");
 });
 
+// Fork rehearsal 2026-10-01: run-keeper.sh put every RPC URL on the keeper's command line, so a restricted provider key
+// showed in `ps` for the whole run. The list now comes from the environment.
+test("E5: KEEPER_RPC_URLS (space-separated) is the RPC list without --rpc-url, ahead of MONAD_RPC_URL", () => {
+  const keyed = "https://monad-mainnet.example/v2/FAKE_KEY_123";
+  const env = { KEEPER_RPC_URLS: ` ${keyed}  https://rpc3.monad.xyz\nhttps://rpc4.monad.xyz `, MONAD_RPC_URL: "https://a.example" };
+  assert.deepEqual(parseKeeperArgs(["governance"], env).rpcUrls, [keyed, "https://rpc3.monad.xyz", "https://rpc4.monad.xyz"]);
+  assert.equal(parseKeeperArgs(["governance"], env).rpcUrl, keyed);
+  assert.deepEqual(parseKeeperArgs(["governance", "--rpc-url", "https://b.example"], env).rpcUrls, ["https://b.example"], "--rpc-url still wins");
+  assert.deepEqual(parseKeeperArgs(["governance"], { KEEPER_RPC_URLS: "  " }).rpcUrls, [...DEFAULT_RPC_URLS], "blank is unset");
+  assert.deepEqual(parseKeeperArgs(["governance"], { KEEPER_RPC_URLS: "", MONAD_RPC_URL: "https://a.example" }).rpcUrls, ["https://a.example"]);
+});
+
 async function server(handler) {
   const s = createServer((req, res) => {
     let body = "";

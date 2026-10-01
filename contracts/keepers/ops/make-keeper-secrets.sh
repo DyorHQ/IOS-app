@@ -4,7 +4,8 @@
 #  - each keystore is made by `cast wallet new` in a private temporary folder, behind cast's hidden password prompt
 #    (paste the password generated for that key in the password manager);
 #  - that password is asked once more, hidden, to write its file, and checked by opening the keystore with it;
-#  - the Discord webhook and the healthchecks.io ping URLs are asked for hidden (Enter skips one);
+#  - the Discord webhook, the healthchecks.io ping URLs and an optional restricted RPC URL (a provider key, used
+#    before rpc3 and rpc4) are asked for hidden (Enter skips one);
 #  - everything goes to `fly secrets import --stage` on stdin (never `fly secrets set NAME=VALUE`, which would put the
 #    value in argv and the shell history), and the temporary folder is deleted on exit.
 # It prints only the public addresses (to fund, and to pin in ops/keeper-signers.json through a reviewed commit: until
@@ -44,10 +45,10 @@ done
 templates() {
   local a=${1:-<APP>}
   cat <<TEMPLATES
-# Secret values (keystores, passwords, the webhook, the ping URLs): only through this script, on stdin:
+# Secret values (keystores, passwords, webhook, ping URLs, a keyed RPC URL): only through this script, on stdin:
 contracts/keepers/ops/make-keeper-secrets.sh --app $a                          # all three keys and the URLs
 contracts/keepers/ops/make-keeper-secrets.sh --app $a --keys grad --no-urls    # replace one key
-contracts/keepers/ops/make-keeper-secrets.sh --app $a --keys none              # replace the URLs
+contracts/keepers/ops/make-keeper-secrets.sh --app $a --keys none              # replace the URLs (webhook, pings, RPC)
 # Apply the staged secrets (restarts the Machine); list names and digests (never values):
 fly secrets deploy --app $a
 fly secrets list --app $a
@@ -142,6 +143,15 @@ if [ "$urls" = 1 ]; then
       *) echo "secrets: a ping URL must be https" >&2; exit 1 ;;
     esac
   done
+  # A restricted provider key's URL goes first; the public rpc3 and rpc4 stay as fallbacks. The keepers read the list
+  # from their environment, never a command line.
+  hidden "Restricted RPC URL, with its key (hidden; Enter keeps rpc3 then rpc4): "
+  case "$REPLY" in
+    "") ;;
+    *[[:space:]]*) echo "secrets: the RPC URL must be one https URL, without spaces" >&2; exit 1 ;;
+    https://*) printf 'KEEPER_RPC_URLS=%s https://rpc3.monad.xyz https://rpc4.monad.xyz\n' "$REPLY" >> "$import" ;;
+    *) echo "secrets: the RPC URL must be https" >&2; exit 1 ;;
+  esac
   REPLY=
 fi
 
