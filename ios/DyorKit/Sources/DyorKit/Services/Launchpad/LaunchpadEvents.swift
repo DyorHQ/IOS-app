@@ -7,7 +7,7 @@ import Foundation
 
 public extension LaunchpadService {
     /// Curve fills for one launch over the last `lookbackBlocks` blocks, or the last 24 hours (`clock`) when nil, oldest
-    /// first. `pair` scales prices to pair units so they line up with `priceNumber`; each fill's time is estimated at the
+    /// first. `pair` scales prices to pair units so they line up with `Launch.pairPrice`; each fill's time is estimated at the
     /// session's measured pace.
     func trades(curve: Address, pair: PairInfo, lookbackBlocks: UInt64? = nil) async throws -> [CurveTrade] {
         let anchor = try await rpc.block(.latest)

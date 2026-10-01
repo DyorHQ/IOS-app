@@ -14,11 +14,11 @@ public struct HeldLaunches: Sendable, Hashable {
     public let pairAssets: [Address: Address]
     /// Their launches, by coin. A coin whose launch, or whose factory's launches, couldn't be read has none.
     public let launches: [Address: Launch]
-    /// Each coin's live price in whole pair-asset units per whole coin, to a Double's precision: its curve's reserves while
-    /// it is on the curve, its pool's sqrt price once graduated. `Launch.price` can't stand in for it: it counts whole
-    /// units of the pair's smallest unit, so on a 6-decimal pair (USDC, AUSD) it moves in steps of $0.000001, which is
-    /// most of a small launch's price, and it is 0 below that. A coin whose launch or live price couldn't be read has
-    /// none: never its curve's last price once graduated, nor any other stale one.
+    /// Each coin's live price in whole pair-asset units per whole coin, to a Double's precision (its launch's `pairPrice`):
+    /// its curve's reserves while it is on the curve, its pool's sqrt price once graduated. `Launch.price` can't stand in
+    /// for it: it counts whole units of the pair's smallest unit, so on a 6-decimal pair (USDC, AUSD) it moves in steps of
+    /// $0.000001, which is most of a small launch's price, and it is 0 below that. A coin whose launch or live price
+    /// couldn't be read has none: never its curve's last price once graduated, nor any other stale one.
     public let pairPerCoin: [Address: Double]
 
     public static let none = HeldLaunches(factories: [:], phases: [:], deployers: [:], pairAssets: [:], launches: [:], pairPerCoin: [:])
@@ -81,43 +81,16 @@ public extension LaunchpadService {
             }
             for await list in group { for launch in list { launches[launch.token] = launch } }
         }
-        let prices = await livePairPrices(Array(launches.values))
+        // Each launch carries its live price, read with it (`Launch.pairPrice`): one source for every screen.
+        let prices = launches.compactMapValues(\.pairPrice)
         return HeldLaunches(factories: hits.mapValues(\.stack.factory), phases: hits.mapValues(\.record.phase), deployers: hits.mapValues(\.record.deployer),
                             pairAssets: hits.mapValues(\.record.pairToken), launches: launches, pairPerCoin: prices)
     }
 
-    /// Each of `launches`' live price in whole pair units per whole coin (`HeldLaunches.pairPerCoin`), in one read: its
-    /// curve's `getReserves` while it is on the curve (climbing, full, migrating or in refund mode, as `hydrate` prices
-    /// it), its pool's slot0 once graduated — a Uniswap v4 pool's from the PoolManager, a Monday Trade pool's own, which
-    /// pairs the coin with WMON in place of native MON. A launch whose read fails, or whose pool can't be found, has none.
-    internal func livePairPrices(_ launches: [Launch]) async -> [Address: Double] {
-        var reads: [(launch: Launch, pairSide: Address, call: ContractCall)] = []
-        for launch in launches {
-            if launch.phase == .graduated {
-                if launch.graduationVenue == .monday {
-                    guard let pool = Address(data: launch.poolId.suffix(20)), !pool.isZero else { continue }
-                    reads.append((launch, launch.pairToken.isZero ? Monad.wmon : launch.pairToken, LaunchpadABI.call(pool, "slot0()", returns: "bytes32")))
-                } else if !addresses.poolManager.isZero {
-                    reads.append((launch, launch.pairToken, LaunchpadABI.call(addresses.poolManager, LaunchpadABI.PoolManager.extsload, [.bytes(LaunchpadABI.slot0(of: launch.poolId))], returns: "bytes32")))
-                }
-            } else {
-                reads.append((launch, launch.pairToken, LaunchpadABI.call(launch.curve, LaunchpadABI.Curve.getReserves, returns: "uint256,uint256")))
-            }
-        }
-        guard !reads.isEmpty, let results = try? await multicall.read(reads.map(\.call)), results.count == reads.count else { return [:] }
-        var out: [Address: Double] = [:]
-        for (read, result) in zip(reads, results) {
-            guard case .success(let values) = result,
-                  let price = Self.pairPerCoin(values, graduated: read.launch.phase == .graduated, token: read.launch.token, pairSide: read.pairSide, pairDecimals: read.launch.pair.decimals)
-            else { continue }
-            out[read.launch.token] = price
-        }
-        return out
-    }
-
-    /// Pure half of `livePairPrices`: whole pair units per whole coin (18 decimals) from a curve's `getReserves`
-    /// (quote reserve, token reserve) or, `graduated`, a pool's slot0 word, whose pair side is `pairSide`. Nil for an
-    /// empty reserve, an uninitialised pool, or a price that isn't a positive finite number.
+    /// A launch's live price (`Launch.pairPrice`): whole pair units per whole coin (18 decimals) from a curve's
+    /// `getReserves` (quote reserve, token reserve) or, `graduated`, a pool's slot0 word, whose pair side is `pairSide`
+    /// (WMON for a Monday Trade pool of a MON launch). Nil for an empty reserve, an uninitialised pool, or a price that
+    /// isn't a positive finite number.
     nonisolated static func pairPerCoin(_ values: [ABIValue], graduated: Bool, token: Address, pairSide: Address, pairDecimals: Int) -> Double? {
         let price: Double
         if graduated {

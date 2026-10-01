@@ -148,6 +148,7 @@ struct SizedLaunchpad: Sendable {
         guard let (i, isCurve) = index(to) else { return nil }
         if isCurve {
             if is_(C.price) { return enc([.uint(7)], "uint256") }
+            if is_(C.getReserves) { return enc([.uint(7), .uint(BigUInt(10).power(18))], "uint256,uint256") }
             if is_(C.completed) || is_(C.rescued) { return enc([.bool(false)], "bool") }
             if is_(C.launchedAt) { return enc([.uint(1_789_000_000)], "uint64") }
             return enc([.uint(1)], "uint256")

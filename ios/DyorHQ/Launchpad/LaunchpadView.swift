@@ -313,7 +313,7 @@ struct LaunchCard: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Market cap").font(.caption2).foregroundStyle(.secondary)
-                        Text("\(NumberStyle.units(launch.marketCap, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)")
+                        Text(launch.marketCapInPair.map { "\(NumberStyle.number($0, compact: true)) \(launch.pair.symbol)" } ?? "—")
                             .font(.footnote.weight(.semibold)).monospacedDigit()
                     }
                     Spacer()
@@ -541,9 +541,10 @@ struct LaunchDetailView: View {
     /// Buying on the curve is open: while it trades, and never on a retired launchpad, whose holders can only sell.
     private var buysOpen: Bool { launch.curveBuysOpen }
 
-    /// The coin's price and market cap in USD, when the pair asset has a known dollar price.
-    private var priceUSD: Double? { pairUSD.map { LaunchpadService.priceNumber(launch) * $0 } }
-    private var marketCapUSD: Double? { pairUSD.map { Amount.units(launch.marketCap, decimals: launch.pair.decimals) * $0 } }
+    /// The coin's price and market cap in USD, from its decimal price (`Launch.pairPrice`), when it and the pair asset's
+    /// dollar price are known.
+    private var priceUSD: Double? { launch.usdPrice(pairUSD: pairUSD) }
+    private var marketCapUSD: Double? { launch.marketCapInPair.flatMap { cap in pairUSD.map { cap * $0 } } }
     /// 24h trading volume in pair units, and in USD when priced.
     private var volume24: Double { trades.filter { Date().timeIntervalSince1970 - Double($0.time) <= 86_400 }.reduce(0) { $0 + Amount.units($1.quoteAmount, decimals: $1.quoteDecimals) } }
     private var volume24USD: Double? { pairUSD.map { volume24 * $0 } }
@@ -641,13 +642,13 @@ struct LaunchDetailView: View {
                 }
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(NumberStyle.number(LaunchpadService.priceNumber(launch))) \(launch.pair.symbol)")
+                        Text(launch.pairPrice.map { "\(NumberStyle.number($0)) \(launch.pair.symbol)" } ?? "—")
                             .font(.system(.title, design: .rounded).weight(.semibold)).monospacedDigit()
                         if let priceUSD { Text(PriceFormat.usdPrice(priceUSD)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().accessibilityLabel(PriceFormat.spoken(priceUSD)) }
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text("\(NumberStyle.units(launch.marketCap, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)").monospacedDigit().fontWeight(.medium)
+                        Text(launch.marketCapInPair.map { "\(NumberStyle.number($0, compact: true)) \(launch.pair.symbol)" } ?? "—").monospacedDigit().fontWeight(.medium)
                         if let marketCapUSD { Text(PriceFormat.usdValue(marketCapUSD)).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
                         else { Text("Market cap").font(.caption).foregroundStyle(.secondary) }
                     }
@@ -936,16 +937,16 @@ struct LaunchDetailView: View {
         (try? await env.prices.prices(for: [pairToken]))?[pairToken.address]?.usd
     }
 
-    /// A price line for the chart: one point per curve trade, always ending on the live price, with a launch-time
-    /// baseline prepended so a coin with no trades still draws a flat line rather than an empty box. Sequential ids
-    /// keep points distinct even when trades share a block.
+    /// A price line for the chart: one point per curve trade, ending on the live decimal price (`Launch.pairPrice`) when
+    /// it was read, with a launch-time baseline prepended so a coin with no trades still draws a flat line rather than an
+    /// empty box. Sequential ids keep points distinct even when trades share a block.
     private static func priceSeries(trades: [CurveTrade], launch: Launch, unit: Double) -> [PricePoint] {
-        let current = LaunchpadService.priceNumber(launch) * unit
         var points: [PricePoint] = []
         var idx: UInt64 = 0
         for trade in trades where trade.price > 0 {
             points.append(PricePoint(block: idx, time: Date(timeIntervalSince1970: TimeInterval(trade.time)), usd: trade.price * unit)); idx += 1
         }
+        guard let current = launch.pairPrice.map({ $0 * unit }) else { return points }
         points.append(PricePoint(block: idx, time: Date(), usd: current)); idx += 1
         if points.count < 2 {
             points.insert(PricePoint(block: idx, time: Date(timeIntervalSince1970: TimeInterval(launch.launchedAt)), usd: current), at: 0)

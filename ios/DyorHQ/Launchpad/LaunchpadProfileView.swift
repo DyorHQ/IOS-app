@@ -318,7 +318,7 @@ private struct CreatedRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-                Text(item.mcapUSD.map { PriceFormat.usdValue($0) } ?? "\(NumberStyle.units(item.launch.marketCap, decimals: item.launch.pair.decimals, compact: true)) \(item.launch.pair.symbol)")
+                Text(item.mcapUSD.map { PriceFormat.usdValue($0) } ?? item.launch.marketCapInPair.map { "\(NumberStyle.number($0, compact: true)) \(item.launch.pair.symbol)" } ?? "—")
                     .font(.subheadline.weight(.medium)).monospacedDigit()
                 Text("Market cap").font(.caption2).foregroundStyle(.secondary)
             }
@@ -363,12 +363,13 @@ final class LaunchpadProfileModel {
     struct Position: Identifiable, Hashable {
         let launch: Launch
         let balance: BigUInt
-        let valueUSD: Double
+        /// At the coin's decimal price (`Launch.pairPrice`); nil when it or the pair asset's dollar price isn't known.
+        let valueUSD: Double?
         let pnlUSD: Double?
         let pnlPercent: Double?
         let claimableRewards: BigUInt
         var id: Address { launch.token }
-        var mcapText: String { "\(NumberStyle.units(launch.marketCap, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" }
+        var mcapText: String { launch.marketCapInPair.map { "\(NumberStyle.number($0, compact: true)) \(launch.pair.symbol)" } ?? "—" }
     }
 
     struct Created: Identifiable, Hashable {
@@ -451,7 +452,7 @@ final class LaunchpadProfileModel {
     }
 
     var isEmpty: Bool { positions.isEmpty && launched.isEmpty && activity.isEmpty }
-    var portfolioValueUSD: Double { positions.reduce(0) { $0 + $1.valueUSD } }
+    var portfolioValueUSD: Double { positions.reduce(0) { $0 + ($1.valueUSD ?? 0) } }
 
     /// Creator fees claimable, one entry per escrow and pair asset (MON first, then each token), largest first.
     var creatorClaimables: [ClaimableAsset] {
@@ -581,7 +582,7 @@ final class LaunchpadProfileModel {
 
         // Coins you created.
         created = launches.filter { $0.deployer == address }.map { launch in
-            let usd = pairUSD[launch.pairToken].map { Amount.units(launch.marketCap, decimals: launch.pair.decimals) * $0 }
+            let usd = launch.marketCapInPair.flatMap { cap in DyorPrice.valid(pairUSD[launch.pairToken]).map { cap * $0 } }
             return Created(launch: launch, mcapUSD: usd)
         }
         .sorted { ($0.mcapUSD ?? 0) > ($1.mcapUSD ?? 0) }
@@ -597,7 +598,7 @@ final class LaunchpadProfileModel {
             }
             var out: [Position] = []
             for await p in group { if let p { out.append(p) } }
-            return out.sorted { $0.valueUSD > $1.valueUSD }
+            return out.sorted { ($0.valueUSD ?? 0) > ($1.valueUSD ?? 0) }
         }
         guard current() else { return }
         positions = heldPositions
@@ -612,16 +613,16 @@ final class LaunchpadProfileModel {
     /// One held-coin position: current value, holder rewards, and PnL from the wallet's own curve trades
     /// (net MON invested vs current value, realized + unrealized), scanning only since the coin launched.
     private static func position(env: AppEnvironment, address: Address, launch: Launch, balance: BigUInt, pairUSD: Double) async -> Position? {
-        let priceUnits = LaunchpadService.priceNumber(launch)
-        let currentValuePair = Amount.units(balance, decimals: 18) * priceUnits
-        let valueUSD = currentValuePair * pairUSD
+        // At its decimal price, never the integer `Launch.price`: unvalued (and no P&L) when that price wasn't read.
+        let currentValuePair = launch.pairPrice.map { Amount.units(balance, decimals: 18) * $0 }
+        let valueUSD = DyorPrice.launch(launch, spot: nil, pairUSD: pairUSD).map { Amount.units(balance, decimals: 18) * $0 }
 
         // Bound the trade scan to the coin's age (plus a buffer), capped at 30 days, so PnL uses the full history
         // without sweeping a month of blocks for a coin launched an hour ago.
         let lookback = await env.launchpad.tradeLookback(launchedAt: launch.launchedAt)
         var pnlUSD: Double?
         var pnlPercent: Double?
-        if let trades = try? await env.launchpad.trades(curve: launch.curve, pair: launch.pair, lookbackBlocks: lookback) {
+        if let currentValuePair, let trades = try? await env.launchpad.trades(curve: launch.curve, pair: launch.pair, lookbackBlocks: lookback) {
             let mine = trades.filter { $0.trader == address }
             if !mine.isEmpty {
                 var buyCost = 0.0, sellProceeds = 0.0

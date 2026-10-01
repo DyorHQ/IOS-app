@@ -510,24 +510,27 @@ final class LaunchpadTests: XCTestCase {
         }
     }
 
-    /// The board's Market Cap sort compares every pair asset in dollars: a 50,000 USDC coin (5e10 raw, 6 decimals) above
-    /// a 1 MON coin (1e18 raw), an aBIL coin by aBIL's price, and a coin whose pair has no price yet after every priced
-    /// one, by its cap in whole units.
+    /// The board's Market Cap sort compares every pair asset in dollars, from each coin's decimal price
+    /// (`Launch.marketCapInPair`): a 50,000 USDC coin above a 1 MON coin, an aBIL coin by aBIL's price, a coin whose pair
+    /// has no price yet after every priced one, by its cap in whole units, and a coin whose own price wasn't read last.
+    /// The integer `Launch.marketCap` (raw units, from the rounded `price()`) never decides.
     func testMarketCapSortComparesPairAssetsInDollars() {
         let usdc = PairInfo(address: Monad.usdc, symbol: "USDC", decimals: 6, isNative: false)
         let ausd = PairInfo(address: Monad.ausd, symbol: "AUSD", decimals: 6, isNative: false)
         let abil = PairInfo(address: Token.abil.address, symbol: "aBIL", decimals: 18, isNative: false)
-        func launch(_ n: UInt8, _ pair: PairInfo, cap: BigUInt) -> Launch {
+        /// One whole coin at `cap` whole pair units, its raw integer cap `raw`.
+        func launch(_ n: UInt8, _ pair: PairInfo, cap: Double?, raw: BigUInt = 0) -> Launch {
             Launch(token: Address(data: Data(repeating: n, count: 20))!, curve: curve, deployer: deployer, creatorFeeRecipient: creatorFeeRecipient, pairToken: pair.address,
                    graduationThreshold: 0, creatorTaxBps: 0, poolFeeBps: 100, tickSpacing: 60, holderFeeSharing: false, graduationVenue: .uniswapV4, phase: .bonding,
                    sweptQuote: 0, sweptTokens: 0, sweptAt: 0, poolId: Data(repeating: 0, count: 32), name: "Coin \(n)", symbol: "C\(n)", logo: "", description: "",
-                   socials: .none, pair: pair, price: 0, realQuoteReserve: 0, completed: false, rescued: false, launchedAt: Int(n), supply: 0, marketCap: cap, progressBps: 0)
+                   socials: .none, pair: pair, price: 0, realQuoteReserve: 0, completed: false, rescued: false, launchedAt: Int(n), supply: e18(1), marketCap: raw, progressBps: 0,
+                   pairPrice: cap)
         }
-        let oneMON = launch(1, .mon, cap: e18(1))
-        let bigUSDC = launch(2, usdc, cap: e6(50_000))
-        let smallAUSD = launch(3, ausd, cap: e6(2))
-        let abilCoin = launch(4, abil, cap: e18(30))
-        let unpriced = launch(5, PairInfo(address: Address(literal: "0x00000000000000000000000000000000000a0005"), symbol: "NEW", decimals: 18, isNative: false), cap: e18(1_000_000))
+        let oneMON = launch(1, .mon, cap: 1, raw: e18(1))
+        let bigUSDC = launch(2, usdc, cap: 50_000, raw: e6(50_000))
+        let smallAUSD = launch(3, ausd, cap: 2, raw: e6(2))
+        let abilCoin = launch(4, abil, cap: 30, raw: e18(30))
+        let unpriced = launch(5, PairInfo(address: Address(literal: "0x00000000000000000000000000000000000a0005"), symbol: "NEW", decimals: 18, isNative: false), cap: 1_000_000, raw: e18(1_000_000))
         let prices: [Address: Double] = [Monad.native: 0.03, Monad.usdc: 1, Monad.ausd: 1, Token.abil.address: 101]
         let sorted = LaunchpadMath.byMarketCap([oneMON, smallAUSD, unpriced, bigUSDC, abilCoin], pairUSD: prices)
         XCTAssertEqual(sorted.map(\.symbol), ["C2", "C4", "C3", "C1", "C5"], "50,000 USDC, 30 aBIL ($3,030), 2 AUSD, 1 MON ($0.03), then the unpriced one")
@@ -535,19 +538,44 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual([oneMON, smallAUSD, unpriced, bigUSDC, abilCoin].sorted { $0.marketCap > $1.marketCap }.map(\.symbol), ["C5", "C4", "C1", "C2", "C3"])
         // With no prices at all, whole units still compare across decimals; equal caps keep their order.
         XCTAssertEqual(LaunchpadMath.byMarketCap([oneMON, smallAUSD, bigUSDC], pairUSD: [:]).map(\.symbol), ["C2", "C3", "C1"])
-        XCTAssertEqual(LaunchpadMath.byMarketCap([launch(6, usdc, cap: e6(5)), launch(7, ausd, cap: e6(5))], pairUSD: prices).map(\.symbol), ["C6", "C7"])
+        XCTAssertEqual(LaunchpadMath.byMarketCap([launch(6, usdc, cap: 5), launch(7, ausd, cap: 5)], pairUSD: prices).map(\.symbol), ["C6", "C7"])
+        // A USDC coin at a true $0.0000035 over 1B coins is a $3,500 cap, which the rounded price() puts at $3,000: the
+        // decimal one ranks it above a $3,200 coin. One whose price wasn't read ranks after both, whatever its raw cap.
+        let dust = launch(8, usdc, cap: 3_500, raw: e6(3_000))
+        let middle = launch(9, usdc, cap: 3_200, raw: e6(3_200))
+        let unread = launch(10, usdc, cap: nil, raw: e6(9_999))
+        XCTAssertEqual(LaunchpadMath.byMarketCap([unread, middle, dust], pairUSD: prices).map(\.symbol), ["C8", "C9", "C10"])
     }
 
-    func testPhaseMappingAndPriceNumber() {
+    func testPhaseMappingAndDecimalPrice() {
         XCTAssertEqual(LaunchPhase(raw: BigUInt(0)), .bonding)
         XCTAssertEqual(LaunchPhase(raw: BigUInt(1)), .migrating)
         XCTAssertEqual(LaunchPhase(raw: BigUInt(2)), .graduated)
         XCTAssertEqual(LaunchPhase(raw: BigUInt(3)), .refund)
         XCTAssertEqual(LaunchPhase(raw: BigUInt(99)), .bonding, "an unknown phase falls back to bonding")
 
-        // priceNumber scales the 18-dp price by the pair's decimals, so the same raw price reads differently per pair.
-        XCTAssertEqual(LaunchpadService.priceNumber(makeLaunch(pairToken: usdc, pair: usdcPair, price: e6(2))), 2.0, accuracy: 1e-9)
-        XCTAssertEqual(LaunchpadService.priceNumber(makeLaunch(pairToken: abil, pair: abilPair, price: e6(2))), 2e-12, accuracy: 1e-18)
+        // A launch is valued at its decimal price alone: dollars are pairPrice × the pair's dollar price, the cap is
+        // pairPrice × the whole supply, and without a decimal price there is neither, whatever the integer price says.
+        let priced = Launch(token: token, curve: curve, deployer: deployer, creatorFeeRecipient: creatorFeeRecipient, pairToken: usdc,
+                            graduationThreshold: e6(4000), creatorTaxBps: 0, poolFeeBps: 100, tickSpacing: 60, holderFeeSharing: false,
+                            graduationVenue: .uniswapV4, phase: .bonding, sweptQuote: 0, sweptTokens: 0, sweptAt: 0, poolId: Data(count: 32), name: "Dyor Coin",
+                            symbol: "DYOR", logo: "", description: "", socials: .none, pair: usdcPair, price: 3, realQuoteReserve: 0, completed: false, rescued: false,
+                            launchedAt: 0, supply: e18(1_000_000_000), marketCap: e6(3_000), progressBps: 0, pairPrice: 0.0000035)
+        XCTAssertEqual(try XCTUnwrap(priced.usdPrice(pairUSD: 1)), 0.0000035, accuracy: 1e-18)
+        XCTAssertEqual(try XCTUnwrap(priced.marketCapInPair), 3_500, accuracy: 1e-6)
+        XCTAssertNil(priced.usdPrice(pairUSD: nil), "no pair price, no dollars")
+        let unread = makeLaunch(pairToken: usdc, pair: usdcPair, price: e6(2))
+        XCTAssertNil(unread.pairPrice)
+        XCTAssertNil(unread.usdPrice(pairUSD: 1), "never the integer price()")
+        XCTAssertNil(unread.marketCapInPair)
+        for bad in [0, -1, Double.nan, .infinity] {
+            let launch = Launch(token: token, curve: curve, deployer: deployer, creatorFeeRecipient: creatorFeeRecipient, pairToken: usdc, graduationThreshold: 0,
+                                creatorTaxBps: 0, poolFeeBps: 100, tickSpacing: 60, holderFeeSharing: false, graduationVenue: .uniswapV4, phase: .bonding, sweptQuote: 0,
+                                sweptTokens: 0, sweptAt: 0, poolId: Data(count: 32), name: "Dyor Coin", symbol: "DYOR", logo: "", description: "", socials: .none,
+                                pair: usdcPair, price: 3, realQuoteReserve: 0, completed: false, rescued: false, launchedAt: 0, supply: e18(1), marketCap: 0,
+                                progressBps: 0, pairPrice: bad)
+            XCTAssertNil(launch.pairPrice, "\(bad) is no price")
+        }
     }
 
     func testPoolPriceAndSlot() {

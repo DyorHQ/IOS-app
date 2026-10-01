@@ -558,11 +558,12 @@ struct MarketRow: Identifiable, Hashable {
 @Observable
 @MainActor
 final class HomeModel {
-    /// A launch coin the wallet holds (or created), valued at its curve price in USD.
+    /// A launch coin the wallet holds (or created), valued in USD at its decimal price (`Launch.usdPrice`); nil when
+    /// that price or its pair asset's isn't known.
     struct LaunchHolding: Identifiable, Hashable {
         let launch: Launch
         let balance: BigUInt
-        let valueUSD: Double
+        let valueUSD: Double?
         var id: Address { launch.token }
     }
 
@@ -589,7 +590,7 @@ final class HomeModel {
     var spotValue: Double { holdings.compactMap(\.value).reduce(0, +) }
     var perpsValue: Double { perpEquity ?? 0 }
     /// Value of the wallet's launch-coin holdings, priced from each curve. Feeds the allocation ring and total.
-    var launchpadValue: Double { launchHoldings.reduce(0) { $0 + $1.valueUSD } }
+    var launchpadValue: Double { launchHoldings.reduce(0) { $0 + ($1.valueUSD ?? 0) } }
     /// Value of the wallet's Moment coins (held plus still owed) at each pool's live price; pre-graduation
     /// entitlements have no market yet and count at zero.
     var momentsValue: Double {
@@ -757,10 +758,10 @@ final class HomeModel {
             // sell-only coin shows only while held (owner decision 2026-09-29).
             guard balance > 0 || (created && launch.listsOnBoard) else { return nil }
             let pairUSD = launch.pair.isNative ? priceMap[Monad.native]?.usd : priceMap[launch.pairToken]?.usd
-            let value = pairUSD.map { Amount.units(balance, decimals: 18) * LaunchpadService.priceNumber(launch) * $0 } ?? 0
+            let value = DyorPrice.launch(launch, spot: priceMap[launch.token]?.usd, pairUSD: pairUSD).map { Amount.units(balance, decimals: 18) * $0 }
             return LaunchHolding(launch: launch, balance: balance, valueUSD: value)
         }
-        .sorted { $0.valueUSD > $1.valueUSD }
+        .sorted { ($0.valueUSD ?? 0) > ($1.valueUSD ?? 0) }
     }
 
     /// The Perpl account's positions and equity: none without an account, nil when a read failed.
