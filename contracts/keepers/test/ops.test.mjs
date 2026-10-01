@@ -742,6 +742,38 @@ test("entrypoint: a key that derives its pinned address may send; a pin mismatch
   assert.match(clean.out, /sweeps: no keystore \(dry runs without a signer\)/);
 });
 
+test("check-signers run through a symlinked path still checks (macOS /var and /tmp are symlinks)", () => {
+  const dir = tmp("keeper-link-");
+  const link = join(dir, "check-signers.mjs");
+  symlinkSync(join(OPS, "check-signers.mjs"), link);
+  const r = spawnSync(process.execPath, [link, `grad=${GUARDIAN}`, "--no-chain"], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir } });
+  assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /^FORBIDDEN grad .*guardian/m);
+});
+
+test("entrypoint: the signer check fails closed, also when the app path runs through a symlink", async () => {
+  // Through a symlinked app directory, as under a stock macOS TMPDIR: the guardian key is still refused.
+  const linked = join(tmp("keeper-applink-"), "app");
+  symlinkSync(appCopy({ grad: GRAD_KEY }), linked);
+  const r = await boot({ app: linked });
+  assert.equal(r.code, 0, r.out);
+  assert.match(readFileSync(join(r.secretsDir, "sweeps.error"), "utf8"), /custody or protocol address .*guardian/);
+  assert.match(r.out, new RegExp(`signer check: OK grad ${GRAD_KEY}`));
+  assert.match(r.out, new RegExp(`grad: signer ${GRAD_KEY}, sends ON`));
+
+  // A check that prints nothing (exit 0) or crashes (exit 1) clears no key: none may send, not even a pinned one.
+  for (const [what, body] of [["silent", "process.exit(0);\n"], ["crashed", 'throw new Error("boom");\n']]) {
+    const app = appCopy({ grad: GRAD_KEY });
+    writeFileSync(join(app, "contracts", "keepers", "ops", "check-signers.mjs"), body);
+    const b = await boot({ app });
+    assert.equal(b.code, 0, `${what}: ${b.out}`);
+    assert.match(readFileSync(join(b.secretsDir, "grad.error"), "utf8"), /the signer check did not clear this key/, what);
+    assert.ok(!existsSync(join(b.secretsDir, "grad.keystore")), `${what}: the key was removed`);
+    assert.doesNotMatch(b.out, /sends ON/, what);
+    assert.match(b.out, /grad: KEEPER_SEND_GRAD=1 but the unit may not send/, what);
+  }
+});
+
 // ---------------------------------------------------------------- bundle.sh and deploy-fly.sh
 
 /** A throwaway git repository holding the files a bundle takes, so bundle.sh runs the same in CI and locally. */

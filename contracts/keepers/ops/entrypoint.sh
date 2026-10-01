@@ -9,9 +9,10 @@
 #     values, so none reaches a command line, the log or the disk;
 #  3. derives each signer's public address as keeper (cast wallet address) and runs check-signers.mjs: the units use
 #     different keys, none is a custody or protocol key or a Safe signer, each derives the address keeper-signers.json
-#     pins, and each holds its minimum. A forbidden key is removed (its unit runs dry runs with no signer); an unpinned
-#     one may run dry runs as its address but never sends; either way a send flag at 1 makes the unit's runs fail
-#     loudly (healthchecks /fail) instead of sending;
+#     pins, and each holds its minimum. It fails closed: a key may send only when the check printed "OK <unit>
+#     <address>" for it. A forbidden key, or one the check did not clear (it failed, crashed or said nothing), is
+#     removed (its unit runs dry runs with no signer); an unpinned one may run dry runs as its address but never sends;
+#     either way a send flag at 1 makes the unit's runs fail loudly (healthchecks /fail) instead of sending;
 #  4. starts supercronic on ops/crontab as keeper, with an environment holding no secret and no capabilities. Given a
 #     command instead (a local test: `docker run … IMAGE /app/contracts/keepers/ops/run-keeper.sh grad`), it runs that
 #     command as keeper after the same preparation.
@@ -151,18 +152,34 @@ if [ ${#signers[@]} -gt 0 ]; then
   rpc_env=()
   [ -n "${KEEPER_RPC_URLS-}" ] && rpc_env=("KEEPER_RPC_URLS=$KEEPER_RPC_URLS")
   check=$(as_keeper ${rpc_env[@]+"${rpc_env[@]}"} node "$OPS_DIR/check-signers.mjs" "${signers[@]}" 2>&1) || crc=$?
+  # Fail closed: a key is cleared only by its own "OK <unit> <address>" line for the address it derived. Silence (the
+  # check did not run, crashed, or printed nothing for a unit) clears nothing.
+  cleared=" "
+  handled=" "
   while IFS= read -r line; do
     case "$line" in
-      "FORBIDDEN "*) rest=${line#FORBIDDEN }; mark "${rest%% *}" "${rest#* }" ;;
-      "UNPINNED "*) rest=${line#UNPINNED }; nosend "${rest%% *}" "${rest#* }" ;;
+      "OK "*)
+        rest=${line#OK }; ok_unit=${rest%% *}; rest=${rest#"$ok_unit"}; rest=${rest# }; ok_addr=${rest%% *}
+        cleared="$cleared$ok_unit=$ok_addr "
+        say "signer check: $line" ;;
+      "FORBIDDEN "*) rest=${line#FORBIDDEN }; mark "${rest%% *}" "${rest#* }"; handled="$handled${rest%% *} " ;;
+      "UNPINNED "*) rest=${line#UNPINNED }; nosend "${rest%% *}" "${rest#* }"; handled="$handled${rest%% *} " ;;
       "") ;;
       *) say "signer check: $line" ;;
     esac
   done <<< "$check"
-  if [ "$crc" != 0 ] && [ "$crc" != 1 ]; then
-    # The check itself failed: fail closed, no unit may send on an unchecked key.
-    for s in "${signers[@]}"; do mark "${s%%=*}" "the signer check could not run (exit $crc)"; done
-  fi
+  for s in "${signers[@]}"; do
+    unit=${s%%=*}
+    case "$handled" in *" $unit "*) continue ;; esac
+    if [ "$crc" != 0 ] && [ "$crc" != 1 ]; then
+      mark "$unit" "the signer check could not run (exit $crc)"
+    else
+      case "$cleared" in
+        *" $s "*) ;;
+        *) mark "$unit" "the signer check did not clear this key (exit $crc, no OK line for ${s#*=})" ;;
+      esac
+    fi
+  done
 fi
 for unit in $UNITS; do
   U=$(upper "$unit")

@@ -23,7 +23,7 @@
 // Exit 0 when every unit may send, 1 when one may not (or, with --require-funding, is underfunded or unread), 2 on a
 // usage error, 3 when the check itself failed.
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -260,7 +260,17 @@ export async function main(argv, { env = process.env, out = console.log, makeCli
   return blocked ? 1 : 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+/** Run as a command (not imported)? argv[1] is the path as given, which may run through a symlink (macOS /var, /tmp),
+    while import.meta.url is the real path: compare real paths, or the check would silently do nothing. */
+function isMain() {
+  try {
+    return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (e) => {
