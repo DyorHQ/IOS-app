@@ -259,11 +259,11 @@ struct AssetsCard: View {
 
     private func tokenRow(_ asset: AssetsModel.TokenAsset, note: String? = nil, unverified: Bool = false) -> some View {
         HStack(spacing: 12) {
-            TokenLogo(symbol: asset.token.symbol, url: asset.token.logoURL, size: 34)
+            TokenLogo(token: asset.token, size: 34)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(asset.token.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                    if unverified { UnverifiedBadge() }
+                    TokenBadgeView(token: asset.token, receivedUnasked: unverified)
                 }
                 Text(note ?? asset.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }

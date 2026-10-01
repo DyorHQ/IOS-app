@@ -143,6 +143,32 @@ final class DyorCoinWiringTests: XCTestCase {
         return String(source[from.lowerBound..<to.lowerBound])
     }
 
+    /// Top Tokens and the Add funds card's "funds arriving" go by the token store's Unverified mark alone, which a DyorHQ
+    /// label never changes: only the wallet's own coins are taken out of it, as chosen.
+    func testAReceivedDyorHQCoinNeverRanksInTopTokensNorCountsAsArrivingFunds() throws {
+        let home = try Self.source("Home/HomeView.swift")
+        let model = try Self.between(home, "final class HomeModel {", "struct TokenDetailView: View {")
+        let top = try Self.between(model, "func topTokens(_ tab: HomeTokenTab) -> [MarketRow] {", "private var discoveredFor")
+        XCTAssertTrue(top.contains("let priced = rows.filter { $0.usd != nil && !unverified.contains($0.id) }"))
+        XCTAssertFalse(top.contains("dyorCoins") || top.contains("badge"), "no label decides what ranks")
+        XCTAssertEqual(model.components(separatedBy: "unverified = ").count - 1, 1, "set in one place")
+        XCTAssertTrue(model.contains("unverified = KnownTokenStore.unverified(owner: address)"))
+        XCTAssertFalse(model.contains("unverified.subtract") || model.contains("unverified.remove"))
+
+        let funds = try Self.source("Home/AddFundsCard.swift")
+        let read = try Self.between(funds, "private func read(env: AppEnvironment, address: Address, home: HomeModel)", "extension FirstFunding.Phase")
+        XCTAssertTrue(read.contains("let unverified = KnownTokenStore.unverified(owner: address)"))
+        XCTAssertTrue(read.contains("let tokens = KnownTokenStore.universe(owner: address).filter { !unverified.contains($0.address) }"))
+        XCTAssertFalse(funds.contains("dyorCoins"), "no label makes a received coin funds arriving")
+
+        // The Swap picker and Home's search list through `TokenPickerList`: received tokens only on a search.
+        let swap = try Self.source("Swap/SwapView.swift")
+        XCTAssertTrue(swap.contains("TokenPickerList.main(universe, unverified: unverified, balances: balances, query: query, tradableOnly: tradableOnly)"))
+        XCTAssertTrue(swap.contains("TokenPickerList.received(universe, unverified: unverified, query: query, excluding: custom?.address, tradableOnly: tradableOnly) { env.dyorCoins.badge($0, receivedUnasked: true).isDyorHQ }"))
+        XCTAssertTrue(swap.contains("Text(\"DyorHQ coins in your wallet\")"))
+        XCTAssertTrue(swap.contains("Text(\"Unverified — in your wallet\")"))
+    }
+
     /// Deleting the account (or this device's data) clears every image cache — the logo loader's, the Moments loader's
     /// and URLCache's, on disk — and deletes the registry's file, before the sign-out.
     func testErasingThisDeviceClearsTheImageCachesAndTheRegistry() throws {
@@ -174,5 +200,43 @@ final class DyorCoinWiringTests: XCTestCase {
         await registry.erase()
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.url.path))
         XCTAssertEqual(DyorCoinStore.fileName(), "dyor-coins-143.json")
+    }
+
+    /// Every Monad token's logo is decided by its address (`TokenLogo(token:)` through `CoinIcon`); a symbol-keyed logo is
+    /// Perps' and Bridge's alone (`MarketLogo`). Launch and Moment artwork load through `ImageSourcePolicy`. News and NFT
+    /// art stay as they are under Smart Invert.
+    func testEveryTokenLogoIsByAddress() throws {
+        let files = try Self.sources()
+        for file in files {
+            XCTAssertFalse(file.text.contains("TokenLogo(symbol:"), file.path)
+            XCTAssertFalse(file.text.contains("UnverifiedBadge()") && !file.path.hasPrefix("Portfolio/AssetsModel.swift"), "tokens show TokenBadgeView: \(file.path)")
+            if file.text.contains("MarketLogo(symbol:") {
+                XCTAssertTrue(file.path.hasPrefix("Perps/") || file.path.hasPrefix("Bridge/"), file.path)
+            }
+        }
+        let components = try Self.source("Design/Components.swift")
+        let logo = try Self.between(components, "struct TokenLogo: View {", "struct MarketLogo: View {")
+        XCTAssertTrue(logo.contains("switch env?.dyorCoins.icon(token) ?? CoinIcon.resolve(token, coin: nil, policy: .app) {"))
+        let bundled = try XCTUnwrap(logo.range(of: "case .bundled(let symbol):"))
+        let named = try XCTUnwrap(logo.range(of: "UIImage(named: \"logo-\\(symbol)\")"))
+        XCTAssertLessThan(bundled.upperBound, named.lowerBound)
+        XCTAssertLessThan(named.lowerBound, try XCTUnwrap(logo.range(of: "case .remote(let sources, let fill):")).lowerBound, "only for a curated address")
+        XCTAssertTrue(logo.contains("RemoteImage(sources: sources, pointSize: size, contentMode: fill ? .fill : .fit, grace: RemoteImageWait.grace)"))
+        XCTAssertEqual(components.components(separatedBy: "UIImage(named: \"logo-").count - 1, 2, "TokenLogo's curated case and MarketLogo")
+        let assets = try Self.source("Portfolio/AssetsModel.swift")
+        XCTAssertTrue(assets.contains("if unverified { UnverifiedBadge() }"), "kept for NFTs")
+        XCTAssertTrue(assets.contains(".accessibilityIgnoresInvertColors() // art"))
+        XCTAssertTrue(try Self.source("News/NewsView.swift").contains(".accessibilityIgnoresInvertColors() // a photo"))
+
+        let launchpad = try Self.source("Launchpad/LaunchpadView.swift")
+        let artwork = try Self.between(launchpad, "struct LaunchArtwork: View {", "private var placeholder")
+        XCTAssertTrue(artwork.contains("let sources = ImageSourcePolicy.app.creatorSources(logo).map { RemoteImageSource(url: $0) }"))
+        XCTAssertFalse(artwork.contains("URL(string: logo)"), "never the launcher's own host")
+        let moments = try Self.source("Moments/MomentsUI.swift")
+        let momentSources = try Self.between(moments, "static func imageSources(provenance: MomentProvenance, creator: Address?) -> [MomentImageSource] {", "func cached(")
+        XCTAssertTrue(momentSources.contains("policy.momentSources(mediaURI: provenance.mediaURI, mediaHash: provenance.mediaHash, isVideo: !provenance.animationURI.isEmpty, creator: creator)"))
+        XCTAssertTrue(momentSources.contains("policy.creatorSources(provenance.mediaURI)"))
+        XCTAssertFalse(momentSources.contains("gatewayURLs"), "never the creator's own host")
+        XCTAssertTrue(try Self.source("App/AppEnvironment.swift").contains("policy: ImageSourcePolicy(supabaseURL: config.supabaseURL))"))
     }
 }

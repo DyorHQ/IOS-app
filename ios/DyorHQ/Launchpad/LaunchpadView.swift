@@ -630,7 +630,10 @@ struct LaunchDetailView: View {
         Section {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
-                    TokenLogo(symbol: launch.symbol, url: URL(string: launch.logo), size: 48)
+                    // By address: its art once the registry knows the coin, its launch's own logo (held to the same hosts)
+                    // until then.
+                    TokenLogo(token: Token(address: launch.token, symbol: launch.symbol, name: launch.name, decimals: 18,
+                                           logoURL: URL(string: launch.logo), isLaunchpad: true), size: 48)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(launch.name).font(.title3.weight(.semibold))
                         Text(launch.isSellOnly ? "\(launch.statusTitle) · Retired launchpad" : launch.statusTitle).font(.subheadline).foregroundStyle(.secondary)

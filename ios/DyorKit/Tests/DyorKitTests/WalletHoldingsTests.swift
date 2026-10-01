@@ -382,11 +382,14 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(send.contains("guard case .loaded = assets, choice != nil else { return false }"))
         XCTAssertTrue(send.contains("review = SendReview(asset: choice,"))
         XCTAssertTrue(send.contains("unverified = asset.unverified"))
-        // A look-alike shows its contract and mark in the list, and the review spells out every token contract.
-        XCTAssertTrue(send.contains("imitates = asset.imitates"))
-        XCTAssertTrue(send.contains("if let listed = asset.imitates { return \"Not the \\(listed.symbol) DyorHQ lists · \\(asset.token.address.short)\" }"))
+        // A look-alike shows its contract and its label in the list (`TokenBadge.title`: "Not the real ETH", "Not the USDC
+        // DyorHQ lists"), frozen with the pick for the review, which spells out every token contract.
+        XCTAssertTrue(send.contains("badge: env.dyorCoins.badge(choice.token, receivedUnasked: choice.unverified))"))
+        XCTAssertTrue(send.contains("private var badge: TokenBadge { env.dyorCoins.badge(asset.token, receivedUnasked: asset.unverified) }"))
+        XCTAssertTrue(send.contains("TokenBadgeView(badge)"))
+        XCTAssertFalse(send.contains("DyorHQ lists\""), "the label's own words, never \"Not the ETH DyorHQ lists\" for a token DyorHQ doesn't list")
         XCTAssertTrue(send.contains("DetailRow(\"Token contract\", review.token.address.checksummed, spellsOut: true)"))
-        XCTAssertTrue(send.contains("if let listed = review.imitates { DetailRow(\"Token\", \"Not the \\(listed.symbol) DyorHQ lists\", tint: .attention) }"))
+        XCTAssertTrue(send.contains("if review.badge.isImitation, let title = review.badge.title { DetailRow(\"Token\", title, tint: .attention) }"))
         XCTAssertTrue(assets.contains("WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes)"), "the Portfolio keeps its order")
         // Both lists value DyorHQ's own coins the app's way (`AppCoinValueTests`).
         let tokens = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
@@ -421,7 +424,7 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertFalse(send.contains("No price was found"), "no pool is no gap in the Send list: the row reads No price")
         XCTAssertTrue(send.contains("guard let value = asset.value else { return \"No price\" }"))
         // A token whose symbol isn't plain shows its contract in the list.
-        XCTAssertTrue(send.contains("return asset.unverified || !asset.plainSymbol ?"))
+        XCTAssertTrue(send.contains("return asset.unverified || !asset.plainSymbol || badge.isWarning ?"))
         // After a new read of the list (Retry), Available and Max are the kept pick's balance from that read, then read again.
         XCTAssertTrue(send.contains(".task(id: balanceReadKey)"))
         XCTAssertTrue(send.contains("private var balanceReadKey: String { \"\\(token?.address.hex ?? \"\")#\\(assetsKey ?? \"\")\" }"))

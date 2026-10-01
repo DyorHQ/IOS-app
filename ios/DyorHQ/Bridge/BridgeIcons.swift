@@ -133,7 +133,7 @@ struct AssetGlyph: View {
     var size: CGFloat = 34
 
     var body: some View {
-        TokenLogo(symbol: token.symbol, url: token.logoURL, size: size)
+        MarketLogo(symbol: token.symbol, url: token.logoURL, size: size)
             .overlay(alignment: .bottomTrailing) {
                 ChainDot(chain: chain, size: size * 0.5)
                     .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))

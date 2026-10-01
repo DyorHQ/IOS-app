@@ -4,48 +4,91 @@ import SwiftUI
 
 // Small, reusable pieces that keep every screen on the same system: SF Symbols, text styles, semantic colors.
 
-/// A token or market logo: remote image with a monogram fallback, always circular, with a faint ring that suits the
-/// appearance (`Color.logoRing`). Smart Invert leaves the logo as it is but inverts the ring with the card, so the ring
-/// still edges the logo on the inverted card.
+/// A token's logo, decided by its address (`CoinIcon`, through `DyorCoinsModel`, so a row draws again when its coin
+/// becomes known): a curated token's bundled logo, never another token's however it is named; a DyorHQ launch's or
+/// Moment's own art, filled; a list logo, fitted whole; and letters for everything else — a look-alike or a token with
+/// a warning among them — or while nothing can be loaded. Always circular, on the plate and with the faint ring that
+/// suits the appearance (`LogoDisc`), whatever the picture: a list logo drawn on a white square shows as one inside the
+/// ring, as a bundled logo would (no third-party art is changed beyond fitting and clipping it).
 struct TokenLogo: View {
+    let token: Token
+    var size: CGFloat = 36
+    @Environment(AppEnvironment.self) private var env: AppEnvironment?
+
+    var body: some View {
+        LogoDisc(size: size) {
+            switch env?.dyorCoins.icon(token) ?? CoinIcon.resolve(token, coin: nil, policy: .app) {
+            case .bundled(let symbol):
+                // Curated tokens ship a rasterized logo (the token list only publishes SVGs, which the app cannot draw): a
+                // transparent disc that fills the square (TokenLogoAssetTests). Found by the curated entry's symbol, which
+                // only a curated address resolves to.
+                if let shipped = UIImage(named: "logo-\(symbol)") { Image(uiImage: shipped).resizable().scaledToFit() } else { monogram }
+            case .remote(let sources, let fill):
+                // Capped and downsampled (RemoteImage): a neutral disc for a moment while it loads, then the monogram until
+                // it comes; the monogram at once when it failed lately (RemoteImageWait).
+                RemoteImage(sources: sources, pointSize: size, contentMode: fill ? .fill : .fit, grace: RemoteImageWait.grace) { loading in
+                    if loading { Color.clear } else { monogram }
+                }
+            case .letters:
+                monogram
+            }
+        }
+    }
+
+    private var monogram: some View { LogoMonogram(symbol: token.symbol, size: size) }
+}
+
+/// A market's or a bridge asset's logo, by its symbol: the bundled logo of that name (BTC, ETH, SOL on Perps; a bridge
+/// asset on another chain), else the remote `url` fitted, else letters. Perps and Bridge only: a Monad token's logo is
+/// `TokenLogo`'s, by address, so a token that merely carries a curated symbol never wears its logo.
+struct MarketLogo: View {
     let symbol: String
     let url: URL?
     var size: CGFloat = 36
-    /// Whether a logo shipped for `symbol` may stand for this token: false for a token that merely carries a curated
-    /// symbol (a "USDC" sent to the wallet), which must never wear the real one's logo.
-    var bundled = true
 
     var body: some View {
-        Group {
-            // Curated tokens ship a rasterized logo (the token list only publishes SVGs, which the app cannot
-            // draw): a transparent disc that fills the square (TokenLogoAssetTests). Anything else tries the remote
-            // image (capped and downsampled, RemoteImage): a neutral disc for a moment while it loads, then the
-            // monogram until it comes; the monogram at once when there is no image or it failed lately
-            // (RemoteImageWait).
-            if bundled, let shipped = UIImage(named: "logo-\(symbol)") {
+        LogoDisc(size: size) {
+            if let shipped = UIImage(named: "logo-\(symbol)") {
                 Image(uiImage: shipped).resizable().scaledToFit()
             } else {
                 RemoteImage(url: url, pointSize: size, contentMode: .fit, grace: RemoteImageWait.grace) { loading in
-                    if loading { Color.clear } else { monogram }
+                    if loading { Color.clear } else { LogoMonogram(symbol: symbol, size: size) }
                 }
             }
         }
-        .frame(width: size, height: size)
-        .background(Color(.tertiarySystemFill))
-        .clipShape(Circle())
-        .accessibilityIgnoresInvertColors()
-        .overlay(Circle().strokeBorder(Color.logoRing, lineWidth: 0.5))
-        .accessibilityHidden(true)
     }
+}
 
-    // A token with no image gets a filled monogram in a colour derived from its symbol, so it reads as a real
-    // avatar (and each token keeps a consistent, distinct colour across launches) rather than a grey placeholder.
-    private var monogram: some View {
+/// The circle every logo sits in: a neutral plate under the picture, clipped round, with a faint ring that suits the
+/// appearance (`Color.logoRing`). Smart Invert leaves the logo as it is but inverts the ring with the card, so the ring
+/// still edges the logo on the inverted card.
+private struct LogoDisc<Content: View>: View {
+    let size: CGFloat
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .frame(width: size, height: size)
+            .background(Color(.tertiarySystemFill))
+            .clipShape(Circle())
+            .accessibilityIgnoresInvertColors()
+            .overlay(Circle().strokeBorder(Color.logoRing, lineWidth: 0.5))
+            .accessibilityHidden(true)
+    }
+}
+
+/// A token with no image gets a filled monogram in a colour derived from its symbol, so it reads as a real avatar (and
+/// each token keeps a consistent, distinct colour across launches) rather than a grey placeholder.
+private struct LogoMonogram: View {
+    let symbol: String
+    let size: CGFloat
+
+    var body: some View {
         let seed = symbol.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
         let hue = Double(seed % 360) / 360
         let tint = Color(hue: hue, saturation: 0.5, brightness: 0.62)
         let letters = ChainText.leading(symbol, 2)
-        return ZStack {
+        ZStack {
             LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
             // One line, shrunk rather than wrapped: two emoji at 0.4 of the disc would otherwise break onto two lines.
             // Inset from the sides so wide letters (two emoji, a ZWJ family, ﷽) fit the circle, not the square. The
@@ -61,8 +104,54 @@ struct TokenLogo: View {
     }
 }
 
-/// Marks a token or NFT that reached the wallet without the user choosing it in DyorHQ: anyone can send any token
-/// or NFT to any wallet, so its name and symbol prove nothing (security audit 2026-09-26, IOST-12).
+/// What a token's row says about where it came from (`TokenBadge`): "DyorHQ Launch" or "DyorHQ Moment" in the brand
+/// colour, or a warning in the attention colour — "Unverified", or a look-alike's "Not the real ETH" — and nothing for
+/// MON, the curated tokens and a token the user chose. It replaces `UnverifiedBadge` for tokens: a DyorHQ coin sent to the
+/// wallet shows its DyorHQ label, never "Unverified", unless its own name or symbol makes it a warning. Decided from the
+/// token's address and what the registry knows of it (`DyorCoinsModel.badge`), or given as it was when a list was read.
+struct TokenBadgeView: View {
+    private let token: Token?
+    private let receivedUnasked: Bool
+    private let fixed: TokenBadge?
+    @Environment(AppEnvironment.self) private var env: AppEnvironment?
+
+    /// `token`'s badge, `receivedUnasked` being whether it reached the wallet without being chosen in the app.
+    init(token: Token, receivedUnasked: Bool) {
+        self.token = token
+        self.receivedUnasked = receivedUnasked
+        fixed = nil
+    }
+
+    /// A badge already decided.
+    init(_ badge: TokenBadge) {
+        token = nil
+        receivedUnasked = false
+        fixed = badge
+    }
+
+    private var badge: TokenBadge {
+        if let fixed { return fixed }
+        guard let token else { return .none }
+        return env?.dyorCoins.badge(token, receivedUnasked: receivedUnasked) ?? TokenBadge.of(token, coin: nil, receivedUnasked: receivedUnasked)
+    }
+
+    var body: some View {
+        let badge = self.badge
+        if let title = badge.title {
+            let tint = badge.isWarning ? Color.attention : Color.brand
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(tint)
+                .padding(.horizontal, 6).padding(.vertical, 1)
+                .background(tint.opacity(0.14), in: Capsule())
+                .layoutPriority(-1)
+        }
+    }
+}
+
+/// Marks an NFT that reached the wallet without the user choosing it in DyorHQ: anyone can send any NFT to any wallet,
+/// so its name and art prove nothing (security audit 2026-09-26, IOST-12). A token shows `TokenBadgeView`.
 struct UnverifiedBadge: View {
     var body: some View {
         Text("Unverified")

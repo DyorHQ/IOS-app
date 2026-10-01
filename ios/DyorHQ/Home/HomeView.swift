@@ -432,9 +432,13 @@ private struct TokenListRow: View {
     var body: some View {
         HStack(spacing: Self.spacing) {
             Text("\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: rankWidth, alignment: .center)
-            TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: Self.logoSize)
+            TokenLogo(token: row.token, size: Self.logoSize)
             VStack(alignment: .leading, spacing: 1) {
-                Text(row.token.symbol).font(.subheadline.weight(.semibold))
+                HStack(spacing: 6) {
+                    Text(row.token.symbol).font(.subheadline.weight(.semibold))
+                    // Top Tokens lists no token the wallet was sent unasked (`HomeModel.topTokens`).
+                    TokenBadgeView(token: row.token, receivedUnasked: false)
+                }
                 Text(row.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -454,11 +458,11 @@ private struct HoldingRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            TokenLogo(symbol: row.token.symbol, url: row.token.logoURL, size: 34)
+            TokenLogo(token: row.token, size: 34)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(row.token.symbol).font(.subheadline.weight(.semibold))
-                    if unverified { UnverifiedBadge() }
+                    TokenBadgeView(token: row.token, receivedUnasked: unverified)
                 }
                 AmountText(amount: row.balance, token: row.token, compact: true, font: .caption).foregroundStyle(.secondary)
             }
