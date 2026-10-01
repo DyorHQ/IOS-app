@@ -59,7 +59,7 @@ import {
 } from "./decide.mjs";
 import { formatEther } from "viem";
 import { MinedRevert, SendStatusUnknown } from "./send.mjs";
-import { nowSeconds, recordSpend, backoffFor, noteSendFailure, noteSendSuccess, spendAllowed } from "./budget.mjs";
+import { nowSeconds, recordSpend, dropSpend, backoffFor, backoffSnapshot, restoreBackoff, noteSendFailure, noteSendSuccess, spendAllowed } from "./budget.mjs";
 import { isRangeRefusal, isTransportError, STALE_BLOCKS } from "./rpc.mjs";
 import { DEFAULT_LOGS_CHUNK, DEFAULT_LOGS_MAX_BLOCKS, LOGS_HEAD_MARGIN, planScan, readCursor, writeCursor } from "./cursor.mjs";
 
@@ -135,6 +135,11 @@ const mon = (wei) => formatEther(BigInt(wei));
  * Live sends pass the spend guard first (K3 / E8): a target that failed recently is backed off (30 min doubling to
  * 6 h), and a send that would take the last 24 hours over `budget.capWei` is held back with a critical alert. A dry
  * run is never held back.
+ *
+ * Live sends are saved as they go (`budget.persist`, the run's state file): before cast runs the send is written as in
+ * flight (its worst case in the ledger and a provisional backoff), and after it the outcome replaces that and is saved
+ * again. A run killed during or after a send (a deploy, the OOM killer, a host fault) so never forgets what it spent
+ * or that the target failed. A state file that cannot be saved holds every later send of the run (`budget.held`).
  */
 async function safeSend({ sender, reporter, client, state, budget, clock = budget?.clock ?? nowSeconds }, job, target, tx) {
   const live = sender.live === true;
@@ -142,7 +147,7 @@ async function safeSend({ sender, reporter, client, state, budget, clock = budge
   const what = tx.label ?? tx.signature;
   const targetKey = `${job}:${target}`;
   // The run refuses every send (stale RPC, past its deadline, state not saved): nothing is read, recorded or backed off.
-  const blocked = live ? sender.blocked?.() : undefined;
+  const blocked = live ? sender.blocked?.() ?? budget?.held : undefined;
   if (blocked) {
     reporter.info(`not sending ${what}: ${blocked}`);
     return null;
@@ -164,40 +169,74 @@ async function safeSend({ sender, reporter, client, state, budget, clock = budge
   } else if (live) {
     gasPrice = await gasPriceOf(client);
   }
+  const worst = tx.gasLimit ? BigInt(tx.gasLimit) * gasPrice : 0n;
+  const keep = live && !!state;
+  const save = () => {
+    if (!keep || !budget?.persist) return true;
+    try {
+      budget.persist();
+      return true;
+    } catch (e) {
+      budget.held = `the state file could not be saved (${errText(e)})`;
+      reporter.alert({ job: "keeper", target: "state file", severity: "critical", key: "keeper:state:write", reason: `${budget.held}: every later send is held, so the spend ledger and the backoffs are never lost` });
+      return false;
+    }
+  };
+  let inFlight;
+  let backoffBefore;
+  if (keep) {
+    backoffBefore = backoffSnapshot(state, targetKey);
+    inFlight = recordSpend(state, { at, wei: worst, job, target, estimated: true, inFlight: `${tx.signature} to ${tx.to}` });
+    noteSendFailure(state, targetKey, at);
+  }
+  const settle = () => {
+    if (!inFlight) return;
+    dropSpend(state, inFlight);
+    restoreBackoff(state, targetKey, backoffBefore);
+    inFlight = undefined;
+  };
+  if (!save()) {
+    settle();
+    reporter.info(`not sending ${what}: ${budget.held}`);
+    return null;
+  }
   const record = (wei, extra) => {
-    if (live && state) recordSpend(state, { at: clock(), wei, job, target, ...extra });
+    if (keep) recordSpend(state, { at: clock(), wei, job, target, ...extra });
   };
   const failed = (reason) => {
-    const b = live && state ? noteSendFailure(state, targetKey, clock()) : undefined;
+    const b = keep ? noteSendFailure(state, targetKey, clock()) : undefined;
     const next = b ? `; not retried before ${new Date(b.until * 1000).toISOString()}` : "";
-    // Every failed send is its own event (it cost, or may have cost, gas): posted once, never "resolved".
+    // Every failed send is its own event (it cost, or may have cost, gas): posted once, never "resolved". It goes into
+    // the alert history at once, so a run killed before it posts still has it posted by the next run.
     reporter.alert({ job, target, severity: "critical", key: `send:${targetKey}:${tx.signature}:${at}`, once: true, reason: `${reason}${next}` });
+    if (keep) budget?.remember?.(reporter.alerts[reporter.alerts.length - 1]);
   };
+  let result = null;
   try {
     const r = await sender.call(tx);
+    settle();
     if (!live || r?.dryRun) return r;
     if (!r?.receipt) throw new SendStatusUnknown(`cast send exited 0 but printed no readable receipt (${r?.receiptError ?? "no output"})`, { gasLimit: tx.gasLimit });
     record(r.spentWei, { tx: r.receipt.transactionHash });
     if (state) noteSendSuccess(state, targetKey);
     reporter.info(`sent ${what}: tx ${r.receipt.transactionHash} succeeded; cost ${mon(r.spentWei)} MON`);
-    return r;
+    result = r;
   } catch (e) {
+    settle();
     if (e?.notStarted) {
       reporter.info(`not sending ${what}: ${errText(e)}`);
-      return null;
-    }
-    if (e instanceof MinedRevert) {
+    } else if (e instanceof MinedRevert) {
       record(e.spentWei, { tx: e.txHash });
       failed(`send failed: ${tx.signature} was mined but REVERTED (tx ${e.txHash}); it cost ${mon(e.spentWei)} MON (gas limit ${e.gasLimit ?? e.gasUsed} at ${e.effectiveGasPrice} wei; Monad bills the limit)`);
     } else if (e?.statusUnknown) {
-      const worst = tx.gasLimit ? BigInt(tx.gasLimit) * gasPrice : 0n;
       record(worst, { estimated: true });
       failed(`send failed: outcome UNKNOWN for ${tx.signature}: ${errText(e)}. Check the keeper address on the explorer; counted as up to ${mon(worst)} MON spent`);
     } else {
       failed(`send failed: ${errText(e)}`);
     }
-    return null;
   }
+  save();
+  return result;
 }
 
 async function now(client) {

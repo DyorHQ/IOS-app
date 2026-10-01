@@ -25,7 +25,8 @@ import { makeReporter, loadState, saveState, EXIT } from "./report.mjs";
 import { redact, rpcLabel } from "./redact.mjs";
 import { momentsGraduationJob, buybacksJob, sweepsJob, launchpadGraduationJob, governanceJob } from "./jobs.mjs";
 import { makeRpcClient, firstHealthy, isTransportError, rpcDegradedAlert, STALE_WARN_S, STALE_CRITICAL_S } from "./rpc.mjs";
-import { planPosts, commitPosts, buildPayloads, deliver, webhookKind, readWebhookFile } from "./notify.mjs";
+import { planPosts, commitPosts, buildPayloads, deliver, webhookKind, readWebhookFile, rememberOnce } from "./notify.mjs";
+import { takeInFlight } from "./budget.mjs";
 
 // The metadata base the live Moments cohort (v2, cohort 4) was deployed with: part of its terms hash, and what the app
 // reads as cohort c4 in a Moment's link.
@@ -69,7 +70,7 @@ export async function runKeeper(o, deps = {}) {
   const say = (s) => log(scrub(s));
   const prefix = o.role === "watchdog" ? "[watchdog] " : "";
   const reporter = makeReporter({ log, scrub });
-  const run = { state: undefined, stopped: false, stale: false, current: "setup", rpcStats: {}, completed: new Set() };
+  const run = { state: undefined, stopped: false, stale: false, current: "setup", rpcStats: {}, completed: new Set(), budget: undefined };
   // A read of the keeper's own (not a job's) that failed: an RPC failure is counted for the "RPC degraded" alert.
   const keeperReadFailed = (target, what, e) => {
     reporter.incomplete.add("keeper");
@@ -82,6 +83,11 @@ export async function runKeeper(o, deps = {}) {
       onProblem: (why) => reporter.alert({ job: "keeper", target: "state file", severity: "warning", key: `keeper:state:${now()}`, once: true, reason: why }),
     });
     const state = run.state;
+    // A send the previous run was killed in the middle of: its outcome is unknown. It stays counted at its worst case
+    // and its target backed off (both were saved before cast ran); a human checks the explorer.
+    for (const e of takeInFlight(state)) {
+      reporter.alert({ job: e.job ?? "keeper", target: e.target ?? "send", severity: "critical", key: `send:inflight:${e.job}:${e.target}:${e.at}`, once: true, reason: `send failed: outcome UNKNOWN for ${e.inFlight}: the keeper was stopped while cast ran (at ${new Date(e.at * 1000).toISOString()}). Check the keeper address on the explorer; counted as up to ${formatEther(BigInt(e.wei))} MON spent, and the target is backed off` });
+    }
     // cast takes one URL: the first endpoint that answers as Monad with a fresh head. In send mode it is also read
     // first (reads fall back on their own), so a stuck endpoint that still answers does not blind the run.
     let castRpc = rpcUrls[0];
@@ -126,7 +132,13 @@ export async function runKeeper(o, deps = {}) {
       cohorts = cohorts.filter((c) => c.live);
       pads = pads.filter((p) => p.live);
     }
-    const common = { client, sender, reporter, state, simAccount: simFrom, budget: { capWei: o.maxSpendPerDay } };
+    // Live sends save the state as they go (jobs.mjs safeSend); after the deadline the run saves its own copy instead.
+    const persist = () => {
+      if (o.stateFile && !run.stopped) saveState(o.stateFile, state);
+    };
+    const remember = webhookUrl ? (a) => rememberOnce(((state.notify ??= {}).keys ??= {}), a, Math.floor(now() / 1000)) : undefined;
+    const common = { client, sender, reporter, state, simAccount: simFrom, budget: { capWei: o.maxSpendPerDay, persist, remember } };
+    run.budget = common.budget;
     const logArgs = {
       logsLookback: o.logsLookback,
       logsChunk: o.logsChunk,
@@ -260,8 +272,22 @@ export async function runKeeper(o, deps = {}) {
   const degraded = rpcDegradedAlert(state, { failures: rpcFailed.length, skipped, stats: run.rpcStats });
   if (degraded) raise(degraded);
   for (const [label, s] of Object.entries(run.rpcStats)) if (s.failed) reporter.info(`rpc ${label} failed ${s.failed}, served ${s.served}`);
-  // Save before posting: the spend ledger and the cursors must survive a hung or killed post.
-  if (hasState) saveState(o.stateFile, state);
+  // Save before posting: the spend ledger and the cursors must survive a hung or killed post. A state file that cannot
+  // be written (a full or read-only volume) must not hide the run's alerts: they are posted with one more critical,
+  // the run exits 1, and every later run holds its sends until the file can be written (safeSend saves before cast).
+  let unsaved;
+  const save = () => {
+    if (!hasState) return;
+    try {
+      saveState(o.stateFile, state);
+    } catch (e) {
+      unsaved ??= errText(e);
+    }
+  };
+  save();
+  if (unsaved && !alerts.some((a) => a.key === "keeper:state:write")) {
+    raise({ job: "keeper", target: "state file", severity: "critical", key: "keeper:state:write", reason: `${unsaved}: this run's spend ledger, backoffs, log cursors and alert history were not saved, and the next runs hold their sends until it can be written` });
+  }
   const serious = alerts.filter((a) => a.severity !== "info");
   let undelivered;
   if (webhookUrl) {
@@ -282,11 +308,15 @@ export async function runKeeper(o, deps = {}) {
     } else {
       log("nothing new to post");
     }
-    if (hasState) saveState(o.stateFile, state);
+    save();
   }
   log(`done: ${reporter.actions.length} action(s), ${alerts.length} alert(s) (${serious.length} warning/critical)`);
   if (undelivered) {
     log(`keeper: alerts NOT delivered (${undelivered}); the next run posts them again`);
+    return EXIT.ERROR;
+  }
+  if (unsaved || run.budget?.held) {
+    log(`keeper: the state file was not saved (${unsaved ?? run.budget.held})`);
     return EXIT.ERROR;
   }
   if (outcome === "overrun") return EXIT.ERROR;

@@ -17,7 +17,9 @@ app = "dyorhq-keepers"
 primary_region = "iad"
 # supercronic lets running jobs finish on SIGTERM; 300 s is Fly's maximum and covers a signing run's 240 s deadline
 # (run-keeper.sh): a send never outlasts that deadline (cast's receipt wait and kill timer shrink to the time left, and
-# a send is not started with less than 75 s left), so a deploy or a secrets change never stops a send half way.
+# a send is not started with less than 75 s left), so a deploy or a secrets change never stops a send half way. A send
+# is saved before and after cast runs, so even a kill (out of memory, a host fault) loses no spend: the next run reports
+# a send it left in flight as an unknown outcome.
 kill_signal = "SIGTERM"
 kill_timeout = 300
 # Two keeper runs can overlap (about 105 MB each, plus cast): swap absorbs a spike instead of the OOM killer.

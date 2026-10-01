@@ -5,7 +5,8 @@
 //    never sends and marks its posts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseKeeperArgs } from "../lib/options.mjs";
@@ -295,4 +296,112 @@ test("E9: a normal run finishes well inside the deadline and exits by its alerts
   const code = await runKeeper(opts(["moments-graduation", "--only-live"]), w.deps);
   assert.equal(code, EXIT.ALERT, "the pending Moment is a warning");
   assert.equal(momentsCohorts().filter((c) => c.live).length, 1);
+});
+
+// ---------------------------------------------------------------- K3: sends are saved as they go
+
+test("K3: a keeper killed while cast runs leaves the send in flight: the next run reports it, keeps it counted and backs off", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "keeper-kill-"));
+  const stateFile = join(dir, "state.json");
+  const started = join(dir, "cast-started");
+  // A cast that hangs (as one waiting for a receipt), after saying it started.
+  const cast = join(dir, "cast");
+  writeFileSync(cast, `#!/bin/sh\ntouch "${started}"\nexec sleep 60\n`, { mode: 0o755 });
+  const lib = new URL("../lib/", import.meta.url).href;
+  const child = join(dir, "child.mjs");
+  writeFileSync(
+    child,
+    `import { runKeeper } from "${lib}run.mjs";
+import { parseKeeperArgs } from "${lib}options.mjs";
+import { makeSender } from "${lib}send.mjs";
+const NOW = ${NOW}n;
+const reads = { momentCount: 1n, state: 1, ledger: { stuckSince: NOW }, getMoment: { deadline: NOW + 20n * 86400n } };
+const client = { getCode: async () => "0x60", getBalance: async () => 10n ** 20n, getBlock: async () => ({ number: 1n, timestamp: NOW }), getBlockNumber: async () => 1n, getGasPrice: async () => 100n * 10n ** 9n, readContract: async ({ functionName }) => { if (functionName in reads) return reads[functionName]; throw new Error("execution reverted"); }, simulateContract: async () => ({ result: null }) };
+const o = parseKeeperArgs(["moments-graduation", "--only-live", "--send", "--account", "k", "--state-file", ${JSON.stringify(stateFile)}], {});
+await runKeeper(o, { log: () => {}, env: {}, makeClient: () => client, makeSenderFn: (s) => makeSender({ ...s, castBin: ${JSON.stringify(cast)}, log: () => {} }), signerAddressFn: () => "${SIGNER}", pickRpc: async (u) => ({ url: u[0], healthy: true }), now: () => Number(NOW) * 1000 });
+`,
+  );
+  const p = spawn(process.execPath, [child], { detached: true, stdio: "ignore" });
+  for (let i = 0; i < 100 && !existsSync(started); i++) await sleep(100);
+  assert.ok(existsSync(started), "cast started");
+  process.kill(-p.pid, "SIGKILL"); // the keeper and its cast, as a deploy or the OOM killer would
+  await new Promise((r) => (p.exitCode !== null || p.signalCode !== null ? r() : p.on("exit", r)));
+
+  const saved = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.equal(saved.budget.spend.length, 1, "the send was saved before cast ran");
+  assert.match(saved.budget.spend[0].inFlight, /^graduate\(uint256\) to 0x/);
+  assert.equal(saved.budget.spend[0].wei, String(5_000_000n * 100n * 10n ** 9n), "at its worst case: 5M gas x 100 gwei");
+  assert.equal(Object.keys(saved.budget.backoff).length, 1, "and its target backed off");
+
+  const w = world();
+  const code = await runKeeper(opts(["moments-graduation", "--only-live", "--webhook", "https://hooks.example/x", "--state-file", stateFile], { send: true, signer: { account: "k" } }), w.deps);
+  assert.equal(code, EXIT.ALERT);
+  assert.deepEqual(w.sends, [], "backed off: not sent again at once");
+  const unknown = w.posts[0].body.alerts.find((a) => a.key.startsWith("send:inflight:"));
+  assert.equal(unknown.severity, "critical");
+  assert.match(unknown.reason, /outcome UNKNOWN for graduate\(uint256\) to 0x.*stopped while cast ran.*counted as up to 0\.5 MON spent/);
+  const after = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.equal(after.budget.spend.length, 1, "still counted");
+  assert.equal(after.budget.spend[0].inFlight, undefined, "reported once");
+});
+
+test("K3: a live send is saved before cast runs and its outcome saved after it", async () => {
+  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const w = world();
+  const seen = [];
+  w.deps.makeSenderFn = () => ({
+    sent: [],
+    live: true,
+    async call() {
+      seen.push(JSON.parse(readFileSync(stateFile, "utf8")));
+      return { dryRun: false, receipt: { status: 1, transactionHash: `0x${"cd".repeat(32)}` }, spentWei: 7n };
+    },
+  });
+  await runKeeper(opts(["moments-graduation", "--only-live", "--state-file", stateFile], { send: true, signer: { account: "k" } }), w.deps);
+  assert.equal(seen.length, 1);
+  assert.ok(seen[0].budget.spend[0].inFlight, "in flight while cast ran");
+  const saved = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.deepEqual(saved.budget.spend.map((e) => [e.wei, e.tx, e.inFlight]), [["7", `0x${"cd".repeat(32)}`, undefined]], "replaced by the receipt's cost");
+  assert.deepEqual(saved.budget.backoff, {}, "the provisional backoff is gone after a success");
+});
+
+test("K3: a failed send's alert is saved with its spend, before the run posts (a run killed in between still has it posted)", async () => {
+  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const w = world();
+  const { MinedRevert } = await import("../lib/send.mjs");
+  w.deps.makeSenderFn = () => ({
+    sent: [],
+    live: true,
+    async call() {
+      throw new MinedRevert({ txHash: `0x${"ab".repeat(32)}`, gasLimit: 5_000_000n, gasUsed: 5_000_000n, effectiveGasPrice: 1n, spentWei: 5_000_000n });
+    },
+  });
+  let onDisk;
+  w.deps.fetchImpl = async (url, init) => ((onDisk ??= JSON.parse(readFileSync(stateFile, "utf8"))), w.posts.push({ url, body: JSON.parse(init.body) }), { ok: true, status: 204 });
+  await runKeeper(opts(["moments-graduation", "--only-live", "--webhook", "https://hooks.example/x", "--state-file", stateFile], { send: true, signer: { account: "k" } }), w.deps);
+  const key = Object.keys(onDisk.notify.keys).find((k) => k.startsWith("send:"));
+  assert.ok(key, "in the history on disk when the post started");
+  assert.equal(onDisk.notify.keys[key].posted, undefined);
+  assert.match(onDisk.notify.keys[key].reason, /mined but REVERTED/);
+  assert.equal(onDisk.budget.spend[0].wei, "5000000");
+  assert.ok(w.posts[0].body.alerts.some((a) => a.key === key), "and posted by this run");
+});
+
+test("K3: a state file that cannot be written holds every send, and the run still posts its alerts and exits 1", { skip: process.getuid?.() === 0 && "root ignores file modes" }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "keeper-ro-"));
+  const stateFile = join(dir, "state.json");
+  writeFileSync(stateFile, JSON.stringify({ version: 1 }));
+  chmodSync(dir, 0o500); // the file reads, but no temp file can be written next to it (a full or read-only volume)
+  try {
+    const w = world();
+    const code = await runKeeper(opts(["moments-graduation", "--only-live", "--webhook", "https://hooks.example/x", "--state-file", stateFile], { send: true, signer: { account: "k" } }), w.deps);
+    assert.equal(code, EXIT.ERROR);
+    assert.deepEqual(w.sends, [], "nothing is sent while the ledger cannot be kept");
+    const alerts = w.posts[0].body.alerts;
+    assert.equal(alerts.find((a) => a.key === "keeper:state:write")?.severity, "critical");
+    assert.ok(alerts.some((a) => a.key.startsWith("mo1:pending:")), "the run's own alerts are posted too");
+    assert.ok(w.lines.some((l) => /not sending graduate .*state file could not be saved/.test(l)));
+  } finally {
+    chmodSync(dir, 0o700);
+  }
 });

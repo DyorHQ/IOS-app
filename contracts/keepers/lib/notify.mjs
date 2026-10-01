@@ -84,6 +84,13 @@ export function planPosts({ alerts, holds = new Set(), completed = new Set(), hi
   return items.sort((x, y) => order(x) - order(y));
 }
 
+/** Writes a one-off alert into the history before the run posts (a failed send, saved with the spend it caused), so
+    that a run killed before it posts still has it posted by the next run. */
+export function rememberOnce(history, a, now) {
+  if (history[a.key]) return;
+  history[a.key] = { job: a.job, target: a.target, firstSeen: now, once: true, severity: a.severity, reason: String(a.reason).slice(0, 500), lastSeen: now };
+}
+
 /** Records what was delivered: a delivered post marks its key posted (now, at this severity); a delivered "resolved"
     forgets the key. Anything undelivered is left as it was, so the next run posts it again. */
 export function commitPosts(history, items, delivered, now) {

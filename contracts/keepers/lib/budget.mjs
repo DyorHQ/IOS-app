@@ -8,6 +8,10 @@
 //  - --max-spend-per-day: a send that would take the last 24 hours' spend (worst case: gas limit x gas price) over the
 //    cap is not sent; the jobs keep simulating and alert, and the cap frees itself as old spend leaves the window.
 //
+// Live sends are saved as they go: before cast runs, the send is written as in flight (its worst case in the ledger and
+// a provisional backoff), and its outcome replaces that. A run killed mid-send leaves the in-flight entry, which the
+// next run reports as an unknown outcome and keeps counted.
+//
 // Times are unix seconds (numbers); amounts are wei, stored as decimal strings because JSON has no bigint.
 
 export const DAY_S = 86_400;
@@ -25,14 +29,35 @@ function budgetOf(state) {
 }
 
 /**
- * Records one send's cost. `estimated` marks a worst-case entry (the receipt was never read). Returns the entry.
+ * Records one send's cost. `estimated` marks a worst-case entry (the receipt was never read); `inFlight` (what is being
+ * sent) marks the entry written before cast runs, which the outcome replaces (see jobs.mjs `safeSend`). Returns the
+ * entry.
  */
-export function recordSpend(state, { at = nowSeconds(), wei, job, target, tx, estimated = false }) {
+export function recordSpend(state, { at = nowSeconds(), wei, job, target, tx, estimated = false, inFlight }) {
   const b = budgetOf(state);
-  const entry = { at, wei: BigInt(wei).toString(), job, target, ...(tx ? { tx } : {}), ...(estimated ? { estimated: true } : {}) };
+  const entry = { at, wei: BigInt(wei).toString(), job, target, ...(tx ? { tx } : {}), ...(estimated ? { estimated: true } : {}), ...(inFlight ? { inFlight } : {}) };
   b.spend.push(entry);
   b.spend = b.spend.filter((e) => e.at > at - SPEND_KEEP_S);
   return entry;
+}
+
+/** Removes one entry `recordSpend` returned. */
+export function dropSpend(state, entry) {
+  if (state?.budget?.spend) state.budget.spend = state.budget.spend.filter((e) => e !== entry);
+}
+
+/**
+ * The in-flight entries a run left behind: it was stopped (killed, out of memory, a host fault) while cast ran, so
+ * each send's outcome is unknown. They stay in the ledger at their worst case, no longer in flight; returns copies.
+ */
+export function takeInFlight(state) {
+  const out = [];
+  for (const e of state?.budget?.spend ?? []) {
+    if (!e.inFlight) continue;
+    out.push({ ...e });
+    delete e.inFlight;
+  }
+  return out;
 }
 
 /** Wei spent by sends recorded after `since` (unix seconds). */
@@ -69,6 +94,19 @@ export function noteSendFailure(state, target, at = nowSeconds()) {
 
 export function noteSendSuccess(state, target) {
   if (state?.budget?.backoff) delete state.budget.backoff[target];
+}
+
+/** A copy of `target`'s backoff (undefined when there is none), for `restoreBackoff`. */
+export function backoffSnapshot(state, target) {
+  const b = state?.budget?.backoff?.[target];
+  return b ? { ...b } : undefined;
+}
+
+/** Puts `target`'s backoff back as `backoffSnapshot` found it. */
+export function restoreBackoff(state, target, snapshot) {
+  const all = backoffs(state);
+  if (snapshot) all[target] = snapshot;
+  else delete all[target];
 }
 
 /**
