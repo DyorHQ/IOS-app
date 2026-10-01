@@ -358,7 +358,7 @@ final class BridgeModel {
         guard let q = quote, let inUsd = q.amountInUsd.flatMap(Double.init), let outUsd = q.amountOutUsd.flatMap(Double.init), inUsd > 0 else { return nil }
         let fee = max(0, inUsd - outUsd)
         let pct = fee / inUsd * 100
-        let amount = fee < 0.01 ? "$\(NumberStyle.number(fee, maximumFractionDigits: 6))" : fee.formatted(.currency(code: "USD"))
+        let amount = PriceFormat.usdValue(fee, fractionDigits: fee < 0.01 ? 2...6 : 2...2)
         return "\(amount) · \(NumberStyle.number(pct, maximumFractionDigits: 2))%"
     }
 

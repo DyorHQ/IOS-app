@@ -241,7 +241,7 @@ struct PerpTradeView: View {
         let tint: Color = (change24h ?? 0) < 0 ? .negative : (change24h ?? 0) > 0 ? .positive : .secondary
         HStack(spacing: 6) {
             if let abs = change24hAbs {
-                Text(abs.formatted(.currency(code: "USD").sign(strategy: .always()).precision(.fractionLength(abs.magnitude < 1 ? 4 : 2))))
+                Text(PriceFormat.usdPrice(abs, signed: true))
             }
             if change24hAbs != nil, change24h != nil { Text("/") }
             if let pct = change24h { Text(NumberStyle.percent(pct)) }
@@ -710,10 +710,10 @@ struct PerpTradeView: View {
                 let total = model.account.map { Amount.units($0.balance, decimals: 6) } ?? 0
                 let inUse = model.account.map { Amount.units(min($0.balance, $0.locked), decimals: 6) } ?? 0
                 DetailRows {
-                    DetailRow("Total balance", total.formatted(.currency(code: "USD")))
-                    DetailRow("In use (margin)", inUse.formatted(.currency(code: "USD")))
-                    DetailRow("Available", availableMargin.formatted(.currency(code: "USD")))
-                    DetailRow("Unrealized", model.unrealizedTotal.formatted(.currency(code: "USD").sign(strategy: .always())), tint: model.unrealizedTotal < 0 ? .negative : .positive)
+                    DetailRow("Total balance", PriceFormat.usdValue(total))
+                    DetailRow("In use (margin)", PriceFormat.usdValue(inUse))
+                    DetailRow("Available", PriceFormat.usdValue(availableMargin))
+                    DetailRow("Unrealized", PriceFormat.usdValue(model.unrealizedTotal, signed: true), tint: model.unrealizedTotal < 0 ? .negative : .positive)
                 }
             case .history:
                 historyList
@@ -842,8 +842,8 @@ struct PerpTradeView: View {
             LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .trailing)], spacing: 6) {
                 historyStat("Price", NumberStyle.number(fill.price), align: .leading)
                 historyStat("Size", "\(NumberStyle.number(fill.size, maximumFractionDigits: 4)) \(fill.symbol)", align: .leading)
-                historyStat("Value", fill.notional.formatted(.currency(code: "USD")), align: .trailing)
-                historyStat("Fee", fill.fee.formatted(.currency(code: "USD")), align: .leading)
+                historyStat("Value", PriceFormat.usdValue(fill.notional), align: .trailing)
+                historyStat("Fee", PriceFormat.usdValue(fill.fee), align: .leading)
                 Color.clear.frame(height: 0)
                 pnlStat(pnl)
             }
@@ -863,7 +863,7 @@ struct PerpTradeView: View {
         VStack(alignment: .trailing, spacing: 1) {
             Text("PnL").font(.caption2).foregroundStyle(.secondary)
             if let pnl {
-                Text(pnl, format: .currency(code: "USD").sign(strategy: .always()))
+                Text(PriceFormat.usdValue(pnl, signed: true))
                     .font(.caption.weight(.medium)).monospacedDigit()
                     .foregroundStyle(pnl < 0 ? Color.negative : (pnl > 0 ? Color.positive : Color.primary))
             } else {
@@ -924,7 +924,7 @@ struct PerpTradeView: View {
             // The parsed values this order signs, not the typed text (audit F4), at the market's full precision.
             DetailRow("Size", "\(NumberStyle.number(signed.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
             DetailRow("Leverage", "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
-            DetailRow("Margin", (notional / max(ticket.leverage, 1)).formatted(.currency(code: "USD")))
+            DetailRow("Margin", PriceFormat.usdValue(notional / max(ticket.leverage, 1)))
             // This path (perplTrading not ready) places a bare on-chain entry — it cannot attach TP/SL. Don't advertise
             // triggers the order won't carry; tell the user they need one-click trading for them.
             if ticket.effectiveTPSL, !ticket.takeProfitText.isEmpty || !ticket.stopLossText.isEmpty {
@@ -1075,7 +1075,7 @@ struct PerpTradeView: View {
 
     private func triggerMetricRow(_ label: String, _ m: (pct: Double, pnl: Double)) -> some View {
         HStack {
-            Text("\(label) \(m.pnl.formatted(.currency(code: "USD").sign(strategy: .always())))")
+            Text("\(label) \(PriceFormat.usdValue(m.pnl, signed: true))")
             Spacer()
             Text(NumberStyle.percent(m.pct))
         }
@@ -1183,7 +1183,7 @@ struct PerpTradeView: View {
             HStack(spacing: 6) {
                 Text("\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.leverage, maximumFractionDigits: 1))×")
                     .foregroundStyle(position.side == .long ? Color.positive : Color.negative)
-                Text(pnl, format: .currency(code: "USD").sign(strategy: .always()))
+                Text(PriceFormat.usdValue(pnl, signed: true))
                     .foregroundStyle(pnl < 0 ? Color.negative : Color.positive)
             }
             .font(.caption2.weight(.semibold).monospacedDigit())
@@ -1912,7 +1912,7 @@ struct SelectPerpetualSheet: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
-                Text(market.mark.formatted(.currency(code: "USD").precision(.fractionLength(market.mark < 1 ? 4 : 2))))
+                Text(PriceFormat.usdPrice(market.mark))
                     .font(.body.weight(.semibold)).monospacedDigit()
                 ChangeText(value: change(market), style: .caption)
             }
@@ -2000,7 +2000,7 @@ private struct PositionCard: View {
                     .foregroundStyle(position.side == .long ? Color.positive : Color.negative)
                 Spacer()
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(livePnl, format: .currency(code: "USD").sign(strategy: .always()))
+                    Text(PriceFormat.usdValue(livePnl, signed: true))
                         .font(.subheadline.weight(.semibold)).monospacedDigit()
                     if let pnlPct {
                         Text(pnlPct, format: .number.precision(.fractionLength(2)).sign(strategy: .always())) + Text("%")
@@ -2013,10 +2013,10 @@ private struct PositionCard: View {
                 stat("Size", "\(NumberStyle.number(position.size)) \(position.symbol)")
                 stat("Entry", NumberStyle.number(position.entry))
                 stat("Mark", NumberStyle.number(liveMark > 0 ? liveMark : position.mark))
-                stat("Margin", position.margin.formatted(.currency(code: "USD")))
+                stat("Margin", PriceFormat.usdValue(position.margin))
                 // An open position's liquidation price is nil only when its maintenance margin couldn't be read.
                 stat("Liq.", position.liquidation.map { NumberStyle.number($0) } ?? "Unknown")
-                stat("Notional", position.notional.formatted(.currency(code: "USD")))
+                stat("Notional", PriceFormat.usdValue(position.notional))
             }
             if !triggers.isEmpty {
                 Text(triggerSummary).font(.caption).foregroundStyle(.secondary)
@@ -2238,7 +2238,7 @@ private struct ClosePositionSheet: View {
                 Section {
                     DetailRow("Position", "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
                     DetailRow("Mark price", NumberStyle.number(mark))
-                    DetailRow("Unrealized", position.unrealized.formatted(.currency(code: "USD").sign(strategy: .always())), tint: position.unrealized < 0 ? .negative : .positive)
+                    DetailRow("Unrealized", PriceFormat.usdValue(position.unrealized, signed: true), tint: position.unrealized < 0 ? .negative : .positive)
                 }
                 Section("Close order") {
                     Picker("Type", selection: $kind) {
@@ -2367,8 +2367,8 @@ private struct AddMarginSheet: View {
             List {
                 Section {
                     DetailRow("Position", "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
-                    DetailRow("Current margin", position.margin.formatted(.currency(code: "USD")))
-                    DetailRow("Available", available.formatted(.currency(code: "USD")))
+                    DetailRow("Current margin", PriceFormat.usdValue(position.margin))
+                    DetailRow("Available", PriceFormat.usdValue(available))
                 }
                 Section("Add margin") {
                     HStack {
@@ -2387,7 +2387,7 @@ private struct AddMarginSheet: View {
                 }
                 if amount > 0, !overBalance {
                     Section("After") {
-                        DetailRow("Margin", projMargin.formatted(.currency(code: "USD")))
+                        DetailRow("Margin", PriceFormat.usdValue(projMargin))
                         DetailRow("Leverage", "\(NumberStyle.number(projLeverage, maximumFractionDigits: 1))×")
                         DetailRow("Liq. price", projLiquidation.map { NumberStyle.number($0) } ?? (market.maintMarginFraction == nil ? "Unknown" : "—"))
                     }
@@ -2506,7 +2506,7 @@ struct AuthedOrderSheet: View {
                     DetailRow("Type", input.kind == .market ? "Market · \(NumberStyle.basisPoints(input.slippageBps)) slippage" : "Limit at \(NumberStyle.number(input.price ?? market.mark, maximumFractionDigits: market.priceDecimals))")
                     DetailRow("Size", "\(NumberStyle.number(input.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
                     DetailRow("Leverage", "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
-                    DetailRow("Margin", summaryMargin.formatted(.currency(code: "USD")))
+                    DetailRow("Margin", PriceFormat.usdValue(summaryMargin))
                     // Each closes this order's size, fixed when placed (security audit GT-5).
                     if let takeProfit { DetailRow("Take profit", "\(NumberStyle.number(takeProfit)) · closes \(NumberStyle.number(triggerSize ?? input.size)) \(market.asset)", tint: .positive) }
                     if let stopLoss { DetailRow("Stop loss", "\(NumberStyle.number(stopLoss)) · closes \(NumberStyle.number(triggerSize ?? input.size)) \(market.asset)", tint: .negative) }

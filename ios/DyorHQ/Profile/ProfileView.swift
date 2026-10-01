@@ -762,8 +762,7 @@ private struct SendAssetRow: View {
 
     private var valueText: String {
         guard let value = asset.value else { return "No price" }
-        if value > 0, value < 0.01 { return "< $0.01" }
-        return value.formatted(.currency(code: "USD").precision(.fractionLength(0...2)))
+        return PriceFormat.usdValue(value)
     }
 }
 

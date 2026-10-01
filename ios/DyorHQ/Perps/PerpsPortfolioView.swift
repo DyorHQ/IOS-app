@@ -43,16 +43,16 @@ struct PerpsPortfolioView: View {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 USDText(value: model.equity, font: .system(.largeTitle, design: .rounded).weight(.semibold))
                 if model.unrealizedTotal != 0 {
-                    Text(model.unrealizedTotal, format: .currency(code: "USD").sign(strategy: .always()))
+                    Text(PriceFormat.usdValue(model.unrealizedTotal, signed: true))
                         .font(.subheadline.weight(.medium)).monospacedDigit()
                         .foregroundStyle(model.unrealizedTotal < 0 ? Color.negative : Color.positive)
                 }
             }
             Divider()
             HStack {
-                miniStat("Available", available.formatted(.currency(code: "USD")))
+                miniStat("Available", PriceFormat.usdValue(available))
                 Spacer()
-                miniStat("Unrealized", model.unrealizedTotal.formatted(.currency(code: "USD").sign(strategy: .always())),
+                miniStat("Unrealized", PriceFormat.usdValue(model.unrealizedTotal, signed: true),
                          tint: model.unrealizedTotal < 0 ? .negative : (model.unrealizedTotal > 0 ? .positive : .primary), alignment: .trailing)
             }
         }
@@ -152,7 +152,7 @@ struct PerpsPortfolioView: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
-                Text(fill.notional.formatted(.currency(code: "USD"))).font(.subheadline.monospacedDigit())
+                Text(PriceFormat.usdValue(fill.notional)).font(.subheadline.monospacedDigit())
                 Text(fill.time, format: .dateTime.month().day().hour().minute())
                     .font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
             }
@@ -185,7 +185,7 @@ struct PerpsPortfolioView: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
-                Text(rec.realizedPnl, format: .currency(code: "USD").sign(strategy: .always()))
+                Text(PriceFormat.usdValue(rec.realizedPnl, signed: true))
                     .font(.subheadline.weight(.medium).monospacedDigit())
                     .foregroundStyle(rec.realizedPnl < 0 ? Color.negative : Color.positive)
                 Text(rec.time, format: .dateTime.month().day().hour().minute())
@@ -199,8 +199,8 @@ struct PerpsPortfolioView: View {
         Text(text).font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 24)
     }
 
-    private func usd(_ value: Double, compact: Bool = false) -> String { "$" + NumberStyle.number(value, compact: compact) }
-    private func signedUSD(_ value: Double) -> String { (value < 0 ? "−$" : "$") + NumberStyle.number(abs(value)) }
+    private func usd(_ value: Double, compact: Bool = false) -> String { PriceFormat.usdValue(value, compact: compact) }
+    private func signedUSD(_ value: Double) -> String { PriceFormat.usdValue(value) }
 }
 
 /// Fetches and aggregates the authenticated Perpl history for the portfolio. Pages fills and closed positions up to

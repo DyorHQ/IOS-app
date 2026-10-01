@@ -262,40 +262,45 @@ struct MomentCard: View {
     }
 }
 
-/// Number formatting shared by the Moments screens.
+/// Number formatting shared by the Moments screens, in the app's one dollar style (`PriceFormat`).
 enum MomentsFormat {
     /// USDC units as dollars with every decimal kept (up to 6), e.g. "$1.00", "$0.123456": for amounts that must be
     /// exact, like what a collect pays and approves.
     static func usdc(_ units: BigUInt) -> String {
-        MomentsMath.usdc(units).formatted(.currency(code: "USD").precision(.fractionLength(2...6)))
+        PriceFormat.usdValue(MomentsMath.usdc(units), fractionDigits: 2...6)
     }
 
     /// USDC units rounded to the cent, e.g. "$771.43": for the reserve, the graduation threshold and what is still needed,
-    /// which a policy can set to a sixth decimal (771.428571 USDC for cohort 4). Under a cent but not zero reads "<$0.01".
+    /// which a policy can set to a sixth decimal (771.428571 USDC for cohort 4). Under half a cent but not zero reads
+    /// "<$0.01".
     static func usdcCents(_ units: BigUInt) -> String {
-        let dollars = MomentsMath.usdc(units)
-        if units > 0, dollars < 0.005 { return "<" + 0.01.formatted(.currency(code: "USD")) }
-        return dollars.formatted(.currency(code: "USD").precision(.fractionLength(2)))
+        PriceFormat.usdValue(MomentsMath.usdc(units))
     }
 
     /// Whole coins, compact, e.g. "3.86M".
     static func coins(_ wei: BigUInt) -> String { NumberStyle.number(MomentsMath.coins(wei), compact: true) }
 
-    /// A coin's dollar price with enough precision for small numbers (three significant digits).
+    /// A coin's dollar price (`PriceFormat.usdPrice`: "$0.0₆1234" for a tiny one), "—" when there is none. VoiceOver
+    /// reads `coinPriceSpoken`.
     static func coinPrice(_ usd: Double) -> String {
         guard usd > 0 else { return "—" }
-        return usd.formatted(.currency(code: "USD").precision(.significantDigits(2...3)))
+        return PriceFormat.usdPrice(usd)
     }
 
-    /// A dollar amount, compact ("US$25.9", "US$1.2K").
+    /// `coinPrice` with every zero written out, for VoiceOver.
+    static func coinPriceSpoken(_ usd: Double) -> String {
+        guard usd > 0 else { return "—" }
+        return PriceFormat.spoken(usd)
+    }
+
+    /// A dollar amount, compact ("$25.90", "$1.2K").
     static func usd(_ value: Double) -> String {
-        if value >= 1_000 { return "US$" + NumberStyle.number(value, compact: true) }
-        return value.formatted(.currency(code: "USD").precision(.fractionLength(value < 1 ? 2...4 : 0...2)))
+        PriceFormat.usdValue(value, compact: true)
     }
 
-    /// A valuation stated in full ("$2,000", never "US$2K"): the graduation FDV is a number people quote exactly.
+    /// A valuation stated in full ("$2,000", never "$2K"): the graduation FDV is a number people quote exactly.
     static func fdv(_ value: Double) -> String {
-        value.formatted(.currency(code: "USD").precision(.fractionLength(value < 100 ? 2 : 0)))
+        PriceFormat.usdValue(value, fractionDigits: value < 100 ? 2...2 : 0...0)
     }
 
     /// "2d 3h left", "45m left", "closed"; `short` drops the word for tight spaces ("2d 3h").

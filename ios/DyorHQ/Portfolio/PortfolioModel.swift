@@ -138,7 +138,7 @@ final class PortfolioModel {
             out.append(Activity(id: "swap-\(swap.id)", section: section, title: kind == .spot ? "Swapped" : "Traded on \(section.title)", subtitle: SwapHistoryItem.describe(swap, tokens: tokens), time: swap.time, usd: swapUSD(swap), hash: swap.hash))
         }
         for fill in fills where fill.time >= since {
-            out.append(Activity(id: "fill-\(fill.id)", section: .perps, title: "\(fill.direction) \(fill.symbol)", subtitle: "\(NumberStyle.number(fill.size)) at \(NumberStyle.number(fill.price)) · fee \(fill.fee.formatted(.currency(code: "USD")))", time: fill.time, usd: fill.notional, hash: nil))
+            out.append(Activity(id: "fill-\(fill.id)", section: .perps, title: "\(fill.direction) \(fill.symbol)", subtitle: "\(NumberStyle.number(fill.size)) at \(NumberStyle.number(fill.price)) · fee \(PriceFormat.usdValue(fill.fee))", time: fill.time, usd: fill.notional, hash: nil))
         }
         for f in launchHistory.fills where f.time >= since {
             let launch = launchesByCurve[f.curve]

@@ -97,7 +97,7 @@ struct LaunchpadProfileView: View {
             if let address = session.address { AddressRow(title: "Address", address: address) }
             if let incomplete = model.incomplete { InlineError(message: incomplete) }
             HStack {
-                stat("Portfolio", model.portfolioValueUSD.formatted(.currency(code: "USD")))
+                stat("Portfolio", PriceFormat.usdValue(model.portfolioValueUSD))
                 Divider().frame(height: 34)
                 stat("Launched", "\(model.launched.count)")
                 Divider().frame(height: 34)
@@ -154,7 +154,7 @@ struct LaunchpadProfileView: View {
                 .background(Color.brand.opacity(0.14), in: Circle()).foregroundStyle(Color.brand)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.medium))
-                Text(amount + (usd.map { " · \($0.formatted(.currency(code: "USD")))" } ?? "")).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                Text(amount + (usd.map { " · \(PriceFormat.usdValue($0))" } ?? "")).font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 if let caption { Text(caption).font(.caption2).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 8)
@@ -286,9 +286,9 @@ private struct PositionRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-                Text(position.valueUSD.formatted(.currency(code: "USD"))).font(.subheadline.weight(.medium)).monospacedDigit()
+                Text(PriceFormat.usdValue(position.valueUSD)).font(.subheadline.weight(.medium)).monospacedDigit()
                 if let pnlUSD = position.pnlUSD {
-                    Text("\(pnlUSD >= 0 ? "+" : "")\(pnlUSD.formatted(.currency(code: "USD")))\(position.pnlPercent.map { " (\($0 >= 0 ? "+" : ""))\(NumberStyle.number($0, maximumFractionDigits: 1))%)" } ?? "")")
+                    Text("\(PriceFormat.usdValue(pnlUSD, signed: true))\(position.pnlPercent.map { " (\($0 >= 0 ? "+" : ""))\(NumberStyle.number($0, maximumFractionDigits: 1))%)" } ?? "")")
                         .font(.caption2).monospacedDigit()
                         .foregroundStyle(pnlUSD >= 0 ? Color.positive : Color.negative)
                 }
@@ -318,7 +318,7 @@ private struct CreatedRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-                Text(item.mcapUSD.map { $0.formatted(.currency(code: "USD").precision(.fractionLength(0...2))) } ?? "\(NumberStyle.units(item.launch.marketCap, decimals: item.launch.pair.decimals, compact: true)) \(item.launch.pair.symbol)")
+                Text(item.mcapUSD.map { PriceFormat.usdValue($0) } ?? "\(NumberStyle.units(item.launch.marketCap, decimals: item.launch.pair.decimals, compact: true)) \(item.launch.pair.symbol)")
                     .font(.subheadline.weight(.medium)).monospacedDigit()
                 Text("Market cap").font(.caption2).foregroundStyle(.secondary)
             }
@@ -483,7 +483,7 @@ final class LaunchpadProfileModel {
 
     var claimableSummary: String {
         guard hasClaimable else { return feesUnread ? "Creator fees couldn't be read" : "Nothing to claim yet" }
-        if totalClaimableUSD > 0 { return totalClaimableUSD.formatted(.currency(code: "USD")) }
+        if totalClaimableUSD > 0 { return PriceFormat.usdValue(totalClaimableUSD) }
         return "\(claimableCount) to claim"
     }
 

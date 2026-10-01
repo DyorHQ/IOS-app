@@ -120,7 +120,7 @@ struct SwapView: View {
                     Text("Balance: \(NumberStyle.units(balance, decimals: model.tokenIn.decimals)) \(model.tokenIn.symbol)")
                 }
                 Spacer()
-                if let usd = model.payUSD { Text(usd, format: .currency(code: "USD")) }
+                if let usd = model.payUSD { Text(PriceFormat.usdValue(usd)) }
             }
             // With the header below trimmed to match (`receiveSection`), the flip button sits 10 pt from the balance
             // line and 10 pt from "You Receive".
@@ -211,7 +211,7 @@ struct SwapView: View {
                     Text("Balance: \(NumberStyle.units(balance, decimals: model.tokenOut.decimals)) \(model.tokenOut.symbol)")
                 }
                 Spacer()
-                if let usd = model.receiveUSD { Text(usd, format: .currency(code: "USD")) }
+                if let usd = model.receiveUSD { Text(PriceFormat.usdValue(usd)) }
             }
         }
     }
