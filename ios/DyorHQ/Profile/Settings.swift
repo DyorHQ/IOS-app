@@ -186,7 +186,7 @@ struct NotificationsView: View {
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("Alerts arrive while DyorHQ is open, on any screen: order fills, a Perps position at 80% and 90% of its margin in use or within 10% of its liquidation price, and price alerts. Nothing arrives while DyorHQ is closed, so don't rely on them to protect a position: set a stop-loss on it. Everything is also kept in the in-app center.")
+                Text("Alerts arrive while DyorHQ is open, on any screen: order fills, a Perps position at 80% and 90% of its margin in use, and price alerts. Nothing arrives while DyorHQ is closed, so don't rely on them to protect a position: set a stop-loss on it. Everything is also kept in the in-app center.")
             }
             .disabled(!settings.notificationsEnabled)
         }
