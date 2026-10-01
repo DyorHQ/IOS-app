@@ -249,6 +249,18 @@ test("E2: a cursor ahead of the head (a lagging fallback RPC) scans nothing and 
   assert.equal(readCursor(state, "gov:moments"), 5_000n);
 });
 
+test("E2: an RPC whose head is minutes below the cursor (stuck, or another chain) is a warning; nothing is scanned", async () => {
+  const state = { cursors: { "gov:moments": "5000" } };
+  const client = govChain({ head: 4_000n });
+  const alerts = await gov(client, state);
+  assert.deepEqual(client.calls, []);
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].severity, "warning");
+  assert.equal(alerts[0].key, "logs:headbehind:gov:moments");
+  assert.match(alerts[0].reason, /the RPC's head 4000 is 1000 blocks below this scan's cursor 5000/);
+  assert.equal(readCursor(state, "gov:moments"), 5_000n, "left alone");
+});
+
 test("E2 MO-1: each cohort's GraduationFailed scan keeps its own cursor", async () => {
   const c1 = { label: "cohort4 (live)", factory: a(0xf1), collect: a(0xc1), graduation: a(0x91) };
   const c3 = { label: "cohort3 (retired)", factory: a(0xf3), collect: a(0xc3), graduation: a(0x93) };

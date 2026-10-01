@@ -35,6 +35,16 @@ export class SendStatusUnknown extends Error {
   }
 }
 
+/** A send the run refused to start (cast never ran, nothing was broadcast): the run is past its deadline, its RPC is
+    stale, or its state cannot be saved. Not a failed send: no backoff, no spend. */
+export class SendNotStarted extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "SendNotStarted";
+    this.notStarted = true;
+  }
+}
+
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 

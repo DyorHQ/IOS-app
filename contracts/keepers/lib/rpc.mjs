@@ -13,6 +13,12 @@ export const DEFAULT_RPC_URLS = Object.freeze(["https://rpc3.monad.xyz", "https:
 export const MONAD_CHAIN_ID = 143;
 /** Consecutive degraded runs after which the RPC warning becomes critical. */
 export const DEGRADED_CRITICAL_RUNS = 3;
+/** A latest block older than this (seconds) is a stuck or lagging RPC: its reads are stale, so nothing is sent (a
+    Monad block is 0.302 s; a healthy head is a second or two old). Critical from STALE_CRITICAL_S. */
+export const STALE_WARN_S = 120;
+export const STALE_CRITICAL_S = 600;
+/** The same age in Monad blocks, for a log cursor ahead of the head an RPC reports. */
+export const STALE_BLOCKS = 400n;
 
 const TRANSPORT_NAMES = new Set(["HttpRequestError", "TimeoutError", "WebSocketRequestError", "SocketClosedError"]);
 // Phrases only: a bare number such as 429 or 503 could be a Moment id in a call's arguments.
@@ -106,21 +112,28 @@ export function makeRpcClient(urls, { timeoutMs = 15_000 } = {}) {
 }
 
 /**
- * The first endpoint that answers eth_chainId with Monad's chain id, for cast (which takes one URL). Falls back to the
- * first URL when none does: the sends then fail on their own and alert.
+ * The first endpoint that answers eth_chainId with Monad's chain id and whose latest block is fresh (at most
+ * `staleAfterS` old), for cast (which takes one URL) and to be read first. Falls back to the first URL when none
+ * does: the run's stale-head check then holds the sends, or they fail on their own and alert.
  */
-export async function firstHealthy(urls, { fetchImpl = globalThis.fetch, timeoutMs = 5_000, chainId = MONAD_CHAIN_ID } = {}) {
+export async function firstHealthy(urls, { fetchImpl = globalThis.fetch, timeoutMs = 5_000, chainId = MONAD_CHAIN_ID, now = Date.now, staleAfterS = STALE_WARN_S } = {}) {
+  const call = async (url, method, params) => {
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return (await res.json())?.result;
+  };
   for (const url of urls) {
     try {
-      const res = await fetchImpl(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!res.ok) continue;
-      const j = await res.json();
-      if (typeof j?.result === "string" && BigInt(j.result) === BigInt(chainId)) return { url, healthy: true };
+      const id = await call(url, "eth_chainId", []);
+      if (typeof id !== "string" || BigInt(id) !== BigInt(chainId)) continue;
+      const block = await call(url, "eth_getBlockByNumber", ["latest", false]);
+      const age = Math.floor(now() / 1000) - Number(BigInt(block?.timestamp));
+      if (age <= staleAfterS) return { url, healthy: true };
     } catch {
       // next endpoint
     }

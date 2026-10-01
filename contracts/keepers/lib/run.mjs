@@ -7,9 +7,10 @@
 // sends pass the spend guard (--max-spend-per-day, per-target backoff).
 //
 // Build 17, K2 ("scans see every block"): reads fall back across the --rpc-url list, cast sends through the first one
-// that answers as chain 143, and the run's RPC read failures become one "RPC degraded" alert (critical after 3 runs in
-// a row) instead of one critical per item. The log scans take their cursor options from here, and may use half of
-// --max-runtime.
+// that answers as chain 143 with a fresh head, and the run's RPC read failures become one "RPC degraded" alert
+// (critical after 3 runs in a row) instead of one critical per item. A latest block more than 2 minutes old (a stuck
+// or lagging RPC that still answers) is an "RPC stale" alert, critical from 10 minutes, and the run sends nothing. The
+// log scans take their cursor options from here, and may use half of --max-runtime.
 //
 // Build 17, K1 ("sends are honest"):
 //  - E7: in send mode the sending address is derived from the signer itself; a different --sim-from refuses the run,
@@ -19,11 +20,11 @@
 //    alert and exits 1. A watchdog (--role watchdog) never sends and marks every post.
 import { formatEther, parseEther } from "viem";
 import { momentsCohorts, launchpads, pinMismatches } from "./deployments.mjs";
-import { makeSender, assertNoKeyEnv, signerAddress } from "./send.mjs";
+import { makeSender, assertNoKeyEnv, signerAddress, SendNotStarted } from "./send.mjs";
 import { makeReporter, loadState, saveState, EXIT } from "./report.mjs";
 import { redact, rpcLabel } from "./redact.mjs";
 import { momentsGraduationJob, buybacksJob, sweepsJob, launchpadGraduationJob, governanceJob } from "./jobs.mjs";
-import { makeRpcClient, firstHealthy, isTransportError, rpcDegradedAlert } from "./rpc.mjs";
+import { makeRpcClient, firstHealthy, isTransportError, rpcDegradedAlert, STALE_WARN_S, STALE_CRITICAL_S } from "./rpc.mjs";
 import { planPosts, commitPosts, buildPayloads, deliver, webhookKind, readWebhookFile } from "./notify.mjs";
 
 // The metadata base the live Moments cohort (v2, cohort 4) was deployed with: part of its terms hash, and what the app
@@ -53,7 +54,7 @@ export async function runKeeper(o, deps = {}) {
     fetchImpl = globalThis.fetch,
     now = Date.now,
   } = deps;
-  const pickRpc = deps.pickRpc ?? ((urls) => firstHealthy(urls, { fetchImpl }));
+  const pickRpc = deps.pickRpc ?? ((urls) => firstHealthy(urls, { fetchImpl, now }));
   const rpcUrls = o.rpcUrls ?? [o.rpcUrl];
   const startedAt = now();
   if (o.role === "watchdog" && o.send) throw new Error("--role watchdog never sends: drop --send");
@@ -67,7 +68,7 @@ export async function runKeeper(o, deps = {}) {
   const say = (s) => log(scrub(s));
   const prefix = o.role === "watchdog" ? "[watchdog] " : "";
   const reporter = makeReporter({ log, scrub });
-  const run = { state: undefined, stopped: false, current: "setup", rpcStats: {}, completed: new Set() };
+  const run = { state: undefined, stopped: false, stale: false, current: "setup", rpcStats: {}, completed: new Set() };
   // A read of the keeper's own (not a job's) that failed: an RPC failure is counted for the "RPC degraded" alert.
   const keeperReadFailed = (target, what, e) => {
     reporter.incomplete.add("keeper");
@@ -80,22 +81,29 @@ export async function runKeeper(o, deps = {}) {
       onProblem: (why) => reporter.alert({ job: "keeper", target: "state file", severity: "warning", key: `keeper:state:${now()}`, once: true, reason: why }),
     });
     const state = run.state;
-    const made = makeClient({ ...o, rpcUrls });
-    const client = made?.client ?? made;
-    run.rpcStats = made?.stats ?? {};
-    // cast takes one URL: the first endpoint that answers as Monad (reads fall back on their own).
+    // cast takes one URL: the first endpoint that answers as Monad with a fresh head. In send mode it is also read
+    // first (reads fall back on their own), so a stuck endpoint that still answers does not blind the run.
     let castRpc = rpcUrls[0];
+    let readUrls = rpcUrls;
     if (o.send) {
       const pick = await pickRpc(rpcUrls);
       castRpc = pick.url;
-      if (!pick.healthy) reporter.info(`no RPC answered as chain 143; cast sends through ${rpcLabel(castRpc)}`);
+      if (pick.healthy) readUrls = [pick.url, ...rpcUrls.filter((u) => u !== pick.url)];
+      else reporter.info(`no RPC answered as chain 143 with a fresh head; cast sends through ${rpcLabel(castRpc)}`);
     }
+    const made = makeClient({ ...o, rpcUrls: readUrls });
+    const client = made?.client ?? made;
+    run.rpcStats = made?.stats ?? {};
     const inner = makeSenderFn({ send: o.send, rpcUrl: castRpc, signer: o.signer, allowUnlocked: o.allowUnlocked, log: say });
-    // Once the deadline has passed nothing more is sent, even if a job is still awaiting a read.
+    // Why the run sends nothing more, if it does not: past the deadline (even if a job is still awaiting a read), or
+    // the RPC's head is stale.
+    const blocked = () => (run.stopped ? "the run was stopped by --max-runtime" : run.stale ? "the RPC's head is stale (see the RPC alert)" : undefined);
     const sender = {
       ...inner,
+      blocked,
       call: (tx) => {
-        if (run.stopped) throw new Error("the run was stopped by --max-runtime: not sending");
+        const why = blocked();
+        if (why) throw new SendNotStarted(`${why}: not sending`);
         return inner.call(tx);
       },
     };
@@ -130,6 +138,27 @@ export async function runKeeper(o, deps = {}) {
 
     log(`keeper: ${o.jobs.join(", ")} · ${o.send ? "SEND" : "dry-run"}${o.role === "watchdog" ? " · watchdog" : ""} · rpc ${rpcUrls.map(rpcLabel).join(" → ")}${o.send ? ` · cast via ${rpcLabel(castRpc)}` : ""}${simFrom ? ` · from ${simFrom}` : ""}${channel ? ` · alerts to ${channel}` : ""}`);
     if (webhookUrl && !o.stateFile) reporter.info("no --state-file: every run posts every standing alert again (no dedup)");
+    // A stuck or lagging RPC answers with old state and no error: every job would read the past (a Moment already
+    // graduated looks pending, a scan finds nothing new) and the run would exit 0. Its latest block's age says so.
+    run.current = "rpc";
+    let latest;
+    try {
+      latest = await client.getBlock();
+    } catch (e) {
+      if (isTransportError(e)) keeperReadFailed("latest block", "the latest block could not be read", e);
+      else {
+        reporter.incomplete.add("keeper");
+        reporter.alert({ job: "keeper", target: "rpc", severity: "warning", key: "read:keeper:latest block", reason: `the latest block could not be read: ${errText(e)}` });
+      }
+    }
+    if (latest?.timestamp !== undefined) {
+      const age = Math.floor(now() / 1000) - Number(latest.timestamp);
+      if (age > STALE_WARN_S) {
+        run.stale = true;
+        reporter.incomplete.add("keeper");
+        reporter.alert({ job: "keeper", target: "rpc", severity: age >= STALE_CRITICAL_S ? "critical" : "warning", key: "rpc:stale", reason: `RPC stale: its latest block${latest.number !== undefined ? ` ${latest.number}` : ""} is ${age}s old (read through ${readUrls.map(rpcLabel).join(" → ")}): this run's reads are of the past, so it sends nothing and resolves nothing` });
+      }
+    }
     run.current = "records";
     for (const m of pinMismatches({ cohorts: [liveCohort], pads: [liveLaunchpad] })) {
       reporter.alert({ job: "records", target: m.file, severity: "critical", key: `records:pin:${m.file}`, reason: `live record names factory ${m.recorded} but the keeper pins ${m.pinned}: a deploy script or a hand edit replaced the record` });
@@ -189,7 +218,7 @@ export async function runKeeper(o, deps = {}) {
         reporter.alert({ job, target: "job", severity: "critical", key: `job:${job}`, reason: `job failed: ${e?.shortMessage || e?.message || e}`, ...(isTransportError(e) ? { rpc: true } : {}) });
       }
       // A job that ran to its end with every read answered: what it no longer raises has resolved.
-      if (ok && !run.stopped && !reporter.incomplete.has(job)) run.completed.add(job);
+      if (ok && !run.stopped && !run.stale && !reporter.incomplete.has(job)) run.completed.add(job);
     }
     return common.sender;
   };

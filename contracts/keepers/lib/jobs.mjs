@@ -60,7 +60,7 @@ import {
 import { formatEther } from "viem";
 import { MinedRevert, SendStatusUnknown } from "./send.mjs";
 import { nowSeconds, recordSpend, backoffFor, noteSendFailure, noteSendSuccess, spendAllowed } from "./budget.mjs";
-import { isRangeRefusal, isTransportError } from "./rpc.mjs";
+import { isRangeRefusal, isTransportError, STALE_BLOCKS } from "./rpc.mjs";
 import { DEFAULT_LOGS_CHUNK, DEFAULT_LOGS_MAX_BLOCKS, LOGS_HEAD_MARGIN, planScan, readCursor, writeCursor } from "./cursor.mjs";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -141,6 +141,12 @@ async function safeSend({ sender, reporter, client, state, budget, clock = budge
   const at = clock();
   const what = tx.label ?? tx.signature;
   const targetKey = `${job}:${target}`;
+  // The run refuses every send (stale RPC, past its deadline, state not saved): nothing is read, recorded or backed off.
+  const blocked = live ? sender.blocked?.() : undefined;
+  if (blocked) {
+    reporter.info(`not sending ${what}: ${blocked}`);
+    return null;
+  }
   let gasPrice = 0n;
   if (live && state) {
     const held = backoffFor(state, targetKey, at);
@@ -176,6 +182,10 @@ async function safeSend({ sender, reporter, client, state, budget, clock = budge
     reporter.info(`sent ${what}: tx ${r.receipt.transactionHash} succeeded; cost ${mon(r.spentWei)} MON`);
     return r;
   } catch (e) {
+    if (e?.notStarted) {
+      reporter.info(`not sending ${what}: ${errText(e)}`);
+      return null;
+    }
     if (e instanceof MinedRevert) {
       record(e.spentWei, { tx: e.txHash });
       failed(`send failed: ${tx.signature} was mined but REVERTED (tx ${e.txHash}); it cost ${mon(e.spentWei)} MON (gas limit ${e.gasLimit ?? e.gasUsed} at ${e.effectiveGasPrice} wei; Monad bills the limit)`);
@@ -252,7 +262,13 @@ function shareOf(logs, i, n) {
 async function scanLogs({ client, reporter, state, job, scanId, label, logs, fetchRange, onLogs }) {
   const read = await client.getBlockNumber();
   const head = logs.cursor ? (read > LOGS_HEAD_MARGIN ? read - LOGS_HEAD_MARGIN : 0n) : read;
-  const plan = planScan({ cursor: logs.cursor ? readCursor(state, scanId) : undefined, head, from: logs.from, lookback: logs.lookback, maxBlocks: logs.maxBlocks, useCursor: logs.cursor });
+  const cursor = logs.cursor ? readCursor(state, scanId) : undefined;
+  const plan = planScan({ cursor, head, from: logs.from, lookback: logs.lookback, maxBlocks: logs.maxBlocks, useCursor: logs.cursor });
+  if (plan?.empty && cursor !== undefined && cursor > read + STALE_BLOCKS) {
+    // A few blocks behind is a lagging fallback (nothing to scan yet); minutes behind the last scanned block is an RPC
+    // that is stuck, or not on the chain the cursor was made on.
+    reporter.alert({ job, target: label, severity: "warning", key: `logs:headbehind:${scanId}`, reason: `the RPC's head ${read} is ${cursor - read} blocks below this scan's cursor ${cursor}: it is stuck or not the chain the cursor was made on, so nothing was scanned` });
+  }
   if (!plan || plan.empty) return;
   if (!logs.cursor) {
     onLogs(await fetchRange(plan.from, plan.to));

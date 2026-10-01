@@ -23,7 +23,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const opts = (argv, over = {}) => ({ ...parseKeeperArgs(argv, {}), ...over });
 
 /** A chain with one live Moment stuck in GraduationPending whose retry simulates OK. */
-function chain({ balance = 50n * MON, blockDelay = 0, hang = false } = {}) {
+/** `blockDelay` and `hang` apply to the jobs' block reads, not to the run's own first look at the head. */
+function chain({ balance = 50n * MON, blockDelay = 0, hang = false, headAge = 2 } = {}) {
   const reads = {
     momentCount: 1n,
     state: 1,
@@ -33,6 +34,7 @@ function chain({ balance = 50n * MON, blockDelay = 0, hang = false } = {}) {
   return {
     balances: [],
     sims: [],
+    blocks: 0,
     async getCode() {
       return "0x6000";
     },
@@ -41,6 +43,7 @@ function chain({ balance = 50n * MON, blockDelay = 0, hang = false } = {}) {
       return balance;
     },
     async getBlock() {
+      if (this.blocks++ === 0) return { number: 1000n, timestamp: NOW - BigInt(headAge) };
       if (hang) await new Promise(() => {});
       if (blockDelay) await sleep(blockDelay);
       return { timestamp: NOW };
@@ -86,6 +89,7 @@ function world({ client = chain(), signer = SIGNER, sends = [], posts = [], line
       makeSenderFn: fakeSender(sends),
       signerAddressFn: () => signer,
       pickRpc: async (urls) => ({ url: urls[0], healthy: true }),
+      now: () => Number(NOW) * 1000, // the chain's clock: its head is fresh
       fetchImpl: async (url, init) => (posts.push({ url, body: JSON.parse(init.body) }), { ok: true, status: 204 }),
     },
   };
@@ -154,6 +158,36 @@ test("the run header names the RPC by its origin only, and the sending address",
   const header = w.lines.find((l) => l.startsWith("keeper:"));
   assert.equal(header, `keeper: moments-graduation · SEND · rpc https://monad.example/… → https://rpc4.monad.xyz · cast via https://monad.example/… · from ${SIGNER}`);
   assert.ok(!w.lines.join("\n").includes("FAKE_KEY_123"));
+});
+
+// ---------------------------------------------------------------- K2: a stale RPC
+
+test("K2: an RPC whose head is stale is an alert (warning from 2 min, critical from 10) and the run sends nothing", async () => {
+  const seen = {};
+  for (const age of [30, 180, 3_600]) {
+    const w = world({ client: chain({ headAge: age }) });
+    const code = await runKeeper(opts(["moments-graduation", "--only-live", "--webhook", "https://hooks.example/x"], { send: true, signer: { account: "k" } }), w.deps);
+    const stale = w.posts[0]?.body.alerts.find((x) => x.key === "rpc:stale");
+    seen[age] = [code, stale?.severity ?? "none", w.sends.length];
+    if (stale) {
+      assert.match(stale.reason, new RegExp(`RPC stale: its latest block 1000 is ${age}s old .*sends nothing`));
+      assert.ok(w.lines.some((l) => /not sending graduate .*: the RPC's head is stale/.test(l)), "the retry is held, not failed");
+      assert.ok(!w.posts[0].body.alerts.some((x) => /send failed/.test(x.reason)), "no failed-send alert, so no backoff");
+    }
+  }
+  assert.deepEqual(seen, { 30: [EXIT.ALERT, "none", 1], 180: [EXIT.ALERT, "warning", 0], 3600: [EXIT.ALERT, "critical", 0] });
+});
+
+test("K2: a stale RPC resolves nothing: a posted alert its job no longer raises stays open", async () => {
+  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const w = world();
+  const o = opts(["moments-graduation", "--only-live", "--webhook", "https://hooks.example/x", "--state-file", stateFile]);
+  await runKeeper(o, w.deps);
+  assert.ok(w.posts[0].body.alerts.some((x) => x.key.startsWith("mo1:pending:")));
+  // The Moment no longer reads as pending, but the head is an hour old: that proves nothing.
+  const stale = world({ client: { ...chain({ headAge: 3_600 }), readContract: async ({ functionName }) => (functionName === "momentCount" ? 1n : functionName === "state" ? 2 : 0n) } });
+  await runKeeper(o, stale.deps);
+  assert.ok(!stale.posts.some((p) => p.body.alerts.some((x) => x.kind === "resolved")), JSON.stringify(stale.posts));
 });
 
 // ---------------------------------------------------------------- E9

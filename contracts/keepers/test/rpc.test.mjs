@@ -205,15 +205,40 @@ test("K2: a log range past a lagging backend's head fails the read at once inste
   assert.equal(calls.length, 1);
 });
 
-test("E5: cast sends through the first endpoint that answers as chain 143", async () => {
+test("E5: cast sends through the first endpoint that answers as chain 143 with a fresh head", async () => {
+  const NOW_S = 1_790_000_000;
+  const node = (chainId, headAge) => async (init) => {
+    const { method } = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ result: method === "eth_chainId" ? chainId : { number: "0x10", timestamp: `0x${(NOW_S - headAge).toString(16)}` } }) };
+  };
   const replies = {
     "https://a.example": () => Promise.reject(new Error("fetch failed")),
-    "https://b.example": async () => ({ ok: true, json: async () => ({ result: "0x1" }) }), // another chain
-    "https://c.example": async () => ({ ok: true, json: async () => ({ result: "0x8f" }) }),
+    "https://b.example": node("0x1", 1), // another chain
+    "https://stuck.example": node("0x8f", 3_600), // Monad, but its head is an hour old
+    "https://c.example": node("0x8f", 2),
   };
-  const fetchImpl = (url) => replies[url]();
-  assert.deepEqual(await firstHealthy(Object.keys(replies), { fetchImpl }), { url: "https://c.example", healthy: true });
-  assert.deepEqual(await firstHealthy(["https://a.example", "https://b.example"], { fetchImpl }), { url: "https://a.example", healthy: false }, "none: the first, and the sends alert on their own");
+  const fetchImpl = (url, init) => replies[url](init);
+  const now = () => NOW_S * 1000;
+  assert.deepEqual(await firstHealthy(Object.keys(replies), { fetchImpl, now }), { url: "https://c.example", healthy: true });
+  assert.deepEqual(await firstHealthy(["https://a.example", "https://b.example", "https://stuck.example"], { fetchImpl, now }), { url: "https://a.example", healthy: false }, "none: the first, and the run's stale-head check holds the sends");
+});
+
+test("K2 in send mode: the fresh endpoint is read first, and cast sends through it", async () => {
+  const seen = {};
+  const w = {
+    log: () => {},
+    env: {},
+    pickRpc: async (urls) => ({ url: urls[1], healthy: true }),
+    makeClient: (o) => {
+      seen.reads = o.rpcUrls;
+      return { getBlock: async () => ({ number: 1n, timestamp: 1_790_000_000n }), getCode: async () => "0x60", getBalance: async () => 10n ** 20n, readContract: async () => 0n };
+    },
+    makeSenderFn: (s) => ((seen.cast = s.rpcUrl), { sent: [], live: true, call: async () => ({}) }),
+    signerAddressFn: () => "0x1111111111111111111111111111111111111111",
+    now: () => 1_790_000_000_000,
+  };
+  await runKeeper(parseKeeperArgs(["moments-graduation", "--only-live", "--send", "--account", "k"], {}), w);
+  assert.deepEqual(seen, { reads: ["https://rpc4.monad.xyz", "https://rpc3.monad.xyz"], cast: "https://rpc4.monad.xyz" });
 });
 
 test("E5: RPC failures collapse into one alert per run: a warning, critical after 3 runs in a row, reset by a clean run", () => {
@@ -295,7 +320,7 @@ test("E5 through a run: every read failing at the RPC posts ONE 'RPC degraded' a
     perRun.push(posts.flatMap((p) => p.alerts.map((x) => `${x.kind} ${x.severity} ${x.target}`)));
   }
   assert.deepEqual(perRun, [["new warning rpc"], [], ["escalated critical rpc"]], "one alert, critical after 3 runs in a row (state file counter)");
-  assert.match(posts[0].alerts[0].reason, /RPC degraded: \d+ read\(s\) failed after retries and fallback \(https:\/\/rpc3\.monad\.xyz failed 12, served 0; https:\/\/rpc4\.monad\.xyz failed 12, served 0\); skipped this run: 143\.json, moments-143\.json, moments-graduation \(the whole job\), buybacks \(the whole job\)/);
-  assert.equal(lines.filter((l) => /^ALERT \[critical\] .*HTTP request failed/.test(l)).length, 12, "each skipped item is still in the log (4 per run)");
+  assert.match(posts[0].alerts[0].reason, /RPC degraded: \d+ read\(s\) failed after retries and fallback \(https:\/\/rpc3\.monad\.xyz failed 12, served 0; https:\/\/rpc4\.monad\.xyz failed 12, served 0\); skipped this run: latest block, 143\.json, moments-143\.json, moments-graduation \(the whole job\), buybacks \(the whole job\)/);
+  assert.equal(lines.filter((l) => /^ALERT \[critical\] .*HTTP request failed/.test(l)).length, 15, "each skipped item is still in the log (5 per run)");
   assert.ok(!lines.join("\n").includes("FAKE_KEY_123") && !JSON.stringify(posts).includes("FAKE_KEY_123"), "the keyed URL in viem's error never leaks");
 });
