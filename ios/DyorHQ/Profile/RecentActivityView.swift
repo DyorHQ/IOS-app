@@ -134,7 +134,7 @@ final class RecentActivityModel {
         // last read: the feed says it is incomplete rather than show less as if that were all.
         let listing = await launchesTask
         let launches = listing.keeping(lastLaunches)
-        async let lpActivityTask = env.launchpad.activity(limit: 100, lookbackBlocks: Monad.blocksPerDay * 7, launches: launches)
+        async let lpActivityTask = env.launchpad.activity(limit: 100, lookbackBlocks: LaunchpadService.recentActivityBlocks, launches: launches)
 
         let byToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
         var unread = !listing.complete

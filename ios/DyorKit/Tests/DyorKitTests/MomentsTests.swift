@@ -166,12 +166,13 @@ final class MomentsTests: XCTestCase {
             block: 105_400_000
         )
         let fees = log(topics: [MomentsABI.Events.feesWithdrawnTopic, BigUInt(7).word, wallet.data.leftPadded(to: 32)], data: "0x0000000000000000000000000000000000000000000000000000000000030d40", block: 105_400_050)
-        let history = MomentsService.history(collected: [collected], claimed: [], withdrawn: [], feesWithdrawn: [fees], published: [], anchor: anchor)
+        let history = MomentsService.history(collected: [collected], claimed: [], withdrawn: [], feesWithdrawn: [fees], published: [], anchor: anchor,
+                                             secondsPerBlock: BlockClockFixture.secondsPerBlock)
         XCTAssertEqual(history.collects.count, 1)
         XCTAssertEqual(history.collects[0].gross, 1_000_000)
         XCTAssertEqual(history.collects[0].platformIn, 50_000)
-        // 100 blocks before the anchor at 0.4 s → 40 s earlier.
-        XCTAssertEqual(history.collects[0].time.timeIntervalSince1970, 1_758_000_000 - 40, accuracy: 0.001)
+        // 100 blocks before the anchor at the pace two mainnet headers measured (0.30212 s) → 30.212 s earlier.
+        XCTAssertEqual(history.collects[0].time.timeIntervalSince1970, 1_758_000_000 - 30.212, accuracy: 0.001)
         XCTAssertEqual(history.withdrawals.first?.kind, .poolFees)
         XCTAssertEqual(history.withdrawals.first?.amount, 200_000)
     }

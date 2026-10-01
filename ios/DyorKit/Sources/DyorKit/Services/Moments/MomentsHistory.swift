@@ -10,6 +10,7 @@ public extension MomentsService {
     /// `fromBlock` (default: the factory's deployment block), newest first.
     func history(account: Address, fromBlock: UInt64? = nil) async -> MomentsAccountHistory {
         guard isDeployed, let anchor = try? await logsRPC.block(.latest) else { return .empty }
+        let secondsPerBlock = await clock.secondsPerBlock()
         let from = max(fromBlock ?? addresses.deployBlock, addresses.deployBlock)
         guard from <= anchor.number else { return .empty }
         let word = account.data.leftPadded(to: 32)
@@ -19,12 +20,15 @@ public extension MomentsService {
         async let feesLogs = logsRPC.chunkedLogs(address: addresses.hook, topics: [MomentsABI.Events.feesWithdrawnTopic, nil, word], fromBlock: from, toBlock: anchor.number)
         async let publishedLogs = logsRPC.chunkedLogs(address: addresses.factory, topics: [MomentsABI.Events.publishedTopic, nil, word], fromBlock: from, toBlock: anchor.number)
         let (collected, claimed, withdrawn, fees, published) = await (collectedLogs, claimedLogs, withdrawnLogs, feesLogs, publishedLogs)
-        return Self.history(collected: collected, claimed: claimed, withdrawn: withdrawn, feesWithdrawn: fees, published: published, anchor: anchor, factory: addresses.factory)
+        return Self.history(collected: collected, claimed: claimed, withdrawn: withdrawn, feesWithdrawn: fees, published: published, anchor: anchor,
+                            secondsPerBlock: secondsPerBlock, factory: addresses.factory)
     }
 
-    /// Pure half of `history`, so the parsers can be tested on canned logs. `factory` tags every record with its
-    /// cohort (Moment ids restart at 1 on every factory).
-    nonisolated static func history(collected: [Log], claimed: [Log], withdrawn: [Log], feesWithdrawn: [Log], published: [Log], anchor: BlockHeader, factory: Address = .zero) -> MomentsAccountHistory {
+    /// Pure half of `history`, so the parsers can be tested on canned logs. Each record's time is estimated from `anchor`
+    /// at `secondsPerBlock`; `factory` tags every record with its cohort (Moment ids restart at 1 on every factory).
+    nonisolated static func history(collected: [Log], claimed: [Log], withdrawn: [Log], feesWithdrawn: [Log], published: [Log], anchor: BlockHeader, secondsPerBlock: Double,
+                                    factory: Address = .zero) -> MomentsAccountHistory {
+        func time(anchor: BlockHeader, block: UInt64) -> Date { Self.time(anchor: anchor, block: block, secondsPerBlock: secondsPerBlock) }
         var collects: [MomentCollectRecord] = []
         for log in collected {
             guard let e = MomentsABI.collected(log) else { continue }
@@ -63,12 +67,17 @@ public extension MomentsService {
     /// addresses are reported apart from wallets (spec §12 containment: holder count + top-holder share).
     func holderStats(coin: Address, publishedAt: Int) async -> MomentHolderStats {
         guard isDeployed, let anchor = try? await logsRPC.block(.latest) else { return .empty }
-        // Estimate the publish block from the anchor and Monad's block time (with slack), never before deployment.
-        let age = max(0, anchor.timestamp - publishedAt)
-        let back = UInt64((Double(age) / Self.blockSeconds * 1.25).rounded(.up)) + 2_000
+        // The publish block from the anchor and the session's pace (with slack), never before deployment.
+        let back = Self.holderLookback(ageSeconds: anchor.timestamp - publishedAt, secondsPerBlock: await clock.secondsPerBlock())
         let from = max(addresses.deployBlock, anchor.number > back ? anchor.number - back : 0)
         let logs = await logsRPC.chunkedLogs(address: coin, topics: [MomentsABI.Events.transferTopic], fromBlock: from, toBlock: anchor.number)
         return Self.holderStats(transfers: logs, addresses: addresses, scannedTo: anchor.number)
+    }
+
+    /// How far back `holderStats` reads a Moment's transfers: its age (no less than 0) in blocks at `secondsPerBlock`,
+    /// with a quarter more and 2,000 blocks of slack, so the publish is inside the scan even if the pace was slower.
+    nonisolated static func holderLookback(ageSeconds: Int, secondsPerBlock: Double) -> UInt64 {
+        BlockClock.blocks(in: TimeInterval(max(0, ageSeconds)) * 1.25, secondsPerBlock: secondsPerBlock) + 2_000
     }
 
     /// Pure half of `holderStats`.

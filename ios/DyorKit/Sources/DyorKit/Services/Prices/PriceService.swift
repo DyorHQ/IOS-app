@@ -3,15 +3,27 @@ import Foundation
 
 public struct PriceInfo: Hashable, Sendable {
     public let usd: Double
-    /// Percent change over the last 24 hours; nil when the historical read was not available.
+    /// Percent change over the last 24 hours, measured from the block mined 24 hours before the latest (`BlockClock`);
+    /// nil when the historical read was not available, or for a coin that didn't exist then (`isNew`).
     public let change24h: Double?
-    /// "Uniswap v4", "Uniswap v3" or "USDC".
+    /// "Uniswap v4", "Uniswap v3", "Nad.fun" or "USDC"; for a DyorHQ coin its own venue: "DyorHQ curve", "Monday Trade",
+    /// "Uniswap v4" or "DyorHQ Moment pool".
     public let source: String
+    /// A DyorHQ coin's change over the same 24 hours in its pair asset (`pairSymbol`), as "vs MON" shows it: 0 when only
+    /// the pair asset's dollar price moved. Nil for every other token, or when the historical read was not available.
+    public let pairChange: Double?
+    /// The asset a DyorHQ coin trades against ("MON", "USDC", "AUSD" or "aBIL"); nil for every other token.
+    public let pairSymbol: String?
+    /// A DyorHQ coin its factory hadn't recorded 24 hours ago: it has no 24h change, and shows "New".
+    public let isNew: Bool
 
-    public init(usd: Double, change24h: Double?, source: String) {
+    public init(usd: Double, change24h: Double?, source: String, pairChange: Double? = nil, pairSymbol: String? = nil, isNew: Bool = false) {
         self.usd = usd
         self.change24h = change24h
         self.source = source
+        self.pairChange = pairChange
+        self.pairSymbol = pairSymbol
+        self.isNew = isNew
     }
 }
 
@@ -28,33 +40,42 @@ public struct PricePoint: Hashable, Sendable, Identifiable {
     }
 }
 
-/// Spot prices straight from the deepest on-chain pool for each token, quoted in USDC, plus the same read 24 hours
-/// earlier (Monad's public RPCs serve historical state) for the 24h change. Nothing here depends on an indexer.
+/// Spot prices straight from on-chain pools, quoted in USDC, plus the same read 24 hours earlier (Monad's public RPCs
+/// serve historical state) for the 24h change. Nothing here depends on an indexer.
+///
+/// With DyorHQ venues on (`setUsesDyorVenues`), a DyorHQ coin — one the registry knows, or one a DyorHQ factory's own
+/// record names — is priced only on the venue its factory's record names (`DyorListing`), re-read every 30 minutes: never
+/// from any other pool, so a thin pool anyone plants beside it is ignored. Every other token, and every token with them
+/// off, is priced from the deepest pool found for it. Times come from the
+/// session's measured block pace (`BlockClock`): the day-ago block is the one mined 24 hours before the latest, and a
+/// chart's span and labels are true times.
 public actor PriceService {
-    /// Monad's block cadence, used to turn block numbers into times for price history.
-    public static let secondsPerBlock: TimeInterval = 0.4
-
     enum Source: Hashable, Sendable {
         case v4(poolId: Data)
         case v3(pool: Address, token: Address, quote: Address, token0: Address)
         /// A Uniswap v2-style pair (Nad.fun's DEX): priced from reserves, not a sqrt price.
         case v2(pool: Address, token: Address, quote: Address, token0: Address)
+        /// A DyorHQ coin's own venue, from its factory's record.
+        case dyor(DyorListing)
 
         var label: String {
             switch self {
             case .v4: return "Uniswap v4"
             case .v3: return "Uniswap v3"
             case .v2: return "Nad.fun"
+            case .dyor(let listing): return listing.label
             }
         }
 
-        /// The read that returns this source's price inputs: slot0's `sqrtPriceX96` for v3/v4, `getReserves` for v2.
-        var priceCall: ContractCall {
+        /// The read that returns this source's price inputs: slot0's `sqrtPriceX96` for v3/v4, `getReserves` for v2, a
+        /// DyorHQ venue's own read (`DyorListing.priceCall`); nil for a DyorHQ coin with nothing to read.
+        var priceCall: ContractCall? {
             get throws {
                 switch self {
                 case .v4(let poolId): return try SwapCalldata.stateViewSlot0(poolId: poolId)
                 case .v3(let pool, _, _, _): return try SwapCalldata.v3Slot0(pool: pool)
                 case .v2(let pool, _, _, _): return try SwapCalldata.v2GetReserves(pool: pool)
+                case .dyor(let listing): return listing.priceCall()
                 }
             }
         }
@@ -62,53 +83,117 @@ public actor PriceService {
         var isWMONQuoted: Bool {
             switch self {
             case .v3(_, _, let quote, _), .v2(_, _, let quote, _): return quote == Monad.wmon
-            case .v4: return false
+            case .v4, .dyor: return false
             }
+        }
+
+        /// The DyorHQ listing, for a DyorHQ coin.
+        var listing: DyorListing? {
+            if case .dyor(let listing) = self { return listing }
+            return nil
         }
     }
 
     public let rpc: RPCClient
+    /// Turns 24 hours into the day-ago block, and a chart's blocks into times.
+    public let clock: BlockClock
     private let multicall: Multicall
-    /// Each token's pool as last looked up, and the tokens without one — both for a while only (`PoolLookupCache`).
+    /// Each token's pool as last looked up, and the tokens without one — both for a while only (`PoolLookupCache`). A
+    /// DyorHQ coin's entry is its venue, from its factory's record, looked up again after the same 30 minutes.
     private var pools = PoolLookupCache<Source>()
     private let now: @Sendable () -> Date
+    /// What says, without a read, that an address is or isn't a DyorHQ coin and which factory recorded it. Without it,
+    /// every token the app doesn't curate has its records read on every factory.
+    private let registry: DyorCoinRegistry?
+    /// The launchpad stacks and Moments cohorts whose records name DyorHQ coins.
+    nonisolated let launchpads: [LaunchpadAddresses]
+    nonisolated let cohorts: [MomentsAddresses]
+    /// Off, DyorHQ coins are priced like any token, as build 16 did (`setUsesDyorVenues`).
+    private var usesDyorVenues: Bool
+    /// Counts the changes to `usesDyorVenues`: a discovery that began before one drops what it found, since it belongs
+    /// to the other setting.
+    private var venueGeneration = 0
 
-    public init(rpc: RPCClient, now: @escaping @Sendable () -> Date = Date.init) {
+    /// `registry` (DyorHQ's coins) reads the launchpads and cohorts it was made with; without one, `launchpads` and
+    /// `cohorts`. `dyorVenues` prices DyorHQ coins on their own venues from the start, and is off unless asked for: on,
+    /// a curve, Uniswap v4 or Moment coin the wallet holds has a spot price, so a screen that also values it as a
+    /// launch or Moment holding must count each coin once before turning it on.
+    public init(rpc: RPCClient, registry: DyorCoinRegistry? = nil, clock: BlockClock? = nil,
+                launchpads: [LaunchpadAddresses] = DyorCoinRegistry.launchpads(live: .monadMainnet),
+                cohorts: [MomentsAddresses] = DyorCoinRegistry.cohorts(live: .monadMainnet),
+                dyorVenues: Bool = false,
+                now: @escaping @Sendable () -> Date = Date.init) {
         self.rpc = rpc
+        self.clock = clock ?? BlockClock(rpc: rpc)
         multicall = Multicall(rpc: rpc)
+        self.registry = registry
+        self.launchpads = registry?.launchpads ?? launchpads
+        self.cohorts = registry?.cohorts ?? cohorts
+        usesDyorVenues = dyorVenues
         self.now = now
+    }
+
+    /// Whether DyorHQ coins are priced on their own venues or like any other token, as before (the default, `init`'s
+    /// `dyorVenues`). A change forgets every pool and venue found, so the next read looks them up the new way.
+    public func setUsesDyorVenues(_ on: Bool) {
+        guard on != usesDyorVenues else { return }
+        usesDyorVenues = on
+        venueGeneration += 1
+        pools = PoolLookupCache<Source>()
     }
 
     // MARK: Public
 
-    /// USD price and 24h change for every token that has a discoverable pool. USDC is 1 by definition.
+    /// USD price and 24h change for every token that has a discoverable pool or, for a DyorHQ coin, a priced venue. USDC
+    /// is 1 by definition. The 24h change compares with the block mined 24 hours before the latest one; a DyorHQ coin's
+    /// venue is read again at that block, so a coin that graduated since is compared with its curve price then, and a
+    /// coin its factory hadn't recorded then is "New" (`PriceInfo.isNew`).
     public func prices(for tokens: [Token]) async throws -> [Address: PriceInfo] {
         try await discover(tokens)
-        let latest = try await rpc.blockNumber()
-        let dayAgo: UInt64? = latest > Monad.blocksPerDay ? latest - Monad.blocksPerDay : nil
-        let sources = resolve(tokens)
+        let sources = await withConversions(resolve(tokens))
+        let head = try await rpc.block(.latest)
+        let dayAgo = head.timestamp > 86_400 ? try? await clock.block(at: Date(timeIntervalSince1970: TimeInterval(head.timestamp - 86_400)), head: head) : nil
         async let nowRead = Self.readPrices(multicall: multicall, sources, block: .latest)
-        async let beforeRead = Self.readPricesOrEmpty(multicall: multicall, sources, dayAgo: dayAgo)
+        async let beforeRead = before(sources, block: dayAgo)
         let (now, before) = try await (nowRead, beforeRead)
+        // Each token's source as read, not as the cache holds it after the reads (a switch change empties it).
+        let sourceOf = Dictionary(sources.map { ($0.token.address, $0.source) }, uniquingKeysWith: { first, _ in first })
         var map: [Address: PriceInfo] = [:]
         for token in tokens {
             if Self.isUSD(token) {
                 map[token.address] = PriceInfo(usd: 1, change24h: 0, source: "USDC")
                 continue
             }
-            guard let usd = now[token.address] else { continue }
-            let change = before[token.address].flatMap { prev in prev != 0 ? (usd - prev) / prev * 100 : nil }
-            map[token.address] = PriceInfo(usd: usd, change24h: change, source: pools.source(token.address)?.label ?? "Uniswap v3")
+            guard let usd = now.usd[token.address] else { continue }
+            let source = sourceOf[token.address]
+            func change(_ now: Double?, _ then: Double?) -> Double? {
+                guard let now, let then, then != 0 else { return nil }
+                return (now - then) / then * 100
+            }
+            if let listing = source?.listing {
+                let isNew = before.new.contains(token.address)
+                map[token.address] = PriceInfo(usd: usd, change24h: isNew ? nil : change(usd, before.prices.usd[token.address]), source: listing.label,
+                                               pairChange: isNew ? nil : change(now.pair[token.address], before.prices.pair[token.address]),
+                                               pairSymbol: DyorListing.pairAsset(listing.pair)?.symbol, isNew: isNew)
+            } else {
+                map[token.address] = PriceInfo(usd: usd, change24h: change(usd, before.prices.usd[token.address]), source: source?.label ?? "Uniswap v3")
+            }
         }
         return map
     }
 
     /// Which of `tokens` have no pool the price finder looks for: its last lookup of each that read every pool it asks
-    /// about found none with liquidity (`PoolLookupCache.hasNoPool`). Such a token simply has no price. A token
-    /// `prices(for:)` gave no price that isn't among them had a read fail — its lookup, or its price — so its price is
-    /// unknown, not absent.
+    /// about found none with liquidity (`PoolLookupCache.hasNoPool`), or a DyorHQ coin's venue has no price (a Moment
+    /// still collecting or expired). Such a token simply has no price. A token `prices(for:)` gave no price that isn't
+    /// among them had a read fail — its lookup, or its price — so its price is unknown, not absent.
     public func withoutPool(_ tokens: [Token]) -> Set<Address> {
-        Set(tokens.map(\.address).filter { pools.hasNoPool($0) })
+        Set(tokens.map(\.address).filter { pools.hasNoPool($0) || pools.source($0)?.listing.map { !$0.isPriced } == true })
+    }
+
+    /// Which of `tokens` are DyorHQ Moments still collecting (or waiting to graduate), as their records last read said:
+    /// no pool yet, so no price, and a screen says "Not trading yet".
+    public func notTradingYet(_ tokens: [Token]) -> Set<Address> {
+        Set(tokens.map(\.address).filter { pools.source($0)?.listing?.venue == .collecting })
     }
 
     /// The prices `prices(for:)` gives without reading the chain: USDC and AUSD at $1, by definition. What a list can
@@ -119,13 +204,17 @@ public actor PriceService {
         return map
     }
 
-    /// Samples the token's pool at `points` evenly spaced blocks over `span`, ending at the latest block, in one
-    /// batched JSON-RPC request. Samples the node cannot serve are dropped, so fewer than `points` may come back.
+    /// Samples the token's pool at `points` evenly spaced blocks over `span` seconds (blocks from the session's measured
+    /// pace), ending at the latest block, in one batched JSON-RPC request; each sample's time is estimated from the latest
+    /// block's own timestamp. A DyorHQ coin is sampled on its own venue: a launch that graduated inside the span on its
+    /// curve before then, a Moment from when it graduated. Samples the node cannot serve are dropped, so fewer than
+    /// `points` may come back.
     public func history(for token: Token, points: Int = 48, span: TimeInterval = 86_400) async throws -> [PricePoint] {
         guard points > 0 else { return [] }
-        let latest = try await rpc.blockNumber()
-        let latestTime = Date()
-        let spanBlocks = UInt64(max(0, span) / Self.secondsPerBlock)
+        let head = try await rpc.block(.latest)
+        let latest = head.number
+        let secondsPerBlock = await clock.secondsPerBlock()
+        let spanBlocks = BlockClock.blocks(in: max(0, span), secondsPerBlock: secondsPerBlock)
         let step = points > 1 ? spanBlocks / UInt64(points - 1) : 0
         var blocks: [UInt64] = []
         for i in 0..<points {
@@ -133,11 +222,12 @@ public actor PriceService {
             let block = latest > back ? latest - back : 0
             if blocks.last != block { blocks.append(block) }
         }
-        func time(_ block: UInt64) -> Date { latestTime.addingTimeInterval(-Double(latest - block) * Self.secondsPerBlock) }
+        func time(_ block: UInt64) -> Date { BlockClock.time(of: block, anchor: head, secondsPerBlock: secondsPerBlock) }
         if Self.isUSD(token) { return blocks.map { PricePoint(block: $0, time: time($0), usd: 1) } }
 
         try await discover([token])
         guard let source = pools.source(token.address) else { return [] }
+        if let listing = source.listing { return try await dyorHistory(token, listing, blocks: blocks, time: time) }
         // WMON-quoted pools need MON's own price at every sample to become USD.
         var monSource: Source?
         if source.isWMONQuoted {
@@ -145,7 +235,7 @@ public actor PriceService {
             guard let mon = pools.source(Monad.native) else { return [] }
             monSource = mon
         }
-        let call = try source.priceCall
+        guard let call = try source.priceCall else { return [] }
         let monCall = try monSource?.priceCall
         var requests: [(CallRequest, BlockTag)] = []
         for block in blocks {
@@ -168,6 +258,33 @@ public actor PriceService {
         return out
     }
 
+    /// `history` for a DyorHQ coin: at each sample its venue's read (`DyorListing.priceCall(at:)`) and its pair asset's
+    /// own reads, as one Multicall3 read at that block, all samples in one batched request.
+    private func dyorHistory(_ token: Token, _ listing: DyorListing, blocks: [UInt64], time: (UInt64) -> Date) async throws -> [PricePoint] {
+        let helpers = await withConversions([(token, .dyor(listing))]).filter { $0.token.address != token.address }
+        var requests: [(calls: [ContractCall], block: UInt64)] = []
+        var samples: [(block: UInt64, at: Int)] = []
+        let helperCalls = try helpers.compactMap { try $0.source.priceCall }
+        guard helperCalls.count == helpers.count else { return [] }
+        for block in blocks {
+            let at = Int(time(block).timeIntervalSince1970)
+            guard let call = listing.priceCall(at: at) else { continue }
+            samples.append((block, at))
+            requests.append(([call] + helperCalls, block))
+        }
+        let answers = try await multicall.read(requests)
+        var out: [PricePoint] = []
+        for (sample, answer) in zip(samples, answers) {
+            guard case .success(let results) = answer, results.count == 1 + helpers.count, case .success(let values) = results[0],
+                  let pairPrice = listing.pairPrice(values, at: sample.at) else { continue }
+            let helperPrices = Self.combine(helpers, Array(results.dropFirst()))
+            let mon = helperPrices.usd[Monad.native] ?? helperPrices.usd[Monad.wmon]
+            guard let pairUSD = DyorListing.pairUSD(listing.pair, mon: mon, abil: helperPrices.usd[Token.abil.address]) else { continue }
+            out.append(PricePoint(block: sample.block, time: time(sample.block), usd: pairPrice * pairUSD))
+        }
+        return out
+    }
+
     /// Value of a raw token amount at a USD price; nil when the price is unknown.
     public static func usdValue(_ amount: BigUInt, decimals: Int, price: Double?) -> Double? {
         price.map { Amount.units(amount, decimals: decimals) * $0 }
@@ -175,15 +292,26 @@ public actor PriceService {
 
     // MARK: Discovery
 
-    /// Finds the deepest pool for each token not looked up lately: for MON/WMON the v4 native/USDC pool (falling back
-    /// to v3), for everything else the v3 pool against USDC, or against WMON when no USDC pool has liquidity.
+    /// Finds where each token not looked up lately trades. A DyorHQ coin first: its venue from its factory's record
+    /// (`listings`), and a token whose records couldn't be read is left for the next read, never priced from another
+    /// pool meanwhile. Then the deepest pool for each other token: for MON/WMON the v4 native/USDC pool (falling back to
+    /// v3), for everything else the v3 pool against USDC, or against WMON when no USDC pool has liquidity. When the
+    /// switch changes while it reads, what it found belongs to the other setting: it is dropped and looked up again.
     private func discover(_ tokens: [Token]) async throws {
         let time = now()
+        let generation = venueGeneration
         var todo: [Token] = []
         for token in tokens where self.pools.needsLookup(token.address, now: time) && !Self.isUSD(token) && !todo.contains(where: { $0.address == token.address }) {
             todo.append(token)
         }
         guard !todo.isEmpty else { return }
+        if usesDyorVenues {
+            let (listed, unsettled) = await listings(todo.map(\.address))
+            guard generation == venueGeneration else { return try await discover(tokens) }
+            for (coin, listing) in listed { pools.found(coin, .dyor(listing), now: time) }
+            todo.removeAll { listed[$0.address] != nil || unsettled.contains($0.address) }
+            guard !todo.isEmpty else { return }
+        }
         let v4Ids = Uniswap.v4Tiers.map { PoolKey.canonical(Monad.native, Monad.usdc, fee: $0.fee, tickSpacing: $0.tickSpacing).id }
         // Discover on both the Uniswap v3 factory and Monday Trade's (a v3-style factory). RWAs like aBIL only have
         // liquidity on Monday, so without it they'd never get a price.
@@ -255,6 +383,7 @@ public actor PriceService {
             }
         }
 
+        guard generation == venueGeneration else { return try await discover(tokens) }
         for token in todo {
             let source: Source?
             let base = token.isNative ? Monad.wmon : token.address
@@ -276,28 +405,194 @@ public actor PriceService {
         }
     }
 
-    // MARK: Reads
-
-    private static func readPricesOrEmpty(multicall: Multicall, _ sources: [(token: Token, source: Source)], dayAgo: UInt64?) async -> [Address: Double] {
-        guard let dayAgo else { return [:] }
-        return (try? await readPrices(multicall: multicall, sources, block: .number(dayAgo))) ?? [:]
+    /// `sources` and what turns them into dollars at the same block: MON's own source for a WMON-quoted pool or a DyorHQ
+    /// coin paired with MON, aBIL's for one paired with aBIL (and MON's again when aBIL's own pool is WMON-quoted). A
+    /// conversion whose pool can't be found leaves those prices out; the others are still read.
+    private func withConversions(_ sources: [(token: Token, source: Source)]) async -> [(token: Token, source: Source)] {
+        var out = sources
+        func has(_ address: Address) -> Bool { out.contains { $0.token.address == address } }
+        func add(_ token: Token) async {
+            guard !has(token.address) else { return }
+            try? await discover([token])
+            if let source = pools.source(token.address) { out.append((token, source)) }
+        }
+        if out.contains(where: { $0.source.listing?.pair == Token.abil.address }) { await add(Token.abil) }
+        let needsMON = out.contains { entry in
+            entry.source.isWMONQuoted || entry.source.listing.map { $0.pair.isZero || $0.pair == Monad.wmon } == true
+        }
+        if needsMON, !has(Monad.native), !has(Monad.wmon) { await add(Token.mon) }
+        return out
     }
 
-    /// USD price per token from each source's `sqrtPriceX96`; WMON-quoted prices become USD through MON's own price.
-    private static func readPrices(multicall: Multicall, _ sources: [(token: Token, source: Source)], block: BlockTag) async throws -> [Address: Double] {
-        var out: [Address: Double] = [:]
-        guard !sources.isEmpty else { return out }
-        let results = try await multicall.read(try sources.map { try $0.source.priceCall }, block: block)
-        for (i, result) in results.enumerated() {
-            guard case .success(let values) = result else { continue }
-            let (token, source) = sources[i]
-            out[token.address] = priceFromValues(values, source: source, tokenDecimals: token.decimals)
+    // MARK: DyorHQ venues
+
+    /// What the factories' records say of `coins` now: each DyorHQ coin's market (`listed`), and the coins whose records
+    /// couldn't be read (`unsettled`), which aren't priced from any pool until a read answers. The rest are not DyorHQ
+    /// coins: MON and the curated tokens, what the registry says isn't one, and every address each factory answered for
+    /// without naming it. A coin the registry knows is asked of its own factory only.
+    private func listings(_ coins: [Address]) async -> (listed: [Address: DyorListing], unsettled: Set<Address>) {
+        var origins: [Address: DyorListing.Origin] = [:]
+        var unknown: [Address] = []
+        for coin in coins where !coin.isZero && Token.core(coin) == nil {
+            switch await registry?.membership(coin) {
+            case .dyor(let known)?:
+                if let origin = origin(of: known) { origins[coin] = origin } else { unknown.append(coin) }
+            case .notDyor?:
+                continue
+            case .unknown?, nil:
+                unknown.append(coin)
+            }
         }
-        for (token, source) in sources where source.isWMONQuoted {
-            let mon = out[Monad.native] ?? out[Monad.wmon]
-            if let mon, let value = out[token.address] { out[token.address] = value * mon } else { out[token.address] = nil }
+        var listed: [Address: DyorListing] = [:]
+        var unsettled: Set<Address> = []
+        // 1. Who recorded each coin not known: every launchpad's record, every cohort's Moment id. A launch's record
+        //    decides it at once; a Moment's is read next.
+        if !unknown.isEmpty {
+            let perCoin = launchpads.count + cohorts.count
+            let answers = await Self.readChunked(multicall, unknown.flatMap { DyorListing.originCalls($0, launchpads: launchpads, cohorts: cohorts) }, block: .latest)
+            for (i, coin) in unknown.enumerated() {
+                switch DyorListing.origins(coin, launchpads: launchpads, cohorts: cohorts, answers: Array(answers[i * perCoin ..< (i + 1) * perCoin])) {
+                case .moment(let cohort, let id): origins[coin] = .moment(cohort, id: id)
+                case .record(.listed(let listing)): listed[coin] = listing
+                case .record(.notDyor): break
+                case .record(.notYet), .record(.unread): unsettled.insert(coin)
+                }
+            }
+        }
+        // 2. Each coin's record in its own factory: a factory's own coin it has no record of now is a node behind, and a
+        //    coin the registry proved is never taken for another's, whatever a record says.
+        let known = Set(origins.keys).subtracting(unknown)
+        for (coin, record) in await records(origins, block: .latest) {
+            switch record {
+            case .listed(let listing): listed[coin] = listing
+            case .notDyor where !known.contains(coin): break
+            case .notDyor, .notYet, .unread: unsettled.insert(coin)
+            }
+        }
+        return (listed, unsettled)
+    }
+
+    /// The launchpad stack or cohort, of those this reads, that recorded `coin`.
+    private func origin(of coin: DyorCoin) -> DyorListing.Origin? {
+        switch coin.origin {
+        case .launch(let factory, _, _):
+            return launchpads.first { $0.factory == factory }.map { .launch($0) }
+        case .moment(let factory, let id, _):
+            return cohorts.first { $0.factory == factory }.map { .moment($0, id: id) }
+        }
+    }
+
+    /// Each coin's record (`DyorListing.record`) in its own factory at `block`, in one read.
+    private func records(_ origins: [Address: DyorListing.Origin], block: BlockTag) async -> [Address: DyorListing.Record] {
+        guard !origins.isEmpty else { return [:] }
+        let entries = origins.sorted { $0.key.hex < $1.key.hex }
+        let layouts = entries.map { entry in DyorListing.recordCalls(entry.key, origin: entry.value) }
+        let answers = await Self.readChunked(multicall, layouts.flatMap { $0 }, block: block)
+        var out: [Address: DyorListing.Record] = [:]
+        var at = 0
+        for (entry, layout) in zip(entries, layouts) {
+            out[entry.key] = DyorListing.record(entry.key, origin: entry.value, answers: Array(answers[at ..< at + layout.count]))
+            at += layout.count
         }
         return out
+    }
+
+    /// `calls` at `block` in Multicall3 reads of at most `Multicall.recordChunk`, `Multicall.readsInFlight` at a time, their
+    /// answers in `calls` order; every call of a read that failed as a whole comes back as a failure.
+    static func readChunked(_ multicall: Multicall, _ calls: [ContractCall], block: BlockTag) async -> [Result<[ABIValue], Error>] {
+        let chunks = stride(from: 0, to: calls.count, by: Multicall.recordChunk).map { Array(calls[$0 ..< min(calls.count, $0 + Multicall.recordChunk)]) }
+        var answers = [[Result<[ABIValue], Error>]](repeating: [], count: chunks.count)
+        await withTaskGroup(of: (Int, [Result<[ABIValue], Error>]).self) { group in
+            var next = 0
+            func send() {
+                guard next < chunks.count else { return }
+                let index = next
+                next += 1
+                let chunk = chunks[index]
+                group.addTask {
+                    do {
+                        let results = try await multicall.read(chunk, block: block)
+                        return (index, results.count == chunk.count ? results : chunk.map { _ in .failure(NetworkError.malformedResponse) })
+                    } catch {
+                        return (index, chunk.map { _ in .failure(error) })
+                    }
+                }
+            }
+            for _ in 0 ..< Multicall.readsInFlight { send() }
+            while let (index, results) = await group.next() {
+                answers[index] = results
+                send()
+            }
+        }
+        return answers.flatMap { $0 }
+    }
+
+    // MARK: Reads
+
+    /// Prices read at one block: dollars per whole token, and for a DyorHQ coin also its price in its pair asset.
+    struct PriceRead: Sendable {
+        var usd: [Address: Double] = [:]
+        var pair: [Address: Double] = [:]
+    }
+
+    /// The day-ago read: every DyorHQ coin's venue read again at `block` (its record then), then every price at that
+    /// block. A coin its factory hadn't recorded then is `new`; one whose record then couldn't be read has no change.
+    private func before(_ sources: [(token: Token, source: Source)], block: UInt64?) async -> (prices: PriceRead, new: Set<Address>) {
+        guard let block else { return (PriceRead(), []) }
+        var origins: [Address: DyorListing.Origin] = [:]
+        for (token, source) in sources { if let listing = source.listing { origins[token.address] = listing.origin } }
+        let then = await records(origins, block: .number(block))
+        var sourcesThen: [(token: Token, source: Source)] = []
+        var new: Set<Address> = []
+        for (token, source) in sources {
+            guard source.listing != nil else { sourcesThen.append((token, source)); continue }
+            switch then[token.address] {
+            case .listed(let listing)?: sourcesThen.append((token, .dyor(listing)))
+            case .notYet?: new.insert(token.address)
+            default: break
+            }
+        }
+        let prices = (try? await Self.readPrices(multicall: multicall, sourcesThen, block: .number(block))) ?? PriceRead()
+        return (prices, new)
+    }
+
+    /// Prices of `sources` at `block`, in one Multicall3 read (`combine`).
+    private static func readPrices(multicall: Multicall, _ sources: [(token: Token, source: Source)], block: BlockTag) async throws -> PriceRead {
+        var priced: [(token: Token, source: Source)] = []
+        var calls: [ContractCall] = []
+        for entry in sources {
+            guard let call = try entry.source.priceCall else { continue }
+            priced.append(entry)
+            calls.append(call)
+        }
+        guard !calls.isEmpty else { return PriceRead() }
+        return combine(priced, try await multicall.read(calls, block: block))
+    }
+
+    /// Pure: dollars per whole token from each source's answer (`results`, one per source, all from one block). A
+    /// WMON-quoted pool's price becomes dollars through MON's; a DyorHQ coin's price in its pair asset
+    /// (`DyorListing.pairPrice`) through its pair asset's (`DyorListing.pairUSD`): MON's, $1, or aBIL's.
+    static func combine(_ sources: [(token: Token, source: Source)], _ results: [Result<[ABIValue], Error>]) -> PriceRead {
+        var read = PriceRead()
+        for ((token, source), result) in zip(sources, results) {
+            guard case .success(let values) = result else { continue }
+            if let listing = source.listing {
+                read.pair[token.address] = listing.pairPrice(values)
+            } else {
+                read.usd[token.address] = priceFromValues(values, source: source, tokenDecimals: token.decimals)
+            }
+        }
+        let mon = read.usd[Monad.native] ?? read.usd[Monad.wmon]
+        for (token, source) in sources where source.isWMONQuoted {
+            if let mon, let value = read.usd[token.address] { read.usd[token.address] = value * mon } else { read.usd[token.address] = nil }
+        }
+        let monUSD = read.usd[Monad.native] ?? read.usd[Monad.wmon]
+        for (token, source) in sources {
+            guard let listing = source.listing, let pairPrice = read.pair[token.address],
+                  let pairUSD = DyorListing.pairUSD(listing.pair, mon: monUSD, abil: read.usd[Token.abil.address]) else { continue }
+            read.usd[token.address] = pairPrice * pairUSD
+        }
+        return read
     }
 
     // MARK: Math
@@ -318,8 +613,8 @@ public actor PriceService {
             // USDC and AUSD are 6-decimal dollar stables; a WMON quote is 18-decimal and converted to USD via MON.
             let quoteDecimals = (quote == Monad.usdc || quote == Monad.ausd) ? 6 : 18
             return price(sqrtPriceX96: sqrtPriceX96, token: token, token0: token0, tokenDecimals: tokenDecimals, quoteDecimals: quoteDecimals)
-        case .v2:
-            return 0 // v2 is priced from reserves, not a sqrt price — see priceFromValues/priceFromData.
+        case .v2, .dyor:
+            return 0 // v2 is priced from reserves, a DyorHQ venue by `DyorListing.pairPrice`: never from here.
         }
     }
 
@@ -341,6 +636,8 @@ public actor PriceService {
         case .v2(_, let token, let quote, let token0):
             guard let r0 = values.first?.uintOrNil, values.count >= 2, let r1 = values[1].uintOrNil else { return nil }
             return priceFromReserves(reserve0: r0, reserve1: r1, token: token, quote: quote, token0: token0, tokenDecimals: tokenDecimals)
+        case .dyor:
+            return nil
         }
     }
 
@@ -354,6 +651,8 @@ public actor PriceService {
             guard let decoded = try? ABI.decode(data, "uint112,uint112,uint32"), decoded.count >= 2,
                   let r0 = decoded[0].uintOrNil, let r1 = decoded[1].uintOrNil else { return nil }
             return priceFromReserves(reserve0: r0, reserve1: r1, token: token, quote: quote, token0: token0, tokenDecimals: tokenDecimals)
+        case .dyor:
+            return nil
         }
     }
 

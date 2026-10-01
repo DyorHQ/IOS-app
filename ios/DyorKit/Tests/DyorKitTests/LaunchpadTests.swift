@@ -633,7 +633,7 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(fill.fee, e6(8))
         XCTAssertEqual(fill.tax, e6(2))
 
-        let trades = LaunchpadService.trades(buys: buys, sells: sells, anchor: anchor, pair: usdcPair)
+        let trades = LaunchpadService.trades(buys: buys, sells: sells, anchor: anchor, pair: usdcPair, secondsPerBlock: BlockClockFixture.secondsPerBlock)
         XCTAssertEqual(trades.count, 2)
         // Sorted by block ascending: the sell at 998 precedes the buy at 1000.
         let sell = trades[0], buy = trades[1]
@@ -654,7 +654,11 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(sell.quoteAmount, bn(se["quote"].string!), "sell quote is the gross before fees")
         XCTAssertEqual(sell.tokenAmount, bn(se["tokens"].string!))
         XCTAssertEqual(sell.price, 2.0, accuracy: 1e-9)
-        XCTAssertEqual(sell.time, 1_699_999_999, "two blocks before the anchor at 0.4 s each")
+        // Two blocks before the anchor at the pace two mainnet headers measured (0.30212 s), rounded to the second.
+        XCTAssertEqual(sell.time, 1_699_999_999, "two blocks before the anchor at the measured pace")
+        XCTAssertEqual(sell.time, Int((Double(anchor.timestamp) - 2 * BlockClockFixture.secondsPerBlock).rounded()))
+        let slower = LaunchpadService.trades(buys: buys, sells: sells, anchor: anchor, pair: usdcPair, secondsPerBlock: 2)
+        XCTAssertEqual(slower[0].time, anchor.timestamp - 4, "the time follows the pace given, never a constant")
     }
 
     func testCandles() {
@@ -697,7 +701,7 @@ final class LaunchpadTests: XCTestCase {
             graduated: [log(f["events"]["graduatedLog"])],
             buys: [log(f["events"]["buyLog"])],
             sells: [log(f["events"]["sellLog"])],
-            anchor: anchor, curves: curves
+            anchor: anchor, secondsPerBlock: BlockClockFixture.secondsPerBlock, curves: curves
         )
         // Newest first by block: buy 1000, sell 998, graduated 995, launched 990.
         XCTAssertEqual(items.count, 4)
@@ -774,7 +778,8 @@ final class LaunchpadTests: XCTestCase {
 
     func testServiceConstants() {
         XCTAssertEqual(LaunchpadService.maxExemptions, 32)
-        XCTAssertEqual(LaunchpadService.blockSeconds, 0.4)
+        XCTAssertEqual(LaunchpadService.recentActivityBlocks, 1_512_000, "a block budget, as when it was called seven days")
+        XCTAssertEqual(LaunchpadService.holderScanBlocks, 6_480_000)
         XCTAssertEqual(LaunchpadService.defaultLogsRPC.absoluteString, "https://rpc1.monad.xyz")
     }
 }

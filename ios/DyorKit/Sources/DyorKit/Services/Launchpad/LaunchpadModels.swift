@@ -780,7 +780,7 @@ public struct CurveTrade: Identifiable, Hashable, Sendable {
     public let id: String
     public let block: UInt64
     public let logIndex: Int
-    /// Unix seconds, estimated from the latest block and Monad's 0.4 s block time.
+    /// Unix seconds, estimated from the latest block at the session's measured pace (`BlockClock`).
     public let time: Int
     public let trader: Address
     public let isBuy: Bool

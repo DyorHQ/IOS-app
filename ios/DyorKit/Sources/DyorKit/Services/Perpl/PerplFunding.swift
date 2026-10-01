@@ -1,16 +1,14 @@
 import Foundation
 
 /// Perpl funding, as the exchange defines it (docs.perpl.xyz/exchange/funding): the rate is the sum over the interval
-/// of the impact-price premium vs the oracle, clamped, and it settles every `blocksPerInterval` blocks — about once an
-/// hour. A positive rate means long positions pay short positions; a negative one, the reverse. Positions carry it as
-/// `premium` (the contract's `premiumPnlCNS`) until they settle.
+/// of the impact-price premium vs the oracle, clamped, and it settles every `blocksPerInterval` blocks. A positive rate
+/// means long positions pay short positions; a negative one, the reverse. Positions carry it as `premium` (the
+/// contract's `premiumPnlCNS`) until they settle. How long an interval lasts is Perpl's own figure from its market
+/// context (`MarketContext.fundingIntervalSeconds` over `fundingIntervalBlocks`: 2,580 s per 8,571 blocks on
+/// 2026-09-08), never an assumed block time.
 public enum PerplFunding {
-    /// Funding settles every 8 571 blocks ("assumes 0.42 second average consensus time").
+    /// Funding settles every 8 571 blocks, the schedule a market's context doesn't name its own.
     public static let blocksPerInterval: UInt64 = 8_571
-    /// The block time the interval assumes, in seconds.
-    public static let assumedBlockSeconds = 0.42
-    /// Hours per interval at the assumed block time (≈ 1.0).
-    public static let intervalHours = Double(blocksPerInterval) * assumedBlockSeconds / 3_600
     public static let hoursPerYear = 24.0 * 365.0
 
     /// `fundingRatePct100k` (contract, parts per 100 000) → fraction of notional per interval.
@@ -43,17 +41,29 @@ public enum PerplFunding {
     /// Funding earned (positive) or paid (negative) by a SHORT of `notional` over `hours` at a constant hourly rate.
     public static func shortIncome(notional: Double, hourly: Double, hours: Double) -> Double { notional * hourly * hours }
 
-    /// The next settlement block on the market's schedule (the first boundary strictly after `head`).
-    public static func nextSettlementBlock(startBlock: UInt64, head: UInt64) -> UInt64 {
-        guard head >= startBlock, startBlock > 0 else { return head + blocksPerInterval }
+    /// The next settlement block on the market's schedule of an interval every `intervalBlocks` blocks (the first
+    /// boundary strictly after `head`).
+    public static func nextSettlementBlock(startBlock: UInt64, head: UInt64, intervalBlocks: UInt64 = blocksPerInterval) -> UInt64 {
+        let interval = max(1, intervalBlocks)
+        guard head >= startBlock, startBlock > 0 else { return head + interval }
         let elapsed = head - startBlock
-        let periods = elapsed / blocksPerInterval + 1
-        return startBlock + periods * blocksPerInterval
+        let periods = elapsed / interval + 1
+        return startBlock + periods * interval
     }
 
-    /// Seconds until the next settlement, from the head block and the chain's measured block time.
-    public static func secondsToNextSettlement(startBlock: UInt64, head: UInt64, blockSeconds: Double = assumedBlockSeconds) -> Double {
-        Double(nextSettlementBlock(startBlock: startBlock, head: head) - head) * blockSeconds
+    /// Seconds until the next settlement, from the head block and the market's own interval in Perpl's context: the
+    /// blocks left on its schedule, at `intervalSeconds` per `intervalBlocks`. Nil when the context reported no interval,
+    /// so the countdown is left out rather than guessed.
+    public static func secondsToNextSettlement(startBlock: UInt64, head: UInt64, intervalSeconds: Int, intervalBlocks: Int) -> Double? {
+        guard intervalSeconds > 0, intervalBlocks > 0 else { return nil }
+        let blocks = UInt64(intervalBlocks)
+        let left = nextSettlementBlock(startBlock: startBlock, head: head, intervalBlocks: blocks) - head
+        return Double(left) * Double(intervalSeconds) / Double(blocks)
+    }
+
+    /// `secondsToNextSettlement` with the interval of `context`, the market's entry in Perpl's context.
+    public static func secondsToNextSettlement(startBlock: UInt64, head: UInt64, context: MarketContext) -> Double? {
+        secondsToNextSettlement(startBlock: startBlock, head: head, intervalSeconds: context.fundingIntervalSeconds, intervalBlocks: context.fundingIntervalBlocks)
     }
 
     /// Hours a short must be held for funding to pay back `totalCost` at a constant hourly rate; nil when the rate
