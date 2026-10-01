@@ -26,6 +26,21 @@ final class PoolLookupCacheTests: XCTestCase {
         XCTAssertEqual(cache.source(token), "deeper-pool")
     }
 
+    /// A market about to move elsewhere (a DyorHQ curve, a Moment still collecting) is looked up again within a minute,
+    /// not after 30: a graduation shows soon. A settled one keeps the full time.
+    func testAnUnsettledMarketIsLookedUpAgainSoon() {
+        var cache = PoolLookupCache<String>()
+        XCTAssertEqual(cache.unsettledTTL, 60)
+        XCTAssertLessThan(cache.unsettledTTL, cache.hitTTL)
+        cache.found(token, "curve", now: start, settled: false)
+        XCTAssertFalse(cache.needsLookup(token, now: start.addingTimeInterval(cache.unsettledTTL - 1)))
+        XCTAssertTrue(cache.needsLookup(token, now: start.addingTimeInterval(cache.unsettledTTL)))
+        XCTAssertEqual(cache.source(token), "curve", "until a lookup completes it keeps pricing the token")
+        cache.found(token, "pool", now: start.addingTimeInterval(cache.unsettledTTL))
+        XCTAssertFalse(cache.needsLookup(token, now: start.addingTimeInterval(cache.unsettledTTL * 2)), "a pool is settled")
+        XCTAssertTrue(cache.needsLookup(token, now: start.addingTimeInterval(cache.unsettledTTL + cache.hitTTL)))
+    }
+
     func testAPoolThatLostItsLiquidityStopsPricing() {
         var cache = PoolLookupCache<String>()
         cache.found(token, "thin-pool", now: start)
