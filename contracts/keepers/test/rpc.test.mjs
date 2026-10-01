@@ -5,8 +5,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HttpRequestError, TimeoutError } from "viem";
 import { isRangeRefusal, isTransportError, makeRpcClient, firstHealthy, rpcDegradedAlert, DEFAULT_RPC_URLS } from "../lib/rpc.mjs";
@@ -16,6 +14,7 @@ import { makeSender } from "../lib/send.mjs";
 import { parseKeeperArgs } from "../lib/options.mjs";
 import { runKeeper } from "../lib/run.mjs";
 import { redact } from "../lib/redact.mjs";
+import { tempDir } from "./tmp.mjs";
 
 const ADDRESS = "0x00000000000000000000000000000000000000f4";
 const http429 = () => new HttpRequestError({ url: "https://rpc1.monad.xyz/?key=FAKE_KEY_123", status: 429, body: {} });
@@ -304,7 +303,7 @@ test("E5 through a run: every read failing at the RPC posts ONE 'RPC degraded' a
       throw http429();
     },
   };
-  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-rpc-")), "state.json");
+  const stateFile = join(tempDir("keeper-rpc-"), "state.json");
   const deps = {
     log: (l) => lines.push(l),
     env: {},

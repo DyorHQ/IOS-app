@@ -2,12 +2,12 @@
 // written atomically and versioned; a corrupt file is moved aside and reported, never silently reset.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync, readdirSync, statSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { loadState, saveState, STATE_VERSION, RESET_HOLD_S } from "../lib/report.mjs";
+import { tempDir } from "./tmp.mjs";
 
-const dir = () => mkdtempSync(join(tmpdir(), "keeper-state-"));
+const dir = () => tempDir("keeper-state-");
 
 test("E6: a missing state file is a first run, with no warning", () => {
   const problems = [];

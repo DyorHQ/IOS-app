@@ -5,8 +5,7 @@
 //      <= 4,000; 3 retries; what was not delivered is posted by the next run; --webhook-file; the URL never leaks.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { planPosts, commitPosts, webhookKind, buildPayloads, deliver, readWebhookFile, formatItem, REPEAT_DEFAULTS } from "../lib/notify.mjs";
@@ -15,6 +14,7 @@ import { makeReporter, EXIT } from "../lib/report.mjs";
 import { makeSender } from "../lib/send.mjs";
 import { parseKeeperArgs } from "../lib/options.mjs";
 import { runKeeper } from "../lib/run.mjs";
+import { tempDir } from "./tmp.mjs";
 
 const T0 = 1_790_000_000;
 const alert = (key, severity, extra = {}) => ({ key, severity, job: "launchpad-graduation", target: `t ${key}`, reason: `r ${key}`, ...extra });
@@ -303,7 +303,7 @@ test("E4: a failed delivery names the channel and status, never the URL or its t
 });
 
 test("E4: --webhook-file holds the URL; its content is never echoed", () => {
-  const dir = mkdtempSync(join(tmpdir(), "keeper-hook-"));
+  const dir = tempDir("keeper-hook-");
   writeFileSync(join(dir, "hook"), `\n  ${DISCORD}  \n`, { mode: 0o600 });
   assert.equal(readWebhookFile(join(dir, "hook")), DISCORD);
   writeFileSync(join(dir, "junk"), "SECRET_WEBHOOK_TOKEN not a url");
@@ -335,7 +335,7 @@ function pendingChain() {
 }
 
 test("E4 through a run: the Discord URL comes from --webhook-file, a failed post exits 1, and the next run posts it again", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "keeper-run-hook-"));
+  const dir = tempDir("keeper-run-hook-");
   writeFileSync(join(dir, "hook"), DISCORD, { mode: 0o600 });
   const stateFile = join(dir, "state.json");
   const lines = [];

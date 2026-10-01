@@ -6,14 +6,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseKeeperArgs } from "../lib/options.mjs";
 import { runKeeper } from "../lib/run.mjs";
 import { signerAddress } from "../lib/send.mjs";
 import { EXIT } from "../lib/report.mjs";
 import { momentsCohorts } from "../lib/deployments.mjs";
+import { tempDir } from "./tmp.mjs";
 
 const NOW = 1_790_000_000n;
 const SIGNER = "0x1111111111111111111111111111111111111111";
@@ -180,7 +180,7 @@ test("K2: an RPC whose head is stale is an alert (warning from 2 min, critical f
 });
 
 test("K2: a stale RPC resolves nothing: a posted alert its job no longer raises stays open", async () => {
-  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const stateFile = join(tempDir("keeper-run-"), "state.json");
   const w = world();
   const o = opts(["moments-graduation", "--only-live", "--webhook", "https://hooks.example/x", "--state-file", stateFile]);
   await runKeeper(o, w.deps);
@@ -217,7 +217,7 @@ test("E9: every watchdog post is marked [watchdog]", async () => {
 });
 
 test("E9: a run past --max-runtime raises a critical alert, saves its state, posts, and exits 1", async () => {
-  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const stateFile = join(tempDir("keeper-run-"), "state.json");
   const w = world({ client: chain({ hang: true }) });
   const t0 = Date.now();
   const code = await runKeeper(opts(["moments-graduation", "--only-live", "--webhook", "https://hooks.example/x", "--state-file", stateFile], { maxRuntime: 0.2 }), w.deps);
@@ -241,7 +241,7 @@ test("E9: once the deadline has passed nothing more is sent, even when a late re
 test("E9: after an overrun the run saves and posts what it had at the deadline; a late scan result is left to the next run", async () => {
   const live = momentsCohorts().find((c) => c.live);
   const scanId = `mo1:GraduationFailed:${live.collect.toLowerCase()}`;
-  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const stateFile = join(tempDir("keeper-run-"), "state.json");
   writeFileSync(stateFile, JSON.stringify({ version: 1, cursors: { [scanId]: "1000" } }));
   const event = { args: { momentId: 1n }, blockNumber: 1_500n, transactionHash: `0x${"fa".repeat(32)}`, logIndex: 0 };
   const client = (logsDelay) => ({
@@ -273,7 +273,7 @@ test("E9: after an overrun the run saves and posts what it had at the deadline; 
 });
 
 test("E9: a send the job reaches after the deadline is refused without a failure or backoff in the saved state", async () => {
-  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const stateFile = join(tempDir("keeper-run-"), "state.json");
   const w = world({ client: chain({ blockDelay: 300 }) });
   const code = await runKeeper(opts(["moments-graduation", "--only-live", "--state-file", stateFile], { send: true, signer: { account: "k" }, maxRuntime: 0.1 }), w.deps);
   assert.equal(code, EXIT.ERROR);
@@ -301,7 +301,7 @@ test("E9: a normal run finishes well inside the deadline and exits by its alerts
 // ---------------------------------------------------------------- K3: sends are saved as they go
 
 test("K3: a keeper killed while cast runs leaves the send in flight: the next run reports it, keeps it counted and backs off", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "keeper-kill-"));
+  const dir = tempDir("keeper-kill-");
   const stateFile = join(dir, "state.json");
   const started = join(dir, "cast-started");
   // A cast that hangs (as one waiting for a receipt), after saying it started.
@@ -346,7 +346,7 @@ await runKeeper(o, { log: () => {}, env: {}, makeClient: () => client, makeSende
 });
 
 test("K3: a live send is saved before cast runs and its outcome saved after it", async () => {
-  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const stateFile = join(tempDir("keeper-run-"), "state.json");
   const w = world();
   const seen = [];
   w.deps.makeSenderFn = () => ({
@@ -366,7 +366,7 @@ test("K3: a live send is saved before cast runs and its outcome saved after it",
 });
 
 test("K3: a failed send's alert is saved with its spend, before the run posts (a run killed in between still has it posted)", async () => {
-  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const stateFile = join(tempDir("keeper-run-"), "state.json");
   const w = world();
   const { MinedRevert } = await import("../lib/send.mjs");
   w.deps.makeSenderFn = () => ({
@@ -388,7 +388,7 @@ test("K3: a failed send's alert is saved with its spend, before the run posts (a
 });
 
 test("K3: after a corrupt state file is reset, sends are held for 24 hours (the cap's lost window), then resume", async () => {
-  const stateFile = join(mkdtempSync(join(tmpdir(), "keeper-run-")), "state.json");
+  const stateFile = join(tempDir("keeper-run-"), "state.json");
   writeFileSync(stateFile, '{"budget": {"spend": [');
   // A run `s` seconds after the reset, against a head that is fresh then.
   const at = (s = 0) => {
@@ -417,7 +417,7 @@ test("K3: after a corrupt state file is reset, sends are held for 24 hours (the 
 });
 
 test("K3: a state file that cannot be written holds every send, and the run still posts its alerts and exits 1", { skip: process.getuid?.() === 0 && "root ignores file modes" }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "keeper-ro-"));
+  const dir = tempDir("keeper-ro-");
   const stateFile = join(dir, "state.json");
   writeFileSync(stateFile, JSON.stringify({ version: 1 }));
   chmodSync(dir, 0o500); // the file reads, but no temp file can be written next to it (a full or read-only volume)
