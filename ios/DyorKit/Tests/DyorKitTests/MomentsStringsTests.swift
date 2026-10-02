@@ -6,7 +6,8 @@ import XCTest
 /// `String` first (a row's value, a field's error, a badge, an Activity record). What has nothing to translate (an amount
 /// with its symbol, a count, a percentage) is shown as it is; a count that needs a plural is the key's own `Int`, never
 /// "x == 1 ? …"; dates and countdowns follow the app's language. The English literals that are identifiers (URL schemes,
-/// the Activity section, upload types) stay as they are, and the folder has no English server or RPC matcher.
+/// the Activity section, upload types) stay as they are, and the folder has no English server or RPC matcher. English
+/// reads a plural key from the catalog too, so once the app's catalog is synced every one has its English "one" form.
 final class MomentsStringsTests: XCTestCase {
     // MARK: The checks
 
@@ -183,6 +184,65 @@ final class MomentsStringsTests: XCTestCase {
         XCTAssertTrue(create.contains(#"contentType: isMP4 ? "video/mp4" : "video/quicktime""#))
     }
 
+    // MARK: The catalog's English plurals
+
+    /// The folder's plural keys as the compiler extracts them (an `Int` is %lld, a `String` %@, a written "%" in an
+    /// interpolated key %%), from the sites `testPluralsAreKeysWithTheirCount` pins. The code's English is the "other"
+    /// form: until the catalog gives a key its "one", a count of 1 reads "1 days" or "Collect 1 Editions".
+    private static let pluralKeys = [
+        "%lld days", // Publish: the collect window, and the review's Window row
+        "Minimum %@. About %lld collects at this price reach the %@ reserve, and the coin graduates at a %@ FDV. Up to %@ of the %@ coins is yours, vesting 20%% at graduation then 16%% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).",
+        "%@ · about %lld collects", // Still needed
+        "%lld editions · %@ $%@", // You get
+        "This collect completes the Moment: it takes only what the reserve still needs (%@ for %lld editions) and graduates the coin in the same transaction.",
+        "Collect %lld Editions", // the Collect button, 1 edition by default
+        "%@ · %lld editions", // Largest holder
+        "%@ · %lld collects", // Owed to collectors
+        "%lld editions · %@", // the collect's Activity record
+        "across %lld Moments", // Claim All's Activity record
+        "%lld editions · promised %@ · claimed %@ · in wallet %@ · creator", // My Moments, a row
+        "%lld editions · promised %@ · claimed %@ · in wallet %@",
+    ]
+
+    /// Every plural key is in the app's catalog with an English "one" and "other" that differ. The catalogs are filled
+    /// once, after every L2 lane merges: while the app's is still empty this is skipped, except under the release gate
+    /// (`DYORHQ_RELEASE_GATE=1`), where an empty catalog refuses the release. A synced catalog without the English
+    /// plurals fails, so the catalog step cannot leave "Collect 1 Editions" in English.
+    func testEveryPluralKeyHasItsEnglishOneAndOther() throws {
+        let strings = try Self.appCatalog()
+        if strings.isEmpty {
+            guard ProcessInfo.processInfo.environment["DYORHQ_RELEASE_GATE"] == "1" else {
+                throw XCTSkip("the app's catalog is not synced yet: the catalog step gives the \(Self.pluralKeys.count) Moments plural keys their English one and other")
+            }
+            return XCTFail("REFUSING A RELEASE: the app's catalog is empty, so English reads \"Collect 1 Editions\" and \"1 days\"")
+        }
+        for key in Self.pluralKeys {
+            if let problem = Self.englishPluralProblem(strings[key]) { XCTFail("\(key): \(problem)") }
+        }
+    }
+
+    /// The plural check reads both shapes Xcode writes (the whole string varied by plural, or a substitution) and refuses
+    /// a key that is missing, has no English plural, or has an English "one" that is missing or the same as "other".
+    func testThePluralCheckReadsTheCatalogShapes() throws {
+        func plural(_ forms: [String: String]) -> [String: Any] {
+            ["plural": forms.mapValues { ["stringUnit": ["state": "translated", "value": $0]] }]
+        }
+        func entry(_ localization: [String: Any], in language: String = "en") -> [String: Any] { ["localizations": [language: localization]] }
+        let whole = entry(["variations": plural(["one": "%lld day", "other": "%lld days"])])
+        let substitution = entry(["stringUnit": ["state": "translated", "value": "Collect %#@count@"],
+                                  "substitutions": ["count": ["argNum": 1, "formatSpecifier": "lld",
+                                                              "variations": plural(["one": "%arg Edition", "other": "%arg Editions"])] as [String: Any]]])
+        XCTAssertNil(Self.englishPluralProblem(whole))
+        XCTAssertNil(Self.englishPluralProblem(substitution))
+
+        XCTAssertEqual(Self.englishPluralProblem(nil), "not in the app's catalog")
+        XCTAssertEqual(Self.englishPluralProblem([String: Any]()), "no English plural") // as a sync adds it
+        XCTAssertEqual(Self.englishPluralProblem(entry(["stringUnit": ["state": "translated", "value": "%lld days"]])), "no English plural")
+        XCTAssertEqual(Self.englishPluralProblem(entry(["variations": plural(["one": "%lld jour", "other": "%lld jours"])], in: "fr")), "no English plural")
+        XCTAssertEqual(Self.englishPluralProblem(entry(["variations": plural(["other": "%lld days"])])), "an English plural without its one or other form")
+        XCTAssertEqual(Self.englishPluralProblem(entry(["variations": plural(["one": "%lld days", "other": "%lld days"])])), "the English one form is the other form")
+    }
+
     // MARK: Reading the sources
 
     /// Every Swift file of ios/DyorHQ/Moments, by name; a new file is read too.
@@ -194,6 +254,43 @@ final class MomentsStringsTests: XCTestCase {
         let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).filter { $0.pathExtension == "swift" }
         XCTAssertGreaterThanOrEqual(files.count, 7)
         return try files.map { ($0.lastPathComponent, try String(contentsOf: $0, encoding: .utf8)) }.sorted { $0.name < $1.name }
+    }
+
+    /// The app's catalog (ios/DyorHQ/Resources/Localizable.xcstrings), its entries by key.
+    private static func appCatalog() throws -> [String: Any] {
+        var file = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { file.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
+        file = file.appendingPathComponent("DyorHQ/Resources/Localizable.xcstrings")
+        guard FileManager.default.fileExists(atPath: file.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
+        let catalog = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        return try XCTUnwrap(catalog["strings"] as? [String: Any], "a catalog has its strings")
+    }
+
+    /// What a plural key's catalog entry lacks in English, or nil: it needs a plural variation (of the whole string or
+    /// of a substitution) whose "one" and "other" forms are both written and differ.
+    private static func englishPluralProblem(_ entry: Any?) -> String? {
+        guard let entry = entry as? [String: Any] else { return "not in the app's catalog" }
+        let forms = plurals(in: (entry["localizations"] as? [String: Any])?["en"] ?? [String: Any]())
+        guard !forms.isEmpty else { return "no English plural" }
+        for form in forms {
+            guard let one = form["one"], let other = form["other"], !one.isEmpty, !other.isEmpty else { return "an English plural without its one or other form" }
+            if one == other { return "the English one form is the other form" }
+        }
+        return nil
+    }
+
+    /// Every plural variation inside a catalog localization, as its forms' values by plural category.
+    private static func plurals(in json: Any) -> [[String: String]] {
+        guard let object = json as? [String: Any] else { return [] }
+        var found: [[String: String]] = []
+        for (key, value) in object {
+            if key == "plural", let forms = value as? [String: Any] {
+                found.append(forms.compactMapValues { (($0 as? [String: Any])?["stringUnit"] as? [String: Any])?["value"] as? String })
+            } else {
+                found += plurals(in: value)
+            }
+        }
+        return found
     }
 
     private static func hasWords(_ words: String) -> Bool { words.range(of: "[a-z]{2,}", options: .regularExpression) != nil }
