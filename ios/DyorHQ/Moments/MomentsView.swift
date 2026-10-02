@@ -20,7 +20,14 @@ struct MomentsView: View {
     enum MomentFilter: String, CaseIterable, Identifiable {
         case all, collecting, graduated
         var id: String { rawValue }
-        var label: String { rawValue.capitalized }
+        /// The segment's name, written out (never the raw value) so it is translated.
+        var label: Text {
+            switch self {
+            case .all: return Text("All", comment: "[tight] Moments filter: every Moment")
+            case .collecting: return Text("Collecting", comment: "[tight] Moments filter: Moments still open to collect")
+            case .graduated: return Text("Graduated", comment: "[tight] Moments filter: Moments whose coin graduated")
+            }
+        }
     }
 
     private var shown: [MomentInfo] {
@@ -104,7 +111,7 @@ struct MomentsView: View {
                     }
                 }
                 Picker("Filter", selection: $filter) {
-                    ForEach(MomentFilter.allCases) { Text($0.label).tag($0) }
+                    ForEach(MomentFilter.allCases) { $0.label.tag($0) }
                 }
                 .pickerStyle(.segmented)
                 if shown.isEmpty {
@@ -128,7 +135,7 @@ struct MomentsView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("MOMENTS").font(.caption.weight(.semibold)).tracking(1.5).foregroundStyle(.secondary)
+            Text("MOMENTS", comment: "Eyebrow over the Moments board, in capitals").font(.caption.weight(.semibold)).tracking(1.5).foregroundStyle(.secondary)
             Text("Make your favorite moments last forever.").font(.system(.title, design: .serif).weight(.semibold)).fixedSize(horizontal: false, vertical: true)
             Text("Publish a photo or video as an NFT on Monad. Share it with everyone and earn every time it's collected.")
                 .font(.subheadline).foregroundStyle(.secondary)
