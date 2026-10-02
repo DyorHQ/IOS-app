@@ -88,8 +88,9 @@ struct PriceAlertsView: View {
                             TokenLogo(token: Token(address: alert.token, symbol: alert.symbol, name: alert.symbol, decimals: alert.decimals), size: 32)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(alert.symbol).font(.subheadline.weight(.semibold))
-                                Text("\(alert.above ? "Above" : "Below") \(PriceFormat.usdPrice(alert.target))").font(.caption).foregroundStyle(.secondary)
-                                    .accessibilityLabel("\(alert.above ? "Above" : "Below") \(PriceFormat.spoken(alert.target))")
+                                Text(alert.above ? "Above \(PriceFormat.usdPrice(alert.target))" : "Below \(PriceFormat.usdPrice(alert.target))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .accessibilityLabel(alert.above ? "Above \(PriceFormat.spoken(alert.target))" : "Below \(PriceFormat.spoken(alert.target))")
                             }
                             Spacer()
                             Image(systemName: alert.above ? "arrow.up.right" : "arrow.down.right")
@@ -158,12 +159,14 @@ private struct CreateAlertView: View {
                         // narrows instead of cutting "Target" short.
                         Text("Target").fixedSize()
                         Spacer()
-                        TextField("0.00", text: $targetText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
+                        TextField("0.00" as String, text: $targetText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
                             .frame(maxWidth: 220).layoutPriority(1)
                         Text("USD").foregroundStyle(.secondary).fixedSize()
                     }
                 } footer: {
-                    Text("DyorHQ notifies you once when it finds \(token.symbol) \(above ? "above" : "below") this price. Alerts arrive while DyorHQ is open: it checks every 30 seconds.")
+                    Text(above
+                         ? "DyorHQ notifies you once when it finds \(token.symbol) above this price. Alerts arrive while DyorHQ is open: it checks every 30 seconds."
+                         : "DyorHQ notifies you once when it finds \(token.symbol) below this price. Alerts arrive while DyorHQ is open: it checks every 30 seconds.")
                 }
             }
             .navigationTitle("New Alert")
