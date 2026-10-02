@@ -43,12 +43,15 @@ struct RetiredMomentDetailView: View {
 
     // MARK: Sections
 
+    /// The badge: its words in the app's language, its symbol and tint.
     private var status: (text: String, symbol: String, tint: Color) {
-        if info.graduated || info.state == .graduated { return ("Graduated", "checkmark.seal.fill", .positive) }
+        if info.graduated || info.state == .graduated {
+            return (tr(LocalizedStringResource("Graduated", comment: "[tight] Moment badge: its coin graduated into a pool")), "checkmark.seal.fill", .positive)
+        }
         switch info.state {
-        case .expired: return ("Expired", "xmark.circle", .secondary)
-        case .graduationPending: return ("Graduation pending", "hourglass", .attention)
-        default: return ("Collecting closed", "lock", .secondary)
+        case .expired: return (tr(LocalizedStringResource("Expired", comment: "[tight] Moment badge: it expired before graduating")), "xmark.circle", .secondary)
+        case .graduationPending: return (tr(LocalizedStringResource("Graduation pending", comment: "[tight] Moment badge: its graduation has not completed yet")), "hourglass", .attention)
+        default: return (tr(LocalizedStringResource("Collecting closed", comment: "[tight] Moment badge: a past cohort's Moment can no longer be collected")), "lock", .secondary)
         }
     }
 
@@ -62,7 +65,7 @@ struct RetiredMomentDetailView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(info.name).font(.title2.weight(.semibold)).lineLimit(2)
-                        Text("$\(info.symbol)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                        Text(verbatim: "$\(info.symbol)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                     }
                     Label(status.text, systemImage: status.symbol)
                         .font(.caption2.weight(.bold))
@@ -99,12 +102,12 @@ struct RetiredMomentDetailView: View {
             if account.nftBalance > 0 {
                 LabeledContent("Editions", value: account.nftIds.isEmpty ? "\(account.nftBalance)" : account.nftIds.prefix(6).map { "#\($0)" }.joined(separator: ", ") + (account.nftIds.count > 6 ? " +\(account.nftIds.count - 6)" : ""))
                 ForEach(account.nftIds.prefix(3), id: \.self) { id in
-                    Link(destination: OpenSea.item(contract: m.nft, tokenId: id)) { Label("View #\(id) on OpenSea", systemImage: "sailboat") }
+                    Link(destination: OpenSea.item(contract: m.nft, tokenId: id)) { Label("View #\(String(id)) on OpenSea", systemImage: "sailboat") }
                 }
             }
             if account.entitlement > 0 { LabeledContent("Coins owed", value: "\(MomentsFormat.coins(account.entitlement)) $\(info.symbol)") }
             if info.graduated {
-                LabeledContent("Claimable now") { Text("\(MomentsFormat.coins(account.claimable)) $\(info.symbol)").monospacedDigit().fontWeight(account.claimable > 0 ? .semibold : .regular).foregroundStyle(account.claimable > 0 ? Color.brand : .primary) }
+                LabeledContent("Claimable now") { Text(verbatim: "\(MomentsFormat.coins(account.claimable)) $\(info.symbol)").monospacedDigit().fontWeight(account.claimable > 0 ? .semibold : .regular).foregroundStyle(account.claimable > 0 ? Color.brand : .primary) }
                 LabeledContent("Claimed", value: "\(MomentsFormat.coins(account.claimed)) $\(info.symbol)")
                 LabeledContent("Vested", value: "\(MomentsMath.collectorVestedBps(graduatedAt: info.pool?.graduatedAt ?? 0, now: now) / 100)%")
                 if account.claimable > 0 {
@@ -113,7 +116,7 @@ struct RetiredMomentDetailView: View {
             }
             if account.coinBalance > 0 { LabeledContent("In wallet", value: "\(MomentsFormat.coins(account.coinBalance)) $\(info.symbol)") }
         } header: {
-            Text("Your Position")
+            Text("Your Position", comment: "Section header: the wallet's editions and coins of this Moment")
         } footer: {
             if !info.graduated {
                 if info.state == .expired {
@@ -139,7 +142,7 @@ struct RetiredMomentDetailView: View {
                     Button("Withdraw Pool Fees", systemImage: "banknote") { Haptics.tap(); action = .withdrawCreatorFees }.disabled(!session.canSign)
                 }
                 if let account {
-                    LabeledContent("Allocation claimable") { Text("\(MomentsFormat.coins(account.claimableCreator)) $\(info.symbol)").monospacedDigit() }
+                    LabeledContent("Allocation claimable") { Text(verbatim: "\(MomentsFormat.coins(account.claimableCreator)) $\(info.symbol)").monospacedDigit() }
                     LabeledContent("Allocation vested", value: "\(MomentsMath.creatorVestedBps(graduatedAt: info.pool?.graduatedAt ?? 0, now: now) / 100)%")
                 }
             }
@@ -165,24 +168,25 @@ struct RetiredMomentDetailView: View {
 
     // MARK: Sheets — the only writes: `RetiredMomentAction`
 
+    /// Each settled write is recorded in the language in use; `section` is an identifier, never translated.
     @ViewBuilder private func sheet(for which: RetiredMomentAction) -> some View {
         let plan = cohort.plan(which, momentId: m.id, symbol: info.symbol)
         switch which {
         case .claim:
             ConfirmationSheet(title: "Claim \(info.symbol)", confirmTitle: "Claim", build: { plan }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed $\(info.symbol)", subtitle: "\(MomentsFormat.coins(account?.claimable ?? 0)) vested coins · past cohort", hash: hash, section: "moments", reference: info.key.description), owner: session.address) },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: tr("Claimed $\(info.symbol)"), subtitle: tr("\(MomentsFormat.coins(account?.claimable ?? 0)) vested coins · past cohort"), hash: hash, section: "moments", reference: info.key.description), owner: session.address) },
                               intent: .momentsClaim) {
                 DetailRow("Claimable", verbatim: "\(MomentsFormat.coins(account?.claimable ?? 0)) $\(info.symbol)")
             }
         case .withdrawCreatorProceeds:
             ConfirmationSheet(title: "Withdraw Proceeds", confirmTitle: "Withdraw", build: { plan }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) proceeds", subtitle: "\(MomentsFormat.usdc(account?.creatorProceeds ?? 0)) creator proceeds · past cohort", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorProceeds ?? 0), reference: info.key.description), owner: session.address) },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: tr("Collected $\(info.symbol) proceeds"), subtitle: tr("\(MomentsFormat.usdc(account?.creatorProceeds ?? 0)) creator proceeds · past cohort"), hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorProceeds ?? 0), reference: info.key.description), owner: session.address) },
                               intent: .momentsWithdraw) {
                 DetailRow("Proceeds", MomentsFormat.usdc(account?.creatorProceeds ?? 0))
             }
         case .withdrawCreatorFees:
             ConfirmationSheet(title: "Withdraw Pool Fees", confirmTitle: "Withdraw", build: { plan }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) pool fees", subtitle: "\(MomentsFormat.usdc(account?.creatorFees ?? 0)) trading fees · past cohort", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorFees ?? 0), reference: info.key.description), owner: session.address) },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: tr("Collected $\(info.symbol) pool fees"), subtitle: tr("\(MomentsFormat.usdc(account?.creatorFees ?? 0)) trading fees · past cohort"), hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorFees ?? 0), reference: info.key.description), owner: session.address) },
                               intent: .momentsWithdraw) {
                 DetailRow("Pool fees", MomentsFormat.usdc(account?.creatorFees ?? 0))
             }

@@ -70,17 +70,17 @@ struct CreateMomentView: View {
         return uri.isEmpty || uri.hasPrefix("ipfs://") || uri.hasPrefix("https://")
     }
     private var priceProblem: String? {
-        guard let price, price > 0 else { return "Enter a collect price in USDC." }
-        if let policy, price < policy.minPrice { return "The minimum price is \(MomentsFormat.usdc(policy.minPrice))." }
+        guard let price, price > 0 else { return tr("Enter a collect price in USDC.") }
+        if let policy, price < policy.minPrice { return tr("The minimum price is \(MomentsFormat.usdc(policy.minPrice)).") }
         // Above the gross that completes the reserve the first collect is charged only that gross.
         if let policy, let ceiling = MomentsMath.maxCollectPrice(threshold: policy.threshold, reserveBps: policy.reserveBps), price > ceiling {
-            return "The maximum price is \(MomentsFormat.usdc(ceiling)): the first collect at that price completes the reserve, so a higher price would never be charged."
+            return tr("The maximum price is \(MomentsFormat.usdc(ceiling)): the first collect at that price completes the reserve, so a higher price would never be charged.")
         }
         return nil
     }
     private var allocProblem: String? {
-        guard let allocBps else { return "Enter your allocation as a percentage." }
-        if allocBps > maxAllocBps { return "At most \(NumberStyle.basisPoints(maxAllocBps)) of the supply." }
+        guard let allocBps else { return tr("Enter your allocation as a percentage.") }
+        if allocBps > maxAllocBps { return tr("At most \(NumberStyle.basisPoints(maxAllocBps)) of the supply.") }
         return nil
     }
     /// Why this name or ticker can't be published (`SymbolSafety.createRefusal`), as the launch form says it: said under its
@@ -154,7 +154,8 @@ struct CreateMomentView: View {
                         build: { try await env.moments.publishPlan(input, termsHash: policy.termsHash) },
                         onDone: { dismiss(); onPublished(nil) },
                         onCompleted: { hash in
-                            Activity.record(ActivityRecord(kind: .moment, title: "Published \(input.name)", subtitle: "$\(input.symbol) · \(MomentsFormat.usdc(input.price)) per edition", hash: hash, section: "moments"), owner: session.address)
+                            // Recorded in the language in use; `section` is an identifier, never translated.
+                            Activity.record(ActivityRecord(kind: .moment, title: tr("Published \(input.name)"), subtitle: tr("$\(input.symbol) · \(MomentsFormat.usdc(input.price)) per edition"), hash: hash, section: "moments"), owner: session.address)
                             // The new coin's picture and DyorHQ label, without waiting for the next 5-minute read.
                             Task { [coins = env.dyorCoins] in await coins.refresh() }
                             Task {
@@ -171,7 +172,7 @@ struct CreateMomentView: View {
                         DetailRow("Collect price", MomentsFormat.usdc(input.price))
                         DetailRow("Graduates at", "\(MomentsFormat.usdcCents(policy.threshold)) reserve · \(MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: input.creatorAllocBps))) FDV")
                         DetailRow("Your coins", verbatim: "\(NumberStyle.basisPoints(input.creatorAllocBps)) · \(MomentsFormat.coins(MomentsConstants.supply * BigUInt(input.creatorAllocBps) / BigUInt(MomentsConstants.bps)))")
-                        DetailRow("Window", verbatim: "\(days) \(days == 1 ? "day" : "days")")
+                        DetailRow(Text("Window", comment: "Review row: how long collecting stays open (a time window, not a screen)"), Text("\(days) days"))
                         // Every term the publish's terms hash binds, as read with it.
                         DetailRow("Each collect", "\(NumberStyle.basisPoints(policy.creatorBps)) you · \(NumberStyle.basisPoints(policy.platformBps)) DyorHQ · \(NumberStyle.basisPoints(policy.reserveBps)) reserve")
                         DetailRow("Minimum price", MomentsFormat.usdc(policy.minPrice))
@@ -180,7 +181,7 @@ struct CreateMomentView: View {
                         DetailRow("If it expires", "\(NumberStyle.basisPoints(policy.expiryCreatorBps)) of the reserve to you, the rest to the treasury")
                         DetailRow("Platform wallet", policy.platform.short)
                         DetailRow("Treasury wallet", policy.treasury.short)
-                        DetailRow("Link", policy.externalBaseURI.replacingOccurrences(of: "https://", with: "") + "<id>")
+                        DetailRow("Link", policy.externalBaseURI.replacingOccurrences(of: "https://", with: "") + "<id>") // not localized: a link pattern
                         if let pending = policy.pending, !pending.hasLapsed(at: Date()) {
                             DetailRow("Policy change", pending.isApplicable(at: Date()) ? "if applied first, nothing is published" : "queued", tint: Color.attention)
                         }
@@ -201,13 +202,10 @@ struct CreateMomentView: View {
     @ViewBuilder private var pendingPolicySection: some View {
         if let policy, let pending = policy.pending, !pending.hasLapsed(at: Date()) {
             let applicable = pending.isApplicable(at: Date())
-            let window = pending.lapsesAt.map { " until \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""
             Section {
                 Label(applicable ? "New terms can take effect at any moment" : "New terms are queued", systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
-                Text(applicable
-                     ? "Anyone can apply the queued policy now\(window). If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them."
-                     : "The queued policy can be applied from \(pending.applicableAt.formatted(date: .abbreviated, time: .shortened))\(window). If it's applied before your publish confirms, nothing is published and you review the new terms below.")
+                Self.pendingNote(applicable: applicable, from: MomentsFormat.date(pending.applicableAt), until: pending.lapsesAt.map(MomentsFormat.date))
                     .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 ForEach(pending.changes(from: policy), id: \.self) { field in
                     LabeledContent(Self.title(field), value: Self.change(field, from: policy, to: pending)).font(.footnote)
@@ -216,7 +214,21 @@ struct CreateMomentView: View {
         }
     }
 
-    private static func title(_ field: PendingMomentPolicy.Field) -> String {
+    /// When the queued policy can be applied, and until when (a proposal that can lapse), each as one sentence.
+    private static func pendingNote(applicable: Bool, from: String, until: String?) -> Text {
+        switch (applicable, until) {
+        case (true, let until?):
+            return Text("Anyone can apply the queued policy now until \(until). If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them.")
+        case (true, nil):
+            return Text("Anyone can apply the queued policy now. If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them.")
+        case (false, let until?):
+            return Text("The queued policy can be applied from \(from) until \(until). If it's applied before your publish confirms, nothing is published and you review the new terms below.")
+        case (false, nil):
+            return Text("The queued policy can be applied from \(from). If it's applied before your publish confirms, nothing is published and you review the new terms below.")
+        }
+    }
+
+    private static func title(_ field: PendingMomentPolicy.Field) -> LocalizedStringKey {
         switch field {
         case .threshold: return "Graduation reserve"
         case .minPrice: return "Minimum price"
@@ -275,7 +287,7 @@ struct CreateMomentView: View {
                     } else if let imageError {
                         Text(imageError).font(.caption).foregroundStyle(Color.attention)
                     } else if let mediaHash {
-                        Text("Fingerprint \(mediaHash.hexString.prefix(12))… goes on-chain.").font(.caption).foregroundStyle(.secondary)
+                        Text("Fingerprint \(String(mediaHash.hexString.prefix(12)))… goes on-chain.").font(.caption).foregroundStyle(.secondary)
                     } else {
                         Text("This becomes the NFT.").font(.caption).foregroundStyle(.secondary)
                     }
@@ -326,16 +338,16 @@ struct CreateMomentView: View {
                 Text("Collect price")
                 Spacer()
                 TextField("1", text: $priceText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit().frame(width: 110)
-                Text("USDC").foregroundStyle(.secondary)
+                Text(verbatim: "USDC").foregroundStyle(.secondary) // not localized: a token symbol
             }
             HStack {
                 Text("Your allocation")
                 Spacer()
                 TextField("10", text: $allocPercentText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit().frame(width: 110)
-                Text("%").foregroundStyle(.secondary)
+                Text(verbatim: "%").foregroundStyle(.secondary)
             }
             Stepper(value: $windowDays, in: 1...30) {
-                HStack { Text("Collect window"); Spacer(); Text("\(windowDays) \(windowDays == 1 ? "day" : "days")").monospacedDigit().foregroundStyle(.secondary) }
+                HStack { Text("Collect window"); Spacer(); Text("\(windowDays) days").monospacedDigit().foregroundStyle(.secondary) }
             }
         } header: {
             Text("Economics")
@@ -345,7 +357,7 @@ struct CreateMomentView: View {
                 if let allocProblem { Text(allocProblem).foregroundStyle(Color.attention) }
                 if let policy, let price, price > 0 {
                     let reservePerCollect = price * BigUInt(policy.reserveBps) / BigUInt(MomentsConstants.bps)
-                    let collects = reservePerCollect > 0 ? (policy.threshold + reservePerCollect - 1) / reservePerCollect : 0
+                    let collects = Int(clamping: reservePerCollect > 0 ? (policy.threshold + reservePerCollect - 1) / reservePerCollect : 0)
                     let fdv = MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps ?? maxAllocBps)
                     Text("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdcCents(policy.threshold)) reserve, and the coin graduates at a \(MomentsFormat.fdv(fdv)) FDV. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
                 } else if policy == nil {
@@ -369,7 +381,7 @@ struct CreateMomentView: View {
                     DetailRow("Collectors + pool", "\(MomentsFormat.coins(MomentsConstants.supply - creatorCoins)) at one price")
                     DetailRow("NFT royalty", NumberStyle.basisPoints(policy.royaltyBps))
                     DetailRow("Trading fee after graduation", "1.5% (0.2% to you)")
-                    DetailRow("Window closes", Date().addingTimeInterval(TimeInterval(windowDays * 86_400)).formatted(date: .abbreviated, time: .shortened))
+                    DetailRow("Window closes", MomentsFormat.date(Date().addingTimeInterval(TimeInterval(windowDays * 86_400))))
                     DetailRow("Liquidity", "Locked forever", tint: .positive)
                 }
                 .padding(.vertical, 4)
@@ -389,18 +401,18 @@ struct CreateMomentView: View {
         previewImage = nil; isVideo = false
         do {
             if !social.isSignedIn { await social.signIn(session: session) }
-            guard social.isSignedIn else { imageError = "Connect DyorHQ Social to upload a photo, or paste a link instead."; return }
+            guard social.isSignedIn else { imageError = tr("Connect DyorHQ Social to upload a photo, or paste a link instead."); return }
             if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
                 // A video: the file itself is the NFT's animation and is fingerprinted; a frame from it is the image.
-                guard let movie = try await item.loadTransferable(type: MovieFile.self) else { imageError = "That video could not be read."; return }
+                guard let movie = try await item.loadTransferable(type: MovieFile.self) else { imageError = tr("That video could not be read."); return }
                 defer { try? FileManager.default.removeItem(at: movie.url) }
                 // The size comes from the file system, before anything is read: a long 4K clip is gigabytes, and
                 // reading it just to refuse it would exhaust memory (security audit 2026-09-26, RI-5). The file is then
                 // hashed a chunk at a time and uploaded straight from disk.
-                guard let size = try movie.url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 50 * 1024 * 1024 else { imageError = "Videos up to 50 MB."; return }
-                guard let posterImage = try await MovieFile.coverFrame(url: movie.url) else { imageError = "Could not read a frame from that video."; return }
+                guard let size = try movie.url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 50 * 1024 * 1024 else { imageError = tr("Videos up to 50 MB."); return }
+                guard let posterImage = try await MovieFile.coverFrame(url: movie.url) else { imageError = tr("Could not read a frame from that video."); return }
                 previewImage = posterImage; isVideo = true // show the video's poster frame immediately, before the pin
-                guard let poster = posterImage.avatarJPEG(maxDimension: 2048, quality: 0.9) else { imageError = "Could not read a frame from that video."; return }
+                guard let poster = posterImage.avatarJPEG(maxDimension: 2048, quality: 0.9) else { imageError = tr("Could not read a frame from that video."); return }
                 let type = UTType(filenameExtension: movie.url.pathExtension) ?? .quickTimeMovie
                 let isMP4 = type.conforms(to: .mpeg4Movie)
                 // The video's hash is the provenance hash; its poster is filed under that same hash so the app can
@@ -414,7 +426,7 @@ struct CreateMomentView: View {
                 await pin(MediaPins(image: posterUpload, video: videoUpload))
             } else {
                 guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data), let jpeg = image.avatarJPEG(maxDimension: 4096, quality: 0.92) else {
-                    imageError = "That photo could not be read."
+                    imageError = tr("That photo could not be read.")
                     return
                 }
                 previewImage = image; isVideo = false // show the picked photo immediately, before the pin returns
