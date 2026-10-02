@@ -53,13 +53,13 @@ final class AssetsModel {
     /// What part of the read failed, in words, as the Send sheet says it: nil when all of it was read. Nothing about
     /// prices when there is nothing to value.
     var readGap: String? {
-        if balancesUnread { return "Your balances couldn't be read. Check your connection and try again." }
+        if balancesUnread { return tr("Your balances couldn't be read. Check your connection and try again.") }
         switch (complete, pricesFailed) {
         case (true, false): return nil
-        case (true, true): return tokens.isEmpty ? nil : "Some prices couldn't be read, so values are missing and no total is shown."
-        case (false, _) where tokens.isEmpty: return "No tokens found, but part of your wallet couldn't be read, so some may be missing."
-        case (false, false): return "Part of your wallet couldn't be read, so a token may be missing from the list and the total."
-        case (false, true): return "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no total is shown."
+        case (true, true): return tokens.isEmpty ? nil : tr("Some prices couldn't be read, so values are missing and no total is shown.")
+        case (false, _) where tokens.isEmpty: return tr("No tokens found, but part of your wallet couldn't be read, so some may be missing.")
+        case (false, false): return tr("Part of your wallet couldn't be read, so a token may be missing from the list and the total.")
+        case (false, true): return tr("Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no total is shown.")
         }
     }
 
@@ -131,7 +131,12 @@ struct AssetsCard: View {
     private enum Kind: String, CaseIterable, Identifiable {
         case assets, nfts
         var id: String { rawValue }
-        var label: String { self == .assets ? "Assets" : "NFTs" }
+        var label: String {
+            switch self {
+            case .assets: return tr(LocalizedStringResource("Assets", comment: "My Holdings tab: the tokens held [tight]"))
+            case .nfts: return tr(LocalizedStringResource("NFTs", comment: "My Holdings tab: the NFTs held [tight]"))
+            }
+        }
     }
 
     private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
@@ -143,7 +148,7 @@ struct AssetsCard: View {
                 Spacer()
                 if model.loading { ProgressView().controlSize(.mini) }
                 else if kind == .assets, model.showsTotal { Text(PriceFormat.usdValue(model.totalValue)).font(.subheadline.weight(.semibold)).monospacedDigit() }
-                else if kind == .nfts, !model.nfts.isEmpty { Text("\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
+                else if kind == .nfts, !model.nfts.isEmpty { Text(verbatim: "\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
 
             Picker("Holdings", selection: $kind) {
@@ -213,11 +218,11 @@ struct AssetsCard: View {
                             // A past-cohort edition opens its claim-only page, here in the Portfolio.
                             NavigationLink(value: PastMomentRoute(info: retired)) { nftTile(nft, caption: "Past cohort Moment") }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("\(nft.name), \(nft.collection)")
+                                .accessibilityLabel(Text(verbatim: "\(nft.name), \(nft.collection)"))
                         } else if model.momentsByNFT[nft.contract] != nil {
                             Button { open(nft) } label: { nftTile(nft, caption: "Moment · OpenSea") }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("\(nft.name), \(nft.collection)")
+                                .accessibilityLabel(Text(verbatim: "\(nft.name), \(nft.collection)"))
                         } else {
                             // Any other collection was sent to the wallet, not chosen here: its name and art prove nothing.
                             Button { open(nft) } label: { nftTile(nft, caption: "OpenSea", unverified: true) }

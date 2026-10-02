@@ -217,10 +217,10 @@ struct HomeView: View {
             Text("Allocation").font(.headline)
             AllocationDonut(
                 segments: [
-                    .init(label: "Spot", value: model.spotValue, color: .allocationSpot),
-                    .init(label: "Perps", value: model.perpsValue, color: .allocationPerps),
-                    .init(label: "Launchpad", value: model.launchpadValue, color: .allocationLaunchpad),
-                    .init(label: "Moments", value: model.momentsValue, color: .allocationMoments),
+                    .init(label: tr("Spot"), value: model.spotValue, color: .allocationSpot),
+                    .init(label: tr("Perps"), value: model.perpsValue, color: .allocationPerps),
+                    .init(label: tr("Launchpad"), value: model.launchpadValue, color: .allocationLaunchpad),
+                    .init(label: tr("Moments"), value: model.momentsValue, color: .allocationMoments),
                 ],
                 total: model.totalValue ?? 0
             )
@@ -338,13 +338,27 @@ struct HomeView: View {
 enum HomeTokenTab: String, CaseIterable, Identifiable {
     case popular, hot, gainers, losers
     var id: String { rawValue }
-    var label: String { rawValue.capitalized }
+    var label: String {
+        switch self {
+        case .popular: return tr(LocalizedStringResource("Popular", comment: "Top Tokens tab: the curated list [tight]"))
+        case .hot: return tr(LocalizedStringResource("Hot", comment: "Top Tokens tab: the biggest moves either way [tight]"))
+        case .gainers: return tr(LocalizedStringResource("Gainers", comment: "Top Tokens tab: rising most in 24h [tight]"))
+        case .losers: return tr(LocalizedStringResource("Losers", comment: "Top Tokens tab: falling most in 24h [tight]"))
+        }
+    }
 }
 
 enum HoldingCategory: String, CaseIterable, Identifiable {
     case spot, perps, launchpad, moments
     var id: String { rawValue }
-    var label: String { self == .launchpad ? "Launch" : rawValue.capitalized }
+    var label: String {
+        switch self {
+        case .spot: return tr(LocalizedStringResource("Spot", comment: "The wallet's own tokens, as against perpetual futures [tight]"))
+        case .perps: return tr(LocalizedStringResource("Perps", comment: "Perpetual futures [tight]"))
+        case .launchpad: return tr(LocalizedStringResource("Launch", comment: "A noun: the Launch tab, the launchpad's coins [tight]"))
+        case .moments: return tr(LocalizedStringResource("Moments", comment: "The Moments feature's name [tight]"))
+        }
+    }
 }
 
 /// One of the four home actions: an SF Symbol over a label, filling its share of the row.
@@ -433,7 +447,7 @@ private struct TokenListRow: View {
 
     var body: some View {
         HStack(spacing: Self.spacing) {
-            Text("\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: rankWidth, alignment: .center)
+            Text(verbatim: "\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: rankWidth, alignment: .center)
             TokenLogo(token: row.token, size: Self.logoSize)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
@@ -502,13 +516,13 @@ private struct LaunchHoldingRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(holding.launch.symbol).font(.subheadline.weight(.semibold))
-                Text("\(NumberStyle.units(holding.balance, decimals: 18, compact: true)) \(holding.launch.symbol)")
+                Text(verbatim: "\(NumberStyle.units(holding.balance, decimals: 18, compact: true)) \(holding.launch.symbol)")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
                 USDText(value: value, font: .subheadline.weight(.medium))
-                Text(holding.launch.phase == .bonding ? "\(holding.launch.progressBps / 100)% to graduation" : holding.launch.phase.title)
+                (holding.launch.phase == .bonding ? Text("\(holding.launch.progressBps / 100)% to graduation") : Text(verbatim: holding.launch.phase.title))
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }
@@ -526,13 +540,13 @@ private struct PositionSummaryRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(position.symbol).font(.subheadline.weight(.semibold))
-                    Text("\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.leverage, maximumFractionDigits: 1))×")
+                    Text(verbatim: "\(sideLabel) \(NumberStyle.number(position.leverage, maximumFractionDigits: 1))×")
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background((position.side == .long ? Color.positive : Color.negative).opacity(0.15), in: Capsule())
                         .foregroundStyle(position.side == .long ? Color.positive : Color.negative)
                 }
-                Text("\(NumberStyle.number(position.size)) at \(NumberStyle.number(position.entry))")
+                Text("\(NumberStyle.number(position.size)) at \(NumberStyle.number(position.entry))", comment: "A perp position's size, then the price it was opened at")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer(minLength: 8)
@@ -540,11 +554,18 @@ private struct PositionSummaryRow: View {
                 Text(PriceFormat.usdValue(position.unrealized, signed: true))
                     .font(.subheadline.weight(.medium)).monospacedDigit()
                     .foregroundStyle(position.unrealized < 0 ? Color.negative : Color.positive)
-                Text("Unrealized").font(.caption2).foregroundStyle(.secondary)
+                Text("Unrealized", comment: "Under a perp position's unrealized profit or loss [tight]").font(.caption2).foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 8)
         .contentShape(Rectangle())
+    }
+
+    /// The position's side, for the chip beside its leverage ("Long 5×").
+    private var sideLabel: String {
+        position.side == .long
+            ? tr(LocalizedStringResource("Long", comment: "A perp position's side: betting the price rises [tight]"))
+            : tr(LocalizedStringResource("Short", comment: "A perp position's side: betting the price falls [tight]"))
     }
 }
 
@@ -747,9 +768,9 @@ final class HomeModel {
         if let priceError {
             error = describe(priceError)
         } else if balanceMap == nil {
-            error = "Your balances couldn't be read just now — showing the last ones read."
+            error = tr("Your balances couldn't be read just now — showing the last ones read.")
         } else if !listing.complete {
-            error = "Some launch coins couldn't be read just now — showing the last ones read."
+            error = tr("Some launch coins couldn't be read just now — showing the last ones read.")
         } else {
             error = nil
             updatedAt = .now
@@ -948,7 +969,7 @@ struct TokenDetailView: View {
     /// launch one, which the footer says.
     private func launchedOnDyorHQ(_ coin: DyorCoin) -> some View {
         Section {
-            LabeledContent("Made on", value: coin.isMoment ? (coin.retired ? "A past Moments cohort" : "DyorHQ Moments") : (coin.retired ? "A retired DyorHQ launchpad" : "The DyorHQ launchpad"))
+            LabeledContent("Made on", value: coin.isMoment ? (coin.retired ? tr("A past Moments cohort") : tr("DyorHQ Moments")) : (coin.retired ? tr("A retired DyorHQ launchpad") : tr("The DyorHQ launchpad")))
             if let phase = launchPhase { LabeledContent("Phase", value: phase.title) }
             AddressRow(title: "Creator", address: coin.creator)
             if let key = coin.momentKey {
@@ -993,7 +1014,7 @@ struct TokenDetailView: View {
 /// "New" in place of a 24h change: a DyorHQ coin its factory hadn't recorded 24 hours ago (`PriceInfo.isNew`).
 private struct NewBadge: View {
     var body: some View {
-        Text("New")
+        Text("New", comment: "Badge for a coin too new to have a 24h change [tight]")
             .font(.footnote.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -1096,7 +1117,7 @@ struct HomeHeader: View {
                     .overlay(alignment: .topTrailing) {
                         let unread = NotificationHub.shared.unreadCount
                         if unread > 0 {
-                            Text(unread > 99 ? "99+" : "\(unread)")
+                            Text(verbatim: unread > 99 ? "99+" : "\(unread)")
                                 .font(.caption2.weight(.bold)).foregroundStyle(.white)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
                                 .background(Color.negative, in: Capsule())
@@ -1152,7 +1173,7 @@ private struct MomentHoldingRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.moment.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Text("\(row.nftBalance) \(row.nftBalance == 1 ? "edition" : "editions") · \(NumberStyle.number(coins, compact: true)) \(row.moment.symbol)")
+                Text(verbatim: "\(tr("\(row.nftBalance) editions")) · \(NumberStyle.number(coins, compact: true)) \(row.moment.symbol)")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
             }
             Spacer(minLength: 8)

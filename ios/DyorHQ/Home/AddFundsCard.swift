@@ -200,7 +200,7 @@ final class FundingWatch {
             let before = phase
             update(FirstFunding.next(after: before, reading: reading, now: .now))
             if case .arrived(_, let since) = phase {
-                if !before.isArrival { AccessibilityNotification.Announcement("Funds arrived").post() }
+                if !before.isArrival { AccessibilityNotification.Announcement(tr("Funds arrived")).post() }
                 // "Funds arrived" holds while the deposit ages the 3 blocks Monad needs before an account can spend it.
                 try? await Task.sleep(for: .seconds(max(0, since.addingTimeInterval(FirstFunding.arrivalPause).timeIntervalSinceNow)))
                 guard !Task.isCancelled else { return }

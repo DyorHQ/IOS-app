@@ -207,7 +207,7 @@ struct LaunchpadView: View {
             HStack(spacing: 8) {
                 Text(title).font(.title3.weight(.semibold))
                 if let count {
-                    Text("\(count)").font(.caption.weight(.semibold)).monospacedDigit()
+                    Text(verbatim: "\(count)").font(.caption.weight(.semibold)).monospacedDigit()
                         .padding(.horizontal, 7).padding(.vertical, 2)
                         .background(Color.brand.opacity(0.14), in: Capsule()).foregroundStyle(Color.brand)
                 }
@@ -290,9 +290,9 @@ enum LaunchSort: String, CaseIterable, Identifiable {
     var id: Self { self }
     var title: String {
         switch self {
-        case .newest: return "Newest"
-        case .marketCap: return "Market Cap"
-        case .progress: return "Near Graduation"
+        case .newest: return tr(LocalizedStringResource("Newest", comment: "Sort chip: the newest coins first [tight]"))
+        case .marketCap: return tr(LocalizedStringResource("Market Cap", comment: "Sort chip: the largest market cap first [tight]"))
+        case .progress: return tr(LocalizedStringResource("Near Graduation", comment: "Sort chip: the coins closest to graduating first [tight]"))
         }
     }
 }
@@ -321,20 +321,20 @@ struct LaunchCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(launch.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text("$\(launch.symbol)").font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(verbatim: "$\(launch.symbol)").font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 0)
                 }
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Market cap").font(.caption2).foregroundStyle(.secondary)
-                        Text(launch.marketCapInPair.map { "\(NumberStyle.number($0, compact: true)) \(launch.pair.symbol)" } ?? "—")
+                        Text(verbatim: launch.marketCapInPair.map { "\(NumberStyle.number($0, compact: true)) \(launch.pair.symbol)" } ?? "—")
                             .font(.footnote.weight(.semibold)).monospacedDigit()
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 1) {
                         // A retired launchpad's graduated coin (QT) is an ordinary pool coin: no caption.
                         if launch.isSellOnly { Text("Retired launchpad").font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
-                        Text(RelativeTime.short(launch.launchedAt)).font(.caption2).foregroundStyle(.tertiary)
+                        Text(verbatim: RelativeTime.short(launch.launchedAt)).font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
                 if launch.phase == .bonding {
@@ -371,7 +371,7 @@ struct LaunchCard: View {
                 .background(.ultraThinMaterial, in: Capsule())
                 .foregroundStyle(.secondary)
         } else if launch.progressBps >= 8000 {
-            Text("\(launch.progressBps / 100)%")
+            Text(verbatim: "\(launch.progressBps / 100)%")
                 .font(.caption2.weight(.bold))
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(.ultraThinMaterial, in: Capsule())
@@ -430,18 +430,6 @@ struct LaunchArtwork: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-    }
-}
-
-/// Compact relative age like "3h" / "2d" for the coin cards.
-enum RelativeTime {
-    static func short(_ unix: Int) -> String {
-        guard unix > 0 else { return "" }
-        let seconds = max(0, Int(Date().timeIntervalSince1970) - unix)
-        if seconds < 60 { return "\(seconds)s" }
-        if seconds < 3600 { return "\(seconds / 60)m" }
-        if seconds < 86400 { return "\(seconds / 3600)h" }
-        return "\(seconds / 86400)d"
     }
 }
 
@@ -589,20 +577,20 @@ struct LaunchDetailView: View {
         .sheet(isPresented: $showConfirm) { confirmation }
         .sheet(isPresented: $showGraduate) {
             ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Graduate", build: { env.launchpad.graduatePlan(launch: launch) }, onDone: { Task { await load() } },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "\(launch.symbol) graduated", subtitle: launch.graduationVenue.title, hash: hash, section: "launch"), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: tr("\(launch.symbol) graduated"), subtitle: launch.graduationVenue.title, hash: hash, section: "launch"), owner: session.address) }) {
                 DetailRow("Venue", launch.graduationVenue.title)
                 DetailRow("Who pays", "You (gas only)")
             }
         }
         .sheet(isPresented: $showClaim) {
             ConfirmationSheet(title: "Claim Rewards", confirmTitle: "Claim", build: { await env.launchpad.claimRewardsPlan(launch: launch, view: account) }, onDone: { Task { await load() } },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed \(launch.symbol) rewards", subtitle: account.map { "\(NumberStyle.units($0.pendingRewards, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? "holder rewards", hash: hash, section: "launch"), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: tr("Claimed \(launch.symbol) rewards"), subtitle: account.map { "\(NumberStyle.units($0.pendingRewards, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? tr("holder rewards"), hash: hash, section: "launch"), owner: session.address) }) {
                 if let account { DetailRow("Pending rewards", verbatim: "\(NumberStyle.units(account.pendingRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
         }
         .sheet(isPresented: $showCreatorClaim) {
             ConfirmationSheet(title: "Claim Creator Fees", confirmTitle: "Claim Fees", build: { env.launchpad.claimEscrowPlan(launch: launch) }, onDone: { Task { await load() } },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected \(launch.symbol) creator fees", subtitle: account.map { "\(NumberStyle.units($0.escrowBalance, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? "creator fees", hash: hash, section: "launch"), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: tr("Collected \(launch.symbol) creator fees"), subtitle: account.map { "\(NumberStyle.units($0.escrowBalance, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? tr("creator fees"), hash: hash, section: "launch"), owner: session.address) }) {
                 if let account { DetailRow("Claimable", verbatim: "\(NumberStyle.units(account.escrowBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
                 DetailRow("To", session.address?.short ?? "—")
             }
@@ -613,13 +601,13 @@ struct LaunchDetailView: View {
     /// claim their escrowed fees here. Fee-sharing coins route creator fees to holders instead.
     private var feesSection: some View {
         Section {
-            LabeledContent("Fee mode", value: launch.holderFeeSharing ? "Shared with holders" : "To creator")
+            LabeledContent("Fee mode", value: launch.holderFeeSharing ? tr("Shared with holders") : tr("To creator"))
             if launch.creatorTaxBps > 0 { LabeledContent("Creator tax", value: NumberStyle.basisPoints(launch.creatorTaxBps)) }
             AddressRow(title: "Fee recipient", address: launch.creatorFeeRecipient.isZero ? launch.deployer : launch.creatorFeeRecipient)
             if isCreator, !launch.holderFeeSharing {
                 if let account, account.escrowBalance > 0 {
                     LabeledContent("Your claimable fees") {
-                        Text("\(NumberStyle.units(account.escrowBalance, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)")
+                        Text(verbatim: "\(NumberStyle.units(account.escrowBalance, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)")
                             .monospacedDigit().fontWeight(.semibold).foregroundStyle(Color.brand)
                     }
                     Button("Claim Creator Fees", systemImage: "banknote") { Haptics.tap(); showCreatorClaim = true }.disabled(!session.canSign)
@@ -631,11 +619,11 @@ struct LaunchDetailView: View {
             Text("Creator Fees")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text((launch.holderFeeSharing
-                    ? "This coin routes its creator fees to holders — each holder claims their pro-rata share (see Your Holdings, or My Launchpad)."
-                    : "The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset.")
+                Text(verbatim: (launch.holderFeeSharing
+                    ? tr("This coin routes its creator fees to holders — each holder claims their pro-rata share (see Your Holdings, or My Launchpad).")
+                    : tr("The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset."))
                     // A Monday Trade pool has no hook: its 1% fee is harvested to DyorHQ, with no creator tax or share in it.
-                    + (launch.graduationVenue == .monday ? " These come from curve trades only: once it graduates on Monday Trade, the pool's 1% fee goes to DyorHQ." : ""))
+                    + (launch.graduationVenue == .monday ? " " + tr("These come from curve trades only: once it graduates on Monday Trade, the pool's 1% fee goes to DyorHQ.") : ""))
                 LearnMoreLink(.launchpadFeesAndRewards)
             }
         }
@@ -651,18 +639,18 @@ struct LaunchDetailView: View {
                                            logoURL: URL(string: launch.logo), isLaunchpad: true), size: 48)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(launch.name).font(.title3.weight(.semibold))
-                        Text(launch.isSellOnly ? "\(launch.statusTitle) · Retired launchpad" : launch.statusTitle).font(.subheadline).foregroundStyle(.secondary)
+                        Text(verbatim: launch.isSellOnly ? "\(launch.statusTitle) · \(tr("Retired launchpad"))" : launch.statusTitle).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(launch.pairPrice.map { "\(NumberStyle.number($0)) \(launch.pair.symbol)" } ?? "—")
+                        Text(verbatim: launch.pairPrice.map { "\(NumberStyle.number($0)) \(launch.pair.symbol)" } ?? "—")
                             .font(.system(.title, design: .rounded).weight(.semibold)).monospacedDigit()
                         if let priceUSD { Text(PriceFormat.usdPrice(priceUSD)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().accessibilityLabel(PriceFormat.spoken(priceUSD)) }
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text(launch.marketCapInPair.map { "\(NumberStyle.number($0, compact: true)) \(launch.pair.symbol)" } ?? "—").monospacedDigit().fontWeight(.medium)
+                        Text(verbatim: launch.marketCapInPair.map { "\(NumberStyle.number($0, compact: true)) \(launch.pair.symbol)" } ?? "—").monospacedDigit().fontWeight(.medium)
                         if let marketCapUSD { Text(PriceFormat.usdValue(marketCapUSD)).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
                         else { Text("Market cap").font(.caption).foregroundStyle(.secondary) }
                     }
@@ -671,7 +659,7 @@ struct LaunchDetailView: View {
                     Gauge(value: Double(launch.progressBps) / 10_000) {
                         Text("Graduation")
                     } currentValueLabel: {
-                        Text("\(launch.progressBps / 100)%")
+                        Text(verbatim: "\(launch.progressBps / 100)%")
                     }
                     .gaugeStyle(.accessoryLinearCapacity)
                     Text("Graduates at \(NumberStyle.units(launch.graduationThreshold, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol) raised. Liquidity then moves to a locked \(launch.graduationVenue.title) pool.")
@@ -750,10 +738,10 @@ struct LaunchDetailView: View {
                 }
                 .pickerStyle(.segmented)
             } else {
-                Label(launch.isRetiredLaunchpad ? RetiredLaunchpad.notice : "Refund mode: sell back into the curve at its price, with no fees.", systemImage: "arrow.up.right.circle")
+                Label(launch.isRetiredLaunchpad ? RetiredLaunchpad.notice : tr("Refund mode: sell back into the curve at its price, with no fees."), systemImage: "arrow.up.right.circle")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
-            AmountField(title: "0", text: $amountText, token: side == .buy ? pairToken : token) {
+            AmountField(title: "0" as String, text: $amountText, token: side == .buy ? pairToken : token) {
                 guard let account else { return }
                 // A native-MON buy keeps the network fee back (as Swap, Send and Bridge Max do), or the buy cannot pay gas.
                 let buyable = launch.pair.isNative ? NetworkFeeReserve.spendable(balance: account.pairBalance, reserve: NetworkFeeReserve.monadFallback) : account.pairBalance
@@ -787,10 +775,10 @@ struct LaunchDetailView: View {
     private var shortfall: String? {
         guard let account, rawAmount > 0 else { return nil }
         if side == .buy, rawAmount > account.pairBalance {
-            return "Not enough \(launch.pair.symbol): you have \(NumberStyle.units(account.pairBalance, decimals: launch.pair.decimals))."
+            return tr("Not enough \(launch.pair.symbol): you have \(NumberStyle.units(account.pairBalance, decimals: launch.pair.decimals)).")
         }
         if side == .sell, rawAmount > account.tokenBalance {
-            return "Not enough \(launch.symbol): you have \(NumberStyle.units(account.tokenBalance, decimals: 18, compact: true))."
+            return tr("Not enough \(launch.symbol): you have \(NumberStyle.units(account.tokenBalance, decimals: 18, compact: true)).")
         }
         return nil
     }
@@ -808,7 +796,7 @@ struct LaunchDetailView: View {
                 LabeledContent("Pool fee", value: NumberStyle.basisPoints(launch.graduationVenue == .monday ? 100 : launch.poolFeeBps))
                 if launch.graduationVenue == .uniswapV4, let detail, detail.hookFeesAwaitingSweep > 0 {
                     LabeledContent("Waiting for a sweep") {
-                        Text("\(NumberStyle.units(detail.hookFeesAwaitingSweep, decimals: launch.pair.decimals)) \(launch.pair.symbol)").monospacedDigit()
+                        Text(verbatim: "\(NumberStyle.units(detail.hookFeesAwaitingSweep, decimals: launch.pair.decimals)) \(launch.pair.symbol)").monospacedDigit()
                     }
                 }
             }
@@ -816,12 +804,13 @@ struct LaunchDetailView: View {
                 LabeledContent("Stuck since", value: Date(timeIntervalSince1970: TimeInterval(detail.stuckSince)).formatted(date: .abbreviated, time: .shortened))
                 if launch.keepersTakeGraduateFallback, let opens = detail.v4FallbackOpensAt {
                     LabeledContent("Uniswap v4 fallback", value: detail.isV4FallbackOpen(at: Int(Date().timeIntervalSince1970))
-                                   ? "Open" : "Opens \(Date(timeIntervalSince1970: TimeInterval(opens)).formatted(date: .abbreviated, time: .shortened))")
+                                   ? tr(LocalizedStringResource("Open", comment: "The Uniswap v4 fallback can be used now: an adjective [tight]"))
+                                   : tr("Opens \(Date(timeIntervalSince1970: TimeInterval(opens)).formatted(date: .abbreviated, time: .shortened))"))
                 }
                 Button("Retry Graduation", systemImage: "arrow.clockwise") { showGraduate = true }.disabled(!session.canSign)
             }
         } header: {
-            Text(launch.phase == .graduated ? "Graduated" : launch.awaitsGraduation ? "Graduation Pending" : launch.phase.title)
+            launch.phase == .graduated ? Text("Graduated") : launch.awaitsGraduation ? Text("Graduation Pending") : Text(verbatim: launch.phase.title)
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 if launch.phase == .graduated {
@@ -845,8 +834,8 @@ struct LaunchDetailView: View {
     /// block later) and keeps only the creator's and DyorHQ's parts for a sweep; an older hook keeps everything.
     private var v4FeeTiming: String {
         launch.generation.hasV2Getters
-            ? "Holders are paid as trades happen; only the creator's and DyorHQ's parts wait in the hook until they're swept."
-            : "Fees wait in the hook until they're swept."
+            ? tr("Holders are paid as trades happen; only the creator's and DyorHQ's parts wait in the hook until they're swept.")
+            : tr("Fees wait in the hook until they're swept.")
     }
 
     /// A completed curve whose migration reverted (the factory records `stuckSince`): the audit's rescue paths apply. Only
@@ -857,22 +846,23 @@ struct LaunchDetailView: View {
     /// The app never offers the Uniswap v4 fallback (`graduateFallback`), on any stack: DyorHQ's keepers send it with the
     /// gas it needs (owner decision 2026-09-28). Only the plain Retry Graduation is offered here.
     private var stuckFooter: String {
-        guard launch.keepersTakeGraduateFallback else { return "The last graduation attempt failed. Anyone can retry it; you only pay the gas." }
+        guard launch.keepersTakeGraduateFallback else { return tr("The last graduation attempt failed. Anyone can retry it; you only pay the gas.") }
         let waits = detail?.fallbackRule?.waits ?? false
-        return "The last graduation attempt failed. Anyone can retry it on Monday Trade; you only pay the gas. DyorHQ's keepers will finish the graduation: they retry it with about 29.9M gas and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool"
-            + (waits ? " once it has been stuck for a day (a \(launch.pair.symbol) coin stays on Monday Trade until then)." : ".")
+        return waits
+            ? tr("The last graduation attempt failed. Anyone can retry it on Monday Trade; you only pay the gas. DyorHQ's keepers will finish the graduation: they retry it with about 29.9M gas and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool once it has been stuck for a day (a \(launch.pair.symbol) coin stays on Monday Trade until then).")
+            : tr("The last graduation attempt failed. Anyone can retry it on Monday Trade; you only pay the gas. DyorHQ's keepers will finish the graduation: they retry it with about 29.9M gas and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool.")
     }
 
     private func holdingsSection(_ account: LaunchAccountView) -> some View {
         Section("Your Holdings") {
             LabeledContent("Balance") { AmountText(amount: account.tokenBalance, token: token, compact: true) }
             if account.pendingRewards > 0 {
-                LabeledContent("Pending rewards") { Text("\(NumberStyle.units(account.pendingRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)").monospacedDigit() }
+                LabeledContent("Pending rewards") { Text(verbatim: "\(NumberStyle.units(account.pendingRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)").monospacedDigit() }
                 Button("Claim Rewards", systemImage: "gift") { showClaim = true }.disabled(!session.canSign)
             }
             if let detail, detail.queuedRewards > 0 {
                 // Rewards wait one block before they are shared out (audit fix against flash-loan reward sniping).
-                LabeledContent("Queued for holders") { Text("\(NumberStyle.units(detail.queuedRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)").monospacedDigit() }
+                LabeledContent("Queued for holders") { Text(verbatim: "\(NumberStyle.units(detail.queuedRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)").monospacedDigit() }
             }
         }
     }
@@ -883,7 +873,9 @@ struct LaunchDetailView: View {
             AddressRow(title: "Token", address: launch.token)
             AddressRow(title: "Creator", address: launch.deployer)
             LabeledContent("Creator tax", value: NumberStyle.basisPoints(launch.creatorTaxBps))
-            LabeledContent("Holder fee sharing", value: launch.holderFeeSharing ? "On" : "Off")
+            LabeledContent("Holder fee sharing", value: launch.holderFeeSharing
+                           ? tr(LocalizedStringResource("On", comment: "A setting that is switched on [tight]"))
+                           : tr(LocalizedStringResource("Off", comment: "A setting that is switched off [tight]")))
             LabeledContent("Graduation venue", value: launch.graduationVenue.title)
             ForEach(socialLinks, id: \.0) { label, url in
                 Link(destination: url) { Label(label, systemImage: "link") }
@@ -892,7 +884,8 @@ struct LaunchDetailView: View {
     }
 
     private var socialLinks: [(String, URL)] {
-        [("Website", launch.socials.website), ("X", launch.socials.twitter), ("Telegram", launch.socials.telegram), ("Discord", launch.socials.discord), ("Farcaster", launch.socials.farcaster)]
+        // not localized: X, Telegram, Discord and Farcaster are the services' own names.
+        [(tr("Website"), launch.socials.website), ("X", launch.socials.twitter), ("Telegram", launch.socials.telegram), ("Discord", launch.socials.discord), ("Farcaster", launch.socials.farcaster)]
             // Creator-set strings: only web links, never another app's URL scheme (a wallet's dapp link, say).
             .compactMap { label, value in URL(string: value).flatMap { ["https", "http"].contains($0.scheme?.lowercased() ?? "") && $0.host() != nil ? (label, $0) : nil } }
     }
@@ -904,7 +897,7 @@ struct LaunchDetailView: View {
                     // Bought here, so chosen here: never shown as Unverified, as a swap into a token isn't.
                     KnownTokenStore.add(token, owner: session.address)
                     KnownTokenStore.markChosen(launch.token, owner: session.address)
-                    Activity.record(ActivityRecord(kind: .buy, title: "Bought \(launch.symbol)", subtitle: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 }), owner: session.address)
+                    Activity.record(ActivityRecord(kind: .buy, title: tr("Bought \(launch.symbol)"), subtitle: tr("\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)"), hash: hash, usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }, intent: .launchpadBuy(token: launch.token, pay: .init(token: launch.pairToken, amount: rawAmount), usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 })) {
                     DetailRow("You pay", verbatim: "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
                     DetailRow("You receive", verbatim: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
@@ -912,7 +905,7 @@ struct LaunchDetailView: View {
                 }
             } else if side == .sell, let q = sellQuote {
                 ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: q.quoteOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
-                    Activity.record(ActivityRecord(kind: .sell, title: "Sold \(launch.symbol)", subtitle: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)", hash: hash, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 }), owner: session.address)
+                    Activity.record(ActivityRecord(kind: .sell, title: tr("Sold \(launch.symbol)"), subtitle: tr("\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)"), hash: hash, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                 }, intent: .launchpadSell(token: launch.token, amount: rawAmount, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 })) {
                     DetailRow("You sell", verbatim: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol)")
                     DetailRow("You receive", verbatim: "\(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
@@ -1013,13 +1006,13 @@ private struct LaunchTradeRow: View {
                 .background((trade.isBuy ? Color.positive : Color.negative).opacity(0.14), in: Circle())
                 .foregroundStyle(trade.isBuy ? Color.positive : Color.negative)
             VStack(alignment: .leading, spacing: 1) {
-                Text("\(trade.isBuy ? "Buy" : "Sell") \(NumberStyle.units(trade.tokenAmount, decimals: 18, compact: true)) \(symbol)")
+                Text(trade.isBuy ? "Buy \(NumberStyle.units(trade.tokenAmount, decimals: 18, compact: true)) \(symbol)" : "Sell \(NumberStyle.units(trade.tokenAmount, decimals: 18, compact: true)) \(symbol)")
                     .font(.subheadline.weight(.medium))
                 Text(trade.trader.short).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                Text("\(NumberStyle.units(trade.quoteAmount, decimals: pair.decimals, compact: true)) \(pair.symbol)")
+                Text(verbatim: "\(NumberStyle.units(trade.quoteAmount, decimals: pair.decimals, compact: true)) \(pair.symbol)")
                     .font(.subheadline.weight(.medium)).monospacedDigit()
                 Text("\(RelativeTime.short(trade.time)) ago").font(.caption2).foregroundStyle(.tertiary)
             }
@@ -1069,7 +1062,7 @@ struct CreateLaunchView: View {
     /// whitelist this wallet isn't on): Review stays off, so nothing, not even a developer buy's approval, is signed.
     /// The launch plan checks again from a fresh read.
     private var blocker: String? {
-        guard let protocolInfo else { return "The launchpad's terms couldn't be read. Close this screen and try again." }
+        guard let protocolInfo else { return tr("The launchpad's terms couldn't be read. Close this screen and try again.") }
         return protocolInfo.launchBlocker?.message
     }
     private var pairInfo: PairInfo? { protocolInfo?.pairs.first { $0.pair.address == pair }?.pair }
@@ -1124,13 +1117,17 @@ struct CreateLaunchView: View {
                 } footer: {
                     if let info = protocolInfo, let pi = pairInfo {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol).\(pairMondayOnly ? " A \(pi.symbol) coin graduates on Monday Trade; if it stays stuck for a day, anyone can move it to a locked Uniswap v4 pool." : "") Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                            if pairMondayOnly {
+                                Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol). A \(pi.symbol) coin graduates on Monday Trade; if it stays stuck for a day, anyone can move it to a locked Uniswap v4 pool. Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                            } else {
+                                Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol). Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                            }
                             LearnMoreLink(.launchACoin)
                         }
                     }
                 }
                 Section {
-                    AmountField(title: "0", text: $initialBuyText, token: pairInfo.map { Token(address: $0.address, symbol: $0.symbol, name: $0.symbol, decimals: $0.decimals) })
+                    AmountField(title: "0" as String, text: $initialBuyText, token: pairInfo.map { Token(address: $0.address, symbol: $0.symbol, name: $0.symbol, decimals: $0.decimals) })
                 } header: {
                     Text("Developer Buy (Optional)")
                 } footer: {
@@ -1158,7 +1155,7 @@ struct CreateLaunchView: View {
                         },
                         onDone: { dismiss(); onLaunched() },
                         onCompleted: { hash in
-                            Activity.record(ActivityRecord(kind: .launch, title: "Launched $\(symbol)", subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
+                            Activity.record(ActivityRecord(kind: .launch, title: tr("Launched $\(symbol)"), subtitle: name.isEmpty ? symbol : name, hash: hash), owner: session.address)
                             // The new coin's picture and DyorHQ label, without waiting for the next 5-minute read.
                             Task { [coins = env.dyorCoins] in await coins.refresh() }
                             // Launched here, so chosen here: its coin is never shown as Unverified, on Home either (whose
@@ -1263,10 +1260,10 @@ struct CreateLaunchView: View {
     /// Uniswap v4 pool's hook both pay them (to holders instead with fee sharing); a Monday Trade pool has no hook, and its
     /// 1% fee is harvested to DyorHQ (MondayFeeVault).
     private var feeFooter: String {
-        let recipients = "You receive it with your share of the trading fees; with fee sharing on, holders receive both instead."
+        let recipients = tr("You receive it with your share of the trading fees; with fee sharing on, holders receive both instead.")
         return effectiveVenue == .monday
-            ? "Creator tax is charged on curve trades only. \(recipients) After graduation the Monday Trade pool's 1% fee goes to DyorHQ: there is no creator tax or fee share in the pool."
-            : "Creator tax is charged on curve trades and, after graduation, on Uniswap v4 pool swaps. \(recipients)"
+            ? tr("Creator tax is charged on curve trades only. \(recipients) After graduation the Monday Trade pool's 1% fee goes to DyorHQ: there is no creator tax or fee share in the pool.")
+            : tr("Creator tax is charged on curve trades and, after graduation, on Uniswap v4 pool swaps. \(recipients)")
     }
 
     private var pairGraduation: BigUInt {
@@ -1279,12 +1276,12 @@ struct CreateLaunchView: View {
         do {
             // Uploading needs a DyorHQ Social session (same wallet); connect on demand.
             if !social.isSignedIn { await social.signIn(session: session) }
-            guard social.isSignedIn else { imageError = "Connect DyorHQ Social to upload an image."; return }
+            guard social.isSignedIn else { imageError = tr("Connect DyorHQ Social to upload an image."); return }
             // The middle square, 512 pixels a side (`LaunchImage`): what the preview shows is what every screen shows.
             guard let data = try await item.loadTransferable(type: Data.self),
                   let image = UIImage(data: data),
                   let jpeg = image.launchJPEG() else {
-                imageError = "That image could not be read."
+                imageError = tr("That image could not be read.")
                 return
             }
             logo = try await social.uploadLaunchImage(jpeg: jpeg).absoluteString
@@ -1315,12 +1312,13 @@ private struct LaunchPreviewCard: View {
                 .clipped()
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Text(name.isEmpty ? "Your coin" : name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text("$\(symbol.isEmpty ? "TICKER" : symbol)").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    (name.isEmpty ? Text("Your coin") : Text(verbatim: name)).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    // not localized: a ticker stands in for the one still to be typed, as tickers are never translated.
+                    Text(verbatim: "$\(symbol.isEmpty ? "TICKER" : symbol)").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                     Spacer()
                 }
                 HStack {
-                    Text("New").font(.caption2.weight(.semibold)).foregroundStyle(Color.brand)
+                    Text("New", comment: "Badge for a coin just launched [tight]").font(.caption2.weight(.semibold)).foregroundStyle(Color.brand)
                         .padding(.horizontal, 7).padding(.vertical, 2).background(Color.brand.opacity(0.14), in: Capsule())
                     Spacer()
                     Text("Pairs with \(pairSymbol)").font(.caption2).foregroundStyle(.secondary)
