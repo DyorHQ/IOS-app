@@ -277,8 +277,8 @@ final class MomentsV2Tests: XCTestCase {
     func testTheReserveRowsRoundToTheCentAndACollectStaysExact() throws {
         XCTAssertEqual(V2Fixture.policy(termsHash: nil).threshold, 771_428_571)
         let detail = try DocsLinksTests.appSource("Moments/MomentDetailView.swift")
-        XCTAssertTrue(detail.contains(#"LabeledContent("Reserve", value: "\(MomentsFormat.usdcCents(info.ledger.reserve)) of \(MomentsFormat.usdcCents(m.threshold))")"#))
-        XCTAssertTrue(detail.contains(#"LabeledContent("Still needed", value: "\(MomentsFormat.usdcCents(info.reserveRemaining)) · about"#))
+        XCTAssertTrue(detail.contains(#"LabeledContent("Reserve", value: tr("\(MomentsFormat.usdcCents(info.ledger.reserve)) of \(MomentsFormat.usdcCents(m.threshold))"))"#))
+        XCTAssertTrue(detail.contains(#"LabeledContent("Still needed", value: tr("\(MomentsFormat.usdcCents(info.reserveRemaining)) · about"#))
         for unrounded in ["MomentsFormat.usdc(m.threshold)", "MomentsFormat.usdc(info.reserveRemaining)", "MomentsFormat.usdc(info.ledger.reserve)"] {
             XCTAssertFalse(detail.contains(unrounded), unrounded)
         }
