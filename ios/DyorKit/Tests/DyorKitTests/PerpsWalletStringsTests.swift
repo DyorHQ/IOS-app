@@ -265,4 +265,69 @@ final class PerpsWalletStringsTests: XCTestCase {
         XCTAssertTrue(run.contains("static var notSent: String { tr(\"Not sent. Nothing left your account.\") }"))
         XCTAssertTrue(run.contains("return tr(\"Up to \\(fee) + \\(unestimated) more steps\")"), "one plural key, not an English-only \"1 more step\"")
     }
+
+    /// The Perps and Wallet keys with a count (an `Int`, so `%lld`), as the app's catalog spells them. Their singular
+    /// comes from the catalog's plural forms, English included: without them a count of 1 reads "1 more steps".
+    static let pluralKeys = [
+        "Up to %@ + %lld more steps",
+        "Use at least %lld characters.",
+        "%lld take-profit/stop-loss orders from an earlier %@ long are still armed on Perpl and would act on this new position. Cancel them from Orders first.",
+        "%lld take-profit/stop-loss orders from an earlier %@ short are still armed on Perpl and would act on this new position. Cancel them from Orders first.",
+        "%@ · %lld orders from the closed long",
+        "%@ · %lld orders from the closed short",
+        "Your recovery phrase hides in %lld seconds. Choose Keep Showing for more time.",
+        "%lld %@ candles. Last %@, up %@ over the period. High %@, low %@.",
+        "%lld %@ candles. Last %@, down %@ over the period. High %@, low %@.",
+        "%lld TP/SL on %@ have no position to close. Left armed, they would fire on your next position here.",
+        "This position has %lld TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next long here).",
+        "This position has %lld TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next short here).",
+        "This position has %lld TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next long here. Check Orders afterwards.",
+        "This position has %lld TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next short here. Check Orders afterwards.",
+        "The limit price can have at most %lld decimal places on %@.",
+        "%lld take profits are live. A new one replaces all of them.",
+        "%lld stop losses are live. A new one replaces all of them.",
+        "Cancel %lld Triggers",
+        "Cancelled %lld TP/SL",
+        "%lld percent",
+        "%lld times",
+        "Maximum leverage, %lld times",
+        "%lld times leverage",
+    ]
+
+    /// Every listed plural key is still written in the Perps or Wallet code, so the list stays the code's.
+    func testThePluralKeysAreTheCodes() throws {
+        let code = try Self.scopedSources().map(\.text).joined(separator: "\n")
+        let value = #"\\\(.+?\)"# // one interpolation, `\(…)`, nested parentheses included
+        for key in Self.pluralKeys {
+            let pattern = NSRegularExpression.escapedPattern(for: key)
+                .replacingOccurrences(of: "%lld", with: value).replacingOccurrences(of: "%@", with: value)
+            XCTAssertNotNil(code.range(of: "\"" + pattern + "\"", options: .regularExpression), "not in the Perps or Wallet code: \(key)")
+        }
+    }
+
+    /// A plural key the app's catalog carries has English `one` and `other` forms, so a count of 1 reads right in
+    /// English too: the catalog step adds them with every language's. A release (`DYORHQ_RELEASE_GATE=1`) needs every
+    /// plural key in the catalog, since a key that isn't there shows its English as written, "1 more steps".
+    func testThePluralKeysHaveEnglishPluralForms() throws {
+        let url = try Self.ios().appendingPathComponent("DyorHQ/Resources/Localizable.xcstrings")
+        let catalog = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let strings = catalog["strings"] as? [String: Any] ?? [:]
+        let release = ProcessInfo.processInfo.environment["DYORHQ_RELEASE_GATE"] == "1"
+        for key in Self.pluralKeys {
+            guard let entry = strings[key] as? [String: Any] else {
+                if release { XCTFail("not in the app's catalog (run scripts/dev/strings-sync.sh, then add its plural forms): \(key)") }
+                continue
+            }
+            let english = (entry["localizations"] as? [String: Any])?["en"] as? [String: Any] ?? [:]
+            let substitutions = (english["substitutions"] as? [String: Any] ?? [:]).values.compactMap { $0 as? [String: Any] }
+            let plurals = ([english] + substitutions).compactMap { ($0["variations"] as? [String: Any])?["plural"] as? [String: Any] }
+            let complete = plurals.contains { forms in
+                ["one", "other"].allSatisfy { form in
+                    let unit = (forms[form] as? [String: Any])?["stringUnit"] as? [String: Any]
+                    return !((unit?["value"] as? String) ?? "").isEmpty
+                }
+            }
+            XCTAssertTrue(complete, "no English one/other plural forms in the app's catalog: \(key)")
+        }
+    }
 }
