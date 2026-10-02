@@ -173,17 +173,18 @@ final class BridgeTracker {
                     recordCompletion(bridge, usd: state.swapDetails?.amountOutUsd.flatMap(Double.init))
                     let out = state.swapDetails?.amountOutFormatted.map { "\($0) \(bridge.destToken.symbol)" }
                     status[bridge.hash] = arrived.map { .arrived($0) }
-                        ?? .unverified("The bridge reports it complete\(out.map { " (\($0))" } ?? ""). Check your \(bridge.destToken.symbol) balance on \(bridge.toName) to confirm it arrived.")
+                        ?? .unverified(out.map { tr("The bridge reports it complete (\($0)). Check your \(bridge.destToken.symbol) balance on \(bridge.toName) to confirm it arrived.") }
+                            ?? tr("The bridge reports it complete. Check your \(bridge.destToken.symbol) balance on \(bridge.toName) to confirm it arrived."))
                     finish(bridge)
                     return
                 case .refunded:
-                    correct(bridge, title: "Bridge refunded", detail: "\(bridge.inSymbol) returned on \(bridge.fromName)")
-                    status[bridge.hash] = .refunded("Bridge refunded — \(state.swapDetails?.refundReason ?? "the swap couldn't complete"). Your funds were returned on \(bridge.fromName).")
+                    correct(bridge, title: tr("Bridge refunded"), detail: tr("\(bridge.inSymbol) returned on \(bridge.fromName)"))
+                    status[bridge.hash] = .refunded(tr("Bridge refunded — \(state.swapDetails?.refundReason ?? tr("the swap couldn't complete")). Your funds were returned on \(bridge.fromName)."))
                     finish(bridge)
                     return
                 case .failed:
-                    correct(bridge, title: "Bridge failed", detail: state.swapDetails?.refundReason ?? "The bridge could not complete on \(bridge.toName)")
-                    status[bridge.hash] = .failed(state.swapDetails?.refundReason ?? "The bridge failed.")
+                    correct(bridge, title: tr("Bridge failed"), detail: state.swapDetails?.refundReason ?? tr("The bridge could not complete on \(bridge.toName)"))
+                    status[bridge.hash] = .failed(state.swapDetails?.refundReason ?? tr("The bridge failed."))
                     finish(bridge)
                     return
                 default:
@@ -198,13 +199,13 @@ final class BridgeTracker {
                 guard isCurrent(bridge) else { return }
                 failures += 1
                 if failures >= 4, !bridge.arrivedByBalance {
-                    status[bridge.hash] = .settling("Still settling — this can take a minute. Check your balance on \(bridge.toName); DyorHQ keeps checking while it's open.")
+                    status[bridge.hash] = .settling(tr("Still settling — this can take a minute. Check your balance on \(bridge.toName); DyorHQ keeps checking while it's open."))
                 }
             }
             try? await Task.sleep(for: .seconds(bridge.arrivedByBalance ? 20 : 4))
         }
         guard isCurrent(bridge), !bridge.arrivedByBalance else { return }
-        status[bridge.hash] = .settling("Taking longer than usual. Check your balance on \(bridge.toName); DyorHQ checks again each time you open it.")
+        status[bridge.hash] = .settling(tr("Taking longer than usual. Check your balance on \(bridge.toName); DyorHQ checks again each time you open it."))
     }
 
     /// The arrival seen in the balance while the bridge still says in progress: recorded, shown as arrived, and kept

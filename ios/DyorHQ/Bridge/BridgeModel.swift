@@ -315,6 +315,7 @@ final class BridgeModel {
         guard let quote, let deposit = quote.depositAddress.flatMap(Address.init), let from = fromToken, let owner = env.session.address,
               let amount = BigUInt(quote.amountIn), let request = try? Self.depositRequest(from, to: deposit, amount: amount) else { return }
         let chain = fromChain
+        // not localized: the step's label is never shown, as this only estimates its fee.
         let fee = await env.sender(for: chain).feePreview([.call(request, label: "Deposit")], from: owner)
         // A new quote or source meanwhile: this fee isn't for it.
         guard self.quote?.depositAddress == quote.depositAddress, fromChain == chain else { return }
@@ -327,6 +328,7 @@ final class BridgeModel {
     /// any standalone large integer in an amount error into human units of the source token, so the user reads
     /// "0.15 USDC" instead of "150000".
     private func humanize(_ message: String) -> String {
+        // not localized: Aurora's own English error text, whatever the app's language.
         guard let token = fromToken,
               message.lowercased().contains("at least") || message.lowercased().contains("too low"),
               let regex = try? NSRegularExpression(pattern: #"\b\d{4,}\b"#) else { return message }
@@ -390,11 +392,11 @@ final class BridgeModel {
 
     func execute() async {
         // A passkey account's bridge always asks (MERA-PLAN §3): one Face ID when the deposit is signed.
-        guard let wallet = env.session.wallet(for: MeraSession.Action(.alwaysAsks(.bridge))) else { localPhase = .failed("Sign in to bridge."); return }
+        guard let wallet = env.session.wallet(for: MeraSession.Action(.alwaysAsks(.bridge))) else { localPhase = .failed(tr("Sign in to bridge.")); return }
         guard let from = fromToken, let amount = amountRaw, let quote, let deposit = quote.depositAddress, let depositAddr = Address(deposit) else {
-            localPhase = .failed("Get a quote first."); return
+            localPhase = .failed(tr("Get a quote first.")); return
         }
-        if env.settings.appLockApplies(to: env.session.account), !(await BiometricGate.authenticate(reason: "Confirm bridge")) { return }
+        if env.settings.appLockApplies(to: env.session.account), !(await BiometricGate.authenticate(reason: tr("Confirm bridge"))) { return }
         localPhase = .signing
         trackedHash = nil
         sourceTxURL = nil
@@ -404,12 +406,12 @@ final class BridgeModel {
         // echo arrives in the same response as that address: the address is trusted to Aurora and the aurora-proxy
         // Edge Function, and the review card shows it before the user confirms (security audit 2026-09-26, IOST-3).
         guard let quotedIn = BigUInt(quote.amountIn), quotedIn == amount else {
-            localPhase = .failed("The bridge quote didn't match the amount you entered, so nothing was sent. Get a new quote.")
+            localPhase = .failed(tr("The bridge quote didn't match the amount you entered, so nothing was sent. Get a new quote."))
             return
         }
         guard let owner = env.session.address, let to = toToken,
               quote.request?.matches(amount: amount, originAsset: from.assetId, destinationAsset: to.assetId, owner: owner) == true else {
-            localPhase = .failed("The bridge quote didn't match your request (amount, tokens or your address), so nothing was sent. Get a new quote.")
+            localPhase = .failed(tr("The bridge quote didn't match your request (amount, tokens or your address), so nothing was sent. Get a new quote."))
             return
         }
         let sendAmount = quotedIn
@@ -417,11 +419,11 @@ final class BridgeModel {
         let destChain = toChain
         // A lock or an app switch while the deposit is signed and sent suspends this: ask for the time iOS grants, so the
         // deposit is broadcast, recorded and persisted, and Aurora told (GL-5).
-        let background = BackgroundTime("Bridge")
+        let background = BackgroundTime("Bridge") // not localized: the background task's name, never shown
         defer { background.end() }
         do {
             guard let request = try Self.depositRequest(from, to: depositAddr, amount: sendAmount) else {
-                localPhase = .failed("This source token can't be bridged."); return
+                localPhase = .failed(tr("This source token can't be bridged.")); return
             }
 
             // The destination balance, asked for before signing (RI-3): the baseline an arrival is measured from. Asked
@@ -453,7 +455,7 @@ final class BridgeModel {
             }()
             let usd = quote.amountOutUsd.flatMap(Double.init) ?? quote.amountInUsd.flatMap(Double.init)
             ActivityLog.record(ActivityRecord(
-                kind: .bridge, title: "Bridge \(from.symbol) → \(to.symbol)",
+                kind: .bridge, title: tr("Bridge \(from.symbol) → \(to.symbol)"),
                 subtitle: "\(amountText) \(from.symbol) · \(sourceChain.name) → \(destChain.name)",
                 hash: hash, section: "bridge", usd: usd, feeUsd: bridgeFeeUsd), owner: owner)
             let tracker = env.bridgeTracker
@@ -502,12 +504,12 @@ extension AuroraSwapStatus {
     /// A short user-facing label for the settlement stage.
     var label: String {
         switch self {
-        case .pendingDeposit, .knownDepositTx: return "Confirming your deposit…"
-        case .incompleteDeposit: return "Waiting for the full deposit…"
-        case .processing: return "Bridging across chains…"
-        case .success: return "Arrived"
-        case .refunded: return "Refunded"
-        case .failed: return "Failed"
+        case .pendingDeposit, .knownDepositTx: return tr("Confirming your deposit…")
+        case .incompleteDeposit: return tr("Waiting for the full deposit…")
+        case .processing: return tr("Bridging across chains…")
+        case .success: return tr(LocalizedStringResource("Arrived", comment: "A bridge's status: the funds arrived [tight]"))
+        case .refunded: return tr(LocalizedStringResource("Refunded", comment: "A bridge's status: the funds were returned [tight]"))
+        case .failed: return tr(LocalizedStringResource("Failed", comment: "A bridge's status [tight]"))
         }
     }
 }
