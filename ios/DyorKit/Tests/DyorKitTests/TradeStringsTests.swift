@@ -182,6 +182,50 @@ final class TradeStringsTests: XCTestCase {
         XCTAssertTrue(profile.contains(#"tr("\(model.claimAllCount) claims · fees and rewards")"#))
     }
 
+    /// The keys above read "1 editions", "1 trades in the period" or "1 claims" until the app's catalog gives them their
+    /// English plural forms (the catalog step, after every lane merges; the build before this one chose the noun by
+    /// hand). While the catalog is still empty this is skipped, naming the keys; once it holds strings, each key needs a
+    /// "one" form with the singular noun and an "other" form with the plural, directly or through a substitution.
+    func testPluralKeysHaveEnglishOneAndOtherForms() throws {
+        let plurals = [("%lld editions", "edition"), ("%lld editions · %@ %@", "edition"),
+                       ("%lld trades in the period", "trade"), ("%lld claims · fees and rewards", "claim")]
+        // The reader finds a direct plural and one inside a substitution.
+        let direct: [String: Any] = ["variations": ["plural": ["one": ["stringUnit": ["value": "%lld edition"]],
+                                                               "other": ["stringUnit": ["value": "%lld editions"]]]]]
+        let substituted: [String: Any] = ["stringUnit": ["value": "%#@arg1@ · %2$@ %3$@"],
+                                          "substitutions": ["arg1": ["variations": ["plural": ["one": ["stringUnit": ["value": "%arg claim"]]]]]]]
+        XCTAssertEqual(Self.pluralForms(in: [direct]).one, ["%lld edition"])
+        XCTAssertEqual(Self.pluralForms(in: [direct]).other, ["%lld editions"])
+        XCTAssertEqual(Self.pluralForms(in: [substituted]).one, ["%arg claim"])
+        let data = Data(try DocsLinksTests.appSource("Resources/Localizable.xcstrings").utf8)
+        let catalog = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let strings = try XCTUnwrap(catalog["strings"] as? [String: Any])
+        try XCTSkipIf(strings.isEmpty, "catalog step pending: give \(plurals.map(\.0)) English one and other forms")
+        for (name, noun) in plurals {
+            let english = (((strings[name] as? [String: Any])?["localizations"] as? [String: Any])?["en"]).map { [$0] } ?? []
+            let forms = Self.pluralForms(in: english)
+            XCTAssertTrue(forms.one.contains { $0.contains(noun) && !$0.contains(noun + "s") }, "\(name): no English \"one\" form with \"\(noun)\"")
+            XCTAssertTrue(forms.other.contains { $0.contains(noun + "s") }, "\(name): no English \"other\" form with \"\(noun)s\"")
+        }
+    }
+
+    /// The text of every "one" and "other" case under a catalog entry's plural variations, however deep (a substitution
+    /// keeps its own).
+    private static func pluralForms(in values: [Any]) -> (one: [String], other: [String]) {
+        var one: [String] = [], other: [String] = []
+        for case let value as [String: Any] in values {
+            if let plural = (value["variations"] as? [String: Any])?["plural"] as? [String: Any] {
+                func text(_ form: String) -> String? { ((plural[form] as? [String: Any])?["stringUnit"] as? [String: Any])?["value"] as? String }
+                if let text = text("one") { one.append(text) }
+                if let text = text("other") { other.append(text) }
+            }
+            let nested = pluralForms(in: Array(value.values))
+            one += nested.one
+            other += nested.other
+        }
+        return (one, other)
+    }
+
     // MARK: What stays English
 
     /// Aurora's errors are matched on its own English text, whatever the app's language; the amounts in them are then
