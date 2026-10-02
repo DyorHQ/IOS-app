@@ -196,10 +196,11 @@ struct CollateralSheet: View {
     private var limit: BigUInt { kind == .deposit ? model.collateral.wallet : (model.account.map { $0.balance - min($0.balance, $0.locked) } ?? 0) }
     /// A first deposit with no account yet is really account creation — the plan calls `createAccount`, not `depositCollateral`.
     private var isCreating: Bool { kind == .deposit && model.account == nil }
+    /// What's wrong with the amount, in the app's language.
     private var problem: String? {
         if raw == 0 { return nil }
-        if raw > limit { return kind == .deposit ? "Not enough AUSD in your wallet." : "More than your available balance." }
-        if kind == .deposit, model.account == nil, raw < Perpl.minimumDeposit { return "The first deposit must be at least 10 AUSD." }
+        if raw > limit { return kind == .deposit ? tr("Not enough AUSD in your wallet.") : tr("More than your available balance.") }
+        if kind == .deposit, model.account == nil, raw < Perpl.minimumDeposit { return tr("The first deposit must be at least 10 AUSD.") }
         return nil
     }
 
@@ -207,7 +208,7 @@ struct CollateralSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    AmountField(title: "0", text: $amountText, token: .ausd) { Haptics.selection(); amountText = Amount.exact(limit, decimals: 6) }
+                    AmountField(title: "0" as String, text: $amountText, token: .ausd) { Haptics.selection(); amountText = Amount.exact(limit, decimals: 6) }
                 } header: {
                     Text(isCreating ? "Open your Perpl account" : (kind == .deposit ? "Deposit AUSD" : "Withdraw AUSD"))
                 } footer: {
@@ -215,12 +216,14 @@ struct CollateralSheet: View {
                         // The Perps screen's first run: opening the account is where someone new to Perps starts. A problem
                         // with the amount takes the explanation's place, and the link stays while it's typed.
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(problem ?? "Your first deposit opens your Perpl account. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.")
+                            if let problem { Text(verbatim: problem) }
+                            else { Text("Your first deposit opens your Perpl account. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.") }
                             LearnMoreLink(.depositAndWithdraw)
                         }
                     }
-                    else if let problem { Text(problem) }
-                    else { Text("\(kind == .deposit ? "In wallet" : "Available"): \(NumberStyle.units(limit, decimals: 6)) AUSD") }
+                    else if let problem { Text(verbatim: problem) }
+                    else if kind == .deposit { Text("In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD") }
+                    else { Text("Available: \(NumberStyle.units(limit, decimals: 6)) AUSD") }
                 }
             }
             .navigationTitle(isCreating ? "Create Account" : (kind == .deposit ? "Deposit" : "Withdraw"))
@@ -232,7 +235,7 @@ struct CollateralSheet: View {
             }
             .sheet(isPresented: $showConfirm) {
                 ConfirmationSheet(title: isCreating ? "Create Trading Account" : (kind == .deposit ? "Confirm Deposit" : "Confirm Withdrawal"), confirmTitle: isCreating ? "Create Account" : (kind == .deposit ? "Deposit" : "Withdraw"), build: { kind == .deposit ? env.perpl.depositPlan(amountCNS: raw, hasAccount: model.account != nil) : env.perpl.withdrawPlan(amountCNS: raw) }, onDone: { dismiss(); Task { await model.load(env: env, address: session.address) } },
-                                  onCompleted: { hash in Activity.record(ActivityRecord(kind: kind == .deposit ? .deposit : .withdraw, title: isCreating ? "Opened trading account" : (kind == .deposit ? "Deposited to Perps" : "Withdrew from Perps"), subtitle: "\(NumberStyle.units(raw, decimals: 6)) AUSD", hash: hash, section: "perps", usd: Amount.units(raw, decimals: 6)), owner: session.address) },
+                                  onCompleted: { hash in Activity.record(ActivityRecord(kind: kind == .deposit ? .deposit : .withdraw, title: isCreating ? tr("Opened trading account") : (kind == .deposit ? tr("Deposited to Perps") : tr("Withdrew from Perps")), subtitle: "\(NumberStyle.units(raw, decimals: 6)) AUSD", hash: hash, section: "perps", usd: Amount.units(raw, decimals: 6)), owner: session.address) },
                                   intent: kind == .deposit ? .perplDeposit(amount: raw) : .perplWithdraw) {
                     DetailRow("Amount", verbatim: "\(NumberStyle.units(raw, decimals: 6)) AUSD")
                     DetailRow(kind == .deposit ? "To" : "From", "Perpl Exchange")

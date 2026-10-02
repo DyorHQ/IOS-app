@@ -33,18 +33,20 @@ enum PasswordStrength {
         return min(score, 4)
     }
 
-    /// `nil` when the password is acceptable, otherwise a short reason to show and block sign-up on.
+    /// `nil` when the password is acceptable, otherwise a short reason to show and block sign-up on, in the app's
+    /// language.
     static func rejection(_ password: String, email: String) -> String? {
-        if password.count < minLength { return "Use at least \(minLength) characters." }
-        if classes(password) < 3 { return "Mix uppercase, lowercase, numbers and symbols (any three)." }
-        if isPredictable(password) { return "Too predictable — avoid repeats and simple sequences." }
+        if password.count < minLength { return tr("Use at least \(minLength) characters.") }
+        if classes(password) < 3 { return tr("Mix uppercase, lowercase, numbers and symbols (any three).") }
+        if isPredictable(password) { return tr("Too predictable — avoid repeats and simple sequences.") }
         let lower = password.lowercased()
-        if blocked.contains(lower) { return "That password is too common." }
+        if blocked.contains(lower) { return tr("That password is too common.") }
+        // not localized: matched against what is typed, in every language
         for weak in ["password", "dyorhq", "qwerty", "letmein", "monad", "crypto", "wallet"] where lower.contains(weak) {
-            return "Avoid common words like “\(weak)”."
+            return tr("Avoid common words like “\(weak)”.")
         }
         let localPart = email.split(separator: "@").first.map { $0.lowercased() } ?? ""
-        if localPart.count >= 3, lower.contains(localPart) { return "Don’t base your password on your email." }
+        if localPart.count >= 3, lower.contains(localPart) { return tr("Don’t base your password on your email.") }
         return nil
     }
 

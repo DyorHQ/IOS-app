@@ -48,7 +48,7 @@ final class TransactionRun {
         Task {
             // A lock or an app switch mid-plan suspends it: ask for the time iOS grants so the step in flight can still
             // broadcast and see its receipt (GL-2).
-            let background = BackgroundTime("Transaction")
+            let background = BackgroundTime("Transaction") // not localized: the background task's name, never shown
             defer { background.end(); mera.endAction() }
             do {
                 let hash = try await sender.run(steps, from: wallet) { event in
@@ -57,7 +57,7 @@ final class TransactionRun {
                 phase = .done(hash)
             } catch where passkey && isUserCancellation(error) {
                 // A passkey prompt the person dismissed: say plainly what did and didn't happen.
-                phase = .failed(sentSomething ? "Stopped at \(BiometricGate.promptName). Only the steps above were sent." : Self.notSent)
+                phase = .failed(sentSomething ? tr("Stopped at \(BiometricGate.promptName). Only the steps above were sent.") : Self.notSent)
             } catch {
                 if let failure = error as? TransactionError, case .reverted(let hash) = failure { PendingActivity.reverted(hash, owner: owner) }
                 // A step sent but not seen confirmed keeps its hash (the View link above, and a pending row in Recent
@@ -85,10 +85,12 @@ final class TransactionRun {
         }
     }
 
-    /// A step-up the person cancelled before anything was signed.
-    static let notSent = "Not sent. Nothing left your account."
-    /// Why a run that already broadcast something is not started again.
-    static let alreadySent = "Part of this was already sent. Check it with View above before trying again — confirming again here could send it twice."
+    /// A step-up the person cancelled before anything was signed, in the app's language.
+    static var notSent: String { tr("Not sent. Nothing left your account.") }
+    /// Why a run that already broadcast something is not started again, in the app's language.
+    static var alreadySent: String {
+        tr("Part of this was already sent. Check it with View above before trying again — confirming again here could send it twice.")
+    }
 
     /// Shows a failure that happened before the plan started (a cancelled step-up).
     func fail(_ message: String) {
@@ -127,13 +129,13 @@ final class BackgroundTime {
 }
 
 extension TransactionSender.FeePreview {
-    /// "Up to 0.061 MON", plus any steps that can only be priced once an earlier one lands (a swap after its approval).
+    /// "Up to 0.061 MON", plus any steps that can only be priced once an earlier one lands (a swap after its approval),
+    /// in the app's language. The step count is a plural.
     var summary: String {
-        let symbol = NetworkFeeLimits.nativeSymbol(chainId: chainId)
-        let more = unestimated == 1 ? "1 more step" : "\(unestimated) more steps"
-        if unestimated == 0 { return "Up to \(NumberStyle.units(maxFee, decimals: 18)) \(symbol)" }
-        if maxFee == 0 { return "Priced as each step is signed" }
-        return "Up to \(NumberStyle.units(maxFee, decimals: 18)) \(symbol) + \(more)"
+        let fee = "\(NumberStyle.units(maxFee, decimals: 18)) \(NetworkFeeLimits.nativeSymbol(chainId: chainId))"
+        if unestimated == 0 { return tr("Up to \(fee)") }
+        if maxFee == 0 { return tr("Priced as each step is signed") }
+        return tr("Up to \(fee) + \(unestimated) more steps")
     }
 }
 
@@ -316,14 +318,18 @@ struct ConfirmationSheet<Details: View>: View {
         }
     }
 
+    /// The spender's name in "Unlimited approval to …": the contracts' own names are never translated, and the two
+    /// that read with "the" are in the app's language.
     static func spenderName(_ spender: Address) -> String {
         switch spender {
-        case Uniswap.permit2: return "Permit2"
-        case Uniswap.universalRouter: return "the Uniswap Universal Router"
-        case Uniswap.swapRouter02: return "Uniswap SwapRouter02"
-        case MondayTrade.swapRouter: return "Monday Trade"
-        case Kuru.entrypoint: return "Kuru Flow"
-        case Perpl.exchange: return "the Perpl Exchange"
+        case Uniswap.permit2: return "Permit2" // not localized: a contract's name
+        case Uniswap.universalRouter:
+            return tr(LocalizedStringResource("the Uniswap Universal Router", comment: "Completes “Unlimited approval to %@” and “Replaces your unlimited approval to %@”."))
+        case Uniswap.swapRouter02: return "Uniswap SwapRouter02" // not localized: a contract's name
+        case MondayTrade.swapRouter: return "Monday Trade" // not localized: a venue's name
+        case Kuru.entrypoint: return "Kuru Flow" // not localized: a venue's name
+        case Perpl.exchange:
+            return tr(LocalizedStringResource("the Perpl Exchange", comment: "Completes “Unlimited approval to %@” and “Replaces your unlimited approval to %@”."))
         default: return spender.short
         }
     }
@@ -344,7 +350,7 @@ struct ConfirmationSheet<Details: View>: View {
     private func confirm() async {
         if settings.appLockApplies(to: session.account) {
             // App Lock fails closed. Without a device passcode nothing can confirm the owner: say so, not a dead button.
-            guard BiometricGate.canAuthenticateOwner else { run.fail("App Lock needs a device passcode. Set one in iOS Settings, then try again."); return }
+            guard BiometricGate.canAuthenticateOwner else { run.fail(tr("App Lock needs a device passcode. Set one in iOS Settings, then try again.")); return }
             guard await BiometricGate.authenticate(reason: "Confirm \(tr(confirmTitle))") else { return }
         }
         guard session.isPasskeyAccount else {

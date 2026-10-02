@@ -19,16 +19,17 @@ final class Session {
     enum Method: String, Codable, Equatable {
         case apple, google, email, emailPassword, passkey, meraPasskey, imported, watchOnly
 
+        /// The sign-in method's name, in the app's language (Apple's and Google's names as they are).
         var title: String {
             switch self {
-            case .apple: return "Apple"
-            case .google: return "Google"
-            case .email: return "Email"
-            case .emailPassword: return "Email & Password"
-            case .passkey: return "Passkey (Privy)"
-            case .meraPasskey: return "Passkey"
-            case .imported: return "Imported wallet"
-            case .watchOnly: return "Watch only"
+            case .apple: return "Apple" // not localized: a company's name
+            case .google: return "Google" // not localized: a company's name
+            case .email: return tr("Email")
+            case .emailPassword: return tr("Email & Password")
+            case .passkey: return tr("Passkey (Privy)")
+            case .meraPasskey: return tr("Passkey")
+            case .imported: return tr("Imported wallet")
+            case .watchOnly: return tr("Watch only")
             }
         }
     }
@@ -152,7 +153,7 @@ final class Session {
         if let address = MeraCredentialStore.address, hasMera {
             // Locked until the first signature asks for the passkey; reads work immediately.
             wallet = MeraWallet(address: address, session: mera)
-            state = .signedIn(Account(address: address, method: .meraPasskey, label: "Passkey"))
+            state = .signedIn(Account(address: address, method: .meraPasskey, label: tr("Passkey")))
             return true
         }
         if let account = ImportedWalletStore.loadAccount() {
@@ -281,7 +282,7 @@ final class Session {
         }
         wallet = MeraWallet(address: address, session: mera)
         lastError = nil
-        state = .signedIn(Account(address: address, method: .meraPasskey, label: "Passkey"))
+        state = .signedIn(Account(address: address, method: .meraPasskey, label: tr("Passkey")))
         backend.startSignIn(address: address, wallet: MeraBackgroundSigner(address: address, session: mera), profileInBackground: true)
     }
 
@@ -314,7 +315,7 @@ final class Session {
         lastError = nil
         pendingMethod = method
         defer { pendingMethod = nil }
-        let user = try await requirePrivy().oAuth.login(with: provider, appUrlScheme: "dyorhq")
+        let user = try await requirePrivy().oAuth.login(with: provider, appUrlScheme: "dyorhq") // not localized: the URL scheme
         try await adoptOnce(user)
     }
 
@@ -343,7 +344,7 @@ final class Session {
     @discardableResult
     func importWallet(_ account: Secp256k1Account) async -> Bool {
         guard ImportedWalletStore.save(privateKey: account.privateKey) else {
-            lastError = "Couldn't save the key in this iPhone's Keychain. Unlock your iPhone and try again."
+            lastError = tr("Couldn't save the key in this iPhone's Keychain. Unlock your iPhone and try again.")
             return false
         }
         WatchOnlyStore.clear()
@@ -525,9 +526,10 @@ final class Session {
     }
 
     /// The canonical challenge the wallet signs to prove control of itself during a bind. The `email-rebind` function
-    /// reparses these lines, so the format must stay in lock-step with it.
+    /// reparses these lines, so the format must stay in lock-step with it (not localized: the server reads it).
     static func bindChallenge(email: String, address: Address) -> String {
         let issued = ISO8601DateFormatter().string(from: Date())
+        // not localized: the email-rebind function reparses these lines
         return "DyorHQ Email Rebind\n\nEmail: \(email)\nAddress: \(address.checksummed.lowercased())\nIssued At: \(issued)"
     }
 
@@ -662,23 +664,24 @@ enum SessionError: LocalizedError {
     /// The user asked for an account from before v2, and none is bound to this email and password (IOSK-2).
     case legacyAccountNotFound
 
+    /// The error in the app's language.
     var errorDescription: String? {
         switch self {
-        case .privyPasskeysDisabled: return "Passkeys in this build open a DyorHQ passkey account, not a Privy one."
-        case .appleSignInUnavailable: return "Sign in with Apple couldn’t start. Make sure this iPhone is signed in to an Apple Account in Settings, then try again."
+        case .privyPasskeysDisabled: return tr("Passkeys in this build open a DyorHQ passkey account, not a Privy one.")
+        case .appleSignInUnavailable: return tr("Sign in with Apple couldn’t start. Make sure this iPhone is signed in to an Apple Account in Settings, then try again.")
         case .legacyWalletHasFunds(let legacy):
-            return "Your account’s original wallet (\(legacy.checksummed)) now holds funds, so the security upgrade can’t finish. Log in with your current password to move them out, then log in again to finish the upgrade. Don’t reset your password before then: a reset creates a new, empty wallet and leaves those funds behind."
-        case .legacyBalanceUnavailable: return "Couldn’t check your wallet’s balance. Check your connection and try again."
-        case .upgradeNeedsNewPassword: return "Choose a new password for the security upgrade — your current one can’t be reused."
-        case .emailAlreadyBound(let current): return "This email already has a DyorHQ wallet (\(current.short))."
-        case .samePasswordLegacyBinding: return "This email’s wallet was created with this same password before our security upgrade. Log in with it instead (choose “Signed up before September 24, 2026?”): log-in takes you through the upgrade."
-        case .legacyAccountNotFound: return "We couldn’t find an account from before September 24, 2026 for that email and password either. Check them and try again."
-        case .authenticationRequired: return "Confirm with Face ID, Touch ID or your passcode to continue."
-        case .privyNotConfigured: return "Sign-in is not set up in this build. Add the Privy keys to Secrets.xcconfig."
-        case .invalidWalletAddress: return "The wallet address returned by Privy is not valid."
-        case .readOnly: return "You are watching this address. Sign in to trade."
-        case .passwordDerivationFailed: return "Couldn't create your wallet from that email and password. Please try again."
-        case .emailNotVerified: return "We couldn't find a verified account for that email and password. If you reset your password or signed up again with this email, it now points to that newer wallet: to go back to this password's wallet, use Forgot password and enter this password. If you're new, tap Sign Up to verify your email first."
+            return tr("Your account’s original wallet (\(legacy.checksummed)) now holds funds, so the security upgrade can’t finish. Log in with your current password to move them out, then log in again to finish the upgrade. Don’t reset your password before then: a reset creates a new, empty wallet and leaves those funds behind.")
+        case .legacyBalanceUnavailable: return tr("Couldn’t check your wallet’s balance. Check your connection and try again.")
+        case .upgradeNeedsNewPassword: return tr("Choose a new password for the security upgrade — your current one can’t be reused.")
+        case .emailAlreadyBound(let current): return tr("This email already has a DyorHQ wallet (\(current.short)).")
+        case .samePasswordLegacyBinding: return tr("This email’s wallet was created with this same password before our security upgrade. Log in with it instead (choose “Signed up before September 24, 2026?”): log-in takes you through the upgrade.")
+        case .legacyAccountNotFound: return tr("We couldn’t find an account from before September 24, 2026 for that email and password either. Check them and try again.")
+        case .authenticationRequired: return tr("Confirm with Face ID, Touch ID or your passcode to continue.")
+        case .privyNotConfigured: return tr("Sign-in is not set up in this build. Add the Privy keys to Secrets.xcconfig.")
+        case .invalidWalletAddress: return tr("The wallet address returned by Privy is not valid.")
+        case .readOnly: return tr("You are watching this address. Sign in to trade.")
+        case .passwordDerivationFailed: return tr("Couldn't create your wallet from that email and password. Please try again.")
+        case .emailNotVerified: return tr("We couldn't find a verified account for that email and password. If you reset your password or signed up again with this email, it now points to that newer wallet: to go back to this password's wallet, use Forgot password and enter this password. If you're new, tap Sign Up to verify your email first.")
         }
     }
 }

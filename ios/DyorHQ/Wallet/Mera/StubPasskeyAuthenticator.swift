@@ -33,6 +33,7 @@ final class StubPasskeyAuthenticator: PasskeyAuthenticator, PasskeySignaling {
 
     enum Refusal: LocalizedError {
         case notLocal, wrongRelyingParty, noPasskey
+        // not localized: a developer's message, in DEBUG Simulator builds only
         var errorDescription: String? {
             switch self {
             case .notLocal: return "The Simulator stub authenticator runs only against a local fork. Build with MONAD_RPC_URL=http://127.0.0.1:8545 (anvil), or launch without -MeraStubAuthenticator."
