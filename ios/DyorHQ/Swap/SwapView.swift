@@ -108,7 +108,7 @@ struct SwapView: View {
     private var paySection: some View {
         Section {
             tokenRow(side: .pay, token: model.tokenIn)
-            AmountField(title: "0", text: $model.amountText, token: nil) {
+            AmountField(title: "0" as String, text: $model.amountText, token: nil) {
                 Haptics.selection(); useMax()
             }
             percentRow
@@ -134,9 +134,11 @@ struct SwapView: View {
     private var percentRow: some View {
         HStack(spacing: 8) {
             ForEach([25, 50, 75, 100], id: \.self) { pct in
-                Button("\(pct)%") {
+                Button {
                     Haptics.selection()
                     if pct == 100 { useMax() } else { model.applyPercent(Double(pct)) }
+                } label: {
+                    Text(verbatim: "\(pct)%")
                 }
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.primary)
@@ -198,7 +200,7 @@ struct SwapView: View {
                     ProgressView().controlSize(.small)
                     Text("Finding the best price").foregroundStyle(.secondary)
                 } else {
-                    Text("0").font(.title2.weight(.medium)).foregroundStyle(.tertiary)
+                    Text(verbatim: "0").font(.title2.weight(.medium)).foregroundStyle(.tertiary)
                 }
                 Spacer()
             }
@@ -245,7 +247,7 @@ struct SwapView: View {
                                 HStack(spacing: 6) {
                                     Text(quote.venue.displayName).font(.headline)
                                     if quote.venue == result.quotes.first?.venue {
-                                        Text("Best").font(.caption.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.positive.opacity(0.15), in: Capsule()).foregroundStyle(Color.positive)
+                                        Text("Best", comment: "Badge on the venue with the best quote [tight]").font(.caption.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.positive.opacity(0.15), in: Capsule()).foregroundStyle(Color.positive)
                                     }
                                 }
                                 Text(quote.route).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
@@ -267,7 +269,7 @@ struct SwapView: View {
                     HStack {
                         Text(venue.displayName).foregroundStyle(.secondary)
                         Spacer()
-                        Text(result.errors[venue] ?? "").font(.footnote).foregroundStyle(.tertiary).multilineTextAlignment(.trailing)
+                        Text(verbatim: result.errors[venue] ?? "").font(.footnote).foregroundStyle(.tertiary).multilineTextAlignment(.trailing)
                     }
                 }
             } header: {
@@ -302,7 +304,7 @@ struct SwapView: View {
             }
         }
         .foregroundStyle(.primary)
-        .accessibilityLabel("\(side == .pay ? "Pay with" : "Receive") \(token.symbol)")
+        .accessibilityLabel(side == .pay ? Text("Pay with \(token.symbol)") : Text("Receive \(token.symbol)"))
         .accessibilityHint("Choose a different token")
     }
 
@@ -316,7 +318,7 @@ struct SwapView: View {
             // reviewed and signed.
             let text = "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals, compact: true)) \(review.tokenIn.symbol) → \(NumberStyle.units(review.quote.amountOut, decimals: review.tokenOut.decimals, compact: true)) \(review.tokenOut.symbol)"
             let usd = [review.payUSD, review.receiveUSD].compactMap { $0 }.first { $0 > 0 }
-            ActivityLog.record(ActivityRecord(kind: .swap, title: "Swapped", subtitle: text, hash: hash, usd: usd), owner: session.address)
+            ActivityLog.record(ActivityRecord(kind: .swap, title: tr("Swapped"), subtitle: text, hash: hash, usd: usd), owner: session.address)
             // Remember both sides so they show in holdings and the picker even if they aren't curated: the token
             // just acquired, and the one paid with (a partial swap leaves a balance still worth showing).
             KnownTokenStore.add(review.tokenOut, owner: session.address)
@@ -441,10 +443,10 @@ final class SwapModel {
     /// The input is more than the wallet holds (a balance that couldn't be read doesn't count).
     var insufficient: Bool { balances[tokenIn.address].map { amountIn > $0 } ?? false }
     var actionTitle: String {
-        if amountIn == 0 { return "Enter an Amount" }
-        if insufficient { return "Insufficient \(tokenIn.symbol)" }
-        if SwapEngine.isWrap(tokenIn, tokenOut) { return tokenIn.isNative ? "Wrap MON" : "Unwrap WMON" }
-        return "Review Swap"
+        if amountIn == 0 { return tr("Enter an Amount") }
+        if insufficient { return tr("Insufficient \(tokenIn.symbol)") }
+        if SwapEngine.isWrap(tokenIn, tokenOut) { return tokenIn.isNative ? tr("Wrap MON") : tr("Unwrap WMON") }
+        return tr("Review Swap")
     }
 
     func select(_ token: Token, for side: Side) {
@@ -550,7 +552,7 @@ final class SwapModel {
             if Task.isCancelled { return }
             result = outcome
             resultKey = key
-            error = outcome.quotes.isEmpty ? (outcome.errors.values.first ?? "No venue can route this pair right now.") : nil
+            error = outcome.quotes.isEmpty ? (outcome.errors.values.first ?? tr("No venue can route this pair right now.")) : nil
             if !userPickedVenue || selectedVenue == nil || !outcome.quotes.contains(where: { $0.venue == selectedVenue }) { selectedVenue = outcome.quotes.first?.venue }
             quoting = false
             if outcome.quotes.isEmpty {
@@ -608,7 +610,7 @@ struct SlippageSheet: View {
                     HStack {
                         Text("Custom")
                         Spacer()
-                        TextField("0.5", text: $customText)
+                        TextField("0.5" as String, text: $customText)
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                             .monospacedDigit()
@@ -616,7 +618,7 @@ struct SlippageSheet: View {
                             .onChange(of: customText) { _, value in
                                 if let pct = Double(value), pct > 0, pct <= 50 { slippageBps = Int((pct * 100).rounded()) }
                             }
-                        Text("%").foregroundStyle(.secondary)
+                        Text(verbatim: "%").foregroundStyle(.secondary)
                     }
                 } footer: {
                     if slippageBps >= 500 {
@@ -638,10 +640,10 @@ struct SlippageSheet: View {
 
     private func hint(_ bps: Int) -> String {
         switch bps {
-        case ...10: "Tightest price. Best for stable pairs."
-        case 11...50: "Balanced — recommended for most swaps."
-        case 51...100: "More forgiving when the market is moving."
-        default: "For volatile or low-liquidity pairs."
+        case ...10: tr("Tightest price. Best for stable pairs.")
+        case 11...50: tr("Balanced — recommended for most swaps.")
+        case 51...100: tr("More forgiving when the market is moving.")
+        default: tr("For volatile or low-liquidity pairs.")
         }
     }
 }
@@ -853,7 +855,7 @@ struct TokenPickerSheet: View {
                         TokenBadgeView(token: token, receivedUnasked: unverified.contains(token.address))
                     }
                     // Only Home's search lists a retired coin; its page has no swap either.
-                    Text(SwapEngine.isTradable(token) ? token.name : "Past cohort · trading closed").font(.footnote).foregroundStyle(.secondary)
+                    (SwapEngine.isTradable(token) ? Text(verbatim: token.name) : Text("Past cohort · trading closed")).font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if let balance = balances[token.address], balance > 0 {
