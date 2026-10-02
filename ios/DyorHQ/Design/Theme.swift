@@ -92,59 +92,52 @@ final class AppSettings {
 
 /// Face ID / Touch ID gate used before signing when the user turns on the app lock.
 enum BiometricGate {
+    /// What the device's owner check asks for (`BiometricPromptKind`): the prompt's name and its icon both come from it,
+    /// so the icon never depends on translated text.
+    typealias PromptKind = BiometricPromptKind
+
     /// Whether the device can do biometric auth at all (so we don't offer a toggle that can never work).
     static var isAvailable: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) }
 
-    /// "Face ID", "Touch ID", or a generic name for the copy in Security.
+    /// "Face ID", "Touch ID", or a generic name for the copy in Security, in the app's language.
     static var typeName: String {
         let context = LAContext()
         _ = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
-        switch context.biometryType {
-        case .faceID: return "Face ID"
-        case .touchID: return "Touch ID"
-        case .opticID: return "Optic ID"
-        default: return "Biometrics"
-        }
+        let kind = PromptKind(biometricsAvailable: true, biometry: context.biometryType)
+        return kind == .passcode ? tr("Biometrics") : kind.name
     }
 
-    /// What this device's passkey prompt asks for, in copy like "Confirm with Face ID" and "Face ID required: …":
-    /// "Face ID", "Touch ID" or "Optic ID", and "Passcode" when no biometrics are enrolled (a passkey then takes the
-    /// device passcode). Read once per launch.
-    static let promptName: String = {
+    /// What this device's passkey prompt asks for: Face ID, Touch ID or Optic ID, and the passcode when no biometrics
+    /// are enrolled (a passkey then takes the device passcode). Read once per launch.
+    static let promptKind: PromptKind = {
         let context = LAContext()
-        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else { return "Passcode" }
-        switch context.biometryType {
-        case .faceID: return "Face ID"
-        case .touchID: return "Touch ID"
-        case .opticID: return "Optic ID"
-        default: return "Passcode"
-        }
+        let available = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+        return PromptKind(biometricsAvailable: available, biometry: context.biometryType)
     }()
 
-    /// The SF Symbol for `promptName`.
-    static let promptSymbol: String = {
-        switch promptName {
-        case "Face ID": return "faceid"
-        case "Touch ID": return "touchid"
-        case "Optic ID": return "opticid"
-        default: return "lock"
-        }
-    }()
+    /// The prompt's name in copy like "Confirm with Face ID" and "Face ID required: …": Apple's names as they are, and
+    /// "Passcode" in the app's language.
+    static var promptName: String { promptKind.name }
+
+    /// The SF Symbol for the prompt, from its kind: never from its name, which is translated.
+    static var promptSymbol: String { promptKind.symbol }
 
     /// Whether the device can verify its owner at all — biometrics or the device passcode.
     static var canAuthenticateOwner: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) }
 
     /// Verifies the device owner before a sensitive action: Face ID / Touch ID, falling back to the device passcode
     /// (after a biometric lockout, or when no biometrics are enrolled). FAILS CLOSED — if the owner can't be verified
-    /// at all (no passcode set) or verification fails, it returns false and the action must not proceed.
+    /// at all (no passcode set) or verification fails, it returns false and the action must not proceed. `reason` is
+    /// written in the code ("Confirm order"), and iOS shows it in the prompt in the app's language.
     @MainActor
-    static func authenticate(reason: String) async -> Bool {
+    static func authenticate(reason: LocalizedStringResource) async -> Bool {
         let context = LAContext()
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else { return false }
+        let text = tr(reason)
         BiometricPrompt.shared.showing += 1
         defer { BiometricPrompt.shared.showing -= 1 }
         return await withCheckedContinuation { continuation in
-            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, _ in
+            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: text) { success, _ in
                 continuation.resume(returning: success)
             }
         }
