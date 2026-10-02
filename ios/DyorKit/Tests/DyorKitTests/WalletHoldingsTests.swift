@@ -412,7 +412,7 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(assets.contains("unpricedHeld = result.unpriced"))
         XCTAssertTrue(assets.contains("var showsTotal: Bool { !pricesFailed && totalValue > 0 }"))
         XCTAssertTrue(assets.contains("else if kind == .assets, model.showsTotal {"))
-        XCTAssertTrue(assets.contains("case (true, true): return tokens.isEmpty ? nil : \"Some prices couldn't be read, so values are missing and no total is shown.\""))
+        XCTAssertTrue(assets.contains("case (true, true): return tokens.isEmpty ? nil : tr(\"Some prices couldn't be read, so values are missing and no total is shown.\")"))
         XCTAssertTrue(assets.contains("if kind == .assets, model.showsTotal, !model.unpriced.isEmpty, !model.loading {"))
         XCTAssertTrue(assets.contains("Text(\"Doesn't include \\(WalletHoldings.symbolList(model.unpriced)): no price found.\")"))
         XCTAssertFalse(assets.contains("valuesMissing"))
