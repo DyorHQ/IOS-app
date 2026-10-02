@@ -131,13 +131,22 @@ enum BiometricGate {
     /// written in the code ("Confirm order"), and iOS shows it in the prompt in the app's language.
     @MainActor
     static func authenticate(reason: LocalizedStringResource) async -> Bool {
+        await authenticate(reason: tr(reason))
+    }
+
+    /// The same check for a reason that is already in the app's language (a `tr("…")`), shown as it is. It is generic
+    /// and disfavoured, so a reason written as a literal still takes the one above and is looked up as a key: a plain
+    /// `String` overload, even disfavoured, would take every literal and show it untranslated.
+    @MainActor
+    @_disfavoredOverload
+    static func authenticate<S: StringProtocol>(reason verbatim: S) async -> Bool {
         let context = LAContext()
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else { return false }
-        let text = tr(reason)
+        let reason = String(verbatim)
         BiometricPrompt.shared.showing += 1
         defer { BiometricPrompt.shared.showing -= 1 }
         return await withCheckedContinuation { continuation in
-            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: text) { success, _ in
+            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, _ in
                 continuation.resume(returning: success)
             }
         }
