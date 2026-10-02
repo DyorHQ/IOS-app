@@ -63,11 +63,11 @@ struct RecoveryPhraseView: View {
             let warnAt = hidesAt.addingTimeInterval(-Self.warning)
             if warnAt.timeIntervalSinceNow > 0 { try? await Task.sleep(for: .seconds(warnAt.timeIntervalSinceNow)) }
             guard !Task.isCancelled, self.hidesAt == hidesAt else { return }
-            UIAccessibility.post(notification: .announcement, argument: "Your recovery phrase hides in \(Int(Self.warning)) seconds. Choose Keep Showing for more time.")
+            UIAccessibility.post(notification: .announcement, argument: tr("Your recovery phrase hides in \(Int(Self.warning)) seconds. Choose Keep Showing for more time."))
             try? await Task.sleep(for: .seconds(max(0, hidesAt.timeIntervalSinceNow)))
             guard !Task.isCancelled, self.hidesAt == hidesAt else { return }
-            hide(notice: "Hidden when its time ran out. Show it again if you haven't finished writing it down.")
-            UIAccessibility.post(notification: .announcement, argument: "Recovery phrase hidden.")
+            hide(notice: tr("Hidden when its time ran out. Show it again if you haven't finished writing it down."))
+            UIAccessibility.post(notification: .announcement, argument: tr("Recovery phrase hidden."))
         }
         // Leaving the foreground drops the words; PrivacyCover covers the snapshot meanwhile. A passkey prompt makes the
         // scene inactive too, and that isn't leaving.
@@ -116,7 +116,7 @@ struct RecoveryPhraseView: View {
                 HStack {
                     Text("Your 24 words")
                     Spacer()
-                    Text("Hides in \(max(0, Int(hidesAt.timeIntervalSince(context.date).rounded(.up))))s").monospacedDigit()
+                    Text("Hides in \(Self.seconds(max(0, Int(hidesAt.timeIntervalSince(context.date).rounded(.up)))))").monospacedDigit()
                 }
             }
         } footer: {
@@ -156,7 +156,7 @@ struct RecoveryPhraseView: View {
         } header: {
             Text("Confirm your backup")
         } footer: {
-            if let notice { Text(notice) }
+            if let notice { Text(verbatim: notice) }
             else { Text("Pick each word from the copy you wrote down.") }
         }
 
@@ -201,7 +201,11 @@ struct RecoveryPhraseView: View {
             Label("Only enter them into a wallet you trust (MetaMask, Rabby, OKX…). A hardware wallet is safest.", systemImage: "hand.raised.fill")
                 .font(.footnote).foregroundStyle(.secondary)
         } footer: {
-            Text("This is the phrase for \(session.address?.short ?? "your wallet"). DyorHQ never stores it.")
+            if let short = session.address?.short {
+                Text("This is the phrase for \(short). DyorHQ never stores it.")
+            } else {
+                Text("This is the phrase for your wallet. DyorHQ never stores it.")
+            }
         }
     }
 
@@ -236,7 +240,12 @@ struct RecoveryPhraseView: View {
         stage = .shown(words: words, quiz: quiz, hidesAt: Date().addingTimeInterval(Mera.RecoveryPhrase.visibleFor))
     }
 
-    /// Drops the words from the screen and memory, keeping only the quiz's three.
+    /// "12s": a countdown in seconds, in the app's language's own short unit.
+    static func seconds(_ seconds: Int) -> String {
+        Duration.seconds(seconds).formatted(.units(allowed: [.seconds], width: .narrow).locale(L10n.locale))
+    }
+
+    /// Drops the words from the screen and memory, keeping only the quiz's three. `notice` is in the app's language.
     private func hide(notice: String?) {
         guard case .shown(_, let quiz, _) = stage else { return }
         stage = .confirming(quiz)
@@ -251,7 +260,7 @@ struct RecoveryPhraseView: View {
         notice = nil
         guard passed else {
             Haptics.error()
-            error = "That doesn't match your recovery phrase. Show it again and check what you wrote down."
+            error = tr("That doesn't match your recovery phrase. Show it again and check what you wrote down.")
             return
         }
         Haptics.success()
@@ -268,7 +277,7 @@ private struct PhraseGrid: View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
             ForEach(Array(words.enumerated()), id: \.offset) { index, word in
                 HStack(spacing: 8) {
-                    Text("\(index + 1)")
+                    Text(verbatim: "\(index + 1)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .frame(width: 20, alignment: .trailing)

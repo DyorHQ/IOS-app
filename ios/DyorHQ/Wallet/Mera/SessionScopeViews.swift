@@ -40,7 +40,8 @@ struct SessionPill: View {
     }
 }
 
-/// The pill's text for a session ending at `expiresAt` (nil while locked), as of `now`.
+/// The pill's text for a session ending at `expiresAt` (nil while locked), as of `now`, in the app's language: the time
+/// left in its short units ("12m", "45s").
 struct SessionPillState: Equatable {
     let isActive: Bool
     /// The last minute: the pill turns amber.
@@ -49,13 +50,16 @@ struct SessionPillState: Equatable {
 
     init(expiresAt: Date?, now: Date) {
         guard let expiresAt, expiresAt > now else {
-            isActive = false; isEnding = false; title = "Locked"
+            isActive = false; isEnding = false
+            title = tr(LocalizedStringResource("Locked", comment: "A passkey session that has ended: the next signature asks for the passkey. [tight]"))
             return
         }
         let left = expiresAt.timeIntervalSince(now)
         isActive = true
         isEnding = left <= 60
-        title = isEnding ? "Active · \(Int(left.rounded(.up)))s" : "Active · \(Int((left / 60).rounded(.up)))m"
+        let time = isEnding ? Duration.seconds(Int(left.rounded(.up))).formatted(.units(allowed: [.seconds], width: .narrow).locale(L10n.locale))
+            : Duration.seconds(Int((left / 60).rounded(.up)) * 60).formatted(.units(allowed: [.minutes], width: .narrow).locale(L10n.locale))
+        title = tr(LocalizedStringResource("Active · \(time)", comment: "A live passkey session and the time it has left: “Active · 12m”. [tight]"))
     }
 }
 
@@ -75,13 +79,13 @@ struct SessionScopeSheet: View {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         let state = SessionPillState(expiresAt: mera.expiresAt, now: context.date)
                         LabeledContent("Session") {
-                            Text(state.isActive ? state.title : "Locked")
+                            Text(verbatim: state.title)
                                 .monospacedDigit()
                                 .foregroundStyle(state.isEnding ? Color.attention : (state.isActive ? Color.positive : Color.secondary))
                         }
                     }
                     if let expiresAt = mera.expiresAt {
-                        LabeledContent("Ends", value: expiresAt.formatted(date: .omitted, time: .shortened))
+                        LabeledContent("Ends", value: expiresAt.formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(L10n.locale)))
                     }
                     if let spent = mera.spentUSD, let left = mera.remainingUSD {
                         LabeledContent("Signed this session", value: PriceFormat.usdValue(spent))
@@ -112,7 +116,7 @@ struct SessionScopeSheet: View {
                 } header: {
                     Text("No \(BiometricGate.promptName) needed while active")
                 } footer: {
-                    Text("Up to $\(Int(Mera.SpendingCaps.perActionUSD)) per action and $\(Int(Mera.SpendingCaps.perSessionUSD)) per session, and only when DyorHQ can price it. Every transaction is also checked on its own: the right chain and contract, approvals for exactly the amount shown, and the output coming back to you.")
+                    Text("Up to \(Self.dollars(Mera.SpendingCaps.perActionUSD)) per action and \(Self.dollars(Mera.SpendingCaps.perSessionUSD)) per session, and only when DyorHQ can price it. Every transaction is also checked on its own: the right chain and contract, approvals for exactly the amount shown, and the output coming back to you.")
                 }
 
                 Section {
@@ -151,7 +155,12 @@ struct SessionScopeSheet: View {
         }
     }
 
+    /// A session's length in the app's language: "15 minutes", or "1 hour" for an hour or more.
     static func length(_ seconds: TimeInterval) -> String {
-        seconds >= 3600 ? "1 hour" : "\(Int(seconds / 60)) minutes"
+        let minutes = seconds >= 3600 ? 60 : Int(seconds / 60)
+        return Duration.seconds(minutes * 60).formatted(.units(allowed: [.hours, .minutes], width: .wide).locale(L10n.locale))
     }
+
+    /// A spending cap in whole dollars, "$50", in the app's one number style.
+    static func dollars(_ value: Double) -> String { "$\(Int(value))" }
 }
