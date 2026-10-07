@@ -486,6 +486,25 @@ final class TokenTransferTests: XCTestCase {
         XCTAssertEqual(refusal, "This send would fail: execution reverted.")
     }
 
+    /// A reason that already ends a sentence keeps its own mark, in any script: a reason in Chinese ends with "。", which a
+    /// check for "." alone followed with a second full stop. One that doesn't end a sentence gets the full stop.
+    func testAReasonEndsItsSentenceOnce() {
+        let saved = L10n.locale
+        defer { L10n.locale = saved }
+        L10n.locale = Locale(identifier: "en_US")
+        XCTAssertEqual(TokenTransfer.wouldFail("Not enough MON to pay for gas."), "This send would fail: Not enough MON to pay for gas.")
+        XCTAssertEqual(TokenTransfer.wouldFail("execution reverted"), "This send would fail: execution reverted.")
+        XCTAssertEqual(TokenTransfer.wouldFail("余额不足。"), "This send would fail: 余额不足。")
+        for reason in ["Paused.", "Trading isn't open yet!", "Is trading open?", "余额不足。", "交易已暂停！", "交易开放了吗？"] {
+            XCTAssertTrue(TokenTransfer.endsASentence(reason), reason)
+            XCTAssertEqual(TokenTransfer.wouldFail(reason), L10n.tr("This send would fail: \(reason)"), reason)
+        }
+        for reason in ["execution reverted", "Pausable: paused", "The contract rejected the transaction (custom error 0xdeadbeef)"] {
+            XCTAssertFalse(TokenTransfer.endsASentence(reason), reason)
+            XCTAssertEqual(TokenTransfer.wouldFail(reason), L10n.tr("This send would fail: \(reason)."), reason)
+        }
+    }
+
     func testATokenThatReturnsFalseIsRefused() async {
         let contract = token.address
         MomentsChainStub.install { to, _ in to == contract ? try! ABI.encode([.bool(false)], "bool") : nil }

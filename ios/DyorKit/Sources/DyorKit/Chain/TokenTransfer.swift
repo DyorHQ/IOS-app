@@ -25,8 +25,7 @@ public enum TokenTransfer {
             returned = try await rpc.ethCall(CallRequest(from: owner, to: request.to, data: request.data, value: request.value))
         } catch let error as RPCError {
             guard isRevert(error) else { return nil }
-            let reason = RevertReason.describe(error)
-            return reason.hasSuffix(".") ? L10n.tr("This send would fail: \(reason)") : L10n.tr("This send would fail: \(reason).")
+            return wouldFail(RevertReason.describe(error))
         } catch {
             return nil
         }
@@ -34,6 +33,18 @@ public enum TokenTransfer {
             return L10n.tr("The \(token.symbol) contract refused this transfer, so nothing would be sent.")
         }
         return nil
+    }
+
+    /// "This send would fail: <reason>". The reason may be a sentence in the app's language or a contract's own words, so
+    /// it keeps the mark it ends with when that ends a sentence in any script ("." "!" "?" "。" "！" "？"); a full stop is
+    /// added only when it doesn't end one.
+    static func wouldFail(_ reason: String) -> String {
+        endsASentence(reason) ? L10n.tr("This send would fail: \(reason)") : L10n.tr("This send would fail: \(reason).")
+    }
+
+    /// Whether `text` ends with a mark that ends a sentence (Unicode's Sentence_Terminal), whatever its script.
+    static func endsASentence(_ text: String) -> Bool {
+        text.last?.unicodeScalars.first?.properties.isSentenceTerminal ?? false
     }
 
     /// A node's answer that the call itself fails (a revert, or not enough MON for it), as opposed to a failed request.
