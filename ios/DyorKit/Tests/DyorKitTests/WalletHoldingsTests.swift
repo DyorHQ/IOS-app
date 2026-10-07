@@ -422,7 +422,7 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(tokens.contains("pricesFailed: failed || !own.complete || !unpriced.unread.isEmpty, unpriced: unpriced.noPool,"))
         XCTAssertFalse(tokens.contains("valuesMissing"))
         XCTAssertFalse(send.contains("No price was found"), "no pool is no gap in the Send list: the row reads No price")
-        XCTAssertTrue(send.contains("guard let value = asset.value else { return \"No price\" }"))
+        XCTAssertTrue(send.contains("guard let value = asset.value else { return tr(\"No price\") }"), "in the app's language")
         // A token whose symbol isn't plain shows its contract in the list.
         XCTAssertTrue(send.contains("return asset.unverified || !asset.plainSymbol || badge.isWarning ?"))
         // After a new read of the list (Retry), Available and Max are the kept pick's balance from that read, then read again.

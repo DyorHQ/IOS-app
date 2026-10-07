@@ -201,7 +201,9 @@ final class AlertCenter {
 
         if preferences.postsFills {
             for position in changes.filled {
-                Notifications.perpOrder(.filled, side: position.side == .long ? "Long" : "Short",
+                Notifications.perpOrder(.filled, side: position.side == .long
+                                            ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]"))
+                                            : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]")),
                                         market: "\(asset(position.perpId, symbol: position.symbol))-PERP", perpId: position.perpId)
             }
         }

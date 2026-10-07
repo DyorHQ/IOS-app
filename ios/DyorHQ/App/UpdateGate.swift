@@ -45,11 +45,14 @@ final class UpdateGate {
 
 /// "Update required" (GP-2): shown in place of the app while this build is below the minimum. It says what to do and
 /// opens the update, shows the account's balances read-only, and keeps key export reachable — the funds never depend
-/// on updating. Nothing on it signs, and nothing that signs is reachable from it.
+/// on updating. Nothing on it signs, and nothing that signs is reachable from it. The owner's message from the row is
+/// written in English, so it is shown only while the app is in English; in any other language the app's own text says
+/// it (`MinimumBuild.ownerMessage(in:)`).
 struct UpdateRequiredView: View {
     let minimum: MinimumBuild
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
+    @Environment(LanguageStore.self) private var language
     @Environment(\.openURL) private var openURL
     @State private var assets = AssetsModel()
 
@@ -67,10 +70,16 @@ struct UpdateRequiredView: View {
                         Text("Update required")
                             .font(.title2.weight(.bold))
                             .accessibilityAddTraits(.isHeader)
-                        Text(minimum.message.isEmpty ? "This version of DyorHQ is no longer supported. Update to trade, send and sign again. Your funds are safe in your wallet: you can still see your balances and export your wallet here." : minimum.message)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
+                        Group {
+                            if let message = minimum.ownerMessage(in: language.resolved) {
+                                Text(verbatim: message)
+                            } else {
+                                Text("This version of DyorHQ is no longer supported. Update to trade, send and sign again. Your funds are safe in your wallet: you can still see your balances and export your wallet here.")
+                            }
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)

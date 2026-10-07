@@ -35,7 +35,7 @@ struct SideMenuView: View {
 
     private var header: some View {
         ZStack {
-            Text("DyorHQ")
+            Text(verbatim: SupportLinks.name)
                 .font(.system(.title2, design: .serif).weight(.semibold))
                 .foregroundStyle(.white)
             HStack {
@@ -93,16 +93,16 @@ struct SideMenuView: View {
         if let name = social.profile?.display_name, !name.isEmpty { return name }
         if let handle = social.profile?.handle, !handle.isEmpty { return "@\(handle)" }
         if let label = session.account?.label, !label.isEmpty { return label }
-        return session.address?.short ?? "Not signed in"
+        return session.address?.short ?? tr("Not signed in")
     }
 
     /// The email or handle under the name; when the name is already the address, how the wallet is signed in.
     private var secondaryLine: String {
-        guard let account = session.account else { return "Sign in to trade" }
-        if account.method == .watchOnly { return "Watching \(account.address.short)" }
+        guard let account = session.account else { return tr("Sign in to trade") }
+        if account.method == .watchOnly { return tr("Watching \(account.address.short)") }
         if let label = account.label, !label.isEmpty, label != displayName { return label }
         if let handle = social.profile?.handle, !handle.isEmpty, "@\(handle)" != displayName { return "@\(handle)" }
-        if displayName == account.address.short { return "Signed in with \(account.method.title.lowercased())" }
+        if displayName == account.address.short { return tr("Signed in with \(account.method.title.lowercased(with: L10n.locale))") }
         return account.address.short
     }
 
@@ -160,7 +160,8 @@ private struct MenuRow: View {
                 }
                 Spacer()
                 if isCurrent {
-                    Text("Now").font(.caption2.weight(.bold)).foregroundStyle(Color.brand)
+                    Text("Now", comment: "What is current: the side menu's badge on the section on screen now, and in the TP/SL sheet the label of the trigger set now [tight]")
+                        .font(.caption2.weight(.bold)).foregroundStyle(Color.brand)
                         .padding(.horizontal, 7).padding(.vertical, 3).background(Color.brand.opacity(0.12), in: Capsule())
                 }
                 Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)

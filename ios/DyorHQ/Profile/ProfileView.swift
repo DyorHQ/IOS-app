@@ -29,13 +29,13 @@ struct ProfileView: View {
     private var signOutMessage: String {
         switch session.account?.method {
         case .watchOnly?, nil:
-            return "Balances and positions for this address will no longer be shown."
+            return tr("Balances and positions for this address will no longer be shown.")
         case .imported?:
-            return "This removes the imported key from this iPhone. You'll need its recovery phrase or private key to use this wallet again — export it first (Manage Wallets → Export Wallet) if you haven't saved it."
+            return tr("This removes the imported key from this iPhone. You'll need its recovery phrase or private key to use this wallet again — export it first (Manage Wallets → Export Wallet) if you haven't saved it.")
         case .emailPassword?:
-            return "Sign in again with your email and password to use this wallet."
+            return tr("Sign in again with your email and password to use this wallet.")
         default:
-            return "Your wallet stays with your account. Sign in again to use it."
+            return tr("Your wallet stays with your account. Sign in again to use it.")
         }
     }
 
@@ -60,7 +60,7 @@ struct ProfileView: View {
                         HStack {
                             SettingsRow("DyorHQ Social", symbol: "person.2.circle", tint: .accent)
                             Spacer()
-                            if social.isSignedIn { Text(social.profile?.handle.map { "@\($0)" } ?? "Connected").font(.footnote).foregroundStyle(.secondary) }
+                            if social.isSignedIn { Text(social.profile?.handle.map { "@\($0)" } ?? tr("Connected")).font(.footnote).foregroundStyle(.secondary) }
                         }
                     }
                     NavigationLink { ManageWalletsView() } label: { SettingsRow("Manage Wallets", symbol: "wallet.bifold", tint: .accent) }
@@ -96,7 +96,7 @@ struct ProfileView: View {
                 }
 
                 Section("Network") {
-                    LabeledContent("Chain", value: "Monad mainnet")
+                    LabeledContent("Chain", value: tr("Monad mainnet"))
                     LabeledContent("RPC", value: env.config.rpcURL.host() ?? env.config.rpcURL.absoluteString)
                 }
 
@@ -136,7 +136,8 @@ struct ProfileView: View {
             .toolbar {
                 if presented {
                     ToolbarItem(placement: .topBarLeading) {
-                        Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }.accessibilityLabel("Close")
+                        Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }
+                            .accessibilityLabel(Text("Close", comment: "Closes this screen (a verb). Elsewhere it closes a position."))
                     }
                 }
             }
@@ -347,12 +348,12 @@ struct SendSheet: View {
     private var problem: String? {
         if let issue = Address.inputProblem(recipientText) { return issue }
         if let to = recipientAddress {
-            if to.isZero { return "That's the zero address: anything sent there is lost for good." }
+            if to.isZero { return tr("That's the zero address: anything sent there is lost for good.") }
             // Tokens sent to their own contract are stuck there: almost no token can send them back (GR-3).
-            if let token, !token.isNative, to == token.address { return "That's the \(token.symbol) token contract itself. Tokens sent to it are almost always lost for good." }
+            if let token, !token.isNative, to == token.address { return tr("That's the \(token.symbol) token contract itself. Tokens sent to it are almost always lost for good.") }
         }
         if let rawAmount, let balance, let token, rawAmount > balance {
-            return "More than your \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)."
+            return tr("More than your \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol).")
         }
         return nil
     }
@@ -387,12 +388,16 @@ struct SendSheet: View {
                             .tint(Color.attention)
                     }
                 } header: {
-                    Text("To")
+                    Text("To", comment: "The address the tokens are sent to, a section header [tight]")
                 } footer: {
                     if let cleanedPaste, cleanedPaste == recipient { Text("Hidden characters were removed from the pasted address. Check it matches the source.") }
                     if let to = recipientAddress, to == session.address { Text("That's your own address.") }
                     if recipientIsContract == true {
-                        Text("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts \(token?.symbol ?? "this token").")
+                        if let token {
+                            Text("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts \(token.symbol).")
+                        } else {
+                            Text("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts this token.")
+                        }
                     } else if recipientCheckFailed {
                         Text("Couldn't check whether this address is a contract. Check it before sending.")
                     }
@@ -444,12 +449,12 @@ struct SendSheet: View {
                         throw TransactionError.rejected(refusal)
                     }
                     let request = try review.request()
-                    return [.call(request, label: "Send \(review.token.symbol)")]
+                    return [.call(request, label: tr("Send \(review.token.symbol)"))]
                 }, onDone: { dismiss() }, onCompleted: { hash in
                     // A send out of the wallet is a withdrawal in the journey. USD is exact for the curated dollar
                     // stables, matched by contract address — a token that only calls itself "USDC" is not dollars —
                     // and left unknown otherwise rather than guessed.
-                    Activity.record(ActivityRecord(kind: .withdraw, title: "Sent \(review.token.symbol)",
+                    Activity.record(ActivityRecord(kind: .withdraw, title: tr("Sent \(review.token.symbol)"),
                         subtitle: "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol) → \(review.to.short)",
                         hash: hash, section: "wallet", usd: WalletHoldings.stableUSD(review.token, amount: review.amount)), owner: session.address)
                 }, intent: .alwaysAsks(.send)) {
@@ -460,7 +465,7 @@ struct SendSheet: View {
                     if !review.token.isNative { DetailRow("Token contract", review.token.address.checksummed, spellsOut: true) }
                     if review.badge.isImitation, let title = review.badge.title { DetailRow("Token", title, tint: .attention) }
                     if review.unverified { DetailRow("Token", review.receivedNote, tint: .attention) }
-                    DetailRow("Network", "Monad")
+                    DetailRow("Network", verbatim: "Monad") // not localized: the chain's name
                 }
             }
         }
@@ -516,9 +521,9 @@ struct SendSheet: View {
     private static func readGap(complete: Bool, pricesFailed: Bool) -> String? {
         switch (complete, pricesFailed) {
         case (true, false): return nil
-        case (true, true): return "Some prices couldn't be read, so values are missing and no token was picked for you."
-        case (false, false): return "Part of your wallet couldn't be read, so a token may be missing from the list."
-        case (false, true): return "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no token was picked for you."
+        case (true, true): return tr("Some prices couldn't be read, so values are missing and no token was picked for you.")
+        case (false, false): return tr("Part of your wallet couldn't be read, so a token may be missing from the list.")
+        case (false, true): return tr("Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no token was picked for you.")
         }
     }
 
@@ -686,8 +691,12 @@ private struct SendReview: Identifiable {
 
     /// What the review says of a token sent to the wallet unasked: a DyorHQ coin by its DyorHQ label, never as Unverified.
     var receivedNote: String {
-        if badge.isDyorHQ, let title = badge.title { return "\(title): sent to you, not chosen here" }
-        return "Unverified: sent to you, not chosen here"
+        if badge.isDyorHQ, let title = badge.title {
+            return tr(LocalizedStringResource("\(title): sent to you, not chosen here",
+                                              comment: "Send review: a token someone sent to this wallet, not one chosen in the app. %@ is its DyorHQ label, DyorHQ Launch or DyorHQ Moment"))
+        }
+        return tr(LocalizedStringResource("Unverified: sent to you, not chosen here",
+                                          comment: "Send review: a token someone sent to this wallet, not one chosen in the app, so its name proves nothing"))
     }
 
     func request() throws -> TransactionRequest { try TokenTransfer.request(token, to: to, amount: amount) }
@@ -795,7 +804,7 @@ private struct SendAssetRow: View {
     }
 
     private var valueText: String {
-        guard let value = asset.value else { return "No price" }
+        guard let value = asset.value else { return tr("No price") }
         return PriceFormat.usdValue(value)
     }
 }

@@ -65,7 +65,7 @@ struct SocialProfileView: View {
                         Text(shortWallet(social.profile?.wallet ?? "")).font(.body.monospaced()).foregroundStyle(.secondary)
                     }
                     HStack(spacing: 4) {
-                        Text("@").foregroundStyle(.secondary)
+                        Text(verbatim: "@").foregroundStyle(.secondary)
                         TextField("handle", text: $handle).textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
                     TextField("Display name", text: $displayName)
@@ -114,11 +114,11 @@ struct SocialProfileView: View {
             guard let data = try await item.loadTransferable(type: Data.self),
                   let image = UIImage(data: data),
                   let jpeg = image.avatarJPEG() else {
-                error = "That image could not be read. Try another."
+                error = tr("That image could not be read. Try another.")
                 return
             }
             try await social.uploadAvatar(jpeg: jpeg)
-            savedNote = "Photo updated."
+            savedNote = tr("Photo updated.")
             Haptics.success()
         } catch {
             self.error = describe(error)
@@ -134,7 +134,7 @@ struct SocialProfileView: View {
 
     private func save() async {
         busy = true; error = nil; savedNote = nil
-        do { try await social.save(handle: handle, displayName: displayName, bio: bio); savedNote = "Saved to DyorHQ." }
+        do { try await social.save(handle: handle, displayName: displayName, bio: bio); savedNote = tr("Saved to DyorHQ.") }
         catch { self.error = describe(error) }
         busy = false
     }

@@ -220,7 +220,14 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
         }
     }
 
-    var label: String { rawValue.capitalized }
+    /// The mode's name on the Appearance sheet and in Profile, in the app's language.
+    var label: String {
+        switch self {
+        case .system: tr(LocalizedStringResource("System", comment: "Follows the device's own setting: on Appearance its light or dark look, on the Language screen and menu its language [tight]"))
+        case .light: tr(LocalizedStringResource("Light", comment: "Appearance: the light look [tight]"))
+        case .dark: tr(LocalizedStringResource("Dark", comment: "Appearance: the dark look [tight]"))
+        }
+    }
     var symbol: String {
         switch self {
         case .system: "circle.lefthalf.filled"

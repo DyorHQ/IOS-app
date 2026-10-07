@@ -242,7 +242,7 @@ struct ChangeText: View {
                 .monospacedDigit()
                 .foregroundStyle(value < 0 ? Color.negative : value > 0 ? Color.positive : Color.secondary)
         } else {
-            Text("—").font(style).foregroundStyle(.tertiary)
+            Text(verbatim: "—").font(style).foregroundStyle(.tertiary)
         }
     }
 }
@@ -286,7 +286,7 @@ struct USDText: View {
                 .minimumScaleFactor(0.75)
                 .accessibilityLabel(isPrice ? PriceFormat.spoken(dollars) : PriceFormat.usdValue(dollars))
         } else {
-            Text("—").font(font).foregroundStyle(.tertiary)
+            Text(verbatim: "—").font(font).foregroundStyle(.tertiary)
         }
     }
 }
@@ -641,11 +641,17 @@ extension View {
     }
 }
 
-/// Text that reads a raw error the way a person would.
+/// Text that reads a raw error the way a person would. An error with a description of its own says it (the app's and
+/// DyorKit's errors write theirs in the app's language). Without one, a cancelled request and a lost connection are told
+/// by the error's type and code (`FailureKind`), never by its text, which iOS writes in the device's language, and are
+/// named in the app's language; any other error says what iOS says.
 func describe(_ error: Error) -> String {
     if let localized = (error as? LocalizedError)?.errorDescription, !localized.isEmpty { return localized }
-    let text = error.localizedDescription
-    if text.localizedCaseInsensitiveContains("cancel") { return "Cancelled." }
-    if text.localizedCaseInsensitiveContains("network") || text.localizedCaseInsensitiveContains("offline") { return "No connection. Check your network and try again." }
-    return text
+    switch FailureKind.of(error) {
+    case .cancelled:
+        return tr(LocalizedStringResource("Cancelled.", comment: "An error message: what was under way was cancelled, by the person or by iOS (a request, a Face ID, passcode or passkey prompt). Not an order's status"))
+    case .offline:
+        return tr(LocalizedStringResource("No connection. Check your network and try again.", comment: "An error message: the device is offline, or its connection dropped during the request"))
+    case .other: return error.localizedDescription
+    }
 }
