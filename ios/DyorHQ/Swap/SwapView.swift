@@ -663,7 +663,9 @@ struct SwapHistoryItem: Identifiable, Hashable {
             guard let token = tokens[address] else { return address.short }
             return "\(NumberStyle.units(raw, decimals: token.decimals, compact: true)) \(token.symbol)"
         }
-        return "\(leg(swap.soldToken, swap.soldAmount)) → \(leg(swap.boughtToken, swap.boughtAmount))"
+        // MON a sale paid out that couldn't be read (`SwapRecord.boughtNativeUnknown`) is named without an amount, never "0 MON".
+        let bought = swap.boughtNativeUnknown ? (tokens[swap.boughtToken]?.symbol ?? Token.mon.symbol) : leg(swap.boughtToken, swap.boughtAmount)
+        return "\(leg(swap.soldToken, swap.soldAmount)) → \(bought)"
     }
 }
 

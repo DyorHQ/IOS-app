@@ -13,6 +13,10 @@ public struct SwapRecord: Identifiable, Sendable, Hashable {
     public let boughtAmount: BigUInt
     public var id: String { hash.hexString }
 
+    /// A sale into native MON whose MON couldn't be read (`SwapHistoryService.nativeReceived`): its amount is unknown, not
+    /// zero. Shown without an amount, and left out of P&L.
+    public var boughtNativeUnknown: Bool { boughtToken == Monad.native && boughtAmount == 0 }
+
     public init(hash: Data, block: UInt64, time: Date, soldToken: Address, soldAmount: BigUInt, boughtToken: Address, boughtAmount: BigUInt) {
         self.hash = hash
         self.block = block
@@ -156,7 +160,59 @@ public struct SwapHistoryService: Sendable {
                 }
             }
         }
-        return Array(records.sorted { $0.block > $1.block }.prefix(limit))
+        records = await withNativeReceived(records.sorted { $0.block > $1.block }.prefix(limit), wallet: wallet)
+        return records
+    }
+
+    /// How many sales into native MON, newest first, a scan reads the MON of (`withNativeReceived`): five reads each.
+    static let nativeReadLimit = 50
+
+    /// `records` with the MON each sale into native MON paid the wallet, which no Transfer log carries: the wallet's
+    /// balance after the sale's block less its balance before it, plus the gas the sale cost (`nativeReceived`). A sale
+    /// whose MON can't be read keeps 0, which the app shows as unknown ("→ MON"), never as "0 MON". Read for the newest
+    /// `nativeReadLimit` such sales, in one batch.
+    private func withNativeReceived(_ records: ArraySlice<SwapRecord>, wallet: Address) async -> [SwapRecord] {
+        var records = Array(records)
+        let unread = records.indices.filter { records[$0].boughtToken == Monad.native && records[$0].boughtAmount == 0 && records[$0].block > 0 }
+            .prefix(Self.nativeReadLimit)
+        guard !unread.isEmpty else { return records }
+        var calls: [(method: String, params: [JSON])] = []
+        for i in unread {
+            let block = records[i].block
+            calls += [("eth_getTransactionReceipt", [.string(records[i].hash.hexString)]),
+                      ("eth_getBalance", [.string(wallet.hex), BlockTag.number(block - 1).json]),
+                      ("eth_getBalance", [.string(wallet.hex), BlockTag.number(block).json]),
+                      ("eth_getTransactionCount", [.string(wallet.hex), BlockTag.number(block - 1).json]),
+                      ("eth_getTransactionCount", [.string(wallet.hex), BlockTag.number(block).json])]
+        }
+        guard let answers = try? await rpc.batch(calls), answers.count == calls.count else { return records }
+        func quantity(_ answer: Result<JSON, RPCError>, _ key: String? = nil) -> BigUInt? {
+            guard case .success(let json) = answer else { return nil }
+            return (key.map { json[$0] } ?? json).string.flatMap { BigUInt(hexQuantity: $0) }
+        }
+        for (k, i) in unread.enumerated() {
+            let answer = Array(answers[(k * 5)..<(k * 5 + 5)])
+            guard case .success(let receipt) = answer[0], receipt["status"].string == "0x1",
+                  receipt["blockNumber"].string.flatMap({ BigUInt(hexQuantity: $0) }) == BigUInt(records[i].block),
+                  let gasUsed = quantity(answer[0], "gasUsed"), let gasPrice = quantity(answer[0], "effectiveGasPrice"),
+                  let before = quantity(answer[1]), let after = quantity(answer[2]),
+                  let nonceBefore = quantity(answer[3]), let nonceAfter = quantity(answer[4]),
+                  let received = Self.nativeReceived(balanceBefore: before, balanceAfter: after, gasFee: gasUsed * gasPrice,
+                                                     noncesBefore: nonceBefore, noncesAfter: nonceAfter) else { continue }
+            let swap = records[i]
+            records[i] = SwapRecord(hash: swap.hash, block: swap.block, time: swap.time, soldToken: swap.soldToken, soldAmount: swap.soldAmount,
+                                    boughtToken: swap.boughtToken, boughtAmount: received)
+        }
+        return records
+    }
+
+    /// The MON a sale into native MON paid the wallet, from its balance on each side of the sale's block and the gas the
+    /// sale cost (Monad's receipt reports what was charged): `after + gasFee − before`. Only when the sale is the wallet's
+    /// one transaction in that block (its count of sent transactions moved by exactly one), so nothing else it sent moved
+    /// its balance; nil otherwise, or when that comes to nothing.
+    static func nativeReceived(balanceBefore: BigUInt, balanceAfter: BigUInt, gasFee: BigUInt, noncesBefore: BigUInt, noncesAfter: BigUInt) -> BigUInt? {
+        guard noncesAfter == noncesBefore + 1, balanceAfter + gasFee > balanceBefore else { return nil }
+        return balanceAfter + gasFee - balanceBefore
     }
 
     /// Contracts a swap for native MON is sent to: the routers DyorHQ itself routes through.

@@ -192,7 +192,7 @@ final class PortfolioModel {
         if Self.stables.contains(swap.soldToken) { return units(swap.soldToken, swap.soldAmount) }
         if Self.stables.contains(swap.boughtToken) { return units(swap.boughtToken, swap.boughtAmount) }
         if let price = prices[swap.soldToken] { return units(swap.soldToken, swap.soldAmount) * price }
-        if let price = prices[swap.boughtToken] { return units(swap.boughtToken, swap.boughtAmount) * price }
+        if !swap.boughtNativeUnknown, let price = prices[swap.boughtToken] { return units(swap.boughtToken, swap.boughtAmount) * price }
         return nil
     }
 
@@ -207,6 +207,9 @@ final class PortfolioModel {
             let usd = swapUSD(swap)
             stats.volume += usd ?? 0
             if kind == .moments, let usd { stats.fees += usd * Double(MomentsConstants.totalTradeFeeBps) / 10_000 }
+            // A sale into MON whose MON couldn't be read counts in volume, not in P&L: as "0 MON" it read as a loss of
+            // everything sold. The P&L says it is incomplete.
+            if swap.boughtNativeUnknown { stats.pnlComplete = false; continue }
             if Self.stables.contains(swap.soldToken) { spent += units(swap.soldToken, swap.soldAmount) } else { deltas[swap.soldToken, default: 0] -= units(swap.soldToken, swap.soldAmount) }
             if Self.stables.contains(swap.boughtToken) { received += units(swap.boughtToken, swap.boughtAmount) } else { deltas[swap.boughtToken, default: 0] += units(swap.boughtToken, swap.boughtAmount) }
         }
