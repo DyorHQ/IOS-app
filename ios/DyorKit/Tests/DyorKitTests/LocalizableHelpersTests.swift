@@ -83,9 +83,11 @@ final class LocalizableHelpersTests: XCTestCase {
         XCTAssertTrue(sheet.contains("Text(\"Confirm with \\(BiometricGate.promptName)\") : Text(verbatim: tr(confirmTitle))"))
 
         // A key inside another key's interpolation is shown as its debug description ("LocalizedStringKey(key: …)"), so a
-        // helper that puts its key title into a sentence wraps it in Text first; an amount with its symbol is verbatim.
+        // helper that puts its key title into a sentence wraps it in Text first; a label made only of other text joins the
+        // Texts as they are (HelpRow's title and description: "%@. %@" would be a key with nothing to translate); an
+        // amount with its symbol is verbatim.
         let help = try Self.source("DyorHQ/Support/GetHelpView.swift")
-        XCTAssertTrue(help.contains(".accessibilityLabel(Text(\"\\(Text(title)). \\(detail)\"))"), "HelpRow's VoiceOver label")
+        XCTAssertTrue(help.contains(".accessibilityLabel(title + Text(verbatim: \". \") + detail)"), "HelpRow's VoiceOver label")
         XCTAssertTrue(try Self.source("DyorHQ/Perps/PerpTradeView.swift").contains(
             ".accessibilityLabel(Text(\"\\(Text(side)) \\(NumberStyle.number(level.price)), total \\(NumberStyle.number(level.total, compact: true)) \\(symbol)\"))"),
             "the order book row's VoiceOver label")

@@ -30,7 +30,7 @@ struct NewsView: View {
                             ContentUnavailableView {
                                 Label("No Headlines", systemImage: "newspaper")
                             } description: {
-                                Text(model.error ?? "The news feeds could not be reached.")
+                                Text(model.error ?? tr("The news feeds could not be reached."))
                             } actions: {
                                 if model.loading {
                                     ProgressView()
@@ -63,7 +63,8 @@ struct NewsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }.accessibilityLabel("Close")
+                    Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }
+                        .accessibilityLabel(Text("Close", comment: "Closes this screen (a verb). Elsewhere it closes a position."))
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if let updated = model.updatedAt { Text(updated, style: .relative).font(.caption2).foregroundStyle(.tertiary) }
@@ -78,7 +79,7 @@ struct NewsView: View {
     private var sourceChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                chip("All", selected: source == nil) { source = nil }
+                chip(Text("All", comment: "News filter: headlines from every source [tight]"), selected: source == nil) { source = nil }
                 ForEach(model.sources, id: \.self) { name in
                     chip(name, selected: source == name) { source = name }
                 }
@@ -120,7 +121,7 @@ private struct NewsRow: View {
                 HStack(spacing: 6) {
                     Text(article.source).font(.caption.weight(.semibold)).foregroundStyle(Color.brand)
                     if let published = article.published {
-                        Text("·").font(.caption).foregroundStyle(.tertiary)
+                        Text(verbatim: "·").font(.caption).foregroundStyle(.tertiary)
                         Text(published, style: .relative).font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -173,7 +174,7 @@ final class NewsModel {
         // Cut short (the page closed): an empty or partial answer, not what the feeds said.
         guard !Task.isCancelled else { return }
         if latest.isEmpty {
-            if articles.isEmpty { error = "The news feeds could not be reached. Check your connection, then pull down or tap Try Again." }
+            if articles.isEmpty { error = tr("The news feeds could not be reached. Check your connection, then pull down or tap Try Again.") }
         } else {
             articles = latest
             error = nil

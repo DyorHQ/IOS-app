@@ -148,7 +148,7 @@ final class AppEnvironment {
             guard let account = try await perpl.account(address) else { return [] }
             let positions = try await perpl.positions(account, markets: markets)
             guard Set(positions.map(\.perpId)).isSuperset(of: account.positionPerpIds) else {
-                throw PerplTradeError.unavailable("Perpl positions couldn't be read in full.")
+                throw PerplTradeError.unavailable(tr("Perpl positions couldn't be read in full."))
             }
             return positions
         }
