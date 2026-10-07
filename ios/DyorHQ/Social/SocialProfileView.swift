@@ -20,7 +20,7 @@ struct SocialProfileView: View {
         List {
             if !session.canSign {
                 Section {
-                    Label("Sign in with a wallet to join DyorHQ social.", systemImage: "person.crop.circle.badge.xmark")
+                    Label("Sign in with a wallet to join DyorHQ Social.", systemImage: "person.crop.circle.badge.xmark")
                         .foregroundStyle(.secondary).font(.subheadline)
                 }
             } else if !social.isSignedIn {

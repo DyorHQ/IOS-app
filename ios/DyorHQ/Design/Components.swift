@@ -142,6 +142,7 @@ struct TokenBadgeView: View {
             Text(title)
                 .font(.caption2.weight(.semibold))
                 .lineLimit(1)
+                .minimumScaleFactor(0.8) // shrinks a little before it truncates: the label's point is its whole name
                 .foregroundStyle(tint)
                 .padding(.horizontal, 6).padding(.vertical, 1)
                 .background(tint.opacity(0.14), in: Capsule())

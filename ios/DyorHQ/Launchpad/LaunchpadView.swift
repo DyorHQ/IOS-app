@@ -683,7 +683,8 @@ struct LaunchDetailView: View {
         } header: {
             Text("Price")
         } footer: {
-            if trades.isEmpty, !loadingTrades {
+            // Only while the curve trades: a graduated coin trades in its pool, which its Graduated section explains.
+            if trades.isEmpty, !loadingTrades, launch.phase == .bonding {
                 Text("No trades yet — the chart moves up as people buy on the curve and down as they sell.").font(.caption)
             }
         }

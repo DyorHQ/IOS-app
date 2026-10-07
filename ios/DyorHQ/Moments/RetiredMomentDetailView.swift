@@ -58,9 +58,11 @@ struct RetiredMomentDetailView: View {
     private var headerSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 12) {
-                MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: m.creator)
-                    .frame(maxWidth: .infinity)
+                // The art fills a box the row's width decides: drawn straight in a flexible frame, a filled image wider than
+                // 240 pt tall allows widened the whole header past the row, cutting off the name and the badge at the left.
+                Color(.tertiarySystemFill)
                     .frame(height: 240)
+                    .overlay { MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: m.creator) }
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {

@@ -980,13 +980,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agregado entre los libros de órdenes de Kuru y los pools de Monad"
+            "value" : "Libros de órdenes de Kuru y pools de Monad"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agrégé sur les carnets d'ordres Kuru et les pools Monad"
+            "value" : "Carnets d'ordres Kuru et pools Monad"
           }
         },
         "ko" : {
@@ -2353,13 +2353,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lanzamiento DyorHQ"
+            "value" : "DyorHQ Launch"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lancement DyorHQ"
+            "value" : "DyorHQ Launch"
           }
         },
         "ko" : {
