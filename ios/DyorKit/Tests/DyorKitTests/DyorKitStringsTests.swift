@@ -119,21 +119,149 @@ final class DyorKitStringsTests: XCTestCase {
     /// formats values but never picks the language) or `NSLocalizedString`; and a one-word key, whose meaning is
     /// ambiguous out of context ("Graduate", "Long", "All"), carries a translator comment.
     func testEveryKeyIsLookedUpInDyorKitsCatalog() throws {
-        let resource = try NSRegularExpression(pattern: #"LocalizedStringResource\("#)
         let oneWord = try NSRegularExpression(pattern: #"L10n\.tr\("[A-Za-z]+"\)"#)
         var resources = 0
         for (path, text) in try Self.sources() where path != "Core/L10n.swift" {
             let range = NSRange(text.startIndex..., in: text)
-            for match in resource.matches(in: text, range: range) {
-                resources += 1
-                let rest = String(text[Range(match.range, in: text)!.upperBound...].prefix(600))
-                XCTAssertTrue(Self.squeezed(rest).contains("bundle: L10n.kit"), "\(path): a resource outside DyorKit's catalog: \(rest.prefix(80))")
-            }
+            resources += Self.resourceCalls(in: text).count
+            XCTAssertEqual(Self.resourcesOutsideTheCatalog(in: text), [], "\(path): a resource outside DyorKit's catalog")
             XCTAssertFalse(text.contains("String(localized:"), path)
             XCTAssertFalse(text.contains("NSLocalizedString"), path)
             XCTAssertNil(oneWord.firstMatch(in: text, range: range), "\(path): a one-word key without a translator comment")
         }
         XCTAssertGreaterThan(resources, 60)
+
+        // The reader sees what it should: a resource is judged by its own arguments alone, read to its own closing
+        // parenthesis, never by a neighbour's (a resource with none above another that names DyorKit's catalog, as a
+        // table of them is written), a nested one's, or the words of its comment.
+        let neighbours = """
+            case .quickstart: return L10n.string(LocalizedStringResource("getting started", comment: "The topic of a docs page."))
+            case .bridge: return L10n.string(LocalizedStringResource("bridging", bundle: L10n.kit, comment: "The topic of a docs page."))
+            """
+        XCTAssertEqual(Self.resourcesOutsideTheCatalog(in: neighbours).count, 1)
+        XCTAssertTrue(Self.resourcesOutsideTheCatalog(in: neighbours).first?.contains("getting started") ?? false)
+        let nested = #"L10n.string(LocalizedStringResource("Pay \(L10n.string(LocalizedStringResource("fees", bundle: L10n.kit))) now", comment: "A (verb)."))"#
+        XCTAssertEqual(Self.resourcesOutsideTheCatalog(in: nested).count, 1, "the nested resource's catalog isn't its own")
+        XCTAssertEqual(Self.resourcesOutsideTheCatalog(in: #"LocalizedStringResource("Graduate", comment: "not bundle: L10n.kit")"#).count, 1)
+        XCTAssertEqual(Self.resourcesOutsideTheCatalog(in: #"LocalizedStringResource("Open", comment: "A verb."); let kit = "bundle: L10n.kit""#).count, 1)
+        XCTAssertEqual(Self.resourcesOutsideTheCatalog(in: #"LocalizedStringResource("Never closes", bundle: L10n.kit"#).count, 1, "a call that never closes")
+        let wrapped = """
+            L10n.string(LocalizedStringResource("Long \\(symbol) (\\(String(size)))", // a side and its size
+                                                bundle: L10n.kit,
+                                                comment: "An order's step (verb): “Long BTC (2)”."))
+            """
+        XCTAssertEqual(Self.resourceCalls(in: wrapped).count, 1)
+        XCTAssertEqual(Self.resourcesOutsideTheCatalog(in: wrapped), [], "a call over several lines, with a comment and nested parentheses")
+    }
+
+    /// Where each `LocalizedStringResource(` call in `text` opens: the index just after its `(`. A mention on a comment
+    /// line isn't a call.
+    private static func resourceCalls(in text: String) -> [Int] {
+        let chars = Array(text)
+        let call = Array("LocalizedStringResource(")
+        var opens: [Int] = []
+        var lineStart = 0
+        var i = 0
+        while i < chars.count {
+            if chars[i] == "\n" { lineStart = i + 1 }
+            if chars[i] == "L", i + call.count <= chars.count, Array(chars[i ..< i + call.count]) == call,
+               i == 0 || !(chars[i - 1].isLetter || chars[i - 1].isNumber || chars[i - 1] == "_"),
+               !String(chars[lineStart ..< i]).trimmingCharacters(in: .whitespaces).hasPrefix("//") {
+                opens.append(i + call.count)
+            }
+            i += 1
+        }
+        return opens
+    }
+
+    /// The `LocalizedStringResource(…)` calls in `text` that don't pass `bundle: L10n.kit` among their own arguments,
+    /// each as the first 80 characters of the call.
+    static func resourcesOutsideTheCatalog(in text: String) -> [String] {
+        let chars = Array(text)
+        let start = "LocalizedStringResource(".count
+        return resourceCalls(in: text).compactMap { open in
+            let own = ownArguments(chars, from: open)
+            if let own, squeezed(own).contains("bundle: L10n.kit") { return nil }
+            return String(chars[(open - start) ..< min(open - start + 80, chars.count)])
+        }
+    }
+
+    /// A call's own arguments, read from `start`, just after its `(`, to the `)` that closes it: each string literal
+    /// stands as `""`, and what a nested bracket or a comment holds is left out. Nil when the call never closes.
+    static func ownArguments(_ chars: [Character], from start: Int) -> String? {
+        var own = ""
+        var depth = 0
+        var i = start
+        while i < chars.count {
+            let c = chars[i]
+            if c == "/", i + 1 < chars.count, chars[i + 1] == "/" {
+                while i < chars.count, chars[i] != "\n" { i += 1 }
+                continue
+            }
+            if c == "\"" {
+                guard let end = endOfLiteral(chars, from: i) else { return nil }
+                if depth == 0 { own += "\"\"" }
+                i = end
+                continue
+            }
+            if "([{".contains(c) {
+                depth += 1
+            } else if ")]}".contains(c) {
+                if depth == 0 { return own }
+                depth -= 1
+            } else if depth == 0 {
+                own.append(c)
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    /// The index just past the string literal whose opening quote is at `start`. A `\(…)` interpolation is read as
+    /// code, so a literal inside it ends where it should; a `"""` literal runs to its closing `"""`.
+    static func endOfLiteral(_ chars: [Character], from start: Int) -> Int? {
+        let multiline = start + 2 < chars.count && chars[start + 1] == "\"" && chars[start + 2] == "\""
+        var i = start + (multiline ? 3 : 1)
+        while i < chars.count {
+            let c = chars[i]
+            if c == "\\", i + 1 < chars.count {
+                if chars[i + 1] == "(" {
+                    guard let end = endOfInterpolation(chars, from: i + 2) else { return nil }
+                    i = end
+                } else {
+                    i += 2
+                }
+                continue
+            }
+            if c == "\"" {
+                if !multiline { return i + 1 }
+                if i + 2 < chars.count, chars[i + 1] == "\"", chars[i + 2] == "\"" { return i + 3 }
+            }
+            if c == "\n", !multiline { return nil }
+            i += 1
+        }
+        return nil
+    }
+
+    /// The index just past the `)` that closes an interpolation whose code starts at `start`.
+    static func endOfInterpolation(_ chars: [Character], from start: Int) -> Int? {
+        var depth = 0
+        var i = start
+        while i < chars.count {
+            let c = chars[i]
+            if c == "\"" {
+                guard let end = endOfLiteral(chars, from: i) else { return nil }
+                i = end
+                continue
+            }
+            if c == "(" { depth += 1 }
+            if c == ")" {
+                if depth == 0 { return i + 1 }
+                depth -= 1
+            }
+            i += 1
+        }
+        return nil
     }
 
     /// A step's label or a notification's title whose first word reads as a noun out of context ("Claim", "Swap",
