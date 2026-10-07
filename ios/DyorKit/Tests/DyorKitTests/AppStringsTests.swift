@@ -274,6 +274,27 @@ final class AppStringsTests: XCTestCase {
             XCTAssertTrue(alerts.contains(side), side)
             XCTAssertTrue(trade.contains(side), "the Perps screen's own: \(side)")
         }
+        // One key is one translation: the Trade switch's "Swap" (the screen's name, a noun) is a key of its own, and the
+        // key "Swap" is the swap review's button, a verb. English reads "Swap" for both.
+        let mode = Self.squeezed(try Self.body(of: "var label: String", after: "enum TradeMode", in: "App/Router.swift"))
+        XCTAssertTrue(mode.contains(#"case .swap: tr(LocalizedStringResource("tradeMode.swap", defaultValue: "Swap", comment: "The Trade tab's switch to its spot-swap screen: the screen's name, a noun [tight]"))"#))
+        XCTAssertTrue(try DocsLinksTests.appSource("Swap/SwapView.swift")
+            .contains(#"confirmTitle: LocalizedStringResource("Swap", comment: "Button: make the swap the review shows (a verb)")"#), "the review's button")
+    }
+
+    /// A key is one translation wherever it stands, so a key used in several places carries one comment, the same at
+    /// every place that writes one, and it names each use; a use with another meaning gets a key of its own.
+    func testASharedKeyHasOneCommentForEveryUse() throws {
+        let shared: [(key: String, names: [String])] = [("Swap", ["(a verb)"])]
+        let app = try FormattedTextIsolationTests.appSources().map(\.text).joined(separator: "\n")
+        for (key, names) in shared {
+            let site = try NSRegularExpression(pattern: #"(?:LocalizedStringResource|Text)\(""# + NSRegularExpression.escapedPattern(for: key) + #"", comment: "((?:[^"\\]|\\.)*)""#)
+            let comments = Set(site.matches(in: app, range: NSRange(app.startIndex..., in: app)).compactMap { Range($0.range(at: 1), in: app).map { String(app[$0]) } })
+            XCTAssertEqual(comments.count, 1, "\(key): one comment for every use: \(comments.sorted())")
+            for comment in comments {
+                for name in names { XCTAssertTrue(comment.contains(name), "\(key): the comment names \(name): \(comment)") }
+            }
+        }
     }
 
     // MARK: Dates and durations

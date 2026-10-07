@@ -24,10 +24,11 @@ extension View {
 enum TradeMode: String, CaseIterable, Identifiable {
     case swap, perps
     var id: String { rawValue }
-    /// The mode's name on the Trade tab's switch, in the app's language.
+    /// The mode's name on the Trade tab's switch, in the app's language. The swap side has a key of its own, "Swap" in
+    /// English: the key "Swap" is the swap review's button, a verb, and one key is one translation.
     var label: String {
         switch self {
-        case .swap: tr(LocalizedStringResource("Swap", comment: "The Trade tab's switch: spot swaps, a noun [tight]"))
+        case .swap: tr(LocalizedStringResource("tradeMode.swap", defaultValue: "Swap", comment: "The Trade tab's switch to its spot-swap screen: the screen's name, a noun [tight]"))
         case .perps: tr(LocalizedStringResource("Perps", comment: "Perpetual futures [tight]"))
         }
     }

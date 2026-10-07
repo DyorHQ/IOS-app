@@ -365,7 +365,7 @@ private struct SwapConfirmation: View {
 
     var body: some View {
         let quote = review.quote
-        ConfirmationSheet(title: "Review Swap", confirmTitle: "Swap", build: {
+        ConfirmationSheet(title: "Review Swap", confirmTitle: LocalizedStringResource("Swap", comment: "Button: make the swap the review shows (a verb)"), build: {
             guard let address = session.address else { throw SessionError.readOnly }
             return try await quote.build(address)
         }, onDone: onDone, onCompleted: onCompleted, intent: intent) {
