@@ -99,7 +99,7 @@ A build with a pending table must not ship, nor one whose String Catalogs lack a
 before a release:
 
 ```bash
-(cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter 'AppStringsTests|PerpsWalletStringsTests|MomentsStringsTests|DyorKitStringsTests|TradeStringsTests|V2WiringTests')
+(cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter 'AppStringsTests|PerpsWalletStringsTests|MomentsStringsTests|DyorKitStringsTests|TradeStringsTests|ShippedLanguagesTests|V2WiringTests')
 (cd DyorKit && DYOR_LIVE_DOCS=1 swift test --filter DocsLinksTests)
 python3 ../scripts/dev/check-launchpad-addresses.py --release
 ```

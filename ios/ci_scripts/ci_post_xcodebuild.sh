@@ -30,7 +30,7 @@ fi
 # lanes' strings tests, which read the app's sources and String Catalogs, refuse a count whose English plural forms
 # aren't in a catalog (a count of 1 would read "1 editions") where they would otherwise skip. They read this checkout
 # only; swift test fetches DyorKit's pinned packages.
-RELEASE_TESTS='AppStringsTests|PerpsWalletStringsTests|MomentsStringsTests|DyorKitStringsTests|TradeStringsTests|V2WiringTests'
+RELEASE_TESTS='AppStringsTests|PerpsWalletStringsTests|MomentsStringsTests|DyorKitStringsTests|TradeStringsTests|ShippedLanguagesTests|V2WiringTests'
 if ! command -v swift >/dev/null; then
   echo "error: swift is missing, so the strings and v2 wiring tests cannot run; refusing to ship." >&2
   exit 1

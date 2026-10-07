@@ -24,7 +24,7 @@ python3 ../scripts/dev/check-launchpad-addresses.py --release || { echo "The rel
 # and the lanes' strings tests, which read the app's sources and String Catalogs, refuse a count whose English plural
 # forms aren't in a catalog (a count of 1 would read "1 editions") where they would otherwise skip. They read this
 # checkout only. swift test rewrites DyorKit/Package.resolved, so its pins are put back as they were.
-RELEASE_TESTS='AppStringsTests|PerpsWalletStringsTests|MomentsStringsTests|DyorKitStringsTests|TradeStringsTests|V2WiringTests'
+RELEASE_TESTS='AppStringsTests|PerpsWalletStringsTests|MomentsStringsTests|DyorKitStringsTests|TradeStringsTests|ShippedLanguagesTests|V2WiringTests'
 PINS=$(mktemp "${TMPDIR:-/tmp}/dyorkit-pins.XXXXXX")
 cp DyorKit/Package.resolved "$PINS"
 GATE=0
