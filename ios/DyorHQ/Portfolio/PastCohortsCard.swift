@@ -131,7 +131,9 @@ struct PastMomentRow: View {
                     Text(MomentsFormat.usdc(position.creatorWithdrawable)).font(.subheadline.weight(.semibold)).monospacedDigit()
                     Text("to withdraw").font(.caption2).foregroundStyle(.secondary)
                 } else {
-                    Text(info.graduated ? "Graduated" : info.state == .expired ? "Expired" : "Closed").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    (info.graduated ? Text("Graduated") : info.state == .expired ? Text("Expired")
+                        : Text(verbatim: tr(LocalizedStringResource("pastCohort.closed", defaultValue: "Closed", comment: "[tight] A past cohort Moment's status when it neither graduated nor expired: collecting it is closed in the app"))))
+                        .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
             }
             Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)

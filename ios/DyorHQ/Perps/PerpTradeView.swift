@@ -82,7 +82,7 @@ struct PerpTradeView: View {
         var title: Text {
             switch self {
             case .book: Text("Order Book", comment: "A tab under the chart: the market's bids and asks. [tight]")
-            case .trades: Text("Trades", comment: "A tab under the chart: the market's latest trades. [tight]")
+            case .trades: Text("Trades", comment: "Trades: a tab under the Perps chart with the market's latest trades, and a count of trades on Portfolio [tight]")
             }
         }
     }
@@ -93,7 +93,7 @@ struct PerpTradeView: View {
             switch self {
             case .positions: Text("Positions", comment: "A tab of the Perps screen: the open positions. [tight]")
             case .orders: Text("Orders", comment: "A tab of the Perps screen: the open orders. [tight]")
-            case .assets: Text("Assets", comment: "A tab of the Perps screen: the trading account's balance. [tight]")
+            case .assets: Text("Assets", comment: "A tab: in My Holdings the tokens held, on Perps the trading account's balance [tight]")
             case .history: Text("Trade History", comment: "A tab of the Perps screen: this market's past trades. [tight]")
             }
         }
@@ -473,7 +473,7 @@ struct PerpTradeView: View {
             HStack(spacing: 8) {
                 Button { Haptics.selection(); showOrderType = true } label: {
                     HStack {
-                        (ticket.kind == .market ? Text("Market", comment: "Order type: fills at once at the market price. Also names the market traded (BTC-PERP). [tight]")
+                        (ticket.kind == .market ? Text("Market", comment: "Order type: a market order, which fills at once at the market price. [tight]")
                                                 : Text("Limit", comment: "Order type: rests at the price you set until it fills. [tight]")).fontWeight(.semibold)
                         Image(systemName: "chevron.down").font(.caption2)
                     }
@@ -974,7 +974,7 @@ struct PerpTradeView: View {
             Activity.record(ActivityRecord(kind: .perp, title: ticket.side == .long ? tr("Long \(perp)") : tr("Short \(perp)"), subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }, intent: orderIntent) {
             let signed = reviewedInput
-            DetailRow("Market", verbatim: "\(market.asset)-PERP")
+            DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: "\(market.asset)-PERP"))
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
             DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(NumberStyle.number(signed.price ?? mark, maximumFractionDigits: market.priceDecimals))")
             // The parsed values this order signs, not the typed text (audit F4), at the market's full precision.
@@ -1012,7 +1012,7 @@ struct PerpTradeView: View {
         return ConfirmationSheet(title: "Cancel Order", confirmTitle: "Cancel Order", build: { env.perpl.cancelPlan(perpId: order.perpId, orderId: order.orderId) }, onDone: { Task { await model.load(env: env, address: session.address) } },
                           onCompleted: { hash in Activity.record(ActivityRecord(kind: .perp, title: tr("Cancelled \(order.symbol) order"), subtitle: what, hash: hash, section: "perps"), owner: session.address) },
                           intent: .alwaysAsks(.cancelOrder)) {
-            DetailRow("Market", order.symbol)
+            DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: order.symbol))
             DetailRow("Order", verbatim: what)
         }
     }
@@ -1237,14 +1237,14 @@ struct PerpTradeView: View {
         // Each line's title is on the chart's price axis, in the app's language.
         if let position {
             out.append(ChartLevel(price: position.entry, colorHex: position.side == .long ? "#1F9E5B" : "#D2483F",
-                                  title: tr(LocalizedStringResource("Entry", comment: "A chart line at the position's entry price. [tight]"))))
+                                  title: tr(LocalizedStringResource("Entry", comment: "The position's entry price: a chart line and a stat on the position [tight]"))))
             if let liq = position.liquidation, liq > 0 {
                 out.append(ChartLevel(price: liq, colorHex: "#F5A623", title: tr(LocalizedStringResource("Liq", comment: "A chart line at the liquidation price, short for Liquidation. [tight]")), dashed: true))
             }
         }
         for order in model.orders where order.perpId == market.id {
             out.append(ChartLevel(price: order.price, colorHex: order.side == .buy ? "#1F9E5B" : "#D2483F",
-                                  title: order.reduceOnly ? tr(LocalizedStringResource("Close", comment: "A chart line at a resting order that closes the position. [tight]"))
+                                  title: order.reduceOnly ? tr(LocalizedStringResource("chartLine.close", defaultValue: "Close", comment: "A chart line at a resting order that closes the position (a noun, as the order's name). [tight]"))
                                                           : tr(LocalizedStringResource("Limit", comment: "Order type: rests at the price you set until it fills. [tight]")),
                                   dashed: true))
         }
@@ -1634,7 +1634,7 @@ struct LeverageSheet: View {
                         .frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(Text("Close", comment: "Closes this sheet (a verb). Elsewhere it closes a position."))
+                .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
             }
             .padding(.top, 22).padding(.horizontal, 22)
 
@@ -1649,7 +1649,7 @@ struct LeverageSheet: View {
                         Haptics.selection()
                         withAnimation(.easeOut(duration: 0.2)) { value = Double(pick) }
                     } label: {
-                        (pick == Int(maxLeverage) ? Text("Max", comment: "The most leverage or amount allowed. [tight]") : Text(verbatim: "\(pick)x"))
+                        (pick == Int(maxLeverage) ? Text("Max", comment: "The most allowed: a button or chip that fills in the whole balance, or the highest leverage or amount [tight]") : Text(verbatim: "\(pick)x"))
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity).padding(.vertical, 14)
                             .background(Int(rounded) == pick ? Color.brand.opacity(0.15) : Color(.tertiarySystemFill), in: Capsule())
@@ -2018,7 +2018,7 @@ private func sheetHeader(_ title: LocalizedStringKey, onClose: @escaping () -> V
                 .frame(width: 44, height: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text("Close", comment: "Closes this sheet (a verb). Elsewhere it closes a position."))
+        .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
     }
     .padding(.top, 20).padding(.horizontal, 20).padding(.bottom, 8)
 }
@@ -2121,7 +2121,7 @@ private struct PositionCard: View {
                 Button("TP/SL", action: onTriggers)
                     .buttonStyle(.bordered).controlSize(.small).tint(.brand)
                     .accessibilityLabel("Take profit and stop loss")
-                Button(action: onClose) { Text("Close", comment: "Closes the open position (a verb). Elsewhere it closes a sheet. [tight]") }
+                Button(action: onClose) { Text(verbatim: tr(LocalizedStringResource("position.close", defaultValue: "Close", comment: "Closes the open position (a verb), a button on the position. [tight]"))) }
                     .buttonStyle(.bordered).controlSize(.small).tint(.negative)
             }
         }
@@ -2343,7 +2343,7 @@ private struct ClosePositionSheet: View {
                 }
                 Section("Close order") {
                     Picker("Type", selection: $kind) {
-                        Text("Market", comment: "Order type: fills at once at the market price. Also names the market traded (BTC-PERP). [tight]").tag(OrderKind.market)
+                        Text("Market", comment: "Order type: a market order, which fills at once at the market price. [tight]").tag(OrderKind.market)
                         Text("Limit", comment: "Order type: rests at the price you set until it fills. [tight]").tag(OrderKind.limit)
                     }
                     .pickerStyle(.segmented)
@@ -2495,7 +2495,7 @@ private struct AddMarginSheet: View {
                     HStack(spacing: 8) {
                         ForEach([0.25, 0.5, 1.0], id: \.self) { frac in
                             Button { amountText = plainAmount(available * frac) } label: {
-                                frac == 1.0 ? Text("Max", comment: "The most leverage or amount allowed. [tight]") : Text(verbatim: "\(Int(frac * 100))%")
+                                frac == 1.0 ? Text("Max", comment: "The most allowed: a button or chip that fills in the whole balance, or the highest leverage or amount [tight]") : Text(verbatim: "\(Int(frac * 100))%")
                             }
                             .buttonStyle(.bordered).controlSize(.small).frame(maxWidth: .infinity)
                         }
@@ -2618,7 +2618,7 @@ struct AuthedOrderSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Market", verbatim: "\(market.asset)-PERP")
+                    DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: "\(market.asset)-PERP"))
                     DetailRow("Side", input.side == .long ? "Long" : "Short", tint: sideColor)
                     DetailRow("Type", input.kind == .market ? "Market · \(NumberStyle.basisPoints(input.slippageBps)) slippage" : "Limit at \(NumberStyle.number(input.price ?? market.mark, maximumFractionDigits: market.priceDecimals))")
                     DetailRow("Size", verbatim: "\(NumberStyle.number(input.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
@@ -2719,7 +2719,7 @@ struct AuthedOrderSheet: View {
             // notification here would double it.
             let perp = "\(market.asset)-PERP"
             let kind = input.kind == .market
-                ? tr(LocalizedStringResource("Market", comment: "Order type: fills at once at the market price. Also names the market traded (BTC-PERP). [tight]"))
+                ? tr(LocalizedStringResource("Market", comment: "Order type: a market order, which fills at once at the market price. [tight]"))
                 : tr(LocalizedStringResource("Limit", comment: "Order type: rests at the price you set until it fills. [tight]"))
             Activity.record(ActivityRecord(kind: .perp, title: input.side == .long ? tr("Long \(perp)") : tr("Short \(perp)"), subtitle: "\(NumberStyle.number(input.size)) \(market.asset) · \(kind)", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address, notify: false)
             if settings.notificationsEnabled, settings.notifyFills {

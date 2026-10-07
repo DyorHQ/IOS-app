@@ -20,7 +20,7 @@ final class PortfolioModel {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .spot: return tr(LocalizedStringResource("Spot", comment: "The wallet's own tokens, as against perpetual futures [tight]"))
+            case .spot: return tr(LocalizedStringResource("Spot", comment: "Spot, as against perpetual futures (Perps): the wallet's own tokens, and trading them by swaps [tight]"))
             case .perps: return tr(LocalizedStringResource("Perps", comment: "Perpetual futures [tight]"))
             case .launch: return tr(LocalizedStringResource("Launch", comment: "A noun: the Launch tab, the launchpad's coins [tight]"))
             case .moments: return tr(LocalizedStringResource("Moments", comment: "The Moments feature's name [tight]"))

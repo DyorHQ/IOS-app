@@ -54,7 +54,7 @@ struct BridgeView: View {
             .navigationTitle("Bridge")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Text("Close", comment: "Closes the Bridge: a verb") } }
+                ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Text("Close", comment: "Closes this screen or sheet (a verb)") } }
                 ToolbarItem(placement: .keyboard) { HStack { Spacer(); Button("Done") { amountFocused = false } } }
             }
         }
@@ -180,7 +180,7 @@ struct BridgeView: View {
             HStack(spacing: 8) {
                 ForEach([0.25, 0.5, 0.75, 1.0], id: \.self) { fraction in
                     Button { model.usePercent(fraction) } label: {
-                        (fraction >= 1 ? Text("Max", comment: "Fills in the whole balance [tight]") : Text(verbatim: "\(Int(fraction * 100))%"))
+                        (fraction >= 1 ? Text("Max", comment: "The most allowed: a button or chip that fills in the whole balance, or the highest leverage or amount [tight]") : Text(verbatim: "\(Int(fraction * 100))%"))
                             .font(.caption.weight(.medium)).frame(maxWidth: .infinity).padding(.vertical, 7)
                             .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }

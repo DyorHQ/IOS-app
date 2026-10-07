@@ -284,6 +284,22 @@ final class PerpsWalletStringsTests: XCTestCase {
         XCTAssertTrue(run.contains("return tr(\"Up to \\(fee) + \\(unestimated) more steps\")"), "one plural key, not an English-only \"1 more step\"")
     }
 
+    /// One key is one translation, so a word with two meanings is two keys, each with its own comment, and English reads
+    /// the same word in both places. "Close" closes a screen or a sheet; the position's Close button and a chart line's
+    /// resting close order are keys of their own. "Market" is the order type; the review row naming the market traded is
+    /// a key of its own.
+    func testAWordWithTwoMeaningsIsTwoKeys() throws {
+        let trade = Self.squeezed(try Self.source("DyorHQ/Perps/PerpTradeView.swift"))
+        XCTAssertTrue(trade.contains(#"Button(action: onClose) { Text(verbatim: tr(LocalizedStringResource("position.close", defaultValue: "Close", comment: "Closes the open position (a verb), a button on the position. [tight]"))) }"#))
+        XCTAssertTrue(trade.contains(#"order.reduceOnly ? tr(LocalizedStringResource("chartLine.close", defaultValue: "Close", comment: "#))
+        XCTAssertEqual(trade.components(separatedBy: ##"DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: "##).count - 1, 3)
+        XCTAssertFalse(trade.contains(#"DetailRow("Market""#), "the review row names the market with its own key")
+        XCTAssertEqual(trade.components(separatedBy: #"Text("Close", comment: "Closes this screen or sheet (a verb)")"#).count - 1, 2)
+        XCTAssertEqual(trade.components(separatedBy: #"Text("Market", comment: "Order type: a market order, which fills at once at the market price. [tight]")"#).count - 1, 2)
+        XCTAssertFalse(trade.contains("Elsewhere it closes"), "each key's comment names its own meaning")
+        XCTAssertFalse(trade.contains("Also names the market traded"))
+    }
+
     /// A key with a count and what its English says for a count of one: the words its singular has (`one`) and the
     /// plural's words it doesn't (`notOne`). A key English says alike for one and many (`sameForOne`) needs its plural
     /// forms only for the other languages.

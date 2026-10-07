@@ -97,6 +97,15 @@ final class MomentsStringsTests: XCTestCase {
         XCTAssertTrue(create.contains(#"TextField("10" as String, text: $allocPercentText)"#))
     }
 
+    /// One key is one translation, so the filter's "All" (every Moment) is a key of its own, apart from the app's other
+    /// "All"s (all time, every news source, every kind of notification): gender and number differ in Spanish and French.
+    /// English reads "All".
+    func testTheFiltersAllIsAKeyOfItsOwn() throws {
+        let board = try XCTUnwrap(try Self.sources().first { $0.name == "MomentsView.swift" }?.text)
+        XCTAssertTrue(board.contains(#"case .all: return Text(verbatim: tr(LocalizedStringResource("momentFilter.all", defaultValue: "All", comment: "[tight] Moments filter: every Moment")))"#))
+        XCTAssertFalse(board.contains(#"Text("All""#))
+    }
+
     /// The five interpolations the compiler said would show a debug description (a `BigUInt` in a key) are written as
     /// what they mean: a token id as a `String`, a count as an `Int`.
     func testNoBigNumberIsInterpolatedIntoAKey() throws {

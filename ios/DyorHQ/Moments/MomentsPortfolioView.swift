@@ -28,7 +28,7 @@ struct MomentsPortfolioView: View {
                                  Text("vested and unclaimed", comment: "[tight] My Moments tile, under the amount"), tint: portfolio.claimable > 0 ? .brand : .primary)
                             tile(Text("Still vesting", comment: "[tight] My Moments tile: coins not vested yet"), portfolio.vesting,
                                  Text("unlocks at the monthly cliffs", comment: "[tight] My Moments tile, under the amount"))
-                            tile(Text("Claimed", comment: "[tight] My Moments tile: coins already claimed"), portfolio.claimed,
+                            tile(Text("Claimed", comment: "[tight] Already claimed: coins on My Moments and a Moment's page, fees and rewards on Portfolio"), portfolio.claimed,
                                  Text("already in your wallet", comment: "[tight] My Moments tile, under the amount"))
                         }
                         .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))

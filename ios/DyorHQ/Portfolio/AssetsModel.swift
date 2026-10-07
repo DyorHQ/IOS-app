@@ -133,7 +133,7 @@ struct AssetsCard: View {
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .assets: return tr(LocalizedStringResource("Assets", comment: "My Holdings tab: the tokens held [tight]"))
+            case .assets: return tr(LocalizedStringResource("Assets", comment: "A tab: in My Holdings the tokens held, on Perps the trading account's balance [tight]"))
             case .nfts: return tr(LocalizedStringResource("NFTs", comment: "My Holdings tab: the NFTs held [tight]"))
             }
         }

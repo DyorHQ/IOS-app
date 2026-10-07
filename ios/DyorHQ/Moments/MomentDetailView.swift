@@ -124,16 +124,16 @@ struct MomentDetailView: View {
                 if info.graduated, let pool = info.pool {
                     stat(Text("Coin price", comment: "[tight] Moment stat: the coin's price"), MomentsFormat.coinPrice(pool.usdcPerCoin), spoken: MomentsFormat.coinPriceSpoken(pool.usdcPerCoin))
                     Divider().frame(height: 34)
-                    stat(Text("FDV", comment: "[tight] Moment stat: fully diluted valuation"), MomentsFormat.fdv(pool.fdvUSD))
+                    stat(Text("FDV", comment: "[tight] Fully diluted valuation: a stat on a Moment's page and on its card"), MomentsFormat.fdv(pool.fdvUSD))
                     Divider().frame(height: 34)
                     stat(Text("Since open", comment: "[tight] Moment stat: the price change since the pool opened"), pool.changeSinceOpen.map { NumberStyle.percent($0) } ?? "—")
                 } else {
-                    stat(Text("Per edition", comment: "[tight] Moment stat: the price of one edition"), MomentsFormat.usdc(m.price))
+                    stat(Text("Per edition", comment: "[tight] The price of one edition: a stat on a Moment's page and on its card"), MomentsFormat.usdc(m.price))
                     Divider().frame(height: 34)
                     // The pool opens at the collect price, so this is fixed at publish — the coin's valuation on day one.
                     stat(Text("Graduation FDV", comment: "[tight] Moment stat: the fully diluted valuation the coin graduates at"), MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: m.threshold, reserveBps: m.reserveBps, creatorAllocBps: m.creatorAllocBps)))
                     Divider().frame(height: 34)
-                    stat(Text("Editions", comment: "[tight] Moment stat: how many editions were collected"), "\(info.editions)")
+                    stat(Text("Editions", comment: "[tight] How many editions of a Moment were collected: a stat on the Moment's page and on its card"), "\(info.editions)")
                     Divider().frame(height: 34)
                     stat(Text("Collects", comment: "[tight] Moment stat: how many collects there were (a noun)"), "\(info.ledger.collects)")
                 }
@@ -190,7 +190,7 @@ struct MomentDetailView: View {
                 Text(session.address == nil ? "Sign in to collect." : "You are watching this address. Sign in to collect.").font(.footnote).foregroundStyle(.secondary)
             }
         } header: {
-            Text("Collect", comment: "Section header: collecting (buying) editions of this Moment")
+            Text("Collect", comment: "Collect (buy) editions of this Moment, a verb: the section header on the Moment's page and its button")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Paid in USDC: \(NumberStyle.basisPoints(m.reserveBps)) reserve, \(NumberStyle.basisPoints(m.creatorBps)) creator, \(NumberStyle.basisPoints(m.platformBps)) DyorHQ. Your NFT appears on OpenSea as soon as it settles.")
@@ -221,7 +221,7 @@ struct MomentDetailView: View {
             Text("The window closed before the threshold; the reserve was wound down. Editions stay with their collectors.")
                 .font(.footnote).foregroundStyle(.secondary)
         } header: {
-            Text("Expired", comment: "Section header: this Moment expired before graduating")
+            Text("Expired", comment: "[tight] The Moment expired before graduating: a badge, a status and a section header")
         }
     }
 
@@ -403,7 +403,7 @@ struct MomentDetailView: View {
         case .collect:
             ConfirmationSheet(
                 title: "Collect \(info.symbol)",
-                confirmTitle: quote?.terminal == true ? "Collect and Graduate" : LocalizedStringResource("Collect", comment: "Button: collect (buy) the editions"),
+                confirmTitle: quote?.terminal == true ? "Collect and Graduate" : LocalizedStringResource("Collect", comment: "Collect (buy) editions of this Moment, a verb: the section header on the Moment's page and its button"),
                 build: {
                     // Every account: an exact USDC approval of the collect contract, then collect. Nothing is signed when
                     // the sheet opens — the Permit2 path signed its transfer here, before Confirm and App Lock (IOST-6) —

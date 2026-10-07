@@ -226,6 +226,19 @@ final class TradeStringsTests: XCTestCase {
         return (one, other)
     }
 
+    /// One key is one translation, so a word with two meanings is two keys, and English reads the same word in both
+    /// places: a past cohort Moment's "Closed" (collecting is closed) is not the Perps tab of closed positions, and My
+    /// Launchpad's "View" (the name of its switch, a noun) is not the explorer link's verb.
+    func testAWordWithTwoMeaningsIsTwoKeys() throws {
+        let past = try DocsLinksTests.appSource("Portfolio/PastCohortsCard.swift")
+        XCTAssertTrue(past.contains(#"Text(verbatim: tr(LocalizedStringResource("pastCohort.closed", defaultValue: "Closed", comment: "#))
+        XCTAssertTrue(past.contains(#"(info.graduated ? Text("Graduated") : info.state == .expired ? Text("Expired")"#), "each status is a key")
+        XCTAssertFalse(past.contains(#""Closed")"#))
+        let profile = try DocsLinksTests.appSource("Launchpad/LaunchpadProfileView.swift")
+        XCTAssertTrue(profile.contains(#"Picker(tr(LocalizedStringResource("myLaunchpad.view", defaultValue: "View", comment: "#))
+        XCTAssertFalse(profile.contains(#"Picker("View""#))
+    }
+
     // MARK: What stays English
 
     /// Aurora's errors are matched on its own English text, whatever the app's language; the amounts in them are then

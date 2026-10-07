@@ -341,10 +341,11 @@ final class AppStringsTests: XCTestCase {
 
     // MARK: Translator comments
 
-    /// A short key whose meaning depends on where it stands carries a translator comment there: "All" sources or all
-    /// notifications, "Close" a screen (and elsewhere a position), "Watch" an address, "To" an address, a status ("Locked",
-    /// "Enrolled", "Ready", "Error", "Now"), "System" and the import's "Type"; a label in a tight place (the menu, the
-    /// switches, the chips, the statuses) says "[tight]". English is unchanged: a comment is only for the translator.
+    /// A short key whose meaning depends on where it stands carries a translator comment there: "All" sources, all
+    /// notifications or all time (a key each), "Close" a screen or a sheet, "Watch" an address, "To" an address, a status
+    /// ("Locked", "Enrolled", "Ready", "Error", "Now"), "System" and the import's "Type"; a label in a tight place (the
+    /// menu, the switches, the chips, the statuses) says "[tight]". English is unchanged: a comment is only for the
+    /// translator.
     func testAmbiguousKeysCarryTheirComments() throws {
         let bare = [#"chip("All""#, #"Text("All")"#, #".accessibilityLabel("Close")"#, #"Button("Watch")"#, #"Text("To")"#,
                     #"LabeledContent("Session")"#, #"LabeledContent("Sign-in""#, #"Text("Locked")"#, #"Text("Enrolled")"#,
@@ -370,6 +371,15 @@ final class AppStringsTests: XCTestCase {
         XCTAssertTrue(mode.contains(#"case .swap: tr(LocalizedStringResource("tradeMode.swap", defaultValue: "Swap", comment: "The Trade tab's switch to its spot-swap screen: the screen's name, a noun [tight]"))"#))
         XCTAssertTrue(try DocsLinksTests.appSource("Swap/SwapView.swift")
             .contains(#"confirmTitle: LocalizedStringResource("Swap", comment: "Button: make the swap the review shows (a verb)")"#), "the review's button")
+        // "All" is a key per meaning, since gender and number differ in Spanish and French: a reporting period (all time),
+        // every news source, every kind of notification (and, in the Moments lane, every Moment). English reads "All".
+        let router = Self.squeezed(try Self.source("App/Router.swift"))
+        XCTAssertEqual(router.components(separatedBy: #"tr(LocalizedStringResource("volumePeriod.all", defaultValue: "All", comment: "A reporting period: all time [tight]"))"#).count - 1, 2,
+                       "the period's label and its chip")
+        XCTAssertTrue(try Self.source("News/NewsView.swift")
+            .contains(#"chip(Text(verbatim: tr(LocalizedStringResource("newsSource.all", defaultValue: "All", comment: "News filter: headlines from every source [tight]"))), selected: source == nil)"#))
+        XCTAssertTrue(try Self.source("Notifications/NotificationCenterView.swift")
+            .contains(#"chip(Text(verbatim: tr(LocalizedStringResource("notificationFilter.all", defaultValue: "All", comment: "Notification center filter: every kind of notification [tight]"))), selected: filter == nil)"#))
     }
 
     /// A key is one translation wherever it stands, so a key used in several places carries one comment, the same at
@@ -391,6 +401,28 @@ final class AppStringsTests: XCTestCase {
                 for name in names { XCTAssertTrue(comment.contains(name), "\(key): the comment names \(name): \(comment)") }
             }
         }
+    }
+
+    /// No key carries two comments anywhere in the app: Xcode would join them for the one translation the key gets, and
+    /// a word with two meanings ("All", "Close", "Market") is two keys instead. Read from every `Text("…", comment:)` and
+    /// `LocalizedStringResource("…", comment:)` of the app, an interpolated value standing for any value.
+    func testNoKeyHasTwoComments() throws {
+        let site = try NSRegularExpression(pattern: #"(?:\bText|LocalizedStringResource)\("((?:[^"\\]|\\.)*)"(?:, defaultValue: "(?:[^"\\]|\\.)*")?, comment: "((?:[^"\\]|\\.)*)""#)
+        let value = try NSRegularExpression(pattern: #"\\\([^)]*\)"#)
+        var comments: [String: Set<String>] = [:]
+        for (_, text) in try FormattedTextIsolationTests.appSources() {
+            let code = Self.squeezed(text)
+            for match in site.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
+                guard let key = Range(match.range(at: 1), in: code), let comment = Range(match.range(at: 2), in: code) else { continue }
+                let written = String(code[key])
+                let normalized = value.stringByReplacingMatches(in: written, range: NSRange(written.startIndex..., in: written), withTemplate: "%")
+                comments[normalized, default: []].insert(String(code[comment]))
+            }
+        }
+        XCTAssertGreaterThan(comments.count, 100, "the scan reads the app's comments")
+        let twice = comments.filter { $0.value.count > 1 }.map { entry in "\(entry.key): \(entry.value.sorted())" }.sorted()
+        XCTAssertEqual(twice, [], "a key with two comments")
+        XCTAssertEqual(comments["Close"], ["Closes this screen or sheet (a verb)"])
     }
 
     // MARK: Dates and durations

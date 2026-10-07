@@ -50,7 +50,7 @@ struct PortfolioView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }
-                        .accessibilityLabel(Text("Close", comment: "Closes the Portfolio: a verb"))
+                        .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {

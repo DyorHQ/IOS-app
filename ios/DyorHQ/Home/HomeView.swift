@@ -353,7 +353,7 @@ enum HoldingCategory: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .spot: return tr(LocalizedStringResource("Spot", comment: "The wallet's own tokens, as against perpetual futures [tight]"))
+        case .spot: return tr(LocalizedStringResource("Spot", comment: "Spot, as against perpetual futures (Perps): the wallet's own tokens, and trading them by swaps [tight]"))
         case .perps: return tr(LocalizedStringResource("Perps", comment: "Perpetual futures [tight]"))
         case .launchpad: return tr(LocalizedStringResource("Launch", comment: "A noun: the Launch tab, the launchpad's coins [tight]"))
         case .moments: return tr(LocalizedStringResource("Moments", comment: "The Moments feature's name [tight]"))
@@ -564,8 +564,8 @@ private struct PositionSummaryRow: View {
     /// The position's side, for the chip beside its leverage ("Long 5×").
     private var sideLabel: String {
         position.side == .long
-            ? tr(LocalizedStringResource("Long", comment: "A perp position's side: betting the price rises [tight]"))
-            : tr(LocalizedStringResource("Short", comment: "A perp position's side: betting the price falls [tight]"))
+            ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]"))
+            : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]"))
     }
 }
 
@@ -1014,7 +1014,7 @@ struct TokenDetailView: View {
 /// "New" in place of a 24h change: a DyorHQ coin its factory hadn't recorded 24 hours ago (`PriceInfo.isNew`).
 private struct NewBadge: View {
     var body: some View {
-        Text("New", comment: "Badge for a coin too new to have a 24h change [tight]")
+        Text("New", comment: "A badge on a new coin: just launched, or too new to have a 24h change [tight]")
             .font(.footnote.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)

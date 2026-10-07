@@ -69,7 +69,7 @@ struct NotificationCenterView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }
-                        .accessibilityLabel(Text("Close", comment: "Closes this screen (a verb). Elsewhere it closes a position."))
+                        .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -89,7 +89,7 @@ struct NotificationCenterView: View {
     private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                chip(Text("All", comment: "Notification center filter: every kind of notification [tight]"), selected: filter == nil) { filter = nil }
+                chip(Text(verbatim: tr(LocalizedStringResource("notificationFilter.all", defaultValue: "All", comment: "Notification center filter: every kind of notification [tight]"))), selected: filter == nil) { filter = nil }
                 ForEach(presentKinds, id: \.self) { kind in
                     chip(kind.title, selected: filter == kind) { filter = kind }
                 }

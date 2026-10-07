@@ -137,7 +137,7 @@ struct ProfileView: View {
                 if presented {
                     ToolbarItem(placement: .topBarLeading) {
                         Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }
-                            .accessibilityLabel(Text("Close", comment: "Closes this screen (a verb). Elsewhere it closes a position."))
+                            .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
                     }
                 }
             }
