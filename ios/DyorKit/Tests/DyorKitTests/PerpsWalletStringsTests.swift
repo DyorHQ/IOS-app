@@ -240,6 +240,26 @@ final class PerpsWalletStringsTests: XCTestCase {
         XCTAssertTrue(page.contains("p.toLocaleString('en-US'"), "prices keep the app's one style")
     }
 
+    /// A sign-in method's name inside a sentence is a key per method, written as the side menu shows it (lowercase in
+    /// English), and Apple's and Google's names are their titles, never translated nor lowercased.
+    func testASignInMethodHasItsOwnNameForASentence() throws {
+        let code = try Self.source("DyorHQ/Wallet/Session.swift")
+        let session = Self.squeezed(code)
+        let start = try XCTUnwrap(code.range(of: "var nameInSentence: String {"))
+        let chars = Array(code)
+        let open = code.distance(from: code.startIndex, to: start.upperBound) - 1
+        let body = Self.squeezed(String(chars[open...(try XCTUnwrap(TradeStringsTests.closing(chars, open)))]))
+        XCTAssertTrue(body.contains("case .apple, .google, .watchOnly: return title"))
+        for (method, key, english) in [("email", "email", "email"), ("emailPassword", "emailPassword", "email & password"),
+                                       ("passkey", "privyPasskey", "passkey (Privy)"), ("meraPasskey", "passkey", "passkey"),
+                                       ("imported", "imported", "imported wallet")] {
+            XCTAssertTrue(body.contains(#"case .\#(method): return tr(LocalizedStringResource("signInMethod.\#(key)", defaultValue: "\#(english)", comment: "A sign-in method"#), method)
+        }
+        XCTAssertFalse(body.contains("lowercased("))
+        XCTAssertTrue(session.contains(#"case .apple: return "Apple" // not localized: a company's name"#))
+        XCTAssertTrue(session.contains(#"case .google: return "Google" // not localized: a company's name"#))
+    }
+
     // MARK: What stays English
 
     /// What a server reparses, what is matched against what someone types, and the values a page or the store reads

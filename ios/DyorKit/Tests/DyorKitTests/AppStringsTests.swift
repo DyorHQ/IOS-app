@@ -285,6 +285,15 @@ final class AppStringsTests: XCTestCase {
         XCTAssertEqual(AppLanguage.en.endonym, "English", "the language names stay in their own language")
     }
 
+    /// The side menu says how the wallet is signed in with the method's own words for a sentence
+    /// (`Session.Method.nameInSentence`), never its title lowercased in code, which wrote "apple", "google" and "privy" in
+    /// every language. English reads "Signed in with Apple" and, as before, "Signed in with email & password".
+    func testTheSideMenuNamesTheSignInMethodAsWritten() throws {
+        let menu = try Self.source("Menu/SideMenuView.swift")
+        XCTAssertTrue(menu.contains(#"if displayName == account.address.short { return tr("Signed in with \(account.method.nameInSentence)") }"#))
+        XCTAssertFalse(menu.contains("lowercased("), "no name is lowercased in code")
+    }
+
     // MARK: Plurals
 
     /// The keys with a count (an `Int`, so `%lld`) in these folders, as the app's catalog spells them, and what each says

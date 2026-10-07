@@ -32,6 +32,20 @@ final class Session {
             case .watchOnly: return tr("Watch only")
             }
         }
+
+        /// The method's name inside a sentence, the side menu's "Signed in with …", in the app's language: as the language
+        /// writes it there (lowercase in English), with Apple's, Google's and Privy's names as they are. A watched address
+        /// is never signed in, so it keeps its title.
+        var nameInSentence: String {
+            switch self {
+            case .apple, .google, .watchOnly: return title
+            case .email: return tr(LocalizedStringResource("signInMethod.email", defaultValue: "email", comment: "A sign-in method (a code sent by email) inside a sentence: the side menu's “Signed in with email”"))
+            case .emailPassword: return tr(LocalizedStringResource("signInMethod.emailPassword", defaultValue: "email & password", comment: "A sign-in method inside a sentence: the side menu's “Signed in with email & password”"))
+            case .passkey: return tr(LocalizedStringResource("signInMethod.privyPasskey", defaultValue: "passkey (Privy)", comment: "A sign-in method inside a sentence: the side menu's “Signed in with passkey (Privy)”. Privy is a company's name"))
+            case .meraPasskey: return tr(LocalizedStringResource("signInMethod.passkey", defaultValue: "passkey", comment: "A sign-in method inside a sentence: the side menu's “Signed in with passkey”"))
+            case .imported: return tr(LocalizedStringResource("signInMethod.imported", defaultValue: "imported wallet", comment: "A sign-in method inside a sentence: the side menu's “Signed in with imported wallet” (a recovery phrase or private key brought in)"))
+            }
+        }
     }
 
     struct Account: Equatable, Codable {
