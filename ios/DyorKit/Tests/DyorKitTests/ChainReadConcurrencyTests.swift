@@ -18,7 +18,7 @@ final class ChainReadConcurrencyTests: XCTestCase {
 
     func testChunksAreReadFourAtATimeAndInOrder() async throws {
         SlowChainStub.install()
-        let results = try await Multicall(rpc: SlowChainStub.rpc()).readItems((0..<20).map { [Self.call($0)] }, text: [], what: "A thing", chunk: 1)
+        let results = try await Multicall(rpc: SlowChainStub.rpc()).readItems((0..<20).map { [Self.call($0)] }, text: [], what: .launch, chunk: 1)
         XCTAssertEqual(Self.values(results), (0..<20).map { BigUInt($0) })
         let seen = SlowChainStub.seen()
         XCTAssertEqual(seen.requests, 20, "20 chunks")
@@ -30,7 +30,7 @@ final class ChainReadConcurrencyTests: XCTestCase {
     /// Every chunk of two is refused as a whole (out of gas), so all 40 items are read again one at a time: four at a time.
     func testRetriesAreReadFourAtATimeAndInOrder() async throws {
         SlowChainStub.install(refusingMoreThan: 1)
-        let results = try await Multicall(rpc: SlowChainStub.rpc()).readItems((0..<40).map { [Self.call($0)] }, text: [], what: "A thing", chunk: 2)
+        let results = try await Multicall(rpc: SlowChainStub.rpc()).readItems((0..<40).map { [Self.call($0)] }, text: [], what: .launch, chunk: 2)
         XCTAssertEqual(Self.values(results), (0..<40).map { BigUInt($0) })
         let seen = SlowChainStub.seen()
         XCTAssertEqual(seen.requests, 20 + 40, "20 refused chunks, then 40 items alone")
@@ -43,14 +43,14 @@ final class ChainReadConcurrencyTests: XCTestCase {
     func testAnErrorThatIsntAboutTheCallStillThrows() async {
         SlowChainStub.install(failingAll: true)
         do {
-            _ = try await Multicall(rpc: SlowChainStub.rpc()).readItems((0..<20).map { [Self.call($0)] }, text: [], what: "A thing", chunk: 1)
+            _ = try await Multicall(rpc: SlowChainStub.rpc()).readItems((0..<20).map { [Self.call($0)] }, text: [], what: .launch, chunk: 1)
             XCTFail("a read the node can't serve throws")
         } catch {
             XCTAssertFalse(error is ChainListUnread, "the node's error, not a missing item: \(error)")
         }
         SlowChainStub.install(refusingMoreThan: 1, failingAlone: true)
         do {
-            _ = try await Multicall(rpc: SlowChainStub.rpc()).readItems((0..<8).map { [Self.call($0)] }, text: [], what: "A thing", chunk: 2)
+            _ = try await Multicall(rpc: SlowChainStub.rpc()).readItems((0..<8).map { [Self.call($0)] }, text: [], what: .launch, chunk: 2)
             XCTFail("a retry the node can't serve throws")
         } catch {
             XCTAssertFalse(error is ChainListUnread, "the node's error, not a missing item: \(error)")

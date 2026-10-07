@@ -253,7 +253,7 @@ public enum MomentSlug {
             out = String(out.prefix(maxBase))
             while out.hasSuffix("-") { out.removeLast() }
         }
-        if out.isEmpty { return "moment" }
+        if out.isEmpty { return "moment" } // not localized: a link's slug
         if !out.unicodeScalars.contains(where: { (0x61...0x7A).contains($0.value) }) { return "moment-" + out }
         return out
     }
@@ -414,9 +414,9 @@ public actor MomentDirectory {
         }
         if !wanted.isEmpty {
             let moments = try await multicall.readItems(wanted.map { [MomentsABI.call($0.cohort.factory, MomentsABI.Factory.getMoment, [.uint($0.id)], returns: MomentsABI.momentTuple)] },
-                                                        text: [], what: "A Moment", chunk: Multicall.recordChunk)
+                                                        text: [], what: .moment, chunk: Multicall.recordChunk)
             let coins = try zip(wanted, moments).map { MomentsABI.moment(id: $0.id, try $1[0].get()[0], factory: $0.cohort.factory).coin }
-            let read = try await multicall.readItems(coins.map { [MomentsABI.call($0, MomentsABI.Coin.name, returns: "string")] }, text: [], what: "A Moment's name",
+            let read = try await multicall.readItems(coins.map { [MomentsABI.call($0, MomentsABI.Coin.name, returns: "string")] }, text: [], what: .momentName,
                                                      chunk: Multicall.nameChunk)
             // Appended in id order per cohort, once every name is read: `wanted` is ascending within each cohort.
             let values = try read.map { try $0[0].get()[0].string }

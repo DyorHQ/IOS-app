@@ -128,7 +128,7 @@ public actor MomentsService {
     func moments(pinned: Int, later: Int) async throws -> (moments: [MomentInfo], cut: Bool) {
         guard isDeployed else { return ([], false) }
         let total = MomentsABI.int(try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.momentCount, returns: "uint256")])[0][0])
-        guard total >= pinned else { throw ChainListUnread("A Moment") }
+        guard total >= pinned else { throw ChainListUnread(.moment) }
         let read = Self.retiredIds(total: total, pinned: pinned, later: later)
         guard !read.ids.isEmpty else { return ([], read.cut) }
         return (try await hydrate(try await records(read.ids.map { BigUInt($0) })), read.cut)
@@ -178,7 +178,7 @@ public actor MomentsService {
             MomentsABI.call(addresses.factory, MomentsABI.Factory.getMoment, [.uint(id)], returns: MomentsABI.momentTuple),
         ])
         guard id <= (try read[0].get())[0].uint else { return nil }
-        guard case .success(let values) = read[1], let tuple = values.first else { throw ChainListUnread("This Moment") }
+        guard case .success(let values) = read[1], let tuple = values.first else { throw ChainListUnread(.thisMoment) }
         return try await hydrate([MomentsABI.moment(id: id, tuple, factory: addresses.factory)])[0]
     }
 
@@ -464,7 +464,7 @@ public actor MomentsService {
                 MomentsABI.call(addresses.graduation, MomentsABI.Graduation.isGraduated, [.uint(m.id)], returns: "bool"),
             ]
         }
-        let results = try await multicall.readItems(items, text: Self.momentTextCalls, what: "A Moment")
+        let results = try await multicall.readItems(items, text: Self.momentTextCalls, what: .moment)
         var partial: [(Moment, MomentLedger, Int, Bool, MomentProvenance, String, String, BigUInt, Bool)] = []
         for (m, r) in zip(moments, results) {
             func value(_ at: Int) throws -> [ABIValue] { try r[at].get() }

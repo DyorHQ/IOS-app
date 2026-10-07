@@ -222,7 +222,7 @@ public actor LaunchpadService {
         guard !page.isEmpty else { return [] }
         let records = try await multicall.readAll(page.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)) })
             .map { LaunchpadABI.LaunchRecord($0[0], legacy: legacy) }
-        for (token, record) in zip(page, records) where !record.exists || record.token != token { throw ChainListUnread("A launch") }
+        for (token, record) in zip(page, records) where !record.exists || record.token != token { throw ChainListUnread(.launch) }
         return try await hydrate(records, factory: factory).reversed()
     }
 
@@ -446,7 +446,7 @@ public actor LaunchpadService {
             ]
         }
         let generation = stack(for: factory).generation
-        let results = try await multicall.readItems(items, text: Self.launchTextCalls, what: "A launch")
+        let results = try await multicall.readItems(items, text: Self.launchTextCalls, what: .launch)
         let livePrices = await poolPrices(for: records, pairs: pairs)
         return try records.enumerated().map { i, r in
             let item = results[i]
