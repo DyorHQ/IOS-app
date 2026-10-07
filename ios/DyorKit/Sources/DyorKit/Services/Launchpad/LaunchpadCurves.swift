@@ -86,13 +86,13 @@ public enum CurveRoute: Sendable, Hashable {
         switch self {
         case .swap, .unchecked: return nil
         case .launchPage(let launch):
-            if launch.curveBuysOpen { return "Buy or sell on its Launch page" }
-            return launch.curveSellsOpen ? "Sell on its Launch page" : "Graduation pending · Launch page"
+            if launch.curveBuysOpen { return L10n.tr("Buy or sell on its Launch page") }
+            return launch.curveSellsOpen ? L10n.tr("Sell on its Launch page") : L10n.tr("Graduation pending · Launch page")
         case .launchUnread(_, let retired, let phase):
             switch phase {
-            case .refund: return "Sell it back on its Launch page"
-            case .migrating: return "Migrating · Launch page"
-            case .bonding, .graduated: return retired ? "Sell on its Launch page" : "Trade on its Launch page"
+            case .refund: return L10n.tr("Sell it back on its Launch page")
+            case .migrating: return L10n.tr("Migrating · Launch page")
+            case .bonding, .graduated: return retired ? L10n.tr("Sell on its Launch page") : L10n.tr("Trade on its Launch page")
             }
         }
     }
@@ -102,9 +102,9 @@ public enum CurveRoute: Sendable, Hashable {
         switch self {
         case .swap, .unchecked: return nil
         case .launchPage(let launch):
-            if launch.curveBuysOpen { return "Trade \(symbol) on its Launch page" }
-            return launch.curveSellsOpen ? "Sell \(symbol) on its Launch page" : "Open \(symbol)'s Launch page"
-        case .launchUnread: return "Open \(symbol)'s Launch page"
+            if launch.curveBuysOpen { return L10n.tr("Trade \(symbol) on its Launch page") }
+            return launch.curveSellsOpen ? L10n.tr("Sell \(symbol) on its Launch page") : L10n.tr("Open \(symbol)'s Launch page")
+        case .launchUnread: return L10n.tr("Open \(symbol)'s Launch page")
         }
     }
 }
@@ -150,24 +150,25 @@ public struct CurveHoldings: Sendable, Hashable {
     }
 }
 
-/// What the app says and checks about coins still on a launchpad's bonding curve, live or retired.
+/// What the app says and checks about coins still on a launchpad's bonding curve, live or retired. What it says is in
+/// the app's language at the moment it is read.
 public enum LaunchpadCurve {
     /// A coin on the live launchpad's curve, trading.
-    public static let tradeOnLaunchPage = "This coin is still on its launchpad's bonding curve, which Swap can't route: buy and sell it on its Launch page. Once it graduates, it trades on Swap."
+    public static var tradeOnLaunchPage: String { L10n.tr("This coin is still on its launchpad's bonding curve, which Swap can't route: buy and sell it on its Launch page. Once it graduates, it trades on Swap.") }
     /// A coin on the live launchpad whose launch is in refund mode.
-    public static let refundOnLaunchPage = "This coin's launch is in refund mode: sell it back into its curve on its Launch page, at the curve's price with no fees."
+    public static var refundOnLaunchPage: String { L10n.tr("This coin's launch is in refund mode: sell it back into its curve on its Launch page, at the curve's price with no fees.") }
     /// A coin on the live launchpad whose full curve waits to graduate, or is migrating.
-    public static let graduationPending = "This coin's curve is full and its graduation is pending: it can't be traded until it graduates, and then it trades on Swap."
+    public static var graduationPending: String { L10n.tr("This coin's curve is full and its graduation is pending: it can't be traded until it graduates, and then it trades on Swap.") }
     /// A coin on the live launchpad's curve whose launch couldn't be read: its page reads it again.
-    public static let launchUnread = "This coin is still on its launchpad's bonding curve, which Swap can't route: trade it on its Launch page. Its launch couldn't be read just now; its page will try again."
+    public static var launchUnread: String { L10n.tr("This coin is still on its launchpad's bonding curve, which Swap can't route: trade it on its Launch page. Its launch couldn't be read just now; its page will try again.") }
     /// A coin on a retired launchpad's curve whose launch couldn't be read.
-    public static let retiredLaunchUnread = "This coin's launchpad is retired: you can sell it on its Launch page, but not buy. Its launch couldn't be read just now; its page will try again."
+    public static var retiredLaunchUnread: String { L10n.tr("This coin's launchpad is retired: you can sell it on its Launch page, but not buy. Its launch couldn't be read just now; its page will try again.") }
     /// A coin in refund mode, on the live launchpad or a retired one, whose launch couldn't be read.
-    public static let refundLaunchUnread = "This coin's launch is in refund mode: sell it back into its curve on its Launch page. Its launch couldn't be read just now; its page will try again."
+    public static var refundLaunchUnread: String { L10n.tr("This coin's launch is in refund mode: sell it back into its curve on its Launch page. Its launch couldn't be read just now; its page will try again.") }
     /// A migrating coin, on the live launchpad or a retired one, whose launch couldn't be read.
-    public static let migratingLaunchUnread = "This coin is migrating from its bonding curve to its pool: it can't be traded until it graduates, and then it trades on Swap. Its launch couldn't be read just now; its page will try again."
+    public static var migratingLaunchUnread: String { L10n.tr("This coin is migrating from its bonding curve to its pool: it can't be traded until it graduates, and then it trades on Swap. Its launch couldn't be read just now; its page will try again.") }
     /// The check itself failed. It names no Launch tab: the board doesn't list a retired launchpad's sell-only coin.
-    public static let unchecked = "DyorHQ couldn't check whether this coin is still on a launchpad's bonding curve just now. If it is, it trades on its Launch page, not on Swap: check again in a moment."
+    public static var unchecked: String { L10n.tr("DyorHQ couldn't check whether this coin is still on a launchpad's bonding curve just now. If it is, it trades on its Launch page, not on Swap: check again in a moment.") }
 
     /// A coin's record from the first stack that recorded it, while the coin is still on that stack's curve.
     struct CurveRecord: Sendable {
@@ -193,7 +194,7 @@ public enum LaunchpadCurve {
 
     /// Pure half of `curveRecords`: `results` holds each query's answer, in order.
     static func curveRecords(queries: [(token: Address, stack: LaunchpadAddresses)], results: [Result<[ABIValue], Error>]) throws -> [Address: CurveRecord] {
-        guard results.count == queries.count else { throw LaunchpadError.unexpectedResponse("launchpad records") }
+        guard results.count == queries.count else { throw LaunchpadError.unexpectedResponse(L10n.string(LocalizedStringResource("launchpad records", bundle: L10n.kit, comment: "What the app could not read, completing “The launchpad returned something the app could not read (<this>).”"))) }
         var out: [Address: CurveRecord] = [:]
         for (query, result) in zip(queries, results) {
             let record = try record(result, legacy: query.stack.generation.legacyRecord)
@@ -204,7 +205,7 @@ public enum LaunchpadCurve {
 
     /// One factory's `getLaunchedToken` answer, decoded in its layout; a missing answer throws.
     static func record(_ result: Result<[ABIValue], Error>, legacy: Bool) throws -> LaunchpadABI.LaunchRecord {
-        guard case .success(let values) = result, let tuple = values.first else { throw LaunchpadError.unexpectedResponse("a launchpad record") }
+        guard case .success(let values) = result, let tuple = values.first else { throw LaunchpadError.unexpectedResponse(L10n.string(LocalizedStringResource("a launchpad record", bundle: L10n.kit, comment: "What the app could not read, completing “The launchpad returned something the app could not read (<this>).”"))) }
         return LaunchpadABI.LaunchRecord(tuple, legacy: legacy)
     }
 }

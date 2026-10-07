@@ -29,17 +29,17 @@ public extension LaunchpadAddresses {
     static var retiredRouters: [Address] { retiredStacks.map(\.router) }
 }
 
-/// What the app says and checks about the retired launchpads' coins.
+/// What the app says (in the app's language) and checks about the retired launchpads' coins.
 public enum RetiredLaunchpad {
     /// What every screen says where a buy of such a coin is refused.
-    public static let notice = "This coin's launchpad is retired: you can sell, but not buy."
+    public static var notice: String { L10n.tr("This coin's launchpad is retired: you can sell, but not buy.") }
 
     /// Home's token page, for a sell-only coin: it sells on its curve, from its Launch page, never through Swap.
-    public static let sellOnLaunchPage = "This coin's launchpad is retired: you can sell it on its Launch page, but not buy."
+    public static var sellOnLaunchPage: String { L10n.tr("This coin's launchpad is retired: you can sell it on its Launch page, but not buy.") }
 
     /// Home's token page, for a sell-only coin whose completed curve waits to graduate (or is migrating): nothing trades
     /// until it graduates, and then it trades both ways on Swap.
-    public static let graduationPending = "This coin's launchpad is retired and its graduation is pending: it can't be traded until it graduates."
+    public static var graduationPending: String { L10n.tr("This coin's launchpad is retired and its graduation is pending: it can't be traded until it graduates.") }
 
     /// What a screen says of a coin on a retired launchpad's curve (`CurveRoute.notice`: Home's token page, Swap's "no
     /// venue" state), from its launch (`launch` nil when it couldn't be read): where to sell it, or, while its curve takes
