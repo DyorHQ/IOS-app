@@ -324,6 +324,15 @@ final class DyorKitStringsTests: XCTestCase {
         }
     }
 
+    /// A step a person follows names iOS's screens as iOS names them: the Passwords app's list of deleted passkeys is
+    /// "Deleted" (iOS 18 and later; "Recently Deleted" is the Photos album), and its translators are told to use iOS's
+    /// own names for the app and the list.
+    func testThePasswordsAppsListIsNamedAsIOSNamesIt() throws {
+        let deletion = Self.squeezed(try Self.source("Services/Mera/MeraAccountDeletion.swift"))
+        XCTAssertTrue(deletion.contains(#"recentlyDeleted = L10n.string(LocalizedStringResource("If your passkey is in iCloud Keychain, Passwords may keep it in Deleted for up to 30 days.", bundle: L10n.kit, comment: "Passwords is iOS's Passwords app and Deleted its list of deleted passwords and passkeys (iOS 18 and later): use iOS's own names for them in this language."))"#))
+        XCTAssertFalse(deletion.contains("Recently Deleted for up to 30 days"), "iOS 18's Passwords app has no Recently Deleted")
+    }
+
     /// Written text that a `static let` would keep in the language of its first read is a computed property, read again
     /// each time it is shown.
     func testNoTextIsFrozenInAStaticLet() throws {

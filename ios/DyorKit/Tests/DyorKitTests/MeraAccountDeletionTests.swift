@@ -136,10 +136,11 @@ final class MeraAccountDeletionTests: XCTestCase {
             "If your passkey is in 1Password or another app, delete it there.",
             "If you signed in with a passkey from another phone, delete it on that phone.",
         ]
-        // iOS 26: the provider took the report. The Recently Deleted note, and the steps in case it still shows.
+        // iOS 26: the provider took the report. The note on the Passwords app's Deleted list, and the steps in case it still
+        // shows.
         let reported = Done(outcome: .reported)
         XCTAssertEqual(reported.title, "Account deleted.")
-        XCTAssertEqual(reported.recentlyDeleted, "If your passkey is in iCloud Keychain, Passwords may keep it in Recently Deleted for up to 30 days.")
+        XCTAssertEqual(reported.recentlyDeleted, "If your passkey is in iCloud Keychain, Passwords may keep it in Deleted for up to 30 days.")
         XCTAssertEqual(reported.steps, steps)
         XCTAssertFalse(reported.passkeyRemains)
         // iOS 18 has no signal, and a refused report reached nothing: the steps are the one step left.

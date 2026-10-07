@@ -2885,12 +2885,13 @@
         }
       }
     },
-    "If your passkey is in iCloud Keychain, Passwords may keep it in Recently Deleted for up to 30 days." : {
+    "If your passkey is in iCloud Keychain, Passwords may keep it in Deleted for up to 30 days." : {
+      "comment" : "Passwords is iOS's Passwords app and Deleted its list of deleted passwords and passkeys (iOS 18 and later): use iOS's own names for them in this language.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si tu llave de acceso está en el Llavero de iCloud, Contraseñas puede conservarla en Eliminado recientemente hasta 30 días."
+            "value" : "Si tu llave de acceso está en el Llavero de iCloud, la app Contraseñas puede conservarla hasta 30 días en su sección de elementos eliminados."
           }
         },
         "fr" : {
@@ -2902,13 +2903,13 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "패스키가 iCloud 키체인에 있다면 ‘암호’ 앱이 최대 30일 동안 ‘최근 삭제된 항목’에 보관할 수 있습니다."
+            "value" : "패스키가 iCloud 키체인에 있다면 ‘암호’ 앱이 최대 30일 동안 ‘삭제됨’에 보관할 수 있습니다."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "如果你的通行密钥保存在 iCloud 钥匙串中，“密码”可能会将其保留在“最近删除”中长达 30 天。"
+            "value" : "如果你的通行密钥保存在 iCloud 钥匙串中，“密码”可能会将其保留在“已删除”中长达 30 天。"
           }
         }
       }
