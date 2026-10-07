@@ -71,7 +71,7 @@ struct WelcomeView: View {
                         .renderingMode(.template).resizable().scaledToFit()
                         .foregroundStyle(.primary)
                         .frame(maxWidth: 250)
-                        .accessibilityLabel("\(SupportLinks.name). \(SupportLinks.tagline).")
+                        .accessibilityLabel(Text(verbatim: "\(SupportLinks.name). \(SupportLinks.tagline)."))
                     Text(SupportLinks.tagline)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.secondary)
@@ -273,7 +273,7 @@ struct SignInView: View {
             .offset(y: appeared ? 0 : 10)
         }
         .background(Color(.systemBackground))
-        .navigationTitle("")
+        .navigationTitle(Text(verbatim: ""))
         .navigationBarTitleDisplayMode(.inline)
         // The app's language before sign-in, once there is a second one to choose.
         .toolbar {
@@ -298,6 +298,7 @@ struct SignInView: View {
             SocialButton(title: "I already have a passkey", symbol: "person.badge.key", busy: busy == "mera-signin") { run("mera-signin") { try await session.signInWithMera(create: false) } }
         } else if session.hasPasskeys {
             SocialButton(title: "Sign in with a Passkey", symbol: "person.badge.key", busy: busy == "passkey") { run("passkey") { try await session.signInWithPasskey() } }
+            // not localized: the passkey's name, the app's
             SocialButton(title: "Create a Passkey", symbol: "faceid", busy: busy == "create") { run("create") { try await session.createPasskey(displayName: "DyorHQ") } }
         }
     }
@@ -454,15 +455,18 @@ private struct AppleIDButton: UIViewRepresentable {
 
 /// "Continue with Google" to Google's sign-in branding guidelines: the official "G" (cropped from Google's pre-approved
 /// iOS assets, one per theme), Google Sans Medium, and the Light / Dark theme fill, 1pt inside stroke and text colors.
-/// Same size as the Apple button, so neither provider is more prominent.
+/// Same size as the Apple button, so neither provider is more prominent. The bundled Google Sans is a subset holding only
+/// the English label's letters, so a label in another language is drawn in the system font (`GoogleButtonFont`).
 private struct GoogleSignInButton: View {
     var busy = false
     let action: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(LanguageStore.self) private var language
 
     var body: some View {
         let dark = colorScheme == .dark
         let shape = RoundedRectangle(cornerRadius: 14, style: .circular)
+        let label = tr(LocalizedStringResource("Continue with Google", comment: "Google's sign-in button: Google's own wording for the language, on one line [tight]"))
         Button { Haptics.tap(); action() } label: {
             HStack(spacing: 12) {
                 if busy {
@@ -470,8 +474,9 @@ private struct GoogleSignInButton: View {
                 } else {
                     Image("GoogleG").resizable().frame(width: 20, height: 20)
                 }
-                Text("Continue with Google")
-                    .font(.custom("GoogleSans-Medium", size: 17, relativeTo: .body))
+                Text(verbatim: label)
+                    .font(GoogleButtonFont.usesGoogleSans(label, language: language.resolved)
+                          ? Font.custom("GoogleSans-Medium", size: 17, relativeTo: .body) : Font.body.weight(.medium))
                     // Scales with Dynamic Type up to the largest size that still fits the 50pt button in one line;
                     // beyond it the label would truncate (and "…" isn't in the subset font).
                     .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
@@ -531,7 +536,17 @@ struct EmailPasswordView: View {
     @Environment(AppEnvironment.self) private var env
     @Binding var path: [OnboardingStep]
 
-    enum Mode: String, CaseIterable, Identifiable { case signUp = "Sign Up", logIn = "Log In"; var id: String { rawValue } }
+    enum Mode: String, CaseIterable, Identifiable {
+        case signUp, logIn
+        var id: String { rawValue }
+        /// The mode's name on the segmented switch, in the app's language (never its raw value).
+        var title: Text {
+            switch self {
+            case .signUp: Text("Sign Up", comment: "Email & Password: the switch's side that creates an account, a verb [tight]")
+            case .logIn: Text("Log In", comment: "Email & Password: the switch's side for an existing account, a verb [tight]")
+            }
+        }
+    }
     enum Stage { case form, otp }
     @State private var mode: Mode = .signUp
     @State private var stage: Stage = .form
@@ -608,14 +623,20 @@ struct EmailPasswordView: View {
         let transactions: UInt64
         let mayBeLegacy: Bool
         var isFunded: Bool { !amounts.isEmpty }
-        var summary: String { amounts.isEmpty ? "no MON or tokens" : ListFormatter.localizedString(byJoining: amounts) }
+        /// The amounts as one list in the app's language ("12 MON and 3 USDC"). A wallet that holds none (`isFunded`) is
+        /// a sentence of its own, never this list.
+        var summary: String {
+            let list = ListFormatter()
+            list.locale = L10n.locale
+            return list.string(from: amounts) ?? amounts.joined(separator: ", ")
+        }
     }
 
     /// Sign-up and reset share the same "set a password" form and OTP verification; only login is different.
     private var setsPassword: Bool { mode == .signUp || reset }
     private var emailValid: Bool { email.contains("@") && email.contains(".") && !email.hasSuffix(".") }
     private var rejection: String? {
-        if let upgrade, password == upgrade.oldPassword { return "Choose a new password — your current one can’t be reused." }
+        if let upgrade, password == upgrade.oldPassword { return tr("Choose a new password — your current one can’t be reused.") }
         return PasswordStrength.rejection(password, email: email)
     }
     private var otpStage: Bool { (setsPassword || verifyingLogIn) && stage == .otp }
@@ -645,7 +666,7 @@ struct EmailPasswordView: View {
                     .listRowBackground(Color.clear)
                 } else {
                     Section {
-                        Picker("Mode", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
+                        Picker("Mode", selection: $mode) { ForEach(Mode.allCases) { $0.title.tag($0) } }
                             .pickerStyle(.segmented).labelsHidden()
                     }
                     .listRowBackground(Color.clear)
@@ -835,9 +856,13 @@ struct EmailPasswordView: View {
                 Text("This email already has a DyorHQ wallet (\(conflict.current.checksummed)). Log in instead, or replace it: funds in \(conflict.current.short) stay there.")
             }
             if let holdings = conflict.holdings {
-                Label("\(conflict.current.short) holds \(holdings.summary).", systemImage: holdings.isFunded ? "dollarsign.circle" : "circle.dashed")
+                if holdings.isFunded {
+                    Label("\(conflict.current.short) holds \(holdings.summary).", systemImage: "dollarsign.circle")
+                } else {
+                    Label("\(conflict.current.short) holds no MON or tokens.", systemImage: "circle.dashed")
+                }
                 if holdings.transactions > 0 {
-                    Label("It has sent \(holdings.transactions) transaction\(holdings.transactions == 1 ? "" : "s"), so it may also hold positions, collateral or coins not shown here.", systemImage: "clock.arrow.circlepath")
+                    Label("It has sent \(Int(clamping: holdings.transactions)) transactions, so it may also hold positions, collateral or coins not shown here.", systemImage: "clock.arrow.circlepath")
                 }
             } else if conflict.readFailed {
                 Label("Couldn’t read what \(conflict.current.short) holds. Check your connection and try again.", systemImage: "exclamationmark.triangle")
@@ -874,13 +899,15 @@ struct EmailPasswordView: View {
         }
     }
 
-    /// The confirmation, naming exactly what stays behind.
+    /// The confirmation, naming exactly what stays behind: each case one whole sentence, in the app's language.
     private func replaceAcknowledgement(_ current: Address, _ holdings: Holdings) -> String {
-        let beyond = holdings.transactions > 0 ? ", and anything else it holds," : ""
-        if holdings.isFunded {
-            return "I understand \(current.short) keeps its \(holdings.summary)\(beyond) and this email will no longer open it."
+        let wallet = current.short, summary = holdings.summary
+        switch (holdings.isFunded, holdings.transactions > 0) {
+        case (true, true): return tr("I understand \(wallet) keeps its \(summary), and anything else it holds, and this email will no longer open it.")
+        case (true, false): return tr("I understand \(wallet) keeps its \(summary) and this email will no longer open it.")
+        case (false, true): return tr("I understand this email will no longer open \(wallet), which holds no MON or tokens (it may hold other things).")
+        case (false, false): return tr("I understand this email will no longer open \(wallet), which holds no MON or tokens.")
         }
-        return "I understand this email will no longer open \(current.short), which holds no MON or tokens\(beyond.isEmpty ? "" : " (it may hold other things)")."
     }
 
     // MARK: Actions
@@ -974,11 +1001,11 @@ struct EmailPasswordView: View {
     /// password typed with the eye button on may contain.
     private func logInMessage(for error: Error) -> String {
         if SupabaseError.isOutage(error) {
-            return "We couldn’t reach DyorHQ to check your password. Nothing is wrong with your password or your wallet: try again in a few minutes, and don’t reset your password meanwhile — a reset creates a new, empty wallet."
+            return tr("We couldn’t reach DyorHQ to check your password. Nothing is wrong with your password or your wallet: try again in a few minutes, and don’t reset your password meanwhile — a reset creates a new, empty wallet.")
         }
         let message = describe(error)
         guard case SessionError.emailNotVerified = error, password.contains(where: { "'\"-".contains($0) }) else { return message }
-        return message + " If you made this password with it shown (the eye button), iOS may have typed curly quotes or a long dash in it: hold the key down to type those."
+        return tr("\(message) If you made this password with it shown (the eye button), iOS may have typed curly quotes or a long dash in it: hold the key down to type those.")
     }
 
     /// Log-in hit `EmailPepperError`: email the one-time code (the same Privy OTP as sign-up), then the code step's
@@ -1057,7 +1084,7 @@ struct EmailPasswordView: View {
     private func runBind(replacing current: Address?) async {
         guard let verified, verified.isFresh else {
             self.verified = nil; conflict = nil
-            self.error = "Your email verification expired. Send a new code to continue."
+            self.error = tr("Your email verification expired. Send a new code to continue.")
             return
         }
         busy = true; error = nil
@@ -1081,13 +1108,16 @@ struct EmailPasswordView: View {
             await readConflictHoldings()
         } catch EmailAuthError.verificationExpired {
             self.verified = nil; conflict = nil
-            self.error = "Your email verification expired. Send a new code to continue."
+            self.error = tr("Your email verification expired. Send a new code to continue.")
         } catch {
             // A failed Replace Wallet is retried with its own button, which stays on screen.
-            let retry = conflict == nil ? "tap Try Again" : "tap Replace Wallet again"
-            self.error = SupabaseError.isOutage(error)
-                ? "We couldn’t reach DyorHQ to finish. Your email is verified, so \(retry) — no new code needed."
-                : describe(error)
+            if !SupabaseError.isOutage(error) {
+                self.error = describe(error)
+            } else if conflict == nil {
+                self.error = tr("We couldn’t reach DyorHQ to finish. Your email is verified, so tap Try Again — no new code needed.")
+            } else {
+                self.error = tr("We couldn’t reach DyorHQ to finish. Your email is verified, so tap Replace Wallet again — no new code needed.")
+            }
         }
     }
 
@@ -1114,11 +1144,13 @@ struct EmailPasswordView: View {
         let body = try JSONEncoder().encode(Body(message: message, signature: signature, replace: replace?.checksummed.lowercased()))
         do { _ = try await env.social.client.invoke(function: "email-rebind", bearer: token, body: body) }
         catch SupabaseError.http(409, let text) {
+            // not localized: the function's own error code
             guard Self.serverField(text, "error") == "email_already_bound", let current = Self.serverField(text, "current").flatMap({ Address($0) }) else {
                 throw EmailAuthError.bindFailed(Self.serverMessage(text))
             }
             throw SessionError.emailAlreadyBound(current)
         }
+        // not localized: the function's own English word for a stale token, matched whatever the app's language
         catch SupabaseError.http(401, let text) where Self.serverField(text, "error")?.contains("expired") == true { throw EmailAuthError.verificationExpired }
         catch SupabaseError.http(let code, let text) where !(500...599).contains(code) { throw EmailAuthError.bindFailed(Self.serverMessage(text)) }
     }
@@ -1129,13 +1161,13 @@ struct EmailPasswordView: View {
         return obj[key] as? String
     }
 
-    /// Surfaces the `{ "error": … }` reason the edge function returns (e.g. wrong code, expired) as a clean sentence.
+    /// Surfaces the `{ "error": … }` reason the edge function returns (e.g. wrong code, expired) as a clean sentence: one
+    /// the app knows in the app's language (`EdgeFunctionError`), any other as the server wrote it.
     private static func serverMessage(_ text: String) -> String {
         guard let msg = serverField(text, "error"), !msg.isEmpty else {
-            return "We couldn’t confirm that. Please try again."
+            return tr("We couldn’t confirm that. Please try again.")
         }
-        let capped = msg.prefix(1).uppercased() + String(msg.dropFirst())
-        return capped.hasSuffix(".") ? capped : capped + "."
+        return EdgeFunctionError.emailRebind(msg)
     }
 
     /// Ends editing in every field, the UIKit password fields included.
@@ -1223,7 +1255,7 @@ enum EmailAuthError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .bindFailed(let message): return message
-        case .verificationExpired: return "Your email verification expired. Send a new code to continue."
+        case .verificationExpired: return tr("Your email verification expired. Send a new code to continue.")
         }
     }
 }
@@ -1333,8 +1365,15 @@ private struct StrengthMeter: View {
     private var tint: Color {
         switch score { case 0, 1: return .negative; case 2: return .attention; default: return .positive }
     }
+    /// The strength's name in the app's language; a space keeps the row's height while nothing is typed.
     private var label: String {
-        switch score { case 0: return " "; case 1: return "Weak"; case 2: return "Fair"; case 3: return "Good"; default: return "Strong" }
+        switch score {
+        case 0: return " "
+        case 1: return tr(LocalizedStringResource("Weak", comment: "A password's strength [tight]"))
+        case 2: return tr(LocalizedStringResource("Fair", comment: "A password's strength [tight]"))
+        case 3: return tr(LocalizedStringResource("Good", comment: "A password's strength [tight]"))
+        default: return tr(LocalizedStringResource("Strong", comment: "A password's strength [tight]"))
+        }
     }
 
     var body: some View {
@@ -1362,7 +1401,7 @@ struct WatchAddressView: View {
     var body: some View {
         Form {
             Section {
-                TextField("0x…", text: $text)
+                TextField("0x…" as String, text: $text)
                     .font(.body.monospaced())
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -1388,7 +1427,8 @@ struct WatchAddressView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Watch") { watch() }.disabled(address == nil)
+                Button { watch() } label: { Text("Watch", comment: "Starts following this address without signing in, a verb [tight]") }
+                    .disabled(address == nil)
             }
         }
         .onAppear { focused = true }

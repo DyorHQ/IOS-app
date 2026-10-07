@@ -16,7 +16,17 @@ struct ImportWalletView: View {
     @State private var reveal = false
     @State private var error: String?
 
-    enum Kind: String, CaseIterable, Identifiable { case phrase = "Recovery Phrase", key = "Private Key"; var id: String { rawValue } }
+    enum Kind: String, CaseIterable, Identifiable {
+        case phrase, key
+        var id: String { rawValue }
+        /// The kind's name on the segmented switch, in the app's language (never its raw value).
+        var title: Text {
+            switch self {
+            case .phrase: Text("Recovery Phrase", comment: "Import Wallet: the switch's side for a 12 or 24 word phrase [tight]")
+            case .key: Text("Private Key", comment: "Import Wallet: the switch's side for a hex private key [tight]")
+            }
+        }
+    }
 
     private var currentInput: String { kind == .phrase ? phrase : privateKey }
 
@@ -24,7 +34,7 @@ struct ImportWalletView: View {
         List {
             Section {
                 Picker("Type", selection: $kind) {
-                    ForEach(Kind.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(Kind.allCases) { $0.title.tag($0) }
                 }
                 .pickerStyle(.segmented)
             }
@@ -115,7 +125,7 @@ struct ImportWalletView: View {
             Text("Recovery Phrase")
         } footer: {
             let count = WalletImport.wordCount(phrase)
-            if count > 0 { Text("\(count) word\(count == 1 ? "" : "s"). Words are separated by spaces.") }
+            if count > 0 { Text("\(count) words. Words are separated by spaces.") }
             else { Text("The 12 or 24 words from your existing wallet, in order.") }
         }
     }
@@ -124,9 +134,9 @@ struct ImportWalletView: View {
         Section {
             Group {
                 if reveal {
-                    TextField("0x…", text: $privateKey)
+                    TextField("0x…" as String, text: $privateKey)
                 } else {
-                    SecureField("0x…", text: $privateKey)
+                    SecureField("0x…" as String, text: $privateKey)
                 }
             }
             .textInputAutocapitalization(.never)
@@ -168,7 +178,7 @@ struct ImportWalletView: View {
         Task {
             guard await session.importWallet(derived) else {
                 // The key did not reach the Keychain: keep what the user entered so they can try again.
-                error = session.lastError ?? "Couldn't save the key on this iPhone. Try again."
+                error = session.lastError ?? tr("Couldn't save the key on this iPhone. Try again.")
                 importing = false
                 return
             }
