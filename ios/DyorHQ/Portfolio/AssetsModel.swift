@@ -283,7 +283,7 @@ struct AssetsCard: View {
                     Text(asset.token.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                     TokenBadgeView(token: asset.token, receivedUnasked: unverified)
                 }
-                (note ?? Text(verbatim: asset.token.name)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                (note ?? Text(verbatim: asset.token.displayName)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {

@@ -262,6 +262,7 @@ public enum ERC20 {
     static func isCallError(_ error: Error) -> Bool {
         guard let error = error as? RPCError, !RPCClient.isRateLimited(error) else { return false }
         let message = error.message.lowercased()
+        // not localized: the nodes' own English, matched as they send it
         return error.code == 3 || message.contains("revert") || message.contains("out of gas") || message.contains("gas required exceeds")
             || message.contains("invalid opcode")
     }

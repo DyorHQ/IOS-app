@@ -23,8 +23,8 @@ public enum NetworkError: Error, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .badStatus(let code): return "The server answered with status \(code)."
-        case .malformedResponse: return "The server sent a response the app could not read."
+        case .badStatus(let code): return L10n.tr("The server answered with status \(String(code)).")
+        case .malformedResponse: return L10n.tr("The server sent a response the app could not read.")
         case .transport(let error): return error.localizedDescription
         }
     }
@@ -142,6 +142,7 @@ public actor RPCClient {
     static func isRateLimited(_ error: RPCError) -> Bool {
         if error.code == 429 || error.code == -32005 { return true }
         let message = error.message.lowercased()
+        // not localized: the endpoints' own English, matched as they send it
         return message.contains("request limit") || message.contains("rate limit") || message.contains("too many requests")
             || message.contains("per second") || message.contains("throughput")
     }
@@ -208,9 +209,11 @@ public actor RPCClient {
         // `Int(exactly:)`: a hostile or broken RPC can send any JSON number as an id; a non-integer one matches nothing.
         for r in responses { if let id = r["id"].number, let key = Int(exactly: id) { byId[key] = r } }
         return (0..<calls.count).map { i in
+            // not localized: RPC messages, read and matched like a node's own
             guard let r = byId[firstId + i] else { return .failure(RPCError(code: -1, message: "Missing response")) }
             let error = r["error"]
             if !error.isNull {
+                // not localized: the node's own message, or a stand-in for one
                 return .failure(RPCError(code: error["code"].number.flatMap { Int(exactly: $0) } ?? -1, message: error["message"].string ?? "RPC error", data: error["data"].string))
             }
             return .success(r["result"])
@@ -272,7 +275,7 @@ public actor RPCClient {
         try await batch(calls.map { ("eth_call", [$0.0.json, $0.1.json]) }).map { result in
             result.flatMap { json in
                 if let data = try? bytes(json) { return .success(data) }
-                return .failure(RPCError(code: -1, message: "Malformed call result"))
+                return .failure(RPCError(code: -1, message: "Malformed call result")) // not localized: an RPC message, as a node's
             }
         }
     }
@@ -293,6 +296,7 @@ public actor RPCClient {
             return hash
         } catch let error as RPCError {
             let message = error.message.lowercased()
+            // not localized: the nodes' own English, matched as they send it
             if message.contains("already known") || message.contains("known transaction") || message.contains("already imported") { return hash }
             if message.contains("nonce too low"), let known = try? await call("eth_getTransactionByHash", [.string(hash.hexString)]), !known.isNull { return hash }
             throw error
@@ -413,13 +417,13 @@ public enum TransactionError: Error, LocalizedError {
     /// this hash; never sign a replacement for it.
     case possiblySent(Data)
 
-    /// Sent — or possibly sent — with no confirmation seen.
-    public static let unconfirmed = "Sent — confirmation not seen yet. Check it before trying again."
+    /// Sent — or possibly sent — with no confirmation seen, in the app's language.
+    public static var unconfirmed: String { L10n.tr("Sent — confirmation not seen yet. Check it before trying again.") }
 
     public var errorDescription: String? {
         switch self {
         case .timedOut, .possiblySent: return Self.unconfirmed
-        case .reverted: return "The transaction was mined but reverted."
+        case .reverted: return L10n.tr("The transaction was mined but reverted.")
         case .rejected(let reason): return reason
         }
     }

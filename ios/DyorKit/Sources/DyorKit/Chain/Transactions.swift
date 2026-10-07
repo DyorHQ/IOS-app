@@ -323,8 +323,10 @@ public struct TransactionSender: Sendable {
         return refusals.contains { message.contains($0) }
     }
 
+    // not localized: the nodes' own English, matched as they send it
     static func isNonceUsed(_ error: RPCError) -> Bool { error.message.lowercased().contains("nonce too low") }
 
+    // not localized: the nodes' own English, matched as they send it
     private static let refusals = [
         "insufficient funds", "insufficient balance", "intrinsic gas too low", "exceeds block gas limit", "underpriced",
         "less than block base fee", "tip higher than fee cap", "max priority fee per gas higher than max fee per gas",
@@ -334,17 +336,18 @@ public struct TransactionSender: Sendable {
     /// Monad's refusal for a balance its consensus can't see yet. Other chains say "insufficient funds", which is a
     /// real shortfall and stays one.
     static func isFundingInFlight(_ error: RPCError) -> Bool {
+        // not localized: Monad's own English, matched as it sends it
         error.message.localizedCaseInsensitiveContains("insufficient balance")
     }
 
-    static let fundsArriving = "Your funds are still arriving. Try again in a moment."
+    static var fundsArriving: String { L10n.tr("Your funds are still arriving. Try again in a moment.") }
 
     /// "Still arriving" when the latest balance covers the value and the most the fee can be; otherwise the account is
     /// really short, and saying the funds are on their way would be false.
     private func fundingRefusal(_ transaction: PreparedTransaction) async -> String {
         guard let balance = try? await rpc.balance(of: transaction.from) else { return Self.fundsArriving }
         let cost = transaction.value + transaction.gasLimit * transaction.maxFeePerGas
-        return balance >= cost ? Self.fundsArriving : "Not enough MON to pay for gas."
+        return balance >= cost ? Self.fundsArriving : L10n.tr("Not enough MON to pay for gas.")
     }
 
     /// Monad's reserve balance: while an account holds under 10 MON plus what a transaction sends, that transaction
@@ -391,7 +394,7 @@ public struct TransactionSender: Sendable {
             last = hash
             previousBlock = receipt.blockNumber
         }
-        guard let hash = last else { throw TransactionError.rejected("Nothing to send.") }
+        guard let hash = last else { throw TransactionError.rejected(L10n.tr("Nothing to send.")) }
         return hash
     }
 }
@@ -401,13 +404,15 @@ public enum RevertReason {
     public static func describe(_ error: RPCError) -> String {
         if let data = error.data, let bytes = Data(hex: data), bytes.count >= 4 {
             let selector = bytes.prefix(4).hexString
+            // not localized: a contract's own revert string, shown as it wrote it
             if selector == "0x08c379a0", let message = try? ABI.decode(bytes.dropFirst(4), "string")[0].string { // Error(string)
                 return message
             }
-            if let named = knownErrors[selector] { return named }
+            if let named = knownErrorSentences[selector] { return named() }
         }
         let message = error.message
-        if message.localizedCaseInsensitiveContains("insufficient funds") { return "Not enough MON to pay for gas." }
+        // not localized: the nodes' own English, matched as they send it ("insufficient funds", "custom error 0x…")
+        if message.localizedCaseInsensitiveContains("insufficient funds") { return L10n.tr("Not enough MON to pay for gas.") }
         // "execution reverted: custom error 0xabcdef12: 0000…" — keep the selector and the payload's words as
         // numbers (usually amounts or limits), drop the wall of hex.
         if let range = message.range(of: #"custom error (0x[0-9a-fA-F]{8})"#, options: .regularExpression) {
@@ -416,79 +421,85 @@ public enum RevertReason {
             let payload = error.data.flatMap { Data(hex: $0) }?.dropFirst(4) ?? Data()
             if !payload.isEmpty, payload.count % 32 == 0, payload.count <= 32 * 6 {
                 let words = stride(from: payload.startIndex, to: payload.endIndex, by: 32).map { BigUInt(payload[$0..<$0 + 32]) }
-                args = " with " + words.map { $0.bitWidth > 128 ? "0x" + String($0, radix: 16).prefix(10) + "…" : String($0) }.joined(separator: ", ")
+                args = words.map { $0.bitWidth > 128 ? "0x" + String($0, radix: 16).prefix(10) + "…" : String($0) }.joined(separator: ", ")
             }
-            return "The contract rejected the transaction (custom error \(selector)\(args))."
+            // not localized: the selector and its arguments, hex and digits
+            return args.isEmpty ? L10n.tr("The contract rejected the transaction (custom error \(selector)).")
+                : L10n.tr("The contract rejected the transaction (custom error \(selector) with \(args)).")
         }
-        return message.isEmpty ? "The transaction would fail." : message
+        return message.isEmpty ? L10n.tr("The transaction would fail.") : message
     }
 
     /// Custom error selectors worth naming: the DyorHQ launchpad and Moments contracts' errors (v1 and v2), keyed by
     /// selector. A selector is only the error's name and arguments, so several contracts can raise the same one
     /// (`ModulesNotSet`, `NothingToClaim`, `InsufficientGasForGraduation`, `ZeroAddress`, `PriceOutOfRange`…): every
     /// sentence reads right whichever contract raised it. `RevertReasonTests` pins each selector against `cast sig`.
-    /// A flow with better context names its own (`MomentsService.collectReason`). Extend as contracts are added.
-    static let knownErrors: [String: String] = {
-        let table: [(String, String)] = [
+    /// A flow with better context names its own (`MomentsService.collectReason`). Extend as contracts are added. Each
+    /// sentence is written when it is shown, so it is in the app's language at that moment.
+    static var knownErrors: [String: String] { knownErrorSentences.mapValues { $0() } }
+
+    /// `knownErrors`, each sentence as the function that writes it: the selectors are hashed once.
+    private static let knownErrorSentences: [String: @Sendable () -> String] = {
+        let table: [(String, @Sendable () -> String)] = [
             // Shared by several contracts.
-            ("ModulesNotSet", "The contracts aren't fully set up yet, so nothing was sent."),
-            ("ZeroAddress", "The transaction names the zero address, so the contract refused it."),
-            ("NothingToClaim", "There is nothing to claim yet."),
-            ("InsufficientGasForGraduation", "This transaction would graduate the coin and needs more gas to graduate. Try again."),
-            ("PriceOutOfRange", "The pool price is out of the range graduation accepts right now. Try again later."),
-            ("NotGraduated", "This hasn't graduated yet."),
+            ("ModulesNotSet", { L10n.tr("The contracts aren't fully set up yet, so nothing was sent.") }),
+            ("ZeroAddress", { L10n.tr("The transaction names the zero address, so the contract refused it.") }),
+            ("NothingToClaim", { L10n.tr("There is nothing to claim yet.") }),
+            ("InsufficientGasForGraduation", { L10n.tr("This transaction would graduate the coin and needs more gas to graduate. Try again.") }),
+            ("PriceOutOfRange", { L10n.tr("The pool price is out of the range graduation accepts right now. Try again later.") }),
+            ("NotGraduated", { L10n.tr("This hasn't graduated yet.") }),
             // Moments factory.
-            ("TermsChanged", "The Moments terms changed after you reviewed them, so nothing was published. Review them again."),
-            ("Paused", "Publishing is paused right now, so nothing was published."),
-            ("PriceTooHigh", "That price is above the most a collect can be charged (the gross that completes the reserve). Lower it."),
-            ("PriceTooLow", "That price is below the minimum collect price."),
-            ("AllocTooHigh", "That allocation is above the most a creator can keep."),
-            ("BadWindow", "The collect window must be between 1 hour and 30 days."),
-            ("UnknownMoment", "That Moment does not exist."),
-            ("PolicyLapsed", "That proposed policy lapsed: nobody applied it within 7 days of it becoming applicable."),
-            ("NotGuardian", "Only the Moments guardian can do that."),
-            ("NotGovernanceOrGuardian", "Only governance or the Moments guardian can do that."),
-            ("UnpauseFirst", "The guardian's pause must be lifted first."),
-            ("BaseURITooLong", "That link base is too long."),
+            ("TermsChanged", { L10n.tr("The Moments terms changed after you reviewed them, so nothing was published. Review them again.") }),
+            ("Paused", { L10n.tr("Publishing is paused right now, so nothing was published.") }),
+            ("PriceTooHigh", { L10n.tr("That price is above the most a collect can be charged (the gross that completes the reserve). Lower it.") }),
+            ("PriceTooLow", { L10n.tr("That price is below the minimum collect price.") }),
+            ("AllocTooHigh", { L10n.tr("That allocation is above the most a creator can keep.") }),
+            ("BadWindow", { L10n.tr("The collect window must be between 1 hour and 30 days.") }),
+            ("UnknownMoment", { L10n.tr("That Moment does not exist.") }),
+            ("PolicyLapsed", { L10n.tr("That proposed policy lapsed: nobody applied it within 7 days of it becoming applicable.") }),
+            ("NotGuardian", { L10n.tr("Only the Moments guardian can do that.") }),
+            ("NotGovernanceOrGuardian", { L10n.tr("Only governance or the Moments guardian can do that.") }),
+            ("UnpauseFirst", { L10n.tr("The guardian's pause must be lifted first.") }),
+            ("BaseURITooLong", { L10n.tr("That link base is too long.") }),
             // Moments collect, graduation and vesting.
-            ("NotCollecting", "This Moment is no longer collecting."),
-            ("CollectWindowClosed", "The collect window has closed."),
-            ("BadQuantity", "Choose between 1 and 20 editions."),
-            ("NotExpirable", "This Moment can't be expired yet."),
-            ("WrongState", "This Moment isn't in a state that allows this."),
-            ("NotBeneficiary", "Only the wallet this is owed to can withdraw it."),
-            ("NothingToWithdraw", "There is nothing to withdraw."),
-            ("NotPending", "This Moment isn't waiting to graduate."),
-            ("AlreadyGraduated", "This Moment has already graduated."),
+            ("NotCollecting", { L10n.tr("This Moment is no longer collecting.") }),
+            ("CollectWindowClosed", { L10n.tr("The collect window has closed.") }),
+            ("BadQuantity", { L10n.tr("Choose between 1 and \(MomentsConstants.maxBatch) editions.") }),
+            ("NotExpirable", { L10n.tr("This Moment can't be expired yet.") }),
+            ("WrongState", { L10n.tr("This Moment isn't in a state that allows this.") }),
+            ("NotBeneficiary", { L10n.tr("Only the wallet this is owed to can withdraw it.") }),
+            ("NothingToWithdraw", { L10n.tr("There is nothing to withdraw.") }),
+            ("NotPending", { L10n.tr("This Moment isn't waiting to graduate.") }),
+            ("AlreadyGraduated", { L10n.tr("This Moment has already graduated.") }),
             // Moments buyback.
-            ("TooSoon", "A buyback for this Moment ran less than an hour ago. Try again later."),
-            ("BelowMinimum", "The buyback budget is below the 1 USDC minimum a round needs."),
-            ("Slippage", "The pool price moved past the buyback's slippage limit. Try again."),
-            ("PriceMoved", "The pool price moved more than 2% within this block, so the buyback was refused. Try again in a later block."),
+            ("TooSoon", { L10n.tr("A buyback for this Moment ran less than an hour ago. Try again later.") }),
+            ("BelowMinimum", { L10n.tr("The buyback budget is below the 1 USDC minimum a round needs.") }),
+            ("Slippage", { L10n.tr("The pool price moved past the buyback's slippage limit. Try again.") }),
+            ("PriceMoved", { L10n.tr("The pool price moved more than 2% within this block, so the buyback was refused. Try again in a later block.") }),
             // Launchpad factory.
-            ("NotWhitelisted", "Launching is limited to approved wallets right now."),
-            ("LaunchConfigDisabled", "This launch template is turned off, so nothing was launched."),
-            ("PairTokenNotApproved", "That pair asset isn't approved for launches."),
-            ("PairRequiresMonday", "That pair asset can only graduate on Monday Trade."),
-            ("GraduationVenueUnavailable", "That graduation venue isn't available."),
-            ("LaunchFeeNotPaid", "The launch fee wasn't paid in full."),
-            ("CreatorTaxTooHigh", "That creator tax is above the maximum."),
-            ("ExemptionListTooLong", "Too many snipe-tax exemptions: at most \(LaunchpadService.maxExemptions)."),
-            ("LaunchEconomicsMismatch", LaunchpadError.termsChanged.errorDescription ?? ""),
-            ("UnknownLaunch", "That coin wasn't launched on this launchpad."),
-            ("WrongGraduationPhase", "This coin isn't in the phase that allows this."),
-            ("FallbackNotAvailable", "The Uniswap v4 fallback isn't available for this coin yet."),
-            ("Create2Mismatch", "The coin couldn't be created at its expected address. Try again."),
-            ("InvalidTickSpacing", "That tick spacing isn't valid."),
+            ("NotWhitelisted", { L10n.tr("Launching is limited to approved wallets right now.") }),
+            ("LaunchConfigDisabled", { L10n.tr("This launch template is turned off, so nothing was launched.") }),
+            ("PairTokenNotApproved", { L10n.tr("That pair asset isn't approved for launches.") }),
+            ("PairRequiresMonday", { L10n.tr("That pair asset can only graduate on Monday Trade.") }),
+            ("GraduationVenueUnavailable", { L10n.tr("That graduation venue isn't available.") }),
+            ("LaunchFeeNotPaid", { L10n.tr("The launch fee wasn't paid in full.") }),
+            ("CreatorTaxTooHigh", { L10n.tr("That creator tax is above the maximum.") }),
+            ("ExemptionListTooLong", { L10n.tr("Too many snipe-tax exemptions: at most \(String(LaunchpadService.maxExemptions)).") }),
+            ("LaunchEconomicsMismatch", { LaunchpadError.termsChanged.errorDescription ?? "" }),
+            ("UnknownLaunch", { L10n.tr("That coin wasn't launched on this launchpad.") }),
+            ("WrongGraduationPhase", { L10n.tr("This coin isn't in the phase that allows this.") }),
+            ("FallbackNotAvailable", { L10n.tr("The Uniswap v4 fallback isn't available for this coin yet.") }),
+            ("Create2Mismatch", { L10n.tr("The coin couldn't be created at its expected address. Try again.") }),
+            ("InvalidTickSpacing", { L10n.tr("That tick spacing isn't valid.") }),
             // Bonding curve.
-            ("CurveNotTrading", "This coin's bonding curve isn't trading."),
-            ("CurveIsCompleted", "This coin's bonding curve is complete; it trades in its pool now."),
-            ("SlippageExceeded", "The price moved past your slippage limit. Try again."),
-            ("NativeValueMismatch", "The MON sent doesn't match the amount."),
-            ("UnexpectedNativeValue", "MON was sent with a trade that takes none."),
-            ("ZeroAmount", "Enter an amount above zero."),
-            ("InsufficientRealReserve", "The curve doesn't hold enough to pay that out. Try a smaller amount."),
-            ("UnsupportedQuoteToken", "This pair asset can't trade on the curve."),
+            ("CurveNotTrading", { L10n.tr("This coin's bonding curve isn't trading.") }),
+            ("CurveIsCompleted", { L10n.tr("This coin's bonding curve is complete; it trades in its pool now.") }),
+            ("SlippageExceeded", { L10n.tr("The price moved past your slippage limit. Try again.") }),
+            ("NativeValueMismatch", { L10n.tr("The MON sent doesn't match the amount.") }),
+            ("UnexpectedNativeValue", { L10n.tr("MON was sent with a trade that takes none.") }),
+            ("ZeroAmount", { L10n.tr("Enter an amount above zero.") }),
+            ("InsufficientRealReserve", { L10n.tr("The curve doesn't hold enough to pay that out. Try a smaller amount.") }),
+            ("UnsupportedQuoteToken", { L10n.tr("This pair asset can't trade on the curve.") }),
         ]
         return Dictionary(table.map { (ABI.selector("\($0.0)()").hexString, $0.1) }, uniquingKeysWith: { first, _ in first })
     }()

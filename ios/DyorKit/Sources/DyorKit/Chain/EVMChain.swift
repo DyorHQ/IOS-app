@@ -49,6 +49,7 @@ public struct EVMChain: Sendable, Hashable, Identifiable {
     /// chain we can sign on. Public RPCs (publicnode) for the sources; Monad here is a placeholder whose RPC the app
     /// replaces with its configured endpoint.
     public static let supported: [EVMChain] = [
+        // not localized: the chains' names
         EVMChain(auroraId: "eth", chainId: 1, name: "Ethereum", nativeSymbol: "ETH", rpcURL: url("https://ethereum-rpc.publicnode.com")),
         EVMChain(auroraId: "base", chainId: 8453, name: "Base", nativeSymbol: "ETH", rpcURL: url("https://base-rpc.publicnode.com")),
         EVMChain(auroraId: "arb", chainId: 42161, name: "Arbitrum", nativeSymbol: "ETH", rpcURL: url("https://arbitrum-one-rpc.publicnode.com")),

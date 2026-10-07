@@ -245,8 +245,8 @@ public enum PerplError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .contextUnavailable(let status): return "Perpl market data is unavailable (status \(status))."
-        case .malformedResponse(let what): return "Perpl sent \(what) the app could not read."
+        case .contextUnavailable(let status): return L10n.tr("Perpl market data is unavailable (status \(String(status))).")
+        case .malformedResponse(let what): return L10n.tr("Perpl sent \(what) the app could not read.")
         }
     }
 }

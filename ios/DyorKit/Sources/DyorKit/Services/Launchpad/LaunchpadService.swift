@@ -222,7 +222,7 @@ public actor LaunchpadService {
         guard !page.isEmpty else { return [] }
         let records = try await multicall.readAll(page.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)) })
             .map { LaunchpadABI.LaunchRecord($0[0], legacy: legacy) }
-        for (token, record) in zip(page, records) where !record.exists || record.token != token { throw ChainListUnread("A launch") }
+        for (token, record) in zip(page, records) where !record.exists || record.token != token { throw ChainListUnread(.launch) }
         return try await hydrate(records, factory: factory).reversed()
     }
 
@@ -446,7 +446,7 @@ public actor LaunchpadService {
             ]
         }
         let generation = stack(for: factory).generation
-        let results = try await multicall.readItems(items, text: Self.launchTextCalls, what: "A launch")
+        let results = try await multicall.readItems(items, text: Self.launchTextCalls, what: .launch)
         let livePrices = await poolPrices(for: records, pairs: pairs)
         return try records.enumerated().map { i, r in
             let item = results[i]
@@ -547,10 +547,10 @@ public actor LaunchpadService {
         guard !launch.isRetiredLaunchpad else { throw LaunchpadError.retiredLaunchpad }
         var steps: [TransactionStep] = []
         if !launch.pair.isNative {
-            steps.append(.approve(token: launch.pairToken, spender: launch.curve, amount: quoteIn, label: "Approve \(launch.pair.symbol)"))
+            steps.append(.approve(token: launch.pairToken, spender: launch.curve, amount: quoteIn, label: L10n.tr("Approve \(launch.pair.symbol)")))
         }
         let data = LaunchpadABI.calldata(LaunchpadABI.Curve.buy, [.uint(quoteIn), .uint(minTokensOut), .address(recipient)])
-        steps.append(.call(TransactionRequest(to: launch.curve, data: data, value: launch.pair.isNative ? quoteIn : 0), label: "Buy $\(launch.symbol)"))
+        steps.append(.call(TransactionRequest(to: launch.curve, data: data, value: launch.pair.isNative ? quoteIn : 0), label: L10n.string(LocalizedStringResource("Buy $\(launch.symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the coin's symbol after a dollar sign, as coin tickers are written ($DOGE)."))))
         return steps
     }
 
@@ -558,8 +558,8 @@ public actor LaunchpadService {
     public func sellPlan(launch: Launch, tokensIn: BigUInt, minQuoteOut: BigUInt, recipient: Address) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Curve.sell, [.uint(tokensIn), .uint(minQuoteOut), .address(recipient)])
         return [
-            .approve(token: launch.token, spender: launch.curve, amount: tokensIn, label: "Approve $\(launch.symbol)"),
-            .call(TransactionRequest(to: launch.curve, data: data), label: "Sell $\(launch.symbol)"),
+            .approve(token: launch.token, spender: launch.curve, amount: tokensIn, label: L10n.string(LocalizedStringResource("Approve $\(launch.symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the coin's symbol after a dollar sign, as coin tickers are written ($DOGE)."))),
+            .call(TransactionRequest(to: launch.curve, data: data), label: L10n.string(LocalizedStringResource("Sell $\(launch.symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the coin's symbol after a dollar sign, as coin tickers are written ($DOGE)."))),
         ]
     }
 
@@ -571,14 +571,14 @@ public actor LaunchpadService {
         if input.initialBuy > 0, LaunchpadAddresses.isRetired(addresses.factory) { throw LaunchpadError.retiredLaunchpad }
         let params = LaunchpadABI.tokenParams(input)
         let exemptions: ABIValue = .array(input.exemptions.map { .address($0) })
-        let label = "Launch $\(input.symbol)"
+        let label = L10n.string(LocalizedStringResource("Launch $\(input.symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. It launches a new coin; the value is its symbol after a dollar sign, as coin tickers are written ($DOGE)."))
         guard input.initialBuy > 0 else {
             let data = LaunchpadABI.calldata(LaunchpadABI.Factory.launchToken, [params, .uint(input.configId), .address(input.pairToken), exemptions])
             return [.call(TransactionRequest(to: addresses.factory, data: data, value: launchFee), label: label)]
         }
         var steps: [TransactionStep] = []
         if !input.pairIsNative {
-            steps.append(.approve(token: input.pairToken, spender: addresses.router, amount: input.initialBuy, label: "Approve developer buy"))
+            steps.append(.approve(token: input.pairToken, spender: addresses.router, amount: input.initialBuy, label: L10n.string(LocalizedStringResource("Approve developer buy", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. It approves the pair asset for the coin creator's own first buy, made with the launch."))))
         }
         let data = LaunchpadABI.calldata(LaunchpadABI.Router.launchAndBuy, [
             params, .uint(input.configId), .address(input.pairToken), .uint(input.initialBuy), .uint(input.minTokensOut), .address(from), exemptions,
@@ -623,7 +623,7 @@ public actor LaunchpadService {
         var steps: [TransactionStep] = []
         if view == nil || (view?.pendingRewards ?? 0) > 0 {
             let data = LaunchpadABI.calldata(LaunchpadABI.Sharing.claim, [.address(launch.token)])
-            steps.append(.call(TransactionRequest(to: stack(for: launch).holderFeeSharing, data: data), label: "Claim holder rewards"))
+            steps.append(.call(TransactionRequest(to: stack(for: launch).holderFeeSharing, data: data), label: L10n.string(LocalizedStringResource("Claim holder rewards", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent."))))
         }
         if let view, view.escrowBalance > 0 {
             steps += claimEscrowPlan(launch: launch)
@@ -637,7 +637,7 @@ public actor LaunchpadService {
         let data = launch.pair.isNative
             ? LaunchpadABI.calldata(LaunchpadABI.Escrow.claim)
             : LaunchpadABI.calldata(LaunchpadABI.Escrow.claimToken, [.address(launch.pairToken)])
-        return [.call(TransactionRequest(to: stack(for: launch).escrow, data: data), label: "Claim creator fees")]
+        return [.call(TransactionRequest(to: stack(for: launch).escrow, data: data), label: L10n.string(LocalizedStringResource("Claim creator fees", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent.")))]
     }
 
     /// The caller's claimable fee-escrow balances in `escrow` (the live stack's when nil) — native MON plus each
@@ -685,9 +685,9 @@ public actor LaunchpadService {
     public func claimEscrowPlan(native: Bool, tokens: [Address], escrow: Address? = nil) -> [TransactionStep] {
         let escrow = escrow ?? addresses.escrow
         var steps: [TransactionStep] = []
-        if native { steps.append(.call(TransactionRequest(to: escrow, data: LaunchpadABI.calldata(LaunchpadABI.Escrow.claim)), label: "Claim MON fees")) }
+        if native { steps.append(.call(TransactionRequest(to: escrow, data: LaunchpadABI.calldata(LaunchpadABI.Escrow.claim)), label: L10n.string(LocalizedStringResource("Claim MON fees", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent.")))) }
         for token in tokens where !token.isZero {
-            steps.append(.call(TransactionRequest(to: escrow, data: LaunchpadABI.calldata(LaunchpadABI.Escrow.claimToken, [.address(token)])), label: "Claim fees"))
+            steps.append(.call(TransactionRequest(to: escrow, data: LaunchpadABI.calldata(LaunchpadABI.Escrow.claimToken, [.address(token)])), label: L10n.string(LocalizedStringResource("Claim fees", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent."))))
         }
         return steps
     }
@@ -698,7 +698,7 @@ public actor LaunchpadService {
     /// gas floor and can only graduate on the creator's venue or revert, so the estimate never decides the venue.
     public func graduatePlan(launch: Launch) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Factory.graduate, [.address(launch.token)])
-        return [.call(TransactionRequest(to: stack(for: launch).factory, data: data), label: "Graduate")]
+        return [.call(TransactionRequest(to: stack(for: launch).factory, data: data), label: L10n.string(LocalizedStringResource("Graduate", bundle: L10n.kit, comment: "A transaction step: graduate a launch's coin from its bonding curve into its pool (a verb).")))]
     }
 
     /// `LaunchpadFactory.graduateFallback(token)` — retry the creator's venue, then graduate a stuck Monday launch on
@@ -714,7 +714,7 @@ public actor LaunchpadService {
     /// a graduated pool.
     public func sweepPoolFeesPlan(launch: Launch, currency: Address? = nil) -> [TransactionStep] {
         let data = LaunchpadABI.calldata(LaunchpadABI.Hook.sweepPoolFees, [.bytes(LaunchpadABI.word(launch.poolId)), .address(currency ?? launch.pairToken)])
-        return [.call(TransactionRequest(to: stack(for: launch).hook, data: data), label: "Distribute pool fees")]
+        return [.call(TransactionRequest(to: stack(for: launch).hook, data: data), label: L10n.tr("Distribute pool fees"))]
     }
 
 }

@@ -63,12 +63,12 @@ public extension LaunchpadService {
             stacks.map { LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(coin)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.generation.legacyRecord)) }
         }
         let results = try await multicall.read(calls)
-        guard results.count == calls.count else { throw LaunchpadError.unexpectedResponse("launchpad records") }
+        guard results.count == calls.count else { throw LaunchpadError.unexpectedResponse(L10n.string(LocalizedStringResource("launchpad records", bundle: L10n.kit, comment: "What the app could not read, completing “The launchpad returned something the app could not read (<this>).”"))) }
         var hits: [Address: (stack: LaunchpadAddresses, record: LaunchpadABI.LaunchRecord)] = [:]
         for (i, coin) in coins.enumerated() {
             let answers = Array(results[i * stacks.count ..< (i + 1) * stacks.count])
             // A factory answers a coin it never launched with an empty record: a missing answer is a failed read.
-            for answer in answers { if case .failure = answer { throw LaunchpadError.unexpectedResponse("a launchpad record") } }
+            for answer in answers { if case .failure = answer { throw LaunchpadError.unexpectedResponse(L10n.string(LocalizedStringResource("a launchpad record", bundle: L10n.kit, comment: "What the app could not read, completing “The launchpad returned something the app could not read (<this>).”"))) } }
             if let hit = Self.firstRecord(stacks: stacks, records: answers), hit.record.token == coin { hits[coin] = hit }
         }
         guard !hits.isEmpty else { return .none }

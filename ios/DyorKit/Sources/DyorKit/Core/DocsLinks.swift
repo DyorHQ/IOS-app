@@ -34,27 +34,27 @@ public enum DocsLinks: String, CaseIterable, Sendable {
         URL(string: rawValue.isEmpty ? Self.base : "\(Self.base)/\(rawValue)")!
     }
 
-    /// The page's topic, for a link's accessibility label ("Learn more about …").
+    /// The page's topic, for a link's accessibility label ("Learn more about …"), in the app's language.
     public var topic: String {
         switch self {
-        case .home: return "DyorHQ"
-        case .quickstart: return "getting started"
-        case .selfCustodyAndSecurity: return "self-custody and security"
-        case .slippageAndPriceImpact: return "slippage and price impact"
-        case .depositAndWithdraw: return "depositing and withdrawing collateral"
-        case .oneClickTrading: return "one-click trading"
-        case .launchACoin: return "launching a coin"
-        case .launchpadGraduation: return "graduation"
-        case .launchpadFeesAndRewards: return "launchpad fees and rewards"
-        case .publishAMoment: return "publishing a Moment"
-        case .collectAMoment: return "collecting a Moment"
-        case .momentsGraduationAndVesting: return "Moment graduation and vesting"
-        case .momentsEarningsAndFees: return "Moment earnings and fees"
-        case .bridge: return "bridging"
-        case .notificationsAndPriceAlerts: return "notifications and price alerts"
-        case .exportSignOutDelete: return "exporting, signing out and deleting"
-        case .contractsAndAddresses: return "contracts and addresses"
-        case .riskDisclosures: return "the risks"
+        case .home: return "DyorHQ" // not localized: the app's name
+        case .quickstart: return L10n.string(LocalizedStringResource("getting started", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .selfCustodyAndSecurity: return L10n.string(LocalizedStringResource("self-custody and security", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .slippageAndPriceImpact: return L10n.string(LocalizedStringResource("slippage and price impact", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .depositAndWithdraw: return L10n.string(LocalizedStringResource("depositing and withdrawing collateral", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .oneClickTrading: return L10n.string(LocalizedStringResource("one-click trading", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .launchACoin: return L10n.string(LocalizedStringResource("launching a coin", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .launchpadGraduation: return L10n.string(LocalizedStringResource("graduation", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .launchpadFeesAndRewards: return L10n.string(LocalizedStringResource("launchpad fees and rewards", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .publishAMoment: return L10n.string(LocalizedStringResource("publishing a Moment", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .collectAMoment: return L10n.string(LocalizedStringResource("collecting a Moment", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .momentsGraduationAndVesting: return L10n.string(LocalizedStringResource("Moment graduation and vesting", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .momentsEarningsAndFees: return L10n.string(LocalizedStringResource("Moment earnings and fees", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .bridge: return L10n.string(LocalizedStringResource("bridging", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .notificationsAndPriceAlerts: return L10n.string(LocalizedStringResource("notifications and price alerts", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .exportSignOutDelete: return L10n.string(LocalizedStringResource("exporting, signing out and deleting", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .contractsAndAddresses: return L10n.string(LocalizedStringResource("contracts and addresses", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
+        case .riskDisclosures: return L10n.string(LocalizedStringResource("the risks", bundle: L10n.kit, comment: "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."))
         }
     }
 }

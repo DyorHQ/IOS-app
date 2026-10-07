@@ -25,9 +25,9 @@ public enum PerplFunding {
         case longsPayShorts, shortsPayLongs, flat
         public var summary: String {
             switch self {
-            case .longsPayShorts: return "Longs pay shorts"
-            case .shortsPayLongs: return "Shorts pay longs"
-            case .flat: return "No funding"
+            case .longsPayShorts: return L10n.string(LocalizedStringResource("Longs pay shorts", bundle: L10n.kit, comment: "Perps funding: holders of long positions pay holders of short ones."))
+            case .shortsPayLongs: return L10n.string(LocalizedStringResource("Shorts pay longs", bundle: L10n.kit, comment: "Perps funding: holders of short positions pay holders of long ones."))
+            case .flat: return L10n.string(LocalizedStringResource("No funding", bundle: L10n.kit, comment: "Perps funding: the rate is zero, so nobody pays."))
             }
         }
     }

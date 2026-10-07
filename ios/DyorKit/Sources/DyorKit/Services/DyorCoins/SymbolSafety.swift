@@ -123,22 +123,22 @@ public enum SymbolSafety {
         /// emoji and symbols stored as many bytes each, which a count of characters doesn't show.
         case nameTooLongToStore
 
-        /// What the form says under the field.
+        /// What the form says under the field, in the app's language.
         public var message: String {
             switch self {
             case .symbolImitates(let token) where Token.core(token.address) == nil:
-                return "This symbol looks like \(token.symbol), a widely traded token this coin isn't. Choose another symbol."
-            case .symbolImitates(let token): return "This symbol looks like \(token.symbol), a token DyorHQ already lists. Choose another symbol."
+                return L10n.tr("This symbol looks like \(token.symbol), a widely traded token this coin isn't. Choose another symbol.")
+            case .symbolImitates(let token): return L10n.tr("This symbol looks like \(token.symbol), a token DyorHQ already lists. Choose another symbol.")
             case .nameImitates(let token) where Token.core(token.address) == nil:
-                return "This name looks like \(token.symbol), a widely traded token this coin isn't. Choose another name."
-            case .nameImitates(let token): return "This name looks like \(token.symbol), a token DyorHQ already lists. Choose another name."
+                return L10n.tr("This name looks like \(token.symbol), a widely traded token this coin isn't. Choose another name.")
+            case .nameImitates(let token): return L10n.tr("This name looks like \(token.symbol), a token DyorHQ already lists. Choose another name.")
             case .symbolNotDisplaySafe:
-                return "A symbol can use A–Z, 0–9 and accented Latin letters, or Chinese, Japanese or Korean characters with 0–9, not mixed."
-            case .symbolTooLong: return "A symbol can be at most \(SymbolSafety.maxSymbolLength) characters."
-            case .nameHasHiddenCharacters: return "This name has hidden or direction-changing characters. Remove them."
-            case .nameMixesAlphabets: return "A word in this name mixes Latin letters with letters from another alphabet that look like them. Use one alphabet in each word."
-            case .nameTooLong(let limit): return "A name can be at most \(limit) characters."
-            case .nameTooLongToStore: return "This name is too long to store: use fewer emoji or symbols."
+                return L10n.tr("A symbol can use A–Z, 0–9 and accented Latin letters, or Chinese, Japanese or Korean characters with 0–9, not mixed.")
+            case .symbolTooLong: return L10n.tr("A symbol can be at most \(SymbolSafety.maxSymbolLength) characters.")
+            case .nameHasHiddenCharacters: return L10n.tr("This name has hidden or direction-changing characters. Remove them.")
+            case .nameMixesAlphabets: return L10n.tr("A word in this name mixes Latin letters with letters from another alphabet that look like them. Use one alphabet in each word.")
+            case .nameTooLong(let limit): return L10n.tr("A name can be at most \(limit) characters.")
+            case .nameTooLongToStore: return L10n.tr("This name is too long to store: use fewer emoji or symbols.")
             }
         }
 

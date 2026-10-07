@@ -800,7 +800,7 @@ private struct SendAssetRow: View {
     }
 
     private var subtitle: String {
-        return asset.unverified || !asset.plainSymbol || badge.isWarning ? "\(asset.token.name) · \(asset.token.address.short)" : asset.token.name
+        return asset.unverified || !asset.plainSymbol || badge.isWarning ? "\(asset.token.displayName) · \(asset.token.address.short)" : asset.token.displayName
     }
 
     private var valueText: String {

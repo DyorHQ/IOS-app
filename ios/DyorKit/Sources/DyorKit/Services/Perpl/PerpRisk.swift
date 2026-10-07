@@ -279,12 +279,15 @@ public struct PerpUserCloses: Sendable {
     }
 }
 
-/// The words of the app's Perps alerts. A watched (watch-only) wallet's alerts say what happened and never suggest an
-/// action it can't take from DyorHQ.
+/// The words of the app's Perps alerts, in the app's language when they are posted. A watched (watch-only) wallet's
+/// alerts say what happened and never suggest an action it can't take from DyorHQ. Every title and body is one sentence
+/// per side and level, so no English word is put into another language's sentence.
 public enum PerpAlertText {
     /// "BTC-PERP long".
     public static func positionName(asset: String, side: PositionSide) -> String {
-        "\(asset)-PERP \(side == .long ? "long" : "short")"
+        side == .long
+            ? L10n.string(LocalizedStringResource("\(asset)-PERP long", bundle: L10n.kit, comment: "A long position on a Perps market: “BTC-PERP long”."))
+            : L10n.string(LocalizedStringResource("\(asset)-PERP short", bundle: L10n.kit, comment: "A short position on a Perps market: “BTC-PERP short”."))
     }
 
     /// The title and body of a margin warning. `canAct` is false for a watched wallet.
@@ -295,38 +298,62 @@ public enum PerpAlertText {
         let used = usageText(notice.usage)
         let act: String
         switch (notice.level, canAct) {
-        case (_, false): act = "You're watching this wallet: DyorHQ can't change its positions."
-        case (.critical, true): act = "Add margin or reduce the position now."
-        default: act = "Add margin or reduce the position on Perps to stay clear of it."
+        case (_, false): act = L10n.tr("You're watching this wallet: DyorHQ can't change its positions.")
+        case (.critical, true): act = L10n.tr("Add margin or reduce the position now.")
+        default: act = L10n.tr("Add margin or reduce the position on Perps to stay clear of it.")
         }
+        // All of its margin in use is a sentence of its own: "All" alone in the percent's place reads wrong in many languages.
+        let all = usageIsAll(notice.usage)
         switch notice.level {
         case .critical:
-            return ("Liquidation risk: \(name)", "\(used) of its margin is in use, and Perpl liquidates at 100%. Mark \(mark), liquidation \(liquidation). \(act)")
+            let body = all
+                ? L10n.string(LocalizedStringResource("All of its margin is in use, and Perpl liquidates at 100%. Mark \(mark), liquidation \(liquidation). \(act)", bundle: L10n.kit, comment:
+                    "A margin alert when all of a position's margin is in use. The values: the mark price, the liquidation price, then what to do, a sentence of its own."))
+                : L10n.string(LocalizedStringResource("\(used) of its margin is in use, and Perpl liquidates at 100%. Mark \(mark), liquidation \(liquidation). \(act)", bundle: L10n.kit, comment:
+                    "A margin alert. The values: the margin in use (“85%”), the mark price, the liquidation price, then what to do, a sentence of its own."))
+            return (L10n.tr("Liquidation risk: \(name)"), body)
         case .warning:
-            return ("Margin warning: \(name)", "\(used) of its margin is in use. Mark \(mark), liquidation \(liquidation). \(act)")
+            let body = all
+                ? L10n.string(LocalizedStringResource("All of its margin is in use. Mark \(mark), liquidation \(liquidation). \(act)", bundle: L10n.kit, comment:
+                    "A margin alert when all of a position's margin is in use. The values: the mark price, the liquidation price, then what to do, a sentence of its own."))
+                : L10n.string(LocalizedStringResource("\(used) of its margin is in use. Mark \(mark), liquidation \(liquidation). \(act)", bundle: L10n.kit, comment:
+                    "A margin alert. The values: the margin in use (“85%”), the mark price, the liquidation price, then what to do, a sentence of its own."))
+            return (L10n.tr("Margin warning: \(name)"), body)
         case .nearLiquidation, .normal:
-            return ("Near liquidation: \(name)", "The mark, \(mark), is within 10% of the liquidation price, \(liquidation). \(act)")
+            return (L10n.tr("Near liquidation: \(name)"),
+                    L10n.string(LocalizedStringResource("The mark, \(mark), is within 10% of the liquidation price, \(liquidation). \(act)", bundle: L10n.kit,
+                        comment: "A margin alert. The values: the mark price, the liquidation price, then what to do, a sentence of its own.")))
         }
     }
+
+    /// Whether a margin usage reads as all of it (`usageText`'s "All"): equity is gone, or the reading is past 1,000%.
+    static func usageIsAll(_ usage: Double) -> Bool { !(usage.isFinite && usage < 10) }
 
     /// Margin usage as an alert says it: a whole percent, rounded down, or "All" once equity is gone or the reading is past
     /// 1,000% (equity next to nothing), so no reading, however large, can overflow the conversion to a whole number.
     public static func usageText(_ usage: Double) -> String {
-        guard usage.isFinite, usage < 10 else { return "All" }
+        guard !usageIsAll(usage) else {
+            return L10n.string(LocalizedStringResource("All", bundle: L10n.kit, comment: "[tight] All of something: every swap, as a history window, or all of a position's margin in use."))
+        }
+        // not localized: a number and its percent sign
         return "\(Int((max(0, usage) * 100).rounded(.down)))%"
     }
 
     /// The title and body of an ending the watcher posts (`PerpEndingNotice`); nil for `.wait` and `.quiet`.
     public static func ending(_ notice: PerpEndingNotice, position: PerpPosition, asset: String) -> (title: String, body: String)? {
-        let side = position.side == .long ? "long" : "short"
+        let long = position.side == .long
         let size = "\(NumberStyle.number(position.size)) \(asset)"
         switch notice {
         case .wait, .quiet: return nil
         case .closeOrderFilled:
-            return ("Close order filled", "Your \(asset)-PERP \(side) (\(size)) is closed.")
+            return (L10n.string(LocalizedStringResource("Close order filled", bundle: L10n.kit, comment: "A notification's title: an order that closes a position (a close order) was filled (executed).")),
+                    long ? L10n.tr("Your \(asset)-PERP long (\(size)) is closed.") : L10n.tr("Your \(asset)-PERP short (\(size)) is closed."))
         case .closed:
-            return ("\(asset)-PERP \(side) closed",
-                    "Your \(size) \(side) is no longer open, and it wasn't closed from this app. It may have hit a take-profit or stop-loss, been liquidated, or been closed on another device. Trade History shows how.")
+            return long
+                ? (L10n.tr("\(asset)-PERP long closed"),
+                   L10n.tr("Your \(size) long is no longer open, and it wasn't closed from this app. It may have hit a take-profit or stop-loss, been liquidated, or been closed on another device. Trade History shows how."))
+                : (L10n.tr("\(asset)-PERP short closed"),
+                   L10n.tr("Your \(size) short is no longer open, and it wasn't closed from this app. It may have hit a take-profit or stop-loss, been liquidated, or been closed on another device. Trade History shows how."))
         }
     }
 

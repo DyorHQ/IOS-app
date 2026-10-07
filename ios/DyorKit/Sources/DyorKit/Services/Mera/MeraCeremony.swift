@@ -83,7 +83,7 @@ extension Mera {
         /// A second ceremony requested while one is open.
         public struct Busy: LocalizedError, Equatable {
             public init() {}
-            public var errorDescription: String? { "A passkey prompt is already open. Finish or cancel it, then try again." }
+            public var errorDescription: String? { L10n.tr("A passkey prompt is already open. Finish or cancel it, then try again.") }
         }
 
         /// Lets one ceremony run at a time. A request made while another is open fails at once with `Busy`, instead of
@@ -153,6 +153,7 @@ extension Mera {
         }
 
         /// The one text for anything a stub account can't do: the error below, and the Bridge screen's disabled state.
+        // not localized: Simulator test mode only (DEBUG builds), for developers
         public static let unavailableTitle = "Not available in Simulator test mode"
 
         /// A stub account asked for something outside the local fork (`permits`).

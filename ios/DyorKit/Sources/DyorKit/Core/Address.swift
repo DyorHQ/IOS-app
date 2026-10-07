@@ -75,13 +75,13 @@ public struct Address: Hashable, Sendable, Codable, CustomStringConvertible {
     /// address with a correct checksum, or empty (nothing to say yet).
     public static func inputProblem(_ text: String) -> String? {
         guard !text.isEmpty else { return nil }
-        guard text.hasPrefix("0x") || text.hasPrefix("0X") else { return "An address starts with 0x." }
+        guard text.hasPrefix("0x") || text.hasPrefix("0X") else { return L10n.tr("An address starts with 0x.") }
         let body = text.dropFirst(2)
-        if body.contains(where: { $0.isWhitespace }) { return "This address has a space or line break inside it. Copy it again from the source." }
-        if let bad = body.first(where: { !$0.isHexDigit || !$0.isASCII }) { return "“\(bad)” can't be part of an address: it uses only 0–9 and a–f." }
-        guard body.count == 40 else { return "An address has 40 characters after 0x; this one has \(body.count)." }
+        if body.contains(where: { $0.isWhitespace }) { return L10n.tr("This address has a space or line break inside it. Copy it again from the source.") }
+        if let bad = body.first(where: { !$0.isHexDigit || !$0.isASCII }) { return L10n.tr("“\(String(bad))” can't be part of an address: it uses only 0–9 and a–f.") }
+        guard body.count == 40 else { return L10n.tr("An address has 40 characters after 0x; this one has \(String(body.count)).") }
         guard hasValidChecksum(text) else {
-            return "This address's capital letters don't match its checksum, so it may contain a typo. Copy it again from the source."
+            return L10n.tr("This address's capital letters don't match its checksum, so it may contain a typo. Copy it again from the source.")
         }
         return nil
     }

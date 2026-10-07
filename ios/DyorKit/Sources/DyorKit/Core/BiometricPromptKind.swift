@@ -37,7 +37,7 @@ public enum BiometricPromptKind: Sendable, CaseIterable {
         case .faceID: "Face ID" // not localized: Apple's name
         case .touchID: "Touch ID" // not localized: Apple's name
         case .opticID: "Optic ID" // not localized: Apple's name
-        case .passcode: L10n.tr("Passcode", comment: "The device passcode, named where a passkey or App Lock asks for it: “Confirm with Passcode”.")
+        case .passcode: L10n.string(LocalizedStringResource("Passcode", bundle: L10n.kit, comment: "The device passcode, named where a passkey or App Lock asks for it: “Confirm with Passcode”."))
         }
     }
 }

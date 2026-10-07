@@ -43,11 +43,14 @@ public struct PerplFill: Identifiable, Sendable, Hashable {
         let side: OrderSide = (typeRaw == 1 || typeRaw == 4) ? .buy : .sell
         let direction: String
         switch typeRaw {
-        case 1: direction = "Open Long"
-        case 2: direction = "Open Short"
-        case 3: direction = "Close Long"
-        case 4: direction = "Close Short"
-        default: direction = side == .buy ? "Buy" : "Sell"
+        case 1: direction = L10n.string(LocalizedStringResource("Open Long", bundle: L10n.kit, comment: "[tight] A Perps fill: it opened or added to a long position."))
+        case 2: direction = L10n.string(LocalizedStringResource("Open Short", bundle: L10n.kit, comment: "[tight] A Perps fill: it opened or added to a short position."))
+        case 3: direction = L10n.string(LocalizedStringResource("Close Long", bundle: L10n.kit, comment: "[tight] A Perps fill: it closed or reduced a long position."))
+        case 4: direction = L10n.string(LocalizedStringResource("Close Short", bundle: L10n.kit, comment: "[tight] A Perps fill: it closed or reduced a short position."))
+        default:
+            direction = side == .buy
+                ? L10n.string(LocalizedStringResource("Buy", bundle: L10n.kit, comment: "[tight] A Perps fill that bought."))
+                : L10n.string(LocalizedStringResource("Sell", bundle: L10n.kit, comment: "[tight] A Perps fill that sold."))
         }
         let priceScaled = (j["p"] as? NSNumber)?.doubleValue ?? 0
         let sizeScaled = (j["s"] as? NSNumber)?.doubleValue ?? 0

@@ -9,9 +9,10 @@ import Foundation
 /// first. The wallet's own coins reach it as chosen ones (`WalletHoldings.ownCoins`, marked chosen by Home, the
 /// Portfolio and the Send sheet).
 public enum TokenPickerList {
-    /// Whether `token`'s symbol or name holds `query`, ignoring case; every token matches an empty query.
+    /// Whether `token`'s symbol or name, as the picker shows it (`displayName`), holds `query`, ignoring case; every token
+    /// matches an empty query.
     public static func matches(_ token: Token, query: String) -> Bool {
-        query.isEmpty || token.symbol.localizedCaseInsensitiveContains(query) || token.name.localizedCaseInsensitiveContains(query)
+        query.isEmpty || token.symbol.localizedCaseInsensitiveContains(query) || token.displayName.localizedCaseInsensitiveContains(query)
     }
 
     /// The main list: the tokens of `universe` that match `query`, none of them received (`unverified`), and, when a swap

@@ -25,23 +25,23 @@ public enum PerplEnrollmentError: Error, LocalizedError, Equatable {
     case digestMismatch
 
     public var errorDescription: String? {
-        "DyorHQ refused to sign Perpl's trading-key request because \(reason). Nothing was signed. Try again later."
+        L10n.tr("DyorHQ refused to sign Perpl's trading-key request because \(reason). Nothing was signed. Try again later.")
     }
 
     private var reason: String {
         switch self {
-        case .wrongChain: return "it is for a different network"
-        case .wrongDomain(let field): return "its signing domain is not Perpl's (\(field))"
-        case .disallowedType: return "it is not an API-key registration"
-        case .wrongTypes: return "its fields are not an API-key registration's"
-        case .foreignSigner: return "it names a different wallet"
-        case .foreignKey: return "it registers a key this device did not create"
-        case .wrongScope: return "it asks for permissions the app did not request"
-        case .builderFee: return "it adds a builder fee you never agreed to"
-        case .unexpectedTerms(let field): return "it changes the key's terms (\(field))"
-        case .stale: return "it is expired or this device's clock is off"
-        case .unexpectedShape(let what): return "it is malformed (\(what))"
-        case .digestMismatch: return "its hash does not match its contents"
+        case .wrongChain: return L10n.string(LocalizedStringResource("it is for a different network", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"))
+        case .wrongDomain(let field): return L10n.string(LocalizedStringResource("its signing domain is not Perpl's (\(field))", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.” The value is a field of the request, in English."))
+        case .disallowedType: return L10n.string(LocalizedStringResource("it is not an API-key registration", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"))
+        case .wrongTypes: return L10n.string(LocalizedStringResource("its fields are not an API-key registration's", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"))
+        case .foreignSigner: return L10n.string(LocalizedStringResource("it names a different wallet", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"))
+        case .foreignKey: return L10n.string(LocalizedStringResource("it registers a key this device did not create", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"))
+        case .wrongScope: return L10n.string(LocalizedStringResource("it asks for permissions the app did not request", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"))
+        case .builderFee: return L10n.string(LocalizedStringResource("it adds a builder fee you never agreed to", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"))
+        case .unexpectedTerms(let field): return L10n.string(LocalizedStringResource("it changes the key's terms (\(field))", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.” The value is a term of the request, in English."))
+        case .stale: return L10n.string(LocalizedStringResource("it is expired or this device's clock is off", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"))
+        case .unexpectedShape(let what): return L10n.string(LocalizedStringResource("it is malformed (\(what))", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.” The value names the part of the request, in English."))
+        case .digestMismatch: return L10n.string(LocalizedStringResource("its hash does not match its contents", bundle: L10n.kit, comment: "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"))
         }
     }
 }
@@ -58,6 +58,7 @@ public enum PerplEnrollment {
     /// not the Exchange. Pinned, so the signature can never be replayed to a contract that verifies EIP-712.
     public static let verifyingContract = Address.zero
     /// The non-builder statement. A builder-bound key carries a different one naming the builder and its fee.
+    // not localized: the statement Perpl's request carries, compared with it as it is
     public static let statement = "I authorize the creation of Perpl API key with the specified scope and parameters"
     /// How far the payload's issue `time` may sit from this device's clock, either way. The payload is validated the
     /// moment it arrives, so anything older is a replay (or a badly wrong clock).
@@ -97,6 +98,8 @@ public enum PerplEnrollment {
     /// allow-list and no builder code — and returns the digest to sign. Throws `PerplEnrollmentError` on any deviation.
     public static func validate(_ json: [String: Any], chainId: Int, address: String, publicKeyHex: String, scopeMask: Int,
                                 label: String, now: Date = Date()) throws -> Validated {
+        // not localized: the parts a refusal names ("salt", "IP allow-list", "message fields") are the request's own,
+        // in English inside the translated sentence, as its translator comments say
         try requireKeys(json, ["types", "primaryType", "domain", "message"], "typed data")
         guard let primary = json["primaryType"] as? String, allowedPrimaryTypes.contains(primary) else {
             throw PerplEnrollmentError.disallowedType

@@ -10,7 +10,7 @@ public struct TokenActivity: Identifiable, Sendable, Hashable {
     public let amount: BigUInt
     public let blockNumber: UInt64
     public let time: Date
-    public var id: String { "\(hash.hexString)-\(direction == .incoming ? "in" : "out")" }
+    public var id: String { "\(hash.hexString)-\(direction == .incoming ? "in" : "out")" } // not localized: an identifier
 }
 
 /// Reads a wallet's recent transfers of a specific token by scanning `Transfer(address,address,uint256)` logs where

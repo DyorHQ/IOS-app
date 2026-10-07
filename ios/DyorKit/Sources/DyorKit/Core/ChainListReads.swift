@@ -4,6 +4,7 @@ import Foundation
 /// symbol and provenance — as the app reads it into a list.
 public enum ChainText {
     /// What a name or symbol shows when its read failed: the same U+FFFD that stands for bytes that aren't text.
+    // not localized: a symbol, the replacement character, in every language
     public static let unreadable = "\u{FFFD}"
 }
 
@@ -11,12 +12,24 @@ public enum ChainText {
 /// be there wasn't, as when the read reached a node a block behind the one that listed the item. Shown as the error it
 /// is, with Retry, never as a shorter list or a missing item.
 public struct ChainListUnread: Error, LocalizedError, Equatable, Sendable {
-    /// What wasn't read, for the message ("A launch", "A Moment").
-    public let what: String
+    /// What wasn't read: each one is a whole sentence of its own, so it reads right in every language.
+    public enum Item: Sendable, Equatable {
+        case launch, moment, thisMoment, momentName, dyorCoin
+    }
 
-    public init(_ what: String) { self.what = what }
+    public let what: Item
 
-    public var errorDescription: String? { "\(what) couldn't be read from the chain just now. Try again." }
+    public init(_ what: Item) { self.what = what }
+
+    public var errorDescription: String? {
+        switch what {
+        case .launch: return L10n.tr("A launch couldn't be read from the chain just now. Try again.")
+        case .moment: return L10n.tr("A Moment couldn't be read from the chain just now. Try again.")
+        case .thisMoment: return L10n.tr("This Moment couldn't be read from the chain just now. Try again.")
+        case .momentName: return L10n.tr("A Moment's name couldn't be read from the chain just now. Try again.")
+        case .dyorCoin: return L10n.tr("A DyorHQ coin couldn't be read from the chain just now. Try again.")
+        }
+    }
 }
 
 public extension Multicall {
@@ -48,7 +61,7 @@ public extension Multicall {
     /// time, as many at a time; an item whose read still fails is read once more without its text, which then shows
     /// stand-ins. Any other error (no answer, throttling that outlasted the client's retries) throws: it would fail item
     /// by item too.
-    func readItems(_ items: [[ContractCall]], text: Set<Int>, what: String, chunk: Int = textChunk) async throws -> [[Result<[ABIValue], Error>]] {
+    func readItems(_ items: [[ContractCall]], text: Set<Int>, what: ChainListUnread.Item, chunk: Int = textChunk) async throws -> [[Result<[ABIValue], Error>]] {
         guard !items.isEmpty else { return [] }
         let size = max(1, chunk)
         let groups = stride(from: 0, to: items.count, by: size).map { $0 ..< min($0 + size, items.count) }
@@ -102,7 +115,7 @@ public extension Multicall {
 
     /// One item of `readItems`, on its own: all its calls, or, when that read is refused as a whole or a protocol call
     /// in it fails, its protocol calls alone, its text standing in as unread. Throws when its protocol values can't be read.
-    private func readAlone(_ calls: [ContractCall], text: Set<Int>, what: String) async throws -> [Result<[ABIValue], Error>] {
+    private func readAlone(_ calls: [ContractCall], text: Set<Int>, what: ChainListUnread.Item) async throws -> [Result<[ABIValue], Error>] {
         do {
             let slice = try await read(calls)
             if slice.indices.allSatisfy({ text.contains($0) || Self.succeeded(slice[$0]) }) { return slice }

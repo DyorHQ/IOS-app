@@ -27,27 +27,28 @@ actor KuruFlowClient {
             "slippageTolerance": .number(Double(min(10_000, max(1, req.slippageBps)))),
         ]))
         let (data, status) = try await post(body, user: user, retry: true)
-        if status == 429 { throw SwapError.venue("Kuru Flow rate limit reached. Retrying on the next refresh.") }
+        if status == 429 { throw SwapError.venue(L10n.tr("Kuru Flow rate limit reached. Retrying on the next refresh.")) }
         let json = (try? JSONDecoder().decode(JSON.self, from: data)) ?? .object([:])
         guard (200..<300).contains(status) else {
-            throw SwapError.venue(Self.text(json["message"]) ?? Self.text(json["error"]) ?? "Kuru Flow returned \(status).")
+            // not localized: Kuru's own message, shown as it sends it
+            throw SwapError.venue(Self.text(json["message"]) ?? Self.text(json["error"]) ?? L10n.tr("Kuru Flow returned \(String(status))."))
         }
         let transaction = json["transaction"]
         guard json["status"].string == "success", transaction.object != nil, let amountOut = Self.quantity(json["output"]) else {
-            throw SwapError.venue(Self.text(json["message"]) ?? "Kuru Flow could not route this trade.")
+            throw SwapError.venue(Self.text(json["message"]) ?? L10n.tr("Kuru Flow could not route this trade."))
         }
         if amountOut == 0 { return nil }
-        guard let to = transaction["to"].string.flatMap({ Address($0) }) else { throw SwapError.venue("Kuru Flow returned an invalid transaction.") }
+        guard let to = transaction["to"].string.flatMap({ Address($0) }) else { throw SwapError.venue(L10n.tr("Kuru Flow returned an invalid transaction.")) }
         // The calldata may come without the 0x prefix.
         var calldataHex = transaction["calldata"].string ?? ""
         if !calldataHex.hasPrefix("0x") { calldataHex = "0x" + calldataHex }
-        guard let calldata = Data(hex: calldataHex) else { throw SwapError.venue("Kuru Flow returned an invalid transaction.") }
+        guard let calldata = Data(hex: calldataHex) else { throw SwapError.venue(L10n.tr("Kuru Flow returned an invalid transaction.")) }
         // Never approve or call a contract the API chose: the only acceptable target is Kuru Flow's entrypoint (verified
         // live — native and ERC-20 routes both go through it), and the value must be exactly the input for a native
         // swap and zero otherwise. A compromised or spoofed API could otherwise point the approval at a drainer.
         let value = Self.quantity(transaction["value"]) ?? 0
         guard to == Kuru.entrypoint, value == (req.tokenIn.isNative ? req.amountIn : 0) else {
-            throw SwapError.venue("Kuru Flow returned an unexpected transaction, so it was blocked for your safety.")
+            throw SwapError.venue(L10n.tr("Kuru Flow returned an unexpected transaction, so it was blocked for your safety."))
         }
         // Kuru chooses the route, so an ordinary pair could still hop through a retired cohort's coin or pool.
         try SwapEngine.ensureNoRetired(in: calldata)
@@ -62,18 +63,18 @@ actor KuruFlowClient {
               swap.tokenIn == (req.tokenIn.isNative ? Address.zero : req.tokenIn.address),
               swap.tokenOut == (req.tokenOut.isNative ? Address.zero : req.tokenOut.address),
               swap.amountIn == req.amountIn, swap.minAmountOut >= SwapMath.minAfterSlippage(amountOut, bps: slippage), swap.takesNoFee else {
-            throw SwapError.venue("Kuru Flow returned an unexpected transaction, so it was blocked for your safety.")
+            throw SwapError.venue(L10n.tr("Kuru Flow returned an unexpected transaction, so it was blocked for your safety."))
         }
         let minOut = swap.minAmountOut
         let tx = TransactionRequest(to: to, data: calldata, value: value)
         let inToken = req.tokenIn
         let amountIn = req.amountIn
 
-        return VenueQuote(venue: .kuru, amountOut: amountOut, minOut: minOut, route: "Aggregated across Kuru order books and Monad pools", gasEstimate: nil, priceImpactBps: nil) { account in
+        return VenueQuote(venue: .kuru, amountOut: amountOut, minOut: minOut, route: L10n.tr("Aggregated across Kuru order books and Monad pools"), gasEstimate: nil, priceImpactBps: nil) { account in
             guard account == user else { throw SwapError.differentWallet }
             var steps: [TransactionStep] = []
-            if !inToken.isNative { steps.append(.approve(token: inToken.address, spender: to, amount: amountIn, label: "Approve \(inToken.symbol) for Kuru Flow")) }
-            steps.append(.call(tx, label: "Swap on Kuru Flow"))
+            if !inToken.isNative { steps.append(.approve(token: inToken.address, spender: to, amount: amountIn, label: L10n.tr("Approve \(inToken.symbol) for Kuru Flow"))) }
+            steps.append(.call(tx, label: L10n.string(LocalizedStringResource("Swap on Kuru Flow", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The venue's name is never translated."))))
             return steps
         }
     }
@@ -106,9 +107,9 @@ actor KuruFlowClient {
         request.httpBody = try JSONEncoder().encode(JSON.object(["user_address": .string(address.checksummed)]))
         request.timeoutInterval = 20
         let (data, status) = try await send(request)
-        guard (200..<300).contains(status) else { throw SwapError.venue("Kuru Flow token request failed (\(status)).") }
+        guard (200..<300).contains(status) else { throw SwapError.venue(L10n.tr("Kuru Flow token request failed (\(String(status))).")) }
         let json = (try? JSONDecoder().decode(JSON.self, from: data)) ?? .null
-        guard let token = Self.text(json["token"]) else { throw SwapError.venue("Kuru Flow did not return an access token.") }
+        guard let token = Self.text(json["token"]) else { throw SwapError.venue(L10n.tr("Kuru Flow did not return an access token.")) }
         let expiresAt = json["expires_at"].number ?? json["expires_at"].string.flatMap(Double.init) ?? (now + 3600)
         credentials[address] = Credential(token: token, expiresAt: expiresAt)
         return token

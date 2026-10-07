@@ -56,15 +56,17 @@ public enum TokenBadge: Hashable, Sendable {
         return WalletHoldings.imitated(by: Token(address: token.address, symbol: coin.symbol, name: coin.name, decimals: token.decimals))
     }
 
-    /// What the badge reads; nil for none.
+    /// What the badge reads, in the app's language; nil for none.
     public var title: String? {
         switch self {
         case .none: return nil
-        case .dyorLaunch: return "DyorHQ Launch"
-        case .dyorMoment: return "DyorHQ Moment"
-        case .unverified: return "Unverified"
-        case .imitates(let listed) where Token.core(listed.address) != nil: return "Not the \(listed.symbol) DyorHQ lists"
-        case .imitates(let major): return "Not the real \(major.symbol)"
+        case .dyorLaunch: return L10n.string(LocalizedStringResource("DyorHQ Launch", bundle: L10n.kit, comment: "[tight] A coin's badge: launched on the DyorHQ launchpad. DyorHQ is never translated."))
+        case .dyorMoment: return L10n.string(LocalizedStringResource("DyorHQ Moment", bundle: L10n.kit, comment: "[tight] A coin's badge: the coin of a DyorHQ Moment. DyorHQ is never translated."))
+        case .unverified: return L10n.string(LocalizedStringResource("Unverified", bundle: L10n.kit, comment: "[tight] A warning badge on a token the app can't vouch for."))
+        case .imitates(let listed) where Token.core(listed.address) != nil:
+            return L10n.string(LocalizedStringResource("Not the \(listed.symbol) DyorHQ lists", bundle: L10n.kit, comment: "[tight] A warning badge on a look-alike: the value is the symbol of the token DyorHQ lists (USDC)."))
+        case .imitates(let major):
+            return L10n.string(LocalizedStringResource("Not the real \(major.symbol)", bundle: L10n.kit, comment: "[tight] A warning badge on a look-alike: the value is the symbol of a widely traded token (ETH)."))
         }
     }
 

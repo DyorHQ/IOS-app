@@ -455,7 +455,7 @@ private struct TokenListRow: View {
                     // Top Tokens lists no token the wallet was sent unasked (`HomeModel.topTokens`).
                     TokenBadgeView(token: row.token, receivedUnasked: false)
                 }
-                Text(row.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(row.token.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
             USDText(price: row.usd, font: .subheadline.weight(.medium))
@@ -917,7 +917,7 @@ struct TokenDetailView: View {
                 }
             }
             Section("About") {
-                LabeledContent("Name", value: row.token.name)
+                LabeledContent("Name", value: row.token.displayName)
                 if !row.token.isNative { AddressRow(title: "Contract", address: row.token.address) }
                 LabeledContent("Decimals", value: String(row.token.decimals))
             }

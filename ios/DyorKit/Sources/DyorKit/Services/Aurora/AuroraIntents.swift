@@ -104,13 +104,14 @@ public struct AuroraIntents: Sendable {
         do { headers = try await authorize() } catch { throw AuroraError.signInRequired }
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw AuroraError.transport("No response") }
+        guard let http = response as? HTTPURLResponse else { throw AuroraError.transport(L10n.tr("No response")) }
         guard (200..<300).contains(http.statusCode) else {
             // Aurora's own `message`, or the proxy's `error` (bridge not configured, sign-in required, bad route).
             let body = try? JSONDecoder().decode(AuroraErrorBody.self, from: data)
             if http.statusCode == 503 { throw AuroraError.notConfigured }
             if http.statusCode == 401 || http.statusCode == 403 { throw AuroraError.signInRequired }
-            throw AuroraError.api(status: http.statusCode, message: body?.message ?? body?.error ?? "Aurora request failed (\(http.statusCode)).")
+            // not localized: Aurora's own message, shown as it sends it (`BridgeModel.humanize` reads it)
+            throw AuroraError.api(status: http.statusCode, message: body?.message ?? body?.error ?? L10n.tr("Aurora request failed (\(String(http.statusCode)))."))
         }
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw AuroraError.decoding(error.localizedDescription) }
@@ -126,11 +127,11 @@ public enum AuroraError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .notConfigured: return "The bridge is temporarily unavailable. Please try again shortly."
-        case .signInRequired: return "Connect your wallet to DyorHQ to use the bridge."
+        case .notConfigured: return L10n.tr("The bridge is temporarily unavailable. Please try again shortly.")
+        case .signInRequired: return L10n.tr("Connect your wallet to DyorHQ to use the bridge.")
         case .api(_, let message): return message
         case .transport(let m): return m
-        case .decoding(let m): return "Couldn't read Aurora's response: \(m)"
+        case .decoding(let m): return L10n.tr("Couldn't read Aurora's response: \(m)")
         }
     }
 }

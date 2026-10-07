@@ -92,19 +92,19 @@ struct UniswapVenue: Sendable {
             case .v4(let v4):
                 if !nativeIn, exactApprovals {
                     // Exactly the input, to Permit2 and on to the Universal Router, the allowance ending minutes after it's set.
-                    steps.append(.approve(token: inToken.address, spender: Uniswap.permit2, amount: amountIn, label: "Approve \(inToken.symbol) for Permit2"))
+                    steps.append(.approve(token: inToken.address, spender: Uniswap.permit2, amount: amountIn, label: L10n.tr("Approve \(inToken.symbol) for Permit2")))
                     steps.append(.permit2Approve(token: inToken.address, spender: Uniswap.universalRouter, amount: amountIn, lifetime: SwapCalldata.exactPermit2Lifetime,
-                                                 label: "Allow the Universal Router to spend \(inToken.symbol)"))
+                                                 label: L10n.tr("Allow the Universal Router to spend \(inToken.symbol)")))
                 } else if !nativeIn {
-                    steps.append(.approve(token: inToken.address, spender: Uniswap.permit2, amount: SwapCalldata.maxUint160, label: "Approve \(inToken.symbol) for Permit2"))
+                    steps.append(.approve(token: inToken.address, spender: Uniswap.permit2, amount: SwapCalldata.maxUint160, label: L10n.tr("Approve \(inToken.symbol) for Permit2")))
                     if let permit = try await Self.permit2Step(multicall: multicall, owner: account, token: inToken, amount: amountIn) { steps.append(permit) }
                 }
                 let request = try SwapCalldata.universalRouterV4(currencyIn: inToken.address, currencyOut: outAddress, hops: v4.hops, amountIn: amountIn, minOut: minOut, deadline: deadline)
-                steps.append(.call(request, label: "Swap on Uniswap v4"))
+                steps.append(.call(request, label: L10n.string(LocalizedStringResource("Swap on Uniswap v4", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The venue's name is never translated."))))
             case .v3(let candidate):
-                if !nativeIn { steps.append(.approve(token: inToken.address, spender: Uniswap.swapRouter02, amount: amountIn, label: "Approve \(inToken.symbol) for Uniswap")) }
+                if !nativeIn { steps.append(.approve(token: inToken.address, spender: Uniswap.swapRouter02, amount: amountIn, label: L10n.tr("Approve \(inToken.symbol) for Uniswap"))) }
                 let request = try SwapCalldata.swapRouter02(route: candidate.route, amountIn: amountIn, minOut: minOut, account: account, nativeIn: nativeIn, nativeOut: nativeOut, deadline: deadline)
-                steps.append(.call(request, label: "Swap on Uniswap v3"))
+                steps.append(.call(request, label: L10n.string(LocalizedStringResource("Swap on Uniswap v3", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The venue's name is never translated."))))
             }
             return steps
         }
@@ -117,7 +117,7 @@ struct UniswapVenue: Sendable {
         let now = SwapMath.nowSeconds
         if allowance[0].uint >= amount, allowance[1].uint > BigUInt(now + 120) { return nil }
         let data = try SwapCalldata.permit2Approve(token: token.address, spender: Uniswap.universalRouter, amount: amount, expiration: BigUInt(now + 30 * 24 * 3600))
-        return .call(TransactionRequest(to: Uniswap.permit2, data: data), label: "Allow the Universal Router to spend \(token.symbol)")
+        return .call(TransactionRequest(to: Uniswap.permit2, data: data), label: L10n.tr("Allow the Universal Router to spend \(token.symbol)"))
     }
 
     // MARK: v4 routing
@@ -274,9 +274,12 @@ struct UniswapVenue: Sendable {
         }
         let fees = hops.map { hop -> String in
             if hop.key.isHookless { return SwapMath.feeLabel(hop.key.fee) }
-            if let momentsHook, hop.key.hooks == momentsHook { return "moments 1.5%" }
-            return "launchpad"
+            if let momentsHook, hop.key.hooks == momentsHook {
+                return L10n.string(LocalizedStringResource("moments 1.5%", bundle: L10n.kit, comment: "In a swap's route, the fee of a DyorHQ Moment's pool: “v4 · USDC → COIN · moments 1.5%”."))
+            }
+            return L10n.string(LocalizedStringResource("launchpad", bundle: L10n.kit, comment: "In a swap's route, the fee of a DyorHQ launchpad pool: “v4 · USDC → MON → TOKEN · 0.05% + launchpad”."))
         }.joined(separator: " + ")
+        // not localized: the route's own notation, versions, symbols and fees
         return "v4 · \(names.joined(separator: " → ")) · \(fees)"
     }
 }

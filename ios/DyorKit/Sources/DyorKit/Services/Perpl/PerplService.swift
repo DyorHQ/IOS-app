@@ -8,6 +8,7 @@ public actor PerplService {
     /// retired). Symbols are the app's; the contract's own symbol (for example `SOL_v2`) is what `PerpMarket.symbol`
     /// carries, and price / lot decimals are read from `getPerpetualInfo` (LIT 5/1, VVV 4/2, TAO 3/3, PUMP 6/0 on
     /// 2026-09-27). A position in a market missing here is still read (`positions`).
+    // not localized: the markets' names
     public static let markets: [(id: Int, symbol: String, name: String)] = [
         (1, "BTC", "Bitcoin"),
         (10, "MON", "Monad"),
@@ -83,7 +84,7 @@ public actor PerplService {
         if !unlisted.isEmpty {
             let extra = try await self.markets(ids: unlisted)
             guard Set(extra.map(\.id)).isSuperset(of: unlisted) else {
-                throw PerplError.malformedResponse("a position in a market")
+                throw PerplError.malformedResponse(L10n.string(LocalizedStringResource("a position in a market", bundle: L10n.kit, comment: "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”")))
             }
             markets += extra
         }
@@ -94,7 +95,7 @@ public actor PerplService {
             // A slot that can't be read is an error, never a list that silently leaves the position out; only a
             // successful read of an empty slot (zero lot) is skipped.
             guard case .success(let values) = result, let perp = markets.first(where: { $0.id == perpId }) else {
-                throw PerplError.malformedResponse("position \(perpId)")
+                throw PerplError.malformedResponse(L10n.string(LocalizedStringResource("position \(String(perpId))", bundle: L10n.kit, comment: "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.” The value is the market's number.")))
             }
             guard let position = PerplExchange.position(perp: perp, values: values) else { continue }
             out.append(position)
@@ -159,7 +160,7 @@ public actor PerplService {
         do {
             body = try JSONDecoder().decode(ContextResponse.self, from: data)
         } catch {
-            throw PerplError.malformedResponse("market context")
+            throw PerplError.malformedResponse(L10n.string(LocalizedStringResource("market context", bundle: L10n.kit, comment: "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”")))
         }
         return (body.markets ?? []).compactMap { market in
             guard let config = market.config, let state = market.state else { return nil }
@@ -201,7 +202,7 @@ public actor PerplService {
         do { (data, response) = try await session.data(for: request) } catch { throw NetworkError.transport(error) }
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw PerplError.contextUnavailable(status: http.statusCode) }
         let series: CandleSeriesResponse
-        do { series = try JSONDecoder().decode(CandleSeriesResponse.self, from: data) } catch { throw PerplError.malformedResponse("candles") }
+        do { series = try JSONDecoder().decode(CandleSeriesResponse.self, from: data) } catch { throw PerplError.malformedResponse(L10n.string(LocalizedStringResource("candles", bundle: L10n.kit, comment: "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"))) }
         let scale = pow(10.0, Double(priceDecimals))
         return (series.d ?? []).map { candle in
             PerpCandle(
@@ -243,7 +244,7 @@ public actor PerplService {
         let timestamp = String(Int(Date().timeIntervalSince1970 * 1000))
         let nonce = PerplAuth.base64url(Data((0..<16).map { _ in UInt8.random(in: 0...255) }))
         let data = try await auth.signedGet(target, key: key, timestamp: timestamp, nonce: nonce)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw PerplError.malformedResponse("history page") }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw PerplError.malformedResponse(L10n.string(LocalizedStringResource("history page", bundle: L10n.kit, comment: "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"))) }
         let rows = json["d"] as? [[String: Any]] ?? []
         let np = json["np"] as? String
         return (rows, (np?.isEmpty == false) ? np : nil)
@@ -257,27 +258,32 @@ public actor PerplService {
         let signature = hasAccount ? PerplExchange.Signature.depositCollateral : PerplExchange.Signature.createAccount
         let request = TransactionRequest(to: PerplExchange.address, data: PerplExchange.calldata(signature, [.uint(amountCNS)]))
         return [
-            .approve(token: Perpl.collateral, spender: Perpl.exchange, amount: amountCNS, label: "Approve AUSD"),
-            .call(request, label: hasAccount ? "Deposit AUSD" : "Open Perpl account"),
+            .approve(token: Perpl.collateral, spender: Perpl.exchange, amount: amountCNS, label: L10n.tr("Approve AUSD")),
+            .call(request, label: hasAccount ? L10n.string(LocalizedStringResource("Deposit AUSD", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent.")) : L10n.string(LocalizedStringResource("Open Perpl account", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. It opens (creates) a trading account on Perpl with a first deposit."))),
         ]
     }
 
     public nonisolated func withdrawPlan(amountCNS: BigUInt) -> [TransactionStep] {
         let request = TransactionRequest(to: PerplExchange.address, data: PerplExchange.calldata(PerplExchange.Signature.withdrawCollateral, [.uint(amountCNS)]))
-        return [.call(request, label: "Withdraw AUSD")]
+        return [.call(request, label: L10n.tr("Withdraw AUSD"))]
     }
 
     /// `execOrders([desc], revertOnFail: true)` for one order.
     public nonisolated func orderPlan(_ input: OrderInput) -> [TransactionStep] {
         let data = PerplExchange.execOrdersCalldata([Self.buildOrderDesc(input)], revertOnFail: true)
-        let verb = input.reduceOnly ? "Close" : input.side == .long ? "Long" : "Short"
-        return [.call(TransactionRequest(to: PerplExchange.address, data: data), label: "\(verb) \(input.market.symbol)")]
+        let symbol = input.market.symbol
+        let label = input.reduceOnly
+            ? L10n.string(LocalizedStringResource("Close \(symbol)", bundle: L10n.kit, comment: "A transaction step: close the position on a Perps market (BTC-PERP)."))
+            : input.side == .long
+            ? L10n.string(LocalizedStringResource("Long \(symbol)", bundle: L10n.kit, comment: "A transaction step: open or add to a long (buy) position on a Perps market (BTC-PERP)."))
+            : L10n.string(LocalizedStringResource("Short \(symbol)", bundle: L10n.kit, comment: "A transaction step: open or add to a short (sell) position on a Perps market (BTC-PERP)."))
+        return [.call(TransactionRequest(to: PerplExchange.address, data: data), label: label)]
     }
 
     public nonisolated func cancelPlan(perpId: Int, orderId: Int) -> [TransactionStep] {
         let desc = PerplExchange.cancelDesc(perpId: perpId, orderId: orderId, descId: BigUInt(OrderDescIDs.shared.next()))
         let data = PerplExchange.execOrdersCalldata([desc], revertOnFail: true)
-        return [.call(TransactionRequest(to: PerplExchange.address, data: data), label: "Cancel order")]
+        return [.call(TransactionRequest(to: PerplExchange.address, data: data), label: L10n.string(LocalizedStringResource("Cancel order", bundle: L10n.kit, comment: "A transaction step: cancel a resting order on Perpl.")))]
     }
 
     /// Closes a position with a reduce-only order on the opposite side. Defaults to a market close; pass
@@ -298,7 +304,7 @@ public actor PerplService {
     public nonisolated func addMarginPlan(market: PerpMarket, amount: Double) -> [TransactionStep] {
         let desc = PerplExchange.addMarginDesc(perpId: market.id, amountCNS: PerplExchange.toCNS(amount), descId: BigUInt(OrderDescIDs.shared.next()))
         let data = PerplExchange.execOrdersCalldata([desc], revertOnFail: true)
-        return [.call(TransactionRequest(to: PerplExchange.address, data: data), label: "Add \(NumberStyle.number(amount, maximumFractionDigits: 2)) AUSD margin")]
+        return [.call(TransactionRequest(to: PerplExchange.address, data: data), label: L10n.tr("Add \(NumberStyle.number(amount, maximumFractionDigits: 2)) AUSD margin"))]
     }
 
     // MARK: Pure helpers

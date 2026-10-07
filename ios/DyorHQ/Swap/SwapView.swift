@@ -297,7 +297,7 @@ struct SwapView: View {
                         Text(token.symbol).font(.headline)
                         TokenBadgeView(token: token, receivedUnasked: KnownTokenStore.isUnverified(token.address, owner: session.address))
                     }
-                    Text(token.name).font(.footnote).foregroundStyle(.secondary)
+                    Text(token.displayName).font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
@@ -855,7 +855,7 @@ struct TokenPickerSheet: View {
                         TokenBadgeView(token: token, receivedUnasked: unverified.contains(token.address))
                     }
                     // Only Home's search lists a retired coin; its page has no swap either.
-                    (SwapEngine.isTradable(token) ? Text(verbatim: token.name) : Text("Past cohort · trading closed")).font(.footnote).foregroundStyle(.secondary)
+                    (SwapEngine.isTradable(token) ? Text(verbatim: token.displayName) : Text("Past cohort · trading closed")).font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if let balance = balances[token.address], balance > 0 {
