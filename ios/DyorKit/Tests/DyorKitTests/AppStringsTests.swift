@@ -348,12 +348,13 @@ final class AppStringsTests: XCTestCase {
 
     /// A short key whose meaning depends on where it stands carries a translator comment there: "All" sources or all
     /// notifications, "Close" a screen (and elsewhere a position), "Watch" an address, "To" an address, a status ("Locked",
-    /// "Enrolled", "Ready", "Error", "Now"); a label in a tight place (the menu, the switches, the chips, the statuses)
-    /// says "[tight]". English is unchanged: a comment is only for the translator.
+    /// "Enrolled", "Ready", "Error", "Now"), "System" and the import's "Type"; a label in a tight place (the menu, the
+    /// switches, the chips, the statuses) says "[tight]". English is unchanged: a comment is only for the translator.
     func testAmbiguousKeysCarryTheirComments() throws {
         let bare = [#"chip("All""#, #"Text("All")"#, #".accessibilityLabel("Close")"#, #"Button("Watch")"#, #"Text("To")"#,
                     #"LabeledContent("Session")"#, #"LabeledContent("Sign-in""#, #"Text("Locked")"#, #"Text("Enrolled")"#,
-                    #"Text("Now")"#, #"Text("Ready")"#, #"Text("Error")"#]
+                    #"Text("Now")"#, #"Text("Ready")"#, #"Text("Error")"#, #"Text("System")"#, #"LocalizedStringResource("System")"#,
+                    #"Picker("Type""#]
         var tight = 0
         for (path, text) in try Self.sources() {
             for occurrence in bare { XCTAssertFalse(text.contains(occurrence), "\(path): \(occurrence) without its comment") }
@@ -379,7 +380,12 @@ final class AppStringsTests: XCTestCase {
     /// A key is one translation wherever it stands, so a key used in several places carries one comment, the same at
     /// every place that writes one, and it names each use; a use with another meaning gets a key of its own.
     func testASharedKeyHasOneCommentForEveryUse() throws {
-        let shared: [(key: String, names: [String])] = [("Swap", ["(a verb)"])]
+        let shared: [(key: String, names: [String])] = [
+            ("Swap", ["(a verb)"]),
+            ("System", ["Appearance", "light or dark", "Language", "its language"]), // Appearance, the Language screen and menu
+            ("Now", ["side menu", "TP/SL sheet"]), // the menu's badge; Perps' row of the trigger set now
+            ("Type", ["Import Wallet", "order's type"]), // Import Wallet's switch; Perps' order type
+        ]
         let app = try FormattedTextIsolationTests.appSources().map(\.text).joined(separator: "\n")
         for (key, names) in shared {
             let site = try NSRegularExpression(pattern: #"(?:LocalizedStringResource|Text)\(""# + NSRegularExpression.escapedPattern(for: key) + #"", comment: "((?:[^"\\]|\\.)*)""#)

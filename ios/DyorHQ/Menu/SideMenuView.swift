@@ -160,7 +160,8 @@ private struct MenuRow: View {
                 }
                 Spacer()
                 if isCurrent {
-                    Text("Now", comment: "Marks the menu's section on screen now [tight]").font(.caption2.weight(.bold)).foregroundStyle(Color.brand)
+                    Text("Now", comment: "What is current: the side menu's badge on the section on screen now, and in the TP/SL sheet the label of the trigger set now [tight]")
+                        .font(.caption2.weight(.bold)).foregroundStyle(Color.brand)
                         .padding(.horizontal, 7).padding(.vertical, 3).background(Color.brand.opacity(0.12), in: Capsule())
                 }
                 Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)

@@ -33,8 +33,10 @@ struct ImportWalletView: View {
     var body: some View {
         List {
             Section {
-                Picker("Type", selection: $kind) {
+                Picker(selection: $kind) {
                     ForEach(Kind.allCases) { $0.title.tag($0) }
+                } label: {
+                    Text("Type", comment: "Which kind it is: on Import Wallet a recovery phrase or a private key, in Perps an order's type (market or limit)")
                 }
                 .pickerStyle(.segmented)
             }

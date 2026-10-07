@@ -387,7 +387,7 @@ struct LanguageView: View {
             Section {
                 row(.system) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("System")
+                        Text("System", comment: "Follows the device's own setting: on Appearance its light or dark look, on the Language screen and menu its language [tight]")
                         Text("Uses your device language (\(language.deviceLanguageName))")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -432,7 +432,8 @@ struct LanguageMenu: View {
     var body: some View {
         Menu {
             Picker("Language", selection: Binding(get: { language.choice }, set: { language.select($0) })) {
-                Text("System").tag(LanguageChoice.system)
+                Text("System", comment: "Follows the device's own setting: on Appearance its light or dark look, on the Language screen and menu its language [tight]")
+                    .tag(LanguageChoice.system)
                 ForEach(language.available) { option in
                     Text(verbatim: option.endonym).tag(LanguageChoice.language(option))
                 }
