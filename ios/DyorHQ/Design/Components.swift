@@ -648,8 +648,10 @@ extension View {
 func describe(_ error: Error) -> String {
     if let localized = (error as? LocalizedError)?.errorDescription, !localized.isEmpty { return localized }
     switch FailureKind.of(error) {
-    case .cancelled: return tr("Cancelled.")
-    case .offline: return tr("No connection. Check your network and try again.")
+    case .cancelled:
+        return tr(LocalizedStringResource("Cancelled.", comment: "An error message: what was under way was cancelled, by the person or by iOS (a request, a Face ID, passcode or passkey prompt). Not an order's status"))
+    case .offline:
+        return tr(LocalizedStringResource("No connection. Check your network and try again.", comment: "An error message: the device is offline, or its connection dropped during the request"))
     case .other: return error.localizedDescription
     }
 }

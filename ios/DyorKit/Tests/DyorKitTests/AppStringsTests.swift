@@ -389,6 +389,7 @@ final class AppStringsTests: XCTestCase {
             ("System", ["Appearance", "light or dark", "Language", "its language"]), // Appearance, the Language screen and menu
             ("Now", ["side menu", "TP/SL sheet"]), // the menu's badge; Perps' row of the trigger set now
             ("Type", ["Import Wallet", "order's type"]), // Import Wallet's switch; Perps' order type
+            ("Cancelled.", ["a request", "passkey prompt"]), // describe(_:); a passkey ceremony's failure
         ]
         let app = try FormattedTextIsolationTests.appSources().map(\.text).joined(separator: "\n")
         for (key, names) in shared {
@@ -439,12 +440,12 @@ final class AppStringsTests: XCTestCase {
     // MARK: Errors
 
     /// `describe(_:)` tells a cancelled request and a lost connection by the error's type and code (`FailureKind`), never
-    /// by matching its English text, and says them in the app's language.
+    /// by matching its English text, and says them in the app's language, each key with a translator comment.
     func testDescribeKnowsFailuresByType() throws {
         let describe = Self.squeezed(try Self.body(of: "func describe(_ error: Error) -> String", in: "Design/Components.swift"))
         XCTAssertTrue(describe.contains("switch FailureKind.of(error) {"))
-        XCTAssertTrue(describe.contains(#"case .cancelled: return tr("Cancelled.")"#))
-        XCTAssertTrue(describe.contains(#"case .offline: return tr("No connection. Check your network and try again.")"#))
+        XCTAssertTrue(describe.contains(#"case .cancelled: return tr(LocalizedStringResource("Cancelled.", comment: "An error message: what was under way was cancelled"#))
+        XCTAssertTrue(describe.contains(#"case .offline: return tr(LocalizedStringResource("No connection. Check your network and try again.", comment: "An error message: the device is offline"#))
         XCTAssertTrue(describe.contains("case .other: return error.localizedDescription"))
         // An error's own description comes first, as before: English reads as it did (an RPC call's lost connection still
         // says iOS's own sentence, through `NetworkError`), and only an error without one is told by its type and code.
