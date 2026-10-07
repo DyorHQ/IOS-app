@@ -568,7 +568,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Une demande de clé d'identification est déjà ouverte. Terminez-la ou annulez-la, puis réessayez."
+            "value" : "Une demande de clé d'accès est déjà ouverte. Terminez-la ou annulez-la, puis réessayez."
           }
         },
         "ko" : {
@@ -2840,7 +2840,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si vous vous êtes connecté avec une clé d'identification d'un autre téléphone, supprimez-la sur ce téléphone."
+            "value" : "Si vous vous êtes connecté avec une clé d'accès d'un autre téléphone, supprimez-la sur ce téléphone."
           }
         },
         "ko" : {
@@ -2868,7 +2868,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si votre clé d'identification se trouve dans 1Password ou une autre app, supprimez-la dans cette app."
+            "value" : "Si votre clé d'accès se trouve dans 1Password ou une autre app, supprimez-la dans cette app."
           }
         },
         "ko" : {
@@ -2897,7 +2897,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si votre clé d'identification se trouve dans le trousseau iCloud, l'app Mots de passe peut la conserver jusqu'à 30 jours dans « Supprimés »."
+            "value" : "Si votre clé d'accès se trouve dans le trousseau iCloud, l'app Mots de passe peut la conserver jusqu'à 30 jours dans « Supprimés »."
           }
         },
         "ko" : {
@@ -2925,7 +2925,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si votre clé d'identification apparaît encore"
+            "value" : "Si votre clé d'accès apparaît encore"
           }
         },
         "ko" : {
@@ -4027,7 +4027,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Il reste une étape : supprimez vous-même la clé d'identification"
+            "value" : "Il reste une étape : supprimez vous-même la clé d'accès"
           }
         },
         "ko" : {
@@ -4255,7 +4255,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ouvrez l'app Mots de passe › Clés d'identification › recherchez « dyorhq » › touchez la clé d'identification DyorHQ › Modifier › Supprimer."
+            "value" : "Ouvrez l'app Mots de passe › Clés d'accès › recherchez « dyorhq » › touchez la clé d'accès DyorHQ › Modifier › Supprimer."
           }
         },
         "ko" : {
@@ -6666,7 +6666,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cette clé d'identification appartient à %1$@, et non à ce compte (%2$@). Rien n'a été supprimé."
+            "value" : "Cette clé d'accès appartient à %1$@, et non à ce compte (%2$@). Rien n'a été supprimé."
           }
         },
         "ko" : {
@@ -7715,7 +7715,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La clé d'identification a renvoyé un résultat que DyorHQ ne peut pas utiliser."
+            "value" : "La clé d'accès a renvoyé un résultat que DyorHQ ne peut pas utiliser."
           }
         },
         "ko" : {
@@ -8052,7 +8052,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le coffre n'a pas pu être ouvert : mauvaise clé d'identification ou données modifiées."
+            "value" : "Le coffre n'a pas pu être ouvert : mauvaise clé d'accès ou données modifiées."
           }
         },
         "ko" : {
@@ -9032,7 +9032,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cette clé d'identification n'a pas encore déverrouillé la clé de trading de DyorHQ. Réessayez pour confirmer avec votre clé d'identification."
+            "value" : "Cette clé d'accès n'a pas encore déverrouillé la clé de trading de DyorHQ. Réessayez pour confirmer avec votre clé d'accès."
           }
         },
         "ko" : {
@@ -10166,7 +10166,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Votre session de clé d'identification a pris fin avant la fin de l'opération. Rien n'a été signé ; réessayez."
+            "value" : "Votre session de clé d'accès a pris fin avant la fin de l'opération. Rien n'a été signé ; réessayez."
           }
         },
         "ko" : {

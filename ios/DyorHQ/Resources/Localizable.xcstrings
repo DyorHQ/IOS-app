@@ -487,7 +487,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La confirmation avec %@ vérifie qu'il s'agit bien de votre clé d'identification, même si votre session est ouverte. Vos données sur le serveur sont d'abord supprimées ; ce n'est qu'ensuite que la clé d'identification est retirée et que ce téléphone est effacé. Cette action est irréversible."
+            "value" : "La confirmation avec %@ vérifie qu'il s'agit bien de votre clé d'accès, même si votre session est ouverte. Vos données sur le serveur sont d'abord supprimées ; ce n'est qu'ensuite que la clé d'accès est retirée et que ce téléphone est effacé. Cette action est irréversible."
           }
         },
         "ko" : {
@@ -4579,7 +4579,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Un compte à clé d'identification se déverrouille avec Face ID ou Touch ID, et le trousseau iCloud conserve sa clé d'identification sur vos autres appareils Apple."
+            "value" : "Un compte à clé d'accès se déverrouille avec Face ID ou Touch ID, et le trousseau iCloud conserve sa clé d'accès sur vos autres appareils Apple."
           }
         },
         "ko" : {
@@ -5150,7 +5150,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajouter une clé d'identification"
+            "value" : "Ajouter une clé d'accès"
           }
         },
         "ko" : {
@@ -5601,7 +5601,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tout reste à l'adresse %@ sur la blockchain, mais sans la clé d'identification ou la phrase de récupération, rien ne peut le déplacer."
+            "value" : "Tout reste à l'adresse %@ sur la blockchain, mais sans la clé d'accès ou la phrase de récupération, rien ne peut le déplacer."
           }
         },
         "ko" : {
@@ -7353,7 +7353,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les routes de bridge se chargent une fois votre session de clé d'identification ouverte."
+            "value" : "Les routes de bridge se chargent une fois votre session de clé d'accès ouverte."
           }
         },
         "ko" : {
@@ -11693,7 +11693,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Confirmez avec votre clé d'identification pour continuer."
+            "value" : "Confirmez avec votre clé d'accès pour continuer."
           }
         },
         "ko" : {
@@ -12984,7 +12984,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Créer une clé d'identification"
+            "value" : "Créer une clé d'accès"
           }
         },
         "ko" : {
@@ -13040,7 +13040,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Créer un compte avec une clé d'identification"
+            "value" : "Créer un compte avec une clé d'accès"
           }
         },
         "ko" : {
@@ -13967,7 +13967,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La suppression retire votre clé d'identification, qui est la seule clé de ce portefeuille. Considérez que c'est définitif, sauf si vous exportez d'abord la phrase de récupération."
+            "value" : "La suppression retire votre clé d'accès, qui est la seule clé de ce portefeuille. Considérez que c'est définitif, sauf si vous exportez d'abord la phrase de récupération."
           }
         },
         "ko" : {
@@ -18677,7 +18677,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "J'ai déjà une clé d'identification"
+            "value" : "J'ai déjà une clé d'accès"
           }
         },
         "ko" : {
@@ -25399,7 +25399,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aucun compte à clé d'identification n'est connecté sur cet appareil."
+            "value" : "Aucun compte à clé d'accès n'est connecté sur cet appareil."
           }
         },
         "ko" : {
@@ -28588,7 +28588,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clé d'identification"
+            "value" : "Clé d'accès"
           }
         },
         "ko" : {
@@ -28616,7 +28616,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clé d'identification (Privy)"
+            "value" : "Clé d'accès (Privy)"
           }
         },
         "ko" : {
@@ -28644,7 +28644,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Session de clé d'identification"
+            "value" : "Session de clé d'accès"
           }
         },
         "ko" : {
@@ -28672,7 +28672,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les comptes à clé d'identification sont créés depuis l'écran de connexion, pas ajoutés ici."
+            "value" : "Les comptes à clé d'accès sont créés depuis l'écran de connexion, pas ajoutés ici."
           }
         },
         "ko" : {
@@ -28700,7 +28700,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clé d'identification ajoutée."
+            "value" : "Clé d'accès ajoutée."
           }
         },
         "ko" : {
@@ -28728,7 +28728,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Session de clé d'identification %@"
+            "value" : "Session de clé d'accès %@"
           }
         },
         "ko" : {
@@ -28756,7 +28756,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Session de clé d'identification verrouillée"
+            "value" : "Session de clé d'accès verrouillée"
           }
         },
         "ko" : {
@@ -28784,7 +28784,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clés d'identification"
+            "value" : "Clés d'accès"
           }
         },
         "ko" : {
@@ -28812,7 +28812,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les clés d'identification ne sont pas activées dans cette version."
+            "value" : "Les clés d'accès ne sont pas activées dans cette version."
           }
         },
         "ko" : {
@@ -28840,7 +28840,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les clés d'identification ne sont pas encore configurées pour DyorHQ sur cet appareil : iOS n'a pas pu confirmer que l'app appartient à accounts.dyorhq.fun. Vérifiez votre connexion et réessayez, ou mettez à jour l'app."
+            "value" : "Les clés d'accès ne sont pas encore configurées pour DyorHQ sur cet appareil : iOS n'a pas pu confirmer que l'app appartient à accounts.dyorhq.fun. Vérifiez votre connexion et réessayez, ou mettez à jour l'app."
           }
         },
         "ko" : {
@@ -28868,7 +28868,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dans cette version, les clés d'identification ouvrent un compte à clé d'identification DyorHQ, et non un compte Privy."
+            "value" : "Dans cette version, les clés d'accès ouvrent un compte à clé d'accès DyorHQ, et non un compte Privy."
           }
         },
         "ko" : {
@@ -32883,7 +32883,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Retire ce compte de cet iPhone. Votre clé d'identification le conserve — reconnectez-vous à tout moment."
+            "value" : "Retire ce compte de cet iPhone. Votre clé d'accès le conserve — reconnectez-vous à tout moment."
           }
         },
         "ko" : {
@@ -35274,7 +35274,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Affichez la phrase de récupération de 24 mots dérivée de votre clé d'identification, pour sauvegarder ce portefeuille ou le restaurer dans un autre portefeuille sans la clé d'identification. Votre clé d'identification est demandée à chaque fois, et la phrase n'est jamais stockée."
+            "value" : "Affichez la phrase de récupération de 24 mots dérivée de votre clé d'accès, pour sauvegarder ce portefeuille ou le restaurer dans un autre portefeuille sans la clé d'accès. Votre clé d'accès est demandée à chaque fois, et la phrase n'est jamais stockée."
           }
         },
         "ko" : {
@@ -35976,7 +35976,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Se connecter avec une clé d'identification"
+            "value" : "Se connecter avec une clé d'accès"
           }
         },
         "ko" : {
@@ -39302,7 +39302,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cette clé d'identification appartient à %1$@, et non à ce compte (%2$@). Déconnectez-vous pour changer de compte."
+            "value" : "Cette clé d'accès appartient à %1$@, et non à ce compte (%2$@). Déconnectez-vous pour changer de compte."
           }
         },
         "ko" : {
@@ -40520,7 +40520,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La demande de clé d'identification n'a pas abouti. Veuillez réessayer."
+            "value" : "La demande de clé d'accès n'a pas abouti. Veuillez réessayer."
           }
         },
         "ko" : {
@@ -40548,7 +40548,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La clé d'identification qui a répondu n'est pas celle utilisée par ce compte."
+            "value" : "La clé d'accès qui a répondu n'est pas celle utilisée par ce compte."
           }
         },
         "ko" : {
@@ -41342,7 +41342,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La copie du compte sur cet iPhone est effacée. Votre clé d'identification conserve le compte et ses fonds ; reconnectez-vous avec elle à tout moment."
+            "value" : "La copie du compte sur cet iPhone est effacée. Votre clé d'accès conserve le compte et ses fonds ; reconnectez-vous avec elle à tout moment."
           }
         },
         "ko" : {
@@ -41662,7 +41662,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ce fournisseur de clés d'identification ne peut pas créer de compte DyorHQ : il ne prend pas en charge la fonctionnalité de clé d'identification dont DyorHQ a besoin (PRF). Utilisez l'app Mots de passe (trousseau iCloud) sur iOS 18 ou version ultérieure."
+            "value" : "Ce fournisseur de clés d'accès ne peut pas créer de compte DyorHQ : il ne prend pas en charge la fonctionnalité de clé d'accès dont DyorHQ a besoin (PRF). Utilisez l'app Mots de passe (trousseau iCloud) sur iOS 18 ou version ultérieure."
           }
         },
         "ko" : {
@@ -41690,7 +41690,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ce fournisseur de clés d'identification n'évalue qu'un seul sel PRF ; les clés de capacité ne sont pas disponibles."
+            "value" : "Ce fournisseur de clés d'accès n'évalue qu'un seul sel PRF ; les clés de capacité ne sont pas disponibles."
           }
         },
         "ko" : {
@@ -42214,7 +42214,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cette clé d'identification de test ne signe que sur le fork Monad local. Le bridge nécessite une vraie clé d'identification sur un appareil."
+            "value" : "Cette clé d'accès de test ne signe que sur le fork Monad local. Le bridge nécessite une vraie clé d'accès sur un appareil."
           }
         },
         "ko" : {
@@ -42410,7 +42410,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ce portefeuille est dérivé de votre clé d'identification à chaque déverrouillage ; sa clé n'est jamais stockée, ni sur cet appareil ni sur un serveur. La même clé d'identification donne le même portefeuille sur n'importe quel appareil."
+            "value" : "Ce portefeuille est dérivé de votre clé d'accès à chaque déverrouillage ; sa clé n'est jamais stockée, ni sur cet appareil ni sur un serveur. La même clé d'accès donne le même portefeuille sur n'importe quel appareil."
           }
         },
         "ko" : {
@@ -47687,7 +47687,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Votre historique Perpl se charge tant que votre session de clé d'identification est déverrouillée."
+            "value" : "Votre historique Perpl se charge tant que votre session de clé d'accès est déverrouillée."
           }
         },
         "ko" : {
@@ -48395,7 +48395,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Votre clé d'identification est le verrou de ce compte : la signature la demande chaque fois que la session est verrouillée, donc le verrouillage de l'app n'ajoute pas de seconde confirmation avec %@."
+            "value" : "Votre clé d'accès est le verrou de ce compte : la signature la demande chaque fois que la session est verrouillée, donc le verrouillage de l'app n'ajoute pas de seconde confirmation avec %@."
           }
         },
         "ko" : {
@@ -48423,7 +48423,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Votre clé d'identification est la clé de ce portefeuille. Ces 24 mots sont un second moyen d'accès : ils restaurent le même portefeuille dans MetaMask, Rabby ou tout portefeuille acceptant une phrase de récupération, même sans votre clé d'identification. Les afficher demande toujours %@, et ils se masquent au bout d'une minute, sauf si vous les gardez affichés."
+            "value" : "Votre clé d'accès est la clé de ce portefeuille. Ces 24 mots sont un second moyen d'accès : ils restaurent le même portefeuille dans MetaMask, Rabby ou tout portefeuille acceptant une phrase de récupération, même sans votre clé d'accès. Les afficher demande toujours %@, et ils se masquent au bout d'une minute, sauf si vous les gardez affichés."
           }
         },
         "ko" : {
@@ -48451,7 +48451,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Votre clé d'identification : DyorHQ demande à votre app de clés d'identification de la supprimer"
+            "value" : "Votre clé d'accès : DyorHQ demande à votre app de clés d'accès de la supprimer"
           }
         },
         "ko" : {
@@ -48617,7 +48617,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Votre clé de trading provient de votre clé d'identification et n'existe que tant que votre session est déverrouillée ; cet appareil ne stocke que son jeton d'accès. Sur un autre iPhone, connectez-vous à nouveau."
+            "value" : "Votre clé de trading provient de votre clé d'accès et n'existe que tant que votre session est déverrouillée ; cet appareil ne stocke que son jeton d'accès. Sur un autre iPhone, connectez-vous à nouveau."
           }
         },
         "ko" : {
@@ -50266,7 +50266,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "une clé d'identification"
+            "value" : "une clé d'accès"
           }
         },
         "ko" : {
@@ -50302,7 +50302,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "une clé d'identification (Privy)"
+            "value" : "une clé d'accès (Privy)"
           }
         },
         "ko" : {
@@ -50418,7 +50418,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "la session de clé d'identification a pris fin avant de pouvoir signer"
+            "value" : "la session de clé d'accès a pris fin avant de pouvoir signer"
           }
         },
         "ko" : {
