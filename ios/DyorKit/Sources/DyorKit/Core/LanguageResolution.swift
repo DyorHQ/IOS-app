@@ -18,7 +18,7 @@ public enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     /// The language's name in itself, as the picker shows it. Never translated.
     public var endonym: String {
         switch self {
-        case .en: return "English"
+        case .en: return "English" // not localized: each language's own name
         case .es: return "Español"
         case .fr: return "Français"
         case .zhHans: return "简体中文"

@@ -20,13 +20,25 @@ public enum L10n {
         set { current.locale = newValue }
     }
 
-    /// DyorKit's text for `value` in the current language, from DyorKit's own catalog.
-    public static func tr(_ value: String.LocalizationValue, comment: StaticString? = nil) -> String {
-        string(LocalizedStringResource(value, bundle: .atURL(bundle.bundleURL), comment: comment))
+    /// DyorKit's text for `value` in the current language, from DyorKit's own catalog. The build copies `value` into the
+    /// catalog as a key. Text that needs a note for its translator is written as a resource instead,
+    /// `string(LocalizedStringResource("Long", bundle: kit, comment: "…"))`: the build copies a resource's comment.
+    public static func tr(_ value: String.LocalizationValue) -> String {
+        string(LocalizedStringResource(value, bundle: kit))
     }
 
-    /// DyorKit's resource bundle, which holds its catalog.
+    /// `tr(value)`: the build copies `value` into the catalog but never a comment passed through a function of ours, so
+    /// the translator would never see it.
+    @available(*, deprecated, message: "the build never copies this comment into the catalog: write string(LocalizedStringResource(value, bundle: kit, comment: …))")
+    public static func tr(_ value: String.LocalizationValue, comment: StaticString?) -> String { tr(value) }
+
+    /// DyorKit's resource bundle, which holds its catalog: `Bundle.module`, the package's own resource bundle, both inside
+    /// the app and under `swift test`.
     static var bundle: Bundle { .module }
+
+    /// DyorKit's catalog as a resource's bundle. Every `LocalizedStringResource` DyorKit writes names it: one without it
+    /// would be looked up in the app's catalog, which never holds DyorKit's text, and always show its English.
+    static var kit: LocalizedStringResource.BundleDescription { .atURL(bundle.bundleURL) }
 
     /// `resource` resolved in the current language (the app's `tr()` passes its own, from the main bundle).
     public static func string(_ resource: LocalizedStringResource) -> String {
