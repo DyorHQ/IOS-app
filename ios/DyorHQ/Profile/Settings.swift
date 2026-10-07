@@ -21,7 +21,11 @@ struct ManageWalletsView: View {
             if let account = session.account {
                 Section {
                     AddressRow(title: "Address", address: account.address)
-                    LabeledContent("Sign-in", value: account.method.title)
+                    LabeledContent {
+                        Text(verbatim: account.method.title)
+                    } label: {
+                        Text("Sign-in", comment: "How this wallet signs in (Apple, Google, Email…), a noun [tight]")
+                    }
                     if let label = account.label { LabeledContent("Account", value: label) }
                 } header: {
                     Text("This Wallet")
@@ -67,7 +71,7 @@ struct ManageWalletsView: View {
                 }
             }
             Section("Network") {
-                LabeledContent("Chain", value: "Monad mainnet")
+                LabeledContent("Chain", value: tr("Monad mainnet"))
                 LabeledContent("Chain ID", value: "143")
                 LabeledContent("RPC", value: env.config.rpcURL.host() ?? "—")
             }
@@ -93,7 +97,8 @@ struct SecurityView: View {
                     Button {
                         busy = true; message = nil
                         Task {
-                            do { try await session.createPasskey(displayName: "DyorHQ"); message = "Passkey added."; isError = false }
+                            // not localized: the passkey's name, the app's
+                            do { try await session.createPasskey(displayName: "DyorHQ"); message = tr("Passkey added."); isError = false }
                             catch { message = describe(error); isError = true }
                             busy = false
                         }
@@ -180,7 +185,7 @@ struct NotificationsView: View {
                     HStack {
                         Label("Manage Price Alerts", systemImage: "bell.badge")
                         Spacer()
-                        Text("\(PriceAlertStore.all(owner: session.address).count)").foregroundStyle(.secondary)
+                        Text(verbatim: "\(PriceAlertStore.all(owner: session.address).count)").foregroundStyle(.secondary)
                     }
                 }
             } header: {
@@ -321,7 +326,7 @@ struct PerplTradingView: View {
                 } message: {
                     // Removing the key cancels nothing (security audit GT-3): say what stays armed where the app can't see it.
                     if liveTriggerCount > 0 {
-                        Text("You have \(liveTriggerCount) take-profit/stop-loss order\(liveTriggerCount == 1 ? "" : "s") live on Perpl. Removing the key doesn't cancel \(liveTriggerCount == 1 ? "it" : "them"): \(liveTriggerCount == 1 ? "it stays" : "they stay") armed, and this device can't show or cancel \(liveTriggerCount == 1 ? "it" : "them") until you connect again.")
+                        Text("You have \(liveTriggerCount) take-profit/stop-loss orders live on Perpl. Removing the key doesn't cancel them: they stay armed, and this device can't show or cancel them until you connect again.")
                     } else {
                         Text("Any take-profit or stop-loss you have on Perpl stays live. This device can't show or cancel them until you connect again.")
                     }
@@ -341,11 +346,11 @@ struct PerplTradingView: View {
     @ViewBuilder private var statusLabel: some View {
         switch trading.status {
         case .notEnrolled: Text("Not connected").foregroundStyle(.secondary)
-        case .enrolled: Text("Enrolled").foregroundStyle(.secondary)
+        case .enrolled: Text("Enrolled", comment: "Perpl trading's status: a trading key is set up, not connected yet [tight]").foregroundStyle(.secondary)
         case .connecting: Text("Connecting…").foregroundStyle(.secondary)
-        case .needsForwarding: Text("Enable one-click").foregroundStyle(Color.attention)
-        case .connected: Text("Ready").foregroundStyle(Color.positive)
-        case .failed: Text("Error").foregroundStyle(Color.attention)
+        case .needsForwarding: Text("Enable one-click", comment: "Perpl trading's status: one-click trading still needs enabling [tight]").foregroundStyle(Color.attention)
+        case .connected: Text("Ready", comment: "Perpl trading's status: connected and ready to trade [tight]").foregroundStyle(Color.positive)
+        case .failed: Text("Error", comment: "Perpl trading's status: the connection failed, a noun [tight]").foregroundStyle(Color.attention)
         }
     }
 
@@ -508,18 +513,21 @@ private struct MeraSessionSection: View {
         let mera = session.mera
         Section {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                LabeledContent("Session") {
+                LabeledContent {
                     if let expiresAt = mera.expiresAt, expiresAt > ctx.date {
                         let left = Int(expiresAt.timeIntervalSince(ctx.date))
-                        Text(String(format: "Unlocked · %02d:%02d left", left / 60, left % 60)).monospacedDigit().foregroundStyle(Color.positive)
+                        let clock = String(format: "%02d:%02d", left / 60, left % 60) // not localized: minutes and seconds
+                        Text("Unlocked · \(clock) left").monospacedDigit().foregroundStyle(Color.positive)
                     } else {
-                        Text("Locked").foregroundStyle(.secondary)
+                        Text("Locked", comment: "The passkey session is locked: signing asks for the passkey [tight]").foregroundStyle(.secondary)
                     }
+                } label: {
+                    Text("Session", comment: "The passkey's signing session, a label [tight]")
                 }
             }
             Picker("Prompt-free for", selection: Binding(get: { Int(mera.sessionLength) }, set: { change(to: TimeInterval($0)) })) {
                 ForEach(Mera.SessionLength.choices, id: \.self) { length in
-                    Text(length >= 3600 ? "1 hour" : "\(Int(length / 60)) minutes").tag(Int(length))
+                    Text(verbatim: Self.lengthText(length)).tag(Int(length))
                 }
             }
             .disabled(changing)
@@ -530,6 +538,11 @@ private struct MeraSessionSection: View {
             if let error { InlineError(message: error) }
             else { Text("Signs without another prompt until the session ends; then \(BiometricGate.promptName) again. A new length applies from the next session, and a longer one needs \(BiometricGate.promptName).") }
         }
+    }
+
+    /// A session length in the app's language's own units ("15 minutes", "1 hour").
+    private static func lengthText(_ length: TimeInterval) -> String {
+        Duration.seconds(Int(length)).formatted(.units(allowed: [.hours, .minutes], width: .wide).locale(L10n.locale))
     }
 
     /// Shorter is immediate; longer asks for the passkey (Face ID) and leaves the live session's end time as it is.

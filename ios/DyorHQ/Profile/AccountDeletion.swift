@@ -14,14 +14,15 @@ enum AccountDeletion {
         /// An Email & Password account's email sign-in at Privy couldn't be deleted; nothing was deleted yet (SB-7).
         case emailSignInNotDeleted(String)
 
+        /// The failure in the app's language; `why` is already in it (the app's text, or a server's known message).
         var errorDescription: String? {
             switch self {
             case .backendSignInNeeded(let why):
-                return "The server verifies it is your wallet before deleting anything, and that sign-in didn't complete: \(why)"
+                return tr("The server verifies it is your wallet before deleting anything, and that sign-in didn't complete: \(why)")
             case .privyNotConfigured:
-                return "Your DyorHQ data was deleted and this iPhone is signed out, but the sign-in account (Privy) could not be: deletion isn't enabled on the server yet. Contact support to finish."
+                return tr("Your DyorHQ data was deleted and this iPhone is signed out, but the sign-in account (Privy) could not be: deletion isn't enabled on the server yet. Contact support to finish.")
             case .emailSignInNotDeleted(let why):
-                return "Nothing was deleted: removing the email sign-in DyorHQ created at Privy didn't work (\(why)). Try again in a few minutes, or contact \(SupportLinks.supportEmail)."
+                return tr("Nothing was deleted: removing the email sign-in DyorHQ created at Privy didn't work (\(why)). Try again in a few minutes, or contact \(SupportLinks.supportEmail).")
             }
         }
     }
@@ -46,7 +47,7 @@ enum AccountDeletion {
             // after the sign-in, so a late upsert can't recreate a row deleted below (RS-8).
             await social.settle()
             if !social.isSignedIn { await social.signIn(session: session) }
-            guard social.isSignedIn else { throw Failure.backendSignInNeeded(social.error ?? "the signature was cancelled") }
+            guard social.isSignedIn else { throw Failure.backendSignInNeeded(social.error ?? tr("the signature was cancelled")) }
             await social.settle()
             // A Privy login's token, fetched fresh before anything is deleted: delete-account takes only one issued in
             // the last 15 minutes, and a failure here leaves everything as it was.
@@ -56,11 +57,11 @@ enum AccountDeletion {
             if let privyToken {
                 do {
                     _ = try await social.client.invoke(function: "delete-account", bearer: privyToken)
-                } catch SupabaseError.http(let code, let body) where code == 500 && body.contains("PRIVY_APP_SECRET") {
+                } catch SupabaseError.http(let code, let body) where code == 500 && body.contains("PRIVY_APP_SECRET") { // not localized: the server's words
                     notice = Failure.privyNotConfigured.localizedDescription
                 } catch {
                     let method = account.method.title
-                    notice = "Your DyorHQ data was deleted and this iPhone is signed out, but your \(method) sign-in account at Privy wasn't deleted (\(describe(error))). To finish, sign in with \(method) again and delete the account once more, or contact \(SupportLinks.supportEmail)."
+                    notice = tr("Your DyorHQ data was deleted and this iPhone is signed out, but your \(method) sign-in account at Privy wasn't deleted (\(describe(error))). To finish, sign in with \(method) again and delete the account once more, or contact \(SupportLinks.supportEmail).")
                 }
             }
             social.signOut()
@@ -89,14 +90,15 @@ enum AccountDeletion {
         guard let token = await social.client.currentSession?.accessToken else { throw SupabaseError.notSignedIn }
         do {
             _ = try await social.client.invoke(function: "delete-account", bearer: token, body: Data(#"{"method":"email-password"}"#.utf8))
-        } catch SupabaseError.http(401, let body) where body.contains("invalid Privy access token") {
+        } catch SupabaseError.http(401, let body) where body.contains("invalid Privy access token") { // not localized: the server's words
             return nil // the delete-account from before this path
-        } catch SupabaseError.http(409, let body) where serverError(body) == "no email binding" {
+        } catch SupabaseError.http(409, let body) where serverError(body) == "no email binding" { // not localized: the server's words
             return nil
-        } catch SupabaseError.http(500, let body) where body.contains("PRIVY_APP_SECRET") {
+        } catch SupabaseError.http(500, let body) where body.contains("PRIVY_APP_SECRET") { // not localized: the server's words
             return Failure.privyNotConfigured.localizedDescription
         } catch SupabaseError.http(let code, let body) {
-            throw Failure.emailSignInNotDeleted(serverError(body) ?? "error \(code)")
+            // A reason the app knows reads in the app's language; any other as the server wrote it.
+            throw Failure.emailSignInNotDeleted(serverError(body).map(EdgeFunctionError.deleteAccount) ?? tr("error \(String(code))"))
         }
         return nil
     }
@@ -164,7 +166,7 @@ enum AccountDeletion {
             await social.signIn(address: address, wallet: signer)
         }
         guard social.isSignedIn, await social.client.signedInWallet?.lowercased() == wallet else {
-            throw Failure.backendSignInNeeded(social.error ?? "the passkey session ended before it could sign")
+            throw Failure.backendSignInNeeded(social.error ?? tr("the passkey session ended before it could sign"))
         }
         await social.settle()
         try await deleteServerRows(wallet: wallet, social: social)
@@ -211,7 +213,7 @@ struct DeleteAccountView: View {
     private var method: Session.Method { session.account?.method ?? .watchOnly }
     private var isPrivy: Bool { [.apple, .google, .email, .passkey].contains(method) }
     private var isPasskey: Bool { method == .meraPasskey }
-    private var typedDelete: Bool { confirmation.trimmingCharacters(in: .whitespaces).uppercased() == "DELETE" }
+    private var typedDelete: Bool { confirmation.trimmingCharacters(in: .whitespaces).uppercased() == "DELETE" } // not localized: the word typed
     private var ready: Bool {
         guard typedDelete, !deleting else { return false }
         if isPasskey { return exported || acknowledged }
@@ -270,7 +272,9 @@ struct DeleteAccountView: View {
                 }
 
                 Section {
-                    TextField("Type DELETE to confirm", text: $confirmation)
+                    // The word typed is always DELETE, in every language (`typedDelete`).
+                    TextField("Type DELETE to confirm", text: $confirmation,
+                              prompt: Text("Type DELETE to confirm", comment: "Keep DELETE in English and in capitals: it is the word the user must type"))
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                     Button(role: .destructive) { Task { await deleteAccount() } } label: {
