@@ -366,7 +366,7 @@ public extension RPCClient {
     func logs(_ filters: [LogFilter]) async throws -> [Result<[Log], RPCError>] {
         try await batch(filters.map { ("eth_getLogs", [$0.json]) }).map { result in
             result.flatMap { json in
-                do { return .success(try Self.parseLogs(json)) } catch { return .failure(RPCError(code: -1, message: "Malformed log response")) }
+                do { return .success(try Self.parseLogs(json)) } catch { return .failure(RPCError(code: -1, message: "Malformed log response")) } // not localized: an RPC message, as a node's
             }
         }
     }
@@ -576,6 +576,7 @@ public extension RPCClient {
     internal static func refusesSize(_ error: RPCError) -> Bool {
         if refusesPastHead(error) { return false }
         let message = error.message.lowercased()
+        // not localized: the endpoints' own English, matched as they send it
         let sizes = ["response size", "block range", "too large", "limited to a", "returned more than", "too many logs", "too many results"]
         if sizes.contains(where: message.contains) { return true }
         if isRateLimited(error) { return false }
@@ -588,6 +589,7 @@ public extension RPCClient {
     /// ends there too, and the node reaches it in a moment, so it is asked again first (`LogsAnswer.pastHead`).
     internal static func refusesPastHead(_ error: RPCError) -> Bool {
         let message = error.message.lowercased()
+        // not localized: the endpoint's own English, matched as it sends it
         return message.contains("beyond current head") || message.contains("beyond the current head")
     }
 

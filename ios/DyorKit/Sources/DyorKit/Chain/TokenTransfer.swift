@@ -19,25 +19,26 @@ public enum TokenTransfer {
     /// `transfer` returns false (it moves nothing, yet the transaction succeeds). A call that couldn't be made says
     /// nothing here; the simulation before signing still runs.
     public static func refusal(_ token: Token, to: Address, amount: BigUInt, from owner: Address, rpc: RPCClient) async -> String? {
-        guard let request = try? request(token, to: to, amount: amount) else { return "This transfer can't be built." }
+        guard let request = try? request(token, to: to, amount: amount) else { return L10n.tr("This transfer can't be built.") }
         let returned: Data
         do {
             returned = try await rpc.ethCall(CallRequest(from: owner, to: request.to, data: request.data, value: request.value))
         } catch let error as RPCError {
             guard isRevert(error) else { return nil }
             let reason = RevertReason.describe(error)
-            return "This send would fail: \(reason)\(reason.hasSuffix(".") ? "" : ".")"
+            return reason.hasSuffix(".") ? L10n.tr("This send would fail: \(reason)") : L10n.tr("This send would fail: \(reason).")
         } catch {
             return nil
         }
         if !token.isNative, returned.count == 32, BigUInt(returned) == 0 {
-            return "The \(token.symbol) contract refused this transfer, so nothing would be sent."
+            return L10n.tr("The \(token.symbol) contract refused this transfer, so nothing would be sent.")
         }
         return nil
     }
 
     /// A node's answer that the call itself fails (a revert, or not enough MON for it), as opposed to a failed request.
     static func isRevert(_ error: RPCError) -> Bool {
+        // not localized: the nodes' own English, matched as they send it
         error.code == 3 || error.message.localizedCaseInsensitiveContains("revert")
             || error.message.localizedCaseInsensitiveContains("insufficient funds")
     }

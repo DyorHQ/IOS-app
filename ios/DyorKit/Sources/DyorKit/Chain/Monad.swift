@@ -101,6 +101,7 @@ public struct Token: Hashable, Sendable, Identifiable, Codable {
 
     /// Curated spot assets from Monad's official token list (monad-crypto/token-list, mainnet v2.48).
     public static let core: [Token] = [
+        // not localized: the tokens' own names
         Token(address: Monad.native, symbol: "MON", name: "Monad", decimals: 18, logoURL: logo("MON")),
         Token(address: Monad.wmon, symbol: "WMON", name: "Wrapped MON", decimals: 18, logoURL: logo("WMON")),
         Token(address: Monad.usdc, symbol: "USDC", name: "USDC", decimals: 6, logoURL: logo("USDC")),

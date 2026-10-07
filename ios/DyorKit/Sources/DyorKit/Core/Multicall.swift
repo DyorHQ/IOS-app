@@ -47,6 +47,7 @@ public struct Multicall: Sendable {
         let decoded = try ABI.decode(raw, Self.returns)[0].elements
         guard decoded.count == calls.count else { throw NetworkError.malformedResponse }
         return zip(calls, decoded).map { call, item in
+            // not localized: an RPC message, matched like a node's ("revert", `ERC20.isCallError`)
             guard item[0].bool else { return .failure(RPCError(code: -32000, message: "Call reverted", data: item[1].bytes.hexString)) }
             do { return .success(try ABI.decode(item[1].bytes, call.returnTypes, strings: call.strings)) } catch { return .failure(error) }
         }
@@ -72,6 +73,7 @@ public struct Multicall: Sendable {
                 let decoded = try ABI.decode(try answer.get(), Self.returns)[0].elements
                 guard decoded.count == request.calls.count else { throw NetworkError.malformedResponse }
                 return zip(request.calls, decoded).map { call, item in
+                    // not localized: an RPC message, matched like a node's ("revert", `ERC20.isCallError`)
                     guard item[0].bool else { return .failure(RPCError(code: -32000, message: "Call reverted", data: item[1].bytes.hexString)) }
                     do { return .success(try ABI.decode(item[1].bytes, call.returnTypes, strings: call.strings)) } catch { return .failure(error) }
                 }
