@@ -109,7 +109,7 @@ public actor PerplAuthClient {
         let body: [String: Any] = ["chain_id": chainId, "address": address, "public_key": publicKeyHex, "scope_mask": scopeMask, "label": label]
         let json = try await post("v1/api-key/payload", body: body)
         guard let typedData = json["typed_data"] as? [String: Any], let mac = json["mac"] as? String, !mac.isEmpty else {
-            throw PerplError.malformedResponse("api-key payload")
+            throw PerplError.malformedResponse(L10n.string(LocalizedStringResource("api-key payload", bundle: L10n.kit, comment: "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”")))
         }
         let validated = try PerplEnrollment.validate(typedData, chainId: chainId, address: address, publicKeyHex: publicKeyHex,
                                                      scopeMask: scopeMask, label: label, now: now)
@@ -136,7 +136,7 @@ public actor PerplAuthClient {
         catch PerplError.contextUnavailable(status: 409) { throw PerplEnrollRefusal.keyAlreadyRegistered }
         catch PerplError.contextUnavailable(status: 423) { throw PerplEnrollRefusal.keyLimitReached }
         guard let info = json["api_key"] as? [String: Any], let token = info["api_key"] as? String else {
-            throw PerplError.malformedResponse("api-key enroll")
+            throw PerplError.malformedResponse(L10n.string(LocalizedStringResource("api-key enroll", bundle: L10n.kit, comment: "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”")))
         }
         return PerplApiKey(token: token, secret: secret, address: address, scopeMask: scopeMask)
     }
@@ -148,7 +148,7 @@ public actor PerplAuthClient {
     public func signedGet(_ target: String, key: PerplApiKey, timestamp: String, nonce: String) async throws -> Data {
         let canonical = PerplAuth.restCanonical(chainId: chainId, method: "GET", target: target, timestamp: timestamp, nonce: nonce, body: "")
         let signature = try PerplAuth.sign(Data(canonical.utf8), secret: key.secret)
-        guard let url = URL(string: apiBase.absoluteString + target) else { throw PerplError.malformedResponse("history URL") }
+        guard let url = URL(string: apiBase.absoluteString + target) else { throw PerplError.malformedResponse(L10n.string(LocalizedStringResource("history URL", bundle: L10n.kit, comment: "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"))) }
         var request = URLRequest(url: url)
         request.timeoutInterval = 25
         request.setValue(key.token, forHTTPHeaderField: "X-API-Key")
@@ -174,7 +174,7 @@ public actor PerplAuthClient {
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw PerplError.contextUnavailable(status: http.statusCode)
         }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw PerplError.malformedResponse("json object") }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw PerplError.malformedResponse(L10n.string(LocalizedStringResource("json object", bundle: L10n.kit, comment: "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"))) }
         return json
     }
 }
@@ -188,8 +188,8 @@ public enum PerplEnrollRefusal: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .keyAlreadyRegistered: return "Perpl already has this trading key. Nothing was changed; try connecting again."
-        case .keyLimitReached: return "Your Perpl account has the most API keys it allows (16). Remove keys you no longer use under API Keys on app.perpl.xyz, then try again."
+        case .keyAlreadyRegistered: return L10n.tr("Perpl already has this trading key. Nothing was changed; try connecting again.")
+        case .keyLimitReached: return L10n.tr("Your Perpl account has the most API keys it allows (16). Remove keys you no longer use under API Keys on app.perpl.xyz, then try again.")
         }
     }
 }

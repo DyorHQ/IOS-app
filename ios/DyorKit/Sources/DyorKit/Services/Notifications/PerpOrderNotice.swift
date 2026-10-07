@@ -22,9 +22,9 @@ public enum PerpOrderNotice: Hashable, Sendable, CaseIterable {
 
     public var title: String {
         switch self {
-        case .submitted: return "Order submitted"
-        case .placed: return "Order placed"
-        case .filled: return "Order filled"
+        case .submitted: return L10n.string(LocalizedStringResource("Order submitted", bundle: L10n.kit, comment: "A notification's title: Perpl acknowledged a market order, which may not have filled yet."))
+        case .placed: return L10n.string(LocalizedStringResource("Order placed", bundle: L10n.kit, comment: "A notification's title: Perpl acknowledged a limit order, which now rests on the order book."))
+        case .filled: return L10n.string(LocalizedStringResource("Order filled", bundle: L10n.kit, comment: "A notification's title: a position opened or grew, so the order was filled (executed)."))
         }
     }
 }

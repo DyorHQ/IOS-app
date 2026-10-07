@@ -72,7 +72,9 @@ final class PerplTriggerTests: XCTestCase {
     func testMessages() {
         let m = btc()
         XCTAssertEqual(PerplTriggerRules.Problem.tooLow(.stopLoss, minimum: 0.1).message(market: m), "Stop-loss must be at least 0.1 on BTC.")
-        XCTAssertEqual(PerplTriggerRules.Problem.offTick(.takeProfit, decimals: 1).message(market: m), "Take-profit can have at most 1 decimal place on BTC.")
+        // One key for any count: what 1 reads is the catalog's plural form (the key itself under `swift test`).
+        XCTAssertEqual(PerplTriggerRules.Problem.offTick(.takeProfit, decimals: 1).message(market: m), L10n.tr("Take-profit can have at most \(1) decimal places on \("BTC")."))
+        XCTAssertEqual(PerplTriggerRules.Problem.offTick(.takeProfit, decimals: 3).message(market: m), "Take-profit can have at most 3 decimal places on BTC.")
         XCTAssertEqual(PerplTriggerRules.Problem.offTick(.takeProfit, decimals: 0).message(market: m), "Take-profit must be a whole number on BTC.")
         XCTAssertEqual(PerplTriggerRules.Problem.wrongSide(.takeProfit, side: .short, reference: 950).message(market: m), "Take-profit must be below your entry (950) for a short.")
         XCTAssertEqual(PerplTriggerRules.Problem.wrongSide(.stopLoss, side: .long, reference: 950).message(market: m, referenceName: "the mark price"),
