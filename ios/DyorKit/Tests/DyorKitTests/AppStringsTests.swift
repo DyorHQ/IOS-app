@@ -197,13 +197,15 @@ final class AppStringsTests: XCTestCase {
 
     // MARK: Plurals
 
-    /// The keys with a count (an `Int`, so `%lld`) in these folders, as the app's catalog spells them. Their singular comes
-    /// from the catalog's plural forms, English included: without them a count of 1 reads "1 words", "1 transactions" or
-    /// "1 take-profit/stop-loss orders … them".
-    static let pluralKeys = [
-        "%lld words. Words are separated by spaces.",
-        "It has sent %lld transactions, so it may also hold positions, collateral or coins not shown here.",
-        "You have %lld take-profit/stop-loss orders live on Perpl. Removing the key doesn't cancel them: they stay armed, and this device can't show or cancel them until you connect again.",
+    /// The keys with a count (an `Int`, so `%lld`) in these folders, as the app's catalog spells them, and what each says
+    /// for a count of one. Their singular comes from the catalog's plural forms, English included: without them a count of
+    /// 1 reads "1 words", "1 transactions" or "1 take-profit/stop-loss orders … them".
+    static let pluralKeys: [PerpsWalletStringsTests.PluralKey] = [
+        .init("%lld words. Words are separated by spaces.", one: ["word."], notOne: ["words."]),
+        .init("It has sent %lld transactions, so it may also hold positions, collateral or coins not shown here.",
+              one: ["transaction,"], notOne: ["transactions"]),
+        .init("You have %lld take-profit/stop-loss orders live on Perpl. Removing the key doesn't cancel them: they stay armed, and this device can't show or cancel them until you connect again.",
+              one: ["order live", "cancel it"], notOne: ["orders", "them", "they"]),
     ]
 
     /// A count with a noun is one key with the count as its argument, which the catalog gives its plural forms (and the
@@ -215,7 +217,7 @@ final class AppStringsTests: XCTestCase {
         }
         let code = try Self.sources().map(\.text).joined(separator: "\n")
         let value = #"\\\(.+?\)"# // one interpolation, `\(…)`, nested parentheses included
-        for key in Self.pluralKeys {
+        for key in Self.pluralKeys.map(\.key) {
             let pattern = NSRegularExpression.escapedPattern(for: key)
                 .replacingOccurrences(of: "%lld", with: value).replacingOccurrences(of: "%@", with: value)
             XCTAssertNotNil(code.range(of: "\"" + pattern + "\"", options: .regularExpression), "not in the code: \(key)")
@@ -224,29 +226,26 @@ final class AppStringsTests: XCTestCase {
         XCTAssertTrue(try Self.source("Onboarding/OnboardingView.swift").contains(#"It has sent \(Int(clamping: holdings.transactions)) transactions"#))
     }
 
-    /// A plural key the app's catalog carries has English `one` and `other` forms, so a count of 1 reads right in English
-    /// too: the catalog step adds them with every language's. A release (`DYORHQ_RELEASE_GATE=1`) needs every plural key in
-    /// the catalog, since a key that isn't there shows its English as written, "1 words".
+    /// The app's catalog gives each plural key English forms whose "one" differs from the "other" and says the singular
+    /// ("%lld word.", "%lld transaction,", "order … it"), as the catalog step writes them with every language's
+    /// (`PerpsWalletStringsTests.checkEnglishPlurals`). Until then the test is skipped, naming the keys still pending; a
+    /// release (`DYORHQ_RELEASE_GATE=1`) refuses a key the catalog doesn't have, since it reads "1 words".
     func testThePluralKeysHaveEnglishPluralForms() throws {
-        let data = Data(try Self.source("Resources/Localizable.xcstrings").utf8)
-        let catalog = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let strings = catalog["strings"] as? [String: Any] ?? [:]
-        let release = ProcessInfo.processInfo.environment["DYORHQ_RELEASE_GATE"] == "1"
-        for key in Self.pluralKeys {
-            guard let entry = strings[key] as? [String: Any] else {
-                if release { XCTFail("not in the app's catalog (run scripts/dev/strings-sync.sh, then add its plural forms): \(key)") }
-                continue
-            }
-            let english = (entry["localizations"] as? [String: Any])?["en"] as? [String: Any] ?? [:]
-            let substitutions = (english["substitutions"] as? [String: Any] ?? [:]).values.compactMap { $0 as? [String: Any] }
-            let plurals = ([english] + substitutions).compactMap { ($0["variations"] as? [String: Any])?["plural"] as? [String: Any] }
-            let complete = plurals.contains { forms in
-                ["one", "other"].allSatisfy { form in
-                    let unit = (forms[form] as? [String: Any])?["stringUnit"] as? [String: Any]
-                    return !((unit?["value"] as? String) ?? "").isEmpty
-                }
-            }
-            XCTAssertTrue(complete, "no English one/other plural forms in the app's catalog: \(key)")
+        try PerpsWalletStringsTests.checkEnglishPlurals(Self.pluralKeys, catalog: Data(try Self.source("Resources/Localizable.xcstrings").utf8))
+    }
+
+    /// Each key takes the singular English says for a count of one, and refuses the plural as written ("1 words").
+    func testEachPluralKeyTakesItsEnglishSingular() {
+        let singular = [
+            "%lld word. Words are separated by spaces.",
+            "It has sent %lld transaction, so it may also hold positions, collateral or coins not shown here.",
+            "You have %lld take-profit/stop-loss order live on Perpl. Removing the key doesn't cancel it: it stays armed, and this device can't show or cancel it until you connect again.",
+        ]
+        XCTAssertEqual(Self.pluralKeys.count, singular.count)
+        for (key, one) in zip(Self.pluralKeys, singular) {
+            XCTAssertNil(PerpsWalletStringsTests.englishPluralProblem(PerpsWalletStringsTests.englishPlural(one: one, other: key.key), key), key.key)
+            XCTAssertNotNil(PerpsWalletStringsTests.englishPluralProblem(PerpsWalletStringsTests.englishPlural(one: key.key, other: key.key), key),
+                            "the plural for one: \(key.key)")
         }
     }
 
