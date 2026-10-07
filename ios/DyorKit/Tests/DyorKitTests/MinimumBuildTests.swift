@@ -50,6 +50,18 @@ final class MinimumBuildTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(parse(#"[{"value":{"min_build":15,"message":"\#(String(repeating: "a", count: 900))"}}]"#)).message.count, 500)
     }
 
+    /// The owner's message is written in English: the Update screen shows it only while the app is in English, and its own
+    /// text, in the app's language, in any other language or when the row has none.
+    func testTheOwnersMessageIsShownOnlyInEnglish() throws {
+        let row = try XCTUnwrap(parse(#"[{"value":{"min_build":18,"message":"Update to keep trading."}}]"#))
+        XCTAssertEqual(row.ownerMessage(in: .en), "Update to keep trading.")
+        for language in AppLanguage.allCases where language != .en {
+            XCTAssertNil(row.ownerMessage(in: language), language.code)
+        }
+        XCTAssertEqual(AppLanguage.allCases.filter { row.ownerMessage(in: $0) != nil }, [.en])
+        XCTAssertNil(MinimumBuild(minBuild: 18, message: "", url: nil).ownerMessage(in: .en), "no message: the app's own text")
+    }
+
     func testMinimumBuildReadsTheIOSRowWithThePublishableKey() async throws {
         WalletAuthCapture.replies = [(200, #"[{"value":{"min_build":14,"message":"","url":"https://testflight.apple.com"}}]"#)]
         let row = try await backend.minimumBuild()
