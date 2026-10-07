@@ -36,15 +36,20 @@ final class DyorKitStringsTests: XCTestCase {
     private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 
     /// The code lines of the sources with their literals; a doc or line comment is left out, and so is a line marked
-    /// "not localized" (or right under such a marker).
+    /// "not localized", or right under a comment line that marks it. A marker at the end of a line of code covers that
+    /// line only: the next line (another case of the same switch, say) is read as any other.
     private static func scannedLines() throws -> [(at: String, line: String, literals: [PerpsWalletStringsTests.Literal])] {
+        scannedLines(of: try sources())
+    }
+
+    private static func scannedLines(of files: [(path: String, text: String)]) -> [(at: String, line: String, literals: [PerpsWalletStringsTests.Literal])] {
         var out: [(String, String, [PerpsWalletStringsTests.Literal])] = []
-        for (path, text) in try sources() {
+        for (path, text) in files {
             let lines = text.components(separatedBy: "\n")
             for (index, line) in lines.enumerated() {
-                let previous = index > 0 ? lines[index - 1] : ""
+                let previous = index > 0 ? lines[index - 1].trimmingCharacters(in: .whitespaces) : ""
                 if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") { continue }
-                if line.contains("not localized") || previous.contains("// not localized") { continue }
+                if line.contains("not localized") || previous.hasPrefix("//") && previous.contains("// not localized") { continue }
                 out.append(("\(path):\(index + 1)", line, PerpsWalletStringsTests.literals(in: line)))
             }
         }
@@ -83,24 +88,63 @@ final class DyorKitStringsTests: XCTestCase {
         XCTAssertEqual(L10n.tr("Perpl liquidates at 100%. Mark \("$1.00")"), "Perpl liquidates at 100%. Mark $1.00", "a percent sign stays one")
     }
 
-    /// Text built as a `String` (a returned label or error, an assigned value, a fallback after `??`, a step's label, a
-    /// refusal) goes through `L10n.tr` or a resource: a bare literal there is shown in English in every language.
+    /// Text built as a `String` (a returned label or error, an assigned value, either branch of a choice, a switch case's
+    /// or a computed property's own result, a fallback after `??`, a step's label, a quote's route, a refusal) goes
+    /// through `L10n.tr` or a resource: a bare literal there is shown in English in every language.
     func testStringTextGoesThroughTheCatalog() throws {
-        let sink = try NSRegularExpression(pattern: #"(return |(?<![=!<>])= |\?\? |\? |label: |errorDescription: String\? \{ |\.rejected\(|\.venue\(|\.transport\(|\.notCollecting\(|\.malformedResponse\(|\.decoding\(|\.unexpectedResponse\(|\.invalidOrder\(|\.closed\(|fallback: |direction = |act = |title = |stepsHeading = |recentlyDeleted = )$"#)
+        let sink = try NSRegularExpression(pattern: Self.sinkPattern)
         var found: [String] = []
-        for (at, _, literals) in try Self.scannedLines() {
-            for literal in literals where literal.depth == 0 && PerpsWalletStringsTests.isWords(literal.text) && !Self.names.contains(literal.text) {
-                let before = NSRange(literal.before.startIndex..., in: literal.before)
-                if sink.firstMatch(in: literal.before, range: before) != nil { found.append("\(at): \"\(literal.text)\"") }
-            }
+        for (at, line, _) in try Self.scannedLines() {
+            for text in Self.bareText(on: line, sink: sink) { found.append("\(at): \"\(text)\"") }
         }
         XCTAssertEqual(found, [], "String text written in DyorKit goes through L10n")
 
-        // The reader sees what it should: a bare sentence after `return`, but not one inside L10n.tr(…).
-        let bare = PerpsWalletStringsTests.literals(in: #"case .x: return "Not enough MON to pay for gas.""#)
-        XCTAssertTrue(sink.firstMatch(in: bare[0].before, range: NSRange(bare[0].before.startIndex..., in: bare[0].before)) != nil)
-        let wrapped = PerpsWalletStringsTests.literals(in: #"case .x: return L10n.tr("Not enough MON to pay for gas.")"#)
-        XCTAssertNil(sink.firstMatch(in: wrapped[0].before, range: NSRange(wrapped[0].before.startIndex..., in: wrapped[0].before)))
+        // The reader sees what it should: each of these is bare English a person reads…
+        for line in [#"case .x: return "Not enough MON to pay for gas.""#,
+                     #"return launch.curveSellsOpen ? L10n.tr("Sell on its Launch page") : "Graduation pending · Launch page""#,
+                     #"return launch.curveSellsOpen ? "Sell on its Launch page" : L10n.tr("Graduation pending · Launch page")"#,
+                     #"case .bonding, .graduated: retired ? L10n.tr("Sell on its Launch page") : "Trade on its Launch page""#,
+                     #"    : "Graduation pending · Launch page""#, // a choice's second branch on a line of its own
+                     #"case .migrating: "Migrating · Launch page""#,
+                     #"default: "Trade on its Launch page""#,
+                     #"public static var notice: String { "This coin's launchpad is retired: you can sell, but not buy." }"#,
+                     #"VenueQuote(venue: .kuru, amountOut: out, minOut: min, route: "Aggregated across Kuru order books and Monad pools", gasEstimate: nil)"#,
+                     #"throw PerplTradeError.unavailable("Perpl trading isn't available right now.")"#] {
+            XCTAssertEqual(Self.bareText(on: line, sink: sink).count, 1, line)
+        }
+        // …and none of these is: the same text looked up, a name, a debug description (for developers).
+        for line in [#"case .x: return L10n.tr("Not enough MON to pay for gas.")"#,
+                     #"return launch.curveSellsOpen ? L10n.tr("Sell on its Launch page") : L10n.tr("Graduation pending · Launch page")"#,
+                     #"case .migrating: L10n.tr("Migrating · Launch page")"#,
+                     #"VenueQuote(venue: .kuru, amountOut: out, minOut: min, route: L10n.tr("Aggregated across Kuru order books and Monad pools"), gasEstimate: nil)"#,
+                     #"case .kuru: return "Kuru Flow""#,
+                     #"public var description: String { "RawDigest32(32 bytes)" }"#] {
+            XCTAssertEqual(Self.bareText(on: line, sink: sink), [], line)
+        }
+        // A "not localized" marker at the end of a line covers that line only; a marker on a line of its own covers the
+        // line under it.
+        let cases = """
+            case .opticID: "Optic ID" // not localized: Apple's name
+            case .passcode: "Passcode"
+            // not localized: Apple's name
+            case .faceID: "Face ID"
+            """
+        XCTAssertEqual(Self.scannedLines(of: [("Kind.swift", cases)]).flatMap { Self.bareText(on: $0.line, sink: sink) }, ["Passcode"])
+    }
+
+    /// Where a bare literal is String text a person reads: after `return` or `=`, either branch of a choice (`? ` and
+    /// ` : `), a fallback after `??`, a switch case's own result (`case .x: "…"`, `default: "…"`), a computed property's
+    /// or a closure's implicit result (`{ "…" }`; not a `description`'s, which is for developers), a step's `label:`, a
+    /// quote's `route:`, an error's text, and the properties that hold a sentence.
+    private static let sinkPattern = #"(return |(?<![=!<>])= |\?\? |\? | : |\bcase [^:"]*: |\bdefault: |(?<!description: String )\{ |label: |route: |errorDescription: String\? \{ |\.rejected\(|\.venue\(|\.transport\(|\.notCollecting\(|\.malformedResponse\(|\.decoding\(|\.unexpectedResponse\(|\.invalidOrder\(|\.unavailable\(|\.closed\(|fallback: |direction = |act = |title = |stepsHeading = |recentlyDeleted = )$"#
+
+    /// The literals of `line` that are String text written bare: words (not a listed name) written in the code itself,
+    /// right after a place whose text a person reads (`sinkPattern`).
+    private static func bareText(on line: String, sink: NSRegularExpression) -> [String] {
+        PerpsWalletStringsTests.literals(in: line).filter { literal in
+            literal.depth == 0 && PerpsWalletStringsTests.isWords(literal.text) && !names.contains(literal.text)
+                && sink.firstMatch(in: literal.before, range: NSRange(literal.before.startIndex..., in: literal.before)) != nil
+        }.map(\.text)
     }
 
     /// A word chosen inside another string's interpolation (`"\(isLong ? "long" : "short") …"`) is never looked up: each
