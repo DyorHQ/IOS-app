@@ -83,6 +83,16 @@ public struct Token: Hashable, Sendable, Identifiable, Codable {
 
     public var id: Address { address }
 
+    /// The name a token the wallet holds is stored under when its symbol and name can't be read
+    /// (`WalletTokenDiscovery`): English, as every earlier build stored it, so a stored list reads the same whatever
+    /// language it was stored in and whichever build reads it. A screen shows `displayName`, in the app's language.
+    // not localized: a stored value; `displayName` shows it in the app's language
+    public static let unnamedName = "Token with no name"
+
+    /// The name a screen shows: the token's own, or, for a token stored with no name (`unnamedName`, by this build or an
+    /// earlier one), "Token with no name" in the app's language at the moment it is shown.
+    public var displayName: String { name == Token.unnamedName ? L10n.tr("Token with no name") : name }
+
     public init(address: Address, symbol: String, name: String, decimals: Int, logoURL: URL? = nil, isLaunchpad: Bool = false) {
         self.address = address
         self.symbol = symbol

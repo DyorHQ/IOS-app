@@ -110,14 +110,15 @@ public enum WalletHoldings {
     }
 
     /// The held tokens a search matches, in `held` order: a pasted address matches that contract only; other text
-    /// matches the symbol or name, or — starting with 0x — the start of the contract address.
+    /// matches the symbol or name as the list shows it (`displayName`), or — starting with 0x — the start of the
+    /// contract address.
     public static func matching(_ held: [HeldToken], query: String) -> [HeldToken] {
         let text = Address.cleanedInput(query).text
         guard !text.isEmpty else { return held }
         if let address = Address(text) { return held.filter { $0.token.address == address } }
         let hex = text.lowercased()
         return held.filter { item in
-            item.token.symbol.localizedCaseInsensitiveContains(text) || item.token.name.localizedCaseInsensitiveContains(text)
+            item.token.symbol.localizedCaseInsensitiveContains(text) || item.token.displayName.localizedCaseInsensitiveContains(text)
                 || (hex.hasPrefix("0x") && hex.count >= 4 && item.token.address.hex.hasPrefix(hex))
         }
     }

@@ -154,9 +154,11 @@ public struct WalletTokenDiscovery: Sendable {
         return Token(address: token, symbol: symbol, name: name ?? symbol, decimals: decimals(results[4]))
     }
 
-    /// A held token with no readable symbol, listed under its short address.
-    private static func unnamed(_ token: Address, name: String? = nil, decimals: Int) -> Token {
-        Token(address: token, symbol: token.short, name: name ?? L10n.tr("Token with no name"), decimals: decimals)
+    /// A held token with no readable symbol, listed under its short address. With no readable name either, its name is
+    /// `Token.unnamedName`, the same in every language: the app stores it (`KnownTokenStore`) and never reads it again,
+    /// so a translated name would stay in the language it was found in. Screens show it translated (`displayName`).
+    static func unnamed(_ token: Address, name: String? = nil, decimals: Int) -> Token {
+        Token(address: token, symbol: token.short, name: name ?? Token.unnamedName, decimals: decimals)
     }
 
     /// A symbol or name as read: a string, or a bytes32 of UTF-8 text padded with zeros, with something visible in it.

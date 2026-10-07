@@ -1,4 +1,6 @@
 import BigInt
+import Observation
+import os
 import XCTest
 @testable import DyorKit
 
@@ -72,6 +74,91 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         XCTAssertEqual(scan.tokens.map(\.name), ["Maker", "Token with no name", "Blank"])
         XCTAssertEqual(scan.tokens.map(\.decimals), [18, 6, 18])
         XCTAssertTrue(scan.complete)
+    }
+
+    /// A held token with no readable symbol or name is stored under `Token.unnamedName`, the same English words in every
+    /// language and in every build, and building it never reads the app's language: the app stores it
+    /// (`KnownTokenStore`) and discovery never reads it again, so a translated name would stay in the language it was
+    /// found in. It is translated when it is shown (`displayName`), whoever stored it: this build in any language, or an
+    /// earlier build in English. A search finds it by the name it shows.
+    func testANamelessTokenIsStoredInNoLanguageAndShownInTheAppsLanguage() async throws {
+        let saved = L10n.locale
+        defer { L10n.locale = saved }
+        L10n.locale = Locale(identifier: "fr_FR")
+        MomentsChainStub.install(chain.answer, logs: [transfer(chain.nameless, nft: false, block: 10)])
+        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        let nameless = try XCTUnwrap(scan.tokens.first)
+        XCTAssertEqual(Token.unnamedName, "Token with no name", "as every earlier build stored it")
+        XCTAssertEqual(nameless.name, Token.unnamedName, "found with the app in French, stored in no language")
+        XCTAssertEqual(nameless.displayName, L10n.tr("Token with no name"))
+
+        // Building it reads no language, so nothing stored depends on one; showing it reads the language, so a screen
+        // showing it redraws in a newly chosen one.
+        XCTAssertFalse(Self.readsTheLanguage { _ = WalletTokenDiscovery.unnamed(chain.nameless, decimals: 6) })
+        XCTAssertFalse(Self.readsTheLanguage { _ = WalletTokenDiscovery.unnamed(chain.nameless, name: "Blank", decimals: 6) })
+        XCTAssertTrue(Self.readsTheLanguage { _ = nameless.displayName })
+        XCTAssertEqual(Token.usdc.displayName, "USDC")
+        XCTAssertFalse(Self.readsTheLanguage { _ = Token.usdc.displayName }, "a token's own name is shown as it is")
+
+        // As an earlier build stored it (`KnownTokenStore`'s JSON, English name): shown in the app's language too.
+        let stored = #"[{"address":"\#(chain.nameless.checksummed)","symbol":"\#(chain.nameless.short)","name":"Token with no name","decimals":6,"isLaunchpad":false}]"#
+        let earlier = try XCTUnwrap(try JSONDecoder().decode([Token].self, from: Data(stored.utf8)).first)
+        XCTAssertEqual(earlier.displayName, L10n.tr("Token with no name"))
+        XCTAssertTrue(Self.readsTheLanguage { _ = earlier.displayName })
+
+        // The Swap picker's search and the Send list's read the name as it is shown.
+        XCTAssertTrue(TokenPickerList.matches(nameless, query: "no name"))
+        XCTAssertTrue(Self.readsTheLanguage { _ = TokenPickerList.matches(nameless, query: "zzz") })
+        let held = [HeldToken(token: nameless, balance: 5, usd: nil, unverified: true)]
+        XCTAssertEqual(WalletHoldings.matching(held, query: "no name"), held)
+        XCTAssertTrue(Self.readsTheLanguage { _ = WalletHoldings.matching(held, query: "zzz") })
+    }
+
+    /// Whether `body` reads the app's language (`L10n.locale`, which SwiftUI observes): a change of language is then seen
+    /// by what ran it.
+    private static func readsTheLanguage(_ body: () -> Void) -> Bool {
+        let changed = OSAllocatedUnfairLock(initialState: false)
+        withObservationTracking { body() } onChange: { changed.withLock { $0 = true } }
+        let saved = L10n.locale
+        L10n.locale = Locale(identifier: "ko_KR")
+        L10n.locale = saved
+        return changed.withLock { $0 }
+    }
+
+    /// Every screen that shows a token's name shows `displayName` (Home's row and token page, the Portfolio's Assets, the
+    /// Send list, Swap's token rows and its picker), so a token stored with no name reads "Token with no name" in the
+    /// app's language. A token's stored name is only copied as it is (`name: token.name`), never shown.
+    func testEveryScreenShowsATokensNameAsDisplayed() throws {
+        var app = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
+        app.appendPathComponent("DyorHQ")
+        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
+        let read = try NSRegularExpression(pattern: #"(?:\w+\.)*token\.name\b"#)
+        let files = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
+        var shown: [String] = []
+        var copied = 0
+        for file in files where file.pathExtension == "swift" {
+            let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+            for (index, line) in lines.enumerated() where !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
+                for match in read.matches(in: line, range: NSRange(line.startIndex..., in: line)) {
+                    if (line as NSString).substring(to: match.range.location).hasSuffix("name: ") { copied += 1; continue }
+                    shown.append("\(file.lastPathComponent):\(index + 1): \((line as NSString).substring(with: match.range))")
+                }
+            }
+        }
+        XCTAssertEqual(shown, [], "a token's name is shown as `displayName`, in the app's language")
+        XCTAssertGreaterThan(copied, 0, "the reader sees the copy into a new Token (Home's discovered tokens)")
+
+        func source(_ path: String) throws -> String { try String(contentsOf: app.appendingPathComponent(path), encoding: .utf8) }
+        let home = try source("Home/HomeView.swift")
+        XCTAssertTrue(home.contains("Text(row.token.displayName).font(.caption)"), "Home's row")
+        XCTAssertTrue(home.contains(#"LabeledContent("Name", value: row.token.displayName)"#), "the token page")
+        XCTAssertTrue(home.contains("? Token(address: token.address, symbol: token.symbol, name: token.name,"), "a discovered token is stored with its name as found")
+        XCTAssertTrue(try source("Portfolio/AssetsModel.swift").contains("(note ?? Text(verbatim: asset.token.displayName))"), "the Portfolio's Assets")
+        XCTAssertTrue(try source("Profile/ProfileView.swift").contains(#""\(asset.token.displayName) · \(asset.token.address.short)" : asset.token.displayName"#), "the Send list")
+        let swap = try source("Swap/SwapView.swift")
+        XCTAssertTrue(swap.contains("Text(token.displayName).font(.footnote)"), "Swap's token rows")
+        XCTAssertTrue(swap.contains("Text(verbatim: token.displayName) : Text(\"Past cohort · trading closed\")"), "Swap's picker")
     }
 
     /// Metadata is read 50 tokens a read, not one round trip per token; a token that breaks its read is read on its own,
