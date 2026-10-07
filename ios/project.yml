@@ -59,7 +59,7 @@ targets:
         CFBundleVersion: "16"
         # Only the languages that ship: a language is added here, and to the catalogs, once its translation is complete
         # (scripts/dev/check-strings.py). The Language screen offers the bundle's languages (AppLanguage.shipped).
-        CFBundleLocalizations: [en]
+        CFBundleLocalizations: [en, es, fr, zh-Hans, ko]
         UILaunchScreen:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]

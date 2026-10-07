@@ -124,7 +124,7 @@ final class LanguageWiringTests: XCTestCase {
 
         let info = try XCTUnwrap(NSDictionary(contentsOf: ios.appendingPathComponent("DyorHQ/Info.plist")) as? [String: Any])
         let shipped = try XCTUnwrap(info["CFBundleLocalizations"] as? [String])
-        XCTAssertEqual(shipped, ["en"], "English only until a translation is complete")
+        XCTAssertEqual(shipped, ["en", "es", "fr", "zh-Hans", "ko"], "English and the four complete translations")
         XCTAssertTrue(project.contains("        CFBundleLocalizations: [\(shipped.joined(separator: ", "))]\n"), "Info.plist regenerated from project.yml")
 
         func catalog(_ path: String) throws -> [String: Any] {
