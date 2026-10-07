@@ -25,7 +25,7 @@ struct MomentsView: View {
             switch self {
             case .all: return Text(verbatim: tr(LocalizedStringResource("momentFilter.all", defaultValue: "All", comment: "[tight] Moments filter: every Moment")))
             case .collecting: return Text("Collecting", comment: "[tight] Moments filter: Moments still open to collect")
-            case .graduated: return Text("Graduated", comment: "[tight] A status: the coin graduated into its pool. A badge and a filter on Moments, a section of the Launch board and a date row: use a form that fits each")
+            case .graduated: return Text(verbatim: tr(LocalizedStringResource("momentFilter.graduated", defaultValue: "Graduated", comment: "[tight] Moments filter: the Moments whose coin has graduated")))
             }
         }
     }

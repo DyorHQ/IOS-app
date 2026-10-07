@@ -168,7 +168,7 @@ struct MomentStateBadge: View {
             let left = MomentsFormat.countdown(info.secondsLeft(at: now), short: onMedia)
             return onMedia ? left : tr(LocalizedStringResource("Collecting · \(left)", comment: "[tight] Moment badge: still collecting, then the time left (\"2d 3h left\")"))
         case .graduationPending: return tr(LocalizedStringResource("Graduation pending", comment: "[tight] Moment badge: its graduation has not completed yet"))
-        case .graduated: return tr(LocalizedStringResource("Graduated", comment: "[tight] A status: the coin graduated into its pool. A badge and a filter on Moments, a section of the Launch board and a date row: use a form that fits each"))
+        case .graduated: return tr(LocalizedStringResource("Graduated", comment: "[tight] A status: the coin graduated into its pool. A badge on Moments, a section of the Launch board and a date row: use a form that fits each"))
         case .expired: return tr(LocalizedStringResource("Expired", comment: "[tight] The Moment expired before graduating: a badge, a status and a section header"))
         }
     }

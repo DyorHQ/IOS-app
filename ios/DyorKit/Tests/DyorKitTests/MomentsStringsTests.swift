@@ -106,6 +106,21 @@ final class MomentsStringsTests: XCTestCase {
         XCTAssertFalse(board.contains(#"Text("All""#))
     }
 
+    /// The filter's "Graduated" (every graduated Moment, a plural beside "All" and "Collecting" in Spanish and French) is
+    /// a key of its own, apart from the status badge's "Graduated", which the Launch board and a date row share. English
+    /// reads "Graduated".
+    func testTheFiltersGraduatedIsAKeyOfItsOwn() throws {
+        let sources = Dictionary(uniqueKeysWithValues: try Self.sources().map { ($0.name, $0.text) })
+        let board = try XCTUnwrap(sources["MomentsView.swift"])
+        XCTAssertTrue(board.contains(#"case .graduated: return Text(verbatim: tr(LocalizedStringResource("momentFilter.graduated", defaultValue: "Graduated", comment: "[tight] Moments filter: the Moments whose coin has graduated")))"#))
+        XCTAssertFalse(board.contains(#"Text("Graduated""#))
+        // The badge's key keeps one comment, which no longer names the filter.
+        let badge = "[tight] A status: the coin graduated into its pool. A badge on Moments, a section of the Launch board and a date row: use a form that fits each"
+        for name in ["MomentsUI.swift", "RetiredMomentDetailView.swift"] {
+            XCTAssertTrue(try XCTUnwrap(sources[name]).contains(#"LocalizedStringResource("Graduated", comment: "\#(badge)")"#), name)
+        }
+    }
+
     /// The five interpolations the compiler said would show a debug description (a `BigUInt` in a key) are written as
     /// what they mean: a token id as a `String`, a count as an `Int`.
     func testNoBigNumberIsInterpolatedIntoAKey() throws {

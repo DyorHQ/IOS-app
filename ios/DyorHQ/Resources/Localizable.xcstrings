@@ -17327,7 +17327,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ganadores"
+            "value" : "Alzas"
           }
         },
         "fr" : {
@@ -17548,7 +17548,7 @@
       }
     },
     "Graduated" : {
-      "comment" : "[tight] A status: the coin graduated into its pool. A badge and a filter on Moments, a section of the Launch board and a date row: use a form that fits each",
+      "comment" : "[tight] A status: the coin graduated into its pool. A badge on Moments, a section of the Launch board and a date row: use a form that fits each",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -21995,7 +21995,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Perdedores"
+            "value" : "Bajas"
           }
         },
         "fr" : {
@@ -49330,6 +49330,150 @@
         }
       }
     },
+    "homeCategory.launch" : {
+      "comment" : "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. The launchpad's coins (a noun), as the Launch tab",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Launch"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Launch"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Launch"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "런칭"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发射"
+          }
+        }
+      }
+    },
+    "homeCategory.moments" : {
+      "comment" : "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. The Moments feature's name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Moments"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moments"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moments"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moments"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moments"
+          }
+        }
+      }
+    },
+    "homeCategory.perps" : {
+      "comment" : "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. Perpetual futures",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Perps"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perps"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perps"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perps"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "永续"
+          }
+        }
+      }
+    },
+    "homeCategory.spot" : {
+      "comment" : "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. The wallet's own tokens, as against Perps",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Spot"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spot"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spot"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현물"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "现货"
+          }
+        }
+      }
+    },
     "if applied first, nothing is published" : {
       "comment" : "Publish review, the row “Policy change”: if the queued policy is applied before this publish confirms, nothing is published",
       "localizations" : {
@@ -49420,6 +49564,42 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全部"
+          }
+        }
+      }
+    },
+    "momentFilter.graduated" : {
+      "comment" : "[tight] Moments filter: the Moments whose coin has graduated",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Graduated"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gradués"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 완료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已毕业"
           }
         }
       }
