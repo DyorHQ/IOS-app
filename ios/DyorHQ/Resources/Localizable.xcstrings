@@ -1,7 +1,6506 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "$%@ · %@ per edition" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "$%1$@ · %2$@ per edition"
+          }
+        }
+      }
+    },
+    "%@ %@ (1%% slippage)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$@ (1%% slippage)"
+          }
+        }
+      }
+    },
+    "%@ %@ for %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$@ for %3$@ %4$@"
+          }
+        }
+      }
+    },
+    "%@ %@ is in your account." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$@ is in your account."
+          }
+        }
+      }
+    },
+    "%@ %@ vested" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$@ vested"
+          }
+        }
+      }
+    },
+    "%@ %@, total %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$@, total %3$@ %4$@"
+          }
+        }
+      }
+    },
+    "%@ + coins, locked" : {
 
+    },
+    "%@ If you made this password with it shown (the eye button), iOS may have typed curly quotes or a long dash in it: hold the key down to type those." : {
+
+    },
+    "%@ ago" : {
+
+    },
+    "%@ at %@" : {
+      "comment" : "A perp position's size, then the price it was opened at",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ at %2$@"
+          }
+        }
+      }
+    },
+    "%@ at %@ · fee %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ at %2$@ · fee %3$@"
+          }
+        }
+      }
+    },
+    "%@ at one price" : {
+
+    },
+    "%@ bridged from %@ to %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ bridged from %2$@ to %3$@."
+          }
+        }
+      }
+    },
+    "%@ confirmed" : {
+
+    },
+    "%@ confirmed on Monad." : {
+
+    },
+    "%@ confirms it's your passkey, even if your session is open. Your data on the server is deleted first; only then is the passkey removed and this phone cleared. This cannot be undone." : {
+
+    },
+    "%@ creator proceeds" : {
+
+    },
+    "%@ creator proceeds · past cohort" : {
+
+    },
+    "%@ graduated" : {
+
+    },
+    "%@ holds %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ holds %2$@."
+          }
+        }
+      }
+    },
+    "%@ holds no MON or tokens." : {
+
+    },
+    "%@ in wallet" : {
+
+    },
+    "%@ into the pool" : {
+
+    },
+    "%@ is now %@ — above your %@ target." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is now %2$@ — above your %3$@ target."
+          }
+        }
+      }
+    },
+    "%@ is now %@ — below your %@ target." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is now %2$@ — below your %3$@ target."
+          }
+        }
+      }
+    },
+    "%@ left" : {
+      "comment" : "[tight] The time left to collect a Moment (\"2d 3h left\")"
+    },
+    "%@ long" : {
+      "comment" : "A long position on the market that comes first: “BTC-PERP long”."
+    },
+    "%@ of %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of %2$@"
+          }
+        }
+      }
+    },
+    "%@ of every collect builds the reserve; at the threshold the coin graduates into a locked Uniswap pool." : {
+
+    },
+    "%@ of every collect, plus %@ of the pool's 1%% fee after graduation, accrue here for you." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of every collect, plus %2$@ of the pool's 1%% fee after graduation, accrue here for you."
+          }
+        }
+      }
+    },
+    "%@ of the reserve to you, the rest to the treasury" : {
+
+    },
+    "%@ or your passcode is required to reveal your key." : {
+
+    },
+    "%@ price chart" : {
+
+    },
+    "%@ required: %@" : {
+      "comment" : "“Face ID required: <why>” on a confirmation sheet. The first value is Face ID, Touch ID, Optic ID or Passcode.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ required: %2$@"
+          }
+        }
+      }
+    },
+    "%@ required: %@." : {
+      "comment" : "“Face ID required: <why>.” The first value is Face ID, Touch ID, Optic ID or Passcode.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ required: %2$@."
+          }
+        }
+      }
+    },
+    "%@ reserve into a locked pool" : {
+
+    },
+    "%@ reserve wound down" : {
+
+    },
+    "%@ reserve · %@ FDV" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ reserve · %2$@ FDV"
+          }
+        }
+      }
+    },
+    "%@ reserve · %@ creator · %@ DyorHQ" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ reserve · %2$@ creator · %3$@ DyorHQ"
+          }
+        }
+      }
+    },
+    "%@ reserve · %@ you · %@ DyorHQ" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ reserve · %2$@ you · %3$@ DyorHQ"
+          }
+        }
+      }
+    },
+    "%@ returned on %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ returned on %2$@"
+          }
+        }
+      }
+    },
+    "%@ rewards" : {
+
+    },
+    "%@ sent" : {
+
+    },
+    "%@ short" : {
+      "comment" : "A short position on the market that comes first: “BTC-PERP short”."
+    },
+    "%@ token" : {
+
+    },
+    "%@ trading fees" : {
+
+    },
+    "%@ trading fees · past cohort" : {
+
+    },
+    "%@ vested coins" : {
+
+    },
+    "%@ vested coins · past cohort" : {
+
+    },
+    "%@ vesting" : {
+
+    },
+    "%@ was created before our security upgrade and still holds %@. Moving your email off it would leave that out of reach in DyorHQ. Log in with its password (Signed up before September 24, 2026?) to move the funds out first." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ was created before our security upgrade and still holds %2$@. Moving your email off it would leave that out of reach in DyorHQ. Log in with its password (Signed up before September 24, 2026?) to move the funds out first."
+          }
+        }
+      }
+    },
+    "%@ you · %@ DyorHQ · %@ reserve" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ you · %2$@ DyorHQ · %3$@ reserve"
+          }
+        }
+      }
+    },
+    "%@ · %@ of circulating" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@ of circulating"
+          }
+        }
+      }
+    },
+    "%@ · %lld collects" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$@ · %2$lld collect"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$@ · %2$lld collects"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%@ · %lld editions" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$@ · %2$lld edition"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$@ · %2$lld editions"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%@ · %lld orders from the closed long" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$@ · %2$lld order from the closed long"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$@ · %2$lld orders from the closed long"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%@ · %lld orders from the closed short" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$@ · %2$lld order from the closed short"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$@ · %2$lld orders from the closed short"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%@ · MC %@" : {
+      "comment" : "Coins held, then the coin's market cap (MC) [tight]",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · MC %2$@"
+          }
+        }
+      }
+    },
+    "%@ · about %lld collects" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$@ · about %2$lld collect"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$@ · about %2$lld collects"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%@ · closes %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · closes %2$@ %3$@"
+          }
+        }
+      }
+    },
+    "%@%% to graduation" : {
+      "comment" : "[tight] Moment card: how far the reserve is toward graduation"
+    },
+    "%@, %@, unverified" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@, %2$@, unverified"
+          }
+        }
+      }
+    },
+    "%@-PERP · on Long" : {
+
+    },
+    "%@-PERP · on Short" : {
+
+    },
+    "%@. It expired without triggering, so it no longer protects your position. Check the position on Perps." : {
+
+    },
+    "%@. It triggered but Perpl couldn't close the position, so it is still open. Check the position on Perps." : {
+
+    },
+    "%@. Perpl is closing that part of the position." : {
+
+    },
+    "%@. Perpl refused it after accepting the order, so it isn't protecting your position. Check the position on Perps." : {
+
+    },
+    "%@: sent to you, not chosen here" : {
+      "comment" : "Send review: a token someone sent to this wallet, not one chosen in the app. %@ is its DyorHQ label, DyorHQ Launch or DyorHQ Moment"
+    },
+    "%lld %@ candles. Last %@, down %@ over the period. High %@, low %@." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld %2$@ candle. Last %3$@, down %4$@ over the period. High %5$@, low %6$@."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld %2$@ candles. Last %3$@, down %4$@ over the period. High %5$@, low %6$@."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld %@ candles. Last %@, up %@ over the period. High %@, low %@." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld %2$@ candle. Last %3$@, up %4$@ over the period. High %5$@, low %6$@."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld %2$@ candles. Last %3$@, up %4$@ over the period. High %5$@, low %6$@."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld TP/SL on %@ have no position to close. Left armed, they would fire on your next position here." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld TP/SL on %2$@ has no position to close. Left armed, it would fire on your next position here."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld TP/SL on %2$@ have no position to close. Left armed, they would fire on your next position here."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld claims · fees and rewards" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld claim · fees and rewards"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld claims · fees and rewards"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld days" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld day"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld days"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld editions" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld edition"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld editions"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld editions · %@" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld edition · %2$@"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld editions · %2$@"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld editions · %@ $%@" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld edition · %2$@ $%3$@"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld editions · %2$@ $%3$@"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld editions · %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld edition · %2$@ %3$@"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld editions · %2$@ %3$@"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld editions · promised %@ · claimed %@ · in wallet %@" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld edition · promised %2$@ · claimed %3$@ · in wallet %4$@"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld editions · promised %2$@ · claimed %3$@ · in wallet %4$@"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld editions · promised %@ · claimed %@ · in wallet %@ · creator" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld edition · promised %2$@ · claimed %3$@ · in wallet %4$@ · creator"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld editions · promised %2$@ · claimed %3$@ · in wallet %4$@ · creator"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld percent" : {
+
+    },
+    "%lld stop losses are live. A new one replaces all of them." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld stop loss is live. A new one replaces it."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld stop losses are live. A new one replaces all of them."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld take profits are live. A new one replaces all of them." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld take profit is live. A new one replaces it."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld take profits are live. A new one replaces all of them."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld take-profit/stop-loss orders from an earlier %@ long are still armed on Perpl and would act on this new position. Cancel them from Orders first." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld take-profit/stop-loss order from an earlier %2$@ long is still armed on Perpl and would act on this new position. Cancel it from Orders first."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld take-profit/stop-loss orders from an earlier %2$@ long are still armed on Perpl and would act on this new position. Cancel them from Orders first."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld take-profit/stop-loss orders from an earlier %@ short are still armed on Perpl and would act on this new position. Cancel them from Orders first." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld take-profit/stop-loss order from an earlier %2$@ short is still armed on Perpl and would act on this new position. Cancel it from Orders first."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld take-profit/stop-loss orders from an earlier %2$@ short are still armed on Perpl and would act on this new position. Cancel them from Orders first."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld times" : {
+
+    },
+    "%lld times leverage" : {
+
+    },
+    "%lld to claim" : {
+
+    },
+    "%lld trades in the period" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld trade in the period"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld trades in the period"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld words. Words are separated by spaces." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld word. Words are separated by spaces."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld words. Words are separated by spaces."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld%% to graduation" : {
+
+    },
+    "1.5% (0.2% to you)" : {
+      "comment" : "Publish review: the trading fee after graduation, then the creator's part of it. Write the percentages as they are"
+    },
+    "15m" : {
+      "comment" : "Chart timeframe: fifteen minutes. [tight]"
+    },
+    "1D" : {
+      "comment" : "Chart timeframe: one day. [tight]"
+    },
+    "1h" : {
+      "comment" : "Chart timeframe: one hour. [tight]"
+    },
+    "1m" : {
+      "comment" : "Chart timeframe: one minute. [tight]"
+    },
+    "24h" : {
+      "comment" : "A reporting period: the last 24 hours [tight]"
+    },
+    "24h Volume" : {
+
+    },
+    "30 days" : {
+      "comment" : "A reporting period: the last 30 days [tight]"
+    },
+    "30D" : {
+      "comment" : "A reporting period on a chip: the last 30 days [tight]"
+    },
+    "4h" : {
+      "comment" : "Chart timeframe: four hours. [tight]"
+    },
+    "5m" : {
+      "comment" : "Chart timeframe: five minutes. [tight]"
+    },
+    "6-digit code" : {
+
+    },
+    "7 days" : {
+      "comment" : "A reporting period: the last 7 days [tight]"
+    },
+    "7D" : {
+      "comment" : "A reporting period on a chip: the last 7 days [tight]"
+    },
+    "A 64-character hex private key, with or without a 0x prefix." : {
+
+    },
+    "A contract, not a wallet" : {
+
+    },
+    "A high tolerance can fill at a much worse price. Use it only for volatile or thin pairs." : {
+
+    },
+    "A new take-profit or stop-loss closes %@ %@, the whole position as it is now. That size is fixed: if you add to or reduce the position later, set TP/SL again. It is cancelled automatically when the position closes." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A new take-profit or stop-loss closes %1$@ %2$@, the whole position as it is now. That size is fixed: if you add to or reduce the position later, set TP/SL again. It is cancelled automatically when the position closes."
+          }
+        }
+      }
+    },
+    "A passkey account unlocks with Face ID or Touch ID, and iCloud Keychain keeps its passkey on your other Apple devices." : {
+
+    },
+    "A past Moments cohort" : {
+
+    },
+    "A past cohort has more Moments than the app reads at once, so one of yours may be missing here." : {
+
+    },
+    "A retired DyorHQ launchpad" : {
+
+    },
+    "A session lasts %@ from the %@ that opens it, and ends when you leave the app. Change the length in Settings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A session lasts %1$@ from the %2$@ that opens it, and ends when you leave the app. Change the length in Settings."
+          }
+        }
+      }
+    },
+    "A square image works best." : {
+
+    },
+    "A tight tolerance protects your price, but a swap can fail in a fast-moving market." : {
+
+    },
+    "AUSD" : {
+      "shouldTranslate" : false
+    },
+    "About" : {
+
+    },
+    "About this Moment" : {
+
+    },
+    "Above %@" : {
+
+    },
+    "Account" : {
+
+    },
+    "Account Value" : {
+
+    },
+    "Account deleted, one step left" : {
+
+    },
+    "Accounts created before our email-wallet security upgrade are found with this extra check, then moved to a new password." : {
+
+    },
+    "Across Spot, Perps, Launch and Moments" : {
+
+    },
+    "Active · %@" : {
+      "comment" : "A live passkey session and the time it has left: “Active · 12m”. [tight]"
+    },
+    "Activity" : {
+      "comment" : "My Launchpad tab: this wallet's launchpad trades and launches [tight]"
+    },
+    "Add" : {
+
+    },
+    "Add Margin" : {
+
+    },
+    "Add Photo" : {
+
+    },
+    "Add a Passkey" : {
+
+    },
+    "Add an Alert" : {
+
+    },
+    "Add funds" : {
+
+    },
+    "Add funds to start trading" : {
+
+    },
+    "Add margin" : {
+
+    },
+    "Added %@ margin" : {
+
+    },
+    "Address" : {
+
+    },
+    "Adjust Leverage" : {
+
+    },
+    "Adjust leverage" : {
+
+    },
+    "Advanced" : {
+      "comment" : "The launch form's advanced settings, a button (an adjective)"
+    },
+    "After" : {
+      "comment" : "Add margin: the position as it will be once the margin is added, a section header"
+    },
+    "Alerts" : {
+
+    },
+    "Alerts arrive while DyorHQ is open, on any screen: order fills, a Perps position at 80% and 90% of its margin in use, and price alerts. Nothing arrives while DyorHQ is closed, so don't rely on them to protect a position: set a stop-loss on it. Everything is also kept in the in-app center." : {
+      "comment" : "Notifications settings: which alerts DyorHQ sends. Write 80% and 90% as they are, the percent sign right after the number"
+    },
+    "Alerts arrive while DyorHQ is open. iOS pauses the app in the background, so nothing reaches your lock screen while DyorHQ is closed." : {
+
+    },
+    "Alerts arrive while DyorHQ is open: it checks prices every 30 seconds on any screen, and again as soon as you come back to it. iOS pauses the app in the background, so an alert can't reach your lock screen while DyorHQ is closed, and a price that crosses and comes back in the meantime isn't reported. An alert fires once, then it's removed. To protect a perp position, set a stop-loss on it." : {
+
+    },
+    "Alerts, watchlists and referral codes" : {
+
+    },
+    "All of it stays at %@ on the blockchain, but without the passkey or the recovery phrase nothing can move it." : {
+
+    },
+    "All-Time Volume" : {
+
+    },
+    "Allocation" : {
+
+    },
+    "Allocation claimable" : {
+
+    },
+    "Allocation vested" : {
+
+    },
+    "Also stop using Sign in with Apple for DyorHQ: open Settings, tap your name, tap Sign in with Apple, select DyorHQ, then tap Delete." : {
+
+    },
+    "Always asks for %@" : {
+
+    },
+    "Amount" : {
+
+    },
+    "Amount unit, %@" : {
+
+    },
+    "An earlier approval lets it spend any amount. This plan approves exactly what it needs instead." : {
+
+    },
+    "Any take-profit or stop-loss you have on Perpl stays live. This device can't show or cancel them until you connect again." : {
+
+    },
+    "Anyone can apply the queued policy now until %@. If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them." : {
+
+    },
+    "Anyone can apply the queued policy now. If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them." : {
+
+    },
+    "Anyone can launch a coin or publish a Moment on DyorHQ: this says where the coin was made, not that DyorHQ vouches for it." : {
+
+    },
+    "Anyone with these words has full control of your funds, on Monad and on every other chain. Never share them — DyorHQ support will never ask for them." : {
+
+    },
+    "Anyone with this key has full control of your funds. Never share it — DyorHQ support will never ask for it." : {
+
+    },
+    "App Lock" : {
+
+    },
+    "App Lock needs a device passcode. Set one in iOS Settings, then try again." : {
+
+    },
+    "Appearance" : {
+
+    },
+    "Approval" : {
+      "comment" : "A token approval (an allowance) the transaction grants, a review row (a noun)"
+    },
+    "Arrived" : {
+      "comment" : "A bridge's status: the funds arrived [tight]"
+    },
+    "Arrived on %@" : {
+
+    },
+    "As last read" : {
+
+    },
+    "Ask" : {
+      "comment" : "The order book's sell side, a row label: the price sellers ask (a noun) [tight]"
+    },
+    "Asks for %@ (or your passcode) before every transaction is signed, and before App Lock can be turned off." : {
+
+    },
+    "Assets" : {
+      "comment" : "A tab: in My Holdings the tokens held, on Perps the trading account's balance [tight]"
+    },
+    "At most %@ of the supply." : {
+
+    },
+    "Avail. Balance" : {
+
+    },
+    "Available" : {
+      "comment" : "The balance or margin free to use, a label (an adjective) [tight]"
+    },
+    "Available: %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Available: %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "Available: %@ AUSD" : {
+
+    },
+    "Avoid common words like “%@”." : {
+
+    },
+    "Back" : {
+
+    },
+    "Balance" : {
+
+    },
+    "Balance: %@" : {
+
+    },
+    "Balance: %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Balance: %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "Balance: %@ %@ · %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Balance: %1$@ %2$@ · %3$@ %4$@"
+          }
+        }
+      }
+    },
+    "Balanced — recommended for most swaps." : {
+
+    },
+    "Balances and markets" : {
+
+    },
+    "Balances and positions for this address will no longer be shown." : {
+
+    },
+    "Balances, positions and launches for this address will be shown. Nothing can be signed." : {
+
+    },
+    "Be the first to launch a coin on DyorHQ." : {
+
+    },
+    "Be the first: publish a photo or video and make it last forever." : {
+
+    },
+    "Below %@" : {
+
+    },
+    "Best" : {
+      "comment" : "Badge on the venue with the best quote [tight]"
+    },
+    "Bid" : {
+      "comment" : "The order book's buy side, a row label: the price buyers bid (a noun) [tight]"
+    },
+    "Bids %@ of visible depth, asks %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Bids %1$@ of visible depth, asks %2$@"
+          }
+        }
+      }
+    },
+    "Bio" : {
+
+    },
+    "Biometrics" : {
+
+    },
+    "Blocked for your safety: %@" : {
+
+    },
+    "Blocked for your safety: %@. This transaction wasn’t signed." : {
+
+    },
+    "Bought %@" : {
+
+    },
+    "Bridge" : {
+      "comment" : "A noun: the cross-chain bridge [tight]"
+    },
+    "Bridge %@ → %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Bridge %1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Bridge again" : {
+
+    },
+    "Bridge complete" : {
+
+    },
+    "Bridge failed" : {
+
+    },
+    "Bridge from" : {
+
+    },
+    "Bridge from another chain" : {
+
+    },
+    "Bridge refunded" : {
+
+    },
+    "Bridge refunded — %@. Your funds were returned on %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Bridge refunded — %1$@. Your funds were returned on %2$@."
+          }
+        }
+      }
+    },
+    "Bridge routes load once your passkey session is open." : {
+
+    },
+    "Bridge to" : {
+
+    },
+    "Bridge to %@" : {
+
+    },
+    "Bridge to Monad" : {
+
+    },
+    "Bridge unavailable" : {
+
+    },
+    "Bridged %@ → %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Bridged %1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Bridging across chains…" : {
+
+    },
+    "Bridging to another chain" : {
+
+    },
+    "Bridging…" : {
+
+    },
+    "Browse Moments" : {
+
+    },
+    "Budget" : {
+      "comment" : "The USDC a Moment's buyback can spend, a review row (a noun)"
+    },
+    "Buy" : {
+
+    },
+    "Buy %@" : {
+
+    },
+    "Buy %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Buy %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "Buy %@ at %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Buy %1$@ at %2$@"
+          }
+        }
+      }
+    },
+    "Buy %@ at %@, %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Buy %1$@ at %2$@, %3$@"
+          }
+        }
+      }
+    },
+    "Buy a coin on the curve and it appears here with its PnL." : {
+
+    },
+    "Buy or launch a coin on the Launch tab." : {
+
+    },
+    "Buy or swap a token and it appears here." : {
+
+    },
+    "Buy your own coin in the same transaction — snipe-tax exempt." : {
+
+    },
+    "Buyback budget" : {
+
+    },
+    "By address" : {
+
+    },
+    "C" : {
+      "comment" : "The chart legend's label for a candle's closing price. [tight]"
+    },
+    "Cancel" : {
+
+    },
+    "Cancel %lld Triggers" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Cancel %lld Trigger"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Cancel %lld Triggers"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Cancel It" : {
+
+    },
+    "Cancel Order" : {
+
+    },
+    "Cancel Stop Loss" : {
+
+    },
+    "Cancel TP/SL" : {
+
+    },
+    "Cancel Take Profit" : {
+
+    },
+    "Cancel Them" : {
+
+    },
+    "Cancel Trigger" : {
+
+    },
+    "Cancel sent for the old stop-loss, but Perpl hasn't confirmed it, so the new one wasn't placed (that could leave two). Check Orders: if the old one is gone, this position has no stop-loss now." : {
+
+    },
+    "Cancel sent for the old take-profit, but Perpl hasn't confirmed it, so the new one wasn't placed (that could leave two). Check Orders: if the old one is gone, this position has no take-profit now." : {
+
+    },
+    "Cancel sent for the stop-loss at %@. It leaves the list when Perpl confirms." : {
+
+    },
+    "Cancel sent for the stop-loss, but Perpl hasn't confirmed it. Check Orders: it may still be live." : {
+
+    },
+    "Cancel sent for the take-profit at %@. It leaves the list when Perpl confirms." : {
+
+    },
+    "Cancel sent for the take-profit, but Perpl hasn't confirmed it. Check Orders: it may still be live." : {
+
+    },
+    "Cancel stop loss at %@" : {
+
+    },
+    "Cancel take profit at %@" : {
+
+    },
+    "Cancelled %@ order" : {
+
+    },
+    "Cancelled %lld TP/SL" : {
+
+    },
+    "Cancelled TP/SL" : {
+
+    },
+    "Cancelled leftover TP/SL" : {
+
+    },
+    "Cancelled." : {
+      "comment" : "An error message: what was under way was cancelled, by the person or by iOS (a request, a Face ID, passcode or passkey prompt). Not an order's status"
+    },
+    "Cancelling orders and closing positions" : {
+
+    },
+    "Category" : {
+      "comment" : "VoiceOver's name for My Holdings' switch between its categories (a noun)"
+    },
+    "Chain" : {
+
+    },
+    "Chain ID" : {
+
+    },
+    "Change Image" : {
+
+    },
+    "Change Photo" : {
+
+    },
+    "Change Video" : {
+
+    },
+    "Change details" : {
+
+    },
+    "Change size unit" : {
+
+    },
+    "Change the filter to see other Moments." : {
+
+    },
+    "Chart Unavailable" : {
+
+    },
+    "Chart view" : {
+
+    },
+    "Check Again" : {
+
+    },
+    "Check for an Older Account" : {
+
+    },
+    "Check this is the address you expect before importing." : {
+
+    },
+    "Choose Image" : {
+
+    },
+    "Choose Photo or Video" : {
+
+    },
+    "Choose a Token" : {
+
+    },
+    "Choose a different token" : {
+
+    },
+    "Choose a new password for the security upgrade — your current one can’t be reused." : {
+
+    },
+    "Choose a new password — your current one can’t be reused." : {
+
+    },
+    "Choose a token" : {
+
+    },
+    "Claim" : {
+
+    },
+    "Claim %@" : {
+
+    },
+    "Claim %@ $%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Claim %1$@ $%2$@"
+          }
+        }
+      }
+    },
+    "Claim %@ Fees" : {
+
+    },
+    "Claim %@ Rewards" : {
+
+    },
+    "Claim All" : {
+
+    },
+    "Claim All Fees" : {
+
+    },
+    "Claim Creator Fees" : {
+
+    },
+    "Claim Fees" : {
+
+    },
+    "Claim Rewards" : {
+
+    },
+    "Claimable" : {
+      "comment" : "Ready to claim, a row label before an amount (an adjective)"
+    },
+    "Claimable Fees" : {
+
+    },
+    "Claimable now" : {
+      "comment" : "[tight] My Moments tile: vested coins to claim"
+    },
+    "Claimed" : {
+      "comment" : "[tight] Already claimed: coins on My Moments and a Moment's page, fees and rewards on Portfolio"
+    },
+    "Claimed $%@" : {
+
+    },
+    "Claimed %@" : {
+
+    },
+    "Claimed %@ rewards" : {
+
+    },
+    "Claimed all Launch earnings" : {
+
+    },
+    "Claimed coins" : {
+
+    },
+    "Claimed creator fees" : {
+
+    },
+    "Claimed fees" : {
+
+    },
+    "Claimed holder rewards" : {
+
+    },
+    "Claimed vested coins" : {
+
+    },
+    "Clear All" : {
+
+    },
+    "Clear all" : {
+
+    },
+    "Clear all notifications?" : {
+
+    },
+    "Cleared the graduation threshold" : {
+
+    },
+    "Close" : {
+      "comment" : "Closes this screen or sheet (a verb)"
+    },
+    "Close Position" : {
+
+    },
+    "Close at Market" : {
+
+    },
+    "Close menu" : {
+
+    },
+    "Close order" : {
+
+    },
+    "Close order placed" : {
+
+    },
+    "Closed" : {
+      "comment" : "A tab of the Perps portfolio: the account's closed positions. [tight]"
+    },
+    "Closed %@" : {
+
+    },
+    "Closes %@ of your %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Closes %1$@ of your %2$@"
+          }
+        }
+      }
+    },
+    "Cohort" : {
+      "comment" : "A past Moments cohort (an earlier Moments contract), a row label before its address (a noun)"
+    },
+    "Coin" : {
+
+    },
+    "Coin holders" : {
+
+    },
+    "Coin price" : {
+      "comment" : "[tight] Moment stat: the coin's price"
+    },
+    "Coin ticker" : {
+
+    },
+    "Coins You Launched" : {
+
+    },
+    "Coins across every Moment. Vesting unlocks at the monthly cliffs." : {
+
+    },
+    "Coins are minted to you as they vest once the Moment graduates." : {
+
+    },
+    "Coins owed" : {
+
+    },
+    "Coins still climbing toward graduation" : {
+
+    },
+    "Coins vest only once a Moment graduates; collecting is closed in the app." : {
+
+    },
+    "Collect" : {
+      "comment" : "Collect (buy) editions of this Moment, a verb: the section header on the Moment's page and its button"
+    },
+    "Collect %@" : {
+
+    },
+    "Collect %lld Editions" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Collect %lld Edition"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Collect %lld Editions"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Collect a Moment and it shows up here with its editions and coins." : {
+
+    },
+    "Collect a Moment on the Moments tab and your editions and coins appear here." : {
+
+    },
+    "Collect and Graduate" : {
+
+    },
+    "Collect moments, graduate coins" : {
+
+    },
+    "Collect price" : {
+
+    },
+    "Collect window" : {
+
+    },
+    "Collected $%@ pool fees" : {
+
+    },
+    "Collected $%@ proceeds" : {
+
+    },
+    "Collected %@" : {
+
+    },
+    "Collected %@ creator fees" : {
+
+    },
+    "Collected platform pool fees" : {
+
+    },
+    "Collected platform proceeds" : {
+
+    },
+    "Collected treasury share" : {
+
+    },
+    "Collecting" : {
+      "comment" : "[tight] Moments filter: Moments still open to collect"
+    },
+    "Collecting closed" : {
+      "comment" : "[tight] Moment badge: a past cohort's Moment can no longer be collected"
+    },
+    "Collecting · %@" : {
+      "comment" : "[tight] Moment badge: still collecting, then the time left (\"2d 3h left\")"
+    },
+    "Collectors + pool" : {
+
+    },
+    "Collects" : {
+      "comment" : "[tight] Moment stat: how many collects there were (a noun)"
+    },
+    "Community" : {
+
+    },
+    "Confirm" : {
+
+    },
+    "Confirm %@" : {
+
+    },
+    "Confirm Deposit" : {
+
+    },
+    "Confirm TP/SL" : {
+
+    },
+    "Confirm Withdrawal" : {
+
+    },
+    "Confirm add margin" : {
+
+    },
+    "Confirm bridge" : {
+
+    },
+    "Confirm close" : {
+
+    },
+    "Confirm order" : {
+
+    },
+    "Confirm password" : {
+
+    },
+    "Confirm with %@" : {
+
+    },
+    "Confirm with Face ID, Touch ID or your passcode to continue." : {
+
+    },
+    "Confirm with your passkey to continue." : {
+
+    },
+    "Confirm your backup" : {
+
+    },
+    "Confirmed" : {
+
+    },
+    "Confirming your deposit…" : {
+
+    },
+    "Connect DyorHQ Social to upload a photo, or paste a link instead." : {
+
+    },
+    "Connect DyorHQ Social to upload an image." : {
+
+    },
+    "Connect Perpl Trading" : {
+
+    },
+    "Connect Perpl trading" : {
+
+    },
+    "Connect Perpl trading in Profile to place take-profit and stop-loss." : {
+
+    },
+    "Connect Perpl trading in Profile to see your history." : {
+
+    },
+    "Connect Perpl trading in Profile to set take-profit and stop-loss." : {
+
+    },
+    "Connect to DyorHQ Social" : {
+
+    },
+    "Connected" : {
+
+    },
+    "Connecting to Perpl trading to place your take-profit and stop-loss." : {
+
+    },
+    "Connecting…" : {
+
+    },
+    "Connection" : {
+
+    },
+    "Contact Support" : {
+
+    },
+    "Continue" : {
+
+    },
+    "Continue with Google" : {
+      "comment" : "Google's sign-in button: Google's own wording for the language, on one line [tight]"
+    },
+    "Contract" : {
+      "comment" : "A token's contract address, a row label (a noun)"
+    },
+    "Contracts & Addresses" : {
+
+    },
+    "Copied" : {
+      "comment" : "A button's title once it copied the text (a past participle) [tight]"
+    },
+    "Copied to the clipboard — it clears automatically in 90 seconds." : {
+
+    },
+    "Copy" : {
+
+    },
+    "Copy Address" : {
+
+    },
+    "Copy Private Key" : {
+
+    },
+    "Copy address" : {
+
+    },
+    "Could not read a frame from that video." : {
+
+    },
+    "Couldn't check whether this address is a contract. Check it before sending." : {
+
+    },
+    "Couldn't create your wallet from that email and password. Please try again." : {
+
+    },
+    "Couldn't load markets." : {
+
+    },
+    "Couldn't load the chart" : {
+
+    },
+    "Couldn't open this Moment" : {
+
+    },
+    "Couldn't open this launch" : {
+
+    },
+    "Couldn't pin to IPFS" : {
+
+    },
+    "Couldn't read every past cohort (pull to refresh): %@" : {
+
+    },
+    "Couldn't read the key from this device's Keychain." : {
+
+    },
+    "Couldn't read your balances or your Perpl account, so nothing can be planned yet. %@" : {
+
+    },
+    "Couldn't save the key in this iPhone's Keychain. Unlock your iPhone and try again." : {
+
+    },
+    "Couldn't save the key on this iPhone. Try again." : {
+
+    },
+    "Couldn’t check your wallet’s balance. Check your connection and try again." : {
+
+    },
+    "Couldn’t make a recovery phrase that restores this wallet, so none is shown. Try again." : {
+
+    },
+    "Couldn’t reach Perpl trading — retrying. Take-profit and stop-loss need it live." : {
+
+    },
+    "Couldn’t read what %@ holds. Check your connection and try again." : {
+
+    },
+    "Create Account" : {
+
+    },
+    "Create Trading Account" : {
+
+    },
+    "Create a Passkey" : {
+
+    },
+    "Create a Perpl Account" : {
+
+    },
+    "Create account with a passkey" : {
+
+    },
+    "Creator" : {
+
+    },
+    "Creator Fees" : {
+
+    },
+    "Creator allocation" : {
+
+    },
+    "Creator fees" : {
+
+    },
+    "Creator fees (as last read)" : {
+
+    },
+    "Creator fees accrue per pair asset. Claim each one, or Claim All." : {
+
+    },
+    "Creator fees couldn't be read" : {
+
+    },
+    "Creator fees couldn't be read just now." : {
+
+    },
+    "Creator fees · %@" : {
+
+    },
+    "Creator tax" : {
+
+    },
+    "Creator tax %@" : {
+
+    },
+    "Creator tax is charged on curve trades and, after graduation, on Uniswap v4 pool swaps. %@" : {
+
+    },
+    "Creator tax is charged on curve trades only. %@ After graduation the Monday Trade pool's 1%% fee goes to DyorHQ: there is no creator tax or fee share in the pool." : {
+
+    },
+    "Creator · %@" : {
+
+    },
+    "Creator · %@ (retired launchpad)" : {
+
+    },
+    "Cross-chain bridging isn't configured in this build yet." : {
+
+    },
+    "Crypto headlines" : {
+
+    },
+    "Cumulative Volume" : {
+
+    },
+    "Current margin" : {
+
+    },
+    "Current price" : {
+
+    },
+    "Curve fee" : {
+
+    },
+    "Custom" : {
+      "comment" : "A slippage tolerance typed by the user (an adjective) [tight]"
+    },
+    "Dark" : {
+      "comment" : "Appearance: the dark look [tight]"
+    },
+    "Data" : {
+      "comment" : "VoiceOver's name for the switch under the Perps chart between the order book and the latest trades (a noun)"
+    },
+    "Decimals" : {
+
+    },
+    "Decrease amount" : {
+
+    },
+    "Decrease price" : {
+
+    },
+    "Default Leverage" : {
+
+    },
+    "Delete Account" : {
+
+    },
+    "Delete with %@" : {
+
+    },
+    "Delete your DyorHQ account" : {
+
+    },
+    "Deletes the key from this device. Take-profit and stop-loss orders already on Perpl stay live." : {
+
+    },
+    "Deleting removes your passkey, which is this wallet's only key. Assume this is permanent unless you export the recovery phrase first." : {
+
+    },
+    "Deleting your account" : {
+
+    },
+    "Deposit" : {
+
+    },
+    "Deposit AUSD" : {
+
+    },
+    "Deposit AUSD to open a trading account first." : {
+
+    },
+    "Deposit to" : {
+
+    },
+    "Deposit to Perps" : {
+
+    },
+    "Deposited to Perps" : {
+
+    },
+    "Description" : {
+
+    },
+    "Developer Buy (Optional)" : {
+
+    },
+    "Developer buy" : {
+
+    },
+    "Direction" : {
+      "comment" : "VoiceOver's name for the Transfer screen's switch between Spot → Perps and Perps → Spot (a noun)"
+    },
+    "Disconnect" : {
+
+    },
+    "Dismiss" : {
+
+    },
+    "Display name" : {
+
+    },
+    "Distance" : {
+      "comment" : "How far, in percent, an order's price is from the mark price, a stat (a noun) [tight]"
+    },
+    "Doesn't include %@: no price found." : {
+
+    },
+    "Done" : {
+
+    },
+    "Don’t base your password on your email." : {
+
+    },
+    "DyorHQ %@ · %@ · Self-custodial." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "DyorHQ %1$@ · %2$@ · Self-custodial."
+          }
+        }
+      }
+    },
+    "DyorHQ %@ · Monad mainnet" : {
+
+    },
+    "DyorHQ Moments" : {
+
+    },
+    "DyorHQ Social" : {
+      "shouldTranslate" : false
+    },
+    "DyorHQ coins in your wallet" : {
+
+    },
+    "DyorHQ never holds your keys or your funds." : {
+
+    },
+    "DyorHQ notifies you once when it finds %@ above this price. Alerts arrive while DyorHQ is open: it checks every 30 seconds." : {
+
+    },
+    "DyorHQ notifies you once when it finds %@ below this price. Alerts arrive while DyorHQ is open: it checks every 30 seconds." : {
+
+    },
+    "Each collect" : {
+
+    },
+    "Earlier DyorHQ Moments contracts. Collecting is closed; claim your vested coins and, as a creator, withdraw your own proceeds." : {
+
+    },
+    "Early-buy tax" : {
+
+    },
+    "Economics" : {
+      "comment" : "Publish a Moment: its price, allocation and collect window, a section header"
+    },
+    "Edition holders" : {
+
+    },
+    "Editions" : {
+      "comment" : "[tight] How many editions of a Moment were collected: a stat on the Moment's page and on its card"
+    },
+    "Email" : {
+
+    },
+    "Email & Password" : {
+
+    },
+    "Email already registered" : {
+
+    },
+    "Email verified: %@" : {
+
+    },
+    "Enable Notifications" : {
+
+    },
+    "Enable One-Click Trading" : {
+
+    },
+    "Enable one-click" : {
+      "comment" : "Perpl trading's status: one-click trading still needs enabling [tight]"
+    },
+    "Enable one-click trading" : {
+
+    },
+    "Enable one-click trading in Profile to cancel from the app." : {
+
+    },
+    "Enable one-click trading in Profile to place take-profit and stop-loss." : {
+
+    },
+    "Enable one-click trading in Profile to see your Perpl history." : {
+
+    },
+    "Enable one-click trading in Profile to set take-profit and stop-loss." : {
+
+    },
+    "Enable one-click trading in Profile → Perpl Trading to include your perps history." : {
+
+    },
+    "Ended" : {
+      "comment" : "When the Moment's collecting ended, a row label before a date"
+    },
+    "Ends" : {
+      "comment" : "When the passkey session ends, a row label before a time (a verb: “Ends 3:42 PM”)"
+    },
+    "Enrolled" : {
+      "comment" : "Perpl trading's status: a trading key is set up, not connected yet [tight]"
+    },
+    "Enter a 42-character address starting with 0x." : {
+
+    },
+    "Enter a collect price in USDC." : {
+
+    },
+    "Enter a limit price." : {
+
+    },
+    "Enter a size in %@." : {
+
+    },
+    "Enter an Amount" : {
+
+    },
+    "Enter an amount in AUSD." : {
+
+    },
+    "Enter the code we emailed to %@. It proves the email is yours, so you can log in even while others are making attempts on it. We’ll log you in right after." : {
+
+    },
+    "Enter the code we emailed to %@. This confirms it’s you before your email moves to the new, empty wallet your new password creates." : {
+
+    },
+    "Enter the code we emailed to %@. This proves the email is yours — your wallet is created after you verify, so no fake or unowned emails can register." : {
+
+    },
+    "Enter the stop-loss as a number, or leave it empty." : {
+
+    },
+    "Enter the stop-loss as a number." : {
+
+    },
+    "Enter the take-profit as a number, or leave it empty." : {
+
+    },
+    "Enter the take-profit as a number." : {
+
+    },
+    "Enter your 12 or 24 word phrase" : {
+
+    },
+    "Enter your allocation as a percentage." : {
+
+    },
+    "Entry" : {
+      "comment" : "The position's entry price: a chart line and a stat on the position [tight]"
+    },
+    "Entry %@" : {
+
+    },
+    "Entry %@ → %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Entry %1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Error" : {
+      "comment" : "Perpl trading's status: the connection failed, a noun [tight]"
+    },
+    "Error: %@" : {
+
+    },
+    "Estimated time" : {
+
+    },
+    "Every Monad transaction pays a small network fee in MON. Send about 0.1 MON to your account to make this trade." : {
+
+    },
+    "Every key, session and cache stored on this device" : {
+
+    },
+    "Execute immediately at current price" : {
+
+    },
+    "Exp. loss" : {
+
+    },
+    "Exp. profit" : {
+
+    },
+    "Expire" : {
+      "comment" : "Button: wind the Moment down (a verb)"
+    },
+    "Expire Moment" : {
+
+    },
+    "Expired" : {
+      "comment" : "[tight] The Moment expired before graduating: a badge, a status and a section header"
+    },
+    "Expired %@" : {
+
+    },
+    "Explore" : {
+
+    },
+    "Export Recovery Phrase" : {
+
+    },
+    "Export Wallet" : {
+
+    },
+    "Export Wallet First" : {
+
+    },
+    "Export in Secure View" : {
+
+    },
+    "Export this wallet's private key through Privy's secure export page." : {
+
+    },
+    "Export was cancelled or didn't finish." : {
+
+    },
+    "FDV" : {
+      "comment" : "[tight] Fully diluted valuation: a stat on a Moment's page and on its card"
+    },
+    "Failed" : {
+      "comment" : "A bridge's status [tight]"
+    },
+    "Fair" : {
+      "comment" : "A password's strength [tight]"
+    },
+    "Fair-launch a memecoin paired with a tokenized stock." : {
+
+    },
+    "Falls below" : {
+
+    },
+    "Fee" : {
+
+    },
+    "Fee mode" : {
+
+    },
+    "Fee recipient" : {
+
+    },
+    "Fee sharing" : {
+
+    },
+    "Fees" : {
+
+    },
+    "Fees accrued" : {
+
+    },
+    "Fees paid" : {
+
+    },
+    "Fees wait in the hook until they're swept." : {
+
+    },
+    "Fill the limit price with the last trade." : {
+
+    },
+    "Fill the limit price with the mid of the book." : {
+
+    },
+    "Fills" : {
+      "comment" : "A tab of the Perps portfolio: the account's executed trades (a noun). [tight]"
+    },
+    "Filter" : {
+
+    },
+    "Finding the best price" : {
+
+    },
+    "Fingerprint %@… goes on-chain." : {
+
+    },
+    "First failure" : {
+
+    },
+    "Fixed at publish; nothing about a live Moment can be changed." : {
+
+    },
+    "Floor" : {
+      "comment" : "VoiceOver's name for the bottom edge of the shaded area under the price chart (a chart value's name)"
+    },
+    "Follow any Monad wallet. Trading needs an account." : {
+
+    },
+    "For volatile or low-liquidity pairs." : {
+
+    },
+    "Forget This Device" : {
+
+    },
+    "Forget this device?" : {
+
+    },
+    "Forgot password?" : {
+
+    },
+    "Free on Perpl: %@ AUSD" : {
+
+    },
+    "From" : {
+
+    },
+    "From sign-in to your first trade" : {
+
+    },
+    "Full range · locked forever" : {
+
+    },
+    "Funding (1h) / Countdown" : {
+      "comment" : "Over the funding rate and the time to the next funding, in a narrow column. [tight]"
+    },
+    "Funds arrived" : {
+
+    },
+    "Funds at this same address on other EVM chains (Bridge)" : {
+
+    },
+    "Gainers" : {
+      "comment" : "Top Tokens tab: rising most in 24h [tight]"
+    },
+    "Get Help" : {
+
+    },
+    "Get Started" : {
+
+    },
+    "Get a quote first." : {
+
+    },
+    "Get started" : {
+
+    },
+    "Getting Started" : {
+
+    },
+    "Good" : {
+      "comment" : "A password's strength [tight]"
+    },
+    "Graduate" : {
+
+    },
+    "Graduated" : {
+      "comment" : "[tight] A status: the coin graduated into its pool. A badge and a filter on Moments, a section of the Launch board and a date row: use a form that fits each"
+    },
+    "Graduated $%@" : {
+
+    },
+    "Graduates" : {
+      "comment" : "Collect review: whether this collect graduates the Moment's coin, a row label (a verb: “Graduates: Yes, in this transaction”)"
+    },
+    "Graduates at" : {
+
+    },
+    "Graduates at %@ %@ raised. Liquidity then moves to a locked %@ pool." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Graduates at %1$@ %2$@ raised. Liquidity then moves to a locked %3$@ pool."
+          }
+        }
+      }
+    },
+    "Graduates on" : {
+
+    },
+    "Graduates to a locked %@ pool once the curve raises %@ %@. A %@ coin graduates on Monday Trade; if it stays stuck for a day, anyone can move it to a locked Uniswap v4 pool. Launch fee %@ MON." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Graduates to a locked %1$@ pool once the curve raises %2$@ %3$@. A %4$@ coin graduates on Monday Trade; if it stays stuck for a day, anyone can move it to a locked Uniswap v4 pool. Launch fee %5$@ MON."
+          }
+        }
+      }
+    },
+    "Graduates to a locked %@ pool once the curve raises %@ %@. Launch fee %@ MON." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Graduates to a locked %1$@ pool once the curve raises %2$@ %3$@. Launch fee %4$@ MON."
+          }
+        }
+      }
+    },
+    "Graduation" : {
+
+    },
+    "Graduation FDV" : {
+      "comment" : "[tight] Moment stat: the fully diluted valuation the coin graduates at"
+    },
+    "Graduation Pending" : {
+
+    },
+    "Graduation has been failing for more than a week past the deadline. Anyone can wind the Moment down now." : {
+
+    },
+    "Graduation has not completed yet; anyone can retry it." : {
+
+    },
+    "Graduation pending" : {
+      "comment" : "[tight] Moment badge: its graduation has not completed yet"
+    },
+    "Graduation reserve" : {
+
+    },
+    "Graduation venue" : {
+
+    },
+    "Guides to every part of DyorHQ" : {
+
+    },
+    "H" : {
+      "comment" : "The chart legend's label for a candle's highest price. [tight]"
+    },
+    "Handle is lowercase letters, numbers and underscores, 3–20 characters." : {
+
+    },
+    "Headlines come straight from each publisher's feed." : {
+
+    },
+    "Held by %@ on Monad. This version can't send, trade or sign anything." : {
+
+    },
+    "Held for later buyback rounds" : {
+
+    },
+    "Help Center" : {
+
+    },
+    "Hidden characters were removed from the pasted address. Check it matches the source." : {
+
+    },
+    "Hidden when its time ran out. Show it again if you haven't finished writing it down." : {
+
+    },
+    "Hidden while the screen is being recorded" : {
+
+    },
+    "Hidden while the screen is being recorded, mirrored or shared." : {
+
+    },
+    "Hide" : {
+
+    },
+    "Hide password" : {
+
+    },
+    "Hides in %@" : {
+
+    },
+    "History" : {
+
+    },
+    "Holder fee sharing" : {
+
+    },
+    "Holder rewards" : {
+
+    },
+    "Holders" : {
+      "comment" : "Who holds the coin or its editions: a stat and a section header (a noun)"
+    },
+    "Holders are paid as trades happen; only the creator's and DyorHQ's parts wait in the hook until they're swept." : {
+
+    },
+    "Holdings" : {
+      "comment" : "What a wallet holds: a tab of My Launchpad, a stat and a section header [tight]"
+    },
+    "Home" : {
+      "comment" : "The Home tab's name, a noun"
+    },
+    "Hot" : {
+      "comment" : "Top Tokens tab: the biggest moves either way [tight]"
+    },
+    "How far the price may move before your swap settles. Beyond this, it cancels instead of filling worse." : {
+
+    },
+    "I already have a passkey" : {
+
+    },
+    "I understand %@ keeps its %@ and this email will no longer open it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "I understand %1$@ keeps its %2$@ and this email will no longer open it."
+          }
+        }
+      }
+    },
+    "I understand %@ keeps its %@, and anything else it holds, and this email will no longer open it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "I understand %1$@ keeps its %2$@, and anything else it holds, and this email will no longer open it."
+          }
+        }
+      }
+    },
+    "I understand I may permanently lose these funds" : {
+
+    },
+    "I understand my current wallet’s funds don’t move to the new one" : {
+
+    },
+    "I understand my password is the only way back to my wallet" : {
+
+    },
+    "I understand only my own backup can recover my funds" : {
+
+    },
+    "I understand this email will no longer open %@, which holds no MON or tokens (it may hold other things)." : {
+
+    },
+    "I understand this email will no longer open %@, which holds no MON or tokens." : {
+
+    },
+    "I've Written It Down" : {
+
+    },
+    "If it expires" : {
+
+    },
+    "Impact %@" : {
+
+    },
+    "Impact cap" : {
+
+    },
+    "Import Wallet" : {
+
+    },
+    "Import a wallet" : {
+
+    },
+    "Import a wallet with its private key or recovery phrase to sign, trade, and export it later." : {
+
+    },
+    "Import an Existing Wallet" : {
+
+    },
+    "Import your own wallet with its recovery phrase or private key. It stays on this device." : {
+
+    },
+    "Imported wallet" : {
+
+    },
+    "In Use" : {
+
+    },
+    "In refund mode, holders sell back into the curve; a migrating coin trades once it graduates" : {
+
+    },
+    "In the pool" : {
+
+    },
+    "In use (margin)" : {
+
+    },
+    "In wallet" : {
+
+    },
+    "In wallet: %@ AUSD" : {
+
+    },
+    "In wallet: %@ AUSD · %@ MON" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "In wallet: %1$@ AUSD · %2$@ MON"
+          }
+        }
+      }
+    },
+    "Increase amount" : {
+
+    },
+    "Increase price" : {
+
+    },
+    "Insufficient %@" : {
+
+    },
+    "Isolated" : {
+      "comment" : "Isolated margin: Perpl's only margin mode. [tight]"
+    },
+    "Isolated margin" : {
+
+    },
+    "It expired before graduating, so its coins never vest. Your editions stay yours." : {
+
+    },
+    "It has sent %lld transactions, so it may also hold positions, collateral or coins not shown here." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "It has sent %lld transaction, so it may also hold positions, collateral or coins not shown here."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "It has sent %lld transactions, so it may also hold positions, collateral or coins not shown here."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Its Moment hasn't graduated yet, so the coin has no market. It trades once the Moment graduates." : {
+
+    },
+    "Its collecting window ended before it graduated, so its coins never vest. Your editions stay yours." : {
+
+    },
+    "Its stop-loss was not sent: if the order is open, set it with TP/SL on the position." : {
+
+    },
+    "Its take-profit and stop-loss were not sent: if the order is open, set them with TP/SL on the position." : {
+
+    },
+    "Its take-profit was not sent: if the order is open, set it with TP/SL on the position." : {
+
+    },
+    "I’ve moved everything I want to keep out of my previous wallet (%@). Anything left there won’t be reachable in DyorHQ after the upgrade." : {
+
+    },
+    "Keep" : {
+      "comment" : "Placeholder of a take-profit or stop-loss price field that already has one: leave it empty to keep it [tight]"
+    },
+    "Keep Showing" : {
+
+    },
+    "Keep Showing gives you another minute. Nothing else is asked." : {
+
+    },
+    "Keeper trigger" : {
+
+    },
+    "Key export for this wallet type isn't set up in this build yet." : {
+
+    },
+    "Kuru, Uniswap and Monday Trade — compared on every swap." : {
+
+    },
+    "L" : {
+      "comment" : "The chart legend's label for a candle's lowest price. [tight]"
+    },
+    "Language" : {
+
+    },
+    "Larger than your %@ position" : {
+
+    },
+    "Largest" : {
+      "comment" : "A Moment's largest holder of editions, a row label (“Largest: 0x12…ab · 3 editions”)"
+    },
+    "Last" : {
+      "comment" : "The price a limit order starts from: the last traded price. [tight]"
+    },
+    "Last Traded Price" : {
+
+    },
+    "Last buyback" : {
+
+    },
+    "Last seen on Perpl" : {
+
+    },
+    "Launch" : {
+      "comment" : "A noun: the Launch tab, the launchpad's coins [tight]"
+    },
+    "Launch %@" : {
+
+    },
+    "Launch a Coin" : {
+
+    },
+    "Launch a coin" : {
+
+    },
+    "Launch a coin and it shows here with its market cap and performance." : {
+
+    },
+    "Launch and trade new coins" : {
+
+    },
+    "Launch fee" : {
+
+    },
+    "Launched" : {
+      "comment" : "How many coins this wallet launched, a stat on My Launchpad (a past participle) [tight]"
+    },
+    "Launched $%@" : {
+
+    },
+    "Launched on DyorHQ" : {
+
+    },
+    "Launches" : {
+      "comment" : "My Launchpad tab: the coins this wallet launched [tight]"
+    },
+    "Launches appear here once the new DyorHQ launchpad contracts are live on Monad." : {
+
+    },
+    "Launching a coin or creating a Moment" : {
+
+    },
+    "Launchpad" : {
+
+    },
+    "Launchpad buys and sells" : {
+
+    },
+    "Launchpad creator fees and holder rewards" : {
+
+    },
+    "Launchpad profile" : {
+
+    },
+    "Learn" : {
+      "comment" : "Get Help: the section of guides to read (a heading)"
+    },
+    "Learn more" : {
+
+    },
+    "Learn more about %@" : {
+
+    },
+    "Left before %@" : {
+
+    },
+    "Leftover TP/SL" : {
+
+    },
+    "Lets Perpl's keeper forward your signed orders. One on-chain transaction." : {
+
+    },
+    "Leverage" : {
+
+    },
+    "Leverage %@ times" : {
+
+    },
+    "Light" : {
+      "comment" : "Appearance: the light look [tight]"
+    },
+    "Limit" : {
+      "comment" : "Order type: rests at the price you set until it fills. [tight]"
+    },
+    "Limit %@ is above the mark (%@) and would fill at once. Check the price." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Limit %1$@ is above the mark (%2$@) and would fill at once. Check the price."
+          }
+        }
+      }
+    },
+    "Limit %@ is below the mark (%@) and would fill at once. Check the price." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Limit %1$@ is below the mark (%2$@) and would fill at once. Check the price."
+          }
+        }
+      }
+    },
+    "Limit at" : {
+
+    },
+    "Limit at %@" : {
+
+    },
+    "Limit price" : {
+
+    },
+    "Limit · reduce-only" : {
+
+    },
+    "Link" : {
+      "comment" : "Publish review: the link each Moment gets (dyorhq.fun/moments/…), a row label (a noun)"
+    },
+    "Links" : {
+
+    },
+    "Liq" : {
+      "comment" : "A chart line at the liquidation price, short for Liquidation. [tight]"
+    },
+    "Liq." : {
+      "comment" : "A position's liquidation price, a stat: short for Liquidation [tight]"
+    },
+    "Liq. if long" : {
+
+    },
+    "Liq. if short" : {
+
+    },
+    "Liq. price" : {
+
+    },
+    "Liquidity" : {
+
+    },
+    "Liquidity locked forever in Uniswap v4. Every trade pays 1.5%: pool, creator, DyorHQ and buybacks." : {
+
+    },
+    "Live market data" : {
+
+    },
+    "Loading" : {
+      "comment" : "The Perps chart's status while its candles load"
+    },
+    "Loading activity…" : {
+
+    },
+    "Loading headlines…" : {
+
+    },
+    "Loading markets…" : {
+
+    },
+    "Loading swaps…" : {
+
+    },
+    "Loading the current policy…" : {
+
+    },
+    "Loading…" : {
+
+    },
+    "Lock now" : {
+
+    },
+    "Locked" : {
+      "comment" : "The passkey session is locked or has ended: the next signature asks for the passkey [tight]"
+    },
+    "Locked forever" : {
+
+    },
+    "Log In" : {
+      "comment" : "Email & Password: the switch's side for an existing account, a verb [tight]"
+    },
+    "Log In Instead" : {
+
+    },
+    "Log In to Move Funds" : {
+
+    },
+    "Log in with the email and password you signed up with. Your wallet is recreated on this device — no code needed." : {
+
+    },
+    "Long" : {
+      "comment" : "Opens a long position: a bet that the price rises. Also a position's side. [tight]"
+    },
+    "Long %@" : {
+      "comment" : "A long position or order on what follows: “Long 0.5 BTC”, “Long BTC”, “Long BTC-PERP”."
+    },
+    "Long %@×" : {
+
+    },
+    "Long / Up" : {
+
+    },
+    "Looking up this token…" : {
+
+    },
+    "Losers" : {
+      "comment" : "Top Tokens tab: falling most in 24h [tight]"
+    },
+    "MOMENTS" : {
+      "comment" : "Eyebrow over the Moments board, in capitals"
+    },
+    "MON and tokens in this wallet" : {
+
+    },
+    "MON has no price right now; deposit AUSD you already hold." : {
+
+    },
+    "MON on hand does not cover the difference at today's price." : {
+
+    },
+    "Made on" : {
+
+    },
+    "Make Moments last forever" : {
+
+    },
+    "Make your favorite moments last forever." : {
+
+    },
+    "Make your first trade" : {
+
+    },
+    "Making sessions longer" : {
+
+    },
+    "Manage Price Alerts" : {
+
+    },
+    "Manage Wallets" : {
+
+    },
+    "Margin" : {
+
+    },
+    "Mark" : {
+      "comment" : "A position's mark price, a stat (a noun) [tight]"
+    },
+    "Mark all as read" : {
+
+    },
+    "Mark price" : {
+
+    },
+    "Market" : {
+      "comment" : "Order type: a market order, which fills at once at the market price. [tight]"
+    },
+    "Market %@" : {
+
+    },
+    "Market Cap" : {
+      "comment" : "Sort chip: the largest market cap first [tight]"
+    },
+    "Market Price" : {
+
+    },
+    "Market cap" : {
+
+    },
+    "Market · %@ slippage" : {
+
+    },
+    "Market, reduce-only, 1% slippage" : {
+
+    },
+    "Max" : {
+      "comment" : "The most allowed: a button or chip that fills in the whole balance, or the highest leverage or amount [tight]"
+    },
+    "Max Slippage" : {
+
+    },
+    "Max network fee" : {
+
+    },
+    "Max slippage" : {
+
+    },
+    "Maximum leverage, %lld times" : {
+
+    },
+    "Media" : {
+      "comment" : "Publish a Moment: the photo or video, a section header and a review row (a noun)"
+    },
+    "Media hash" : {
+
+    },
+    "Menu" : {
+
+    },
+    "Mid" : {
+      "comment" : "The price a limit order starts from: the middle of the order book. [tight]"
+    },
+    "Mid Price" : {
+
+    },
+    "Mid price %@" : {
+
+    },
+    "Mid price %@, spread %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Mid price %1$@, spread %2$@"
+          }
+        }
+      }
+    },
+    "Minimum" : {
+
+    },
+    "Minimum %@. About %lld collects at this price reach the %@ reserve, and the coin graduates at a %@ FDV. Up to %@ of the %@ coins is yours, vesting 20%% at graduation then 16%% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days)." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Minimum %1$@. About %2$lld collect at this price reaches the %3$@ reserve, and the coin graduates at a %4$@ FDV. Up to %5$@ of the %6$@ coins is yours, vesting 20%% at graduation then 16%% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days)."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Minimum %1$@. About %2$lld collects at this price reach the %3$@ reserve, and the coin graduates at a %4$@ FDV. Up to %5$@ of the %6$@ coins is yours, vesting 20%% at graduation then 16%% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days)."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Minimum price" : {
+
+    },
+    "Minimum received" : {
+
+    },
+    "Minimum received %@ %@ at %@ slippage. Quotes refresh every 15 seconds." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Minimum received %1$@ %2$@ at %3$@ slippage. Quotes refresh every 15 seconds."
+          }
+        }
+      }
+    },
+    "Mint a photo or video as an NFT on Monad. Share it, and earn when it’s collected." : {
+
+    },
+    "Minted so far" : {
+
+    },
+    "Mix uppercase, lowercase, numbers and symbols (any three)." : {
+
+    },
+    "Mode" : {
+      "comment" : "VoiceOver's name for the Email & Password screen's switch between Sign Up and Log In (a noun)"
+    },
+    "Moment" : {
+
+    },
+    "Moment #%@" : {
+
+    },
+    "Moment · OpenSea" : {
+
+    },
+    "Moments" : {
+      "comment" : "The Moments feature's name [tight]"
+    },
+    "Moments Not Live Yet" : {
+
+    },
+    "Moments from earlier DyorHQ contracts. Collecting is closed; claim your vested coins and, as a creator, withdraw your own proceeds." : {
+
+    },
+    "Moments vesting and creator proceeds" : {
+
+    },
+    "Moments: collect, claim, withdraw to you" : {
+
+    },
+    "Monad address" : {
+
+    },
+    "Monad mainnet" : {
+
+    },
+    "Monad's token list is still loading, so a token may be missing for now." : {
+
+    },
+    "More Monad tokens" : {
+
+    },
+    "More forgiving when the market is moving." : {
+
+    },
+    "More languages are coming in the next update." : {
+
+    },
+    "More options" : {
+
+    },
+    "More than the balance free on Perpl." : {
+
+    },
+    "More than your %@ %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "More than your %1$@ %2$@."
+          }
+        }
+      }
+    },
+    "More than your %@ balance." : {
+
+    },
+    "More than your available balance." : {
+
+    },
+    "Most you can keep" : {
+
+    },
+    "Move Funds Out" : {
+
+    },
+    "Move to" : {
+
+    },
+    "Moving one cancels the old trigger first, and places the new one once Perpl confirms the cancel." : {
+
+    },
+    "My Holdings" : {
+
+    },
+    "My Launchpad" : {
+
+    },
+    "My Moments" : {
+
+    },
+    "NFT" : {
+
+    },
+    "NFT royalty" : {
+
+    },
+    "NFTs" : {
+      "comment" : "My Holdings tab: the NFTs held [tight]"
+    },
+    "NFTs and Moments" : {
+
+    },
+    "Name" : {
+
+    },
+    "Near Graduation" : {
+      "comment" : "Sort chip: the coins closest to graduating first [tight]"
+    },
+    "Needs one-click trading — not placed" : {
+
+    },
+    "Network" : {
+
+    },
+    "New" : {
+      "comment" : "A badge on a new coin: just launched, or too new to have a 24h change [tight]"
+    },
+    "New Alert" : {
+
+    },
+    "New Launch" : {
+
+    },
+    "New Launches Open Soon" : {
+
+    },
+    "New Moments appear here once the new DyorHQ Moments contracts are live on Monad. Moments from earlier cohorts are in My Moments." : {
+
+    },
+    "New launches open soon." : {
+
+    },
+    "New password" : {
+
+    },
+    "New terms are queued" : {
+
+    },
+    "New terms can take effect at any moment" : {
+
+    },
+    "New terms for new Moments are queued. If they take effect before your publish confirms, nothing is published and you review them again." : {
+
+    },
+    "New to Perpl?" : {
+
+    },
+    "Newest" : {
+      "comment" : "Sort chip: the newest coins first [tight]"
+    },
+    "News" : {
+
+    },
+    "No %@ needed" : {
+
+    },
+    "No %@ needed while active" : {
+
+    },
+    "No Activity Yet" : {
+
+    },
+    "No Candles" : {
+
+    },
+    "No DyorHQ launchpad has a launch of this coin." : {
+
+    },
+    "No Headlines" : {
+
+    },
+    "No Launches Yet" : {
+
+    },
+    "No Markets" : {
+
+    },
+    "No Moment at this link" : {
+
+    },
+    "No Moments Yet" : {
+
+    },
+    "No Moments yet" : {
+
+    },
+    "No NFTs in this wallet yet." : {
+
+    },
+    "No Notifications" : {
+
+    },
+    "No Price History" : {
+
+    },
+    "No biometrics enrolled on this device." : {
+
+    },
+    "No candle history yet" : {
+
+    },
+    "No closed positions yet" : {
+
+    },
+    "No coins launched" : {
+
+    },
+    "No coins on the curve yet: launch the first one." : {
+
+    },
+    "No connection. Check your network and try again." : {
+      "comment" : "An error message: the device is offline, or its connection dropped during the request"
+    },
+    "No fills yet" : {
+
+    },
+    "No launch coins held" : {
+
+    },
+    "No launch holdings" : {
+
+    },
+    "No launchpad activity" : {
+
+    },
+    "No open orders" : {
+
+    },
+    "No open positions" : {
+
+    },
+    "No passkey account is signed in on this device." : {
+
+    },
+    "No price" : {
+
+    },
+    "No price alerts yet." : {
+
+    },
+    "No spot balances" : {
+
+    },
+    "No swaps in this range yet." : {
+
+    },
+    "No token in this wallet matches." : {
+
+    },
+    "No token matches yet: Monad's token list is still loading. Paste a contract address to add any Monad token." : {
+
+    },
+    "No token matches. Paste a contract address to add any Monad token." : {
+
+    },
+    "No tokens found, but part of your wallet couldn't be read, so some may be missing." : {
+
+    },
+    "No tokens in this wallet yet." : {
+
+    },
+    "No tokens in this wallet." : {
+
+    },
+    "No trades on %@-PERP yet" : {
+
+    },
+    "No trades yet — the chart moves up as people buy on the curve and down as they sell." : {
+
+    },
+    "No venue can price MON → AUSD right now." : {
+
+    },
+    "No venue can route this pair right now." : {
+
+    },
+    "None on Perpl" : {
+
+    },
+    "Not a DyorHQ launch" : {
+
+    },
+    "Not a valid 12–24 word recovery phrase yet." : {
+
+    },
+    "Not a valid private key." : {
+
+    },
+    "Not connected" : {
+
+    },
+    "Not enough %@: you have %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not enough %1$@: you have %2$@."
+          }
+        }
+      }
+    },
+    "Not enough AUSD in your wallet." : {
+
+    },
+    "Not enough AUSD, and no MON to convert." : {
+
+    },
+    "Not enough MON to cover the difference." : {
+
+    },
+    "Not enough available margin." : {
+
+    },
+    "Not found on the network — it never confirmed" : {
+
+    },
+    "Not pinned to IPFS yet." : {
+
+    },
+    "Not sent." : {
+
+    },
+    "Not sent. Nothing left your account." : {
+
+    },
+    "Not signed in" : {
+
+    },
+    "Not trading yet" : {
+
+    },
+    "Not updating" : {
+
+    },
+    "Nothing has been published under this link yet. It may be mistyped." : {
+
+    },
+    "Nothing here yet" : {
+
+    },
+    "Nothing in this period." : {
+
+    },
+    "Nothing to claim yet" : {
+
+    },
+    "Nothing to claim yet — fees accrue as people trade your coin." : {
+
+    },
+    "Nothing to claim yet." : {
+
+    },
+    "Nothing was cancelled." : {
+
+    },
+    "Nothing was changed." : {
+
+    },
+    "Nothing was deleted: removing the email sign-in DyorHQ created at Privy didn't work (%@). Try again in a few minutes, or contact %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing was deleted: removing the email sign-in DyorHQ created at Privy didn't work (%1$@). Try again in a few minutes, or contact %2$@."
+          }
+        }
+      }
+    },
+    "Notification history and this device's push registration" : {
+
+    },
+    "Notifications" : {
+
+    },
+    "Notifications are off. Turn them on in Profile → Notifications to be alerted; events are still recorded here." : {
+
+    },
+    "Notifications are turned off for DyorHQ in iOS Settings. Enable them there to receive alerts." : {
+
+    },
+    "Notifications, %lld unread" : {
+
+    },
+    "Notify when" : {
+
+    },
+    "Notifying the bridge…" : {
+
+    },
+    "Notional" : {
+      "comment" : "A position's notional value (its size times the price), a stat [tight]"
+    },
+    "Now" : {
+      "comment" : "What is current: the side menu's badge on the section on screen now, and in the TP/SL sheet the label of the trigger set now [tight]"
+    },
+    "O" : {
+      "comment" : "The chart legend's label for a candle's opening price. [tight]"
+    },
+    "Off" : {
+      "comment" : "A setting that is switched off [tight]"
+    },
+    "On" : {
+      "comment" : "A setting that is switched on [tight]"
+    },
+    "On OpenSea once it settles" : {
+
+    },
+    "One-click trading" : {
+
+    },
+    "One-click trading enabled" : {
+
+    },
+    "One-time security upgrade: enter the code we emailed to %@. Your account then moves to the new wallet your new password creates. Your previous wallet (%@) stays behind, and so does its public profile." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "One-time security upgrade: enter the code we emailed to %1$@. Your account then moves to the new wallet your new password creates. Your previous wallet (%2$@) stays behind, and so does its public profile."
+          }
+        }
+      }
+    },
+    "Only enter it into a wallet you trust (MetaMask, Rabby, OKX…). A hardware wallet is safest." : {
+
+    },
+    "Only enter them into a wallet you trust (MetaMask, Rabby, OKX…). A hardware wallet is safest." : {
+
+    },
+    "Open" : {
+      "comment" : "The Uniswap v4 fallback can be used now: an adjective [tight]"
+    },
+    "Open %@" : {
+
+    },
+    "Open a perp from the Trade tab." : {
+
+    },
+    "Open full history on Monadscan" : {
+
+    },
+    "Open media" : {
+
+    },
+    "Open the Launch Page" : {
+
+    },
+    "Open the Launch Tab" : {
+
+    },
+    "Open the Moment" : {
+
+    },
+    "Open video" : {
+
+    },
+    "Open your Perpl account" : {
+
+    },
+    "OpenSea" : {
+      "shouldTranslate" : false
+    },
+    "Opened at" : {
+
+    },
+    "Opened trading account" : {
+
+    },
+    "Opening Moment…" : {
+
+    },
+    "Opening launch…" : {
+
+    },
+    "Opens %@" : {
+
+    },
+    "Opens a new trading account" : {
+
+    },
+    "Opens the DyorHQ docs in Safari." : {
+
+    },
+    "Optional" : {
+      "comment" : "Placeholder of a field that may be left empty [tight]"
+    },
+    "Or paste an image link (ipfs:// or https://)" : {
+
+    },
+    "Order" : {
+      "comment" : "A Perps order, a review row label (a noun) [tight]"
+    },
+    "Order Book" : {
+      "comment" : "A tab under the chart: the market's bids and asks. [tight]"
+    },
+    "Order Type" : {
+
+    },
+    "Order book" : {
+
+    },
+    "Order book. Best bid %@, best ask %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Order book. Best bid %1$@, best ask %2$@."
+          }
+        }
+      }
+    },
+    "Order forwarding authorized on Perpl" : {
+
+    },
+    "Order sent to Perpl." : {
+
+    },
+    "Order sent, but Perpl didn't accept the stop-loss. Set it with TP/SL on the position once the order fills." : {
+
+    },
+    "Order sent, but Perpl didn't accept the take-profit and stop-loss. Set them with TP/SL on the position once the order fills." : {
+
+    },
+    "Order sent, but Perpl didn't accept the take-profit. Set it with TP/SL on the position once the order fills." : {
+
+    },
+    "Order size is calculated from an AUSD amount at the current price." : {
+
+    },
+    "Order size is denominated in %@, the base asset." : {
+
+    },
+    "Order status unknown for the stop-loss — Perpl didn't confirm it. Check Open Orders before placing it again." : {
+
+    },
+    "Order status unknown for the take-profit and stop-loss — Perpl didn't confirm them. Check Open Orders before placing them again." : {
+
+    },
+    "Order status unknown for the take-profit — Perpl didn't confirm it. Check Open Orders before placing it again." : {
+
+    },
+    "Order status unknown — Perpl didn't confirm the new stop-loss. Check Open Orders before placing it again." : {
+
+    },
+    "Order status unknown — Perpl didn't confirm the new stop-loss. The old one was cancelled. Check Open Orders before placing it again." : {
+
+    },
+    "Order status unknown — Perpl didn't confirm the new take-profit. Check Open Orders before placing it again." : {
+
+    },
+    "Order status unknown — Perpl didn't confirm the new take-profit. The old one was cancelled. Check Open Orders before placing it again." : {
+
+    },
+    "Order status unknown — Perpl didn't confirm this order, so it may have been placed. Check Open Orders and Positions before placing it again." : {
+
+    },
+    "Order view" : {
+
+    },
+    "Orders" : {
+      "comment" : "A tab of the Perps screen: the open orders. [tight]"
+    },
+    "Owed to collectors" : {
+
+    },
+    "P&L" : {
+      "comment" : "Profit and loss, a stat on Portfolio [tight]"
+    },
+    "Paid in USDC: %@ reserve, %@ creator, %@ DyorHQ. Your NFT appears on OpenSea as soon as it settles." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Paid in USDC: %1$@ reserve, %2$@ creator, %3$@ DyorHQ. Your NFT appears on OpenSea as soon as it settles."
+          }
+        }
+      }
+    },
+    "Paired with" : {
+
+    },
+    "Pairing" : {
+      "comment" : "Launch a coin: the asset the coin is paired with on its curve and in its pool, a section header (a noun)"
+    },
+    "Pairs with %@" : {
+
+    },
+    "Part of this was already sent. Check it with View above before trying again — confirming again here could send it twice." : {
+
+    },
+    "Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh." : {
+
+    },
+    "Part of your launchpad couldn't be read just now, so some coins or fees may be missing. Pull to refresh." : {
+
+    },
+    "Part of your wallet couldn't be read, so a token may be missing from the list and the total." : {
+
+    },
+    "Part of your wallet couldn't be read, so a token may be missing from the list." : {
+
+    },
+    "Passkey" : {
+
+    },
+    "Passkey (Privy)" : {
+
+    },
+    "Passkey Session" : {
+
+    },
+    "Passkey accounts are created from the sign-in screen, not added here." : {
+
+    },
+    "Passkey added." : {
+
+    },
+    "Passkey session %@" : {
+
+    },
+    "Passkey session locked" : {
+
+    },
+    "Passkeys" : {
+
+    },
+    "Passkeys are not enabled in this build." : {
+
+    },
+    "Passkeys aren’t set up for DyorHQ on this device yet: iOS couldn’t confirm the app belongs to accounts.dyorhq.fun. Check your connection and try again, or update the app." : {
+
+    },
+    "Passkeys in this build open a DyorHQ passkey account, not a Privy one." : {
+
+    },
+    "Password" : {
+
+    },
+    "Password strength" : {
+
+    },
+    "Passwords don’t match." : {
+
+    },
+    "Past 24 hours" : {
+
+    },
+    "Past Cohorts" : {
+
+    },
+    "Past cohort Moment" : {
+
+    },
+    "Past cohort · trading closed" : {
+
+    },
+    "Past cohort — collecting closed" : {
+
+    },
+    "Paste" : {
+
+    },
+    "Paste from Clipboard" : {
+
+    },
+    "Pay with %@" : {
+
+    },
+    "Pending" : {
+      "comment" : "[tight] My Moments tile: coins promised, not graduated yet"
+    },
+    "Pending rewards" : {
+
+    },
+    "Pending…" : {
+
+    },
+    "Per edition" : {
+      "comment" : "[tight] The price of one edition: a stat on a Moment's page and on its card"
+    },
+    "Period" : {
+
+    },
+    "Perpetuals on Perpl" : {
+
+    },
+    "Perpl Exchange" : {
+      "shouldTranslate" : false
+    },
+    "Perpl Trading" : {
+
+    },
+    "Perpl collateral and open positions" : {
+
+    },
+    "Perpl didn't confirm cancelling the old stop-loss, so the new one wasn't placed. Check Orders before trying again." : {
+
+    },
+    "Perpl didn't confirm cancelling the old take-profit, so the new one wasn't placed. Check Orders before trying again." : {
+
+    },
+    "Perpl didn't confirm cancelling the stop-loss at %@. Check Orders before trying again." : {
+
+    },
+    "Perpl didn't confirm cancelling the take-profit at %@. Check Orders before trying again." : {
+
+    },
+    "Perpl has no candle history for this market yet." : {
+
+    },
+    "Perpl hasn't reported this position on the trading connection yet. Try again in a moment." : {
+
+    },
+    "Perpl hasn't sent your open orders yet, so take-profit and stop-loss left from an earlier position can't be checked. Nothing was sent. Try again in a moment." : {
+
+    },
+    "Perpl history: %@" : {
+
+    },
+    "Perpl markets could not be loaded." : {
+
+    },
+    "Perpl positions couldn't be read in full." : {
+
+    },
+    "Perpl refused it." : {
+
+    },
+    "Perpl refused the cancel." : {
+
+    },
+    "Perpl refused to cancel the stop-loss at %@: %@. It is still live." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Perpl refused to cancel the stop-loss at %1$@: %2$@. It is still live."
+          }
+        }
+      }
+    },
+    "Perpl refused to cancel the take-profit at %@: %@. It is still live." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Perpl refused to cancel the take-profit at %1$@: %2$@. It is still live."
+          }
+        }
+      }
+    },
+    "Perpl rejected the order." : {
+
+    },
+    "Perpl trading isn't connected, so this position's current TP/SL can't be read. Reconnect in Profile → Perpl Trading." : {
+
+    },
+    "Perpl trading isn't connected. Reconnect in Profile → Perpl Trading to cancel." : {
+
+    },
+    "Perpl's candles couldn't be loaded. Retrying every 15 seconds." : {
+
+    },
+    "Perpl's markets couldn't be loaded. DyorHQ keeps retrying every few seconds." : {
+
+    },
+    "Perpl: deposit, withdraw to you, orders and brackets" : {
+
+    },
+    "Perpl’s on-chain order book, signed by your own wallet." : {
+
+    },
+    "Perps" : {
+      "comment" : "Perpetual futures [tight]"
+    },
+    "Perps Margin Warnings" : {
+
+    },
+    "Perps → Spot" : {
+
+    },
+    "Phase" : {
+      "comment" : "A launch's phase (Bonding, Graduated…), a row label (a noun)"
+    },
+    "Photo updated." : {
+
+    },
+    "Pick each word from the copy you wrote down." : {
+
+    },
+    "Pinning to IPFS…" : {
+
+    },
+    "Place" : {
+      "comment" : "Publish a Moment: where the photo or video was taken, a field's placeholder (a noun: a location)"
+    },
+    "Place Limit Close" : {
+
+    },
+    "Place Order" : {
+
+    },
+    "Placed on Perpl as keeper triggers that close this order's size (%@). The size is fixed: they don't grow if you add to the position later." : {
+
+    },
+    "Placed on Perpl as keeper triggers that close this order's size only (%@), not your whole %@ position. For all of it, use TP/SL on the position." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Placed on Perpl as keeper triggers that close this order's size only (%1$@), not your whole %2$@ position. For all of it, use TP/SL on the position."
+          }
+        }
+      }
+    },
+    "Placed on Perpl as keeper triggers that close this order's size only, not your whole %@ position. For all of it, use TP/SL on the position." : {
+
+    },
+    "Placed on Perpl as keeper triggers that close this order's size. The size is fixed: they don't grow if you add to the position later." : {
+
+    },
+    "Platform pool fees" : {
+
+    },
+    "Platform proceeds" : {
+
+    },
+    "Platform wallet" : {
+
+    },
+    "PnL" : {
+      "comment" : "Profit and loss, a column header in Perps trade history [tight]"
+    },
+    "Policy change" : {
+
+    },
+    "Pool" : {
+      "comment" : "Section header: the coin's liquidity pool"
+    },
+    "Pool fee" : {
+
+    },
+    "Pool fees" : {
+
+    },
+    "Pool fees to withdraw" : {
+
+    },
+    "Popular" : {
+      "comment" : "Top Tokens tab: the curated list [tight]"
+    },
+    "Portfolio" : {
+
+    },
+    "Position" : {
+
+    },
+    "Position deleveraged" : {
+
+    },
+    "Position liquidated" : {
+
+    },
+    "Position opened, but Perpl didn't accept the stop-loss. Set it with TP/SL on the position." : {
+
+    },
+    "Position opened, but Perpl didn't accept the take-profit and stop-loss. Set them with TP/SL on the position." : {
+
+    },
+    "Position opened, but Perpl didn't accept the take-profit. Set it with TP/SL on the position." : {
+
+    },
+    "Position unwound" : {
+
+    },
+    "Positions" : {
+      "comment" : "A tab of the Perps screen: the open positions. [tight]"
+    },
+    "Post only (maker)" : {
+
+    },
+    "Post-Only" : {
+
+    },
+    "Powered by Aurora Intents · cross-chain settlement handled for you." : {
+
+    },
+    "Preparing transaction" : {
+
+    },
+    "Preview" : {
+      "comment" : "Publish a Moment: how the Moment will look, a section header (a noun)"
+    },
+    "Price" : {
+
+    },
+    "Price Alerts" : {
+
+    },
+    "Price Type" : {
+
+    },
+    "Price alert: %@" : {
+
+    },
+    "Price alerts" : {
+      "comment" : "A notification center filter [tight]"
+    },
+    "Price check" : {
+
+    },
+    "Price from curve trades" : {
+
+    },
+    "Price grouping %@" : {
+
+    },
+    "Price over the past 24 hours" : {
+
+    },
+    "Priced as each step is signed" : {
+
+    },
+    "Pricing the MON → AUSD swap…" : {
+
+    },
+    "Privacy Policy" : {
+
+    },
+    "Private Key" : {
+      "comment" : "Import Wallet: the switch's side for a hex private key [tight]"
+    },
+    "Proceeds" : {
+      "comment" : "The USDC a creator or the platform earned from collects, a row label (a noun)"
+    },
+    "Proceeds to withdraw" : {
+
+    },
+    "Profile" : {
+
+    },
+    "Progress" : {
+
+    },
+    "Prompt-free for" : {
+
+    },
+    "Protocol Beneficiary" : {
+
+    },
+    "Publish" : {
+
+    },
+    "Publish %@" : {
+
+    },
+    "Publish a Moment" : {
+
+    },
+    "Publish a photo or video as an NFT on Monad. Share it with everyone and earn every time it's collected." : {
+
+    },
+    "Published" : {
+
+    },
+    "Published %@" : {
+
+    },
+    "QR code of your address" : {
+
+    },
+    "Queued for holders" : {
+
+    },
+    "Quotes" : {
+      "comment" : "The price quotes from each swap venue, a section header (a noun)"
+    },
+    "Quoting…" : {
+
+    },
+    "RPC" : {
+
+    },
+    "Ran $%@ buyback" : {
+
+    },
+    "Range" : {
+      "comment" : "VoiceOver's name for the swap history's period switch (24H, 7D, 30D, All), a noun"
+    },
+    "Read these before you trade" : {
+
+    },
+    "Reading %@…" : {
+
+    },
+    "Reading the wallet…" : {
+
+    },
+    "Reading your Moments…" : {
+
+    },
+    "Reading your balances…" : {
+
+    },
+    "Reading your wallet's history. Tokens found there will be added." : {
+
+    },
+    "Reading your wallet…" : {
+
+    },
+    "Ready" : {
+      "comment" : "Perpl trading's status: connected and ready to trade [tight]"
+    },
+    "Ready to trade" : {
+
+    },
+    "Realized P&L" : {
+
+    },
+    "Receive" : {
+
+    },
+    "Receive %@" : {
+
+    },
+    "Received %@" : {
+
+    },
+    "Recent Activity" : {
+
+    },
+    "Recent Trades" : {
+
+    },
+    "Recipient" : {
+
+    },
+    "Reconnect" : {
+
+    },
+    "Recovery Phrase" : {
+      "comment" : "Import Wallet: the switch's side for a 12 or 24 word phrase [tight]"
+    },
+    "Recovery Phrase Exported" : {
+
+    },
+    "Recovery phrase hidden." : {
+
+    },
+    "Reduce Only" : {
+
+    },
+    "Refreshing…" : {
+
+    },
+    "Refund & Migrating" : {
+
+    },
+    "Refund mode: sell back into the curve at its price, with no fees." : {
+
+    },
+    "Refunded" : {
+      "comment" : "A bridge's status: the funds were returned [tight]"
+    },
+    "Refunded (curve full)" : {
+
+    },
+    "Remove API Key" : {
+
+    },
+    "Remove stop loss" : {
+
+    },
+    "Remove take profit" : {
+
+    },
+    "Remove the API key?" : {
+
+    },
+    "Removes everything about this watched address from this device." : {
+
+    },
+    "Removes this account from this iPhone. Your passkey keeps it — sign in again anytime." : {
+
+    },
+    "Replace Wallet" : {
+
+    },
+    "Replaces your unlimited approval to %@" : {
+
+    },
+    "Report a Bug" : {
+
+    },
+    "Require %@" : {
+
+    },
+    "Reserve" : {
+      "comment" : "A Moment's USDC reserve, which builds up toward graduation (a noun)"
+    },
+    "Reset Password" : {
+
+    },
+    "Reset password" : {
+
+    },
+    "Resetting creates a **new, empty wallet** for your new password. Anything in your current wallet stays at its address and can only be reached with your old password. We’ll email a code to confirm it’s you." : {
+
+    },
+    "Rests as a reduce-only limit at your price until it fills. It won't reduce your position until then." : {
+
+    },
+    "Retired launchpad" : {
+
+    },
+    "Retry" : {
+
+    },
+    "Retry Graduation" : {
+
+    },
+    "Reveal" : {
+
+    },
+    "Reveal Private Key" : {
+
+    },
+    "Reveal this wallet's private key to back it up or move it to another wallet. The key never leaves your device." : {
+
+    },
+    "Reveal your wallet's private key" : {
+
+    },
+    "Reverted — only the network fee was spent" : {
+
+    },
+    "Review" : {
+
+    },
+    "Review Order" : {
+
+    },
+    "Review Order · Perpl" : {
+
+    },
+    "Review Swap" : {
+
+    },
+    "Rewards: %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Rewards: %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "Rises above" : {
+
+    },
+    "Risk Disclosures" : {
+
+    },
+    "Route" : {
+      "comment" : "The path a swap or a bridge takes, a row label (a noun)"
+    },
+    "Run" : {
+      "comment" : "Button: run the buyback (a verb)"
+    },
+    "Run Buyback" : {
+
+    },
+    "SL %@" : {
+      "comment" : "A stop-loss (SL) at its price, in a summary line. [tight]"
+    },
+    "SL removed" : {
+
+    },
+    "Save Profile" : {
+
+    },
+    "Save TP/SL" : {
+
+    },
+    "Saved on this device · unverified" : {
+
+    },
+    "Saved to DyorHQ." : {
+
+    },
+    "Screens iOS draws itself, such as Face ID and permission prompts, change the next time you open DyorHQ." : {
+
+    },
+    "Search coins" : {
+
+    },
+    "Search tokens" : {
+
+    },
+    "Search tokens…" : {
+
+    },
+    "Search…" : {
+
+    },
+    "Security" : {
+
+    },
+    "Security Upgrade" : {
+
+    },
+    "Security upgrade" : {
+
+    },
+    "Seeded with" : {
+
+    },
+    "Select Perpetual" : {
+
+    },
+    "Selected" : {
+
+    },
+    "Self-custodial: support can never reach your keys or funds. Never share a recovery phrase with anyone." : {
+
+    },
+    "Sell" : {
+
+    },
+    "Sell %@" : {
+
+    },
+    "Sell %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sell %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "Sell %@ at %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sell %1$@ at %2$@"
+          }
+        }
+      }
+    },
+    "Sell %@ at %@, %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sell %1$@ at %2$@, %3$@"
+          }
+        }
+      }
+    },
+    "Sell on the Curve" : {
+
+    },
+    "Send" : {
+
+    },
+    "Send %@" : {
+
+    },
+    "Send MON or USDC on Monad to your account. Funds usually arrive in seconds." : {
+
+    },
+    "Send MON or any Monad token to this address." : {
+
+    },
+    "Send a new code" : {
+
+    },
+    "Send to this contract anyway" : {
+
+    },
+    "Send without that check" : {
+
+    },
+    "Sending on %@…" : {
+
+    },
+    "Sending or transferring tokens" : {
+
+    },
+    "Sent %@" : {
+
+    },
+    "Sent — confirmation not seen yet" : {
+
+    },
+    "Session" : {
+      "comment" : "The passkey's signing session, a label [tight]"
+    },
+    "Set a device passcode in iOS Settings to reveal your key — it protects the key if your phone is lost." : {
+
+    },
+    "Set a device passcode in iOS Settings — App Lock can't confirm transactions without one." : {
+
+    },
+    "Set a specific price for your order" : {
+
+    },
+    "Set at" : {
+
+    },
+    "Settings" : {
+
+    },
+    "Share" : {
+
+    },
+    "Share fees with holders" : {
+
+    },
+    "Share of volume per section" : {
+
+    },
+    "Share this Moment" : {
+
+    },
+    "Shared with holders" : {
+
+    },
+    "Shares fees" : {
+
+    },
+    "Short" : {
+      "comment" : "Opens a short position: a bet that the price falls. Also a position's side. [tight]"
+    },
+    "Short %@" : {
+      "comment" : "A short position or order on what follows: “Short 0.5 BTC”, “Short BTC”, “Short BTC-PERP”."
+    },
+    "Short %@×" : {
+
+    },
+    "Short / Down" : {
+
+    },
+    "Show All Moments" : {
+
+    },
+    "Show Recovery Phrase" : {
+
+    },
+    "Show all %lld" : {
+
+    },
+    "Show password" : {
+
+    },
+    "Show the 24-word recovery phrase your passkey derives, to back this wallet up or restore it in another wallet without the passkey. It asks for your passkey every time and is never stored." : {
+
+    },
+    "Show the Phrase Again" : {
+
+    },
+    "Showing it again asks for %@." : {
+
+    },
+    "Showing your most recent activity." : {
+
+    },
+    "Showing your recovery phrase" : {
+
+    },
+    "Shown on OpenSea and in DyorHQ as the NFT." : {
+
+    },
+    "Shown once behind %@. Reveal it only somewhere private." : {
+
+    },
+    "Shows it larger" : {
+
+    },
+    "Shows the full address" : {
+
+    },
+    "Shows the short address" : {
+
+    },
+    "Shows what signs without %@" : {
+
+    },
+    "Side" : {
+      "comment" : "Which side an order is on (Buy or Sell, Long or Short), a row label (a noun) [tight]"
+    },
+    "Sign In to See Your Portfolio" : {
+
+    },
+    "Sign Out" : {
+
+    },
+    "Sign Up" : {
+      "comment" : "Email & Password: the switch's side that creates an account, a verb [tight]"
+    },
+    "Sign in again with your email and password to use this wallet." : {
+
+    },
+    "Sign in to bridge." : {
+
+    },
+    "Sign in to collect." : {
+
+    },
+    "Sign in to open the Moment you were sent." : {
+
+    },
+    "Sign in to send from this address." : {
+
+    },
+    "Sign in to trade" : {
+
+    },
+    "Sign in to trade." : {
+
+    },
+    "Sign in with Apple" : {
+
+    },
+    "Sign in with Apple couldn’t start. Make sure this iPhone is signed in to an Apple Account in Settings, then try again." : {
+
+    },
+    "Sign in with Face ID or Touch ID. Add one per device." : {
+
+    },
+    "Sign in with a Passkey" : {
+
+    },
+    "Sign in with a wallet to join DyorHQ social." : {
+
+    },
+    "Sign out of DyorHQ" : {
+
+    },
+    "Sign out of DyorHQ?" : {
+
+    },
+    "Sign up or log in. New accounts verify with a one-time code." : {
+
+    },
+    "Sign-in" : {
+      "comment" : "How this wallet signs in (Apple, Google, Email…), a noun [tight]"
+    },
+    "Sign-in is not set up in this build. Add the Privy keys to Secrets.xcconfig." : {
+
+    },
+    "Signed and forwarded by your Perpl API key over the trading connection." : {
+
+    },
+    "Signed in" : {
+
+    },
+    "Signed in with %@" : {
+
+    },
+    "Signed this session" : {
+
+    },
+    "Signed up before September 24, 2026?" : {
+
+    },
+    "Signing any message other than DyorHQ sign-in" : {
+
+    },
+    "Signing in with Apple" : {
+
+    },
+    "Signing in with Google" : {
+
+    },
+    "Signs without another prompt until the session ends; then %@ again. A new length applies from the next session, and a longer one needs %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Signs without another prompt until the session ends; then %1$@ again. A new length applies from the next session, and a longer one needs %2$@."
+          }
+        }
+      }
+    },
+    "Since open" : {
+      "comment" : "[tight] Moment stat: the price change since the pool opened"
+    },
+    "Size" : {
+
+    },
+    "Size (%@)" : {
+
+    },
+    "Size, share of available margin" : {
+
+    },
+    "Slippage" : {
+
+    },
+    "Slippage %@" : {
+
+    },
+    "Sold %@" : {
+
+    },
+    "Some DyorHQ coins here were sent to your wallet without you choosing them here. Anyone can launch a coin on DyorHQ: check the contract before you send." : {
+
+    },
+    "Some details of this launch couldn't be read just now." : {
+
+    },
+    "Some launch coins couldn't be read just now — showing the last ones read." : {
+
+    },
+    "Some launchpad activity couldn't be read just now. Pull to refresh." : {
+
+    },
+    "Some of the old stop-losses were cancelled, but one was refused and is still live (%@). The new one wasn't placed. Check Orders." : {
+
+    },
+    "Some of the old take-profits were cancelled, but one was refused and is still live (%@). The new one wasn't placed. Check Orders." : {
+
+    },
+    "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no token was picked for you." : {
+
+    },
+    "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no total is shown." : {
+
+    },
+    "Some prices couldn't be read, so values are missing and no token was picked for you." : {
+
+    },
+    "Some prices couldn't be read, so values are missing and no total is shown." : {
+
+    },
+    "Some tokens here carry the name of another token but are other contracts. Check the contract before you send." : {
+
+    },
+    "Spends" : {
+      "comment" : "Review row: what the buyback spends its budget on"
+    },
+    "Split" : {
+      "comment" : "How each collect is split between the reserve, the creator and DyorHQ, a row label (a noun)"
+    },
+    "Split (you · DyorHQ · reserve)" : {
+
+    },
+    "Spot" : {
+      "comment" : "Spot, as against perpetual futures (Perps): the wallet's own tokens, and trading them by swaps [tight]"
+    },
+    "Spot → Perps" : {
+
+    },
+    "Spread %@" : {
+
+    },
+    "Square images look best." : {
+
+    },
+    "Start Trading" : {
+
+    },
+    "Status" : {
+
+    },
+    "Still needed" : {
+
+    },
+    "Still reading your wallet's history, so more tokens may be added." : {
+
+    },
+    "Still settling — this can take a minute. Check your balance on %@; DyorHQ keeps checking while it's open." : {
+
+    },
+    "Still vesting" : {
+      "comment" : "[tight] My Moments tile: coins not vested yet"
+    },
+    "Stop Loss" : {
+
+    },
+    "Stop Watching" : {
+
+    },
+    "Stop loss" : {
+
+    },
+    "Stop loss price, USD" : {
+
+    },
+    "Stop watching this address?" : {
+
+    },
+    "Stop-loss couldn't execute" : {
+
+    },
+    "Stop-loss expired" : {
+
+    },
+    "Stop-loss moved to %@, closing %@. The old one was cancelled." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stop-loss moved to %1$@, closing %2$@. The old one was cancelled."
+          }
+        }
+      }
+    },
+    "Stop-loss not changed: %@ The old one is still live." : {
+
+    },
+    "Stop-loss not placed" : {
+
+    },
+    "Stop-loss not placed: %@" : {
+
+    },
+    "Stop-loss removed." : {
+
+    },
+    "Stop-loss set at %@, closing %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stop-loss set at %1$@, closing %2$@."
+          }
+        }
+      }
+    },
+    "Stop-loss triggered" : {
+
+    },
+    "Stopped at %@. Only the steps above were sent." : {
+
+    },
+    "Strong" : {
+      "comment" : "A password's strength [tight]"
+    },
+    "Stuck since" : {
+
+    },
+    "Supply" : {
+      "comment" : "A Moment coin's total supply, a row label (a noun)"
+    },
+    "Support" : {
+
+    },
+    "Support and community" : {
+
+    },
+    "Swap" : {
+      "comment" : "Button: make the swap the review shows (a verb)"
+    },
+    "Swap %@" : {
+
+    },
+    "Swap %@ for %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Swap %1$@ for %2$@"
+          }
+        }
+      }
+    },
+    "Swap %@ for %@ at the best price across Monad's venues." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Swap %1$@ for %2$@ at the best price across Monad's venues."
+          }
+        }
+      }
+    },
+    "Swap %@ on %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Swap %1$@ on %2$@"
+          }
+        }
+      }
+    },
+    "Swap History" : {
+
+    },
+    "Swap across every Monad venue" : {
+
+    },
+    "Swap at the best price" : {
+
+    },
+    "Swap complete" : {
+
+    },
+    "Swap direction" : {
+
+    },
+    "Swap first" : {
+
+    },
+    "Swapped" : {
+      "comment" : "An Activity row's title: a swap was made (a verb in the past tense)"
+    },
+    "Swapped %@ → %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Swapped %1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "Swaps" : {
+      "comment" : "A notification center filter [tight]"
+    },
+    "Swaps & Fills" : {
+
+    },
+    "Swaps on Uniswap, Monday Trade and Kuru Flow" : {
+
+    },
+    "Symbol, name or address" : {
+
+    },
+    "System" : {
+      "comment" : "Follows the device's own setting: on Appearance its light or dark look, on the Language screen and menu its language [tight]"
+    },
+    "TP %@" : {
+      "comment" : "A take-profit (TP) at its price, in a summary line. [tight]"
+    },
+    "TP removed" : {
+
+    },
+    "TP/SL" : {
+      "comment" : "Take profit and stop loss, abbreviated: a switch, a button and a row label on Perps [tight]"
+    },
+    "TP/SL can't be verified right now: Perpl trading is offline. Rows below may be out of date, and orders placed on other devices or the Perpl web app don't show." : {
+
+    },
+    "TP/SL can't go on a reduce-only order. Set it on the position instead." : {
+
+    },
+    "TP/SL updated" : {
+
+    },
+    "TP/SL · %@-PERP" : {
+
+    },
+    "Take Profit" : {
+
+    },
+    "Take profit" : {
+
+    },
+    "Take profit and stop loss" : {
+
+    },
+    "Take profit price, USD" : {
+
+    },
+    "Take-profit / stop-loss" : {
+
+    },
+    "Take-profit and stop-loss left from an earlier %@ long can't be checked while Perpl trading is offline. If you had any, check Orders first: they would act on this position." : {
+
+    },
+    "Take-profit and stop-loss left from an earlier %@ short can't be checked while Perpl trading is offline. If you had any, check Orders first: they would act on this position." : {
+
+    },
+    "Take-profit couldn't execute" : {
+
+    },
+    "Take-profit expired" : {
+
+    },
+    "Take-profit moved to %@, closing %@. The old one was cancelled." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Take-profit moved to %1$@, closing %2$@. The old one was cancelled."
+          }
+        }
+      }
+    },
+    "Take-profit not changed: %@ The old one is still live." : {
+
+    },
+    "Take-profit not placed" : {
+
+    },
+    "Take-profit not placed: %@" : {
+
+    },
+    "Take-profit removed." : {
+
+    },
+    "Take-profit set at %@, closing %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Take-profit set at %1$@, closing %2$@."
+          }
+        }
+      }
+    },
+    "Take-profit triggered" : {
+
+    },
+    "Taking longer than usual. Check your balance on %@; DyorHQ checks again each time you open it." : {
+
+    },
+    "Target" : {
+      "comment" : "A price alert's target price, a field label (a noun) [tight]"
+    },
+    "Telegram" : {
+      "shouldTranslate" : false
+    },
+    "Tell us what went wrong" : {
+
+    },
+    "Terms of Use" : {
+
+    },
+    "That doesn't match your recovery phrase. Show it again and check what you wrote down." : {
+
+    },
+    "That image could not be read." : {
+
+    },
+    "That image could not be read. Try another." : {
+
+    },
+    "That link isn't a Moment." : {
+
+    },
+    "That passkey belongs to %@, not to this account (%@). Sign out to switch accounts." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That passkey belongs to %1$@, not to this account (%2$@). Sign out to switch accounts."
+          }
+        }
+      }
+    },
+    "That password is too common." : {
+
+    },
+    "That photo could not be read." : {
+
+    },
+    "That trigger isn't on this position." : {
+
+    },
+    "That video could not be read." : {
+
+    },
+    "That's the %@ token contract itself. Tokens sent to it are almost always lost for good." : {
+
+    },
+    "That's the zero address: anything sent there is lost for good." : {
+
+    },
+    "That's your own address." : {
+
+    },
+    "The 12 or 24 words from your existing wallet, in order." : {
+
+    },
+    "The DyorHQ launchpad" : {
+
+    },
+    "The MON → AUSD price moved; try again." : {
+
+    },
+    "The Privy account that verified your email, unless it's also another way into DyorHQ" : {
+
+    },
+    "The RWA HQ for social trading" : {
+      "comment" : "DyorHQ's tagline, under the wordmark. Ask the owner before translating it.",
+      "shouldTranslate" : false
+    },
+    "The TP/SL on Perpl changed meanwhile, so nothing was sent. Check them and try again." : {
+
+    },
+    "The bridge could not complete on %@" : {
+
+    },
+    "The bridge failed." : {
+
+    },
+    "The bridge quote didn't match the amount you entered, so nothing was sent. Get a new quote." : {
+
+    },
+    "The bridge quote didn't match your request (amount, tokens or your address), so nothing was sent. Get a new quote." : {
+
+    },
+    "The bridge reports it complete (%@). Check your %@ balance on %@ to confirm it arrived." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The bridge reports it complete (%1$@). Check your %2$@ balance on %3$@ to confirm it arrived."
+          }
+        }
+      }
+    },
+    "The bridge reports it complete. Check your %@ balance on %@ to confirm it arrived." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The bridge reports it complete. Check your %1$@ balance on %2$@ to confirm it arrived."
+          }
+        }
+      }
+    },
+    "The collect window closed with the reserve short of the threshold. Anyone can wind it down: %@ of the reserve to the creator, the rest to the treasury." : {
+
+    },
+    "The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset." : {
+
+    },
+    "The curve is full. It graduates next, into a locked %@ pool, and then trades on the Swap screen." : {
+
+    },
+    "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's 1% swap fee is harvested to a DyorHQ fees wallet; it isn't paid to holders or the creator, and there is no creator tax on the pool." : {
+
+    },
+    "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. %@" : {
+
+    },
+    "The first deposit must be at least 10 AUSD." : {
+
+    },
+    "The first deposit opens your Perpl account and must be at least 10 AUSD." : {
+
+    },
+    "The furthest a market order or swap may move from its quote before it is cancelled." : {
+
+    },
+    "The last graduation attempt failed. Anyone can retry it on Monday Trade; you only pay the gas. DyorHQ's keepers will finish the graduation: they retry it with about 29.9M gas and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool once it has been stuck for a day (a %@ coin stays on Monday Trade until then)." : {
+
+    },
+    "The last graduation attempt failed. Anyone can retry it on Monday Trade; you only pay the gas. DyorHQ's keepers will finish the graduation: they retry it with about 29.9M gas and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool." : {
+
+    },
+    "The last graduation attempt failed. Anyone can retry it; you only pay the gas." : {
+
+    },
+    "The launchpad's terms couldn't be read. Close this screen and try again." : {
+
+    },
+    "The leverage a new perps order opens on. Each market still caps it to its own maximum." : {
+
+    },
+    "The limit price can have at most %lld decimal places on %@." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The limit price can have at most %1$lld decimal place on %2$@."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The limit price can have at most %1$lld decimal places on %2$@."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "The limit price must be a whole number on %@." : {
+
+    },
+    "The maximum price is %@: the first collect at that price completes the reserve, so a higher price would never be charged." : {
+
+    },
+    "The minimum price is %@." : {
+
+    },
+    "The most the network can charge. Each transaction's fee is checked again before it's signed, and refused if it's unusually high." : {
+
+    },
+    "The news feeds could not be reached." : {
+
+    },
+    "The news feeds could not be reached. Check your connection, then pull down or tap Try Again." : {
+
+    },
+    "The old stop-loss was cancelled, but Perpl refused the new one (%@). This position has no stop-loss now." : {
+
+    },
+    "The old take-profit was cancelled, but Perpl refused the new one (%@). This position has no take-profit now." : {
+
+    },
+    "The passkey request didn’t complete. Please try again." : {
+
+    },
+    "The passkey that answered isn’t the one this account uses." : {
+
+    },
+    "The queued policy can be applied from %@ until %@. If it's applied before your publish confirms, nothing is published and you review the new terms below." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The queued policy can be applied from %1$@ until %2$@. If it's applied before your publish confirms, nothing is published and you review the new terms below."
+          }
+        }
+      }
+    },
+    "The queued policy can be applied from %@. If it's applied before your publish confirms, nothing is published and you review the new terms below." : {
+
+    },
+    "The recovery phrase restores this wallet in any other wallet app. Or send what it holds to a wallet you keep." : {
+
+    },
+    "The server asks your wallet for one signature to prove it is you, then deletes everything. This cannot be undone." : {
+
+    },
+    "The server verifies it is your wallet before deleting anything, and that sign-in didn't complete: %@" : {
+
+    },
+    "The video link must be ipfs:// or https://." : {
+
+    },
+    "The video plays on OpenSea; its cover frame is the NFT image." : {
+
+    },
+    "The wallet address returned by Privy is not valid." : {
+
+    },
+    "The wallet returned an unreadable signature." : {
+
+    },
+    "The window closed before the threshold; the reserve was wound down. Editions stay with their collectors." : {
+
+    },
+    "There is no open position on %@ for these to close." : {
+
+    },
+    "These arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you trade." : {
+
+    },
+    "These come from curve trades only: once it graduates on Monday Trade, the pool's 1% fee goes to DyorHQ." : {
+
+    },
+    "These were launched or published on DyorHQ and sent to your wallet without you choosing them here. Anyone can launch a coin on DyorHQ: check the contract before you trade." : {
+
+    },
+    "This Moment was published on an earlier DyorHQ Moments contract whose fee wallets have been retired. You can claim your vested coins and, as its creator, withdraw your own proceeds and pool fees; collecting, trading and every other action are closed in the app." : {
+
+    },
+    "This Moment was published on an earlier DyorHQ Moments contract, since replaced by a new release. You can claim your vested coins and, as its creator, withdraw your own proceeds and pool fees; collecting, trading and every other action are closed in the app." : {
+
+    },
+    "This Wallet" : {
+
+    },
+    "This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts %@." : {
+
+    },
+    "This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts this token." : {
+
+    },
+    "This becomes the NFT." : {
+
+    },
+    "This coin routes its creator fees to holders — each holder claims their pro-rata share (see Your Holdings, or My Launchpad)." : {
+
+    },
+    "This collect completes the Moment: it takes only what the reserve still needs (%@ for %lld editions) and graduates the coin in the same transaction." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This collect completes the Moment: it takes only what the reserve still needs (%1$@ for %2$lld edition) and graduates the coin in the same transaction."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This collect completes the Moment: it takes only what the reserve still needs (%1$@ for %2$lld editions) and graduates the coin in the same transaction."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "This email already has a DyorHQ wallet (%@)." : {
+
+    },
+    "This email already has a DyorHQ wallet (%@). Log in instead, or replace it: funds in %@ stay there." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This email already has a DyorHQ wallet (%1$@). Log in instead, or replace it: funds in %2$@ stay there."
+          }
+        }
+      }
+    },
+    "This email’s wallet was created with this same password before our security upgrade. Log in with it instead (choose “Signed up before September 24, 2026?”): log-in takes you through the upgrade." : {
+
+    },
+    "This iPhone's copy of the account is erased. Your passkey keeps the account and its funds; sign in with it again anytime." : {
+
+    },
+    "This is a Privy embedded wallet, secured by your %@ sign-in. The same sign-in opens it on any device. DyorHQ never holds your keys." : {
+
+    },
+    "This is the key for %@. Treat it like the keys to a safe." : {
+
+    },
+    "This is the key for your wallet. Treat it like the keys to a safe." : {
+
+    },
+    "This is the phrase for %@. DyorHQ never stores it." : {
+
+    },
+    "This is the phrase for your wallet. DyorHQ never stores it." : {
+
+    },
+    "This launch is between phases. Trading resumes when migration completes." : {
+
+    },
+    "This market is isolated-margin only" : {
+
+    },
+    "This new password **is** your new wallet. Keep it safe: if you lose it, you lose access to what you put in this wallet — write it down or save it in your password manager." : {
+
+    },
+    "This order closes your %@ long and opens a %@ short: its take-profit and stop-loss close that short only." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This order closes your %1$@ long and opens a %2$@ short: its take-profit and stop-loss close that short only."
+          }
+        }
+      }
+    },
+    "This order closes your %@ short and opens a %@ long: its take-profit and stop-loss close that long only." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This order closes your %1$@ short and opens a %2$@ long: its take-profit and stop-loss close that long only."
+          }
+        }
+      }
+    },
+    "This passkey provider can’t create a DyorHQ account: it doesn’t support the passkey feature DyorHQ needs (PRF). Use Passwords (iCloud Keychain) on iOS 18 or later." : {
+
+    },
+    "This passkey provider evaluates one PRF salt only; capability keys are unavailable." : {
+
+    },
+    "This password **is** your wallet. We can’t reset it or send a recovery email. If you lose it, you lose access to your funds — write it down or save it in your password manager." : {
+
+    },
+    "This password has characters beyond a standard keyboard, like curly quotes, long dashes or accents. It opens your wallet only when typed exactly the same way, so make sure you can type it on every device you’ll use." : {
+
+    },
+    "This position has %lld TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next long here)." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This position has %lld TP/SL on Perpl. Once it is fully closed, cancel it from Orders (it would otherwise stay armed for your next long here)."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This position has %lld TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next long here)."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "This position has %lld TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next short here)." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This position has %lld TP/SL on Perpl. Once it is fully closed, cancel it from Orders (it would otherwise stay armed for your next short here)."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This position has %lld TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next short here)."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "This position has %lld TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next long here. Check Orders afterwards." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This position has %lld TP/SL on Perpl. Once it is fully closed, the app cancels it while Perpl trading is connected, so it can't fire on your next long here. Check Orders afterwards."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This position has %lld TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next long here. Check Orders afterwards."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "This position has %lld TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next short here. Check Orders afterwards." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This position has %lld TP/SL on Perpl. Once it is fully closed, the app cancels it while Perpl trading is connected, so it can't fire on your next short here. Check Orders afterwards."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "This position has %lld TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next short here. Check Orders afterwards."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "This position is no longer on Perpl's live list, so nothing was changed. Check Positions, then try again." : {
+
+    },
+    "This position is no longer open." : {
+
+    },
+    "This removes the imported key from this iPhone. You'll need its recovery phrase or private key to use this wallet again — export it first (Manage Wallets → Export Wallet) if you haven't saved it." : {
+
+    },
+    "This source token can't be bridged." : {
+
+    },
+    "This test passkey signs on the local Monad fork only. Bridging needs a real passkey on a device." : {
+
+    },
+    "This token arrived in your wallet without you choosing it in DyorHQ. Anyone can send any token to any wallet, with any name — including a real token's. Check the contract below before you trade it, and never follow a link or site its name points to." : {
+
+    },
+    "This token carries the name of another token but is a different contract. Check the contract below before you trade it, and never follow a link or site its name points to." : {
+
+    },
+    "This token has no pool with enough liquidity to chart." : {
+
+    },
+    "This token's name or symbol has characters that can make it read as another. Check the contract below before you trade it, and never follow a link or site its name points to." : {
+
+    },
+    "This version of DyorHQ is no longer supported. Update to trade, send and sign again. Your funds are safe in your wallet: you can still see your balances and export your wallet here." : {
+
+    },
+    "This wallet holds no tokens on Monad, so there's nothing to send." : {
+
+    },
+    "This wallet is derived from your passkey every time you unlock it; its key is never stored, on this device or on a server. The same passkey gives the same wallet on any device." : {
+
+    },
+    "This wallet is recreated from your email and password. Removing it deletes the device copy; keep your email and password, the only way back to the funds. A password reset can't bring them back: it creates a new, empty wallet." : {
+
+    },
+    "This wallet was created on this device and is secured by your %@ account. DyorHQ never holds your keys." : {
+
+    },
+    "This wallet's private key is removed from this device. Keep its recovery phrase or key somewhere safe; it is the only way back to the funds." : {
+
+    },
+    "Ticker" : {
+
+    },
+    "Tightest price. Best for stable pairs." : {
+
+    },
+    "Time" : {
+
+    },
+    "To" : {
+      "comment" : "The address the tokens are sent to, a section header [tight]"
+    },
+    "To creator" : {
+
+    },
+    "To treasury" : {
+
+    },
+    "Today" : {
+
+    },
+    "Token" : {
+
+    },
+    "Token contract" : {
+
+    },
+    "Tolerance" : {
+      "comment" : "Slippage tolerance, a section header (a noun)"
+    },
+    "Too predictable — avoid repeats and simple sequences." : {
+
+    },
+    "Top Tokens" : {
+
+    },
+    "Top wallet" : {
+
+    },
+    "Total" : {
+
+    },
+    "Total (%@)" : {
+
+    },
+    "Total Volume" : {
+
+    },
+    "Total balance" : {
+
+    },
+    "Total fee" : {
+
+    },
+    "Total volume %@" : {
+
+    },
+    "Trade" : {
+
+    },
+    "Trade $%@" : {
+
+    },
+    "Trade History" : {
+      "comment" : "A tab of the Perps screen: this market's past trades. [tight]"
+    },
+    "Trade on the Curve" : {
+
+    },
+    "Trade perpetuals" : {
+
+    },
+    "Traded on %@" : {
+
+    },
+    "Trades" : {
+      "comment" : "Trades: a tab under the Perps chart with the market's latest trades, and a count of trades on Portfolio [tight]"
+    },
+    "Trades, claims, fees, fills and price alerts show up here." : {
+
+    },
+    "Trading Preferences" : {
+
+    },
+    "Trading fee after graduation" : {
+
+    },
+    "Transactions" : {
+      "comment" : "A notification center filter [tight]"
+    },
+    "Transactions, tokens and Moments you created stay on the Monad blockchain — nothing can remove them — and images you published for coins or Moments stay online because those tokens point to them." : {
+
+    },
+    "Transfer" : {
+
+    },
+    "Transferred to Perps" : {
+
+    },
+    "Treasury share" : {
+
+    },
+    "Treasury wallet" : {
+
+    },
+    "Trigger" : {
+      "comment" : "A take-profit or stop-loss order's trigger price, a stat (a noun) [tight]"
+    },
+    "Try Again" : {
+
+    },
+    "Try again" : {
+
+    },
+    "Turn off App Lock" : {
+
+    },
+    "Turn on Notifications and Price Alerts above to receive these." : {
+
+    },
+    "Type" : {
+      "comment" : "Which kind it is: on Import Wallet a recovery phrase or a private key, in Perps an order's type (market or limit)"
+    },
+    "Type DELETE to confirm" : {
+      "comment" : "Keep DELETE in English and in capitals: it is the word the user must type"
+    },
+    "USD" : {
+      "shouldTranslate" : false
+    },
+    "Uniswap v4 fallback" : {
+
+    },
+    "Unit Preference" : {
+
+    },
+    "Unknown" : {
+      "comment" : "A liquidation price that can't be computed. [tight]"
+    },
+    "Unlimited approval to %@" : {
+
+    },
+    "Unlock to bridge" : {
+
+    },
+    "Unlock with %@" : {
+
+    },
+    "Unlocked · %@ left" : {
+
+    },
+    "Unrealized" : {
+      "comment" : "Under a perp position's unrealized profit or loss [tight]"
+    },
+    "Unverified" : {
+
+    },
+    "Unverified token" : {
+
+    },
+    "Unverified tokens arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you send." : {
+
+    },
+    "Unverified — in your wallet" : {
+
+    },
+    "Unverified: sent to you, not chosen here" : {
+      "comment" : "Send review: a token someone sent to this wallet, not one chosen in the app, so its name proves nothing"
+    },
+    "Unwrap WMON" : {
+
+    },
+    "Up to %@" : {
+
+    },
+    "Up to %@ + %lld more steps" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Up to %1$@ + %2$lld more step"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Up to %1$@ + %2$lld more steps"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Up to %@ per action and %@ per session, and only when DyorHQ can price it. Every transaction is also checked on its own: the right chain and contract, approvals for exactly the amount shown, and the output coming back to you." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Up to %1$@ per action and %2$@ per session, and only when DyorHQ can price it. Every transaction is also checked on its own: the right chain and contract, approvals for exactly the amount shown, and the output coming back to you."
+          }
+        }
+      }
+    },
+    "Update DyorHQ" : {
+
+    },
+    "Update required" : {
+
+    },
+    "Updated %@ ago" : {
+
+    },
+    "Uploading…" : {
+
+    },
+    "Use DyorHQ's Link" : {
+
+    },
+    "Use an ipfs:// or https:// link." : {
+
+    },
+    "Use at least %lld characters." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Use at least %lld character."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Use at least %lld characters."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Use your recovery phrase or private key." : {
+
+    },
+    "Uses %@ AUSD from your wallet and swaps ≈ %@ MON → AUSD on %@ for the rest." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uses %1$@ AUSD from your wallet and swaps ≈ %2$@ MON → AUSD on %3$@ for the rest."
+          }
+        }
+      }
+    },
+    "Uses your device language (%@)" : {
+
+    },
+    "Value" : {
+
+    },
+    "Venue" : {
+      "comment" : "The exchange or pool a trade goes through (Kuru Flow, Uniswap…), a row label (a noun)"
+    },
+    "Verify" : {
+
+    },
+    "Verify Email" : {
+
+    },
+    "Verify every contract DyorHQ uses" : {
+
+    },
+    "Verify your email" : {
+
+    },
+    "Vested" : {
+      "comment" : "How much of the coins has vested, a row label before a percentage (a past participle)"
+    },
+    "Video link (optional)" : {
+
+    },
+    "Videos up to 50 MB." : {
+
+    },
+    "View" : {
+      "comment" : "Opens the transaction in a block explorer: a verb [tight]"
+    },
+    "View #%@ on OpenSea" : {
+
+    },
+    "View on Monadscan" : {
+
+    },
+    "View on OpenSea" : {
+
+    },
+    "Volume" : {
+
+    },
+    "Volume by Section" : {
+
+    },
+    "Volume period" : {
+
+    },
+    "Volume, fees and P&L across DyorHQ" : {
+
+    },
+    "Volume, fees and P&L are computed from your wallet's own on-chain history." : {
+
+    },
+    "Waiting for a sweep" : {
+
+    },
+    "Waiting for the book…" : {
+
+    },
+    "Waiting for the full deposit…" : {
+
+    },
+    "Waiting for trades…" : {
+
+    },
+    "Wallet" : {
+
+    },
+    "Wallet found" : {
+
+    },
+    "Watch" : {
+      "comment" : "Starts following this address without signing in, a verb [tight]"
+    },
+    "Watch an Address" : {
+
+    },
+    "Watch an address" : {
+
+    },
+    "Watch only" : {
+
+    },
+    "Watching %@" : {
+
+    },
+    "Watching for your deposit" : {
+
+    },
+    "Watching this address" : {
+
+    },
+    "We couldn't find a verified account for that email and password. If you reset your password or signed up again with this email, it now points to that newer wallet: to go back to this password's wallet, use Forgot password and enter this password. If you're new, tap Sign Up to verify your email first." : {
+
+    },
+    "We couldn’t confirm that. Please try again." : {
+
+    },
+    "We couldn’t find an account from before September 24, 2026 for that email and password either. Check them and try again." : {
+
+    },
+    "We couldn’t reach DyorHQ to check your password. Nothing is wrong with your password or your wallet: try again in a few minutes, and don’t reset your password meanwhile — a reset creates a new, empty wallet." : {
+
+    },
+    "We couldn’t reach DyorHQ to finish. Your email is verified, so tap Replace Wallet again — no new code needed." : {
+
+    },
+    "We couldn’t reach DyorHQ to finish. Your email is verified, so tap Try Again — no new code needed." : {
+
+    },
+    "Weak" : {
+      "comment" : "A password's strength [tight]"
+    },
+    "Website" : {
+
+    },
+    "We’ll email a one-time code to %@. Entering it proves the email is yours, then we log you in." : {
+
+    },
+    "What could be lost" : {
+
+    },
+    "What happened:\n\nWhat I expected:\n\nSteps to reproduce:\n" : {
+
+    },
+    "What is deleted" : {
+
+    },
+    "When" : {
+      "comment" : "Publish a Moment: when the photo or video was taken, a date field's label"
+    },
+    "Who pays" : {
+
+    },
+    "Win Rate" : {
+
+    },
+    "Window" : {
+      "comment" : "Review row: how long collecting stays open (a time window, not a screen)"
+    },
+    "Window Closed" : {
+      "comment" : "Section header: the collect window has closed (not a screen window)"
+    },
+    "Window closed" : {
+      "comment" : "[tight] Moment badge: its collect window has closed"
+    },
+    "Window closes" : {
+
+    },
+    "Withdraw" : {
+
+    },
+    "Withdraw AUSD" : {
+
+    },
+    "Withdraw Platform Fees" : {
+
+    },
+    "Withdraw Platform Proceeds" : {
+
+    },
+    "Withdraw Pool Fees" : {
+
+    },
+    "Withdraw Proceeds" : {
+
+    },
+    "Withdraw Treasury Share" : {
+
+    },
+    "Withdraw to Spot" : {
+
+    },
+    "Withdrawals pay you, the creator, and no one else." : {
+
+    },
+    "Withdrawing to another address" : {
+
+    },
+    "Withdrawn to Spot" : {
+
+    },
+    "Withdrew from Perps" : {
+
+    },
+    "Withdrew pool fees" : {
+
+    },
+    "Withdrew proceeds" : {
+
+    },
+    "Word #%lld" : {
+
+    },
+    "Word %lld, %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Word %1$lld, %2$@"
+          }
+        }
+      }
+    },
+    "Wrap MON" : {
+
+    },
+    "Wrapping and unwrapping MON" : {
+
+    },
+    "Write them on paper, in order. Don't screenshot, copy or save them anywhere online." : {
+
+    },
+    "X profile" : {
+
+    },
+    "Yes, in this transaction" : {
+
+    },
+    "Yesterday" : {
+
+    },
+    "You (gas only)" : {
+
+    },
+    "You Created This" : {
+
+    },
+    "You Pay" : {
+
+    },
+    "You Receive" : {
+
+    },
+    "You are watching this address. Sign in to collect." : {
+
+    },
+    "You are watching this address. Sign in to create a wallet you can sign with." : {
+
+    },
+    "You are watching this address. Sign in to trade." : {
+
+    },
+    "You exported and confirmed the recovery phrase." : {
+
+    },
+    "You get" : {
+
+    },
+    "You have %lld take-profit/stop-loss orders live on Perpl. Removing the key doesn't cancel them: they stay armed, and this device can't show or cancel them until you connect again." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "You have %lld take-profit/stop-loss order live on Perpl. Removing the key doesn't cancel it: it stays armed, and this device can't show or cancel it until you connect again."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "You have %lld take-profit/stop-loss orders live on Perpl. Removing the key doesn't cancel them: they stay armed, and this device can't show or cancel them until you connect again."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "You pay" : {
+
+    },
+    "You receive" : {
+
+    },
+    "You receive it with your share of the trading fees; with fee sharing on, holders receive both instead." : {
+
+    },
+    "You receive on %@" : {
+
+    },
+    "You sell" : {
+
+    },
+    "You send" : {
+
+    },
+    "You switched accounts while this was in progress. Nothing was applied to the account you're signed in to now." : {
+
+    },
+    "You took a screenshot of your recovery phrase. Delete it from Photos, and from Recently Deleted: anyone who sees it can take your funds." : {
+
+    },
+    "You'll sign a short message with your wallet to prove it's you — no transaction, no fees." : {
+
+    },
+    "You're watching this address — there's no key to export." : {
+
+    },
+    "Your %@ sign-in account at Privy, including its embedded wallet" : {
+
+    },
+    "Your %@ wallet's key is held by Privy, not DyorHQ. Export opens Privy's own secure page — you re-confirm your Privy sign-in there, and the key is shown inside that page only. DyorHQ never sees or stores it." : {
+
+    },
+    "Your %@ was deleveraged by Perpl." : {
+
+    },
+    "Your %@ was liquidated by Perpl." : {
+
+    },
+    "Your %@ was unwound by Perpl." : {
+
+    },
+    "Your 24 words" : {
+
+    },
+    "Your Alerts" : {
+
+    },
+    "Your Balance" : {
+
+    },
+    "Your Coin" : {
+
+    },
+    "Your DyorHQ data was deleted and this iPhone is signed out, but the sign-in account (Privy) could not be: deletion isn't enabled on the server yet. Contact support to finish." : {
+
+    },
+    "Your DyorHQ data was deleted and this iPhone is signed out, but your %@ sign-in account at Privy wasn't deleted (%@). To finish, sign in with %@ again and delete the account once more, or contact %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your DyorHQ data was deleted and this iPhone is signed out, but your %1$@ sign-in account at Privy wasn't deleted (%2$@). To finish, sign in with %3$@ again and delete the account once more, or contact %4$@."
+          }
+        }
+      }
+    },
+    "Your DyorHQ profile, posts, comments, follows and reactions" : {
+
+    },
+    "Your Holdings" : {
+
+    },
+    "Your Launchpad Activity" : {
+
+    },
+    "Your Moments" : {
+
+    },
+    "Your NFT" : {
+
+    },
+    "Your Perpl history loads while your passkey session is unlocked." : {
+
+    },
+    "Your Position" : {
+      "comment" : "Section header: the wallet's editions and coins of this Moment"
+    },
+    "Your Profile" : {
+
+    },
+    "Your Sell-Only Coins" : {
+
+    },
+    "Your USDC" : {
+
+    },
+    "Your account was created before our email-wallet security upgrade. Choose a new password: it becomes a new wallet that can’t be guessed offline, and we’ll email a code to confirm it’s you. Your previous wallet (%@) has no MON or token balance left." : {
+
+    },
+    "Your account’s original wallet (%@) now holds funds, so the security upgrade can’t finish. Log in with your current password to move them out, then log in again to finish the upgrade. Don’t reset your password before then: a reset creates a new, empty wallet and leaves those funds behind." : {
+
+    },
+    "Your account’s original wallet (%@) still holds funds, so its security upgrade waits until they’re moved out. Log in to it now and send them to another wallet you control. Then log out and log in again to finish the upgrade." : {
+
+    },
+    "Your address, " : {
+      "comment" : "VoiceOver's name for the deposit address, followed by the address itself, spelled out: keep the comma and the space at the end"
+    },
+    "Your allocation" : {
+
+    },
+    "Your balances" : {
+
+    },
+    "Your balances couldn't be read just now — showing the last ones read." : {
+
+    },
+    "Your balances couldn't be read. Check your connection and try again." : {
+
+    },
+    "Your buys, sells and launches show here." : {
+
+    },
+    "Your claimable fees" : {
+
+    },
+    "Your code was accepted, so no new code is needed. If the last attempt went through after all, this just finishes it." : {
+
+    },
+    "Your coin" : {
+
+    },
+    "Your coins" : {
+
+    },
+    "Your current wallet" : {
+
+    },
+    "Your email is linked to the DyorHQ wallet %@. Going on moves your email to a new, empty wallet. Funds in %@ stay there, reachable only with its old password." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your email is linked to the DyorHQ wallet %1$@. Going on moves your email to a new, empty wallet. Funds in %2$@ stay there, reachable only with its old password."
+          }
+        }
+      }
+    },
+    "Your email verification expired. Send a new code to continue." : {
+
+    },
+    "Your embedded wallet is deleted together with the Privy account. Send your funds elsewhere or export the wallet's key first; afterwards nobody can recover it." : {
+
+    },
+    "Your first deposit opens your Perpl account. Minimum 10 AUSD. In wallet: %@ AUSD." : {
+
+    },
+    "Your key is stored only on this iPhone, in the Keychain, and is never sent anywhere. DyorHQ cannot recover it — keep your original backup safe." : {
+
+    },
+    "Your launches, swaps, buys, sells and perp orders show up here." : {
+
+    },
+    "Your passkey is this account's lock: signing asks for it whenever the session is locked, so App Lock doesn't add a second %@ prompt." : {
+
+    },
+    "Your passkey is this wallet's key. These 24 words are a second way in: they restore the same wallet in MetaMask, Rabby or any wallet that takes a recovery phrase, even without your passkey. Showing them always asks for %@, and they hide after a minute unless you keep them showing." : {
+
+    },
+    "Your passkey: DyorHQ asks your passkey app to remove it" : {
+
+    },
+    "Your photo is uploaded, but not on IPFS, where a Moment's media stays available without DyorHQ. Try again, or publish with DyorHQ's link to it instead: that link is permanent on-chain, and DyorHQ only shows it while it still matches your photo's fingerprint." : {
+
+    },
+    "Your recovery phrase hides in %lld seconds. Choose Keep Showing for more time." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Your recovery phrase hides in %lld second. Choose Keep Showing for more time."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Your recovery phrase hides in %lld seconds. Choose Keep Showing for more time."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Your share on expiry" : {
+
+    },
+    "Your trading key comes from your passkey and exists only while your session is unlocked; this device stores just its token. On another iPhone, connect once more." : {
+
+    },
+    "Your trading key is generated on this device and authorized once by your wallet." : {
+
+    },
+    "Your video is uploaded, but a video Moment needs both the video and its cover frame on IPFS before it can be published. Try again in a minute." : {
+
+    },
+    "Your wallet" : {
+
+    },
+    "Your wallet is yours — you hold the keys." : {
+
+    },
+    "Your wallet needs a Perpl account before it can trade. Opens app.perpl.xyz." : {
+
+    },
+    "Your wallet no longer holds the %@ you picked. Choose a token." : {
+
+    },
+    "Your wallet stays with your account. Sign in again to use it." : {
+
+    },
+    "Your wallet's key or recovery phrase works in any other wallet app." : {
+
+    },
+    "across %lld Moments" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "across %lld Moment"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "across %lld Moments"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "already in your wallet" : {
+      "comment" : "[tight] My Moments tile, under the amount"
+    },
+    "chartLine.close" : {
+      "comment" : "A chart line at a resting order that closes the position (a noun, as the order's name). [tight]",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Close"
+          }
+        }
+      }
+    },
+    "claimable" : {
+      "comment" : "[tight] My Moments row, under an amount of coins: they can be claimed now"
+    },
+    "closed" : {
+      "comment" : "[tight] A Moment's collect window: it has closed"
+    },
+    "coins" : {
+      "comment" : "Stands in for a Moment coin's symbol when it couldn't be read, after an amount: “3 editions · 1.2M coins”"
+    },
+    "creator" : {
+      "comment" : "Among a Moment's summary parts: you published it"
+    },
+    "creator %@ · DyorHQ %@ · buyback %@" : {
+      "comment" : "The fees a Moment's pool accrued, a row's value: the creator's, DyorHQ's and the buyback's, each an amount",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "creator %1$@ · DyorHQ %2$@ · buyback %3$@"
+          }
+        }
+      }
+    },
+    "creator fees" : {
+      "comment" : "An Activity row's detail when the amount couldn't be read: the creator fees that were collected"
+    },
+    "error %@" : {
+      "comment" : "Stands in for a server's reason when it sent none, by its status code (“error 503”), inside parentheses in a sentence about deleting the account"
+    },
+    "expired" : {
+      "comment" : "[tight] My Moments row, under an amount of coins: the Moment expired"
+    },
+    "half on coins, half paired as liquidity" : {
+      "comment" : "Buyback review, the row “Spends”: what the buyback spends its budget on"
+    },
+    "handle" : {
+      "comment" : "Social profile: the placeholder of the @handle field (a user name)"
+    },
+    "holder rewards" : {
+      "comment" : "An Activity row's detail when the amount couldn't be read: the holder rewards that were claimed"
+    },
+    "if applied first, nothing is published" : {
+      "comment" : "Publish review, the row “Policy change”: if the queued policy is applied before this publish confirms, nothing is published"
+    },
+    "link, hashed" : {
+      "comment" : "Publish review, the row “Media”: the media is a link, checked by its hash"
+    },
+    "momentFilter.all" : {
+      "comment" : "[tight] Moments filter: every Moment",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All"
+          }
+        }
+      }
+    },
+    "more ways in" : {
+      "comment" : "Sign-in screen: a divider above the other ways in (importing a wallet, watching an address)"
+    },
+    "myLaunchpad.view" : {
+      "comment" : "The name VoiceOver reads for My Launchpad's switch between its tabs (Holdings, Launches, Activity): a noun",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "View"
+          }
+        }
+      }
+    },
+    "newsSource.all" : {
+      "comment" : "News filter: headlines from every source [tight]",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All"
+          }
+        }
+      }
+    },
+    "no reason given" : {
+      "comment" : "Stands in for Perpl's reason when it gave none, completing “Perpl refused to cancel the take-profit at %@: <this>.”"
+    },
+    "notificationFilter.all" : {
+      "comment" : "Notification center filter: every kind of notification [tight]",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All"
+          }
+        }
+      }
+    },
+    "on Long" : {
+      "comment" : "[tight] Under a take-profit or stop-loss order: it acts on the long position"
+    },
+    "on Short" : {
+      "comment" : "[tight] Under a take-profit or stop-loss order: it acts on the short position"
+    },
+    "or continue with" : {
+      "comment" : "Sign-in screen: a divider above the other sign-in methods (Apple, Google, a passkey)"
+    },
+    "orderReview.market" : {
+      "comment" : "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Market"
+          }
+        }
+      }
+    },
+    "pastCohort.closed" : {
+      "comment" : "[tight] A past cohort Moment's status when it neither graduated nor expired: collecting it is closed in the app",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Closed"
+          }
+        }
+      }
+    },
+    "pending" : {
+      "comment" : "[tight] My Moments row, under an amount of coins: promised, the Moment has not graduated"
+    },
+    "photo, fingerprinted · DyorHQ link, not IPFS" : {
+      "comment" : "Publish review, the row “Media”: a photo, fingerprinted, at DyorHQ's link instead of IPFS"
+    },
+    "photo, fingerprinted · IPFS" : {
+      "comment" : "Publish review, the row “Media”: a photo, fingerprinted, stored on IPFS"
+    },
+    "position.close" : {
+      "comment" : "Closes the open position (a verb), a button on the position. [tight]",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Close"
+          }
+        }
+      }
+    },
+    "promised, not graduated yet" : {
+      "comment" : "[tight] My Moments tile, under the amount"
+    },
+    "queued" : {
+      "comment" : "Publish review, the row “Policy change”: new terms are queued, not applicable yet [tight]"
+    },
+    "refused if the price moved over 2% this block" : {
+      "comment" : "Buyback review, the row “Price check”: the buyback is refused if the pool price moved over 2% in this block. Keep 2% as it is written"
+    },
+    "the Perpl Exchange" : {
+      "comment" : "Completes “Unlimited approval to %@” and “Replaces your unlimited approval to %@”."
+    },
+    "the Uniswap Universal Router" : {
+      "comment" : "Completes “Unlimited approval to %@” and “Replaces your unlimited approval to %@”."
+    },
+    "the mark price" : {
+      "comment" : "Completes a sentence about where a take-profit or stop-loss must sit: “… above the mark price”."
+    },
+    "the passkey session ended before it could sign" : {
+      "comment" : "Why the server sign-in before deleting the account didn't complete, completing “… and that sign-in didn't complete: <this>”"
+    },
+    "the signature was cancelled" : {
+      "comment" : "Why the server sign-in before deleting the account didn't complete, completing “… and that sign-in didn't complete: <this>”"
+    },
+    "the swap couldn't complete" : {
+      "comment" : "Stands in for the bridge's refund reason when it gave none, completing “Bridge refunded — <this>. Your funds were returned on %@.”"
+    },
+    "to withdraw" : {
+      "comment" : "[tight] Past Cohorts row, under a USDC amount: what the creator can withdraw"
+    },
+    "tradeMode.swap" : {
+      "comment" : "The Trade tab's switch to its spot-swap screen: the screen's name, a noun [tight]",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Swap"
+          }
+        }
+      }
+    },
+    "unlocks at the monthly cliffs" : {
+      "comment" : "[tight] My Moments tile, under the amount"
+    },
+    "until %@" : {
+      "comment" : "The collect window's row: open until the date that follows"
+    },
+    "unverified" : {
+      "comment" : "Ends a TP/SL summary when Perpl's live list couldn't confirm it: “TP 72,000 · unverified”."
+    },
+    "vested and unclaimed" : {
+      "comment" : "[tight] My Moments tile, under the amount"
+    },
+    "video, fingerprinted · IPFS" : {
+      "comment" : "Publish review, the row “Media”: a video, fingerprinted, stored on IPFS"
+    },
+    "volumePeriod.all" : {
+      "comment" : "A reporting period: all time [tight]",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All"
+          }
+        }
+      }
+    },
+    "≈ %@ MON → %@ AUSD on %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "≈ %1$@ MON → %2$@ AUSD on %3$@"
+          }
+        }
+      }
+    }
   },
   "version" : "1.0"
 }

@@ -1,7 +1,1578 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ Nothing was sent." : {
+      "comment" : "The value is a sentence that says why; this one adds that no transaction was sent."
+    },
+    "%@ did not answer within %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ did not answer within %2$@."
+          }
+        }
+      }
+    },
+    "%@ of its margin is in use, and Perpl liquidates at 100%%. Mark %@, liquidation %@. %@" : {
+      "comment" : "A margin alert. The values: the margin in use (“85%”), the mark price, the liquidation price, then what to do, a sentence of its own.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of its margin is in use, and Perpl liquidates at 100%%. Mark %2$@, liquidation %3$@. %4$@"
+          }
+        }
+      }
+    },
+    "%@ of its margin is in use. Mark %@, liquidation %@. %@" : {
+      "comment" : "A margin alert. The values: the margin in use (“85%”), the mark price, the liquidation price, then what to do, a sentence of its own.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of its margin is in use. Mark %2$@, liquidation %3$@. %4$@"
+          }
+        }
+      }
+    },
+    "%@-PERP long" : {
+      "comment" : "A long position on a Perps market: “BTC-PERP long”."
+    },
+    "%@-PERP long closed" : {
 
+    },
+    "%@-PERP short" : {
+      "comment" : "A short position on a Perps market: “BTC-PERP short”."
+    },
+    "%@-PERP short closed" : {
+
+    },
+    "24H" : {
+      "comment" : "[tight] A history window: the last 24 hours."
+    },
+    "30D" : {
+      "comment" : "[tight] A history window: the last 30 days."
+    },
+    "7D" : {
+      "comment" : "[tight] A history window: the last 7 days."
+    },
+    "A DyorHQ coin couldn't be read from the chain just now. Try again." : {
+
+    },
+    "A Moment couldn't be read from the chain just now. Try again." : {
+
+    },
+    "A Moment's name couldn't be read from the chain just now. Try again." : {
+
+    },
+    "A buyback for this Moment ran less than an hour ago. Try again later." : {
+
+    },
+    "A launch couldn't be read from the chain just now. Try again." : {
+
+    },
+    "A name can be at most %lld characters." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "A name can be at most %lld character."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "A name can be at most %lld characters."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "A passkey prompt is already open. Finish or cancel it, then try again." : {
+
+    },
+    "A symbol can be at most %lld characters." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "A symbol can be at most %lld character."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "A symbol can be at most %lld characters."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "A symbol can use A–Z, 0–9 and accented Latin letters, or Chinese, Japanese or Korean characters with 0–9, not mixed." : {
+
+    },
+    "A take-profit or stop-loss can only close a position." : {
+
+    },
+    "A word in this name mixes Latin letters with letters from another alphabet that look like them. Use one alphabet in each word." : {
+
+    },
+    "ABI data contains an out-of-range offset" : {
+
+    },
+    "ABI data is shorter than its declared layout" : {
+
+    },
+    "ABI string is not valid UTF-8" : {
+
+    },
+    "ABI value does not match type %@" : {
+
+    },
+    "Account deleted." : {
+
+    },
+    "Add %@ AUSD margin" : {
+
+    },
+    "Add margin or reduce the position now." : {
+
+    },
+    "Add margin or reduce the position on Perps to stay clear of it." : {
+
+    },
+    "Aggregated across Kuru order books and Monad pools" : {
+
+    },
+    "All" : {
+      "comment" : "[tight] A history window: every swap, as far back as the app reads."
+    },
+    "All of its margin is in use, and Perpl liquidates at 100%%. Mark %@, liquidation %@. %@" : {
+      "comment" : "A margin alert when all of a position's margin is in use. The values: the mark price, the liquidation price, then what to do, a sentence of its own.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All of its margin is in use, and Perpl liquidates at 100%%. Mark %1$@, liquidation %2$@. %3$@"
+          }
+        }
+      }
+    },
+    "All of its margin is in use. Mark %@, liquidation %@. %@" : {
+      "comment" : "A margin alert when all of a position's margin is in use. The values: the mark price, the liquidation price, then what to do, a sentence of its own.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All of its margin is in use. Mark %1$@, liquidation %2$@. %3$@"
+          }
+        }
+      }
+    },
+    "Allow the Universal Router to spend %@" : {
+
+    },
+    "An address has 40 characters after 0x; this one has %@." : {
+
+    },
+    "An address starts with 0x." : {
+
+    },
+    "Approve $%@" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the coin's symbol after a dollar sign, as coin tickers are written ($DOGE)."
+    },
+    "Approve %@" : {
+
+    },
+    "Approve %@ for Kuru Flow" : {
+
+    },
+    "Approve %@ for Monday Trade" : {
+
+    },
+    "Approve %@ for Permit2" : {
+
+    },
+    "Approve %@ for Uniswap" : {
+
+    },
+    "Approve AUSD" : {
+
+    },
+    "Approve USDC" : {
+
+    },
+    "Approve USDC for Permit2" : {
+
+    },
+    "Approve developer buy" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. It approves the pair asset for the coin creator's own first buy, made with the launch."
+    },
+    "Aurora request failed (%@)." : {
+
+    },
+    "Bonding" : {
+      "comment" : "[tight] A launch's phase: its coin trades on its bonding curve."
+    },
+    "Buy" : {
+      "comment" : "[tight] A Perps fill that bought."
+    },
+    "Buy $%@" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the coin's symbol after a dollar sign, as coin tickers are written ($DOGE)."
+    },
+    "Buy or sell on its Launch page" : {
+
+    },
+    "Cancel order" : {
+      "comment" : "A transaction step: cancel a resting order on Perpl."
+    },
+    "Choose between 1 and %lld editions." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Choose %lld edition."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Choose between 1 and %lld editions."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Claim %@" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the symbol of a Moment's coin, whose vested coins are claimed."
+    },
+    "Claim %lld Moments" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is how many Moments' vested coins are claimed together.",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Claim %lld Moment"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Claim %lld Moments"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Claim MON fees" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent."
+    },
+    "Claim creator fees" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent."
+    },
+    "Claim fees" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent."
+    },
+    "Claim holder rewards" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent."
+    },
+    "Close %@" : {
+      "comment" : "A transaction step: close the position on a Perps market (BTC-PERP)."
+    },
+    "Close Long" : {
+      "comment" : "[tight] A Perps fill: it closed or reduced a long position."
+    },
+    "Close Short" : {
+      "comment" : "[tight] A Perps fill: it closed or reduced a short position."
+    },
+    "Close order filled" : {
+      "comment" : "A notification's title: an order that closes a position (a close order) was filled (executed)."
+    },
+    "Collect %lld editions of %@" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The values are the number of editions collected and the Moment's symbol.",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Collect %1$lld edition of %2$@"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Collect %1$lld editions of %2$@"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Collecting" : {
+      "comment" : "[tight] A Moment's state: its editions can be collected."
+    },
+    "Connect your wallet to DyorHQ to use the bridge." : {
+
+    },
+    "Could not read %@ from the server." : {
+
+    },
+    "Couldn't delete your data. Nothing on this phone was changed. Try again." : {
+
+    },
+    "Couldn't read Aurora's response: %@" : {
+
+    },
+    "Deposit AUSD" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent."
+    },
+    "Distribute pool fees" : {
+
+    },
+    "DyorHQ Launch" : {
+      "comment" : "[tight] A coin's badge: launched on the DyorHQ launchpad. DyorHQ is never translated."
+    },
+    "DyorHQ Moment" : {
+      "comment" : "[tight] A coin's badge: the coin of a DyorHQ Moment. DyorHQ is never translated."
+    },
+    "DyorHQ couldn't check this coin's launchpad just now, so buying it isn't offered. Try again in a moment." : {
+
+    },
+    "DyorHQ couldn't check whether this coin is still on a launchpad's bonding curve just now. If it is, it trades on its Launch page, not on Swap: check again in a moment." : {
+
+    },
+    "DyorHQ refused to sign Perpl's trading-key request because %@. Nothing was signed. Try again later." : {
+
+    },
+    "DyorHQ's keepers will finish this graduation: they retry it with the gas it needs and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool. Nothing was sent." : {
+
+    },
+    "DyorHQ's server isn't answering right now (%@). Try again in a minute." : {
+
+    },
+    "Enable one-click trading (order forwarding) on your Perpl account first." : {
+
+    },
+    "Enter an amount above zero." : {
+
+    },
+    "Expire Moment" : {
+
+    },
+    "Expired" : {
+      "comment" : "[tight] A Moment's state: its collect window closed before it graduated."
+    },
+    "From retired launchpads: sell them on their page. They can't be bought, and a coin waiting to graduate can't be sold until it does." : {
+
+    },
+    "From retired launchpads: sell them on their page. They can't be bought." : {
+
+    },
+    "Graduate" : {
+      "comment" : "A transaction step: graduate a launch's coin from its bonding curve into its pool (a verb)."
+    },
+    "Graduated" : {
+      "comment" : "[tight] A status: a launch's coin or a Moment has graduated, and trades in its pool."
+    },
+    "Graduation pending" : {
+      "comment" : "[tight] A status: a launch's coin or a Moment waits to graduate into its pool."
+    },
+    "Graduation pending · Launch page" : {
+
+    },
+    "If you signed in with a passkey from another phone, delete it on that phone." : {
+
+    },
+    "If your passkey is in 1Password or another app, delete it there." : {
+
+    },
+    "If your passkey is in iCloud Keychain, Passwords may keep it in Recently Deleted for up to 30 days." : {
+
+    },
+    "If your passkey still shows up" : {
+
+    },
+    "Invalid ABI type: %@" : {
+
+    },
+    "Invalid Privy access token." : {
+
+    },
+    "Invalid function signature: %@" : {
+
+    },
+    "Invalid wallet signature." : {
+
+    },
+    "Kuru Flow could not route this trade." : {
+
+    },
+    "Kuru Flow did not return an access token." : {
+
+    },
+    "Kuru Flow rate limit reached. Retrying on the next refresh." : {
+
+    },
+    "Kuru Flow returned %@." : {
+
+    },
+    "Kuru Flow returned an invalid transaction." : {
+
+    },
+    "Kuru Flow returned an unexpected transaction, so it was blocked for your safety." : {
+
+    },
+    "Kuru Flow token request failed (%@)." : {
+
+    },
+    "Launch $%@" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. It launches a new coin; the value is its symbol after a dollar sign, as coin tickers are written ($DOGE)."
+    },
+    "Launching is limited to approved wallets right now, and this wallet isn't one." : {
+
+    },
+    "Launching is limited to approved wallets right now." : {
+
+    },
+    "Liquidation risk: %@" : {
+
+    },
+    "Long %@" : {
+      "comment" : "A transaction step: open or add to a long (buy) position on a Perps market (BTC-PERP)."
+    },
+    "Longs pay shorts" : {
+      "comment" : "Perps funding: holders of long positions pay holders of short ones."
+    },
+    "MON sent with an approval" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "MON was sent with a trade that takes none." : {
+
+    },
+    "Margin warning: %@" : {
+
+    },
+    "Migrating" : {
+      "comment" : "[tight] A launch's phase: its coin moves from its curve to its pool."
+    },
+    "Migrating · Launch page" : {
+
+    },
+    "Missing Privy access token." : {
+
+    },
+    "Moment earnings and fees" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "Moment graduation and vesting" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "Moments are not live on this network yet." : {
+
+    },
+    "Near liquidation: %@" : {
+
+    },
+    "New launches are paused right now." : {
+
+    },
+    "No Perpl trading account. Deposit AUSD first." : {
+
+    },
+    "No funding" : {
+      "comment" : "Perps funding: the rate is zero, so nobody pays."
+    },
+    "No response" : {
+
+    },
+    "No route for this pair." : {
+
+    },
+    "No verified email on this Privy account." : {
+
+    },
+    "Not connected to Perpl trading." : {
+
+    },
+    "Not enough MON to pay for gas." : {
+
+    },
+    "Not the %@ DyorHQ lists" : {
+      "comment" : "[tight] A warning badge on a look-alike: the value is the symbol of the token DyorHQ lists (USDC)."
+    },
+    "Not the real %@" : {
+      "comment" : "[tight] A warning badge on a look-alike: the value is the symbol of a widely traded token (ETH)."
+    },
+    "Nothing to send." : {
+
+    },
+    "One step left: delete the passkey yourself" : {
+
+    },
+    "Only governance or the Moments guardian can do that." : {
+
+    },
+    "Only the Moments guardian can do that." : {
+
+    },
+    "Only the wallet this is owed to can withdraw it." : {
+
+    },
+    "Open %@'s Launch page" : {
+
+    },
+    "Open Long" : {
+      "comment" : "[tight] A Perps fill: it opened or added to a long position."
+    },
+    "Open Perpl account" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. It opens (creates) a trading account on Perpl with a first deposit."
+    },
+    "Open Short" : {
+      "comment" : "[tight] A Perps fill: it opened or added to a short position."
+    },
+    "Open the Passwords app › Passkeys › search \"dyorhq\" › tap the DyorHQ passkey › Edit › Delete." : {
+      "comment" : "A step to delete a passkey by hand. Passwords, Passkeys, Edit and Delete are iOS's own names: use iOS's words for them in this language; “dyorhq” is typed as it is."
+    },
+    "Order filled" : {
+      "comment" : "A notification's title: a position opened or grew, so the order was filled (executed)."
+    },
+    "Order placed" : {
+      "comment" : "A notification's title: Perpl acknowledged a limit order, which now rests on the order book."
+    },
+    "Order submitted" : {
+      "comment" : "A notification's title: Perpl acknowledged a market order, which may not have filled yet."
+    },
+    "Passcode" : {
+      "comment" : "The device passcode, named where a passkey or App Lock asks for it: “Confirm with Passcode”."
+    },
+    "Past cohort · trading closed. %@ is a retired Moment coin, so DyorHQ never trades it." : {
+
+    },
+    "Past cohort · trading closed. %@ is a retired Moment pool, so DyorHQ never trades it." : {
+
+    },
+    "Perpl already has this trading key. Nothing was changed; try connecting again." : {
+
+    },
+    "Perpl closed the idle trading connection (%@). It reconnects on your next order." : {
+
+    },
+    "Perpl couldn't process a trading frame (%@). Reconnect and try again." : {
+
+    },
+    "Perpl did not acknowledge the order in time." : {
+
+    },
+    "Perpl did not confirm this request." : {
+
+    },
+    "Perpl did not confirm this trigger." : {
+
+    },
+    "Perpl dropped the trading connection because the app fell behind reading it. Try again." : {
+
+    },
+    "Perpl market data is unavailable (status %@)." : {
+
+    },
+    "Perpl rejected this trading key. Remove the API key below and connect again to enroll a fresh one." : {
+
+    },
+    "Perpl sent %@ the app could not read." : {
+
+    },
+    "Perpl trading connection closed (%@: %@)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Perpl trading connection closed (%1$@: %2$@)."
+          }
+        }
+      }
+    },
+    "Perpl trading connection closed (code %@)." : {
+
+    },
+    "Perpl trading connection was lost." : {
+
+    },
+    "Perpl trading connection was lost: %@." : {
+
+    },
+    "Perpl's trading rate limit was hit. Wait a moment and try again." : {
+
+    },
+    "Perpl's trading server is restarting. Try again in a moment." : {
+
+    },
+    "Priced from its DyorHQ curve" : {
+
+    },
+    "Priced from its Moment pool" : {
+
+    },
+    "Priced from its Monday Trade pool" : {
+
+    },
+    "Priced from its Uniswap v4 pool" : {
+
+    },
+    "Publish %@" : {
+
+    },
+    "Publishing is off: the Moments contract would link new Moments somewhere other than dyorhq.fun." : {
+
+    },
+    "Publishing is off: the Moments terms couldn't be verified." : {
+
+    },
+    "Publishing is paused by governance; collecting continues." : {
+
+    },
+    "Publishing is paused by the Moments guardian; collecting continues." : {
+
+    },
+    "Publishing is paused right now, so nothing was published." : {
+
+    },
+    "Publishing is unavailable right now: the Moments terms couldn't be read. Pull to refresh." : {
+
+    },
+    "Refund mode" : {
+      "comment" : "[tight] A launch's phase: its coin can only be sold back into its curve."
+    },
+    "Request cancelled in your wallet." : {
+
+    },
+    "Retry graduation" : {
+
+    },
+    "Run buyback" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. It runs a round of a Moment's buyback."
+    },
+    "Sell" : {
+      "comment" : "[tight] A Perps fill that sold."
+    },
+    "Sell $%@" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the coin's symbol after a dollar sign, as coin tickers are written ($DOGE)."
+    },
+    "Sell %@ on its Launch page" : {
+
+    },
+    "Sell it back on its Launch page" : {
+
+    },
+    "Sell on its Launch page" : {
+
+    },
+    "Sell only" : {
+      "comment" : "[tight] A badge on a coin from a retired launchpad: it can be sold, not bought."
+    },
+    "Sent — confirmation not seen yet. Check it before trying again." : {
+
+    },
+    "Short %@" : {
+      "comment" : "A transaction step: open or add to a short (sell) position on a Perps market (BTC-PERP)."
+    },
+    "Shorts pay longs" : {
+      "comment" : "Perps funding: holders of short positions pay holders of long ones."
+    },
+    "Sign in to DyorHQ to continue." : {
+
+    },
+    "Sign in with a wallet that can sign to collect." : {
+
+    },
+    "Sign-in isn't finished on the server yet (APP_JWT_SECRET not set)." : {
+
+    },
+    "Sign-in was refused (%@). Please try again." : {
+
+    },
+    "Sign-in was refused. Please try again." : {
+
+    },
+    "Stop-loss can have at most %lld decimal places on %@." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Stop-loss can have at most %1$lld decimal place on %2$@."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Stop-loss can have at most %1$lld decimal places on %2$@."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Stop-loss is not a valid price." : {
+
+    },
+    "Stop-loss must be a whole number on %@." : {
+
+    },
+    "Stop-loss must be above %@ (%@) for a short." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stop-loss must be above %1$@ (%2$@) for a short."
+          }
+        }
+      }
+    },
+    "Stop-loss must be above the liquidation price (%@). Liquidation would come first, so it would never protect you." : {
+
+    },
+    "Stop-loss must be at least %@ on %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stop-loss must be at least %1$@ on %2$@."
+          }
+        }
+      }
+    },
+    "Stop-loss must be below %@ (%@) for a long." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stop-loss must be below %1$@ (%2$@) for a long."
+          }
+        }
+      }
+    },
+    "Stop-loss must be below the liquidation price (%@). Liquidation would come first, so it would never protect you." : {
+
+    },
+    "Supabase request failed (%@)." : {
+
+    },
+    "Swap on Kuru Flow" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The venue's name is never translated."
+    },
+    "Swap on Monday Trade" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The venue's name is never translated."
+    },
+    "Swap on Uniswap v3" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The venue's name is never translated."
+    },
+    "Swap on Uniswap v4" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The venue's name is never translated."
+    },
+    "Take-profit and stop-loss can't be attached to a reduce-only order. Set them on the position instead." : {
+
+    },
+    "Take-profit can have at most %lld decimal places on %@." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Take-profit can have at most %1$lld decimal place on %2$@."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Take-profit can have at most %1$lld decimal places on %2$@."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Take-profit is not a valid price." : {
+
+    },
+    "Take-profit must be a whole number on %@." : {
+
+    },
+    "Take-profit must be above %@ (%@) for a long." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Take-profit must be above %1$@ (%2$@) for a long."
+          }
+        }
+      }
+    },
+    "Take-profit must be at least %@ on %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Take-profit must be at least %1$@ on %2$@."
+          }
+        }
+      }
+    },
+    "Take-profit must be below %@ (%@) for a short." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Take-profit must be below %1$@ (%2$@) for a short."
+          }
+        }
+      }
+    },
+    "That Moment does not exist." : {
+
+    },
+    "That allocation is above the most a creator can keep." : {
+
+    },
+    "That coin wasn't launched on this launchpad." : {
+
+    },
+    "That creator tax is above the maximum." : {
+
+    },
+    "That graduation venue isn't available." : {
+
+    },
+    "That link base is too long." : {
+
+    },
+    "That pair asset can only graduate on Monday Trade." : {
+
+    },
+    "That pair asset isn't approved for launches." : {
+
+    },
+    "That passkey belongs to %@, not to this account (%@). Nothing was deleted." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That passkey belongs to %1$@, not to this account (%2$@). Nothing was deleted."
+          }
+        }
+      }
+    },
+    "That price is above the most a collect can be charged (the gross that completes the reserve). Lower it." : {
+
+    },
+    "That price is below the minimum collect price." : {
+
+    },
+    "That proposed policy lapsed: nobody applied it within 7 days of it becoming applicable." : {
+
+    },
+    "That sign-in expired or was already used. Please try again." : {
+
+    },
+    "That tick spacing isn't valid." : {
+
+    },
+    "That verification was for a different email. Verify this email to continue." : {
+
+    },
+    "The %@ contract refused this transfer, so nothing would be sent." : {
+
+    },
+    "The MON sent doesn't match the amount." : {
+
+    },
+    "The Moments terms changed after you reviewed them, so nothing was published. Review them again." : {
+
+    },
+    "The Moments terms couldn't be verified, so nothing was published. Review them again." : {
+
+    },
+    "The Uniswap v4 fallback isn't available for this coin yet." : {
+
+    },
+    "The amount is too large for this venue." : {
+
+    },
+    "The bridge is temporarily unavailable. Please try again shortly." : {
+
+    },
+    "The buyback budget is below the 1 USDC minimum a round needs." : {
+
+    },
+    "The code you entered was for a different email." : {
+
+    },
+    "The coin couldn't be created at its expected address. Try again." : {
+
+    },
+    "The collect window has closed." : {
+
+    },
+    "The collect window must be between 1 hour and 30 days." : {
+
+    },
+    "The contract rejected the transaction (custom error %@ with %@)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The contract rejected the transaction (custom error %1$@ with %2$@)."
+          }
+        }
+      }
+    },
+    "The contract rejected the transaction (custom error %@)." : {
+
+    },
+    "The contracts aren't fully set up yet, so nothing was sent." : {
+
+    },
+    "The curve doesn't hold enough to pay that out. Try a smaller amount." : {
+
+    },
+    "The guardian's pause must be lifted first." : {
+
+    },
+    "The launch fee changed to %@ MON since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new fee." : {
+
+    },
+    "The launch fee wasn't paid in full." : {
+
+    },
+    "The launch terms changed since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new terms." : {
+
+    },
+    "The launchpad contracts are not deployed yet." : {
+
+    },
+    "The launchpad returned something the app could not read (%@)." : {
+
+    },
+    "The launchpad's contracts aren't locked yet, so launching stays off for now." : {
+
+    },
+    "The launchpad's contracts aren't the ones this version of DyorHQ was built for, so launching is off. Update the app." : {
+
+    },
+    "The limit price rounds to zero on this market." : {
+
+    },
+    "The liquidation price can't be read right now, so this stop-loss can't be checked against it. Try again in a moment." : {
+
+    },
+    "The mark, %@, is within 10%% of the liquidation price, %@. %@" : {
+      "comment" : "A margin alert. The values: the mark price, the liquidation price, then what to do, a sentence of its own.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The mark, %1$@, is within 10%% of the liquidation price, %2$@. %3$@"
+          }
+        }
+      }
+    },
+    "The network asked for an unusually high fee (up to %@), so nothing was signed. Try again in a moment." : {
+
+    },
+    "The network quoted an unusual gas price, so nothing was signed. Try again in a moment." : {
+
+    },
+    "The order size rounds to zero on this market." : {
+
+    },
+    "The passkey returned an output DyorHQ can’t use." : {
+
+    },
+    "The pool price is out of the range graduation accepts right now. Try again later." : {
+
+    },
+    "The pool price moved more than 2% within this block, so the buyback was refused. Try again in a later block." : {
+      "comment" : "Why a Moment's buyback was refused. Write 2% as it is, the percent sign right after the number"
+    },
+    "The pool price moved past the buyback's slippage limit. Try again." : {
+
+    },
+    "The price moved past your slippage limit. Try again." : {
+
+    },
+    "The route is malformed." : {
+
+    },
+    "The server answered with status %@." : {
+
+    },
+    "The server sent a response the app could not read." : {
+
+    },
+    "The take-profit or stop-loss price rounds to zero on this market." : {
+
+    },
+    "The transaction names the zero address, so the contract refused it." : {
+
+    },
+    "The transaction was mined but reverted." : {
+
+    },
+    "The transaction would fail." : {
+
+    },
+    "The vault could not be opened: wrong passkey or the data was changed." : {
+
+    },
+    "The vault is not in Mera's format." : {
+
+    },
+    "The wallet returned an unreadable signature." : {
+
+    },
+    "There is nothing to claim yet." : {
+
+    },
+    "There is nothing to withdraw." : {
+
+    },
+    "This Moment can't be expired yet." : {
+
+    },
+    "This Moment couldn't be read from the chain just now. Try again." : {
+
+    },
+    "This Moment has already graduated." : {
+
+    },
+    "This Moment is no longer collecting." : {
+
+    },
+    "This Moment isn't in a state that allows this." : {
+
+    },
+    "This Moment isn't waiting to graduate." : {
+
+    },
+    "This address has a space or line break inside it. Copy it again from the source." : {
+
+    },
+    "This address's capital letters don't match its checksum, so it may contain a typo. Copy it again from the source." : {
+
+    },
+    "This coin is migrating from its bonding curve to its pool: it can't be traded until it graduates, and then it trades on Swap. Its launch couldn't be read just now; its page will try again." : {
+
+    },
+    "This coin is still on its launchpad's bonding curve, which Swap can't route: buy and sell it on its Launch page. Once it graduates, it trades on Swap." : {
+
+    },
+    "This coin is still on its launchpad's bonding curve, which Swap can't route: trade it on its Launch page. Its launch couldn't be read just now; its page will try again." : {
+
+    },
+    "This coin isn't in the phase that allows this." : {
+
+    },
+    "This coin's bonding curve is complete; it trades in its pool now." : {
+
+    },
+    "This coin's bonding curve isn't trading." : {
+
+    },
+    "This coin's curve is full and its graduation is pending: it can't be traded until it graduates, and then it trades on Swap." : {
+
+    },
+    "This coin's launch is in refund mode: sell it back into its curve on its Launch page, at the curve's price with no fees." : {
+
+    },
+    "This coin's launch is in refund mode: sell it back into its curve on its Launch page. Its launch couldn't be read just now; its page will try again." : {
+
+    },
+    "This coin's launchpad is retired and its graduation is pending: it can't be traded until it graduates." : {
+
+    },
+    "This coin's launchpad is retired: you can sell it on its Launch page, but not buy." : {
+
+    },
+    "This coin's launchpad is retired: you can sell it on its Launch page, but not buy. Its launch couldn't be read just now; its page will try again." : {
+
+    },
+    "This coin's launchpad is retired: you can sell, but not buy." : {
+
+    },
+    "This hasn't graduated yet." : {
+
+    },
+    "This launch template is turned off, so nothing was launched." : {
+
+    },
+    "This name has hidden or direction-changing characters. Remove them." : {
+
+    },
+    "This name is too long to store: use fewer emoji or symbols." : {
+
+    },
+    "This name looks like %@, a token DyorHQ already lists. Choose another name." : {
+
+    },
+    "This name looks like %@, a widely traded token this coin isn't. Choose another name." : {
+
+    },
+    "This order only reduces your long, so its take-profit and stop-loss would have no short to close and would stay armed for your next short here. Set them with TP/SL on the position instead." : {
+
+    },
+    "This order only reduces your short, so its take-profit and stop-loss would have no long to close and would stay armed for your next long here. Set them with TP/SL on the position instead." : {
+
+    },
+    "This pair asset can't trade on the curve." : {
+
+    },
+    "This passkey hasn’t unlocked DyorHQ’s trading key yet. Try again to confirm with your passkey." : {
+
+    },
+    "This quote was made for a different wallet. Refresh the quote." : {
+
+    },
+    "This reset expired — start again." : {
+
+    },
+    "This send would fail: %@" : {
+
+    },
+    "This send would fail: %@." : {
+
+    },
+    "This symbol looks like %@, a token DyorHQ already lists. Choose another symbol." : {
+
+    },
+    "This symbol looks like %@, a widely traded token this coin isn't. Choose another symbol." : {
+
+    },
+    "This transaction would graduate the coin and needs more gas to graduate. Try again." : {
+
+    },
+    "This transfer can't be built." : {
+
+    },
+    "Token with no name" : {
+
+    },
+    "Too many Perpl trading connections for this wallet — Perpl allows 4, shared with the Perpl web app. Close other Perpl sessions (or wait a minute) and try again." : {
+
+    },
+    "Too many attempts for this email. Verify your email to continue." : {
+
+    },
+    "Too many attempts — try again in a few minutes." : {
+
+    },
+    "Too many attempts. Please wait a few minutes and try again." : {
+
+    },
+    "Too many attempts. Try again in %@ min." : {
+
+    },
+    "Too many snipe-tax exemptions: at most %@." : {
+
+    },
+    "Trade %@ on its Launch page" : {
+
+    },
+    "Trade on its Launch page" : {
+
+    },
+    "Trading connection was closed." : {
+
+    },
+    "Unverified" : {
+      "comment" : "[tight] A warning badge on a token the app can't vouch for."
+    },
+    "Unwrap WMON" : {
+
+    },
+    "Unwrap WMON → MON, 1:1" : {
+
+    },
+    "Wallet signature did not match." : {
+
+    },
+    "Withdraw AUSD" : {
+
+    },
+    "Withdraw creator fees" : {
+
+    },
+    "Withdraw creator proceeds" : {
+
+    },
+    "Withdraw platform fees" : {
+
+    },
+    "Withdraw platform proceeds" : {
+
+    },
+    "Withdraw treasury share" : {
+
+    },
+    "Wrap" : {
+      "comment" : "The 1:1 conversion between MON and WMON, named where a venue's name goes."
+    },
+    "Wrap MON" : {
+
+    },
+    "Wrap MON → WMON, 1:1" : {
+
+    },
+    "You're watching this wallet: DyorHQ can't change its positions." : {
+
+    },
+    "Your %@ long is no longer open, and it wasn't closed from this app. It may have hit a take-profit or stop-loss, been liquidated, or been closed on another device. Trade History shows how." : {
+
+    },
+    "Your %@ short is no longer open, and it wasn't closed from this app. It may have hit a take-profit or stop-loss, been liquidated, or been closed on another device. Trade History shows how." : {
+
+    },
+    "Your %@-PERP long (%@) is closed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your %1$@-PERP long (%2$@) is closed."
+          }
+        }
+      }
+    },
+    "Your %@-PERP short (%@) is closed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your %1$@-PERP short (%2$@) is closed."
+          }
+        }
+      }
+    },
+    "Your Perpl account has the most API keys it allows (16). Remove keys you no longer use under API Keys on app.perpl.xyz, then try again." : {
+
+    },
+    "Your email verification expired. Verify your email again to continue." : {
+
+    },
+    "Your funds are still arriving. Try again in a moment." : {
+
+    },
+    "Your passkey session ended before this finished. Nothing was signed; try again." : {
+
+    },
+    "a buy on a retired launchpad, which only takes sells" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "a contract call DyorHQ doesn’t sign on its own" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "a different token than shown" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "a graduation fallback, which only DyorHQ’s keepers send" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "a launchpad curve DyorHQ can’t verify" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "a launchpad record" : {
+      "comment" : "What the app could not read, completing “The launchpad returned something the app could not read (<this>).”"
+    },
+    "a minimum received below 99% of the quote" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "a position in a market" : {
+      "comment" : "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"
+    },
+    "a signed-in wallet session is required" : {
+      "comment" : "DyorHQ's server's reason, inside parentheses in a sentence about deleting the account (“… didn't work (<this>).”): lowercase, no full stop"
+    },
+    "a swap that pays a fee to someone else" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "a transaction from another account" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "a transaction on another chain" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "account deletion failed — contact support" : {
+      "comment" : "DyorHQ's server's reason, inside parentheses in a sentence about deleting the account (“… didn't work (<this>).”): lowercase, no full stop"
+    },
+    "account deletion is unavailable right now — try again in a minute" : {
+      "comment" : "DyorHQ's server's reason, inside parentheses in a sentence about deleting the account (“… didn't work (<this>).”): lowercase, no full stop"
+    },
+    "an allowance that outlasts this session" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "an approval above the amount shown" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "an approval for a token not shown" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "an approval for an unknown spender" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "an unusually high network fee" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "api-key enroll" : {
+      "comment" : "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"
+    },
+    "api-key payload" : {
+      "comment" : "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"
+    },
+    "bridging" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "bridging to another chain" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "cancelling an order" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "candles" : {
+      "comment" : "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"
+    },
+    "closing a position" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "collecting a Moment" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "contracts and addresses" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "deleting your account" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "depositing and withdrawing collateral" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "exporting, signing out and deleting" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "getting started" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "graduation" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "history URL" : {
+      "comment" : "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"
+    },
+    "history page" : {
+      "comment" : "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"
+    },
+    "it adds a builder fee you never agreed to" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"
+    },
+    "it asks for permissions the app did not request" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"
+    },
+    "it changes the key's terms (%@)" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.” The value is a term of the request, in English."
+    },
+    "it is expired or this device's clock is off" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"
+    },
+    "it is for a different network" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"
+    },
+    "it is malformed (%@)" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.” The value names the part of the request, in English."
+    },
+    "it is not an API-key registration" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"
+    },
+    "it names a different wallet" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"
+    },
+    "it registers a key this device did not create" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"
+    },
+    "its fields are not an API-key registration's" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"
+    },
+    "its hash does not match its contents" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.”"
+    },
+    "its signing domain is not Perpl's (%@)" : {
+      "comment" : "Why DyorHQ refused to sign, completing “DyorHQ refused to sign Perpl’s trading-key request because <this>.” The value is a field of the request, in English."
+    },
+    "json object" : {
+      "comment" : "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"
+    },
+    "launching a coin" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "launching or creating" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "launchpad" : {
+      "comment" : "In a swap's route, the fee of a DyorHQ launchpad pool: “v4 · USDC → MON → TOKEN · 0.05% + launchpad”."
+    },
+    "launchpad fees and rewards" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "launchpad records" : {
+      "comment" : "What the app could not read, completing “The launchpad returned something the app could not read (<this>).”"
+    },
+    "making sessions longer" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "marginUsage.all" : {
+      "comment" : "[tight] All of a position's margin is in use, where a percentage (“85%”) would stand.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All"
+          }
+        }
+      }
+    },
+    "market context" : {
+      "comment" : "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”"
+    },
+    "missing access token" : {
+      "comment" : "DyorHQ's server's reason, inside parentheses in a sentence about deleting the account (“… didn't work (<this>).”): lowercase, no full stop"
+    },
+    "moments 1.5%" : {
+      "comment" : "In a swap's route, the fee of a DyorHQ Moment's pool: “v4 · USDC → COIN · moments 1.5%”."
+    },
+    "more MON than shown" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "more than the amount shown" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "notifications and price alerts" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "one-click trading" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "over the %@ limit per action" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.” The value is an amount in US dollars ($100)."
+    },
+    "over this session’s %@ limit" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.” The value is an amount in US dollars ($250)."
+    },
+    "position %@" : {
+      "comment" : "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.” The value is the market's number."
+    },
+    "publishing a Moment" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "self-custody and security" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "sending to another address" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "server not configured" : {
+      "comment" : "DyorHQ's server's reason, inside parentheses in a sentence about deleting the account (“… didn't work (<this>).”): lowercase, no full stop"
+    },
+    "showing your recovery phrase" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "sign in again to delete your account" : {
+      "comment" : "DyorHQ's server's reason, inside parentheses in a sentence about deleting the account (“… didn't work (<this>).”): lowercase, no full stop"
+    },
+    "signing a message" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "signing raw data" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "slippage and price impact" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "the email pepper" : {
+      "comment" : "What the app could not read, completing “Could not read <this> from the server.”"
+    },
+    "the output going to another address" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "the pin-media response" : {
+      "comment" : "What the app could not read, completing “Could not read <this> from the server.”"
+    },
+    "the risks" : {
+      "comment" : "The topic of a docs page, completing the accessibility label “Learn more about <topic>”."
+    },
+    "the sign-in nonce" : {
+      "comment" : "What the app could not read, completing “Could not read <this> from the server.”"
+    },
+    "the sign-in response" : {
+      "comment" : "What the app could not read, completing “Could not read <this> from the server.”"
+    },
+    "this action always asks" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "this can’t be priced" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "too many attempts — try again in a few minutes" : {
+      "comment" : "DyorHQ's server's reason, inside parentheses in a sentence about deleting the account (“… didn't work (<this>).”): lowercase, no full stop"
+    },
+    "vs %@ %@" : {
+      "comment" : "A coin's 24h change measured in the asset it trades against: “vs MON 1.20%”. The values are the asset's symbol and the change.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "vs %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "withdrawing to another address" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "your entry" : {
+      "comment" : "Completes a sentence about where a take-profit or stop-loss must sit: “… above your entry (950) for a long”."
+    },
+    "your session is locked" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"
+    },
+    "“%@” can't be part of an address: it uses only 0–9 and a–f." : {
+
+    }
   },
   "version" : "1.0"
 }
