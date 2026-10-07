@@ -654,12 +654,20 @@ public enum WalletHoldings {
         return (unpriced.filter { noPool.contains($0.address) }, unpriced.filter { !noPool.contains($0.address) })
     }
 
-    /// Symbols as a list in words, in the app's language: "cbBTC", "cbBTC and LBTC", "cbBTC, LBTC and rETH".
+    /// Symbols as a list in words, in the app's language as a whole: in English "cbBTC", "cbBTC and LBTC", "cbBTC, LBTC
+    /// and rETH", as it has always read whatever the region; every other language joins them its own way
+    /// (`ListFormatter`: "cbBTC, LBTC et rETH", "cbBTC、LBTC和rETH").
     public static func symbolList(_ tokens: [Token]) -> String {
         let symbols = tokens.map(\.symbol)
         guard let last = symbols.last else { return "" }
         guard symbols.count > 1 else { return last }
-        let first = symbols.dropLast().joined(separator: ", ")
-        return L10n.string(LocalizedStringResource("\(first) and \(last)", bundle: L10n.kit, comment: "The end of a list of token symbols: “cbBTC and LBTC”, or “cbBTC, LBTC and rETH”, where the first value is the list before the last symbol."))
+        let locale = L10n.locale
+        if locale.language.languageCode == .english {
+            // not localized: English as it has always read; ListFormatter would put a comma before "and" in the US
+            return symbols.dropLast().joined(separator: ", ") + " and " + last
+        }
+        let list = ListFormatter()
+        list.locale = locale
+        return list.string(from: symbols) ?? symbols.joined(separator: ", ")
     }
 }

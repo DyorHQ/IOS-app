@@ -288,6 +288,31 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertEqual(WalletHoldings.symbolList([cbbtc, try core("LBTC"), try core("rETH")]), "cbBTC, LBTC and rETH")
     }
 
+    /// The list of symbols follows the app's language as a whole, its commas included: English as it has always read,
+    /// with no comma before "and" whatever the device's region, and every other language its own way of listing.
+    func testASymbolListFollowsTheAppsLanguage() throws {
+        let saved = L10n.locale
+        defer { L10n.locale = saved }
+        let tokens = try ["cbBTC", "LBTC", "rETH"].map { symbol in try XCTUnwrap(Token.core.first { $0.symbol == symbol }) }
+        let languages: [(AppLanguage, String, three: String, two: String)] = [
+            (.en, "en_US", "cbBTC, LBTC and rETH", "cbBTC and LBTC"),
+            (.en, "en_GB", "cbBTC, LBTC and rETH", "cbBTC and LBTC"),
+            (.en, "fr_FR", "cbBTC, LBTC and rETH", "cbBTC and LBTC"),
+            (.fr, "en_US", "cbBTC, LBTC et rETH", "cbBTC et LBTC"),
+            (.es, "en_US", "cbBTC, LBTC y rETH", "cbBTC y LBTC"),
+            (.zhHans, "en_US", "cbBTC、LBTC和rETH", "cbBTC和LBTC"),
+            (.ko, "en_US", "cbBTC, LBTC 및 rETH", "cbBTC 및 LBTC"),
+        ]
+        for (language, device, three, two) in languages {
+            L10n.locale = L10n.locale(for: language, device: Locale(identifier: device))
+            let label = "\(language.code) on a \(device) device"
+            XCTAssertEqual(WalletHoldings.symbolList(tokens), three, label)
+            XCTAssertEqual(WalletHoldings.symbolList(Array(tokens.prefix(2))), two, label)
+            XCTAssertEqual(WalletHoldings.symbolList(Array(tokens.prefix(1))), "cbBTC", label)
+            XCTAssertEqual(WalletHoldings.symbolList([]), "", label)
+        }
+    }
+
     /// Dust never switches behaviour: a speck (1 wei) of a curated token no pool prices, which anyone can send to any
     /// wallet, leaves the order, the token a send starts on and the total as they were. It is only named.
     func testASpeckOfATokenWithNoPriceChangesNothing() throws {
