@@ -82,6 +82,19 @@ final class MomentsStringsTests: XCTestCase {
         }
         XCTAssertEqual(placeholderOnly, [], "nothing to translate: Text(verbatim:)")
         XCTAssertGreaterThan(checked, 150, "the scan reads the folder's keys")
+
+        // A field's placeholder with nothing to translate (a number) is passed as a `String`, shown as it is.
+        var placeholders: [String] = []
+        for (name, text) in try Self.sources() {
+            for call in Self.calls("TextField", in: Self.code(text)) {
+                guard let first = call.first, first.label == nil, !String(first.value).hasSuffix(" as String") else { continue }
+                placeholders += Self.literals(in: first.value).filter { !Self.hasWords($0.words) }.map { "\(name): TextField(\($0.source))" }
+            }
+        }
+        XCTAssertEqual(placeholders, [], "a number as a placeholder: \"1\" as String")
+        let create = try XCTUnwrap(try Self.sources().first { $0.name == "CreateMomentView.swift" }?.text)
+        XCTAssertTrue(create.contains(#"TextField("1" as String, text: $priceText)"#))
+        XCTAssertTrue(create.contains(#"TextField("10" as String, text: $allocPercentText)"#))
     }
 
     /// The five interpolations the compiler said would show a debug description (a `BigUInt` in a key) are written as

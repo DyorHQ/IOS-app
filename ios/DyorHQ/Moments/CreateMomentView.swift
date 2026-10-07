@@ -337,13 +337,13 @@ struct CreateMomentView: View {
             HStack {
                 Text("Collect price")
                 Spacer()
-                TextField("1", text: $priceText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit().frame(width: 110)
+                TextField("1" as String, text: $priceText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit().frame(width: 110)
                 Text(verbatim: "USDC").foregroundStyle(.secondary) // not localized: a token symbol
             }
             HStack {
                 Text("Your allocation")
                 Spacer()
-                TextField("10", text: $allocPercentText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit().frame(width: 110)
+                TextField("10" as String, text: $allocPercentText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit().frame(width: 110)
                 Text(verbatim: "%").foregroundStyle(.secondary)
             }
             Stepper(value: $windowDays, in: 1...30) {
