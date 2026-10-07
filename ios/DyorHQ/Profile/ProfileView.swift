@@ -691,8 +691,12 @@ private struct SendReview: Identifiable {
 
     /// What the review says of a token sent to the wallet unasked: a DyorHQ coin by its DyorHQ label, never as Unverified.
     var receivedNote: String {
-        if badge.isDyorHQ, let title = badge.title { return tr("\(title): sent to you, not chosen here") }
-        return tr("Unverified: sent to you, not chosen here")
+        if badge.isDyorHQ, let title = badge.title {
+            return tr(LocalizedStringResource("\(title): sent to you, not chosen here",
+                                              comment: "Send review: a token someone sent to this wallet, not one chosen in the app. %@ is its DyorHQ label, DyorHQ Launch or DyorHQ Moment"))
+        }
+        return tr(LocalizedStringResource("Unverified: sent to you, not chosen here",
+                                          comment: "Send review: a token someone sent to this wallet, not one chosen in the app, so its name proves nothing"))
     }
 
     func request() throws -> TransactionRequest { try TokenTransfer.request(token, to: to, amount: amount) }

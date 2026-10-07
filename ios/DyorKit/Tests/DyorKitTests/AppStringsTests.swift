@@ -216,6 +216,10 @@ final class AppStringsTests: XCTestCase {
         let profile = try Self.source("Profile/ProfileView.swift")
         XCTAssertTrue(profile.contains(#"return [.call(request, label: tr("Send \(review.token.symbol)"))]"#), "the step's label")
         XCTAssertTrue(profile.contains(#"title: tr("Sent \(review.token.symbol)")"#), "the Activity row")
+        // A token sent to the wallet unasked: a sentence of its own, a DyorHQ coin's label as its %@, with what it means.
+        let received = Self.squeezed(try Self.body(of: "var receivedNote: String", in: "Profile/ProfileView.swift"))
+        XCTAssertTrue(received.contains(#"return tr(LocalizedStringResource("\(title): sent to you, not chosen here", comment: "Send review: a token someone sent to this wallet, not one chosen in the app. %@ is its DyorHQ label, DyorHQ Launch or DyorHQ Moment"))"#))
+        XCTAssertTrue(received.contains(#"return tr(LocalizedStringResource("Unverified: sent to you, not chosen here", comment: "#))
     }
 
     /// Text with nothing to translate ("·", "@", "—", a count, "0x…") is shown as it is, never looked up as a key.
