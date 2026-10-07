@@ -26,20 +26,11 @@ final class AppStringsTests: XCTestCase {
 
     private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 
-    /// The lines of the folders with their literals; a line marked "not localized", or right under such a marker, is
-    /// left out.
+    /// The lines of the folders with their literals; a comment line is left out, and so is a line marked "not localized",
+    /// or right under a comment line that marks it (`PerpsWalletStringsTests.scannedLines(of:)`: a marker at the end of a
+    /// line of code covers that line only).
     private static func scannedLines() throws -> [(at: String, line: String, literals: [PerpsWalletStringsTests.Literal])] {
-        var out: [(String, String, [PerpsWalletStringsTests.Literal])] = []
-        for (path, text) in try sources() {
-            let lines = text.components(separatedBy: "\n")
-            for (index, line) in lines.enumerated() {
-                let previous = index > 0 ? lines[index - 1] : ""
-                if line.contains("not localized") || previous.contains("// not localized") { continue }
-                if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") { continue }
-                out.append(("\(path):\(index + 1)", line, PerpsWalletStringsTests.literals(in: line)))
-            }
-        }
-        return out
+        PerpsWalletStringsTests.scannedLines(of: try sources())
     }
 
     /// The body of the first `{ … }` after `declaration` (itself after `after`, when given), its comments removed.

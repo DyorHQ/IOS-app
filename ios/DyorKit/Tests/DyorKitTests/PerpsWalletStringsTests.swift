@@ -92,19 +92,37 @@ final class PerpsWalletStringsTests: XCTestCase {
             || text.range(of: #"^[A-Z][a-z]+[.…!?]?$"#, options: .regularExpression) != nil
     }
 
-    /// The lines of the scoped sources with their literals; a line marked "not localized" (or under such a marker) is
-    /// left out.
+    /// The lines of the scoped sources with their literals; a comment line is left out, and so is a line marked "not
+    /// localized", or right under a comment line that marks it. A marker at the end of a line of code covers that line
+    /// only: the next line (another case of the same switch, say) is read as any other.
     private static func scannedLines() throws -> [(at: String, line: String, literals: [Literal])] {
+        scannedLines(of: try scopedSources())
+    }
+
+    static func scannedLines(of files: [(path: String, text: String)]) -> [(at: String, line: String, literals: [Literal])] {
         var out: [(String, String, [Literal])] = []
-        for (path, text) in try scopedSources() {
+        for (path, text) in files {
             let lines = text.components(separatedBy: "\n")
             for (index, line) in lines.enumerated() {
-                let previous = index > 0 ? lines[index - 1] : ""
-                if line.contains("not localized") || previous.contains("// not localized") { continue }
+                let previous = index > 0 ? lines[index - 1].trimmingCharacters(in: .whitespaces) : ""
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") { continue }
+                if line.contains("not localized") || previous.hasPrefix("//") && previous.contains("// not localized") { continue }
                 out.append(("\(path):\(index + 1)", line, literals(in: line)))
             }
         }
         return out
+    }
+
+    /// A "not localized" marker at the end of a line of code covers that line only; a marker on a line of its own covers
+    /// the line under it.
+    func testANotLocalizedMarkerCoversItsOwnLine() {
+        let cases = """
+            case .google: return "Google" // not localized: a company's name
+            case .email: return "Email"
+            // not localized: Apple's name
+            case .apple: return "Apple"
+            """
+        XCTAssertEqual(Self.scannedLines(of: [("Kind.swift", cases)]).flatMap(\.literals).map(\.text), ["Email"])
     }
 
     func testTheLiteralReaderSeesNestedLiterals() {
