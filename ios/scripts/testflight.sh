@@ -19,8 +19,18 @@ if [[ -z "$TEAM" ]]; then echo "DEVELOPMENT_TEAM is not set in DyorHQ/Config/Sec
 if grep -q "127.0.0.1" DyorHQ/Config/Secrets.xcconfig; then echo "Secrets.xcconfig points at a local fork; restore the mainnet RPC first" >&2; exit 1; fi
 # The v2 wiring gate, as in ci_scripts/ci_post_xcodebuild.sh: nothing ships while DyorKit's v2 addresses are PENDING or
 # a retired Moments cohort is not final on chain (the archive's own build phase checks again).
-# Run the Swift half too before a release: (cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter V2WiringTests).
 python3 ../scripts/dev/check-launchpad-addresses.py --release || { echo "The release gate failed (above); nothing was built." >&2; exit 1; }
+# Its Swift half and the strings gate, as in ci_scripts/ci_post_xcodebuild.sh: V2WiringTests refuses a pending v2 table,
+# and the lanes' strings tests, which read the app's sources and String Catalogs, refuse a count whose English plural
+# forms aren't in a catalog (a count of 1 would read "1 editions") where they would otherwise skip. They read this
+# checkout only. swift test rewrites DyorKit/Package.resolved, so its pins are put back as they were.
+RELEASE_TESTS='AppStringsTests|PerpsWalletStringsTests|MomentsStringsTests|DyorKitStringsTests|TradeStringsTests|V2WiringTests'
+PINS=$(mktemp "${TMPDIR:-/tmp}/dyorkit-pins.XXXXXX")
+cp DyorKit/Package.resolved "$PINS"
+GATE=0
+(cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter "$RELEASE_TESTS") || GATE=$?
+cp "$PINS" DyorKit/Package.resolved && rm -f "$PINS"
+(( GATE == 0 )) || { echo "The strings and v2 wiring tests failed under DYORHQ_RELEASE_GATE=1 (above); nothing was built." >&2; exit 1; }
 
 # Bump the build number so every upload is unique — App Store Connect rejects a duplicate CFBundleVersion, which is
 # the most common first-timer failure. Pin an exact number with BUILD=<n>; keep the current one with NO_BUMP=1.
