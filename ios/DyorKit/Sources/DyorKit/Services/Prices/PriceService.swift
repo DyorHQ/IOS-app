@@ -7,7 +7,7 @@ public struct PriceInfo: Hashable, Sendable {
     /// nil when the historical read was not available, or for a coin that didn't exist then (`isNew`).
     public let change24h: Double?
     /// "Uniswap v4", "Uniswap v3", "Nad.fun" or "USDC"; for a DyorHQ coin its own venue: "DyorHQ curve", "Monday Trade",
-    /// "Uniswap v4" or "DyorHQ Moment pool".
+    /// "Uniswap v4" or "DyorHQ Moment pool". An identifier, never shown: `sourceLine` says it in the app's language.
     public let source: String
     /// A DyorHQ coin's change over the same 24 hours in its pair asset (`pairSymbol`), as "vs MON" shows it: 0 when only
     /// the pair asset's dollar price moved. Nil for every other token, or when the historical read was not available.
@@ -31,23 +31,24 @@ public extension PriceInfo {
     /// Whether it is a DyorHQ coin's price, from its own curve or pool (`DyorListing`): only those carry a pair asset.
     var isDyorVenue: Bool { pairSymbol != nil }
 
-    /// A DyorHQ coin's 24h change in its pair asset, as its token page shows it under the price: "vs MON 0.00%" when only
+    /// A DyorHQ coin's 24h change in its pair asset, in the app's language, as its token page shows it under the price: "vs MON 0.00%" when only
     /// MON's dollar price moved. A change under half a hundredth of a percent reads 0.00%. Nil for every other token,
     /// and without the day-ago read (a coin that is "New" included).
     var pairChangeText: String? {
         guard let pairSymbol, let pairChange, pairChange.isFinite else { return nil }
-        return "vs \(pairSymbol) \(NumberStyle.percent(abs(pairChange) < 0.005 ? 0 : pairChange))"
+        let change = NumberStyle.percent(abs(pairChange) < 0.005 ? 0 : pairChange)
+        return L10n.string(LocalizedStringResource("vs \(pairSymbol) \(change)", bundle: L10n.kit, comment: "A coin's 24h change measured in the asset it trades against: “vs MON 1.20%”. The values are the asset's symbol and the change."))
     }
 
     /// Where a DyorHQ coin's price comes from, in one line for its token page: "Priced from its DyorHQ curve", "…its
-    /// Uniswap v4 pool", "…its Monday Trade pool" or "…its Moment pool". Nil for every other token.
+    /// Uniswap v4 pool", "…its Monday Trade pool" or "…its Moment pool", in the app's language. Nil for every other token.
     var sourceLine: String? {
         guard isDyorVenue else { return nil }
         switch source {
-        case DyorListing.curveLabel: return "Priced from its DyorHQ curve"
-        case DyorListing.v4Label: return "Priced from its Uniswap v4 pool"
-        case DyorListing.mondayLabel: return "Priced from its Monday Trade pool"
-        case DyorListing.momentLabel: return "Priced from its Moment pool"
+        case DyorListing.curveLabel: return L10n.tr("Priced from its DyorHQ curve")
+        case DyorListing.v4Label: return L10n.tr("Priced from its Uniswap v4 pool")
+        case DyorListing.mondayLabel: return L10n.tr("Priced from its Monday Trade pool")
+        case DyorListing.momentLabel: return L10n.tr("Priced from its Moment pool")
         default: return nil
         }
     }
@@ -85,6 +86,7 @@ public actor PriceService {
         /// A DyorHQ coin's own venue, from its factory's record.
         case dyor(DyorListing)
 
+        // not localized: identifiers (`PriceInfo.source`), never shown
         var label: String {
             switch self {
             case .v4: return "Uniswap v4"

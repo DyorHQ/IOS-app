@@ -156,7 +156,7 @@ public struct WalletTokenDiscovery: Sendable {
 
     /// A held token with no readable symbol, listed under its short address.
     private static func unnamed(_ token: Address, name: String? = nil, decimals: Int) -> Token {
-        Token(address: token, symbol: token.short, name: name ?? "Token with no name", decimals: decimals)
+        Token(address: token, symbol: token.short, name: name ?? L10n.tr("Token with no name"), decimals: decimals)
     }
 
     /// A symbol or name as read: a string, or a bytes32 of UTF-8 text padded with zeros, with something visible in it.

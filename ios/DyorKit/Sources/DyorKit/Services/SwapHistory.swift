@@ -46,10 +46,10 @@ public struct SwapHistoryService: Sendable {
         public var id: String { rawValue }
         public var label: String {
             switch self {
-            case .day: return "24H"
-            case .week: return "7D"
-            case .month: return "30D"
-            case .all: return "All"
+            case .day: return L10n.string(LocalizedStringResource("24H", bundle: L10n.kit, comment: "[tight] A history window: the last 24 hours."))
+            case .week: return L10n.string(LocalizedStringResource("7D", bundle: L10n.kit, comment: "[tight] A history window: the last 7 days."))
+            case .month: return L10n.string(LocalizedStringResource("30D", bundle: L10n.kit, comment: "[tight] A history window: the last 30 days."))
+            case .all: return L10n.string(LocalizedStringResource("All", bundle: L10n.kit, comment: "[tight] All of something: every swap, as a history window, or all of a position's margin in use."))
             }
         }
         /// The blocks a scan of this window reads at `secondsPerBlock`: the day, the week and the month their true length

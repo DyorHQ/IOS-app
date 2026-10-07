@@ -653,10 +653,12 @@ public enum WalletHoldings {
         return (unpriced.filter { noPool.contains($0.address) }, unpriced.filter { !noPool.contains($0.address) })
     }
 
-    /// Symbols as a list in words: "cbBTC", "cbBTC and LBTC", "cbBTC, LBTC and rETH".
+    /// Symbols as a list in words, in the app's language: "cbBTC", "cbBTC and LBTC", "cbBTC, LBTC and rETH".
     public static func symbolList(_ tokens: [Token]) -> String {
         let symbols = tokens.map(\.symbol)
         guard let last = symbols.last else { return "" }
-        return symbols.count == 1 ? last : symbols.dropLast().joined(separator: ", ") + " and " + last
+        guard symbols.count > 1 else { return last }
+        let first = symbols.dropLast().joined(separator: ", ")
+        return L10n.string(LocalizedStringResource("\(first) and \(last)", bundle: L10n.kit, comment: "The end of a list of token symbols: “cbBTC and LBTC”, or “cbBTC, LBTC and rETH”, where the first value is the list before the last symbol."))
     }
 }

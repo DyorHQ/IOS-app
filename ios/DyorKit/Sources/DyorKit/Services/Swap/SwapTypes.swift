@@ -7,10 +7,11 @@ public enum Venue: String, Sendable, CaseIterable, Codable {
 
     public var displayName: String {
         switch self {
+        // not localized: the venues' names
         case .kuru: return "Kuru Flow"
         case .uniswap: return "Uniswap"
         case .monday: return "Monday Trade"
-        case .wrap: return "Wrap"
+        case .wrap: return L10n.string(LocalizedStringResource("Wrap", bundle: L10n.kit, comment: "The 1:1 conversion between MON and WMON, named where a venue's name goes."))
         }
     }
 }
@@ -99,15 +100,16 @@ public enum SwapError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .timedOut(let venue, let seconds): return "\(venue.displayName) did not answer within \(seconds)s."
-        case .differentWallet: return "This quote was made for a different wallet. Refresh the quote."
-        case .malformedRoute: return "The route is malformed."
-        case .amountTooLarge: return "The amount is too large for this venue."
+        case .timedOut(let venue, let seconds): return L10n.tr("\(venue.displayName) did not answer within \(RelativeTime.seconds(seconds)).")
+        case .differentWallet: return L10n.tr("This quote was made for a different wallet. Refresh the quote.")
+        case .malformedRoute: return L10n.tr("The route is malformed.")
+        case .amountTooLarge: return L10n.tr("The amount is too large for this venue.")
         case .tradingClosed(let address):
-            let what = MomentsAddresses.isRetiredCoin(address) ? "coin" : "pool"
-            return "Past cohort · trading closed. \(address.short) is a retired Moment \(what), so DyorHQ never trades it."
+            return MomentsAddresses.isRetiredCoin(address)
+                ? L10n.tr("Past cohort · trading closed. \(address.short) is a retired Moment coin, so DyorHQ never trades it.")
+                : L10n.tr("Past cohort · trading closed. \(address.short) is a retired Moment pool, so DyorHQ never trades it.")
         case .retiredLaunchpad: return RetiredLaunchpad.notice
-        case .launchpadUnchecked: return "DyorHQ couldn't check this coin's launchpad just now, so buying it isn't offered. Try again in a moment."
+        case .launchpadUnchecked: return L10n.tr("DyorHQ couldn't check this coin's launchpad just now, so buying it isn't offered. Try again in a moment.")
         case .venue(let message): return message
         }
     }
@@ -141,7 +143,8 @@ public enum SwapMath {
     static func describe(_ error: Error) -> String {
         if let rpc = error as? RPCError { return RevertReason.describe(rpc) }
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        if message.range(of: "user rejected|user denied", options: [.regularExpression, .caseInsensitive]) != nil { return "Request cancelled in your wallet." }
+        // not localized: the wallet's own English, matched as it sends it
+        if message.range(of: "user rejected|user denied", options: [.regularExpression, .caseInsensitive]) != nil { return L10n.tr("Request cancelled in your wallet.") }
         return message.count > 220 ? String(message.prefix(220)) + "…" : message
     }
 }
