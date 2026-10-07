@@ -116,8 +116,8 @@ public enum Mera {
         case malformed, wrongKeyOrTampered
         public var errorDescription: String? {
             switch self {
-            case .malformed: return "The vault is not in Mera's format."
-            case .wrongKeyOrTampered: return "The vault could not be opened: wrong passkey or the data was changed."
+            case .malformed: return L10n.tr("The vault is not in Mera's format.")
+            case .wrongKeyOrTampered: return L10n.tr("The vault could not be opened: wrong passkey or the data was changed.")
             }
         }
     }

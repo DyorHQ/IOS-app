@@ -48,7 +48,7 @@ extension Mera {
             public var errorDescription: String? {
                 switch self {
                 case .differentAccount(let expected, let got):
-                    return "That passkey belongs to \(got.short), not to this account (\(expected.short)). Nothing was deleted."
+                    return L10n.tr("That passkey belongs to \(got.short), not to this account (\(expected.short)). Nothing was deleted.")
                 }
             }
         }
@@ -60,7 +60,7 @@ extension Mera {
 
             public init(underlying: Error) { self.underlying = underlying }
 
-            public var errorDescription: String? { "Couldn't delete your data. Nothing on this phone was changed. Try again." }
+            public var errorDescription: String? { L10n.tr("Couldn't delete your data. Nothing on this phone was changed. Try again.") }
         }
 
         /// Deletes a passkey account in the only order that can't strand it:
@@ -107,23 +107,27 @@ extension Mera {
             /// Whether the passkey is most likely still there (nothing took the report).
             public let passkeyRemains: Bool
 
-            public static let manualSteps = [
-                "Open the Passwords app › Passkeys › search \"dyorhq\" › tap the DyorHQ passkey › Edit › Delete.",
-                "If your passkey is in 1Password or another app, delete it there.",
-                "If you signed in with a passkey from another phone, delete it on that phone.",
-            ]
+            /// The steps to delete the passkey by hand, in the app's language.
+            public static var manualSteps: [String] {
+                [
+                    L10n.string(LocalizedStringResource("Open the Passwords app › Passkeys › search \"dyorhq\" › tap the DyorHQ passkey › Edit › Delete.", bundle: L10n.kit,
+                        comment: "A step to delete a passkey by hand. Passwords, Passkeys, Edit and Delete are iOS's own names: use iOS's words for them in this language; “dyorhq” is typed as it is.")),
+                    L10n.tr("If your passkey is in 1Password or another app, delete it there."),
+                    L10n.tr("If you signed in with a passkey from another phone, delete it on that phone."),
+                ]
+            }
 
             public init(outcome: PasskeySignalOutcome) {
-                title = "Account deleted."
+                title = L10n.tr("Account deleted.")
                 steps = Self.manualSteps
                 switch outcome {
                 case .reported:
-                    recentlyDeleted = "If your passkey is in iCloud Keychain, Passwords may keep it in Recently Deleted for up to 30 days."
-                    stepsHeading = "If your passkey still shows up"
+                    recentlyDeleted = L10n.tr("If your passkey is in iCloud Keychain, Passwords may keep it in Recently Deleted for up to 30 days.")
+                    stepsHeading = L10n.tr("If your passkey still shows up")
                     passkeyRemains = false
                 case .unsupported, .failed:
                     recentlyDeleted = nil
-                    stepsHeading = "One step left: delete the passkey yourself"
+                    stepsHeading = L10n.tr("One step left: delete the passkey yourself")
                     passkeyRemains = true
                 }
             }
