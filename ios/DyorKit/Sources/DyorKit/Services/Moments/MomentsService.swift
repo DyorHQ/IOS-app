@@ -43,11 +43,11 @@ public actor MomentsService {
 
         public var errorDescription: String? {
             switch self {
-            case .notDeployed: return "Moments are not live on this network yet."
-            case .unknownMoment: return "That Moment does not exist."
+            case .notDeployed: return L10n.tr("Moments are not live on this network yet.")
+            case .unknownMoment: return L10n.tr("That Moment does not exist.")
             case .notCollecting(let why): return why
-            case .signerRequired: return "Sign in with a wallet that can sign to collect."
-            case .termsNotReviewed: return "The Moments terms couldn't be verified, so nothing was published. Review them again."
+            case .signerRequired: return L10n.tr("Sign in with a wallet that can sign to collect.")
+            case .termsNotReviewed: return L10n.tr("The Moments terms couldn't be verified, so nothing was published. Review them again.")
             }
         }
     }
@@ -233,10 +233,10 @@ public actor MomentsService {
     static func collectReason(_ error: RPCError) -> String {
         if let data = error.data, let bytes = Data(hex: data), bytes.count >= 4 {
             switch bytes.prefix(4).hexString {
-            case ABI.selector("CollectWindowClosed()").hexString: return "The collect window has closed."
-            case ABI.selector("NotCollecting()").hexString: return "This Moment is no longer collecting."
-            case ABI.selector("BadQuantity()").hexString: return "Choose between 1 and \(MomentsConstants.maxBatch) editions."
-            case ABI.selector("UnknownMoment()").hexString: return "That Moment does not exist."
+            case ABI.selector("CollectWindowClosed()").hexString: return L10n.tr("The collect window has closed.")
+            case ABI.selector("NotCollecting()").hexString: return L10n.tr("This Moment is no longer collecting.")
+            case ABI.selector("BadQuantity()").hexString: return L10n.tr("Choose between 1 and \(MomentsConstants.maxBatch) editions.")
+            case ABI.selector("UnknownMoment()").hexString: return L10n.tr("That Moment does not exist.")
             default: break
             }
         }
@@ -371,7 +371,7 @@ public actor MomentsService {
         var salt = [UInt8](repeating: 0, count: 32)
         for i in salt.indices { salt[i] = UInt8.random(in: 0...255) }
         let data = MomentsABI.calldata(MomentsABI.Factory.publish, [MomentsABI.publishParams(input, salt: Data(salt)), .bytes(termsHash)])
-        return [.call(TransactionRequest(to: addresses.factory, data: data), label: "Publish \(input.symbol)")]
+        return [.call(TransactionRequest(to: addresses.factory, data: data), label: L10n.tr("Publish \(input.symbol)"))]
     }
 
     /// Collects `quantity` editions with a Permit2 signature: Permit2 is approved once for USDC (unlimited, the
@@ -382,12 +382,12 @@ public actor MomentsService {
         let maxGross = price * BigUInt(quantity)
         let permit = Permit2Signature.Permit(token: addresses.usdc, amount: maxGross, nonce: Permit2Signature.randomNonce(), deadline: BigUInt(Int(Date().timeIntervalSince1970) + 30 * 60))
         let digest = try Permit2Signature.digest(permit: permit, spender: addresses.collect, permit2: addresses.permit2, chainId: Monad.chainId)
-        guard let signature = Data(hex: try await signer.signDigest(digest)), signature.count == 65 else { throw TransactionError.rejected("The wallet returned an unreadable signature.") }
+        guard let signature = Data(hex: try await signer.signDigest(digest)), signature.count == 65 else { throw TransactionError.rejected(L10n.tr("The wallet returned an unreadable signature.")) }
         let data = MomentsABI.calldata(MomentsABI.Collect.collectWithPermit2, [.uint(momentId), .uint(quantity), MomentsABI.permit(token: permit.token, amount: permit.amount, nonce: permit.nonce, deadline: permit.deadline), .bytes(signature)])
         let maxUint = (BigUInt(1) << 256) - 1
         return [
-            .approve(token: addresses.usdc, spender: addresses.permit2, amount: maxUint, label: "Approve USDC for Permit2"),
-            .call(TransactionRequest(to: addresses.collect, data: data), label: "Collect \(quantity) \(quantity == 1 ? "edition" : "editions") of \(symbol)"),
+            .approve(token: addresses.usdc, spender: addresses.permit2, amount: maxUint, label: L10n.tr("Approve USDC for Permit2")),
+            .call(TransactionRequest(to: addresses.collect, data: data), label: L10n.string(LocalizedStringResource("Collect \(quantity) editions of \(symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The values are the number of editions collected and the Moment's symbol."))),
         ]
     }
 
@@ -395,49 +395,49 @@ public actor MomentsService {
     public func collectWithApprovalPlan(momentId: BigUInt, quantity: Int, gross: BigUInt, symbol: String) -> [TransactionStep] {
         let data = MomentsABI.calldata(MomentsABI.Collect.collect, [.uint(momentId), .uint(quantity)])
         return [
-            .approve(token: addresses.usdc, spender: addresses.collect, amount: gross, label: "Approve USDC"),
-            .call(TransactionRequest(to: addresses.collect, data: data), label: "Collect \(quantity) \(quantity == 1 ? "edition" : "editions") of \(symbol)"),
+            .approve(token: addresses.usdc, spender: addresses.collect, amount: gross, label: L10n.tr("Approve USDC")),
+            .call(TransactionRequest(to: addresses.collect, data: data), label: L10n.string(LocalizedStringResource("Collect \(quantity) editions of \(symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The values are the number of editions collected and the Moment's symbol."))),
         ]
     }
 
     public func claimPlan(momentId: BigUInt, symbol: String) -> [TransactionStep] {
-        [.call(TransactionRequest(to: addresses.vesting, data: MomentsABI.calldata(MomentsABI.Vesting.claim, [.uint(momentId)])), label: "Claim \(symbol)")]
+        [.call(TransactionRequest(to: addresses.vesting, data: MomentsABI.calldata(MomentsABI.Vesting.claim, [.uint(momentId)])), label: L10n.string(LocalizedStringResource("Claim \(symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the symbol of a Moment's coin, whose vested coins are claimed.")))]
     }
 
     public func claimAllPlan(momentIds: [BigUInt]) -> [TransactionStep] {
-        [.call(TransactionRequest(to: addresses.vesting, data: MomentsABI.calldata(MomentsABI.Vesting.claimAll, [.array(momentIds.map { .uint($0) })])), label: "Claim \(momentIds.count) \(momentIds.count == 1 ? "Moment" : "Moments")")]
+        [.call(TransactionRequest(to: addresses.vesting, data: MomentsABI.calldata(MomentsABI.Vesting.claimAll, [.array(momentIds.map { .uint($0) })])), label: L10n.string(LocalizedStringResource("Claim \(momentIds.count) Moments", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is how many Moments' vested coins are claimed together.")))]
     }
 
     public func withdrawCreatorProceedsPlan(momentId: BigUInt) -> [TransactionStep] {
-        [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawCreator, [.uint(momentId)])), label: "Withdraw creator proceeds")]
+        [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawCreator, [.uint(momentId)])), label: L10n.tr("Withdraw creator proceeds"))]
     }
 
     public func withdrawPlatformProceedsPlan(momentId: BigUInt) -> [TransactionStep] {
-        [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawPlatform, [.uint(momentId)])), label: "Withdraw platform proceeds")]
+        [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawPlatform, [.uint(momentId)])), label: L10n.tr("Withdraw platform proceeds"))]
     }
 
     public func withdrawTreasuryProceedsPlan(momentId: BigUInt) -> [TransactionStep] {
-        [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawTreasury, [.uint(momentId)])), label: "Withdraw treasury share")]
+        [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawTreasury, [.uint(momentId)])), label: L10n.tr("Withdraw treasury share"))]
     }
 
     public func withdrawCreatorFeesPlan(momentId: BigUInt) -> [TransactionStep] {
-        [.call(TransactionRequest(to: addresses.hook, data: MomentsABI.calldata(MomentsABI.Hook.withdrawCreator, [.uint(momentId)])), label: "Withdraw creator fees")]
+        [.call(TransactionRequest(to: addresses.hook, data: MomentsABI.calldata(MomentsABI.Hook.withdrawCreator, [.uint(momentId)])), label: L10n.tr("Withdraw creator fees"))]
     }
 
     public func withdrawPlatformFeesPlan(momentId: BigUInt) -> [TransactionStep] {
-        [.call(TransactionRequest(to: addresses.hook, data: MomentsABI.calldata(MomentsABI.Hook.withdrawPlatform, [.uint(momentId)])), label: "Withdraw platform fees")]
+        [.call(TransactionRequest(to: addresses.hook, data: MomentsABI.calldata(MomentsABI.Hook.withdrawPlatform, [.uint(momentId)])), label: L10n.tr("Withdraw platform fees"))]
     }
 
     public func retryGraduationPlan(momentId: BigUInt) -> [TransactionStep] {
-        [.call(TransactionRequest(to: addresses.graduation, data: MomentsABI.calldata(MomentsABI.Graduation.graduate, [.uint(momentId)])), label: "Retry graduation")]
+        [.call(TransactionRequest(to: addresses.graduation, data: MomentsABI.calldata(MomentsABI.Graduation.graduate, [.uint(momentId)])), label: L10n.tr("Retry graduation"))]
     }
 
     public func expirePlan(momentId: BigUInt) -> [TransactionStep] {
-        [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.expire, [.uint(momentId)])), label: "Expire Moment")]
+        [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.expire, [.uint(momentId)])), label: L10n.tr("Expire Moment"))]
     }
 
     public func buybackPlan(momentId: BigUInt, minCoinOut: BigUInt) -> [TransactionStep] {
-        [.call(TransactionRequest(to: addresses.buyback, data: MomentsABI.calldata(MomentsABI.Buyback.execute, [.uint(momentId), .uint(minCoinOut)])), label: "Run buyback")]
+        [.call(TransactionRequest(to: addresses.buyback, data: MomentsABI.calldata(MomentsABI.Buyback.execute, [.uint(momentId), .uint(minCoinOut)])), label: L10n.string(LocalizedStringResource("Run buyback", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. It runs a round of a Moment's buyback.")))]
     }
 
     // MARK: - Hydration
