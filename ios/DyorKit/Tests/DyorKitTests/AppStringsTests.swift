@@ -70,25 +70,120 @@ final class AppStringsTests: XCTestCase {
     }
 
     /// Text built as a `String` (a returned label, an assigned error or notice, a fallback after `??`, a thrown failure's
-    /// reason, an Activity row, a feed row, a step's label) goes through `tr()`: a bare literal there is shown in English in
-    /// every language.
+    /// reason, an Activity row, a feed row, a step's label, or a branch of a ternary that is one of these) goes through
+    /// `tr()`: a bare literal there is shown in English in every language.
     func testStringTextGoesThroughTr() throws {
-        let sink = try NSRegularExpression(pattern: #"(return |(?<![=!<>])= |\?\? |\.unavailable\(|\.backendSignInNeeded\(|\.emailSignInNotDeleted\(|\.bindFailed\(|\.append\(|error: )$"#)
-        let record = try NSRegularExpression(pattern: #"(title: |subtitle: |body: |label: |side: )$"#)
         var found: [String] = []
         var checked = 0
         for (at, line, literals) in try Self.scannedLines() {
-            let recordLine = ["ActivityRecord(", "FeedItem(", "post(kind:", ".call(", "Notifications.", "AppNotification("].contains { line.contains($0) }
             for literal in literals where literal.depth == 0 && PerpsWalletStringsTests.isWords(literal.text) {
                 checked += 1
-                let before = NSRange(literal.before.startIndex..., in: literal.before)
-                if sink.firstMatch(in: literal.before, range: before) != nil || (recordLine && record.firstMatch(in: literal.before, range: before) != nil) {
-                    found.append("\(at): \"\(literal.text)\"")
-                }
+                if Self.isStringText(literal, on: line) { found.append("\(at): \"\(literal.text)\"") }
             }
         }
         XCTAssertEqual(found, [], "String text written in the code goes through tr()")
         XCTAssertGreaterThan(checked, 400, "the scan reads the folders' text")
+    }
+
+    /// The scan's reader: a literal is String text right after a sink, in a record's field on a record line, or as a
+    /// branch of a ternary that is returned, assigned or a record's field; a key (`Text(…)`'s, a `tr()`'s) is not, nor a
+    /// ternary inside a call.
+    func testTheScanSeesStringTextInATernary() {
+        func flagged(_ line: String) -> [String] {
+            PerpsWalletStringsTests.literals(in: line)
+                .filter { $0.depth == 0 && PerpsWalletStringsTests.isWords($0.text) && Self.isStringText($0, on: line) }.map(\.text)
+        }
+        XCTAssertEqual(flagged(#"incomplete = unread ? "Some activity couldn't be read just now." : nil"#), ["Some activity couldn't be read just now."])
+        XCTAssertEqual(flagged(#"return isLong ? "Opens a long." : "Opens a short.""#), ["Opens a long.", "Opens a short."])
+        XCTAssertEqual(flagged(#"notice = failed ? nil : "Saved just now.""#), ["Saved just now."])
+        XCTAssertEqual(flagged(#"guard ok else { return (a ?? b).isEmpty ? "Nothing to show." : "Not read." }"#), ["Nothing to show.", "Not read."])
+        XCTAssertEqual(flagged(#"Notifications.perpOrder(.filled, side: position.side == .long ? "Long" : "Short","#), ["Long", "Short"])
+        XCTAssertEqual(flagged(#"error = message ?? "Something went wrong.""#), ["Something went wrong."])
+
+        XCTAssertEqual(flagged(#"incomplete = unread ? tr("Some activity couldn't be read just now.") : nil"#), [])
+        XCTAssertEqual(flagged(#"let label = Text(isLong ? "Opens a long." : "Opens a short.")"#), [], "keys")
+        XCTAssertEqual(flagged(#"Label(isPhrase ? "Not a valid phrase yet." : "Not a valid key.", systemImage: "x")"#), [], "keys")
+        XCTAssertEqual(flagged(#"shown = name == "Some words" ? first : second"#), [], "a comparison, not a value")
+        XCTAssertEqual(flagged(#"row = Row(title: isLong ? "Opens a long." : "Opens a short.")"#), [], "not a record line")
+    }
+
+    /// Where String text is written in code: the end of the code before a literal (`return `, an assignment, `?? `, a
+    /// failure's or notice's argument), and on a record line a record's field.
+    private static let sink = try! NSRegularExpression(pattern: #"(return |(?<![=!<>])= |\?\? |\.unavailable\(|\.backendSignInNeeded\(|\.emailSignInNotDeleted\(|\.bindFailed\(|\.append\(|error: )$"#)
+    private static let record = try! NSRegularExpression(pattern: #"(title: |subtitle: |body: |label: |side: )$"#)
+    /// Where a ternary whose branches are String text starts: a `return`, an assignment, or a record's field.
+    private static let ternaryHead = try! NSRegularExpression(pattern: #"(\breturn |(?<![=!<>])= )"#)
+    private static let recordTernaryHead = try! NSRegularExpression(pattern: #"\b(title|subtitle|body|label|side): "#)
+
+    /// Whether `literal` on `line` is String text the code builds, which must go through `tr()`.
+    static func isStringText(_ literal: PerpsWalletStringsTests.Literal, on line: String) -> Bool {
+        let recordLine = ["ActivityRecord(", "FeedItem(", "post(kind:", ".call(", "Notifications.", "AppNotification("].contains { line.contains($0) }
+        let range = NSRange(literal.before.startIndex..., in: literal.before)
+        if sink.firstMatch(in: literal.before, range: range) != nil { return true }
+        if recordLine, record.firstMatch(in: literal.before, range: range) != nil { return true }
+        return isTernaryBranch(literal.before, head: ternaryHead) || (recordLine && isTernaryBranch(literal.before, head: recordTernaryHead))
+    }
+
+    /// Whether the code before a literal makes it a branch of a ternary that `head` starts, at that expression's top level:
+    /// `incomplete = unread ? "…" : nil`, `return isLong ? "…" : "…"`; not `x = Text(isLong ? "…" : "…")`, whose
+    /// literals are keys.
+    static func isTernaryBranch(_ before: String, head: NSRegularExpression) -> Bool {
+        let code = withoutLiterals(before)
+        guard code.hasSuffix("? ") || code.hasSuffix(": ") else { return false }
+        for match in head.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
+            guard let start = Range(match.range, in: code) else { continue }
+            let rest = Array(code[start.upperBound...])
+            var depth = 0
+            var ternary = false
+            for (index, c) in rest.enumerated() {
+                if "([{".contains(c) { depth += 1 } else if ")]}".contains(c) { depth -= 1 }
+                if depth < 0 { break }
+                if c == "?", depth == 0, index > 0, rest[index - 1] == " ", index + 1 < rest.count, rest[index + 1] == " " { ternary = true }
+            }
+            if depth == 0, ternary { return true }
+        }
+        return false
+    }
+
+    /// `code` with every string literal emptied (`"…"` becomes `""`), interpolations included, so only code is read.
+    static func withoutLiterals(_ code: String) -> String {
+        let chars = Array(code)
+        var out = ""
+        var index = 0
+        func skipLiteral() { // from an opening quote to past its closing one
+            index += 1
+            while index < chars.count {
+                if chars[index] == "\\", index + 1 < chars.count {
+                    if chars[index + 1] == "(" { index += 2; skipInterpolation(); continue }
+                    index += 2
+                    continue
+                }
+                if chars[index] == "\"" { index += 1; return }
+                index += 1
+            }
+        }
+        func skipInterpolation() { // to past the parenthesis that closes `\(`
+            var depth = 0
+            while index < chars.count {
+                let c = chars[index]
+                if c == "\"" { skipLiteral(); continue }
+                if c == "(" { depth += 1 } else if c == ")" {
+                    if depth == 0 { index += 1; return }
+                    depth -= 1
+                }
+                index += 1
+            }
+        }
+        while index < chars.count {
+            if chars[index] == "\"" {
+                skipLiteral()
+                out += "\"\""
+                continue
+            }
+            out.append(chars[index])
+            index += 1
+        }
+        return out
     }
 
     /// The `String`s these folders build are written inside `tr()`, one sentence per case: the notices a deletion leaves
@@ -367,6 +462,14 @@ final class AppStringsTests: XCTestCase {
         XCTAssertEqual(deletion.components(separatedBy: #"body.contains("PRIVY_APP_SECRET") { // not localized"#).count - 1, 2)
         XCTAssertTrue(deletion.contains(#"confirmation.trimmingCharacters(in: .whitespaces).uppercased() == "DELETE" } // not localized"#))
         XCTAssertTrue(deletion.contains(#"comment: "Keep DELETE in English and in capitals: it is the word the user must type""#))
+        // A refusal the function sends reaches the screen through EdgeFunctionError: a known one in the app's language,
+        // email-rebind's as a sentence of its own and delete-account's inside one; nothing else reads the server's text.
+        let message = Self.squeezed(try Self.body(of: "private static func serverMessage(_ text: String) -> String", in: "Onboarding/OnboardingView.swift"))
+        XCTAssertTrue(message.contains("return EdgeFunctionError.emailRebind(msg)"))
+        XCTAssertFalse(message.contains("uppercased()"), "EdgeFunctionError writes the sentence")
+        XCTAssertEqual(onboarding.components(separatedBy: "throw EmailAuthError.bindFailed(Self.serverMessage(text))").count - 1, 2)
+        XCTAssertTrue(deletion.contains(#"throw Failure.emailSignInNotDeleted(serverError(body).map(EdgeFunctionError.deleteAccount) ?? tr("error \(String(code))"))"#))
+        XCTAssertEqual(deletion.components(separatedBy: "serverError(body)").count - 1, 2, "the matcher and the mapped reason")
 
         let rebind = try EdgeFunctionErrorTests.function("email-rebind")
         XCTAssertTrue(rebind.contains(#"error: "email_already_bound""#))
