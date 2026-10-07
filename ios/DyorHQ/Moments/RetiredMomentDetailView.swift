@@ -46,10 +46,10 @@ struct RetiredMomentDetailView: View {
     /// The badge: its words in the app's language, its symbol and tint.
     private var status: (text: String, symbol: String, tint: Color) {
         if info.graduated || info.state == .graduated {
-            return (tr(LocalizedStringResource("Graduated", comment: "[tight] Moment badge: its coin graduated into a pool")), "checkmark.seal.fill", .positive)
+            return (tr(LocalizedStringResource("Graduated", comment: "[tight] A status: the coin graduated into its pool. A badge on Moments, a section of the Launch board and a date row: use a form that fits each")), "checkmark.seal.fill", .positive)
         }
         switch info.state {
-        case .expired: return (tr(LocalizedStringResource("Expired", comment: "[tight] Moment badge: it expired before graduating")), "xmark.circle", .secondary)
+        case .expired: return (tr(LocalizedStringResource("Expired", comment: "[tight] The Moment expired before graduating: a badge, a status and a section header")), "xmark.circle", .secondary)
         case .graduationPending: return (tr(LocalizedStringResource("Graduation pending", comment: "[tight] Moment badge: its graduation has not completed yet")), "hourglass", .attention)
         default: return (tr(LocalizedStringResource("Collecting closed", comment: "[tight] Moment badge: a past cohort's Moment can no longer be collected")), "lock", .secondary)
         }

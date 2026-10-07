@@ -324,6 +324,15 @@ final class DyorKitStringsTests: XCTestCase {
         }
     }
 
+    /// A step a person follows names iOS's screens as iOS names them: the Passwords app's list of deleted passkeys is
+    /// "Deleted" (iOS 18 and later; "Recently Deleted" is the Photos album), and its translators are told to use iOS's
+    /// own names for the app and the list.
+    func testThePasswordsAppsListIsNamedAsIOSNamesIt() throws {
+        let deletion = Self.squeezed(try Self.source("Services/Mera/MeraAccountDeletion.swift"))
+        XCTAssertTrue(deletion.contains(#"recentlyDeleted = L10n.string(LocalizedStringResource("If your passkey is in iCloud Keychain, Passwords may keep it in Deleted for up to 30 days.", bundle: L10n.kit, comment: "Passwords is iOS's Passwords app and Deleted its list of deleted passwords and passkeys (iOS 18 and later): use iOS's own names for them in this language."))"#))
+        XCTAssertFalse(deletion.contains("Recently Deleted for up to 30 days"), "iOS 18's Passwords app has no Recently Deleted")
+    }
+
     /// Written text that a `static let` would keep in the language of its first read is a computed property, read again
     /// each time it is shown.
     func testNoTextIsFrozenInAStaticLet() throws {
@@ -448,7 +457,9 @@ final class DyorKitStringsTests: XCTestCase {
         }
     }
 
-    /// Perps alerts: each side and level is a sentence of its own, and all of the margin in use reads as before.
+    /// Perps alerts: each side and level is a sentence of its own, and all of the margin in use reads as before. That
+    /// "All" is a key of its own, apart from the swap history's window "All": one key is one translation, and French and
+    /// Spanish say all of the margin with another form than all time.
     func testPerpAlertsReadAsBefore() throws {
         let saved = L10n.locale
         defer { L10n.locale = saved }
@@ -458,6 +469,30 @@ final class DyorKitStringsTests: XCTestCase {
         XCTAssertTrue(PerpAlertText.usageIsAll(.nan) && PerpAlertText.usageIsAll(10) && !PerpAlertText.usageIsAll(9.99))
         let alerts = try Self.source("Services/Perpl/PerpRisk.swift")
         XCTAssertFalse(alerts.contains(#"side == .long ? "long" : "short""#), "no side chosen inside a sentence")
+        XCTAssertTrue(alerts.contains(#"LocalizedStringResource("marginUsage.all", defaultValue: "All", bundle: L10n.kit, comment: "#))
+        XCTAssertTrue(try Self.source("Services/SwapHistory.swift")
+            .contains(#"LocalizedStringResource("All", bundle: L10n.kit, comment: "[tight] A history window: every swap, as far back as the app reads.")"#))
+    }
+
+    /// No key carries two comments in DyorKit: Xcode would join them for the one translation the key gets, and a word with
+    /// two meanings is two keys instead. Read from every `LocalizedStringResource("…", bundle: L10n.kit, comment:)`, an
+    /// interpolated value standing for any value.
+    func testNoKeyHasTwoComments() throws {
+        let site = try NSRegularExpression(pattern: #"LocalizedStringResource\("((?:[^"\\]|\\.)*)"(?:, defaultValue: "(?:[^"\\]|\\.)*")?, bundle: L10n\.kit, comment: "((?:[^"\\]|\\.)*)""#)
+        let value = try NSRegularExpression(pattern: #"\\\([^)]*\)"#)
+        var comments: [String: Set<String>] = [:]
+        for (_, text) in try Self.sources() {
+            let code = Self.squeezed(text)
+            for match in site.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
+                guard let key = Range(match.range(at: 1), in: code), let comment = Range(match.range(at: 2), in: code) else { continue }
+                let written = String(code[key])
+                let normalized = value.stringByReplacingMatches(in: written, range: NSRange(written.startIndex..., in: written), withTemplate: "%")
+                comments[normalized, default: []].insert(String(code[comment]))
+            }
+        }
+        XCTAssertGreaterThan(comments.count, 100, "the scan reads DyorKit's comments")
+        let twice = comments.filter { $0.value.count > 1 }.map { entry in "\(entry.key): \(entry.value.sorted())" }.sorted()
+        XCTAssertEqual(twice, [], "a key with two comments")
     }
 
     // MARK: What stays English

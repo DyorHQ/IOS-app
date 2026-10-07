@@ -23,9 +23,9 @@ struct MomentsView: View {
         /// The segment's name, written out (never the raw value) so it is translated.
         var label: Text {
             switch self {
-            case .all: return Text("All", comment: "[tight] Moments filter: every Moment")
+            case .all: return Text(verbatim: tr(LocalizedStringResource("momentFilter.all", defaultValue: "All", comment: "[tight] Moments filter: every Moment")))
             case .collecting: return Text("Collecting", comment: "[tight] Moments filter: Moments still open to collect")
-            case .graduated: return Text("Graduated", comment: "[tight] Moments filter: Moments whose coin graduated")
+            case .graduated: return Text(verbatim: tr(LocalizedStringResource("momentFilter.graduated", defaultValue: "Graduated", comment: "[tight] Moments filter: the Moments whose coin has graduated")))
             }
         }
     }

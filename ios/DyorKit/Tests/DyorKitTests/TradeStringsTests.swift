@@ -226,6 +226,36 @@ final class TradeStringsTests: XCTestCase {
         return (one, other)
     }
 
+    /// One key is one translation, so a word with two meanings is two keys, and English reads the same word in both
+    /// places: a past cohort Moment's "Closed" (collecting is closed) is not the Perps tab of closed positions, and My
+    /// Launchpad's "View" (the name of its switch, a noun) is not the explorer link's verb.
+    func testAWordWithTwoMeaningsIsTwoKeys() throws {
+        let past = try DocsLinksTests.appSource("Portfolio/PastCohortsCard.swift")
+        XCTAssertTrue(past.contains(#"Text(verbatim: tr(LocalizedStringResource("pastCohort.closed", defaultValue: "Closed", comment: "#))
+        XCTAssertTrue(past.contains(#"(info.graduated ? Text("Graduated") : info.state == .expired ? Text("Expired")"#), "each status is a key")
+        XCTAssertFalse(past.contains(#""Closed")"#))
+        let profile = try DocsLinksTests.appSource("Launchpad/LaunchpadProfileView.swift")
+        XCTAssertTrue(profile.contains(#"Picker(tr(LocalizedStringResource("myLaunchpad.view", defaultValue: "View", comment: "#))
+        XCTAssertFalse(profile.contains(#"Picker("View""#))
+    }
+
+    /// Home's four categories, My Holdings' switch and the balance card's split, are keys of their own, apart from the
+    /// tabs' and the menu's names: four share the card's width, so a language whose Launch tab is a long word keeps the
+    /// switch short. The split names each category as the switch does. English reads Spot, Perps, Launch and Moments.
+    func testHomesCategoriesAreKeysOfTheirOwn() throws {
+        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        for (key, english) in [("spot", "Spot"), ("perps", "Perps"), ("launch", "Launch"), ("moments", "Moments")] {
+            XCTAssertTrue(home.contains(#"tr(LocalizedStringResource("homeCategory.\#(key)", defaultValue: "\#(english)", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split."#), key)
+        }
+        for (category, value) in [("spot", "spotValue"), ("perps", "perpsValue"), ("launchpad", "launchpadValue"), ("moments", "momentsValue")] {
+            XCTAssertTrue(home.contains("splitStat(.\(category), model.\(value), "), "the split names \(category) as the switch does")
+        }
+        XCTAssertTrue(home.contains("Text(verbatim: category.label).font(.caption)"))
+        XCTAssertTrue(home.contains("ForEach(HoldingCategory.allCases) { Text($0.label).tag($0) }"))
+        XCTAssertFalse(home.contains(#"splitStat("Launch""#), "the split's labels are the categories'")
+        XCTAssertFalse(home.contains(#"LocalizedStringResource("Launch", comment:"#), "Home's switch no longer borrows the Launch tab's key")
+    }
+
     // MARK: What stays English
 
     /// Aurora's errors are matched on its own English text, whatever the app's language; the amounts in them are then

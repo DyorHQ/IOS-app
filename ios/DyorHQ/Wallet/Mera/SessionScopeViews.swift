@@ -51,7 +51,7 @@ struct SessionPillState: Equatable {
     init(expiresAt: Date?, now: Date) {
         guard let expiresAt, expiresAt > now else {
             isActive = false; isEnding = false
-            title = tr(LocalizedStringResource("Locked", comment: "A passkey session that has ended: the next signature asks for the passkey. [tight]"))
+            title = tr(LocalizedStringResource("Locked", comment: "The passkey session is locked or has ended: the next signature asks for the passkey [tight]"))
             return
         }
         let left = expiresAt.timeIntervalSince(now)

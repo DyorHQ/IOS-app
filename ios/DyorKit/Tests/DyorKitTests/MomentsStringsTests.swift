@@ -82,6 +82,43 @@ final class MomentsStringsTests: XCTestCase {
         }
         XCTAssertEqual(placeholderOnly, [], "nothing to translate: Text(verbatim:)")
         XCTAssertGreaterThan(checked, 150, "the scan reads the folder's keys")
+
+        // A field's placeholder with nothing to translate (a number) is passed as a `String`, shown as it is.
+        var placeholders: [String] = []
+        for (name, text) in try Self.sources() {
+            for call in Self.calls("TextField", in: Self.code(text)) {
+                guard let first = call.first, first.label == nil, !String(first.value).hasSuffix(" as String") else { continue }
+                placeholders += Self.literals(in: first.value).filter { !Self.hasWords($0.words) }.map { "\(name): TextField(\($0.source))" }
+            }
+        }
+        XCTAssertEqual(placeholders, [], "a number as a placeholder: \"1\" as String")
+        let create = try XCTUnwrap(try Self.sources().first { $0.name == "CreateMomentView.swift" }?.text)
+        XCTAssertTrue(create.contains(#"TextField("1" as String, text: $priceText)"#))
+        XCTAssertTrue(create.contains(#"TextField("10" as String, text: $allocPercentText)"#))
+    }
+
+    /// One key is one translation, so the filter's "All" (every Moment) is a key of its own, apart from the app's other
+    /// "All"s (all time, every news source, every kind of notification): gender and number differ in Spanish and French.
+    /// English reads "All".
+    func testTheFiltersAllIsAKeyOfItsOwn() throws {
+        let board = try XCTUnwrap(try Self.sources().first { $0.name == "MomentsView.swift" }?.text)
+        XCTAssertTrue(board.contains(#"case .all: return Text(verbatim: tr(LocalizedStringResource("momentFilter.all", defaultValue: "All", comment: "[tight] Moments filter: every Moment")))"#))
+        XCTAssertFalse(board.contains(#"Text("All""#))
+    }
+
+    /// The filter's "Graduated" (every graduated Moment, a plural beside "All" and "Collecting" in Spanish and French) is
+    /// a key of its own, apart from the status badge's "Graduated", which the Launch board and a date row share. English
+    /// reads "Graduated".
+    func testTheFiltersGraduatedIsAKeyOfItsOwn() throws {
+        let sources = Dictionary(uniqueKeysWithValues: try Self.sources().map { ($0.name, $0.text) })
+        let board = try XCTUnwrap(sources["MomentsView.swift"])
+        XCTAssertTrue(board.contains(#"case .graduated: return Text(verbatim: tr(LocalizedStringResource("momentFilter.graduated", defaultValue: "Graduated", comment: "[tight] Moments filter: the Moments whose coin has graduated")))"#))
+        XCTAssertFalse(board.contains(#"Text("Graduated""#))
+        // The badge's key keeps one comment, which no longer names the filter.
+        let badge = "[tight] A status: the coin graduated into its pool. A badge on Moments, a section of the Launch board and a date row: use a form that fits each"
+        for name in ["MomentsUI.swift", "RetiredMomentDetailView.swift"] {
+            XCTAssertTrue(try XCTUnwrap(sources[name]).contains(#"LocalizedStringResource("Graduated", comment: "\#(badge)")"#), name)
+        }
     }
 
     /// The five interpolations the compiler said would show a debug description (a `BigUInt` in a key) are written as

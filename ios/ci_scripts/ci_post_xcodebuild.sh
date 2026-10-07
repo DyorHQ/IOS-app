@@ -9,7 +9,8 @@
 # PENDING (scripts/dev/check-launchpad-addresses.py --release), so no build ships with Launch and Publish "not live yet",
 # and while a retired Moments cohort is not final on chain (momentCount equal to its pin, every coin in the retired-coin
 # table, cohorts 1 and 2 paused: read-only calls to a public Monad RPC). The DyorHQ target's install-only build phase
-# runs the same check first; this is the second layer.
+# runs the same check first; this is the second layer. Then its Swift half and the strings gate: DyorKit's
+# V2WiringTests and the strings tests under DYORHQ_RELEASE_GATE=1, so no build ships with a count that reads "1 editions".
 set -euo pipefail
 set +x # never trace: the scanner holds secret values in variables
 [[ ${CI_XCODEBUILD_ACTION:-} == archive ]] || exit 0
@@ -22,6 +23,20 @@ if [[ ! -f $WIRING ]] || ! command -v python3 >/dev/null; then
 fi
 if ! python3 "$WIRING" --release >&2; then
   echo "error: REFUSING TO SHIP — the v2 contract addresses or the retired Moments cohorts failed the release gate (above)." >&2
+  exit 1
+fi
+
+# Its Swift half and the strings gate, as in scripts/testflight.sh: V2WiringTests refuses a pending v2 table, and the
+# lanes' strings tests, which read the app's sources and String Catalogs, refuse a count whose English plural forms
+# aren't in a catalog (a count of 1 would read "1 editions") where they would otherwise skip. They read this checkout
+# only; swift test fetches DyorKit's pinned packages.
+RELEASE_TESTS='AppStringsTests|PerpsWalletStringsTests|MomentsStringsTests|DyorKitStringsTests|TradeStringsTests|ShippedLanguagesTests|V2WiringTests'
+if ! command -v swift >/dev/null; then
+  echo "error: swift is missing, so the strings and v2 wiring tests cannot run; refusing to ship." >&2
+  exit 1
+fi
+if ! (cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter "$RELEASE_TESTS" >&2); then
+  echo "error: REFUSING TO SHIP — the strings or v2 wiring tests failed under DYORHQ_RELEASE_GATE=1 (above)." >&2
   exit 1
 fi
 

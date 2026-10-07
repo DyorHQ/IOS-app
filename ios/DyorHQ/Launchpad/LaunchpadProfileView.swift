@@ -39,7 +39,7 @@ struct LaunchpadProfileView: View {
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .positions: return tr(LocalizedStringResource("Holdings", comment: "My Launchpad tab: the launch coins held [tight]"))
+            case .positions: return tr(LocalizedStringResource("Holdings", comment: "What a wallet holds: a tab of My Launchpad, a stat and a section header [tight]"))
             case .launches: return tr(LocalizedStringResource("Launches", comment: "My Launchpad tab: the coins this wallet launched [tight]"))
             case .activity: return tr(LocalizedStringResource("Activity", comment: "My Launchpad tab: this wallet's launchpad trades and launches [tight]"))
             }
@@ -66,7 +66,7 @@ struct LaunchpadProfileView: View {
                 headerSection
                 claimSection
                 Section {
-                    Picker("View", selection: $tab) { ForEach(Tab.allCases) { Text($0.label).tag($0) } }
+                    Picker(tr(LocalizedStringResource("myLaunchpad.view", defaultValue: "View", comment: "The name VoiceOver reads for My Launchpad's switch between its tabs (Holdings, Launches, Activity): a noun")), selection: $tab) { ForEach(Tab.allCases) { Text($0.label).tag($0) } }
                         .pickerStyle(.segmented)
                         .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 }

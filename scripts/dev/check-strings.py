@@ -28,7 +28,9 @@ from pathlib import Path
 ROOT = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip())
 SOURCE = "en"
 NEVER_TRANSLATED = ["DyorHQ", "Face ID", "Touch ID", "Optic ID"]
-SPECIFIER = re.compile(r"%(?:(\d+)\$)?[-+ #0]*\d*(?:\.\d+)?(hh|h|ll|l|q|z|t|j)?([@dDiuUxXoOfFeEgGcCsSpaA])")
+# A percent sign before a space is text ("1% slippage", "80% and 90%", "1 % de"), not a specifier with printf's space
+# flag, which no string of the app uses: read as one, every translation of such a string would differ from the English.
+SPECIFIER = re.compile(r"%(?:(\d+)\$)?[-+#0]*\d*(?:\.\d+)?(hh|h|ll|l|q|z|t|j)?([@dDiuUxXoOfFeEgGcCsSpaA])")
 
 findings = []
 

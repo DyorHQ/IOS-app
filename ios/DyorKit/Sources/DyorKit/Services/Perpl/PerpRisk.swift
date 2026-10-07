@@ -333,7 +333,7 @@ public enum PerpAlertText {
     /// 1,000% (equity next to nothing), so no reading, however large, can overflow the conversion to a whole number.
     public static func usageText(_ usage: Double) -> String {
         guard !usageIsAll(usage) else {
-            return L10n.string(LocalizedStringResource("All", bundle: L10n.kit, comment: "[tight] All of something: every swap, as a history window, or all of a position's margin in use."))
+            return L10n.string(LocalizedStringResource("marginUsage.all", defaultValue: "All", bundle: L10n.kit, comment: "[tight] All of a position's margin is in use, where a percentage (“85%”) would stand."))
         }
         // not localized: a number and its percent sign
         return "\(Int((max(0, usage) * 100).rounded(.down)))%"

@@ -129,10 +129,10 @@ struct HomeView: View {
             Divider()
 
             HStack(spacing: 10) {
-                splitStat("Spot", model.spotValue, .allocationSpot)
-                splitStat("Perps", model.perpsValue, .allocationPerps)
-                splitStat("Launch", model.launchpadValue, .allocationLaunchpad)
-                splitStat("Moments", model.momentsValue, .allocationMoments)
+                splitStat(.spot, model.spotValue, .allocationSpot)
+                splitStat(.perps, model.perpsValue, .allocationPerps)
+                splitStat(.launchpad, model.launchpadValue, .allocationLaunchpad)
+                splitStat(.moments, model.momentsValue, .allocationMoments)
             }
         }
         .padding(16)
@@ -186,11 +186,12 @@ struct HomeView: View {
         }
     }
 
-    private func splitStat(_ title: LocalizedStringKey, _ value: Double, _ dot: Color) -> some View {
+    /// One of the four categories under the balance, named as My Holdings' switch names it.
+    private func splitStat(_ category: HoldingCategory, _ value: Double, _ dot: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 Circle().fill(dot).frame(width: 7, height: 7)
-                Text(title).font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: category.label).font(.caption).foregroundStyle(.secondary)
             }
             Text(PriceFormat.usdValue(value))
                 .font(.subheadline.weight(.medium)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
@@ -351,12 +352,14 @@ enum HomeTokenTab: String, CaseIterable, Identifiable {
 enum HoldingCategory: String, CaseIterable, Identifiable {
     case spot, perps, launchpad, moments
     var id: String { rawValue }
+    /// The category's name where four share Home's card: My Holdings' switch and the balance card's split. Keys of their
+    /// own, apart from the tabs' and the menu's names, so a language whose tab names are long can keep these short.
     var label: String {
         switch self {
-        case .spot: return tr(LocalizedStringResource("Spot", comment: "The wallet's own tokens, as against perpetual futures [tight]"))
-        case .perps: return tr(LocalizedStringResource("Perps", comment: "Perpetual futures [tight]"))
-        case .launchpad: return tr(LocalizedStringResource("Launch", comment: "A noun: the Launch tab, the launchpad's coins [tight]"))
-        case .moments: return tr(LocalizedStringResource("Moments", comment: "The Moments feature's name [tight]"))
+        case .spot: return tr(LocalizedStringResource("homeCategory.spot", defaultValue: "Spot", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. The wallet's own tokens, as against Perps"))
+        case .perps: return tr(LocalizedStringResource("homeCategory.perps", defaultValue: "Perps", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. Perpetual futures"))
+        case .launchpad: return tr(LocalizedStringResource("homeCategory.launch", defaultValue: "Launch", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. The launchpad's coins (a noun), as the Launch tab"))
+        case .moments: return tr(LocalizedStringResource("homeCategory.moments", defaultValue: "Moments", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. The Moments feature's name"))
         }
     }
 }
@@ -564,8 +567,8 @@ private struct PositionSummaryRow: View {
     /// The position's side, for the chip beside its leverage ("Long 5×").
     private var sideLabel: String {
         position.side == .long
-            ? tr(LocalizedStringResource("Long", comment: "A perp position's side: betting the price rises [tight]"))
-            : tr(LocalizedStringResource("Short", comment: "A perp position's side: betting the price falls [tight]"))
+            ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]"))
+            : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]"))
     }
 }
 
@@ -1014,7 +1017,7 @@ struct TokenDetailView: View {
 /// "New" in place of a 24h change: a DyorHQ coin its factory hadn't recorded 24 hours ago (`PriceInfo.isNew`).
 private struct NewBadge: View {
     var body: some View {
-        Text("New", comment: "Badge for a coin too new to have a 24h change [tight]")
+        Text("New", comment: "A badge on a new coin: just launched, or too new to have a 24h change [tight]")
             .font(.footnote.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)

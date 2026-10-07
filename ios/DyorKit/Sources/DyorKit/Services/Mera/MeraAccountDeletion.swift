@@ -18,8 +18,8 @@ public enum PasskeySignalOutcome: Equatable, Sendable {
 /// Tells the credential provider that a DyorHQ passkey is no longer valid (MERA-PLAN §8), so it stops offering it.
 /// Used for account deletion, and for orphan cleanup: a passkey whose creation never derived an address.
 ///
-/// No guarantee comes back. The passkey "may be removed or hidden" — Apple Passwords was seen moving it to Recently
-/// Deleted for 30 days — third-party managers act only if they opt in, and a passkey used by QR from another phone is
+/// No guarantee comes back. The passkey "may be removed or hidden" — Apple Passwords was seen moving it to its Deleted
+/// list for 30 days — third-party managers act only if they opt in, and a passkey used by QR from another phone is
 /// never reached. Signing out ("Forget this device") never signals: the passkey is the account.
 @MainActor
 public protocol PasskeySignaling {
@@ -122,7 +122,8 @@ extension Mera {
                 steps = Self.manualSteps
                 switch outcome {
                 case .reported:
-                    recentlyDeleted = L10n.tr("If your passkey is in iCloud Keychain, Passwords may keep it in Recently Deleted for up to 30 days.")
+                    recentlyDeleted = L10n.string(LocalizedStringResource("If your passkey is in iCloud Keychain, Passwords may keep it in Deleted for up to 30 days.", bundle: L10n.kit,
+                        comment: "Passwords is iOS's Passwords app and Deleted its list of deleted passwords and passkeys (iOS 18 and later): use iOS's own names for them in this language."))
                     stepsHeading = L10n.tr("If your passkey still shows up")
                     passkeyRemains = false
                 case .unsupported, .failed:

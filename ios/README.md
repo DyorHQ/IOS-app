@@ -95,15 +95,22 @@ the Swift together. `V2WiringTests` accepts only all-zero tables (a `// PENDING`
 live yet", and the retired stacks and Moments cohorts keep serving their coins, claims and links) or fully wired tables
 that match the records.
 
-A build with a pending table must not ship, so before a release:
+A build with a pending table must not ship, nor one whose String Catalogs lack a count's English plural forms, so
+before a release:
 
 ```bash
-(cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter V2WiringTests)
+(cd DyorKit && DYORHQ_RELEASE_GATE=1 swift test --filter 'AppStringsTests|PerpsWalletStringsTests|MomentsStringsTests|DyorKitStringsTests|TradeStringsTests|ShippedLanguagesTests|V2WiringTests')
 (cd DyorKit && DYOR_LIVE_DOCS=1 swift test --filter DocsLinksTests)
 python3 ../scripts/dev/check-launchpad-addresses.py --release
 ```
 
-The first and the last fail while either table is pending. The last one also proves the retired Moments cohorts final on chain
+The first and the last fail while either table is pending. The first also fails when a key with a count is missing
+from the app's or DyorKit's catalog, or has no English "one" form there (a count of 1 would read "1 editions"): the
+strings tests skip that check outside the gate, until `scripts/dev/strings-sync.sh` has filled the catalogs. After
+changing any text, run `scripts/dev/strings-sync.sh` (it builds into a scratch folder; `--derived-data` reuses a
+build), give a new count key its English one and other forms, and run `scripts/dev/check-strings.py --enforce`.
+`ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud) and `scripts/testflight.sh` run the first command too, each refusing
+the archive. The last one also proves the retired Moments cohorts final on chain
 (read-only calls to a public Monad RPC): each factory's `momentCount()` equals its pin
 (`MomentLink.Cohort.finalMomentCount`), and its coins are exactly its entries in `MomentsAddresses.retiredMainnetCoins`.
 Cohort 3's publishing is not paused on chain (owner decision 2026-09-28: the old stacks are retired in the app only),

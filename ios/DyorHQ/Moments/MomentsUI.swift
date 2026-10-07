@@ -168,8 +168,8 @@ struct MomentStateBadge: View {
             let left = MomentsFormat.countdown(info.secondsLeft(at: now), short: onMedia)
             return onMedia ? left : tr(LocalizedStringResource("Collecting · \(left)", comment: "[tight] Moment badge: still collecting, then the time left (\"2d 3h left\")"))
         case .graduationPending: return tr(LocalizedStringResource("Graduation pending", comment: "[tight] Moment badge: its graduation has not completed yet"))
-        case .graduated: return tr(LocalizedStringResource("Graduated", comment: "[tight] Moment badge: its coin graduated into a pool"))
-        case .expired: return tr(LocalizedStringResource("Expired", comment: "[tight] Moment badge: it expired before graduating"))
+        case .graduated: return tr(LocalizedStringResource("Graduated", comment: "[tight] A status: the coin graduated into its pool. A badge on Moments, a section of the Launch board and a date row: use a form that fits each"))
+        case .expired: return tr(LocalizedStringResource("Expired", comment: "[tight] The Moment expired before graduating: a badge, a status and a section header"))
         }
     }
 
@@ -226,14 +226,14 @@ struct MomentCard: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 1) {
                         // A graduated coin's per-unit price is a tiny fraction of a cent; the fully diluted value reads better in a card.
-                        (info.graduated ? Text("FDV", comment: "[tight] Moment card: fully diluted valuation") : Text("Per edition", comment: "[tight] Moment card: the price of one edition"))
+                        (info.graduated ? Text("FDV", comment: "[tight] Fully diluted valuation: a stat on a Moment's page and on its card") : Text("Per edition", comment: "[tight] The price of one edition: a stat on a Moment's page and on its card"))
                             .font(.caption2).foregroundStyle(.secondary)
                         Text(info.graduated ? MomentsFormat.usd(info.pool?.fdvUSD ?? 0) : MomentsFormat.usdc(info.moment.price))
                             .font(.footnote.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 1) {
-                        Text("Editions", comment: "[tight] Moment card: how many editions were collected").font(.caption2).foregroundStyle(.secondary)
+                        Text("Editions", comment: "[tight] How many editions of a Moment were collected: a stat on the Moment's page and on its card").font(.caption2).foregroundStyle(.secondary)
                         Text(verbatim: "\(info.editions)").font(.footnote.weight(.semibold)).monospacedDigit()
                     }
                 }

@@ -520,7 +520,7 @@ private struct MeraSessionSection: View {
                         let clock = String(format: "%02d:%02d", left / 60, left % 60) // not localized: minutes and seconds
                         Text("Unlocked · \(clock) left").monospacedDigit().foregroundStyle(Color.positive)
                     } else {
-                        Text("Locked", comment: "The passkey session is locked: signing asks for the passkey [tight]").foregroundStyle(.secondary)
+                        Text("Locked", comment: "The passkey session is locked or has ended: the next signature asks for the passkey [tight]").foregroundStyle(.secondary)
                     }
                 } label: {
                     Text("Session", comment: "The passkey's signing session, a label [tight]")

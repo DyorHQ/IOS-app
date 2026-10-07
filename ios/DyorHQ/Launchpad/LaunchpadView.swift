@@ -1318,7 +1318,7 @@ private struct LaunchPreviewCard: View {
                     Spacer()
                 }
                 HStack {
-                    Text("New", comment: "Badge for a coin just launched [tight]").font(.caption2.weight(.semibold)).foregroundStyle(Color.brand)
+                    Text("New", comment: "A badge on a new coin: just launched, or too new to have a 24h change [tight]").font(.caption2.weight(.semibold)).foregroundStyle(Color.brand)
                         .padding(.horizontal, 7).padding(.vertical, 2).background(Color.brand.opacity(0.14), in: Capsule())
                     Spacer()
                     Text("Pairs with \(pairSymbol)").font(.caption2).foregroundStyle(.secondary)

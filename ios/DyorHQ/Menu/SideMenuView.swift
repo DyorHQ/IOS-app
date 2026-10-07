@@ -102,7 +102,7 @@ struct SideMenuView: View {
         if account.method == .watchOnly { return tr("Watching \(account.address.short)") }
         if let label = account.label, !label.isEmpty, label != displayName { return label }
         if let handle = social.profile?.handle, !handle.isEmpty, "@\(handle)" != displayName { return "@\(handle)" }
-        if displayName == account.address.short { return tr("Signed in with \(account.method.title.lowercased(with: L10n.locale))") }
+        if displayName == account.address.short { return tr("Signed in with \(account.method.nameInSentence)") }
         return account.address.short
     }
 

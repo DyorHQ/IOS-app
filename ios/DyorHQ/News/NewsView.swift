@@ -64,7 +64,7 @@ struct NewsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }
-                        .accessibilityLabel(Text("Close", comment: "Closes this screen (a verb). Elsewhere it closes a position."))
+                        .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if let updated = model.updatedAt { Text(updated, style: .relative).font(.caption2).foregroundStyle(.tertiary) }
@@ -79,7 +79,7 @@ struct NewsView: View {
     private var sourceChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                chip(Text("All", comment: "News filter: headlines from every source [tight]"), selected: source == nil) { source = nil }
+                chip(Text(verbatim: tr(LocalizedStringResource("newsSource.all", defaultValue: "All", comment: "News filter: headlines from every source [tight]"))), selected: source == nil) { source = nil }
                 ForEach(model.sources, id: \.self) { name in
                     chip(name, selected: source == name) { source = name }
                 }

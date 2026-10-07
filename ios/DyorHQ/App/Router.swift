@@ -235,7 +235,7 @@ enum VolumePeriod: String, CaseIterable, Identifiable {
         case .day: return tr(LocalizedStringResource("24h", comment: "A reporting period: the last 24 hours [tight]"))
         case .week: return tr(LocalizedStringResource("7 days", comment: "A reporting period: the last 7 days [tight]"))
         case .month: return tr(LocalizedStringResource("30 days", comment: "A reporting period: the last 30 days [tight]"))
-        case .all: return tr(LocalizedStringResource("All", comment: "A reporting period: all time [tight]"))
+        case .all: return tr(LocalizedStringResource("volumePeriod.all", defaultValue: "All", comment: "A reporting period: all time [tight]"))
         }
     }
     /// The period's short name, for a chip, in the app's language.
@@ -244,7 +244,7 @@ enum VolumePeriod: String, CaseIterable, Identifiable {
         case .day: return tr(LocalizedStringResource("24h", comment: "A reporting period: the last 24 hours [tight]"))
         case .week: return tr(LocalizedStringResource("7D", comment: "A reporting period on a chip: the last 7 days [tight]"))
         case .month: return tr(LocalizedStringResource("30D", comment: "A reporting period on a chip: the last 30 days [tight]"))
-        case .all: return tr(LocalizedStringResource("All", comment: "A reporting period: all time [tight]"))
+        case .all: return tr(LocalizedStringResource("volumePeriod.all", defaultValue: "All", comment: "A reporting period: all time [tight]"))
         }
     }
     /// Wall-clock length; nil for "All".
@@ -280,7 +280,7 @@ enum MenuItem: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .home: return tr(LocalizedStringResource("Home", comment: "The Home tab's name, a noun"))
-        case .spot: return tr(LocalizedStringResource("Spot", comment: "Spot trading (swaps), as against perpetual futures"))
+        case .spot: return tr(LocalizedStringResource("Spot", comment: "Spot, as against perpetual futures (Perps): the wallet's own tokens, and trading them by swaps [tight]"))
         case .perps: return tr(LocalizedStringResource("Perps", comment: "Perpetual futures [tight]"))
         case .launch: return tr(LocalizedStringResource("Launch", comment: "A noun: the Launch tab, the launchpad's coins [tight]"))
         case .moments: return tr(LocalizedStringResource("Moments", comment: "The Moments feature's name [tight]"))
