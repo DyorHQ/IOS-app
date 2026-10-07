@@ -38,7 +38,7 @@ struct PortfolioView: View {
                 .padding(.vertical, 12)
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Portfolio")
+            .navigationTitle(tr("Portfolio"))
             .navigationBarTitleDisplayMode(.inline)
             // A retired-cohort Moment opens its claim-only page, read from its own cohort (keyed by factory, id).
             .navigationDestination(for: PastMomentRoute.self) { route in

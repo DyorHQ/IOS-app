@@ -51,7 +51,7 @@ struct BridgeView: View {
                 }
                 #endif
             }
-            .navigationTitle("Bridge")
+            .navigationTitle(tr("Bridge"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Text("Close", comment: "Closes this screen or sheet (a verb)") } }
@@ -408,7 +408,7 @@ struct BridgeView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .navigationTitle(model.intoMonad ? "Bridge from" : "Bridge to")
+            .navigationTitle(model.intoMonad ? tr("Bridge from") : tr("Bridge to"))
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])
@@ -452,7 +452,7 @@ struct BridgeView: View {
                     ProgressView("Reading your balances…").font(.footnote)
                 }
             }
-            .navigationTitle("Bridge from")
+            .navigationTitle(tr("Bridge from"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSourcePicker = false } } }
             .task { await model.loadBalances() } // ensure balances are read (retries if a first load failed)
@@ -483,7 +483,7 @@ struct BridgeView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .navigationTitle("\(chain.name) token")
+            .navigationTitle(tr("\(chain.name) token"))
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])

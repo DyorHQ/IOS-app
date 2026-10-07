@@ -53,7 +53,7 @@ struct RecoveryPhraseView: View {
             }
             warningSection
         }
-        .navigationTitle("Recovery Phrase")
+        .navigationTitle(tr("Recovery Phrase"))
         .navigationBarTitleDisplayMode(.inline)
         .background { ScreenCaptureObserver { captured = $0 } }
         // The words hide themselves a minute after the reveal (or the last Keep Showing), with a spoken warning twenty

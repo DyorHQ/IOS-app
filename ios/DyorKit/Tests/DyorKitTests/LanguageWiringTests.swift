@@ -69,6 +69,30 @@ final class LanguageWiringTests: XCTestCase {
         XCTAssertTrue(store.contains("func tr(_ resource: LocalizedStringResource) -> String { L10n.string(resource) }"))
     }
 
+    /// A navigation title and a search prompt, which UIKit draws, are `String`s from `tr()`. A key's title is resolved once,
+    /// when its screen is shown, so a screen open during a change of language kept its old title (Profile read "Profil" in
+    /// Spanish); `tr()` reads `L10n.locale`, which is observable, so the title is drawn again in the new language.
+    func testTitlesAndSearchPromptsFollowTheLanguage() throws {
+        var titles = 0
+        var found: [String] = []
+        for (path, text) in try FormattedTextIsolationTests.appSources() {
+            for (number, line) in text.components(separatedBy: "\n").enumerated() {
+                let code = line.trimmingCharacters(in: .whitespaces)
+                if code.hasPrefix("//") || code.hasPrefix("///") { continue }
+                if line.contains(".navigationTitle(") { titles += 1 }
+                if line.range(of: #"\.navigationTitle\([^)]*"[^"]*[A-Za-z][^"]*""#, options: .regularExpression) != nil,
+                   line.range(of: #"\.navigationTitle\((Text\(verbatim:|tr\(|[^"]*\? tr\()"#, options: .regularExpression) == nil {
+                    found.append("\(path):\(number + 1): \(code)")
+                }
+                if line.range(of: #"\.searchable\(.*prompt: ""#, options: .regularExpression) != nil {
+                    found.append("\(path):\(number + 1): \(code)")
+                }
+            }
+        }
+        XCTAssertEqual(found, [], "a key's title or prompt stays in the language it was first shown in: write it in tr()")
+        XCTAssertGreaterThan(titles, 50, "the scan reads the app's titles")
+    }
+
     /// Delete Account and Forget This Device erase the app's defaults, the saved language with them; the erase then sets
     /// the language back to English, saved and on screen, before the sign-out.
     func testTheEraseSetsTheLanguageBackToEnglish() throws {
@@ -99,6 +123,13 @@ final class LanguageWiringTests: XCTestCase {
         XCTAssertTrue(store.contains("shipped = bundle.localizations"))
         XCTAssertTrue(store.contains("var deviceLanguageName: String { LanguageResolution.deviceLanguageName(device: Self.deviceLanguages(defaults)) }"),
                       "the System row names the device's language, not the one System falls back to")
+        // The device's list is the global domain's own: the app's AppleLanguages shadows it in the standard search and in
+        // Locale.preferredLanguages, and persistentDomain(forName:) of the global domain comes back without it in an iOS
+        // app, which named the app's language as the device's and made System keep it.
+        let devices = try Self.between(store, "private static func deviceLanguages(_ defaults: UserDefaults) -> [String] {", "func tr(")
+        let global = try XCTUnwrap(devices.range(of: "CFPreferencesCopyAppValue(LanguageResolution.appleLanguagesKey as CFString, kCFPreferencesAnyApplication)"))
+        let fallback = try XCTUnwrap(devices.range(of: "return Locale.preferredLanguages"))
+        XCTAssertLessThan(global.upperBound, fallback.lowerBound, "the global domain first, iOS's list last")
 
         let profile = try Self.source("DyorHQ/Profile/ProfileView.swift")
         XCTAssertTrue(profile.contains("SettingsRow(\"Language\", symbol: \"globe\", tint: .accent); Spacer(); Text(language.resolved.endonym)"))

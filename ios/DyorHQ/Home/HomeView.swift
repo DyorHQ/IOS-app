@@ -369,12 +369,14 @@ private struct HomeAction: View {
     let title: LocalizedStringKey
     let symbol: String
     let action: () -> Void
+    /// One height for every symbol, so the four tiles and their labels line up: Transfer's arrows stand taller.
+    @ScaledMetric(relativeTo: .body) private var symbolHeight: CGFloat = 24
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                Image(systemName: symbol).font(.body.weight(.semibold))
-                Text(title).font(.caption).fontWeight(.medium)
+                Image(systemName: symbol).font(.body.weight(.semibold)).frame(height: symbolHeight)
+                Text(title).font(.caption).fontWeight(.medium).lineLimit(1).minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
@@ -1094,7 +1096,7 @@ struct HomeHeader: View {
             Button { Haptics.tap(); showSearch = true } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    Text("Search tokens…").foregroundStyle(.secondary)
+                    Text("Search tokens…").foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: 0)
                     if let error {
                         Image(systemName: "wifi.exclamationmark").foregroundStyle(Color.attention).accessibilityLabel(error)

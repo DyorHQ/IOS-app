@@ -87,7 +87,7 @@ struct ProfileView: View {
                     NavigationLink {
                         ScrollView { GetHelpContent().padding(16) }
                             .background(Color(.systemGroupedBackground))
-                            .navigationTitle("Support")
+                            .navigationTitle(tr("Support"))
                             .navigationBarTitleDisplayMode(.inline)
                     } label: { SettingsRow("Support", symbol: "questionmark.circle", tint: .accent) }
                     Link(destination: SupportLinks.helpCenter) { SettingsRow("Help Center", symbol: "book", tint: .accent) }
@@ -130,7 +130,7 @@ struct ProfileView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Profile")
+            .navigationTitle(tr("Profile"))
             .navigationBarTitleDisplayMode(presented ? .inline : .large)
             .foregroundStyle(.primary)
             .toolbar {
@@ -283,7 +283,7 @@ struct ReceiveSheet: View {
                 Spacer()
             }
             .padding(.top, 24)
-            .navigationTitle("Receive")
+            .navigationTitle(tr("Receive"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .sensoryFeedback(.success, trigger: copied)
@@ -413,7 +413,7 @@ struct SendSheet: View {
                     else if let balance, let token { Text("Available: \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)") }
                 }
             }
-            .navigationTitle("Send")
+            .navigationTitle(tr("Send"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -760,8 +760,8 @@ private struct SendAssetPicker: View {
             }
         }
         .listStyle(.insetGrouped)
-        .searchable(text: $query, prompt: "Symbol, name or address")
-        .navigationTitle("Choose a Token")
+        .searchable(text: $query, prompt: tr("Symbol, name or address"))
+        .navigationTitle(tr("Choose a Token"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }

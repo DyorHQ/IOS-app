@@ -112,7 +112,7 @@ struct PriceAlertsView: View {
                 Text("Alerts arrive while DyorHQ is open: it checks prices every 30 seconds on any screen, and again as soon as you come back to it. iOS pauses the app in the background, so an alert can't reach your lock screen while DyorHQ is closed, and a price that crosses and comes back in the meantime isn't reported. An alert fires once, then it's removed. To protect a perp position, set a stop-loss on it.")
             }
         }
-        .navigationTitle("Price Alerts")
+        .navigationTitle(tr("Price Alerts"))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showCreate) { CreateAlertView { alerts = PriceAlertStore.all(owner: session.address) } }
         .task(id: session.address) { alerts = PriceAlertStore.all(owner: session.address) }
@@ -169,7 +169,7 @@ private struct CreateAlertView: View {
                          : "DyorHQ notifies you once when it finds \(token.symbol) below this price. Alerts arrive while DyorHQ is open: it checks every 30 seconds.")
                 }
             }
-            .navigationTitle("New Alert")
+            .navigationTitle(tr("New Alert"))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .toolbar {

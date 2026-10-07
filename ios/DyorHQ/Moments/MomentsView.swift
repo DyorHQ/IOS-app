@@ -49,7 +49,7 @@ struct MomentsView: View {
                     board
                 }
             }
-            .navigationTitle("Moments")
+            .navigationTitle(tr("Moments"))
             .navigationDestination(for: MomentInfo.self) { info in MomentDetailView(info: info, onChanged: { Task { await model.load(env: env) } }) }
             .navigationDestination(for: MomentLink.self) { link in MomentLinkView(link: link, onChanged: { Task { await model.load(env: env) } }) }
             .toolbar {

@@ -109,7 +109,7 @@ struct PositionTriggersSheet: View {
                 TriggerSheetOutcomeSection(phase: phase)
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("TP/SL · \(market.asset)-PERP")
+            .navigationTitle(tr("TP/SL · \(market.asset)-PERP"))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .toolbar {

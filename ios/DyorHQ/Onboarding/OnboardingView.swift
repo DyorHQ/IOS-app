@@ -795,7 +795,7 @@ struct EmailPasswordView: View {
                 } header: { Text("Security upgrade") }
             }
         }
-        .navigationTitle(otpStage ? "Verify Email" : (upgrade != nil ? "Security Upgrade" : reset ? "Reset Password" : "Email & Password"))
+        .navigationTitle(otpStage ? tr("Verify Email") : (upgrade != nil ? tr("Security Upgrade") : reset ? tr("Reset Password") : tr("Email & Password")))
         .navigationBarTitleDisplayMode(.inline)
         .disabled(busy)
         // No way back mid-request: a reset or sign-up the server may already have saved can't be left half-seen (GE-5).
@@ -1423,7 +1423,7 @@ struct WatchAddressView: View {
                 }
             }
         }
-        .navigationTitle("Watch an Address")
+        .navigationTitle(tr("Watch an Address"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {

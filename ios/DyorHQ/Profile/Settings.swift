@@ -76,7 +76,7 @@ struct ManageWalletsView: View {
                 LabeledContent("RPC", value: env.config.rpcURL.host() ?? "—")
             }
         }
-        .navigationTitle("Manage Wallets")
+        .navigationTitle(tr("Manage Wallets"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -152,7 +152,7 @@ struct SecurityView: View {
                 }
             }
         }
-        .navigationTitle("Security")
+        .navigationTitle(tr("Security"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -195,7 +195,7 @@ struct NotificationsView: View {
             }
             .disabled(!settings.notificationsEnabled)
         }
-        .navigationTitle("Notifications")
+        .navigationTitle(tr("Notifications"))
         .navigationBarTitleDisplayMode(.inline)
         .task { denied = await Notifications.authorizationStatus() == .denied }
         .onChange(of: settings.notificationsEnabled) { _, on in
@@ -232,7 +232,7 @@ struct TradingPreferencesView: View {
                 Text("The furthest a market order or swap may move from its quote before it is cancelled.")
             }
         }
-        .navigationTitle("Trading Preferences")
+        .navigationTitle(tr("Trading Preferences"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -333,7 +333,7 @@ struct PerplTradingView: View {
                 }
             }
         }
-        .navigationTitle("Perpl Trading")
+        .navigationTitle(tr("Perpl Trading"))
         .navigationBarTitleDisplayMode(.inline)
         .task { trading.refresh(account: session.account) }
     }
@@ -403,7 +403,7 @@ struct LanguageView: View {
                 }
             }
         }
-        .navigationTitle("Language")
+        .navigationTitle(tr("Language"))
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -481,7 +481,7 @@ struct AppearanceSheet: View {
                 Spacer()
             }
             .padding(20)
-            .navigationTitle("Appearance")
+            .navigationTitle(tr("Appearance"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }

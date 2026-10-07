@@ -64,7 +64,7 @@ struct NotificationCenterView: View {
                 }
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Notifications")
+            .navigationTitle(tr("Notifications"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {

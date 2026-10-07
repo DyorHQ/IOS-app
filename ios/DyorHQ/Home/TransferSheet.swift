@@ -91,7 +91,7 @@ struct TransferSheet: View {
                     else { Text("Free on Perpl: \(NumberStyle.units(perpsAvailable, decimals: 6)) AUSD") }
                 }
             }
-            .navigationTitle("Transfer")
+            .navigationTitle(tr("Transfer"))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .toolbar {

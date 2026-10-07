@@ -77,7 +77,7 @@ struct LaunchpadProfileView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("My Launchpad")
+            .navigationTitle(tr("My Launchpad"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .overlay { if model.loading, model.isEmpty { ProgressView().controlSize(.large) } }

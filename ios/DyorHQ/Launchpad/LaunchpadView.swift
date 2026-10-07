@@ -29,7 +29,7 @@ struct LaunchpadView: View {
             // sell-only (owner decision 2026-09-28) and hidden from the board (2026-09-29): its holders reach its page
             // from "Your Sell-Only Coins", Home, the Portfolio and Swap.
             board
-            .navigationTitle("Launch")
+            .navigationTitle(tr("Launch"))
             .navigationDestination(for: LaunchPage.self) { page in
                 switch page {
                 case .launch(let launch): LaunchDetailView(launch: launch)
@@ -46,7 +46,7 @@ struct LaunchpadView: View {
                         .disabled(!env.config.launchpad.isDeployed || !session.canSign)
                 }
             }
-            .searchable(text: $query, prompt: "Search coins")
+            .searchable(text: $query, prompt: tr("Search coins"))
             .refreshable { await model.load(env: env, account: session.address) }
             // Restarts with the wallet: whether it may launch is part of what the create screen is given.
             .task(id: session.address) { await model.poll(env: env, account: session.address) }
@@ -1135,7 +1135,7 @@ struct CreateLaunchView: View {
                 }
                 advancedSection
             }
-            .navigationTitle("Launch a Coin")
+            .navigationTitle(tr("Launch a Coin"))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .toolbar {

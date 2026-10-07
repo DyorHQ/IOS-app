@@ -85,7 +85,7 @@ struct SocialProfileView: View {
                 }
             }
         }
-        .navigationTitle("DyorHQ Social")
+        .navigationTitle(tr("DyorHQ Social"))
         .navigationBarTitleDisplayMode(.inline)
         .task { social.bind(address: session.address); sync() }
         .onChange(of: social.isSignedIn) { _, _ in sync() }

@@ -44,7 +44,7 @@ struct RecentActivityView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Recent Activity")
+        .navigationTitle(tr("Recent Activity"))
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await model.load(env: env, address: session.address) }
         .task(id: session.address) { await model.load(env: env, address: session.address) }

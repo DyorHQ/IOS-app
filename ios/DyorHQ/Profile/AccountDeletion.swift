@@ -292,7 +292,7 @@ struct DeleteAccountView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Delete Account")
+            .navigationTitle(tr("Delete Account"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(deleting) } }
             .interactiveDismissDisabled(deleting)
@@ -412,7 +412,7 @@ struct DeletionNoticeView: View {
                 .listRowInsets(EdgeInsets())
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Delete Account")
+            .navigationTitle(tr("Delete Account"))
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -466,7 +466,7 @@ struct AccountDeletedView: View {
                 .listRowInsets(EdgeInsets())
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Delete Account")
+            .navigationTitle(tr("Delete Account"))
             .navigationBarTitleDisplayMode(.inline)
         }
     }

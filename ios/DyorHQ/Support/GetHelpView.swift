@@ -44,7 +44,7 @@ struct GetHelpView: View {
         NavigationStack {
             ScrollView { GetHelpContent().padding(16) }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Support")
+            .navigationTitle(tr("Support"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {

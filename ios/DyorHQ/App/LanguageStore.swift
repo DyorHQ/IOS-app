@@ -68,9 +68,15 @@ final class LanguageStore {
     }
 
     /// The device's ordered language list (Settings › General › Language & Region). The app's own `AppleLanguages`
-    /// shadows it in the standard search, so it is read from the global domain, falling back to iOS's list when that
-    /// can't be read.
+    /// shadows it in the standard search, and in `Locale.preferredLanguages`, so it is read from the global domain
+    /// itself. In an iOS app, `persistentDomain(forName: UserDefaults.globalDomain)` comes back without it, which named
+    /// the app's language as the device's and made System keep it. iOS's list is the fallback, as at a launch with no
+    /// language saved, when nothing shadows it.
     private static func deviceLanguages(_ defaults: UserDefaults) -> [String] {
+        if let device = CFPreferencesCopyAppValue(LanguageResolution.appleLanguagesKey as CFString, kCFPreferencesAnyApplication) as? [String],
+           !device.isEmpty {
+            return device
+        }
         if let device = defaults.persistentDomain(forName: UserDefaults.globalDomain)?[LanguageResolution.appleLanguagesKey] as? [String],
            !device.isEmpty {
             return device

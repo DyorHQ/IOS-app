@@ -59,7 +59,7 @@ struct NewsView: View {
                 }
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("News")
+            .navigationTitle(tr("News"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {

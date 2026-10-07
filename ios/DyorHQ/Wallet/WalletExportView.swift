@@ -51,7 +51,7 @@ struct WalletExportView: View {
                 privySections
             }
         }
-        .navigationTitle("Export Wallet")
+        .navigationTitle(tr("Export Wallet"))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showPrivyExport) {
             if let url = env.config.walletExportURL { PrivyExportSheet(url: url) }
@@ -218,7 +218,7 @@ private struct PrivyExportSheet: View {
                 else { status = tr("Export was cancelled or didn't finish.") }
             }
             .ignoresSafeArea(edges: .bottom)
-            .navigationTitle("Export Wallet")
+            .navigationTitle(tr("Export Wallet"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .safeAreaInset(edge: .bottom) {

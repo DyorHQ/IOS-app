@@ -281,6 +281,7 @@ struct PerpTradeView: View {
             if let pct = change24h { Text(NumberStyle.percent(pct)) }
         }
         .font(.footnote.weight(.medium)).monospacedDigit()
+        .lineLimit(1).minimumScaleFactor(0.7) // one line: a signed dollar figure wrapped after its "−"
         .foregroundStyle(tint)
     }
 
@@ -2376,7 +2377,7 @@ private struct ClosePositionSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Close Position")
+            .navigationTitle(tr("Close Position"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -2515,7 +2516,7 @@ private struct AddMarginSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Add Margin")
+            .navigationTitle(tr("Add Margin"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -2658,7 +2659,7 @@ struct AuthedOrderSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Place Order")
+            .navigationTitle(tr("Place Order"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

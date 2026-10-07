@@ -31,7 +31,7 @@ struct SwapView: View {
             }
             .listStyle(.insetGrouped)
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Trade")
+            .navigationTitle(tr("Trade"))
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top, spacing: 0) { TradeModeSwitcher() }
             .toolbar {
@@ -630,7 +630,7 @@ struct SlippageSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Slippage")
+            .navigationTitle(tr("Slippage"))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
@@ -805,8 +805,8 @@ struct TokenPickerSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .searchable(text: $query, prompt: "Symbol, name or address")
-            .navigationTitle("Choose a Token")
+            .searchable(text: $query, prompt: tr("Symbol, name or address"))
+            .navigationTitle(tr("Choose a Token"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .task(id: query) {

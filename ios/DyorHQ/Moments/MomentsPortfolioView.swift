@@ -77,7 +77,7 @@ struct MomentsPortfolioView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("My Moments")
+            .navigationTitle(tr("My Moments"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .refreshable { await load() }

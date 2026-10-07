@@ -5657,13 +5657,13 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allocation"
+            "value" : "Répartition"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "할당량"
+            "value" : "자산 배분"
           }
         },
         "zh-Hans" : {
@@ -33929,7 +33929,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Rechercher des jetons…"
+            "value" : "Chercher un jeton…"
           }
         },
         "ko" : {

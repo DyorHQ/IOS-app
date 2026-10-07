@@ -226,7 +226,7 @@ struct CollateralSheet: View {
                     else { Text("Available: \(NumberStyle.units(limit, decimals: 6)) AUSD") }
                 }
             }
-            .navigationTitle(isCreating ? "Create Account" : (kind == .deposit ? "Deposit" : "Withdraw"))
+            .navigationTitle(isCreating ? tr("Create Account") : (kind == .deposit ? tr("Deposit") : tr("Withdraw")))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .toolbar {

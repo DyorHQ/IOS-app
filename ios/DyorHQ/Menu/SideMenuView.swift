@@ -156,7 +156,7 @@ private struct MenuRow: View {
                     .background(Color.brand.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title).font(.body.weight(.semibold)).foregroundStyle(.primary)
-                    Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Spacer()
                 if isCurrent {

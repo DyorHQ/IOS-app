@@ -37,7 +37,7 @@ struct PerpsPortfolioView: View {
                 .padding(.vertical, 12)
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Portfolio")
+            .navigationTitle(tr("Portfolio"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .refreshable { await portfolio.load(env: env, key: perplTrading.key, markets: model.markets) }

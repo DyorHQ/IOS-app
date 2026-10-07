@@ -73,7 +73,7 @@ struct ImportWalletView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Import Wallet")
+        .navigationTitle(tr("Import Wallet"))
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {

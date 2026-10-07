@@ -134,7 +134,7 @@ struct SessionScopeSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Passkey Session")
+            .navigationTitle(tr("Passkey Session"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }

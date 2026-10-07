@@ -128,7 +128,7 @@ struct CreateMomentView: View {
                 economicsSection
                 if valid { previewSection }
             }
-            .navigationTitle("Publish a Moment")
+            .navigationTitle(tr("Publish a Moment"))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .scrollDismissesKeyboard(.interactively)
