@@ -47,7 +47,7 @@ struct RootView: View {
         .onChange(of: linkGateInput, initial: true) { _, _ in applyLinkGate() }
         .overlay(alignment: .bottom) {
             if let notice = router.linkNotice {
-                Text(notice)
+                Paragraph(notice)
                     .font(.footnote.weight(.medium))
                     .padding(.horizontal, 14).padding(.vertical, 9)
                     .background(.regularMaterial, in: Capsule())

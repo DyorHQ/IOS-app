@@ -39,7 +39,7 @@ private struct PendingLinkBanner: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "camera.aperture").foregroundStyle(Color.brand)
-            Text("Sign in to open the Moment you were sent.")
+            Paragraph("Sign in to open the Moment you were sent.")
                 .font(.footnote.weight(.medium))
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button { router.pendingLink = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
@@ -121,8 +121,8 @@ private struct BrandGlow: View {
 private struct Feature {
     let symbol: String
     let title: LocalizedStringKey
-    let detail: LocalizedStringKey
-    init(_ symbol: String, _ title: LocalizedStringKey, _ detail: LocalizedStringKey) { self.symbol = symbol; self.title = title; self.detail = detail }
+    let detail: LocalizedStringResource
+    init(_ symbol: String, _ title: LocalizedStringKey, _ detail: LocalizedStringResource) { self.symbol = symbol; self.title = title; self.detail = detail }
 }
 
 /// A gentle, swipeable carousel of the four things DyorHQ does. Auto-advances — unless the user prefers reduced motion,
@@ -200,7 +200,7 @@ private struct FeatureCard: View {
                 Text(feature.title)
                     .font(.title2.weight(.semibold))
                     .multilineTextAlignment(.center)
-                Text(feature.detail)
+                Paragraph(feature.detail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -230,7 +230,7 @@ struct SignInView: View {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Get started").font(.largeTitle.weight(.bold))
-                    Text("Your wallet is yours — you hold the keys.")
+                    Paragraph("Your wallet is yours — you hold the keys.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
                 .padding(.top, 4)
@@ -654,13 +654,13 @@ struct EmailPasswordView: View {
             if !otpStage {
                 if let upgrade {
                     Section {
-                        Text("Your account was created before our email-wallet security upgrade. Choose a new password: it becomes a new wallet that can’t be guessed offline, and we’ll email a code to confirm it’s you. Your previous wallet (\(upgrade.legacy.short)) has no MON or token balance left.")
+                        Paragraph("Your account was created before our email-wallet security upgrade. Choose a new password: it becomes a new wallet that can’t be guessed offline, and we’ll email a code to confirm it’s you. Your previous wallet (\(upgrade.legacy.short)) has no MON or token balance left.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } header: { Text("Security upgrade") }
                     .listRowBackground(Color.clear)
                 } else if reset {
                     Section {
-                        Text("Resetting creates a **new, empty wallet** for your new password. Anything in your current wallet stays at its address and can only be reached with your old password. We’ll email a code to confirm it’s you.")
+                        Paragraph("Resetting creates a **new, empty wallet** for your new password. Anything in your current wallet stays at its address and can only be reached with your old password. We’ll email a code to confirm it’s you.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } header: { Text("Reset password") }
                     .listRowBackground(Color.clear)
@@ -689,7 +689,7 @@ struct EmailPasswordView: View {
                         }
                     } else if mode == .logIn {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Log in with the email and password you signed up with. Your wallet is recreated on this device — no code needed.")
+                            Paragraph("Log in with the email and password you signed up with. Your wallet is recreated on this device — no code needed.")
                             Button("Forgot password?") { beginReset() }.font(.footnote)
                         }
                     } else if !password.isEmpty, !confirm.isEmpty, password != confirm {
@@ -714,13 +714,14 @@ struct EmailPasswordView: View {
                     Section {
                         Label {
                             if reset {
-                                Text("This new password **is** your new wallet. Keep it safe: if you lose it, you lose access to what you put in this wallet — write it down or save it in your password manager.")
+                                Paragraph("This new password **is** your new wallet. Keep it safe: if you lose it, you lose access to what you put in this wallet — write it down or save it in your password manager.")
                             } else {
-                                Text("This password **is** your wallet. We can’t reset it or send a recovery email. If you lose it, you lose access to your funds — write it down or save it in your password manager.")
+                                Paragraph("This password **is** your wallet. We can’t reset it or send a recovery email. If you lose it, you lose access to your funds — write it down or save it in your password manager.")
                             }
                         } icon: {
                             Image(systemName: "key.horizontal.fill").foregroundStyle(Color.attention)
                         }
+                        .modifier(ParagraphLabel())
                         .font(.footnote)
                         Toggle("I understand my password is the only way back to my wallet", isOn: $acknowledged).font(.footnote)
                         if reset, upgrade == nil {
@@ -748,13 +749,13 @@ struct EmailPasswordView: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
                         if let upgrade {
-                            Text("One-time security upgrade: enter the code we emailed to \(email). Your account then moves to the new wallet your new password creates. Your previous wallet (\(upgrade.legacy.short)) stays behind, and so does its public profile.")
+                            Paragraph("One-time security upgrade: enter the code we emailed to \(email). Your account then moves to the new wallet your new password creates. Your previous wallet (\(upgrade.legacy.short)) stays behind, and so does its public profile.")
                         } else if verifyingLogIn {
-                            Text("Enter the code we emailed to \(email). It proves the email is yours, so you can log in even while others are making attempts on it. We’ll log you in right after.")
+                            Paragraph("Enter the code we emailed to \(email). It proves the email is yours, so you can log in even while others are making attempts on it. We’ll log you in right after.")
                         } else if reset {
-                            Text("Enter the code we emailed to \(email). This confirms it’s you before your email moves to the new, empty wallet your new password creates.")
+                            Paragraph("Enter the code we emailed to \(email). This confirms it’s you before your email moves to the new, empty wallet your new password creates.")
                         } else {
-                            Text("Enter the code we emailed to \(email). This proves the email is yours — your wallet is created after you verify, so no fake or unowned emails can register.")
+                            Paragraph("Enter the code we emailed to \(email). This proves the email is yours — your wallet is created after you verify, so no fake or unowned emails can register.")
                         }
                         HStack(spacing: 16) {
                             Button("Send a new code") { startSignUp() }.disabled(busy)
@@ -773,7 +774,7 @@ struct EmailPasswordView: View {
                 Section {
                     Button("Verify Email", systemImage: "envelope.badge") { startLogInVerification() }
                 } footer: {
-                    Text("We’ll email a one-time code to \(email). Entering it proves the email is yours, then we log you in.")
+                    Paragraph("We’ll email a one-time code to \(email). Entering it proves the email is yours, then we log you in.")
                 }
             }
 
@@ -781,15 +782,15 @@ struct EmailPasswordView: View {
                 Section {
                     Button("Check for an Older Account", systemImage: "clock.arrow.circlepath") { logInLegacy() }
                 } header: {
-                    Text("Signed up before September 24, 2026?")
+                    Paragraph("Signed up before September 24, 2026?")
                 } footer: {
-                    Text("Accounts created before our email-wallet security upgrade are found with this extra check, then moved to a new password.")
+                    Paragraph("Accounts created before our email-wallet security upgrade are found with this extra check, then moved to a new password.")
                 }
             }
 
             if let legacy = fundedLegacy, !otpStage {
                 Section {
-                    Text("Your account’s original wallet (\(legacy.short)) still holds funds, so its security upgrade waits until they’re moved out. Log in to it now and send them to another wallet you control. Then log out and log in again to finish the upgrade.")
+                    Paragraph("Your account’s original wallet (\(legacy.short)) still holds funds, so its security upgrade waits until they’re moved out. Log in to it now and send them to another wallet you control. Then log out and log in again to finish the upgrade.")
                         .font(.footnote)
                     Button("Log In to Move Funds", systemImage: "arrow.right.circle") { continueWithLegacy() }
                 } header: { Text("Security upgrade") }
@@ -843,7 +844,7 @@ struct EmailPasswordView: View {
             Section {
                 Button("Try Again", systemImage: "arrow.clockwise") { Task { await runBind(replacing: nil) } }
             } footer: {
-                Text("Your code was accepted, so no new code is needed. If the last attempt went through after all, this just finishes it.")
+                Paragraph("Your code was accepted, so no new code is needed. If the last attempt went through after all, this just finishes it.")
             }
         }
     }
@@ -851,9 +852,9 @@ struct EmailPasswordView: View {
     @ViewBuilder private func conflictSections(_ conflict: Conflict) -> some View {
         Section {
             if reset || upgrade != nil {
-                Text("Your email is linked to the DyorHQ wallet \(conflict.current.checksummed). Going on moves your email to a new, empty wallet. Funds in \(conflict.current.short) stay there, reachable only with its old password.")
+                Paragraph("Your email is linked to the DyorHQ wallet \(conflict.current.checksummed). Going on moves your email to a new, empty wallet. Funds in \(conflict.current.short) stay there, reachable only with its old password.")
             } else {
-                Text("This email already has a DyorHQ wallet (\(conflict.current.checksummed)). Log in instead, or replace it: funds in \(conflict.current.short) stay there.")
+                Paragraph("This email already has a DyorHQ wallet (\(conflict.current.checksummed)). Log in instead, or replace it: funds in \(conflict.current.short) stay there.")
             }
             if let holdings = conflict.holdings {
                 if holdings.isFunded {
@@ -1412,9 +1413,9 @@ struct WatchAddressView: View {
                 Text("Monad address")
             } footer: {
                 if !text.isEmpty, address == nil {
-                    Text("Enter a 42-character address starting with 0x.")
+                    Paragraph("Enter a 42-character address starting with 0x.")
                 } else {
-                    Text("Balances, positions and launches for this address will be shown. Nothing can be signed.")
+                    Paragraph("Balances, positions and launches for this address will be shown. Nothing can be signed.")
                 }
             }
             Section {

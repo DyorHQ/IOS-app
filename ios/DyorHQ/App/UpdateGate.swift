@@ -74,7 +74,7 @@ struct UpdateRequiredView: View {
                             if let message = minimum.ownerMessage(in: language.resolved) {
                                 Text(verbatim: message)
                             } else {
-                                Text("This version of DyorHQ is no longer supported. Update to trade, send and sign again. Your funds are safe in your wallet: you can still see your balances and export your wallet here.")
+                                Paragraph("This version of DyorHQ is no longer supported. Update to trade, send and sign again. Your funds are safe in your wallet: you can still see your balances and export your wallet here.")
                             }
                         }
                         .font(.subheadline)
@@ -113,14 +113,14 @@ struct UpdateRequiredView: View {
                     } header: {
                         Text("Your balances")
                     } footer: {
-                        Text("Held by \(address.short) on Monad. This version can't send, trade or sign anything.")
+                        Paragraph("Held by \(address.short) on Monad. This version can't send, trade or sign anything.")
                     }
 
                     if session.canSign {
                         Section {
                             NavigationLink { WalletExportView() } label: { Label("Export Wallet", systemImage: "key.horizontal") }
                         } footer: {
-                            Text("Your wallet's key or recovery phrase works in any other wallet app.")
+                            Paragraph("Your wallet's key or recovery phrase works in any other wallet app.")
                         }
                     }
                 }

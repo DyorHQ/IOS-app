@@ -92,9 +92,9 @@ struct RetiredMomentDetailView: View {
         } footer: {
             switch cohort.retirement {
             case .retiredWallets:
-                Text("This Moment was published on an earlier DyorHQ Moments contract whose fee wallets have been retired. You can claim your vested coins and, as its creator, withdraw your own proceeds and pool fees; collecting, trading and every other action are closed in the app.")
+                Paragraph("This Moment was published on an earlier DyorHQ Moments contract whose fee wallets have been retired. You can claim your vested coins and, as its creator, withdraw your own proceeds and pool fees; collecting, trading and every other action are closed in the app.")
             case .replaced:
-                Text("This Moment was published on an earlier DyorHQ Moments contract, since replaced by a new release. You can claim your vested coins and, as its creator, withdraw your own proceeds and pool fees; collecting, trading and every other action are closed in the app.")
+                Paragraph("This Moment was published on an earlier DyorHQ Moments contract, since replaced by a new release. You can claim your vested coins and, as its creator, withdraw your own proceeds and pool fees; collecting, trading and every other action are closed in the app.")
             }
         }
     }
@@ -122,11 +122,11 @@ struct RetiredMomentDetailView: View {
         } footer: {
             if !info.graduated {
                 if info.state == .expired {
-                    Text("It expired before graduating, so its coins never vest. Your editions stay yours.")
+                    Paragraph("It expired before graduating, so its coins never vest. Your editions stay yours.")
                 } else if info.missedGraduation(at: now) {
-                    Text("Its collecting window ended before it graduated, so its coins never vest. Your editions stay yours.")
+                    Paragraph("Its collecting window ended before it graduated, so its coins never vest. Your editions stay yours.")
                 } else {
-                    Text("Coins vest only once a Moment graduates; collecting is closed in the app.")
+                    Paragraph("Coins vest only once a Moment graduates; collecting is closed in the app.")
                 }
             }
         }
@@ -151,7 +151,7 @@ struct RetiredMomentDetailView: View {
         } header: {
             Text("You Created This")
         } footer: {
-            Text("Withdrawals pay you, the creator, and no one else.")
+            Paragraph("Withdrawals pay you, the creator, and no one else.")
         }
     }
 

@@ -237,7 +237,7 @@ struct DeleteAccountView: View {
                     Text("What is deleted")
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Transactions, tokens and Moments you created stay on the Monad blockchain — nothing can remove them — and images you published for coins or Moments stay online because those tokens point to them.")
+                        Paragraph("Transactions, tokens and Moments you created stay on the Monad blockchain — nothing can remove them — and images you published for coins or Moments stay online because those tokens point to them.")
                         LearnMoreLink(.exportSignOutDelete)
                     }
                 }
@@ -246,7 +246,7 @@ struct DeleteAccountView: View {
                     Section {
                         // Apple's fallback when the app can't revoke the Sign in with Apple token itself (TN3194); the
                         // steps are Apple's own (support.apple.com/102571).
-                        Text("Also stop using Sign in with Apple for DyorHQ: open Settings, tap your name, tap Sign in with Apple, select DyorHQ, then tap Delete.")
+                        Paragraph("Also stop using Sign in with Apple for DyorHQ: open Settings, tap your name, tap Sign in with Apple, select DyorHQ, then tap Delete.")
                     } header: {
                         Text("Sign in with Apple")
                     }
@@ -256,12 +256,12 @@ struct DeleteAccountView: View {
                     Section {
                         switch method {
                         case .apple, .google, .email, .passkey:
-                            Text("Your embedded wallet is deleted together with the Privy account. Send your funds elsewhere or export the wallet's key first; afterwards nobody can recover it.")
+                            Paragraph("Your embedded wallet is deleted together with the Privy account. Send your funds elsewhere or export the wallet's key first; afterwards nobody can recover it.")
                             NavigationLink { WalletExportView() } label: { Label("Export Wallet First", systemImage: "key.horizontal") }
                         case .imported:
-                            Text("This wallet's private key is removed from this device. Keep its recovery phrase or key somewhere safe; it is the only way back to the funds.")
+                            Paragraph("This wallet's private key is removed from this device. Keep its recovery phrase or key somewhere safe; it is the only way back to the funds.")
                         case .emailPassword:
-                            Text("This wallet is recreated from your email and password. Removing it deletes the device copy; keep your email and password, the only way back to the funds. A password reset can't bring them back: it creates a new, empty wallet.")
+                            Paragraph("This wallet is recreated from your email and password. Removing it deletes the device copy; keep your email and password, the only way back to the funds. A password reset can't bring them back: it creates a new, empty wallet.")
                         case .meraPasskey, .watchOnly:
                             EmptyView()
                         }
@@ -286,9 +286,9 @@ struct DeleteAccountView: View {
                     }
                     .disabled(!ready)
                 } footer: {
-                    if let error { Text(error).foregroundStyle(Color.attention) }
-                    else if isPasskey { Text("\(BiometricGate.promptName) confirms it's your passkey, even if your session is open. Your data on the server is deleted first; only then is the passkey removed and this phone cleared. This cannot be undone.") }
-                    else { Text(session.canSign ? "The server asks your wallet for one signature to prove it is you, then deletes everything. This cannot be undone." : "Removes everything about this watched address from this device.") }
+                    if let error { Paragraph(error).foregroundStyle(Color.attention) }
+                    else if isPasskey { Paragraph("\(BiometricGate.promptName) confirms it's your passkey, even if your session is open. Your data on the server is deleted first; only then is the passkey removed and this phone cleared. This cannot be undone.") }
+                    else { Paragraph(session.canSign ? "The server asks your wallet for one signature to prove it is you, then deletes everything. This cannot be undone." : "Removes everything about this watched address from this device.") }
                 }
             }
             .listStyle(.insetGrouped)
@@ -308,7 +308,7 @@ struct DeleteAccountView: View {
                 .font(.footnote.monospaced())
                 .textSelection(.enabled)
                 .padding(.vertical, 2)
-            Text("Deleting removes your passkey, which is this wallet's only key. Assume this is permanent unless you export the recovery phrase first.")
+            Paragraph("Deleting removes your passkey, which is this wallet's only key. Assume this is permanent unless you export the recovery phrase first.")
                 .font(.subheadline)
         } header: {
             Text("Your wallet")
@@ -328,7 +328,7 @@ struct DeleteAccountView: View {
                     .foregroundStyle(Color.brand)
             }
         } footer: {
-            Text("The recovery phrase restores this wallet in any other wallet app. Or send what it holds to a wallet you keep.")
+            Paragraph("The recovery phrase restores this wallet in any other wallet app. Or send what it holds to a wallet you keep.")
         }
         .disabled(deleting)
 
@@ -348,7 +348,7 @@ struct DeleteAccountView: View {
         } header: {
             Text("What could be lost")
         } footer: {
-            Text("All of it stays at \(address.short) on the blockchain, but without the passkey or the recovery phrase nothing can move it.")
+            Paragraph("All of it stays at \(address.short) on the blockchain, but without the passkey or the recovery phrase nothing can move it.")
         }
     }
 
@@ -396,7 +396,7 @@ struct DeletionNoticeView: View {
                         Text("Account deleted, one step left")
                             .font(.title2.weight(.bold))
                             .multilineTextAlignment(.center)
-                        Text(message)
+                        Paragraph(message)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -436,7 +436,7 @@ struct AccountDeletedView: View {
                         Text(done.title)
                             .font(.title2.weight(.bold))
                         if let note = done.recentlyDeleted {
-                            Text(note)
+                            Paragraph(note)
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)

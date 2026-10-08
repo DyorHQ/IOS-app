@@ -116,7 +116,7 @@ struct MomentDetailView: View {
                 LabeledContent("Window closes", value: MomentsFormat.date(m.deadline))
             }
         } footer: {
-            Text("\(NumberStyle.basisPoints(m.reserveBps)) of every collect builds the reserve; at the threshold the coin graduates into a locked Uniswap pool.")
+            Paragraph("\(NumberStyle.basisPoints(m.reserveBps)) of every collect builds the reserve; at the threshold the coin graduates into a locked Uniswap pool.")
         }
     }
 
@@ -166,13 +166,13 @@ struct MomentDetailView: View {
             if let quote {
                 let editions = Int(clamping: quote.editions)
                 LabeledContent("You pay") { Text(MomentsFormat.usdc(quote.gross)).monospacedDigit().fontWeight(.semibold) }
-                LabeledContent("You get") { Text("\(editions) editions · \(MomentsFormat.coins(quote.entitlement)) $\(info.symbol)").monospacedDigit().multilineTextAlignment(.trailing) }
+                LabeledContent("You get") { Paragraph("\(editions) editions · \(MomentsFormat.coins(quote.entitlement)) $\(info.symbol)").monospacedDigit().multilineTextAlignment(.trailing) }
                 if quote.terminal {
                     Label("This collect completes the Moment: it takes only what the reserve still needs (\(MomentsFormat.usdc(quote.gross)) for \(editions) editions) and graduates the coin in the same transaction.", systemImage: "sparkles")
                         .font(.footnote).foregroundStyle(Color.brand)
                 }
             } else if let quoteReason {
-                Text(quoteReason).font(.footnote).foregroundStyle(.secondary)
+                Paragraph(quoteReason).font(.footnote).foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Quoting…").font(.footnote).foregroundStyle(.secondary) }
             }
@@ -195,7 +195,7 @@ struct MomentDetailView: View {
             Text("Collect", comment: "Collect (buy) editions of this Moment, a verb: the section header on the Moment's page and its button")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Paid in USDC: \(NumberStyle.basisPoints(m.reserveBps)) reserve, \(NumberStyle.basisPoints(m.creatorBps)) creator, \(NumberStyle.basisPoints(m.platformBps)) DyorHQ. Your NFT appears on OpenSea as soon as it settles.")
+                Paragraph("Paid in USDC: \(NumberStyle.basisPoints(m.reserveBps)) reserve, \(NumberStyle.basisPoints(m.creatorBps)) creator, \(NumberStyle.basisPoints(m.platformBps)) DyorHQ. Your NFT appears on OpenSea as soon as it settles.")
                 LearnMoreLink(.collectAMoment)
             }
         }
@@ -208,7 +208,7 @@ struct MomentDetailView: View {
 
     private var pendingSection: some View {
         Section {
-            Text("Graduation has not completed yet; anyone can retry it.")
+            Paragraph("Graduation has not completed yet; anyone can retry it.")
                 .font(.footnote).foregroundStyle(.secondary)
             if info.ledger.stuckSince > 0 { LabeledContent("First failure", value: MomentsFormat.date(info.ledger.stuckSince)) }
             Button("Retry Graduation", systemImage: "arrow.clockwise") { Haptics.tap(); action = .retry }.disabled(!session.canSign)
@@ -220,7 +220,7 @@ struct MomentDetailView: View {
     private var expiredSection: some View {
         Section {
             LabeledContent("Ended", value: MomentsFormat.date(info.ledger.endedAt))
-            Text("The window closed before the threshold; the reserve was wound down. Editions stay with their collectors.")
+            Paragraph("The window closed before the threshold; the reserve was wound down. Editions stay with their collectors.")
                 .font(.footnote).foregroundStyle(.secondary)
         } header: {
             Text("Expired", comment: "[tight] The Moment expired before graduating: a badge, a status and a section header")
@@ -265,7 +265,7 @@ struct MomentDetailView: View {
         } footer: {
             // Where a collector's coins vest and are claimed.
             VStack(alignment: .leading, spacing: 4) {
-                if !info.graduated, info.state != .expired { Text("Coins are minted to you as they vest once the Moment graduates.") }
+                if !info.graduated, info.state != .expired { Paragraph("Coins are minted to you as they vest once the Moment graduates.") }
                 LearnMoreLink(.momentsGraduationAndVesting)
             }
         }
@@ -291,7 +291,7 @@ struct MomentDetailView: View {
             Text("You Created This")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("\(NumberStyle.basisPoints(m.creatorBps)) of every collect, plus \(NumberStyle.basisPoints(MomentsConstants.hookCreatorShareBps)) of the pool's 1% fee after graduation, accrue here for you.")
+                Paragraph("\(NumberStyle.basisPoints(m.creatorBps)) of every collect, plus \(NumberStyle.basisPoints(MomentsConstants.hookCreatorShareBps)) of the pool's 1% fee after graduation, accrue here for you.")
                 LearnMoreLink(.momentsEarningsAndFees)
             }
         }
@@ -347,7 +347,7 @@ struct MomentDetailView: View {
         } header: {
             Text("Pool", comment: "Section header: the coin's liquidity pool")
         } footer: {
-            Text("Liquidity locked forever in Uniswap v4. Every trade pays 1.5%: pool, creator, DyorHQ and buybacks.")
+            Paragraph("Liquidity locked forever in Uniswap v4. Every trade pays 1.5%: pool, creator, DyorHQ and buybacks.")
         }
     }
 
@@ -391,7 +391,7 @@ struct MomentDetailView: View {
         } header: {
             Text("About this Moment")
         } footer: {
-            Text("Fixed at publish; nothing about a live Moment can be changed.")
+            Paragraph("Fixed at publish; nothing about a live Moment can be changed.")
         }
     }
 

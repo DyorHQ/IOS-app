@@ -213,14 +213,14 @@ struct ConfirmationSheet<Details: View>: View {
                     Section {
                         ForEach(replacedUnlimited, id: \.self) { DetailRow("Approval", "Replaces your unlimited approval to \($0)") }
                     } footer: {
-                        Text("An earlier approval lets it spend any amount. This plan approves exactly what it needs instead.")
+                        Paragraph("An earlier approval lets it spend any amount. This plan approves exactly what it needs instead.")
                     }
                 }
                 if let fee, !run.isDone {
                     Section {
                         DetailRow("Max network fee", fee.summary)
                     } footer: {
-                        Text("The most the network can charge. Each transaction's fee is checked again before it's signed, and refused if it's unusually high.")
+                        Paragraph("The most the network can charge. Each transaction's fee is checked again before it's signed, and refused if it's unusually high.")
                     }
                 }
                 if session.isPasskeyAccount, !preparing, buildError == nil, !run.isRunning, !run.isDone, let assessment {
@@ -263,7 +263,7 @@ struct ConfirmationSheet<Details: View>: View {
                             .multilineTextAlignment(.center)
                         PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
                     } else if !session.canSign {
-                        Text(SessionError.readOnly.localizedDescription)
+                        Paragraph(SessionError.readOnly.localizedDescription)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)

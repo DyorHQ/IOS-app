@@ -96,7 +96,7 @@ struct RecoveryPhraseView: View {
             Text("Recovery Phrase")
         } footer: {
             if let error { InlineError(message: error) }
-            else { Text("Your passkey is this wallet's key. These 24 words are a second way in: they restore the same wallet in MetaMask, Rabby or any wallet that takes a recovery phrase, even without your passkey. Showing them always asks for \(BiometricGate.promptName), and they hide after a minute unless you keep them showing.") }
+            else { Paragraph("Your passkey is this wallet's key. These 24 words are a second way in: they restore the same wallet in MetaMask, Rabby or any wallet that takes a recovery phrase, even without your passkey. Showing them always asks for \(BiometricGate.promptName), and they hide after a minute unless you keep them showing.") }
         }
     }
 
@@ -123,7 +123,7 @@ struct RecoveryPhraseView: View {
             if screenshotTaken {
                 InlineError(message: "You took a screenshot of your recovery phrase. Delete it from Photos, and from Recently Deleted: anyone who sees it can take your funds.")
             } else {
-                Text("Write them on paper, in order. Don't screenshot, copy or save them anywhere online.")
+                Paragraph("Write them on paper, in order. Don't screenshot, copy or save them anywhere online.")
             }
         }
 
@@ -131,7 +131,7 @@ struct RecoveryPhraseView: View {
             Button("I've Written It Down", systemImage: "checkmark") { Haptics.tap(); hide(notice: nil) }
             Button("Keep Showing", systemImage: "clock.arrow.circlepath") { Haptics.tap(); keepShowing() }
         } footer: {
-            Text("Keep Showing gives you another minute. Nothing else is asked.")
+            Paragraph("Keep Showing gives you another minute. Nothing else is asked.")
         }
     }
 
@@ -157,7 +157,7 @@ struct RecoveryPhraseView: View {
             Text("Confirm your backup")
         } footer: {
             if let notice { Text(verbatim: notice) }
-            else { Text("Pick each word from the copy you wrote down.") }
+            else { Paragraph("Pick each word from the copy you wrote down.") }
         }
 
         Section {
@@ -202,9 +202,9 @@ struct RecoveryPhraseView: View {
                 .font(.footnote).foregroundStyle(.secondary)
         } footer: {
             if let short = session.address?.short {
-                Text("This is the phrase for \(short). DyorHQ never stores it.")
+                Paragraph("This is the phrase for \(short). DyorHQ never stores it.")
             } else {
-                Text("This is the phrase for your wallet. DyorHQ never stores it.")
+                Paragraph("This is the phrase for your wallet. DyorHQ never stores it.")
             }
         }
     }

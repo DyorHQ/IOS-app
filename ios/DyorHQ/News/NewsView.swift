@@ -30,7 +30,7 @@ struct NewsView: View {
                             ContentUnavailableView {
                                 Label("No Headlines", systemImage: "newspaper")
                             } description: {
-                                Text(model.error ?? tr("The news feeds could not be reached."))
+                                Paragraph(model.error ?? tr("The news feeds could not be reached."))
                             } actions: {
                                 if model.loading {
                                     ProgressView()
@@ -51,7 +51,7 @@ struct NewsView: View {
                                     .textCase(nil)
                                     .listRowInsets(EdgeInsets())
                             } footer: {
-                                Text("Headlines come straight from each publisher's feed.").font(.caption)
+                                Paragraph("Headlines come straight from each publisher's feed.").font(.caption)
                             }
                         }
                     }
@@ -127,7 +127,7 @@ private struct NewsRow: View {
                 }
                 Text(article.title).font(.subheadline.weight(.semibold)).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 if !article.summary.isEmpty {
-                    Text(article.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Paragraph(article.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
             Spacer(minLength: 0)

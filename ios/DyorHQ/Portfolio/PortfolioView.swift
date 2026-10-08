@@ -23,7 +23,11 @@ struct PortfolioView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     if session.address == nil {
-                        ContentUnavailableView("Sign In to See Your Portfolio", systemImage: "chart.pie", description: Text("Volume, fees and P&L are computed from your wallet's own on-chain history."))
+                        ContentUnavailableView {
+                            Label("Sign In to See Your Portfolio", systemImage: "chart.pie")
+                        } description: {
+                            Paragraph("Volume, fees and P&L are computed from your wallet's own on-chain history.")
+                        }
                             .padding(.top, 40)
                     } else {
                         heroCard
@@ -98,7 +102,7 @@ struct PortfolioView: View {
                     .lineLimit(1).minimumScaleFactor(0.6)
                     .contentTransition(.numericText(value: totals.volume))
                     .redacted(reason: model.loading && !model.hasLoaded ? .placeholder : [])
-                Text("Across Spot, Perps, Launch and Moments").font(.caption).foregroundStyle(.secondary)
+                Paragraph("Across Spot, Perps, Launch and Moments").font(.caption).foregroundStyle(.secondary)
             }
             Divider()
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
@@ -212,7 +216,7 @@ struct PortfolioView: View {
                 small(section == .perps ? "Trades" : "Claimed", section == .perps ? "\(stats.trades)" : usd(stats.claimedFees), tint: section != .perps && stats.claimedFees > 0 ? .positive : .primary)
             }
             if section == .perps, let note = model.perpsNote {
-                Text(note).font(.caption2).foregroundStyle(.secondary)
+                Paragraph(note).font(.caption2).foregroundStyle(.secondary)
             } else if section != .perps {
                 Text("\(stats.trades) trades in the period").font(.caption2).foregroundStyle(.tertiary)
             }

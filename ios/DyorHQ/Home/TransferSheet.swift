@@ -83,11 +83,11 @@ struct TransferSheet: View {
                     Text(direction == .toPerps ? (isCreating ? "Open your Perpl account" : "Deposit to Perps") : "Withdraw to Spot")
                 } footer: {
                     if loadError != nil { EmptyView() }
-                    else if let problem { Text(problem) }
+                    else if let problem { Paragraph(problem) }
                     else if direction == .toPerps, needsSwap, let quote {
-                        Text("Uses \(NumberStyle.units(walletAUSD, decimals: 6)) AUSD from your wallet and swaps ≈ \(NumberStyle.units(quoteMON, decimals: 18, compact: true)) MON → AUSD on \(quote.venue.displayName) for the rest.")
-                    } else if direction == .toPerps, needsSwap, quoting { Text("Pricing the MON → AUSD swap…") }
-                    else if direction == .toPerps { Text("In wallet: \(NumberStyle.units(walletAUSD, decimals: 6)) AUSD · \(NumberStyle.units(walletMON, decimals: 18, compact: true)) MON") }
+                        Paragraph("Uses \(NumberStyle.units(walletAUSD, decimals: 6)) AUSD from your wallet and swaps ≈ \(NumberStyle.units(quoteMON, decimals: 18, compact: true)) MON → AUSD on \(quote.venue.displayName) for the rest.")
+                    } else if direction == .toPerps, needsSwap, quoting { Paragraph("Pricing the MON → AUSD swap…") }
+                    else if direction == .toPerps { Paragraph("In wallet: \(NumberStyle.units(walletAUSD, decimals: 6)) AUSD · \(NumberStyle.units(walletMON, decimals: 18, compact: true)) MON") }
                     else { Text("Free on Perpl: \(NumberStyle.units(perpsAvailable, decimals: 6)) AUSD") }
                 }
             }

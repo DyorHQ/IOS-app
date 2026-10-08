@@ -33,7 +33,7 @@ final class ScreenLayoutTests: XCTestCase {
         XCTAssertFalse(body.contains(".stride(by: .hour"), "a mark every few hours over weeks is a hundred labels")
 
         let launch = Self.squeezed(try DocsLinksTests.appSource("Launchpad/LaunchpadView.swift"))
-        XCTAssertTrue(launch.contains("if trades.isEmpty, !loadingTrades, launch.phase == .bonding { Text(\"No trades yet"))
+        XCTAssertTrue(launch.contains("if trades.isEmpty, !loadingTrades, launch.phase == .bonding { Paragraph(\"No trades yet"))
     }
 
     /// A DyorHQ coin's badge shrinks a little before it truncates: its point is the whole name.

@@ -324,10 +324,10 @@ struct HomeView: View {
         .cardBackground()
     }
 
-    private func holdingsEmpty(_ title: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
+    private func holdingsEmpty(_ title: LocalizedStringKey, _ detail: LocalizedStringResource) -> some View {
         VStack(spacing: 4) {
             Text(title).font(.subheadline.weight(.medium))
-            Text(detail).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Paragraph(detail).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
@@ -886,7 +886,7 @@ struct TokenDetailView: View {
                         Text(source).font(.footnote).foregroundStyle(.secondary)
                     }
                     if notTradingYet {
-                        Text("Its Moment hasn't graduated yet, so the coin has no market. It trades once the Moment graduates.").font(.footnote).foregroundStyle(.secondary)
+                        Paragraph("Its Moment hasn't graduated yet, so the coin has no market. It trades once the Moment graduates.").font(.footnote).foregroundStyle(.secondary)
                     } else {
                         Text("Past 24 hours").font(.footnote).foregroundStyle(.secondary)
                         PriceChart(points: history, isLoading: loadingHistory, tint: (change ?? 0) < 0 ? Color.negative : Color.positive)
@@ -899,7 +899,7 @@ struct TokenDetailView: View {
                 // A look-alike keeps its warning, whatever made it (a DyorHQ launch called USDC included).
                 Section {
                     Label(title, systemImage: "exclamationmark.shield").font(.subheadline.weight(.semibold)).foregroundStyle(Color.attention)
-                    Text("This token carries the name of another token but is a different contract. Check the contract below before you trade it, and never follow a link or site its name points to.")
+                    Paragraph("This token carries the name of another token but is a different contract. Check the contract below before you trade it, and never follow a link or site its name points to.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             } else if badge.isDyorHQ, let coin = env.dyorCoins.coin(row.token.address) {
@@ -949,7 +949,7 @@ struct TokenDetailView: View {
                     Link(destination: url) { Label("View on Monadscan", systemImage: "safari") }
                 }
             } footer: {
-                if SwapEngine.isTradable(row.token), let notice = curveRoute?.notice { Text(notice) }
+                if SwapEngine.isTradable(row.token), let notice = curveRoute?.notice { Paragraph(notice) }
             }
         }
         .listStyle(.insetGrouped)
@@ -992,7 +992,7 @@ struct TokenDetailView: View {
         } header: {
             Text("Launched on DyorHQ")
         } footer: {
-            Text("Anyone can launch a coin or publish a Moment on DyorHQ: this says where the coin was made, not that DyorHQ vouches for it.")
+            Paragraph("Anyone can launch a coin or publish a Moment on DyorHQ: this says where the coin was made, not that DyorHQ vouches for it.")
         }
     }
 
@@ -1079,7 +1079,11 @@ struct PriceChart: View {
         } else if isLoading {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ContentUnavailableView("No Price History", systemImage: "chart.line.downtrend.xyaxis", description: Text("This token has no pool with enough liquidity to chart."))
+            ContentUnavailableView {
+                Label("No Price History", systemImage: "chart.line.downtrend.xyaxis")
+            } description: {
+                Paragraph("This token has no pool with enough liquidity to chart.")
+            }
         }
     }
 }

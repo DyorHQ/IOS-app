@@ -46,7 +46,7 @@ final class LocalizableHelpersTests: XCTestCase {
         for signature in [
             "init(title: LocalizedStringKey, text: Binding<String>, token: Token?, onMax: (() -> Void)? = nil)", // AmountField
             "init(title: LocalizedStringKey, address: Address)", // AddressRow
-            "init(message: LocalizedStringKey)", // InlineError
+            "init(message: LocalizedStringResource)", // InlineError: a key resolved in the app's language, wrapped by word in Korean
             "init(title: LocalizedStringKey, systemImage: String? = nil, image: String? = nil, isBusy: Bool = false, isDisabled: Bool = false, foreground: Color = .white, action: @escaping () -> Void)", // PrimaryButton
             "init(title: Text, systemImage: String? = nil,", // PrimaryButton, for a caller's own Text
             "init(_ label: LocalizedStringKey, _ value: LocalizedStringKey, tint: Color = .primary, spellsOut: Bool = false)", // DetailRow
@@ -56,8 +56,11 @@ final class LocalizableHelpersTests: XCTestCase {
         ] {
             XCTAssertTrue(components.contains(signature), signature)
         }
-        // InlineError's VoiceOver label keeps its key ("Error: %@"), with the message as it was given.
-        XCTAssertTrue(components.contains(".accessibilityLabel(Text(\"Error: \\(message)\"))"))
+        // InlineError's VoiceOver label keeps its key ("Error: %@"), with the message in the app's language; the message
+        // itself is a Paragraph, so Korean wraps between words.
+        XCTAssertTrue(components.contains(".accessibilityLabel(Text(\"Error: \\(spoken)\"))"))
+        XCTAssertTrue(components.contains("case .localized(let resource): Paragraph(resource)"))
+        XCTAssertTrue(components.contains("case .verbatim(let text): Paragraph(verbatim: text)"))
 
         let profile = try Self.source("DyorHQ/Profile/ProfileView.swift")
         XCTAssertTrue(Self.squeezed(profile).contains("init(_ title: LocalizedStringKey, symbol: String, tint: Color = .accent)"), "SettingsRow")

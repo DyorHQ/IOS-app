@@ -324,8 +324,12 @@ struct PerpTradeView: View {
                 .overlay {
                     if shownCandles.isEmpty {
                         if loadingCandles { ProgressView() }
-                        else if candlesFailed { ContentUnavailableView("Chart Unavailable", systemImage: "wifi.exclamationmark", description: Text("Perpl's candles couldn't be loaded. Retrying every 15 seconds.")) }
-                        else { ContentUnavailableView("No Candles", systemImage: "chart.bar.xaxis", description: Text("Perpl has no candle history for this market yet.")) }
+                        else if candlesFailed {
+                            ContentUnavailableView { Label("Chart Unavailable", systemImage: "wifi.exclamationmark") } description: { Paragraph("Perpl's candles couldn't be loaded. Retrying every 15 seconds.") }
+                        }
+                        else {
+                            ContentUnavailableView { Label("No Candles", systemImage: "chart.bar.xaxis") } description: { Paragraph("Perpl has no candle history for this market yet.") }
+                        }
                     }
                 }
                 .overlay(alignment: .bottomLeading) {
@@ -523,7 +527,7 @@ struct PerpTradeView: View {
                     checkRow("Post-Only", isOn: $ticket.postOnly)
                     checkRow("Reduce Only", isOn: $ticket.reduceOnly)
                     if ticket.reduceOnly {
-                        Text("TP/SL can't go on a reduce-only order. Set it on the position instead.")
+                        Paragraph("TP/SL can't go on a reduce-only order. Set it on the position instead.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
@@ -543,7 +547,7 @@ struct PerpTradeView: View {
             .padding(.top, 2)
 
             if let ticketError {
-                Text(ticketError).font(.caption).foregroundStyle(Color.attention)
+                Paragraph(ticketError).font(.caption).foregroundStyle(Color.attention)
             }
         }
     }
@@ -626,7 +630,7 @@ struct PerpTradeView: View {
             if let m = tpMetrics { triggerMetricRow("Exp. profit", m) }
             fieldRow("Stop loss", text: $ticket.stopLossText, unit: "USD", placeholder: "Optional")
             if let m = slMetrics { triggerMetricRow("Exp. loss", m) }
-            Text(tpslStatus.text)
+            Paragraph(tpslStatus.text)
                 .font(.caption2).foregroundStyle(tpslStatus.warning ? Color.attention : Color.secondary)
         }
     }
@@ -842,8 +846,8 @@ struct PerpTradeView: View {
                 Image(systemName: notice.warning ? "exclamationmark.triangle.fill" : "bell.fill")
                     .foregroundStyle(notice.warning ? Color.attention : Color.brand)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(notice.title).font(.subheadline.weight(.semibold))
-                    Text(notice.body).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Paragraph(notice.title).font(.subheadline.weight(.semibold))
+                    Paragraph(notice.body).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 4)
                 Button { perplTrading.dismissProtectionNotice() } label: {
@@ -2114,7 +2118,7 @@ private struct PositionCard: View {
                 stat("Notional", PriceFormat.usdValue(position.notional))
             }
             if !triggers.isEmpty {
-                Text(triggerSummary).font(.caption).foregroundStyle(.secondary)
+                Paragraph(triggerSummary).font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: 8) {
                 Button("Add Margin", action: onAddMargin)
@@ -2357,9 +2361,9 @@ private struct ClosePositionSheet: View {
                         }
                         // The price this close signs, read back from the typed text (audit F4).
                         if let limitPrice, limitPrice > 0 { DetailRow("Limit at", NumberStyle.number(limitPrice, maximumFractionDigits: market.priceDecimals)) }
-                        if let limitProblem { Text(limitProblem).font(.footnote).foregroundStyle(Color.attention) }
+                        if let limitProblem { Paragraph(limitProblem).font(.footnote).foregroundStyle(Color.attention) }
                         Toggle("Post only (maker)", isOn: $postOnly)
-                        Text("Rests as a reduce-only limit at your price until it fills. It won't reduce your position until then.")
+                        Paragraph("Rests as a reduce-only limit at your price until it fills. It won't reduce your position until then.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         DetailRow("Order", "Market, reduce-only, 1% slippage")
@@ -2393,7 +2397,7 @@ private struct ClosePositionSheet: View {
                         Text(TransactionRun.alreadySent).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
                     } else if !session.canSign {
-                        Text(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        Paragraph(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     } else {
                         // A passkey account's close always asks (MERA-PLAN §3): one Face ID when it's signed.
                         if session.isPasskeyAccount { SessionScopeBadge(assessment: .faceID(Mera.AlwaysAsk.closePosition.summary)) }
@@ -2431,16 +2435,16 @@ private struct ClosePositionSheet: View {
 
     /// What happens to the position's TP/SL once it is closed, for its side and the kind of account. The count is a
     /// plural.
-    private func leftoverNote(count: Int) -> Text {
+    @ViewBuilder private func leftoverNote(count: Int) -> some View {
         switch (session.isPasskeyAccount, position.side == .long) {
         case (true, true):
-            Text("This position has \(count) TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next long here).")
+            Paragraph("This position has \(count) TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next long here).")
         case (true, false):
-            Text("This position has \(count) TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next short here).")
+            Paragraph("This position has \(count) TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next short here).")
         case (false, true):
-            Text("This position has \(count) TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next long here. Check Orders afterwards.")
+            Paragraph("This position has \(count) TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next long here. Check Orders afterwards.")
         case (false, false):
-            Text("This position has \(count) TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next short here. Check Orders afterwards.")
+            Paragraph("This position has \(count) TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next short here. Check Orders afterwards.")
         }
     }
 
@@ -2532,7 +2536,7 @@ private struct AddMarginSheet: View {
                         Text(TransactionRun.alreadySent).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
                     } else if !session.canSign {
-                        Text(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        Paragraph(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     } else {
                         // Moving margin isn't in a passkey session's scope (MERA-PLAN §3): one Face ID when it's signed.
                         if session.isPasskeyAccount { SessionScopeBadge(assessment: .faceID(Mera.AlwaysAsk.unlisted.summary)) }
@@ -2634,7 +2638,7 @@ struct AuthedOrderSheet: View {
                     if let triggerNote, takeProfit != nil || stopLoss != nil {
                         Text(verbatim: triggerNote + " " + tr("Signed and forwarded by your Perpl API key over the trading connection."))
                     } else {
-                        Text("Signed and forwarded by your Perpl API key over the trading connection.")
+                        Paragraph("Signed and forwarded by your Perpl API key over the trading connection.")
                     }
                 }
                 if !isPlaced, let scopeAssessment {

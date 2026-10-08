@@ -18,7 +18,7 @@ final class AppStringsTests: XCTestCase {
     /// The Swift files of the folders, by their path under ios/DyorHQ.
     private static func sources() throws -> [(path: String, text: String)] {
         let all = try FormattedTextIsolationTests.appSources().filter { source in folders.contains { source.path.hasPrefix($0 + "/") } }
-        XCTAssertEqual(all.count, 29, "the folders' files")
+        XCTAssertEqual(all.count, 30, "the folders' files")
         return all
     }
 
@@ -215,7 +215,7 @@ final class AppStringsTests: XCTestCase {
 
     /// Text with nothing to translate ("·", "@", "—", a count, "0x…") is shown as it is, never looked up as a key.
     func testNoPlaceholderOnlyKey() throws {
-        let key = try NSRegularExpression(pattern: #"(Text|Label|Button|TextField|SecureField|Toggle|Section|LabeledContent|Link|ProgressView|\.accessibilityLabel|\.accessibilityValue|\.navigationTitle)\($"#)
+        let key = try NSRegularExpression(pattern: #"(Text|Paragraph|Label|Button|TextField|SecureField|Toggle|Section|LabeledContent|Link|ProgressView|\.accessibilityLabel|\.accessibilityValue|\.navigationTitle)\($"#)
         var found: [String] = []
         for (at, _, literals) in try Self.scannedLines() {
             for literal in literals where literal.depth == 0 && literal.text.range(of: "[A-Za-z]{2,}", options: .regularExpression) == nil {
@@ -534,7 +534,7 @@ final class AppStringsTests: XCTestCase {
     /// the app's own text otherwise.
     func testTheUpdateScreenShowsTheServerMessageOnlyInEnglish() throws {
         let gate = Self.squeezed(try Self.source("App/UpdateGate.swift"))
-        XCTAssertTrue(gate.contains("if let message = minimum.ownerMessage(in: language.resolved) { Text(verbatim: message) } else { Text(\"This version of DyorHQ is no longer supported."))
+        XCTAssertTrue(gate.contains("if let message = minimum.ownerMessage(in: language.resolved) { Text(verbatim: message) } else { Paragraph(\"This version of DyorHQ is no longer supported."))
         XCTAssertFalse(gate.contains("minimum.message"), "the row's text is shown only through ownerMessage(in:) (MinimumBuildTests)")
         XCTAssertTrue(gate.contains("@Environment(LanguageStore.self) private var language"))
     }

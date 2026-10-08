@@ -169,7 +169,7 @@ final class PerpsWalletStringsTests: XCTestCase {
 
     /// Text with nothing to translate ("/", "%", "—", "5x", "0.5") is shown as it is, never looked up as a key.
     func testNoPlaceholderOnlyKey() throws {
-        let key = try NSRegularExpression(pattern: #"(Text|Label|Button|TextField|Toggle|\.accessibilityLabel|\.accessibilityValue|\.navigationTitle)\($"#)
+        let key = try NSRegularExpression(pattern: #"(Text|Paragraph|Label|Button|TextField|Toggle|\.accessibilityLabel|\.accessibilityValue|\.navigationTitle)\($"#)
         var found: [String] = []
         for (at, _, literals) in try Self.scannedLines() {
             for literal in literals where literal.depth == 0 && literal.text.range(of: "[A-Za-z]{2,}", options: .regularExpression) == nil {
@@ -184,7 +184,7 @@ final class PerpsWalletStringsTests: XCTestCase {
 
     /// A tab's or a case's name on screen is a written key, never its raw value (an identifier).
     func testNoRawValueIsShown() throws {
-        let shown = try NSRegularExpression(pattern: #"(Text|Label|Button)\([^()]*\.rawValue(\.capitalized)?\)"#)
+        let shown = try NSRegularExpression(pattern: #"(Text|Paragraph|Label|Button)\([^()]*\.rawValue(\.capitalized)?\)"#)
         for (path, text) in try Self.scopedSources() {
             XCTAssertNil(shown.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)), "\(path): a raw value shown as text")
             XCTAssertFalse(text.contains(".capitalized"), path)

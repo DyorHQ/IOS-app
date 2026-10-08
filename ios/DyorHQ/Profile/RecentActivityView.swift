@@ -27,7 +27,7 @@ struct RecentActivityView: View {
                     ContentUnavailableView {
                         Label("No Activity Yet", systemImage: "clock.arrow.circlepath")
                     } description: {
-                        Text("Your launches, swaps, buys, sells and perp orders show up here.")
+                        Paragraph("Your launches, swaps, buys, sells and perp orders show up here.")
                     } actions: {
                         Button("Start Trading") { Haptics.tap(); router.presented = nil; router.tradeMode = .swap; router.tab = .trade }
                     }

@@ -34,7 +34,7 @@ struct PerpsView: View {
                     ContentUnavailableView {
                         Label("No Markets", systemImage: "chart.bar.xaxis")
                     } description: {
-                        Text("Perpl's markets couldn't be loaded. DyorHQ keeps retrying every few seconds.")
+                        Paragraph("Perpl's markets couldn't be loaded. DyorHQ keeps retrying every few seconds.")
                     } actions: {
                         Button("Try Again") { Haptics.tap(); Task { await model.load(env: env, address: session.address) } }
                     }
@@ -217,7 +217,7 @@ struct CollateralSheet: View {
                         // with the amount takes the explanation's place, and the link stays while it's typed.
                         VStack(alignment: .leading, spacing: 4) {
                             if let problem { Text(verbatim: problem) }
-                            else { Text("Your first deposit opens your Perpl account. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.") }
+                            else { Paragraph("Your first deposit opens your Perpl account. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.") }
                             LearnMoreLink(.depositAndWithdraw)
                         }
                     }

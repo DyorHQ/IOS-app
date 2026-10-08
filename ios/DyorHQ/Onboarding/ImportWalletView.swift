@@ -58,7 +58,7 @@ struct ImportWalletView: View {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.positive)
                     }
                 } footer: {
-                    Text("Check this is the address you expect before importing.")
+                    Paragraph("Check this is the address you expect before importing.")
                 }
             } else if !currentInput.isEmpty {
                 Section {
@@ -127,8 +127,8 @@ struct ImportWalletView: View {
             Text("Recovery Phrase")
         } footer: {
             let count = WalletImport.wordCount(phrase)
-            if count > 0 { Text("\(count) words. Words are separated by spaces.") }
-            else { Text("The 12 or 24 words from your existing wallet, in order.") }
+            if count > 0 { Paragraph("\(count) words. Words are separated by spaces.") }
+            else { Paragraph("The 12 or 24 words from your existing wallet, in order.") }
         }
     }
 
@@ -156,7 +156,7 @@ struct ImportWalletView: View {
         } header: {
             Text("Private Key")
         } footer: {
-            Text("A 64-character hex private key, with or without a 0x prefix.")
+            Paragraph("A 64-character hex private key, with or without a 0x prefix.")
         }
     }
 

@@ -150,7 +150,7 @@ struct LaunchpadProfileView: View {
         } header: {
             Text("Claimable Fees")
         } footer: {
-            Text("Creator fees accrue per pair asset. Claim each one, or Claim All.")
+            Paragraph("Creator fees accrue per pair asset. Claim each one, or Claim All.")
         }
     }
 
@@ -161,7 +161,7 @@ struct LaunchpadProfileView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.medium))
                 Text(verbatim: amount + (usd.map { " · \(PriceFormat.usdValue($0))" } ?? "")).font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                if let caption { Text(caption).font(.caption2).foregroundStyle(.secondary) }
+                if let caption { Paragraph(caption).font(.caption2).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 8)
             Button("Claim", action: action).buttonStyle(.bordered).controlSize(.small).tint(.brand).disabled(!session.canSign)
@@ -216,10 +216,10 @@ struct LaunchpadProfileView: View {
         } header: { Text("Your Launchpad Activity") }
     }
 
-    private func emptyRow(_ title: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
+    private func emptyRow(_ title: LocalizedStringKey, _ detail: LocalizedStringResource) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.subheadline.weight(.medium))
-            Text(detail).font(.caption).foregroundStyle(.secondary)
+            Paragraph(detail).font(.caption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
     }

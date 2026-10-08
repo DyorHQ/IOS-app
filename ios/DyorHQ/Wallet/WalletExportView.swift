@@ -98,8 +98,8 @@ struct WalletExportView: View {
             Text("Private Key")
         } footer: {
             if let error { InlineError(message: error) }
-            else if copied { Text("Copied to the clipboard — it clears automatically in 90 seconds.") }
-            else if revealedKey == nil { Text("Shown once behind \(BiometricGate.typeName). Reveal it only somewhere private.") }
+            else if copied { Paragraph("Copied to the clipboard — it clears automatically in 90 seconds.") }
+            else if revealedKey == nil { Paragraph("Shown once behind \(BiometricGate.typeName). Reveal it only somewhere private.") }
         }
 
         warningSection
@@ -123,9 +123,9 @@ struct WalletExportView: View {
             Text("Private Key")
         } footer: {
             if env.config.walletExportURL == nil {
-                Text("Key export for this wallet type isn't set up in this build yet.")
+                Paragraph("Key export for this wallet type isn't set up in this build yet.")
             } else {
-                Text("Your \(method?.title ?? "") wallet's key is held by Privy, not DyorHQ. Export opens Privy's own secure page — you re-confirm your Privy sign-in there, and the key is shown inside that page only. DyorHQ never sees or stores it.")
+                Paragraph("Your \(method?.title ?? "") wallet's key is held by Privy, not DyorHQ. Export opens Privy's own secure page — you re-confirm your Privy sign-in there, and the key is shown inside that page only. DyorHQ never sees or stores it.")
             }
         }
 
@@ -139,7 +139,7 @@ struct WalletExportView: View {
             Label("You're watching this address — there's no key to export.", systemImage: "eye")
                 .font(.subheadline).foregroundStyle(.secondary)
         } footer: {
-            Text("Import a wallet with its private key or recovery phrase to sign, trade, and export it later.")
+            Paragraph("Import a wallet with its private key or recovery phrase to sign, trade, and export it later.")
         }
     }
 
@@ -154,9 +154,9 @@ struct WalletExportView: View {
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 if let short = session.address?.short {
-                    Text("This is the key for \(short). Treat it like the keys to a safe.")
+                    Paragraph("This is the key for \(short). Treat it like the keys to a safe.")
                 } else {
-                    Text("This is the key for your wallet. Treat it like the keys to a safe.")
+                    Paragraph("This is the key for your wallet. Treat it like the keys to a safe.")
                 }
                 LearnMoreLink(.exportSignOutDelete)
             }
@@ -223,7 +223,7 @@ private struct PrivyExportSheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .safeAreaInset(edge: .bottom) {
                 if let status {
-                    Text(status).font(.footnote).foregroundStyle(Color.attention)
+                    Paragraph(status).font(.footnote).foregroundStyle(Color.attention)
                         .frame(maxWidth: .infinity).padding().background(.bar)
                 }
             }
