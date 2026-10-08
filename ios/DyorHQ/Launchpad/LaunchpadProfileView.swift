@@ -113,45 +113,94 @@ struct LaunchpadProfileView: View {
         }
     }
 
+    /// Fees: everything the wallet earned on the launchpad (Total), what reached it (Received: creator fees the escrow paid
+    /// straight to it or it claimed, and holder rewards claimed) and what waits to be claimed (Claimable), each per asset
+    /// with its dollar value at today's prices; then a row to claim each claimable balance, and Claim All.
     @ViewBuilder private var claimSection: some View {
         Section {
-            // An escrow that couldn't be read says so, with Retry, and keeps its last balances read for this wallet: never
-            // "Nothing to claim yet" on a failed read.
+            VStack(spacing: 10) {
+                feeTile(Text("Total fees", comment: "My Launchpad's full-width tile: every fee the wallet earned on the launchpad, received and claimable"), model.totalFees,
+                        loading: model.feesLoading || model.claimableLoading)
+                HStack(alignment: .top, spacing: 10) {
+                    feeTile(Text("Received", comment: "[tight] Fees or proceeds that reached the wallet: paid straight to it, or claimed. A tile on My Launchpad and Portfolio"), model.receivedFees,
+                            loading: model.feesLoading)
+                    feeTile(Text("Claimable", comment: "Ready to claim, a row label before an amount (an adjective)"), model.claimableShown,
+                            loading: model.claimableLoading, tint: model.hasClaimable ? .brand : .primary)
+                }
+                // Side by side, the two tiles share the taller one's height.
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+            // A history or an escrow that couldn't be read says so, with Retry: Total and Received are never shown in part,
+            // and an escrow's balances are kept from its last read for this wallet, never "0" on a failed read.
+            if model.incomeUnread {
+                retryRow("Fees received couldn't be read just now.")
+            }
             if model.feesUnread {
-                HStack(alignment: .firstTextBaseline) {
-                    InlineError(message: "Creator fees couldn't be read just now.")
-                    Spacer(minLength: 8)
-                    Button("Retry") { Task { await model.load(env: env, address: session.address) } }.font(.footnote.weight(.semibold))
+                retryRow("Creator fees couldn't be read just now.")
+            }
+            // Creator fees — one row per pair asset and launchpad escrow, each claimed on its own.
+            ForEach(model.creatorClaimables) { asset in
+                claimRow(icon: "banknote", title: "Creator fees · \(asset.symbol)", amount: asset.amountText, usd: asset.usd, caption: asset.caption) {
+                    claimTarget = .creator(asset)
                 }
             }
-            if !model.hasClaimable {
-                if !model.feesUnread { Text("Nothing to claim yet.").font(.subheadline).foregroundStyle(.secondary) }
-            } else {
-                // Creator fees — one row per pair asset and launchpad escrow, each claimed on its own.
-                ForEach(model.creatorClaimables) { asset in
-                    claimRow(icon: "banknote", title: "Creator fees · \(asset.symbol)", amount: asset.amountText, usd: asset.usd, caption: asset.caption) {
-                        claimTarget = .creator(asset)
-                    }
+            // Holder rewards — one row per fee-sharing coin held.
+            ForEach(model.rewardClaimables) { reward in
+                claimRow(icon: "gift", title: "\(reward.launch.symbol) rewards", amount: reward.amountText, usd: nil) {
+                    claimTarget = .rewards(reward)
                 }
-                // Holder rewards — one row per fee-sharing coin held.
-                ForEach(model.rewardClaimables) { reward in
-                    claimRow(icon: "gift", title: "\(reward.launch.symbol) rewards", amount: reward.amountText, usd: nil) {
-                        claimTarget = .rewards(reward)
-                    }
+            }
+            if session.canSign, model.claimAllCount > 1 {
+                Button { Haptics.tap(); claimTarget = .all } label: {
+                    Text("Claim All").frame(maxWidth: .infinity).fontWeight(.semibold)
                 }
-                if session.canSign, model.claimAllCount > 1 {
-                    Button { Haptics.tap(); claimTarget = .all } label: {
-                        Text("Claim All").frame(maxWidth: .infinity).fontWeight(.semibold)
-                    }
-                    .buttonStyle(.borderedProminent).tint(.brand)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                }
+                .buttonStyle(.borderedProminent).tint(.brand)
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
             }
         } header: {
-            Text("Claimable Fees")
+            Text("Fees")
         } footer: {
-            Paragraph("Creator fees accrue per pair asset. Claim each one, or Claim All.")
+            // True on every stack: from v1 the escrow pays fees straight to the wallet; before v1 it holds them to claim. A
+            // graduated pool's creator fees wait in the hook until a sweep credits them to the escrow.
+            Paragraph("Received: creator fees paid straight to your wallet, and the fees and rewards you claimed. Claimable: creator fees held in the fee escrow, and holder rewards. Creator fees from a graduated pool show here once they're swept. Dollar values are at today's prices.")
         }
+    }
+
+    private func retryRow(_ message: LocalizedStringResource) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            InlineError(message: message)
+            Spacer(minLength: 8)
+            Button("Retry") { Task { await model.load(env: env, address: session.address) } }.font(.footnote.weight(.semibold))
+        }
+    }
+
+    /// One fee tile: its title, the amount in each asset (MON first), and their dollar value. `amounts` nil: a spinner
+    /// while the first read runs (`loading`), "—" when it couldn't be read; empty: none ("0 MON").
+    private func feeTile(_ title: Text, _ amounts: [LaunchpadProfileModel.FeeAmount]?, loading: Bool, tint: Color = .primary) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            title.font(.caption).foregroundStyle(.secondary)
+            if loading {
+                ProgressView().controlSize(.small).padding(.vertical, 2)
+            } else if let amounts {
+                if amounts.isEmpty {
+                    Text(verbatim: "0 MON").font(.headline).monospacedDigit()
+                } else {
+                    ForEach(amounts) { fee in
+                        Text(verbatim: fee.text).font(.headline).monospacedDigit().foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.6)
+                    }
+                }
+                if let usd = model.feeUSD(amounts), !amounts.isEmpty {
+                    Text(verbatim: PriceFormat.usdValue(usd)).font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+                }
+            } else {
+                Text(verbatim: "—").font(.headline).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(12)
+        .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 
     private func claimRow(icon: String, title: LocalizedStringKey, amount: String, usd: Double?, caption: String? = nil, action: @escaping () -> Void) -> some View {
@@ -481,6 +530,97 @@ final class LaunchpadProfileModel {
         positions.filter { $0.claimableRewards > 0 }.map { RewardClaim(launch: $0.launch, amount: $0.claimableRewards) }
     }
 
+    /// One asset's amount on a fee tile: creator fees and holder rewards in it together.
+    struct FeeAmount: Identifiable, Hashable {
+        let token: Address
+        let symbol: String
+        let decimals: Int
+        let amount: BigUInt
+        var id: Address { token }
+        var text: String { "\(NumberStyle.units(amount, decimals: decimals)) \(symbol)" }
+    }
+
+    /// Fees the wallet received, from the chain (`LaunchpadService.feeIncome`): creator fees paid straight to it or
+    /// claimed, and holder rewards claimed. Nil until read.
+    private(set) var income: LaunchpadFeeIncome?
+    /// The fee history couldn't be read to the head, or a holder reward's coin isn't among the launches read: Received
+    /// and Total say so (with Retry) instead of showing part of it as the whole.
+    private(set) var incomeUnread = false
+
+    /// What is waiting to be claimed, per asset: the creator-fee balances (as `creatorClaimables` lists them) and the
+    /// holder rewards (in each coin's pair asset).
+    var claimableFees: [FeeAmount] {
+        var amounts: [Address: BigUInt] = [:]
+        for asset in creatorClaimables { amounts[asset.token, default: 0] += asset.amount }
+        for reward in rewardClaimables { amounts[reward.launch.pairToken, default: 0] += reward.amount }
+        return feeAmounts(amounts)
+    }
+
+    /// What reached the wallet, per asset; nil while unread or incomplete. Creator fees paid straight to it or claimed,
+    /// plus holder rewards claimed, each in its coin's pair asset (`rewardPairs`).
+    var receivedFees: [FeeAmount]? {
+        guard let received = receivedAmounts else { return nil }
+        return feeAmounts(received)
+    }
+
+    /// Everything the wallet earned in fees, per asset: received plus claimable. Nil while Received is, or while an
+    /// escrow couldn't be read (what it holds may be missing from Claimable).
+    var totalFees: [FeeAmount]? {
+        guard !feesUnread, var amounts = receivedAmounts else { return nil }
+        for fee in claimableFees { amounts[fee.token, default: 0] += fee.amount }
+        return feeAmounts(amounts)
+    }
+
+    /// Received is being read for the first time.
+    var feesLoading: Bool { income == nil && !incomeUnread }
+    /// The escrows haven't been read for this wallet yet.
+    var claimableLoading: Bool { escrowsFor == nil && !feesUnread }
+    /// Claimable as the tile shows it: nil ("—") when an escrow couldn't be read and nothing was kept from an earlier
+    /// read; otherwise what the claim rows list.
+    var claimableShown: [FeeAmount]? {
+        let fees = claimableFees
+        return feesUnread && fees.isEmpty ? nil : fees
+    }
+
+    /// A dollar value for `amounts` at today's prices; nil when an asset in it has no price, so a partial sum is never
+    /// shown as the whole.
+    func feeUSD(_ amounts: [FeeAmount]) -> Double? {
+        var total = 0.0
+        for fee in amounts where fee.amount > 0 {
+            guard let price = DyorPrice.valid(pairUSD[fee.token]) else { return nil }
+            total += Amount.units(fee.amount, decimals: fee.decimals) * price
+        }
+        return total
+    }
+
+    private var receivedAmounts: [Address: BigUInt]? {
+        guard let income, income.complete, !incomeUnread else { return nil }
+        var amounts = income.creatorFeesReceived
+        for (coin, amount) in income.rewardsClaimed {
+            guard let pair = rewardPairs[coin] else { return nil }
+            amounts[pair, default: 0] += amount
+        }
+        return amounts
+    }
+
+    /// A launch coin → its pair asset, for the holder rewards claimed in it.
+    private var rewardPairs: [Address: Address] = [:]
+
+    /// `amounts` with their symbols and decimals, MON first, then the others by value; zero amounts left out.
+    private func feeAmounts(_ amounts: [Address: BigUInt]) -> [FeeAmount] {
+        amounts.filter { $0.value > 0 }.map { token, amount in
+            if token.isZero { return FeeAmount(token: token, symbol: "MON", decimals: 18, amount: amount) }
+            let symbol = pairMeta[token]?.symbol ?? Token.core(token)?.symbol ?? token.short
+            let decimals = pairMeta[token]?.decimals ?? Token.core(token)?.decimals ?? 18
+            return FeeAmount(token: token, symbol: symbol, decimals: decimals, amount: amount)
+        }
+        .sorted { a, b in
+            if a.token.isZero != b.token.isZero { return a.token.isZero }
+            let usdA = Amount.units(a.amount, decimals: a.decimals) * (pairUSD[a.token] ?? 0), usdB = Amount.units(b.amount, decimals: b.decimals) * (pairUSD[b.token] ?? 0)
+            return usdA == usdB ? a.symbol < b.symbol : usdA > usdB
+        }
+    }
+
     var claimableCount: Int { creatorClaimables.count + rewardClaimables.count }
     var hasClaimable: Bool { claimableCount > 0 }
     var totalClaimableUSD: Double { creatorClaimables.reduce(0) { $0 + $1.usd } }
@@ -528,6 +668,7 @@ final class LaunchpadProfileModel {
         guard let address else {
             positions = []; created = []; escrows = []; activity = []; incomplete = nil; shownFor = nil
             lastEscrowReads = []; escrowsFor = nil; feesUnread = false; loading = false
+            income = nil; incomeUnread = false; rewardPairs = [:]
             return
         }
         // Another wallet's coins, rewards, fees and activity never show while this one's load, or a failed read, is under
@@ -535,10 +676,14 @@ final class LaunchpadProfileModel {
         if shownFor != address {
             positions = []; created = []; activity = []; incomplete = nil
             escrows = []; lastEscrowReads = []; escrowsFor = nil; feesUnread = false
+            income = nil; incomeUnread = false; rewardPairs = [:]
             shownFor = address
         }
         loading = true
         defer { if load == loads { loading = false } }
+
+        // The fees the wallet received, read from the chain alongside everything else (`LaunchpadService.feeIncome`).
+        async let incomeRead = env.launchpad.feeIncome(wallet: address)
 
         let listing = await env.launchpad.launchListing(limit: 100)
         guard current() else { return }
@@ -579,6 +724,14 @@ final class LaunchpadProfileModel {
             if let core = Token.core(token) { pairMeta[token] = (core.symbol, core.decimals) }
         }
         incomplete = unread ? tr("Part of your launchpad couldn't be read just now, so some coins or fees may be missing. Pull to refresh.") : nil
+
+        // Fees received: read to the head, or said to be unread, never shown in part. A holder reward is paid in its
+        // coin's pair asset, which the launches read name; one whose coin isn't among them is unread too.
+        let readIncome = await incomeRead
+        guard current() else { return }
+        rewardPairs = Dictionary(launches.map { ($0.token, $0.pairToken) }, uniquingKeysWith: { first, _ in first })
+        income = readIncome
+        incomeUnread = !readIncome.complete || readIncome.rewardsClaimed.keys.contains { rewardPairs[$0] == nil }
         guard !launches.isEmpty else { positions = []; created = []; activity = []; return }
 
         // Balances across every launch token in one multicall.

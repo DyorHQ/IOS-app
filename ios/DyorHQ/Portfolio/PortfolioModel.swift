@@ -8,7 +8,8 @@ import Observation
 /// volume, fees paid, P&L, claimed fees and trade counts, for any reporting period. Sources:
 ///  · Spot: the wallet's swaps reconstructed from ERC-20 `Transfer` logs (rpc1, up to 90 days).
 ///  · Perps: Perpl's authenticated fill and position history (exact notional, fees and realized P&L).
-///  · Launch: the wallet's own `CurveBuy` / `CurveSell` fills (exact fee + tax) and escrow / holder-reward claims.
+///  · Launch: the wallet's own `CurveBuy` / `CurveSell` fills (exact fee + tax), the creator fees the escrows paid straight
+///    to it, and escrow / holder-reward claims.
 ///  · Moments: `Collected` / `Claimed` / `Withdrawn` events plus swaps on Moment pools.
 /// Dollar values: stablecoins count at $1; everything else is valued at the current price (so P&L is marked to
 /// today's prices, and a swap between two unpriced tokens counts zero volume rather than a guess).
@@ -51,6 +52,8 @@ final class PortfolioModel {
         var volume = 0.0
         var fees = 0.0
         var pnl = 0.0
+        /// Fees and proceeds that reached the wallet: creator fees paid straight to it or claimed, holder rewards claimed,
+        /// Moments proceeds and pool fees withdrawn (the "Fees received" figure).
         var claimedFees = 0.0
         var trades = 0
         /// False when part of the P&L could not be valued (an unpriced token), so the figure is a lower bound.
@@ -151,6 +154,10 @@ final class PortfolioModel {
             let usd = claimUSD(c)
             out.append(Activity(id: "lclaim-\(c.id)", section: .launch, title: c.kind == .creatorFees ? tr("Claimed creator fees") : tr("Claimed holder rewards"), subtitle: c.launchToken.flatMap { launchesByToken[$0]?.symbol }.map { "$\($0)" } ?? "", time: c.time, usd: usd, hash: c.hash))
         }
+        for p in launchHistory.payments where p.time >= since {
+            let asset = paymentAsset(p)
+            out.append(Activity(id: "lpaid-\(p.id)", section: .launch, title: tr("Received creator fees"), subtitle: "\(NumberStyle.units(p.amount, decimals: asset.decimals)) \(asset.symbol)", time: p.time, usd: paymentUSD(p), hash: p.hash))
+        }
         for c in momentsHistory.collects where c.time >= since {
             let m = momentsByKey[c.key]
             out.append(Activity(id: "collect-\(c.id)", section: .moments, title: tr("Collected \(m?.name ?? tr("Moment #\(String(c.momentId))"))"), subtitle: tr("\(c.editions) editions · \(NumberStyle.number(MomentsMath.coins(c.entitlement), compact: true)) \(m?.symbol ?? tr("coins"))"), time: c.time, usd: MomentsMath.usdc(c.gross), hash: c.hash))
@@ -243,6 +250,19 @@ final class PortfolioModel {
         return Amount.units(fill.quoteAmount, decimals: launch.pair.decimals) * price
     }
 
+    /// A creator fee paid straight to the wallet: its asset's symbol and decimals (MON, or a pair token).
+    private func paymentAsset(_ payment: WalletFeePayment) -> (symbol: String, decimals: Int) {
+        if payment.token.isZero { return ("MON", 18) }
+        if let token = tokens[payment.token] { return (token.symbol, token.decimals) }
+        if let core = Token.core(payment.token) { return (core.symbol, core.decimals) }
+        return (payment.token.short, 18)
+    }
+
+    private func paymentUSD(_ payment: WalletFeePayment) -> Double? {
+        guard let price = payment.token.isZero ? prices[Monad.native] : prices[payment.token] else { return nil }
+        return Amount.units(payment.amount, decimals: paymentAsset(payment).decimals) * price
+    }
+
     private func claimUSD(_ claim: WalletFeeClaim) -> Double? {
         switch claim.kind {
         case .creatorFees:
@@ -277,6 +297,9 @@ final class PortfolioModel {
         stats.pnl += received - spent
         for claim in launchHistory.claims where claim.time >= since {
             if let usd = claimUSD(claim) { stats.claimedFees += usd } else { stats.pnlComplete = false }
+        }
+        for payment in launchHistory.payments where payment.time >= since {
+            if let usd = paymentUSD(payment) { stats.claimedFees += usd } else { stats.pnlComplete = false }
         }
         return stats
     }

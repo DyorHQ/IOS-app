@@ -32,6 +32,17 @@ final class WordWrapTests: XCTestCase {
         XCTAssertEqual(WordWrap.lines(of: "Face  ID"), [["Face", "ID"]], "two spaces are not the name")
     }
 
+    /// Two sentences join with a space, but none after a Chinese full stop: "。 " let a line start with "。".
+    func testSentencesJoinAsTheLanguageWritesThem() {
+        XCTAssertEqual(WordWrap.sentences("Fees are paid.", "These come from curve trades only."), "Fees are paid. These come from curve trades only.")
+        XCTAssertEqual(WordWrap.sentences("이 수수료는 지급돼요.", "커브 거래에서만 발생해요."), "이 수수료는 지급돼요. 커브 거래에서만 발생해요.")
+        XCTAssertEqual(WordWrap.sentences("Frais versés\u{202F};", "il suffit"), "Frais versés\u{202F}; il suffit", "a French semicolon keeps its space")
+        XCTAssertEqual(WordWrap.sentences("这些款项。", "这些仅来自曲线交易。"), "这些款项。这些仅来自曲线交易。")
+        XCTAssertEqual(WordWrap.sentences("等待领取；", "一次领取"), "等待领取；一次领取")
+        XCTAssertEqual(WordWrap.sentences("Paid straight.", ""), "Paid straight.", "nothing to add, no space")
+        XCTAssertEqual(WordWrap.sentences("", "Only this."), "Only this.")
+    }
+
     /// A word keeps its attributes: a bold or linked word stays so, and the words read back as the text.
     func testWordsKeepTheirAttributes() throws {
         let text = try AttributedString(markdown: "**중요:** [자세히 보기](https://dyorhq.fun) 확인", options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
