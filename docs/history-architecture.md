@@ -32,8 +32,9 @@ couldn't be read.
    launchpad (fills, escrow payments and claims), fee sharing, Moments — each kept on disk with the blocks it covers.
    A refresh reads only the blocks since the last one, then backfills older blocks while its budget lasts; the cursor
    never moves past a block that wasn't read. Screens read the store first (instant) and refresh it in the background.
-   History older than the store's floor (30 days for transfers; each DyorHQ contract's deployment for the rest) is
-   not read.
+   History older than the store's floor is not read: for the transfer scans the wallet's first transaction (found
+   once by bisection over its nonce at past blocks) or 30 days back, whichever is earlier, so every swap the wallet
+   ever made counts; for the rest each DyorHQ contract's deployment.
 3. **Screens publish what they have.** The actions the app recorded show at once; chain history fills in as the store
    catches up ("Reading your history… 28%"); a source that couldn't be read says so with Retry, and never replaces
    what the last good read showed. The rounds of reading run behind the screens (`HistoryModel`): up to 40 requests

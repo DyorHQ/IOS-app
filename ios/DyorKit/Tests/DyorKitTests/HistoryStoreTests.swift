@@ -159,6 +159,46 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(stalled.progress, snapshot.progress)
     }
 
+    /// The transfer scans read back to the wallet's first transaction when that is older than their window, and to the
+    /// window alone when it is nearer, or the wallet never sent one, or it couldn't be read. The first transaction's
+    /// block is found by bisection over the nonce at past blocks, and asked once.
+    func testTheTransferScansReadBackToTheWalletsFirstTransaction() async throws {
+        XCTAssertEqual(HistoryScan.Floor.earliest(block: 5_000, blocks: 1_000).block(head: 10_000), 5_000, "the first transaction, older than the window")
+        XCTAssertEqual(HistoryScan.Floor.earliest(block: 9_500, blocks: 1_000).block(head: 10_000), 9_000, "the window, when the first transaction is nearer")
+        XCTAssertEqual(HistoryScan.Floor.earliest(block: 5_000, blocks: 20_000).block(head: 10_000), 0)
+
+        LogsStub.install(head: 100_000, firstTransaction: 61_337) { _ in nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LogsStub.self]
+        let client = RPCClient(url: URL(string: "https://wide.logs-stub.invalid")!, session: URLSession(configuration: configuration))
+        let first = try await client.firstTransactionBlock(of: wallet, head: 100_000)
+        XCTAssertEqual(first, 61_337)
+        LogsStub.install(head: 100_000) { _ in nil }
+        let none = try await client.firstTransactionBlock(of: wallet, head: 100_000)
+        XCTAssertNil(none)
+
+        let asked = Counter()
+        let service = WalletHistoryService(store: HistoryStore(router: router(), directory: nil), swapHistory: SwapHistoryService(rpc: client), clock: BlockClock(rpc: client),
+                                           stacks: { [] }, cohorts: [], firstActivity: { _ in await asked.bump(); return 61_337 })
+        let scans = await service.scans(wallet: wallet)
+        XCTAssertEqual(scans[0].floor, .earliest(block: 61_337, blocks: WalletHistoryScans.transferBlocks))
+        XCTAssertEqual(scans[1].floor, scans[0].floor)
+        XCTAssertEqual(scans[2].floor, .block(LaunchpadAddresses.feeHistoryStart), "the other scans keep their floors")
+        _ = await service.scans(wallet: wallet)
+        let count = await asked.count
+        XCTAssertEqual(count, 1, "asked once per wallet")
+
+        let failing = WalletHistoryService(store: HistoryStore(router: router(), directory: nil), swapHistory: SwapHistoryService(rpc: client), clock: BlockClock(rpc: client),
+                                           stacks: { [] }, cohorts: [], firstActivity: { _ in throw URLError(.notConnectedToInternet) })
+        let fallback = await failing.scans(wallet: wallet)
+        XCTAssertEqual(fallback[0].floor, WalletHistoryScans.transferFloor, "the window alone until it can be read")
+    }
+
+    private actor Counter {
+        var count = 0
+        func bump() { count += 1 }
+    }
+
     /// Past the cap, the oldest logs are dropped and the floor moves up to the kept ones: the entry is complete without
     /// them, and no refresh reads them again.
     func testTheCapMovesTheFloorUpToTheKeptLogs() {

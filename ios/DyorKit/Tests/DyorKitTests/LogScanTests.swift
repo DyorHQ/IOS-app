@@ -677,11 +677,14 @@ final class LogsStub: URLProtocol {
     nonisolated(unsafe) private static var logCap: Int?
     nonisolated(unsafe) private static var inFlight = 0
     nonisolated(unsafe) private static var mostInFlight = 0
+    /// The block the stub wallet sent its first transaction in (`eth_getTransactionCount` answers 1 from it on); nil
+    /// says it never did.
+    nonisolated(unsafe) private static var firstTransaction: UInt64?
 
     /// `latency`: how long each request takes to answer, so requests sent together overlap (`maxInFlight()`). `logCap`: a
     /// range matching more logs is refused as rpc1 refuses one over its 10K, naming the range from its start that fits.
     static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, singleErrorStatus: Int = 200, latency: TimeInterval = 0,
-                        logCap: Int? = nil, hostRule: HostRule? = nil, rule: @escaping Rule) {
+                        logCap: Int? = nil, firstTransaction: UInt64? = nil, hostRule: HostRule? = nil, rule: @escaping Rule) {
         lock.lock(); defer { lock.unlock() }
         self.head = head
         chainLogs = logs
@@ -689,6 +692,7 @@ final class LogsStub: URLProtocol {
         self.singleErrorStatus = singleErrorStatus
         self.latency = latency
         self.logCap = logCap
+        self.firstTransaction = firstTransaction
         self.rule = rule
         self.hostRule = hostRule
         failHead = false
@@ -791,6 +795,12 @@ final class LogsStub: URLProtocol {
         case "eth_blockNumber":
             if failHead { return nil }
             return result(.string(BigUInt(head).hexQuantity))
+        case "eth_getTransactionCount":
+            // The nonce at a block: 1 from the first transaction's block on, 0 before it or ever.
+            lock.lock(); let first = firstTransaction; lock.unlock()
+            let tag = call["params"][1].string ?? "latest"
+            let at = tag.hasPrefix("0x") ? BigUInt(hexQuantity: tag).map { UInt64($0) } ?? head : head
+            return result(.string(BigUInt(first.map { at >= $0 ? 1 : 0 } ?? 0).hexQuantity))
         case "eth_getLogs":
             let filter = call["params"][0]
             let from = filter["fromBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? 0
