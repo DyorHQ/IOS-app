@@ -177,9 +177,16 @@ final class HistoryStoreTests: XCTestCase {
         let none = try await client.firstTransactionBlock(of: wallet, head: 100_000)
         XCTAssertNil(none)
 
+        XCTAssertEqual(LogsEndpoints.archive.map(\.host), ["rpc2.monad.xyz", "rpc4.monad.xyz", "rpc1.monad.xyz"], "the endpoints that answer a nonce at any block")
+
         let asked = Counter()
         let service = WalletHistoryService(store: HistoryStore(router: router(), directory: nil), swapHistory: SwapHistoryService(rpc: client), clock: BlockClock(rpc: client),
                                            stacks: { [] }, cohorts: [], firstActivity: { _ in await asked.bump(); return 61_337 })
+        // The instant read of the store never waits for the lookup: the window's floor until a refresh has looked.
+        let instant = await service.scans(wallet: wallet, findingFirstTransaction: false)
+        XCTAssertEqual(instant[0].floor, WalletHistoryScans.transferFloor)
+        let unasked = await asked.count
+        XCTAssertEqual(unasked, 0)
         let scans = await service.scans(wallet: wallet)
         XCTAssertEqual(scans[0].floor, .earliest(block: 61_337, blocks: WalletHistoryScans.transferBlocks))
         XCTAssertEqual(scans[1].floor, scans[0].floor)
