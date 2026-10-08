@@ -48,7 +48,7 @@ of the chain and the docs site. It is refused together with `--release`.
 
 Local config values are compared, never printed: a problem there names the key only.
 """
-import json, os, re, sys, urllib.request
+import json, os, re, sys, time, urllib.request
 from html.parser import HTMLParser
 
 ARGS = sys.argv[1:]
@@ -154,9 +154,18 @@ def state(values, where):
 # The retired Moments cohorts: MomentLink.Cohort's pins and MomentsAddresses.retiredMainnetCoins.
 MOMENT_LINK = "ios/DyorKit/Sources/DyorKit/Services/Moments/MomentLink.swift"
 MOMENTS_MODELS = "ios/DyorKit/Sources/DyorKit/Services/Moments/MomentsModels.swift"
-# Keyless public Monad RPCs (DyorKit's Monad.publicRPCs), tried in order. Only eth_blockNumber, eth_call and eth_getCode
-# are sent.
-PUBLIC_RPCS = ["https://rpc1.monad.xyz", "https://rpc.monad.xyz"]
+# Keyless public Monad RPCs (docs.monad.xyz → Network information), tried in order; the last one that answered goes
+# first. Only eth_blockNumber, eth_call and eth_getCode are sent. The deployBlock proof reads each factory's code at
+# blocks weeks old, which only an endpoint with archive state answers: rpc1 (Alchemy, 15 rps), rpc2 (Goldsky Edge,
+# 300 per 10 s) and the Monad Foundation's rpc-mainnet.monadinfra.com (20 rps) did on 2026-10-08, while rpc.monad.xyz
+# (QuickNode, 25 rps) answers "historical state … not available" to them. rpc1 also refuses some clients outright
+# (HTTP 403 by user agent, and Xcode Cloud's build 18 could read nothing at those blocks while this Mac could), so the
+# archive-capable endpoints come first and every read gets RPC_ROUNDS tries over the whole list, a growing pause
+# apart, before it counts as unreadable.
+PUBLIC_RPCS = ["https://rpc1.monad.xyz", "https://rpc2.monad.xyz", "https://rpc-mainnet.monadinfra.com",
+               "https://rpc.monad.xyz"]
+RPC_ROUNDS = 3
+RPC_PAUSE_S = 2.0
 SELECTORS = {  # pinned in DyorKit's MomentsTests; RetiredCohortGateTests' fixture encodes every one with DyorKit's ABI
     "publishingPaused()": "0x788ab4ac",
     "momentCount()": "0xc895d059",
@@ -238,21 +247,27 @@ def retired_tables():
     return cohorts, coins
 
 def rpc(method, params):
-    """A read from the first public RPC that answers (the last one that did goes first); raises when none does."""
+    """A read from the first public RPC that answers (the last one that did goes first), over RPC_ROUNDS rounds of the
+    whole list; raises, naming every answer of the last round, when none does."""
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     errors = []
-    for url in list(PUBLIC_RPCS):
-        request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "User-Agent": "dyorhq-release-gate"})
-        try:
-            reply = json.load(urllib.request.urlopen(request, timeout=20))
-        except Exception as e:  # noqa: BLE001 — any transport failure moves to the next RPC
-            errors.append(f"{url}: {type(e).__name__}")
-            continue
-        if "result" in reply:
-            PUBLIC_RPCS.remove(url)
-            PUBLIC_RPCS.insert(0, url)
-            return reply["result"]
-        errors.append(f"{url}: {str(reply.get('error'))[:120]}")
+    for round_number in range(RPC_ROUNDS):
+        if round_number:
+            time.sleep(RPC_PAUSE_S * round_number)
+        errors = []
+        for url in list(PUBLIC_RPCS):
+            request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "User-Agent": "dyorhq-release-gate"})
+            try:
+                reply = json.load(urllib.request.urlopen(request, timeout=20))
+            except Exception as e:  # noqa: BLE001 — any transport failure (an HTTP status included) moves to the next RPC
+                status = getattr(e, "code", None)  # an HTTPError's status, e.g. 403 or 429
+                errors.append(f"{url}: {type(e).__name__}{f' {status}' if status else ''}")
+                continue
+            if "result" in reply:
+                PUBLIC_RPCS.remove(url)
+                PUBLIC_RPCS.insert(0, url)
+                return reply["result"]
+            errors.append(f"{url}: {str(reply.get('error'))[:120]}")
     raise RuntimeError("; ".join(errors))
 
 def chain_reader():
@@ -379,7 +394,7 @@ def check_live_on_chain(call, code):
                 problems.append(f"{where}.{field} {address} has no code on chain")
                 missing.add(address)
         except Exception as e:  # noqa: BLE001
-            problems.append(f"{where}.{field} {address}: its code could not be read on chain ({type(e).__name__}); refusing")
+            problems.append(f"{where}.{field} {address}: its code could not be read on chain ({type(e).__name__}: {str(e)[:200]}); refusing")
             missing.add(address)
 
     expected = [  # (where, contract, getter, value, whose)
@@ -427,7 +442,7 @@ def check_live_on_chain(call, code):
         try:
             before, at = has_code(code(factory, deploy_block - 1)), has_code(code(factory, deploy_block))
         except Exception as e:  # noqa: BLE001
-            problems.append(f"{where}: its code around {whose}'s deployBlock could not be read on chain ({type(e).__name__}); refusing")
+            problems.append(f"{where}: its code around {whose}'s deployBlock could not be read on chain ({type(e).__name__}: {str(e)[:200]}); refusing")
             continue
         if before or not at:
             problems.append(f"{where}: {whose}'s deployBlock {deploy_block} is not the block that created it "
