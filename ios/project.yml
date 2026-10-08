@@ -74,7 +74,7 @@ targets:
           - CFBundleURLName: fun.dyorhq.app
             CFBundleURLSchemes: [dyorhq]
         LSApplicationQueriesSchemes: [https]
-        # Values below are filled from Secrets.xcconfig at build time and read by Config.swift. EVERYTHING here ships
+        # Values below are filled from Secrets.xcconfig at build time and read by AppConfig.swift. EVERYTHING here ships
         # in plaintext inside the IPA, so only PUBLIC identifiers belong here — never an API key or a keyed URL
         # (scripts/testflight.sh refuses to upload an archive that contains one).
         PrivyAppID: "$(PRIVY_APP_ID)"

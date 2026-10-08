@@ -14,15 +14,16 @@ The sole approved identity is the editorial wordmark and interlocking D/Q monogr
 - The iOS implementation: `ios/DyorHQ/Design/Theme.swift` (colour tokens) and `ios/DyorHQ/Design/Components.swift`
   (shared components), with the asset catalog in `ios/DyorHQ/Resources/Assets.xcassets`.
 
-The web app (and its CSS tokens and components) was removed on 2026-09-27; DyorHQ is an iPhone app.
+DyorHQ is an iPhone app; the web app (and its CSS tokens and components) was removed on 2026-09-27. This document
+keeps the brand rules; the Swift files above are where they are implemented.
 
-Do not declare new brand colors or font stacks in feature stylesheets. Extend the token source when a genuinely new semantic role is needed.
+Do not declare new brand colors or font stacks in feature code. Extend the token source when a genuinely new semantic role is needed.
 
 ## Identity
 
 Use `dyorhq-wordmark.png` for the wordmark and `dyorhq-monogram.png` for the D/Q app icon. Both derive from the approved board. The shared component displays the wordmark without redrawing its letters. Black on light, near-white on dark. Do not recolor individual letters, distort proportions or add a glow. iOS mirrors these assets in its asset catalog; the wordmark uses template rendering for theme adaptation.
 
-Keep at least one lowercase letter-height of surrounding clear space. Use the wordmark at 104px wide or above in the interface. The tagline is separate live Manrope text, at least 12px, and omitted where space is insufficient. Use the D/Q monogram at favicon size. An outlined vector master and optical small-size refinement remain future production assets; the supplied assets are raster artwork. The board's sample watchlist values are illustrative, not live data; its typography specimens are visual approximations. Use the bundled font files and exact CSS tokens for implementation.
+Keep at least one lowercase letter-height of surrounding clear space. Use the wordmark at 104pt wide or above in the interface. The tagline is separate live text, at least 12pt, and omitted where space is insufficient. Use the D/Q monogram for the app icon and other small sizes. An outlined vector master and optical small-size refinement remain future production assets; the supplied assets are raster artwork. The board's sample watchlist values are illustrative, not live data; its typography specimens are visual approximations.
 
 ## Typography
 
@@ -34,85 +35,82 @@ Keep at least one lowercase letter-height of surrounding clear space. Use the wo
 
 The wordmark is original artwork, not Bodoni Moda text. Bodoni Moda complements its thick-thin serif character. Manrope provides open, readable interface lettering. IBM Plex Mono keeps changing figures aligned.
 
-These families describe the brand; the iPhone app follows Apple's system type unless a screen calls for the editorial face.
+These families describe the brand in marketing and print. The iPhone app follows Apple's system type (SF Pro through
+Dynamic Type text styles, with tabular figures for amounts); the only bundled font is the Google Sans subset that
+Google's sign-in branding requires for the "Continue with Google" button.
 
-Scale: 12px metadata, 14px labels, 16px body, 18px lead, 24px section titles, 40-72px editorial display. Dense financial rows may use 13-14px figures. Text should not be less than 12px. Use sentence case and normal tracking in controls. Financial data uses tabular figures. Never apply a serif to a numeric amount or switch fonts on a single emphasized word.
+Scale: 12pt metadata, 14pt labels, 16pt body, 18pt lead, 24pt section titles, 40–72pt editorial display. Dense financial rows may use 13–14pt figures. Text should not be less than 12pt. Use sentence case and normal tracking in controls. Financial data uses tabular figures. Never apply a serif to a numeric amount or switch fonts on a single emphasized word.
 
 ## Color
 
 | Token role | Light | Dark |
 | --- | --- | --- |
-| Canvas `--bg` | #F7F7F5 | #18191B |
-| Surface `--card` | #FCFCFA | #242528 |
-| Inset `--inner` | #EFEFED | #2D2E32 |
-| Primary text `--text` | #18191B | #F7F7F5 |
-| Secondary text `--muted` | #606165 | #B0B1B6 |
-| Supporting text `--faint` | #6B6C70 | #A3A4AA |
+| Canvas | #F7F7F5 | #18191B |
+| Surface | #FCFCFA | #242528 |
+| Inset | #EFEFED | #2D2E32 |
+| Primary text | #18191B | #F7F7F5 |
+| Secondary text | #606165 | #B0B1B6 |
+| Supporting text | #6B6C70 | #A3A4AA |
 | Control boundary | #85868B | #878990 |
 | Positive | #126A4B | #77D8AC |
 | Negative | #AD3047 | #F496AA |
 | Attention | #775812 | #E4C67D |
 
-Primary actions invert the text/canvas pair. Do not introduce a decorative accent. Positive and negative always have text or sign information, not color alone. Warnings use attention colors. Asset identifiers have their own `--asset-*` namespace, independent of action colors. Token colors are illustrative identifiers, not certified company brand assets.
+Primary actions invert the text/canvas pair. Do not introduce a decorative accent. Positive and negative always have text or sign information, not color alone. Warnings use attention colors. Asset identifiers (token logos and colors) are independent of action colors. Token colors are illustrative identifiers, not certified company brand assets.
 
-The whole page shares one theme. System preference is the default; explicit light/dark choices persist locally. No section-level theme flips. The reference palette shows the current theme's roles.
+The whole app shares one theme. The system appearance is the default; an explicit light or dark choice persists on the device. No screen-level theme flips.
 
 ## Shape, spacing and layers
 
-Spacing uses a 4px base with 8, 12, 16, 20, 24, 32, 40, 48, 64px steps. Exceptions are limited to optical type adjustments, icon geometry, and the device mockup.
+Spacing uses a 4pt base with 8, 12, 16, 20, 24, 32, 40, 48, 64pt steps. Exceptions are limited to optical type adjustments and icon geometry.
 
-Radii: 6px badges, 8px compact controls, 12px fields/buttons, 16px cards, 24px sheets. Circular identity avatars and pill-shaped floating navigation are documented exceptions. Phone geometry is illustrative and is not certified hardware modeling.
+Radii: 6pt badges, 8pt compact controls, 12pt fields/buttons, 16pt cards, 24pt sheets. Circular identity avatars and pill-shaped floating navigation are documented exceptions.
 
-Layer scale: chrome 20, menu 40, sheet 50, toast 60, preview studio 90. Avoid new arbitrary z-index values. Cards use a border and minimal shadow. Never put blur behind prices, order books, or forms.
+Layer order: chrome, then menus, sheets and toasts. Cards use a border and minimal shadow. Never put blur behind prices, order books, or forms.
 
 ## Components and states
 
-### Button
+### Buttons
 
-`Button` accepts `variant`, `size`, `busy`, and standard button props. Variants: primary, secondary, ghost, tone-up, tone-down. Sizes: regular, sm, big. Default type is button; forms must explicitly pass submit.
+Variants: primary (the inverted text/canvas pair), secondary, ghost, and tone-up / tone-down for trade direction only. Sizes: regular, small, big.
 
-- Default: solid fill, a one-line label, minimum 44px target.
-- Hover: subtle brightness change, no outer glow.
-- Active: slight scale feedback.
-- Focus: visible 2px contrasting outline, 4px offset.
-- Disabled: subdued solid surface, actual disabled attribute, no activation.
-- Busy: disabled plus `aria-busy`, retain meaningful status text. Announce real progress in the surrounding status region.
+- Default: solid fill, a one-line label, minimum 44pt target.
+- Pressed: slight scale feedback, no outer glow.
+- Disabled: subdued solid surface, actually disabled.
+- Busy: disabled plus a progress indicator, with the status text kept meaningful.
 
 ### Segmented choices
 
-`Seg` is a labeled group of native toggle buttons, not a tab widget without panels. Active buttons expose `aria-pressed`. Tab reaches buttons; Enter/Space activates. `label` names the group. Use buy/sell variants only for trade-direction decisions.
+A labeled group of toggles whose selected state is exposed to VoiceOver, not a tab widget without panels. Use buy/sell variants only for trade-direction decisions.
 
 ### Inputs
 
-Visible label above every input. Helper text or error below, connected using `aria-describedby`. Invalid inputs have `aria-invalid`, a contrasting boundary, and a specific error message. Placeholder is not a label. Error example: "Enter 2 to 10 letters, with no spaces or numbers." This reference example does not change the launchpad contract's ticker rules.
+Visible label above every input. Helper text or error below. An invalid input has a contrasting boundary and a specific error message. A placeholder is not a label. Error example: "Enter 2 to 10 letters, with no spaces or numbers." This reference example does not change the launchpad contract's ticker rules.
 
-### Switch and range
+### Toggles and sliders
 
-Switch exposes `role=switch`, a descriptive name, and `aria-checked`. Native range inputs have names, min/max/step, and adjacent values. Preserve keyboard support.
+System toggles and sliders with a descriptive name and the current value shown next to them (the leverage ruler shows its value while dragging).
 
 ### Feedback
 
-Empty states explain what will populate the surface. Loading placeholders reserve dimensions. Success, errors, and action results use specific language. Status messages use polite live regions. Never show a simulated quote as live or imply a UI demonstration submitted a transaction.
+Empty states explain what will populate the surface. Loading placeholders reserve dimensions. Success, errors, and action results use specific language. Never show a simulated quote as live or imply that a demonstration submitted a transaction. Every write ends in a confirmation sheet that shows exactly what will be sent.
 
-## Motion and glass
+## Motion and materials
 
-140ms for tactile feedback, 220ms for selection, 320ms for panels; shared easing `cubic-bezier(.2,.8,.2,1)`. Transitions use opacity and transform where possible. Loading may animate while a task is pending, but decorative loops are removed. Reduced motion and the user's motion toggle remove animation. Reduced transparency replaces glass with an opaque surface.
+140ms for tactile feedback, 220ms for selection, 320ms for panels. Transitions use opacity and transform where possible. Loading may animate while a task is pending, but decorative loops are removed. Reduce Motion removes animation.
 
-Liquid glass is a web approximation. It is restricted to floating navigation. The default intensity is 30 percent. Order details and inputs remain opaque.
+Translucent material is restricted to floating navigation. Order details and inputs remain opaque. Reduce Transparency replaces the material with an opaque surface.
 
-## Responsive behavior
+## Layout
 
-At narrow widths, documentation uses one column and the app uses the full viewport without a device frame. Preserve safe-area insets and scroll access to all content. Labels do not get hidden to make financial values fit. Charts and order books may use compact labels, but form values stay readable. Avoid fixed widths on form controls; use `min-width: 0` where flex children can shrink.
+The app uses the full screen with safe-area insets and every surface stays scrollable. Labels are not hidden to make financial values fit. Charts and order books may use compact labels, but form values stay readable. Gains and losses carry a sign or a word, never color alone.
 
-## Verification and scope
+## Verification
 
-Run `node --test tests/design-system.test.mjs` for token contrast, theme parity, font assets, and retired-style checks. Run `npm run typecheck`, `npm run build`, and `node --test tests/rendered-html.test.mjs` for integration. Browser checks should cover both themes, narrow and desktop layouts, focus, selection, input error/success, and saved theme persistence.
-
-Contrast assertions are not a complete accessibility certification. They validate specified foreground/background pairs; composite surfaces and all interaction flows still require review. Wallet, launchpad, swap, and contract behavior are outside this visual migration and remain unchanged.
+Check both appearances, Dynamic Type at the larger sizes, VoiceOver order, and input error and success states on a device or the Simulator, in every shipped language. The token pairs above were chosen for WCAG AA contrast; composite surfaces and interaction flows still need review. Wallet, launchpad, swap, and contract behavior are outside this document.
 
 ## Migration
 
-The prior Signal palette and Geist/Inter font selection are retired. Preference schema v3 retains theme, readability, glass, and motion settings; it no longer accepts arbitrary brand colors, fonts, or corner radii. The old standalone preview URL links to the canonical React preview to avoid a second drifting implementation.
+The prior Signal palette and Geist/Inter font selection are retired. Do not restore them from git history.
 
-Reference: https://github.com/Leonxlnx/taste-skill
 Font sources: https://github.com/google/fonts/tree/main/ofl/bodonimoda, https://github.com/google/fonts/tree/main/ofl/manrope, https://github.com/google/fonts/tree/main/ofl/ibmplexmono

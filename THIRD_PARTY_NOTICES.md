@@ -1,6 +1,16 @@
 # Third-party notices
 
-This file credits third-party work that DyorHQ's own code is derived from. It is not a license for this repository.
+This file credits third-party work that DyorHQ's own code is derived from, and the third-party files bundled in the
+app. It is not a license for this repository. Package dependencies (Swift packages in `ios/Package.resolved`, the
+Foundry libraries under `contracts/lib`, npm packages in `package-lock.json`) carry their own licenses in their
+sources.
+
+## Bundled in the app
+
+- **TradingView Lightweight Charts™ 4.2.3** (`ios/DyorHQ/Resources/Web/lightweight-charts.standalone.production.js`),
+  copyright TradingView, Inc., Apache License 2.0; its license header is kept at the top of the file.
+- **Google Sans Medium**, subset to the "Continue with Google" label (`ios/DyorHQ/Resources/Fonts/GoogleSans-Medium.ttf`),
+  under the SIL Open Font License 1.1 reproduced next to it in `GoogleSans-OFL.txt`.
 
 ## Mera
 
