@@ -9,10 +9,12 @@ import Foundation
 
 /// The wallet's scans. Every DyorHQ event names the wallet as an indexed topic, so each scan is one filter.
 public enum WalletHistoryScans {
-    /// How far back the transfer scans read: 30 days at Monad's pace. Older swaps are not read.
+    /// How far back the transfer scans read at least: 30 days at Monad's pace — further, to the wallet's first
+    /// transaction, once that is known (`WalletHistoryService`), so every swap the wallet ever made counts.
     public static let transferDays: TimeInterval = 30 * 86_400
     static let transferTopic = ABI.eventTopic("Transfer(address,address,uint256)")
-    static var transferFloor: HistoryScan.Floor { .blocks(BlockClock.blocks(in: transferDays, secondsPerBlock: BlockClock.fallbackSecondsPerBlock)) }
+    public static var transferBlocks: UInt64 { BlockClock.blocks(in: transferDays, secondsPerBlock: BlockClock.fallbackSecondsPerBlock) }
+    public static var transferFloor: HistoryScan.Floor { .blocks(transferBlocks) }
 
     public static let transfersInId = "transfers-in"
     public static let transfersOutId = "transfers-out"
@@ -21,13 +23,13 @@ public enum WalletHistoryScans {
     public static let momentsId = "moments"
 
     /// Every ERC-20 `Transfer` into the wallet: swaps' received legs, and every token that ever paid it.
-    public static func transfersIn(wallet: Address) -> HistoryScan {
-        HistoryScan(id: transfersInId, query: LogsQuery(addresses: [], topics: [[transferTopic], nil, [wallet.data.leftPadded(to: 32)]]), floor: transferFloor)
+    public static func transfersIn(wallet: Address, floor: HistoryScan.Floor = transferFloor) -> HistoryScan {
+        HistoryScan(id: transfersInId, query: LogsQuery(addresses: [], topics: [[transferTopic], nil, [wallet.data.leftPadded(to: 32)]]), floor: floor)
     }
 
     /// Every ERC-20 `Transfer` out of the wallet: swaps' spent legs.
-    public static func transfersOut(wallet: Address) -> HistoryScan {
-        HistoryScan(id: transfersOutId, query: LogsQuery(addresses: [], topics: [[transferTopic], [wallet.data.leftPadded(to: 32)]]), floor: transferFloor)
+    public static func transfersOut(wallet: Address, floor: HistoryScan.Floor = transferFloor) -> HistoryScan {
+        HistoryScan(id: transfersOutId, query: LogsQuery(addresses: [], topics: [[transferTopic], [wallet.data.leftPadded(to: 32)]]), floor: floor)
     }
 
     /// The wallet's curve fills (`CurveBuy` / `CurveSell` index the trader first) and the creator fees an escrow paid it
@@ -155,15 +157,24 @@ public actor WalletHistoryService {
     private var swapCache: [String: (fingerprint: String, swaps: [SwapRecord])] = [:]
     /// What the swap reconstruction looked up per transaction, by wallet (`SwapHistoryService.TransactionFacts`).
     private var swapFacts: [String: [Data: SwapHistoryService.TransactionFacts]] = [:]
+    /// The block of a wallet's first transaction (`RPCClient.firstTransactionBlock`): nil when it has sent none; throws
+    /// when it couldn't be read, to be asked again.
+    private let firstActivity: @Sendable (Address) async throws -> UInt64?
+    /// What `firstActivity` answered, by wallet: a block, or none (not kept: a wallet that sends its first
+    /// transaction later is asked again).
+    private var firstBlocks: [String: UInt64] = [:]
 
     /// `stacks`: every launchpad stack whose fills and fees count (the live one and the retired ones); `cohorts`: every
-    /// Moments cohort, the live one first.
-    public init(store: HistoryStore, swapHistory: SwapHistoryService, clock: BlockClock, stacks: @escaping @Sendable () async -> [LaunchpadAddresses], cohorts: [MomentsAddresses]) {
+    /// Moments cohort, the live one first; `firstActivity`: the wallet's first transaction's block, for the transfer
+    /// scans to read back to (nil, the default, keeps them to their window).
+    public init(store: HistoryStore, swapHistory: SwapHistoryService, clock: BlockClock, stacks: @escaping @Sendable () async -> [LaunchpadAddresses], cohorts: [MomentsAddresses],
+                firstActivity: @escaping @Sendable (Address) async throws -> UInt64? = { _ in nil }) {
         self.store = store
         self.swapHistory = swapHistory
         self.clock = clock
         self.stacks = stacks
         self.cohorts = cohorts
+        self.firstActivity = firstActivity
     }
 
     public var history: HistoryStore { store }
@@ -171,8 +182,20 @@ public actor WalletHistoryService {
     /// The scans for `wallet`.
     public func scans(wallet: Address) async -> [HistoryScan] {
         let stacks = await stacks()
-        return [WalletHistoryScans.transfersIn(wallet: wallet), WalletHistoryScans.transfersOut(wallet: wallet), WalletHistoryScans.launchpad(wallet: wallet),
+        let floor = await transferFloor(wallet)
+        return [WalletHistoryScans.transfersIn(wallet: wallet, floor: floor), WalletHistoryScans.transfersOut(wallet: wallet, floor: floor), WalletHistoryScans.launchpad(wallet: wallet),
                 WalletHistoryScans.feeSharing(wallet: wallet, stacks: stacks), WalletHistoryScans.moments(wallet: wallet, cohorts: cohorts)]
+    }
+
+    /// How far back the transfer scans read for `wallet`: to its first transaction when that is older than the usual
+    /// window (`WalletHistoryScans.transferDays`), so every swap it ever made counts; the window alone when it never
+    /// sent one, or until its first transaction's block can be read.
+    private func transferFloor(_ wallet: Address) async -> HistoryScan.Floor {
+        let key = wallet.hex.lowercased()
+        if let first = firstBlocks[key] { return .earliest(block: first, blocks: WalletHistoryScans.transferBlocks) }
+        guard let first = try? await firstActivity(wallet) else { return WalletHistoryScans.transferFloor }
+        firstBlocks[key] = first
+        return .earliest(block: first, blocks: WalletHistoryScans.transferBlocks)
     }
 
     /// The history from what is held, with no scan: instant. `curves`: the curves whose fills count (every stack's

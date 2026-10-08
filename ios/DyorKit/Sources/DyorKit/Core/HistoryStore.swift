@@ -13,11 +13,15 @@ public struct HistoryScan: Sendable, Hashable {
     public enum Floor: Sendable, Hashable {
         case block(UInt64)
         case blocks(UInt64)
+        /// The earlier of a block and so many blocks back: a wallet's first transaction, or the usual window when
+        /// that is nearer than it.
+        case earliest(block: UInt64, blocks: UInt64)
 
         public func block(head: UInt64) -> UInt64 {
             switch self {
             case .block(let block): return min(block, head)
             case .blocks(let count): return head > count ? head - count : 0
+            case .earliest(let block, let count): return min(Floor.block(block).block(head: head), Floor.blocks(count).block(head: head))
             }
         }
     }

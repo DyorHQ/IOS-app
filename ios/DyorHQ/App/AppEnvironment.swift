@@ -127,7 +127,19 @@ final class AppEnvironment {
         moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock)
         retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc, logsClient, clock] in RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock) }
         walletHistory = WalletHistoryService(store: historyStore, swapHistory: swapHistory, clock: clock, stacks: { [launchpad] in await launchpad.stacks },
-                                             cohorts: [config.moments] + MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory })
+                                             cohorts: [config.moments] + MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory },
+                                             firstActivity: { [logsClient] wallet in
+                                                 // The block of the wallet's first transaction, found once (about 27 nonce reads at past blocks)
+                                                 // and kept: the transfer scans read back to it, so every swap the wallet ever made counts. Read
+                                                 // through the logs client: rpc1, rpc2 and rpc4 answer a nonce at any block, rpc.monad.xyz (the
+                                                 // primary client) refuses old state (measured 2026-10-08). A wallet that has sent none is asked
+                                                 // again next time, not kept as such.
+                                                 let key = "history.v1.firstBlock.\(wallet.hex.lowercased())"
+                                                 if let kept = UserDefaults.standard.string(forKey: key).flatMap({ UInt64($0) }) { return kept }
+                                                 let first = try await logsClient.firstTransactionBlock(of: wallet, head: try await logsClient.blockNumber())
+                                                 if let first { UserDefaults.standard.set(String(first), forKey: key) }
+                                                 return first
+                                             })
         #if DEBUG
         // A fork rehearsal (Secrets.xcconfig MOMENTS_*, Debug only): v2 links (c4) and names follow the Moments this build
         // shows. Without the override this is nil, and c4 stays MomentsAddresses.monadMainnet.

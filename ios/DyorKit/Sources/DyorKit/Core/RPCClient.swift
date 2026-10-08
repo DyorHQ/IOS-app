@@ -272,6 +272,20 @@ public actor RPCClient {
         try bytes(await call("eth_getCode", [.string(address.hex), BlockTag.latest.json]))
     }
 
+    /// The block of `address`'s first transaction — the first block its nonce is 1 at — found by bisection over its
+    /// nonce at past blocks (about 27 reads; the public endpoints answer a nonce at any block, measured 2026-10-08).
+    /// Nil when it has sent none by `head`.
+    public func firstTransactionBlock(of address: Address, head: UInt64) async throws -> UInt64? {
+        guard try await transactionCount(of: address, block: .number(head)) > 0 else { return nil }
+        var low: UInt64 = 0
+        var high = head
+        while low < high {
+            let mid = low + (high - low) / 2
+            if try await transactionCount(of: address, block: .number(mid)) > 0 { high = mid } else { low = mid + 1 }
+        }
+        return high
+    }
+
     public func transactionCount(of address: Address, block: BlockTag = .pending) async throws -> UInt64 {
         let raw = try quantity(await call("eth_getTransactionCount", [.string(address.hex), block.json]))
         guard let count = UInt64(exactly: raw) else { throw NetworkError.malformedResponse }
