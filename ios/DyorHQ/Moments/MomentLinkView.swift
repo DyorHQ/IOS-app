@@ -19,13 +19,16 @@ struct MomentLinkView: View {
         } else {
             Group {
                 if missing {
-                    ContentUnavailableView("No Moment at this link", systemImage: "camera.aperture",
-                                           description: Text("Nothing has been published under this link yet. It may be mistyped."))
+                    ContentUnavailableView {
+                        Label("No Moment at this link", systemImage: "camera.aperture")
+                    } description: {
+                        Paragraph("Nothing has been published under this link yet. It may be mistyped.")
+                    }
                 } else if let error {
                     ContentUnavailableView {
                         Label("Couldn't open this Moment", systemImage: "wifi.exclamationmark")
                     } description: {
-                        Text(error)
+                        Paragraph(error)
                     } actions: {
                         Button("Retry") { Task { await load() } }.buttonStyle(.borderedProminent)
                     }

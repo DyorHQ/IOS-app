@@ -38,14 +38,14 @@ struct MomentsPortfolioView: View {
                                 .disabled(!session.canSign)
                         }
                     } footer: {
-                        Text("Coins across every Moment. Vesting unlocks at the monthly cliffs.")
+                        Paragraph("Coins across every Moment. Vesting unlocks at the monthly cliffs.")
                     }
                     if portfolio.rows.isEmpty {
                         if past.positions.isEmpty {
                             ContentUnavailableView {
                                 Label("No Moments Yet", systemImage: "camera.aperture")
                             } description: {
-                                Text("Collect a Moment and it shows up here with its editions and coins.")
+                                Paragraph("Collect a Moment and it shows up here with its editions and coins.")
                             } actions: {
                                 Button("Browse Moments") { Haptics.tap(); dismiss() }
                             }
@@ -72,7 +72,7 @@ struct MomentsPortfolioView: View {
                     } header: {
                         Text("Past Cohorts")
                     } footer: {
-                        Text("Earlier DyorHQ Moments contracts. Collecting is closed; claim your vested coins and, as a creator, withdraw your own proceeds.")
+                        Paragraph("Earlier DyorHQ Moments contracts. Collecting is closed; claim your vested coins and, as a creator, withdraw your own proceeds.")
                     }
                 }
             }

@@ -43,8 +43,11 @@ struct MomentsView: View {
             Group {
                 if !env.config.moments.isDeployed {
                     // The live (v2) cohort is pending. Past-cohort Moments stay reachable through My Moments and links.
-                    ContentUnavailableView("Moments Not Live Yet", systemImage: "camera.aperture",
-                                           description: Text("New Moments appear here once the new DyorHQ Moments contracts are live on Monad. Moments from earlier cohorts are in My Moments."))
+                    ContentUnavailableView {
+                        Label("Moments Not Live Yet", systemImage: "camera.aperture")
+                    } description: {
+                        Paragraph("New Moments appear here once the new DyorHQ Moments contracts are live on Monad. Moments from earlier cohorts are in My Moments.")
+                    }
                 } else {
                     board
                 }
@@ -137,7 +140,7 @@ struct MomentsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("MOMENTS", comment: "Eyebrow over the Moments board, in capitals").font(.caption.weight(.semibold)).tracking(1.5).foregroundStyle(.secondary)
             Text("Make your favorite moments last forever.").font(.system(.title, design: .serif).weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-            Text("Publish a photo or video as an NFT on Monad. Share it with everyone and earn every time it's collected.")
+            Paragraph("Publish a photo or video as an NFT on Monad. Share it with everyone and earn every time it's collected.")
                 .font(.subheadline).foregroundStyle(.secondary)
             if let unread = model.policyUnread {
                 // The terms couldn't be read: Publish is off (no policy to bind a publish to), the Moments still show.

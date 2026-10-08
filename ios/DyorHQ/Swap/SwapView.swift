@@ -280,7 +280,7 @@ struct SwapView: View {
                 }
             } footer: {
                 if let quote = model.selectedQuote {
-                    Text("Minimum received \(NumberStyle.units(quote.minOut, decimals: model.tokenOut.decimals)) \(model.tokenOut.symbol) at \(NumberStyle.basisPoints(model.slippageBps)) slippage. Quotes refresh every 15 seconds.")
+                    Paragraph("Minimum received \(NumberStyle.units(quote.minOut, decimals: model.tokenOut.decimals)) \(model.tokenOut.symbol) at \(NumberStyle.basisPoints(model.slippageBps)) slippage. Quotes refresh every 15 seconds.")
                 }
             }
         } else if let error = model.currentError {
@@ -584,7 +584,7 @@ struct SlippageSheet: View {
         NavigationStack {
             List {
                 Section {
-                    Text("How far the price may move before your swap settles. Beyond this, it cancels instead of filling worse.")
+                    Paragraph("How far the price may move before your swap settles. Beyond this, it cancels instead of filling worse.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } footer: {
@@ -598,7 +598,7 @@ struct SlippageSheet: View {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(NumberStyle.basisPoints(bps)).foregroundStyle(.primary)
-                                    Text(hint(bps)).font(.caption).foregroundStyle(.secondary)
+                                    Paragraph(hint(bps)).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 if slippageBps == bps { Image(systemName: "checkmark").foregroundStyle(Color.brand).fontWeight(.semibold) }
@@ -625,7 +625,7 @@ struct SlippageSheet: View {
                         Label("A high tolerance can fill at a much worse price. Use it only for volatile or thin pairs.", systemImage: "exclamationmark.triangle")
                             .font(.caption).foregroundStyle(Color.attention)
                     } else if slippageBps <= 10 {
-                        Text("A tight tolerance protects your price, but a swap can fail in a fast-moving market.").font(.caption)
+                        Paragraph("A tight tolerance protects your price, but a swap can fail in a fast-moving market.").font(.caption)
                     }
                 }
             }
@@ -771,9 +771,9 @@ struct TokenPickerSheet: View {
                         if lookingUp {
                             Text("Looking up this token…")
                         } else if venueListCatchingUp {
-                            Text("No token matches yet: Monad's token list is still loading. Paste a contract address to add any Monad token.")
+                            Paragraph("No token matches yet: Monad's token list is still loading. Paste a contract address to add any Monad token.")
                         } else {
-                            Text("No token matches. Paste a contract address to add any Monad token.")
+                            Paragraph("No token matches. Paste a contract address to add any Monad token.")
                         }
                     }
                 }
@@ -783,7 +783,7 @@ struct TokenPickerSheet: View {
                     } header: {
                         Text("DyorHQ coins in your wallet")
                     } footer: {
-                        Text("These were launched or published on DyorHQ and sent to your wallet without you choosing them here. Anyone can launch a coin on DyorHQ: check the contract before you trade.")
+                        Paragraph("These were launched or published on DyorHQ and sent to your wallet without you choosing them here. Anyone can launch a coin on DyorHQ: check the contract before you trade.")
                     }
                 }
                 if !received.unverified.isEmpty {
@@ -792,7 +792,7 @@ struct TokenPickerSheet: View {
                     } header: {
                         Text("Unverified — in your wallet")
                     } footer: {
-                        Text("These arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you trade.")
+                        Paragraph("These arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you trade.")
                     }
                 }
                 // With nothing matched, the "no match" footer says the list is loading: never a second footer under it.
@@ -802,7 +802,7 @@ struct TokenPickerSheet: View {
                     } header: {
                         if !remote.isEmpty { Text("More Monad tokens") }
                     } footer: {
-                        if venueListCatchingUp { Text("Monad's token list is still loading, so a token may be missing for now.") }
+                        if venueListCatchingUp { Paragraph("Monad's token list is still loading, so a token may be missing for now.") }
                     }
                 }
             }

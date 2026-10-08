@@ -91,9 +91,9 @@ struct PositionTriggersSheet: View {
                 triggerSection(.takeProfit, text: $tpText, remove: $removeTP, current: currentTP)
                 Section {
                     if let liveSize {
-                        Text("A new take-profit or stop-loss closes \(NumberStyle.number(liveSize)) \(market.asset), the whole position as it is now. That size is fixed: if you add to or reduce the position later, set TP/SL again. It is cancelled automatically when the position closes.")
+                        Paragraph("A new take-profit or stop-loss closes \(NumberStyle.number(liveSize)) \(market.asset), the whole position as it is now. That size is fixed: if you add to or reduce the position later, set TP/SL again. It is cancelled automatically when the position closes.")
                     }
-                    Text("Moving one cancels the old trigger first, and places the new one once Perpl confirms the cancel.")
+                    Paragraph("Moving one cancels the old trigger first, and places the new one once Perpl confirms the cancel.")
                 }
                 .font(.footnote).foregroundStyle(.secondary)
                 if session.isPasskeyAccount, !finished, !changes.isEmpty {
@@ -160,7 +160,7 @@ struct PositionTriggersSheet: View {
             Text(isTP ? "Take profit" : "Stop loss")
         } footer: {
             if current.count > 1 {
-                Text(isTP ? "\(current.count) take profits are live. A new one replaces all of them."
+                Paragraph(isTP ? "\(current.count) take profits are live. A new one replaces all of them."
                           : "\(current.count) stop losses are live. A new one replaces all of them.")
             }
         }

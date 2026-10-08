@@ -37,7 +37,7 @@ struct SocialProfileView: View {
                     .disabled(busy || social.state == .signingIn)
                 } footer: {
                     if let error = social.error { InlineError(message: error) }
-                    else { Text("You'll sign a short message with your wallet to prove it's you — no transaction, no fees.") }
+                    else { Paragraph("You'll sign a short message with your wallet to prove it's you — no transaction, no fees.") }
                 }
             } else {
                 Section {
@@ -81,7 +81,7 @@ struct SocialProfileView: View {
                 } footer: {
                     if let error { InlineError(message: error) }
                     else if let savedNote { Label(savedNote, systemImage: "checkmark.circle.fill").foregroundStyle(Color.positive) }
-                    else { Text("Handle is lowercase letters, numbers and underscores, 3–20 characters.") }
+                    else { Paragraph("Handle is lowercase letters, numbers and underscores, 3–20 characters.") }
                 }
             }
         }

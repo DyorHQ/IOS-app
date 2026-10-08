@@ -30,7 +30,7 @@ struct ManageWalletsView: View {
                 } header: {
                     Text("This Wallet")
                 } footer: {
-                    Text(account.method == .watchOnly
+                    Paragraph(account.method == .watchOnly
                          ? "You are watching this address. Sign in to create a wallet you can sign with."
                          : account.method == .meraPasskey
                          ? "This wallet is derived from your passkey every time you unlock it; its key is never stored, on this device or on a server. The same passkey gives the same wallet on any device."
@@ -54,7 +54,7 @@ struct ManageWalletsView: View {
                             Label(account.method == .meraPasskey ? "Export Recovery Phrase" : "Export Wallet", systemImage: "key.horizontal")
                         }
                     } footer: {
-                        Text(account.method == .imported || account.method == .emailPassword
+                        Paragraph(account.method == .imported || account.method == .emailPassword
                              ? "Reveal this wallet's private key to back it up or move it to another wallet. The key never leaves your device."
                              : account.method == .meraPasskey
                              ? "Show the 24-word recovery phrase your passkey derives, to back this wallet up or restore it in another wallet without the passkey. It asks for your passkey every time and is never stored."
@@ -66,7 +66,7 @@ struct ManageWalletsView: View {
                     Section {
                         NavigationLink { ImportWalletView() } label: { Label("Import an Existing Wallet", systemImage: "square.and.arrow.down") }
                     } footer: {
-                        Text("Import your own wallet with its recovery phrase or private key. It stays on this device.")
+                        Paragraph("Import your own wallet with its recovery phrase or private key. It stays on this device.")
                     }
                 }
             }
@@ -120,9 +120,9 @@ struct SecurityView: View {
             } header: {
                 Text("Passkeys")
             } footer: {
-                if let message { Text(message).foregroundStyle(isError ? Color.attention : Color.positive) }
-                else if session.hasMera { Text("A passkey account unlocks with Face ID or Touch ID, and iCloud Keychain keeps its passkey on your other Apple devices.") }
-                else { Text("Sign in with Face ID or Touch ID. Add one per device.") }
+                if let message { Paragraph(message).foregroundStyle(isError ? Color.attention : Color.positive) }
+                else if session.hasMera { Paragraph("A passkey account unlocks with Face ID or Touch ID, and iCloud Keychain keeps its passkey on your other Apple devices.") }
+                else { Paragraph("Sign in with Face ID or Touch ID. Add one per device.") }
             }
 
             Section {
@@ -144,11 +144,11 @@ struct SecurityView: View {
             } footer: {
                 if session.account?.method == .meraPasskey {
                     // `AppSettings.appLockApplies`: a passkey account's lock is its passkey, never a second prompt.
-                    Text("Your passkey is this account's lock: signing asks for it whenever the session is locked, so App Lock doesn't add a second \(BiometricGate.promptName) prompt.")
+                    Paragraph("Your passkey is this account's lock: signing asks for it whenever the session is locked, so App Lock doesn't add a second \(BiometricGate.promptName) prompt.")
                 } else if settings.requireBiometrics, !BiometricGate.canAuthenticateOwner {
-                    Text("Set a device passcode in iOS Settings — App Lock can't confirm transactions without one.").foregroundStyle(Color.attention)
+                    Paragraph("Set a device passcode in iOS Settings — App Lock can't confirm transactions without one.").foregroundStyle(Color.attention)
                 } else {
-                    Text("Asks for \(BiometricGate.typeName) (or your passcode) before every transaction is signed, and before App Lock can be turned off.")
+                    Paragraph("Asks for \(BiometricGate.typeName) (or your passcode) before every transaction is signed, and before App Lock can be turned off.")
                 }
             }
         }
@@ -172,8 +172,8 @@ struct NotificationsView: View {
                 Toggle("Enable Notifications", isOn: $settings.notificationsEnabled)
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    if denied { Text("Notifications are turned off for DyorHQ in iOS Settings. Enable them there to receive alerts.").foregroundStyle(Color.attention) }
-                    else { Text("Alerts arrive while DyorHQ is open. iOS pauses the app in the background, so nothing reaches your lock screen while DyorHQ is closed.") }
+                    if denied { Paragraph("Notifications are turned off for DyorHQ in iOS Settings. Enable them there to receive alerts.").foregroundStyle(Color.attention) }
+                    else { Paragraph("Alerts arrive while DyorHQ is open. iOS pauses the app in the background, so nothing reaches your lock screen while DyorHQ is closed.") }
                     LearnMoreLink(.notificationsAndPriceAlerts)
                 }
             }
@@ -191,7 +191,7 @@ struct NotificationsView: View {
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("Alerts arrive while DyorHQ is open, on any screen: order fills, a Perps position at 80% and 90% of its margin in use, and price alerts. Nothing arrives while DyorHQ is closed, so don't rely on them to protect a position: set a stop-loss on it. Everything is also kept in the in-app center.")
+                Paragraph("Alerts arrive while DyorHQ is open, on any screen: order fills, a Perps position at 80% and 90% of its margin in use, and price alerts. Nothing arrives while DyorHQ is closed, so don't rely on them to protect a position: set a stop-loss on it. Everything is also kept in the in-app center.")
             }
             .disabled(!settings.notificationsEnabled)
         }
@@ -221,7 +221,7 @@ struct TradingPreferencesView: View {
                     LabeledContent("Default Leverage", value: "\(Int(settings.defaultLeverage))×")
                 }
             } footer: {
-                Text("The leverage a new perps order opens on. Each market still caps it to its own maximum.")
+                Paragraph("The leverage a new perps order opens on. Each market still caps it to its own maximum.")
             }
             Section {
                 Picker("Max Slippage", selection: $settings.slippageBps) {
@@ -229,7 +229,7 @@ struct TradingPreferencesView: View {
                     ForEach(TradingDefaults.slippageChoicesBps, id: \.self) { Text(NumberStyle.basisPoints($0)).tag($0) }
                 }
             } footer: {
-                Text("The furthest a market order or swap may move from its quote before it is cancelled.")
+                Paragraph("The furthest a market order or swap may move from its quote before it is cancelled.")
             }
         }
         .navigationTitle(tr("Trading Preferences"))
@@ -263,9 +263,9 @@ struct PerplTradingView: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     if session.account?.method == .meraPasskey {
-                        Text("Your trading key comes from your passkey and exists only while your session is unlocked; this device stores just its token. On another iPhone, connect once more.")
+                        Paragraph("Your trading key comes from your passkey and exists only while your session is unlocked; this device stores just its token. On another iPhone, connect once more.")
                     } else {
-                        Text("Your trading key is generated on this device and authorized once by your wallet.")
+                        Paragraph("Your trading key is generated on this device and authorized once by your wallet.")
                     }
                     LearnMoreLink(.oneClickTrading)
                 }
@@ -282,7 +282,7 @@ struct PerplTradingView: View {
             } header: {
                 Text("New to Perpl?")
             } footer: {
-                Text("Your wallet needs a Perpl account before it can trade. Opens app.perpl.xyz.")
+                Paragraph("Your wallet needs a Perpl account before it can trade. Opens app.perpl.xyz.")
             }
 
             Section {
@@ -312,14 +312,14 @@ struct PerplTradingView: View {
                 if let error { InlineError(message: error) }
                 // A drop that happened outside a tap (idle timeout, rejected key, connection cap) is only on `status`.
                 else if case .failed(let why) = trading.status { InlineError(message: why) }
-                else if trading.status == .needsForwarding { Text("Lets Perpl's keeper forward your signed orders. One on-chain transaction.") }
+                else if trading.status == .needsForwarding { Paragraph("Lets Perpl's keeper forward your signed orders. One on-chain transaction.") }
             }
 
             if trading.isEnrolled {
                 Section {
                     Button("Remove API Key", role: .destructive) { confirmRemoveKey = true }.disabled(busy)
                 } footer: {
-                    Text("Deletes the key from this device. Take-profit and stop-loss orders already on Perpl stay live.")
+                    Paragraph("Deletes the key from this device. Take-profit and stop-loss orders already on Perpl stay live.")
                 }
                 .confirmationDialog("Remove the API key?", isPresented: $confirmRemoveKey, titleVisibility: .visible) {
                     Button("Remove API Key", role: .destructive) { if let address = session.address { trading.forget(address: address) } }
@@ -398,7 +398,7 @@ struct LanguageView: View {
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Screens iOS draws itself, such as Face ID and permission prompts, change the next time you open DyorHQ.")
+                    Paragraph("Screens iOS draws itself, such as Face ID and permission prompts, change the next time you open DyorHQ.")
                     if language.available.count < 2 { Text("More languages are coming in the next update.") }
                 }
             }
@@ -537,7 +537,7 @@ private struct MeraSessionSection: View {
             Text("Passkey")
         } footer: {
             if let error { InlineError(message: error) }
-            else { Text("Signs without another prompt until the session ends; then \(BiometricGate.promptName) again. A new length applies from the next session, and a longer one needs \(BiometricGate.promptName).") }
+            else { Paragraph("Signs without another prompt until the session ends; then \(BiometricGate.promptName) again. A new length applies from the next session, and a longer one needs \(BiometricGate.promptName).") }
         }
     }
 

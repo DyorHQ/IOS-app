@@ -400,25 +400,45 @@ struct AddressRow: View {
 }
 
 /// Inline error under a form, in sentence case with a symbol. A message written in the code is a catalog key; most come
-/// at run time (a thrown error's description, a server's message, a model's text) and are shown as they are.
+/// at run time (a thrown error's description, a server's message, a model's text) and are shown as they are. It wraps
+/// between words in Korean (`Paragraph`).
 struct InlineError: View {
-    private let message: Text
+    private enum Message {
+        case localized(LocalizedStringResource)
+        case verbatim(String)
+    }
 
-    init(message: LocalizedStringKey) {
-        self.message = Text(message)
+    private let message: Message
+
+    init(message: LocalizedStringResource) {
+        self.message = .localized(message)
     }
 
     @_disfavoredOverload
     init<S: StringProtocol>(message: S) {
-        self.message = Text(verbatim: String(message))
+        self.message = .verbatim(String(message))
+    }
+
+    /// The message in the app's language, for VoiceOver.
+    private var spoken: String {
+        switch message {
+        case .localized(let resource): return tr(resource)
+        case .verbatim(let text): return text
+        }
     }
 
     var body: some View {
-        Label { message } icon: { Image(systemName: "exclamationmark.triangle.fill") }
+        Label {
+            switch message {
+            case .localized(let resource): Paragraph(resource)
+            case .verbatim(let text): Paragraph(verbatim: text)
+            }
+        } icon: { Image(systemName: "exclamationmark.triangle.fill") }
+            .modifier(ParagraphLabel())
             .font(.footnote)
             .foregroundStyle(Color.attention)
             .symbolRenderingMode(.hierarchical)
-            .accessibilityLabel(Text("Error: \(message)"))
+            .accessibilityLabel(Text("Error: \(spoken)"))
     }
 }
 

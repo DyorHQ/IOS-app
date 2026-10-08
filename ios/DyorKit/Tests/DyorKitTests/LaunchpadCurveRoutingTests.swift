@@ -496,7 +496,7 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         XCTAssertTrue(home.contains("} else if let route = curveRoute, route.isOnCurve, let title = route.actionTitle(row.token.symbol) {"))
         XCTAssertTrue(home.contains(toLaunch))
         XCTAssertTrue(home.contains("if curveRoute == .unchecked {"))
-        XCTAssertTrue(home.contains("let notice = curveRoute?.notice { Text(notice) }"))
+        XCTAssertTrue(home.contains("let notice = curveRoute?.notice { Paragraph(notice) }"))
         XCTAssertFalse(home.contains("buyRefusal"), "the page asks where the coin trades, not whether a retired one may be bought")
         XCTAssertFalse(home.contains("router.openSwap(tokenIn: row.token,"), "no Swap that sells the page's coin: none routes a curve")
         let launchTab = try XCTUnwrap(home.range(of: "case .launchpad:"))

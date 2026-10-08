@@ -77,7 +77,7 @@ struct PastCohortsCard: View {
                     Spacer()
                     if model.loading { ProgressView().controlSize(.mini) }
                 }
-                Text("Moments from earlier DyorHQ contracts. Collecting is closed; claim your vested coins and, as a creator, withdraw your own proceeds.")
+                Paragraph("Moments from earlier DyorHQ contracts. Collecting is closed; claim your vested coins and, as a creator, withdraw your own proceeds.")
                     .font(.caption).foregroundStyle(.secondary)
                 if let error = model.error { InlineError(message: "Couldn't read every past cohort (pull to refresh): \(error)") }
                 if let incomplete = model.incomplete { InlineError(message: incomplete) }
@@ -120,7 +120,7 @@ struct PastMomentRow: View {
                     Text(info.name).font(.subheadline.weight(.semibold)).lineLimit(1)
                     Text(verbatim: "$\(info.symbol)").font(.caption).foregroundStyle(.secondary)
                 }
-                Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Paragraph(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {

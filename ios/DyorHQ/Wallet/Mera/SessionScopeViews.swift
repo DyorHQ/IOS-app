@@ -104,7 +104,7 @@ struct SessionScopeSheet: View {
                     }
                 } footer: {
                     if let error { InlineError(message: error) }
-                    else { Text("A session lasts \(Self.length(mera.sessionLength)) from the \(BiometricGate.promptName) that opens it, and ends when you leave the app. Change the length in Settings.") }
+                    else { Paragraph("A session lasts \(Self.length(mera.sessionLength)) from the \(BiometricGate.promptName) that opens it, and ends when you leave the app. Change the length in Settings.") }
                 }
 
                 Section {
@@ -116,7 +116,7 @@ struct SessionScopeSheet: View {
                 } header: {
                     Text("No \(BiometricGate.promptName) needed while active")
                 } footer: {
-                    Text("Up to \(Self.dollars(Mera.SpendingCaps.perActionUSD)) per action and \(Self.dollars(Mera.SpendingCaps.perSessionUSD)) per session, and only when DyorHQ can price it. Every transaction is also checked on its own: the right chain and contract, approvals for exactly the amount shown, and the output coming back to you.")
+                    Paragraph("Up to \(Self.dollars(Mera.SpendingCaps.perActionUSD)) per action and \(Self.dollars(Mera.SpendingCaps.perSessionUSD)) per session, and only when DyorHQ can price it. Every transaction is also checked on its own: the right chain and contract, approvals for exactly the amount shown, and the output coming back to you.")
                 }
 
                 Section {

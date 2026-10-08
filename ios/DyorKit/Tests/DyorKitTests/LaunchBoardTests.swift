@@ -254,7 +254,7 @@ final class LaunchBoardTests: XCTestCase {
         let card = try XCTUnwrap(source.range(of: "private var exploreEmptyCard: some View {"))
         let cardEnd = try XCTUnwrap(source.range(of: "private func sectionHeader(", range: card.upperBound..<source.endIndex))
         let cardSource = String(source[card.upperBound..<cardEnd.lowerBound])
-        XCTAssertTrue(cardSource.contains("Text(\"No coins on the curve yet: launch the first one.\")"))
+        XCTAssertTrue(cardSource.contains("Paragraph(\"No coins on the curve yet: launch the first one.\")"))
         XCTAssertTrue(cardSource.contains("Button { Haptics.tap(); showCreate = true } label: { Text(\"Launch a Coin\").fontWeight(.semibold) }\n                    .buttonStyle(.borderedProminent).disabled(!session.canSign)"))
 
         // Captions: a sell-only coin's only. QT reads "Graduated".

@@ -168,7 +168,7 @@ struct AddFundsCard: View {
         }
     }
 
-    private func header(_ symbol: String, tint: Color, title: LocalizedStringKey, detail: LocalizedStringKey) -> some View {
+    private func header(_ symbol: String, tint: Color, title: LocalizedStringKey, detail: LocalizedStringResource) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: symbol)
                 .font(.body.weight(.semibold))
@@ -177,7 +177,7 @@ struct AddFundsCard: View {
                 .background(tint.opacity(0.14), in: Circle())
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.headline)
-                Text(detail).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Paragraph(detail).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
     }

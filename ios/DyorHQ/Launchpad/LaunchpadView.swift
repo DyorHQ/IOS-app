@@ -185,7 +185,7 @@ struct LaunchpadView: View {
             sectionHeader("Explore", count: nil, subtitle: "Coins still climbing toward graduation")
             VStack(spacing: 12) {
                 Image(systemName: "flame").font(.title2).foregroundStyle(Color.brand)
-                Text("No coins on the curve yet: launch the first one.")
+                Paragraph("No coins on the curve yet: launch the first one.")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Button { Haptics.tap(); showCreate = true } label: { Text("Launch a Coin").fontWeight(.semibold) }
                     .buttonStyle(.borderedProminent).disabled(!session.canSign)
@@ -612,7 +612,7 @@ struct LaunchDetailView: View {
                     }
                     Button("Claim Creator Fees", systemImage: "banknote") { Haptics.tap(); showCreatorClaim = true }.disabled(!session.canSign)
                 } else {
-                    Text("Nothing to claim yet — fees accrue as people trade your coin.").font(.caption).foregroundStyle(.secondary)
+                    Paragraph("Nothing to claim yet — fees accrue as people trade your coin.").font(.caption).foregroundStyle(.secondary)
                 }
             }
         } header: {
@@ -662,7 +662,7 @@ struct LaunchDetailView: View {
                         Text(verbatim: "\(launch.progressBps / 100)%")
                     }
                     .gaugeStyle(.accessoryLinearCapacity)
-                    Text("Graduates at \(NumberStyle.units(launch.graduationThreshold, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol) raised. Liquidity then moves to a locked \(launch.graduationVenue.title) pool.")
+                    Paragraph("Graduates at \(NumberStyle.units(launch.graduationThreshold, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol) raised. Liquidity then moves to a locked \(launch.graduationVenue.title) pool.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -685,7 +685,7 @@ struct LaunchDetailView: View {
         } footer: {
             // Only while the curve trades: a graduated coin trades in its pool, which its Graduated section explains.
             if trades.isEmpty, !loadingTrades, launch.phase == .bonding {
-                Text("No trades yet — the chart moves up as people buy on the curve and down as they sell.").font(.caption)
+                Paragraph("No trades yet — the chart moves up as people buy on the curve and down as they sell.").font(.caption)
             }
         }
     }
@@ -766,8 +766,8 @@ struct LaunchDetailView: View {
             Text(buysOpen ? "Trade on the Curve" : "Sell on the Curve")
         } footer: {
             if !session.canSign { Text("Sign in to trade.") }
-            else if let shortfall { Text(shortfall).foregroundStyle(Color.attention) }
-            else if let account { Text("Balance: \(NumberStyle.units(account.tokenBalance, decimals: 18, compact: true)) \(launch.symbol) · \(NumberStyle.units(account.pairBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
+            else if let shortfall { Paragraph(shortfall).foregroundStyle(Color.attention) }
+            else if let account { Paragraph("Balance: \(NumberStyle.units(account.tokenBalance, decimals: 18, compact: true)) \(launch.symbol) · \(NumberStyle.units(account.pairBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
         }
     }
 
@@ -816,15 +816,15 @@ struct LaunchDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 if launch.phase == .graduated {
                     // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes (GP-6).
-                    Text(launch.graduationVenue == .monday
+                    Paragraph(launch.graduationVenue == .monday
                          ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's 1% swap fee is harvested to a DyorHQ fees wallet; it isn't paid to holders or the creator, and there is no creator tax on the pool."
                          : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. \(v4FeeTiming)")
                 } else if isStuck {
-                    Text(stuckFooter)
+                    Paragraph(stuckFooter)
                 } else if launch.awaitsGraduation {
-                    Text("The curve is full. It graduates next, into a locked \(launch.graduationVenue.title) pool, and then trades on the Swap screen.")
+                    Paragraph("The curve is full. It graduates next, into a locked \(launch.graduationVenue.title) pool, and then trades on the Swap screen.")
                 } else {
-                    Text("This launch is between phases. Trading resumes when migration completes.")
+                    Paragraph("This launch is between phases. Trading resumes when migration completes.")
                 }
                 LearnMoreLink(.launchpadGraduation)
             }
@@ -870,7 +870,7 @@ struct LaunchDetailView: View {
 
     private var aboutSection: some View {
         Section("About") {
-            if !launch.description.isEmpty { Text(launch.description).font(.subheadline) }
+            if !launch.description.isEmpty { Paragraph(launch.description).font(.subheadline) }
             AddressRow(title: "Token", address: launch.token)
             AddressRow(title: "Creator", address: launch.deployer)
             LabeledContent("Creator tax", value: NumberStyle.basisPoints(launch.creatorTaxBps))
@@ -1119,9 +1119,9 @@ struct CreateLaunchView: View {
                     if let info = protocolInfo, let pi = pairInfo {
                         VStack(alignment: .leading, spacing: 4) {
                             if pairMondayOnly {
-                                Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol). A \(pi.symbol) coin graduates on Monday Trade; if it stays stuck for a day, anyone can move it to a locked Uniswap v4 pool. Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                                Paragraph("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol). A \(pi.symbol) coin graduates on Monday Trade; if it stays stuck for a day, anyone can move it to a locked Uniswap v4 pool. Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
                             } else {
-                                Text("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol). Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
+                                Paragraph("Graduates to a locked \(effectiveVenue.title) pool once the curve raises \(NumberStyle.units(pairGraduation, decimals: pi.decimals, compact: true)) \(pi.symbol). Launch fee \(NumberStyle.units(info.launchFee, decimals: 18)) MON.")
                             }
                             LearnMoreLink(.launchACoin)
                         }
@@ -1132,7 +1132,7 @@ struct CreateLaunchView: View {
                 } header: {
                     Text("Developer Buy (Optional)")
                 } footer: {
-                    Text("Buy your own coin in the same transaction — snipe-tax exempt.")
+                    Paragraph("Buy your own coin in the same transaction — snipe-tax exempt.")
                 }
                 advancedSection
             }
@@ -1222,7 +1222,7 @@ struct CreateLaunchView: View {
                     if uploadingImage {
                         HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Uploading…").font(.caption).foregroundStyle(.secondary) }
                     } else if let imageError {
-                        Text(imageError).font(.caption).foregroundStyle(Color.attention)
+                        Paragraph(imageError).font(.caption).foregroundStyle(Color.attention)
                     } else {
                         Text("Square images look best.").font(.caption).foregroundStyle(.secondary)
                     }
@@ -1253,7 +1253,7 @@ struct CreateLaunchView: View {
                 Label("Advanced", systemImage: "slider.horizontal.3")
             }
         } footer: {
-            Text(feeFooter)
+            Paragraph(feeFooter)
         }
     }
 

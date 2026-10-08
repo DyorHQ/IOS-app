@@ -123,11 +123,11 @@ final class AppAlertsWiringTests: XCTestCase {
     /// The screens say plainly that alerts arrive while DyorHQ is open, on any screen, and never while it's closed.
     func testTheCopySaysAlertsArriveWhileOpen() throws {
         let settings = try app("Profile/Settings.swift")
-        XCTAssertTrue(settings.contains("Text(\"Alerts arrive while DyorHQ is open. iOS pauses the app in the background, so nothing reaches your lock screen while DyorHQ is closed.\")"))
-        XCTAssertTrue(settings.contains("Text(\"Alerts arrive while DyorHQ is open, on any screen:"))
+        XCTAssertTrue(settings.contains("Paragraph(\"Alerts arrive while DyorHQ is open. iOS pauses the app in the background, so nothing reaches your lock screen while DyorHQ is closed.\")"))
+        XCTAssertTrue(settings.contains("Paragraph(\"Alerts arrive while DyorHQ is open, on any screen:"))
         XCTAssertFalse(settings.contains("while the Perps screen is open"))
         let alerts = try app("Wallet/PriceAlerts.swift")
-        XCTAssertTrue(alerts.contains("Text(\"Alerts arrive while DyorHQ is open: it checks prices every 30 seconds"))
+        XCTAssertTrue(alerts.contains("Paragraph(\"Alerts arrive while DyorHQ is open: it checks prices every 30 seconds"))
         XCTAssertTrue(alerts.contains("Alerts arrive while DyorHQ is open: it checks every 30 seconds.\")"))
         XCTAssertFalse(alerts.contains("once a minute"))
     }

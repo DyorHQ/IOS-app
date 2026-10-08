@@ -18,13 +18,16 @@ struct LaunchReferenceView: View {
         } else {
             Group {
                 if missing {
-                    ContentUnavailableView("Not a DyorHQ launch", systemImage: "flame",
-                                           description: Text("No DyorHQ launchpad has a launch of this coin."))
+                    ContentUnavailableView {
+                        Label("Not a DyorHQ launch", systemImage: "flame")
+                    } description: {
+                        Paragraph("No DyorHQ launchpad has a launch of this coin.")
+                    }
                 } else if let error {
                     ContentUnavailableView {
                         Label("Couldn't open this launch", systemImage: "wifi.exclamationmark")
                     } description: {
-                        Text(error)
+                        Paragraph(error)
                     } actions: {
                         Button("Try Again") { Task { await load() } }.buttonStyle(.borderedProminent)
                         Link("View on Monadscan", destination: Monad.explorerToken(reference.token))

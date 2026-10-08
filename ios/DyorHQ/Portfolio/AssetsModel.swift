@@ -165,7 +165,7 @@ struct AssetsCard: View {
             }
             if kind == .assets, model.showsTotal, !model.unpriced.isEmpty, !model.loading {
                 // A token no pool prices is no failure: the total is of the rest, and says what it leaves out.
-                Text("Doesn't include \(WalletHoldings.symbolList(model.unpriced)): no price found.")
+                Paragraph("Doesn't include \(WalletHoldings.symbolList(model.unpriced)): no price found.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if kind == .assets, model.tokens.isEmpty, model.loading || model.readGap == nil {

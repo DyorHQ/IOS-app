@@ -110,7 +110,7 @@ struct ProfileView: View {
                         }
                         .disabled(signingOut)
                     } footer: {
-                        Text("Removes this account from this iPhone. Your passkey keeps it — sign in again anytime.")
+                        Paragraph("Removes this account from this iPhone. Your passkey keeps it — sign in again anytime.")
                     }
                 }
 
@@ -126,7 +126,7 @@ struct ProfileView: View {
                     }
                     .disabled(signingOut)
                 } footer: {
-                    Text("DyorHQ \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · \(SupportLinks.tagline) · Self-custodial.")
+                    Paragraph("DyorHQ \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · \(SupportLinks.tagline) · Self-custodial.")
                 }
             }
             .listStyle(.insetGrouped)
@@ -266,7 +266,7 @@ struct ReceiveSheet: View {
                         .font(.footnote.monospaced())
                         .multilineTextAlignment(.center)
                         .textSelection(.enabled)
-                    Text("Send MON or any Monad token to this address.")
+                    Paragraph("Send MON or any Monad token to this address.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -390,16 +390,16 @@ struct SendSheet: View {
                 } header: {
                     Text("To", comment: "The address the tokens are sent to, a section header [tight]")
                 } footer: {
-                    if let cleanedPaste, cleanedPaste == recipient { Text("Hidden characters were removed from the pasted address. Check it matches the source.") }
+                    if let cleanedPaste, cleanedPaste == recipient { Paragraph("Hidden characters were removed from the pasted address. Check it matches the source.") }
                     if let to = recipientAddress, to == session.address { Text("That's your own address.") }
                     if recipientIsContract == true {
                         if let token {
-                            Text("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts \(token.symbol).")
+                            Paragraph("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts \(token.symbol).")
                         } else {
-                            Text("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts this token.")
+                            Paragraph("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts this token.")
                         }
                     } else if recipientCheckFailed {
-                        Text("Couldn't check whether this address is a contract. Check it before sending.")
+                        Paragraph("Couldn't check whether this address is a contract. Check it before sending.")
                     }
                 }
                 Section {
@@ -409,7 +409,7 @@ struct SendSheet: View {
                 } header: {
                     Text("Amount")
                 } footer: {
-                    if let problem { Text(problem).foregroundStyle(Color.attention) }
+                    if let problem { Paragraph(problem).foregroundStyle(Color.attention) }
                     else if let balance, let token { Text("Available: \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)") }
                 }
             }
@@ -494,7 +494,7 @@ struct SendSheet: View {
                     Text("Reading your wallet…").foregroundStyle(.secondary)
                 }
             } else if complete {
-                Text("This wallet holds no tokens on Monad, so there's nothing to send.").foregroundStyle(.secondary)
+                Paragraph("This wallet holds no tokens on Monad, so there's nothing to send.").foregroundStyle(.secondary)
             } else {
                 readNotice("No tokens found, but part of your wallet couldn't be read, so some may be missing.")
             }
@@ -505,12 +505,12 @@ struct SendSheet: View {
                 if let choice { SendAssetRow(asset: choice) } else { Text("Choose a token") }
             }
             if let droppedChoice, choice == nil {
-                Text("Your wallet no longer holds the \(droppedChoice) you picked. Choose a token.").font(.footnote).foregroundStyle(Color.attention)
+                Paragraph("Your wallet no longer holds the \(droppedChoice) you picked. Choose a token.").font(.footnote).foregroundStyle(Color.attention)
             }
             if readingHistory {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Reading your wallet's history. Tokens found there will be added.").font(.footnote).foregroundStyle(.secondary)
+                    Paragraph("Reading your wallet's history. Tokens found there will be added.").font(.footnote).foregroundStyle(.secondary)
                 }
             } else if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }
         }
@@ -746,15 +746,15 @@ private struct SendAssetPicker: View {
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 8) {
-                    if readingHistory { Text("Still reading your wallet's history, so more tokens may be added.") }
+                    if readingHistory { Paragraph("Still reading your wallet's history, so more tokens may be added.") }
                     if shown.isEmpty {
                         Text("No token in this wallet matches.")
                     } else if zip(shown, badges).contains(where: { $0.unverified && !$1.isDyorHQ }) {
-                        Text("Unverified tokens arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you send.")
+                        Paragraph("Unverified tokens arrived in your wallet without you choosing them here. Anyone can send any token, with any name — including a real token's. Check the contract before you send.")
                     } else if shown.contains(where: \.unverified) {
-                        Text("Some DyorHQ coins here were sent to your wallet without you choosing them here. Anyone can launch a coin on DyorHQ: check the contract before you send.")
+                        Paragraph("Some DyorHQ coins here were sent to your wallet without you choosing them here. Anyone can launch a coin on DyorHQ: check the contract before you send.")
                     } else if badges.contains(where: \.isImitation) {
-                        Text("Some tokens here carry the name of another token but are other contracts. Check the contract before you send.")
+                        Paragraph("Some tokens here carry the name of another token but are other contracts. Check the contract before you send.")
                     }
                 }
             }

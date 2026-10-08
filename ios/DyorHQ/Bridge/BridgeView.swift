@@ -33,8 +33,11 @@ struct BridgeView: View {
                     ContentUnavailableView(Mera.Stub.unavailableTitle, systemImage: "point.3.connected.trianglepath.dotted",
                                            description: Text("This test passkey signs on the local Monad fork only. Bridging needs a real passkey on a device."))
                 } else if !model.isConfigured {
-                    ContentUnavailableView("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted",
-                                           description: Text("Cross-chain bridging isn't configured in this build yet."))
+                    ContentUnavailableView {
+                        Label("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted")
+                    } description: {
+                        Paragraph("Cross-chain bridging isn't configured in this build yet.")
+                    }
                 } else if model.needsUnlock {
                     unlockPrompt
                 } else {
@@ -42,8 +45,11 @@ struct BridgeView: View {
                 }
                 #else
                 if !model.isConfigured {
-                    ContentUnavailableView("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted",
-                                           description: Text("Cross-chain bridging isn't configured in this build yet."))
+                    ContentUnavailableView {
+                        Label("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted")
+                    } description: {
+                        Paragraph("Cross-chain bridging isn't configured in this build yet.")
+                    }
                 } else if model.needsUnlock {
                     unlockPrompt
                 } else {
@@ -77,7 +83,7 @@ struct BridgeView: View {
         ContentUnavailableView {
             Label("Unlock to bridge", systemImage: "lock.fill")
         } description: {
-            unlockError.map { Text(verbatim: $0) } ?? Text("Bridge routes load once your passkey session is open.")
+            if let unlockError { Paragraph(verbatim: unlockError) } else { Paragraph("Bridge routes load once your passkey session is open.") }
         } actions: {
             Button {
                 Haptics.tap()
@@ -140,7 +146,7 @@ struct BridgeView: View {
                 .padding(.top, 2)
 
                 VStack(spacing: 4) {
-                    Text("Powered by Aurora Intents · cross-chain settlement handled for you.")
+                    Paragraph("Powered by Aurora Intents · cross-chain settlement handled for you.")
                         .foregroundStyle(.secondary)
                     LearnMoreLink(.bridge)
                 }
@@ -340,7 +346,7 @@ struct BridgeView: View {
         case .settling(let message):
             HStack(spacing: 10) {
                 Image(systemName: "clock.arrow.circlepath").font(.title3).foregroundStyle(Color.attention)
-                Text(message).font(.caption)
+                Paragraph(message).font(.caption)
                 Spacer()
                 if let url = model.completedTxURL {
                     Link(destination: url) { Text("View", comment: "Opens the transaction in a block explorer: a verb [tight]") }.font(.footnote.weight(.semibold))

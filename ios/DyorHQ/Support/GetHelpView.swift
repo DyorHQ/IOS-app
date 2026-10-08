@@ -88,7 +88,7 @@ struct GetHelpContent: View {
                 HelpRow(symbol: "doc.text", title: Text("Terms of Use"), detail: Text(verbatim: "dyorhq.fun/terms")) { openURL(SupportLinks.terms) }
                 HelpRow(symbol: "hand.raised", title: Text("Privacy Policy"), detail: Text(verbatim: "dyorhq.fun/privacy")) { openURL(SupportLinks.privacy) }
             }
-            Text("Self-custodial: support can never reach your keys or funds. Never share a recovery phrase with anyone.")
+            Paragraph("Self-custodial: support can never reach your keys or funds. Never share a recovery phrase with anyone.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)

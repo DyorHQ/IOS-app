@@ -215,16 +215,16 @@ struct CreateMomentView: View {
     }
 
     /// When the queued policy can be applied, and until when (a proposal that can lapse), each as one sentence.
-    private static func pendingNote(applicable: Bool, from: String, until: String?) -> Text {
+    @ViewBuilder private static func pendingNote(applicable: Bool, from: String, until: String?) -> some View {
         switch (applicable, until) {
         case (true, let until?):
-            return Text("Anyone can apply the queued policy now until \(until). If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them.")
+            Paragraph("Anyone can apply the queued policy now until \(until). If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them.")
         case (true, nil):
-            return Text("Anyone can apply the queued policy now. If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them.")
+            Paragraph("Anyone can apply the queued policy now. If it's applied before your publish confirms, nothing is published: you review the new terms below and publish again. Your terms never change without you seeing them.")
         case (false, let until?):
-            return Text("The queued policy can be applied from \(from) until \(until). If it's applied before your publish confirms, nothing is published and you review the new terms below.")
+            Paragraph("The queued policy can be applied from \(from) until \(until). If it's applied before your publish confirms, nothing is published and you review the new terms below.")
         case (false, nil):
-            return Text("The queued policy can be applied from \(from). If it's applied before your publish confirms, nothing is published and you review the new terms below.")
+            Paragraph("The queued policy can be applied from \(from). If it's applied before your publish confirms, nothing is published and you review the new terms below.")
         }
     }
 
@@ -285,9 +285,9 @@ struct CreateMomentView: View {
                     } else if unpinned != nil {
                         Text("Not pinned to IPFS yet.").font(.caption).foregroundStyle(Color.attention)
                     } else if let imageError {
-                        Text(imageError).font(.caption).foregroundStyle(Color.attention)
+                        Paragraph(imageError).font(.caption).foregroundStyle(Color.attention)
                     } else if let mediaHash {
-                        Text("Fingerprint \(String(mediaHash.hexString.prefix(12)))… goes on-chain.").font(.caption).foregroundStyle(.secondary)
+                        Paragraph("Fingerprint \(String(mediaHash.hexString.prefix(12)))… goes on-chain.").font(.caption).foregroundStyle(.secondary)
                     } else {
                         Text("This becomes the NFT.").font(.caption).foregroundStyle(.secondary)
                     }
@@ -307,10 +307,10 @@ struct CreateMomentView: View {
         } header: {
             Text("Media")
         } footer: {
-            if !mediaURI.isEmpty, !mediaValid { Text("Use an ipfs:// or https:// link.") }
-            else if !animationValid { Text("The video link must be ipfs:// or https://.") }
-            else if isVideo { Text("The video plays on OpenSea; its cover frame is the NFT image.") }
-            else { Text("Shown on OpenSea and in DyorHQ as the NFT.") }
+            if !mediaURI.isEmpty, !mediaValid { Paragraph("Use an ipfs:// or https:// link.") }
+            else if !animationValid { Paragraph("The video link must be ipfs:// or https://.") }
+            else if isVideo { Paragraph("The video plays on OpenSea; its cover frame is the NFT image.") }
+            else { Paragraph("Shown on OpenSea and in DyorHQ as the NFT.") }
         }
     }
 
@@ -353,17 +353,17 @@ struct CreateMomentView: View {
             Text("Economics")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                if let priceProblem { Text(priceProblem).foregroundStyle(Color.attention) }
-                if let allocProblem { Text(allocProblem).foregroundStyle(Color.attention) }
+                if let priceProblem { Paragraph(priceProblem).foregroundStyle(Color.attention) }
+                if let allocProblem { Paragraph(allocProblem).foregroundStyle(Color.attention) }
                 if let policy, let price, price > 0 {
                     let reservePerCollect = price * BigUInt(policy.reserveBps) / BigUInt(MomentsConstants.bps)
                     let collects = Int(clamping: reservePerCollect > 0 ? (policy.threshold + reservePerCollect - 1) / reservePerCollect : 0)
                     let fdv = MomentsMath.graduationFDV(threshold: policy.threshold, reserveBps: policy.reserveBps, creatorAllocBps: allocBps ?? maxAllocBps)
-                    Text("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdcCents(policy.threshold)) reserve, and the coin graduates at a \(MomentsFormat.fdv(fdv)) FDV. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
+                    Paragraph("Minimum \(MomentsFormat.usdc(policy.minPrice)). About \(collects) collects at this price reach the \(MomentsFormat.usdcCents(policy.threshold)) reserve, and the coin graduates at a \(MomentsFormat.fdv(fdv)) FDV. Up to \(NumberStyle.basisPoints(maxAllocBps)) of the \(MomentsFormat.coins(MomentsConstants.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
                 } else if policy == nil {
                     Text("Loading the current policy…")
                 }
-                if let block = policy?.publishBlock { Text(block.message).foregroundStyle(Color.attention) }
+                if let block = policy?.publishBlock { Paragraph(block.message).foregroundStyle(Color.attention) }
                 LearnMoreLink(.publishAMoment)
             }
         }

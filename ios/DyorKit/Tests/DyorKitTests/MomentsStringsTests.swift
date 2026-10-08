@@ -32,7 +32,7 @@ final class MomentsStringsTests: XCTestCase {
                 let title = call.first { $0.label == "title" }.map { String($0.value) } ?? ""
                 XCTAssertTrue(title.hasPrefix("tr("), "\(name): an Activity record's title is in the app's language: \(title)")
             }
-            for callee in ["Text", "DetailRow"] {
+            for callee in ["Text", "Paragraph", "DetailRow"] {
                 for call in Self.calls(callee, in: chars) {
                     for argument in call where argument.label == "verbatim" {
                         unlocalized += Self.literals(in: argument.value).filter { Self.hasWords($0.words) }.map { "\(name): \(callee)(verbatim: \($0.source))" }
@@ -70,7 +70,7 @@ final class MomentsStringsTests: XCTestCase {
             XCTAssertFalse(text.contains("== 1 ?"), "\(name): a plural made by hand reads wrong in other languages")
             XCTAssertFalse(text.contains(".capitalized"), "\(name): a label from a raw value is never translated")
             let chars = Self.code(text)
-            for callee in ["Text", "Label", "Button", "Section", "LabeledContent"] {
+            for callee in ["Text", "Paragraph", "Label", "Button", "Section", "LabeledContent"] {
                 for call in Self.calls(callee, in: chars) {
                     guard let first = call.first, first.label == nil else { continue }
                     for literal in Self.literals(in: first.value) {
@@ -134,7 +134,7 @@ final class MomentsStringsTests: XCTestCase {
         XCTAssertFalse(detail.contains(#"\(quote.editions)"#))
         XCTAssertTrue(detail.contains("let editions = Int(clamping: quote.editions)"))
         XCTAssertTrue(create.contains("let collects = Int(clamping: reservePerCollect > 0 ?"))
-        XCTAssertTrue(create.contains(#"Text("Fingerprint \(String(mediaHash.hexString.prefix(12)))… goes on-chain.")"#))
+        XCTAssertTrue(create.contains(#"Paragraph("Fingerprint \(String(mediaHash.hexString.prefix(12)))… goes on-chain.")"#))
     }
 
     /// Every count that needs a plural is the key's `Int` ("%lld editions"), so the catalog gives "1 edition" and each
@@ -146,7 +146,7 @@ final class MomentsStringsTests: XCTestCase {
             #"Text("\(days) days")"#, // Publish's review: Window
             #"About \(collects) collects at this price"#, // Publish: the pricing footer
             #"value: tr("\(MomentsFormat.usdcCents(info.reserveRemaining)) · about \(info.collectsToGraduate) collects"))"#,
-            #"Text("\(editions) editions · \(MomentsFormat.coins(quote.entitlement)) $\(info.symbol)")"#, // You get
+            #"Paragraph("\(editions) editions · \(MomentsFormat.coins(quote.entitlement)) $\(info.symbol)")"#, // You get
             #"(\(MomentsFormat.usdc(quote.gross)) for \(editions) editions)"#, // the terminal collect
             #""Collect \(quantity) Editions""#, // the Collect button
             #"value: tr("\(top.short) · \(count) editions"))"#, // Largest holder

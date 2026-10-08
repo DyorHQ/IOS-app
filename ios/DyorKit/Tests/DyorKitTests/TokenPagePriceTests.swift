@@ -54,7 +54,7 @@ final class TokenPagePriceTests: XCTestCase {
         XCTAssertLessThan(reprice.lowerBound, try XCTUnwrap(body.range(of: "if !notTradingYet { history =")).lowerBound, "the page reads before it decides on a chart")
         XCTAssertFalse(body.contains("!row.notTradingYet"), "a Moment Home saw collecting is read again by its page")
         let chart = try XCTUnwrap(body.range(of: "PriceChart(points: history"))
-        let notTrading = try XCTUnwrap(body.range(of: "if notTradingYet {\n                        Text(\"Its Moment hasn't graduated yet"))
+        let notTrading = try XCTUnwrap(body.range(of: "if notTradingYet {\n                        Paragraph(\"Its Moment hasn't graduated yet"))
         XCTAssertLessThan(notTrading.upperBound, chart.lowerBound, "no chart while it collects")
         XCTAssertTrue(home.contains("let notTrading = priceMap == nil ? [] : await env.prices.notTradingYet(tokens)"))
         XCTAssertTrue(home.contains("let info = priceMap[token.address].flatMap { DyorPrice.valid($0.usd) != nil ? $0 : nil }"))

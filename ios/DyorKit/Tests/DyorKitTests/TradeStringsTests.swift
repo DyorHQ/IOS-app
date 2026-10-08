@@ -20,7 +20,7 @@ final class TradeStringsTests: XCTestCase {
     // MARK: Keys
 
     /// SwiftUI's views and modifiers whose first, unlabelled argument is a key when it is a literal.
-    private static let views: Set<String> = ["Text", "Button", "Label", "Section", "LabeledContent", "Link", "TextField", "ProgressView",
+    private static let views: Set<String> = ["Text", "Paragraph", "Button", "Label", "Section", "LabeledContent", "Link", "TextField", "ProgressView",
                                              "Toggle", "Stepper", "Picker", "ContentUnavailableView", "Menu"]
     private static let modifiers: Set<String> = ["accessibilityLabel", "accessibilityHint", "navigationTitle"]
 
