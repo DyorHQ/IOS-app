@@ -56,7 +56,7 @@ targets:
         CFBundleDisplayName: DyorHQ
         CFBundleName: DyorHQ
         CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "21"
+        CFBundleVersion: "22"
         # Only the languages that ship: a language is added here, and to the catalogs, once its translation is complete
         # (scripts/dev/check-strings.py). The Language screen offers the bundle's languages (AppLanguage.shipped).
         CFBundleLocalizations: [en, es, fr, zh-Hans, ko]
