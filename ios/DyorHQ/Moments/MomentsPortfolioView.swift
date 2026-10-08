@@ -86,8 +86,13 @@ struct MomentsPortfolioView: View {
             .navigationTitle(tr("My Moments"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .refreshable { await load() }
+            .refreshable {
+                await env.history.refresh(env: env)
+                await load()
+            }
             .task { await load() }
+            // The history fills in behind the screen (`HistoryModel`): the proceeds follow it.
+            .task(id: env.history.version) { await loadEarnings() }
             .sheet(isPresented: $showClaimAll) {
                 ConfirmationSheet(title: "Claim All", confirmTitle: "Claim All", build: { await env.moments.claimAllPlan(momentIds: portfolio?.claimableIds ?? []) }, onDone: { Task { await load() } },
                                   // Recorded in the language in use; `section` is an identifier, never translated.
@@ -117,14 +122,23 @@ struct MomentsPortfolioView: View {
     /// trading fees after graduation, split into what it withdrew (Claimed) and what the contracts still hold for it
     /// (Unclaimed, withdrawn on each Moment's page). Both pairs add up to the same USDC.
     @ViewBuilder private var proceedsSection: some View {
-        if let earnings, !earnings.complete {
-            // A cohort's publishes or withdrawals couldn't be read to the head: no total is shown in part.
+        if let earnings, !earnings.complete, !earnings.moments.isEmpty || !env.history.filling {
+            // The Moments history hasn't been read to the head: a total is never shown in part. While the history is
+            // still filling in it says how far it has got; stalled or unreachable, it says so, with a pull to retry.
             Section {
-                InlineError(message: "Part of your proceeds couldn't be read just now. Pull to refresh.")
+                if env.history.filling {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Reading your history… \(NumberStyle.percent(env.history.snapshot.progress * 100, fractionDigits: 0, signed: false))").foregroundStyle(.secondary).monospacedDigit()
+                    }
+                } else {
+                    InlineError(message: "Part of your proceeds couldn't be read just now. Pull to refresh.")
+                }
             } header: {
                 Text("Proceeds")
             }
-        } else if let earnings, !earnings.moments.isEmpty {
+        } else if let earnings, earnings.complete {
+            // Shown once the history is read, zeros included, so a creator always finds it.
             Section {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                     usdcTile(Text("From collectors", comment: "[tight] My Moments tile: the creator's share of the collects of the Moments it published, in USDC"), earnings.fromCollectors,
@@ -146,6 +160,20 @@ struct MomentsPortfolioView: View {
         } else if let earningsError {
             Section {
                 InlineError(message: earningsError)
+            } header: {
+                Text("Proceeds")
+            }
+        } else {
+            // The history is still filling in (nothing published found yet), or the balances are being read.
+            Section {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    if env.history.filling {
+                        Text("Reading your history… \(NumberStyle.percent(env.history.snapshot.progress * 100, fractionDigits: 0, signed: false))").foregroundStyle(.secondary).monospacedDigit()
+                    } else {
+                        Text("Reading your Moments…").foregroundStyle(.secondary)
+                    }
+                }
             } header: {
                 Text("Proceeds")
             }
@@ -172,15 +200,23 @@ struct MomentsPortfolioView: View {
         _ = await (live, pastLoad, earningsLoad)
     }
 
-    /// The proceeds of every cohort, read together: the live cohort's and each retired one's. A cohort that can't be read
-    /// leaves nothing shown in part: the section says it couldn't be read.
+    /// The proceeds of every cohort, read together: the live cohort's and each retired one's, each from the wallet's
+    /// Moments history as the history model has it (no scan of its own) and the contracts' balances. A cohort whose
+    /// history isn't read to the head leaves nothing shown in part: the section says how far the history has got.
     private func loadEarnings() async {
         guard let address = session.address else { earnings = nil; earningsError = nil; return }
         let cohorts = env.retiredMoments
         do {
-            async let live = env.moments.creatorEarnings(account: address)
+            let liveLogs = await env.walletHistory.momentsLogs(wallet: address, cohort: env.config.moments)
+            async let live = env.moments.creatorEarnings(account: address, published: liveLogs.published, withdrawn: liveLogs.withdrawn, feesWithdrawn: liveLogs.feesWithdrawn,
+                                                         complete: liveLogs.complete)
             let retired = try await withThrowingTaskGroup(of: MomentsCreatorEarnings.self) { group in
-                for cohort in cohorts { group.addTask { try await cohort.creatorEarnings(account: address) } }
+                for cohort in cohorts {
+                    group.addTask {
+                        let logs = await env.walletHistory.momentsLogs(wallet: address, cohort: cohort.cohort)
+                        return try await cohort.creatorEarnings(account: address, published: logs.published, withdrawn: logs.withdrawn, feesWithdrawn: logs.feesWithdrawn, complete: logs.complete)
+                    }
+                }
                 var all = MomentsCreatorEarnings.none
                 for try await read in group { all = all + read }
                 return all

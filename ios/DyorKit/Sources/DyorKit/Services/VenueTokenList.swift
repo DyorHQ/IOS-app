@@ -124,18 +124,31 @@ public final class VenueTokenList {
         await run?.value
     }
 
+    /// Reads the stored list, so search has it at once; the run that brings it up to the chain head is `refresh`,
+    /// which may come later (after the wallet's history has been read). Nothing after `stop()`, or once read.
+    public func load() async {
+        guard !isStopped, !isLoaded else { return }
+        await loadStore(generation)
+    }
+
+    /// The store into memory, unless a run started or `stop()` was called meanwhile, or another load got there first.
+    private func loadStore(_ generation: Int) async {
+        let read = self.read
+        let stored = await Task.detached(priority: .utility) { Self.decode(read()) }.value
+        guard generation == self.generation, !isLoaded else { return }
+        tokens = stored.tokens
+        checkpoint = stored.checkpoint
+        saved = stored.checkpoint
+        dropped.formUnion(stored.dropped)
+        droppedStored = stored.dropped
+        droppedSaved = dropped
+        isLoaded = true
+    }
+
     private func perform(_ generation: Int) async {
         if !isLoaded {
-            let read = self.read
-            let stored = await Task.detached(priority: .utility) { Self.decode(read()) }.value
-            guard generation == self.generation else { return }
-            tokens = stored.tokens
-            checkpoint = stored.checkpoint
-            saved = stored.checkpoint
-            dropped.formUnion(stored.dropped)
-            droppedStored = stored.dropped
-            droppedSaved = dropped
-            isLoaded = true
+            await loadStore(generation)
+            guard generation == self.generation, isLoaded else { return }
         }
         let result = await service.refresh(tokens: tokens, checkpoint: checkpoint, dropped: dropped, logos: logos) { [weak self] progress in
             guard let self, await self.show(progress, generation) else { return }

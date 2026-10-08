@@ -80,7 +80,8 @@ struct SwapView: View {
             } header: {
                 Text("Swap History")
             }
-            .task(id: "\(historyWindow.rawValue)-\(session.address?.hex ?? "")") { await loadHistory() }
+            // The history fills in behind the screen (`HistoryModel`): the list follows it.
+            .task(id: "\(historyWindow.rawValue)-\(session.address?.hex ?? "")-\(env.history.version)") { await loadHistory() }
         }
     }
 
@@ -89,8 +90,9 @@ struct SwapView: View {
         loadingHistory = true
         defer { loadingHistory = false }
         let tokens = Dictionary(KnownTokenStore.universe(owner: address).map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
-        let scanned = await env.swapHistory.swaps(wallet: address, window: historyWindow, decimals: tokens.mapValues(\.decimals))
         let cutoff = Date().addingTimeInterval(-historyWindow.seconds)
+        // The wallet's swaps from the history model (no scan of its own), within the window.
+        let scanned = env.history.wallet == address ? env.history.snapshot.swaps.filter { $0.time >= cutoff } : []
         var items: [SwapHistoryItem] = []
         var seen = Set<String>()
         // Recorded swaps first: exact legs, and they include native-MON legs the Transfer scan can't see.

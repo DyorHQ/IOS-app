@@ -64,7 +64,13 @@ public struct WalletTokenDiscovery: Sendable {
         let walletWord = wallet.data.leftPadded(to: 32)
         // Every ERC-20 that has sent tokens to this wallet in the window; the emitting contract IS the token.
         let incoming = await logsRPC.chunkedLogsReport(address: nil, topics: [topic, nil, walletWord], fromBlock: from, toBlock: latest, mode: logScan)
-        var complete = incoming.complete
+        return await held(wallet: wallet, incoming: incoming.logs, complete: incoming.complete, known: known)
+    }
+
+    /// The tokens the wallet holds among those that ever sent it a `Transfer` (`incoming`, as the history store keeps
+    /// them): balances, ERC-165 and metadata read as `scan` reads them. `complete` is whether the logs cover their window.
+    public func held(wallet: Address, incoming: [Log], complete scanned: Bool, known: Set<Address> = []) async -> Scan {
+        var complete = scanned
 
         // The emitting contract of every Transfer into the wallet. A token logs its amount as data (three topics); a few
         // index it (four topics, no data), as an ERC-721 collection indexes its token id: such a sender is a token only
@@ -72,7 +78,7 @@ public struct WalletTokenDiscovery: Sendable {
         var candidates: [Address] = []
         var indexedOnly = Set<Address>()
         var seen = Set<Address>()
-        for log in incoming.logs where !log.address.isZero && !known.contains(log.address) {
+        for log in incoming where !log.address.isZero && !known.contains(log.address) {
             if Self.isERC20Transfer(log) {
                 indexedOnly.remove(log.address)
                 if seen.insert(log.address).inserted { candidates.append(log.address) }
