@@ -82,7 +82,12 @@ struct LaunchpadProfileView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .overlay { if model.loading, model.isEmpty { ProgressView().controlSize(.large) } }
             .task(id: session.address) { await model.load(env: env, address: session.address) }
-            .refreshable { await model.load(env: env, address: session.address) }
+            // The history fills in behind the screen (`HistoryModel`): the fee tiles follow it.
+            .task(id: env.history.version) { model.applyIncome(env.history.snapshot) }
+            .refreshable {
+                await env.history.refresh(env: env)
+                await model.load(env: env, address: session.address)
+            }
             .sheet(item: $claimTarget) { claimSheet(for: $0) }
         }
     }
@@ -132,9 +137,15 @@ struct LaunchpadProfileView: View {
             }
             .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
             // A history or an escrow that couldn't be read says so, with Retry: Total and Received are never shown in part,
-            // and an escrow's balances are kept from its last read for this wallet, never "0" on a failed read.
-            if model.incomeUnread {
-                retryRow("Fees received couldn't be read just now.")
+            // and an escrow's balances are kept from its last read for this wallet, never "0" on a failed read. A history
+            // still filling in says how far it has got.
+            if model.incomeFilling {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("Reading your history… \(NumberStyle.percent(model.incomeProgress * 100, fractionDigits: 0, signed: false))").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                }
+            } else if model.incomeUnread {
+                retryRow("Fees received couldn't be read just now.", history: true)
             }
             if model.feesUnread {
                 retryRow("Creator fees couldn't be read just now.")
@@ -167,11 +178,18 @@ struct LaunchpadProfileView: View {
         }
     }
 
-    private func retryRow(_ message: LocalizedStringResource) -> some View {
+    /// `history`: the retry reads the wallet's history on as well (`HistoryModel.refresh`).
+    private func retryRow(_ message: LocalizedStringResource, history: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline) {
             InlineError(message: message)
             Spacer(minLength: 8)
-            Button("Retry") { Task { await model.load(env: env, address: session.address) } }.font(.footnote.weight(.semibold))
+            Button("Retry") {
+                Task {
+                    if history { await env.history.refresh(env: env) }
+                    await model.load(env: env, address: session.address)
+                }
+            }
+            .font(.footnote.weight(.semibold))
         }
     }
 
@@ -540,12 +558,31 @@ final class LaunchpadProfileModel {
         var text: String { "\(NumberStyle.units(amount, decimals: decimals)) \(symbol)" }
     }
 
-    /// Fees the wallet received, from the chain (`LaunchpadService.feeIncome`): creator fees paid straight to it or
-    /// claimed, and holder rewards claimed. Nil until read.
+    /// Fees the wallet received, from its history (`WalletHistorySnapshot.feeIncome`): creator fees paid straight to it
+    /// or claimed, and holder rewards claimed. Nil until the history has read its window.
     private(set) var income: LaunchpadFeeIncome?
     /// The fee history couldn't be read to the head, or a holder reward's coin isn't among the launches read: Received
     /// and Total say so (with Retry) instead of showing part of it as the whole.
     private(set) var incomeUnread = false
+    /// The history is still filling in: Received and Total wait for it, and say how far it has got.
+    private(set) var incomeFilling = false
+    private(set) var incomeProgress = 0.0
+
+    /// The fees received as the history model has them now: shown once the launchpad and fee-sharing scans have read
+    /// their windows; while they fill in, waited for; when the chain couldn't be reached, or the filling stalled, said
+    /// to be unread, with Retry. Called whenever `HistoryModel.version` moves, and by `load`.
+    func applyIncome(_ snapshot: WalletHistorySnapshot) {
+        guard shownFor != nil else { return }
+        let complete = snapshot.feeIncome.complete
+        incomeFilling = !complete && snapshot.filling
+        incomeProgress = snapshot.progress
+        if complete {
+            income = snapshot.feeIncome
+            incomeUnread = snapshot.feeIncome.rewardsClaimed.keys.contains { rewardPairs[$0] == nil }
+        } else if !snapshot.filling {
+            incomeUnread = true
+        }
+    }
 
     /// What is waiting to be claimed, per asset: the creator-fee balances (as `creatorClaimables` lists them) and the
     /// holder rewards (in each coin's pair asset).
@@ -682,9 +719,6 @@ final class LaunchpadProfileModel {
         loading = true
         defer { if load == loads { loading = false } }
 
-        // The fees the wallet received, read from the chain alongside everything else (`LaunchpadService.feeIncome`).
-        async let incomeRead = env.launchpad.feeIncome(wallet: address)
-
         let listing = await env.launchpad.launchListing(limit: 100)
         guard current() else { return }
         let launches = listing.keeping(lastLaunches)
@@ -725,13 +759,11 @@ final class LaunchpadProfileModel {
         }
         incomplete = unread ? tr("Part of your launchpad couldn't be read just now, so some coins or fees may be missing. Pull to refresh.") : nil
 
-        // Fees received: read to the head, or said to be unread, never shown in part. A holder reward is paid in its
-        // coin's pair asset, which the launches read name; one whose coin isn't among them is unread too.
-        let readIncome = await incomeRead
-        guard current() else { return }
+        // Fees received: from the wallet's history as the history model has it (`HistoryModel`), which fills in behind
+        // the screen; `applyIncome` follows it. A holder reward is paid in its coin's pair asset, which the launches read
+        // name; one whose coin isn't among them is unread too.
         rewardPairs = Dictionary(launches.map { ($0.token, $0.pairToken) }, uniquingKeysWith: { first, _ in first })
-        income = readIncome
-        incomeUnread = !readIncome.complete || readIncome.rewardsClaimed.keys.contains { rewardPairs[$0] == nil }
+        applyIncome(env.history.snapshot)
         guard !launches.isEmpty else { positions = []; created = []; activity = []; return }
 
         // Balances across every launch token in one multicall.

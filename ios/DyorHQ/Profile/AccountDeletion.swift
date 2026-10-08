@@ -71,6 +71,8 @@ enum AccountDeletion {
         NotificationHub.shared.clear()
         // Before the erase: a venue list save after it would turn App Lock's default off for the next launch (R4).
         env.venueList.stop()
+        // The wallet's history on disk, what was built from it, and whatever a round under way reads after this.
+        await env.walletHistory.forget(wallet: account.address)
         await session.eraseLocalData()
         session.deletionNotice = notice
     }
@@ -146,6 +148,7 @@ enum AccountDeletion {
         env.perplTrading.forget(address: address)
         NotificationHub.shared.clear()
         env.venueList.stop()
+        await env.walletHistory.forget(wallet: address)
         await session.eraseLocalData()
     }
 

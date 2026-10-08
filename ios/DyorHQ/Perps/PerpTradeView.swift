@@ -976,7 +976,8 @@ struct PerpTradeView: View {
         ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { try await checkedOrderPlan() }, onDone: { ticket.sizeText = ""; sizePercent = 0; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
             if let reviewCloses { model.noteUserClose(market.id, closing: reviewCloses) }
             let perp = "\(market.asset)-PERP"
-            Activity.record(ActivityRecord(kind: .perp, title: ticket.side == .long ? tr("Long \(perp)") : tr("Short \(perp)"), subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
+            // The size in the asset, whatever unit the ticket was typed in (a ticket typed in dollars once recorded "50 BTC").
+            Activity.record(ActivityRecord(kind: .perp, title: ticket.side == .long ? tr("Long \(perp)") : tr("Short \(perp)"), subtitle: "\(NumberStyle.number(reviewedInput.size, maximumFractionDigits: market.lotDecimals)) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }, intent: orderIntent) {
             let signed = reviewedInput
             DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: "\(market.asset)-PERP"))
@@ -2555,6 +2556,12 @@ private struct AddMarginSheet: View {
         .presentationDetents([.medium, .large])
         .presentationBackground(Color(.systemGroupedBackground))
         .sensoryFeedback(.success, trigger: run.isDone)
+        // Recorded when the margin settles, not when the sheet is dismissed: a settled sheet can be swiped away.
+        .onChange(of: run.phase) { _, phase in
+            if case .done(let hash) = phase {
+                Activity.record(ActivityRecord(kind: .deposit, title: tr("Added \(position.symbol) margin"), subtitle: "\(NumberStyle.number(amount)) AUSD", hash: hash, section: "perps", usd: amount), owner: session.address)
+            }
+        }
     }
 
     private func plainAmount(_ value: Double) -> String {
@@ -2563,13 +2570,8 @@ private struct AddMarginSheet: View {
 
     private func finish() {
         let done = run.isDone
-        let hash = run.doneHash
-        let added = amount
         dismiss()
-        if done {
-            Activity.record(ActivityRecord(kind: .deposit, title: tr("Added \(position.symbol) margin"), subtitle: "\(NumberStyle.number(added)) AUSD", hash: hash, section: "perps", usd: added), owner: session.address)
-            onDone()
-        }
+        if done { onDone() }
     }
 }
 

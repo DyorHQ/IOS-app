@@ -85,6 +85,14 @@ final class PortfolioModel {
     /// The wallet the latest load is for. A load started for another (a refresh or a reload that outlived an account
     /// switch) publishes nothing: `reset` cleared that wallet's data, and this one's must not come back (RS-10).
     private var loadingFor: Address?
+    /// The on-chain history as the history model has it (`applyHistory`): still filling in, how far, whether the chain
+    /// could be reached, and the day the transfer history reaches back to.
+    private(set) var historyFilling = false
+    private(set) var historyComplete = false
+    private(set) var historyUnreachable = false
+    private(set) var historyProgress = 0.0
+    private(set) var historySince: Date?
+    private var historyVersion = -1
 
     // Raw, period-agnostic material.
     private var swaps: [SwapRecord] = []
@@ -135,7 +143,7 @@ final class PortfolioModel {
     func activity(_ period: VolumePeriod) -> [Activity] {
         let since = period.since()
         var out: [Activity] = []
-        for swap in swaps where swap.time >= since {
+        for swap in swapsLessFills where swap.time >= since {
             let kind = classify(swap)
             let section: Section = kind == .launch ? .launch : kind == .moments ? .moments : .spot
             out.append(Activity(id: "swap-\(swap.id)", section: section, title: kind == .spot ? tr("Swapped") : tr("Traded on \(section.title)"), subtitle: SwapHistoryItem.describe(swap, tokens: tokens), time: swap.time, usd: swapUSD(swap), hash: swap.hash))
@@ -190,6 +198,16 @@ final class PortfolioModel {
         return .spot
     }
 
+    /// The transactions of the wallet's curve fills: a curve buy or sell moves the coin and the pair asset in the same
+    /// transaction, so the transfer history reads it as a swap too. The fill is the record; the swap is left out.
+    private var fillTransactions: Set<Data> { Set(launchHistory.fills.map(\.hash)) }
+
+    /// The wallet's swaps, less those that are curve fills.
+    private var swapsLessFills: [SwapRecord] {
+        let fills = fillTransactions
+        return fills.isEmpty ? swaps : swaps.filter { !fills.contains($0.hash) }
+    }
+
     private func units(_ token: Address, _ raw: BigUInt) -> Double {
         Amount.units(raw, decimals: tokens[token]?.decimals ?? 18)
     }
@@ -209,7 +227,7 @@ final class PortfolioModel {
         var stats = Stats()
         var spent = 0.0, received = 0.0
         var deltas: [Address: Double] = [:]
-        for swap in swaps where swap.time >= since && classify(swap) == kind {
+        for swap in swapsLessFills where swap.time >= since && classify(swap) == kind {
             stats.trades += 1
             let usd = swapUSD(swap)
             stats.volume += usd ?? 0
@@ -326,24 +344,27 @@ final class PortfolioModel {
 
     // MARK: Loading
 
-    /// Loads every source for the wallet. `force` re-reads even when the last load is fresh (under five minutes old).
-    func load(env: AppEnvironment, address: Address?, perplKey: PerplApiKey?, force: Bool) async {
+    /// Loads the reference data (launches, Moments, the token universe), prices and perps for the wallet, and takes its
+    /// on-chain history from the history model (`HistoryModel`), which fills it in behind every screen: `applyHistory`
+    /// rebuilds the figures whenever it moves. `force` re-reads even when the last load is fresh (under five minutes
+    /// old). `passkey`: the account signs with a passkey, whose Perpl history loads only while its session is unlocked.
+    func load(env: AppEnvironment, address: Address?, perplKey: PerplApiKey?, force: Bool, passkey: Bool = false) async {
         guard let address else { reset(); return }
         // A cached load that skipped perps for lack of a Perpl key (or hit a transient perps error) must not be
         // served once a key is available — otherwise perps volume stays 0 in the whole-app total. On a cold start the
         // Portfolio load reads perplTrading.key before RootView's refresh(account:) has loaded it from the Keychain,
         // so re-fetch when we now have a key and the last load noted a perps gap. A clean keyed load clears perpsNote.
-        if !force, loadedFor == address, !(perpsNote != nil && perplKey != nil), let updatedAt, Date().timeIntervalSince(updatedAt) < 300 { return }
+        if !force, loadedFor == address, !(perpsNote != nil && perplKey != nil), let updatedAt, Date().timeIntervalSince(updatedAt) < 300 {
+            applyHistory(env.history.snapshot, version: env.history.version, for: address)
+            return
+        }
         if loadedFor != address { reset() }
         loadingFor = address
         loading = true
         defer { loading = false }
-        // Nothing is published until every read is back, and a failed read never replaces what the last good one
-        // showed: an interrupted log scan comes back empty rather than failing, so a load cancelled part-way (the
-        // screen went away) publishes nothing, and a load with a failed read keeps the earlier data for that part, says
-        // so, and isn't cached as fresh (security audit 2026-09-26, RS-10). `reset` above already cleared another
-        // wallet's data, and a load for a wallet that is no longer the latest one asked for publishes nothing, so what
-        // is kept is always this wallet's.
+        // Nothing is published until every read is back, and a failed read never replaces what the last good one showed
+        // (security audit 2026-09-26, RS-10): the history comes from the store, which only ever grows, and a load for a
+        // wallet that is no longer the latest one asked for publishes nothing, so what is kept is always this wallet's.
 
         // Reference data first: the launch list (curves + pair assets), the Moments list (coins + pools), the token universe.
         // Launches on retired factories are history too: the coins and trades stay part of the wallet's record.
@@ -370,24 +391,12 @@ final class PortfolioModel {
         let tokenMap = Dictionary(universe.map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
         let curves = Set(launches.map(\.curve))
         let momentsCoins = Set(moments.map(\.moment.coin))
+        // The history model builds the records again with the launches' curves and the tokens' decimals.
+        env.history.setReference(env: env, curves: curves, decimals: tokenMap.mapValues(\.decimals))
 
-        // Histories, all at once.
-        let decimals = tokenMap.mapValues(\.decimals)
-        // Whole-history scans: rpc1 answers a wallet's complete transfer history in one call, so every section counts
-        // everything the wallet ever did, not the last 30 days. No head means the chain can't be read right now, and
-        // the scans below would come back empty, not failed.
-        let head = await env.swapHistory.head()
-        async let swapsTask = env.swapHistory.swaps(wallet: address, fromBlock: 0, toBlock: head ?? 0, decimals: decimals, limit: 2000)
-        async let launchTask = env.launchpad.walletHistory(wallet: address, lookbackBlocks: UInt64.max, curves: curves)
-        async let momentsHistoryTask = env.moments.history(account: address)
-        async let retiredHistoryTask = Self.retiredHistory(env: env, address: address)
         let priceable = universe.filter { !$0.isLaunchpad && !momentsCoins.contains($0.address) }
         async let pricesTask = env.prices.prices(for: priceable)
-        async let perpsTask = loadPerps(env: env, key: perplKey)
-
-        let scannedSwaps = await swapsTask
-        let scannedLaunch = await launchTask
-        let scannedMoments = MomentsAccountHistory.merged([await momentsHistoryTask] + (await retiredHistoryTask))
+        async let perpsTask = loadPerps(env: env, key: perplKey, passkey: passkey)
         let fetchedPrices = try? await pricesTask
         let perps = await perpsTask
         guard !Task.isCancelled, loadingFor == address else { return }
@@ -397,12 +406,6 @@ final class PortfolioModel {
         momentsByCoin = Dictionary(moments.map { ($0.moment.coin, $0) }, uniquingKeysWith: { first, _ in first })
         momentsByKey = Dictionary(moments.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
         tokens = tokenMap
-        if head != nil {
-            swaps = scannedSwaps
-            launchHistory = scannedLaunch
-            momentsHistory = scannedMoments
-        }
-        Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio scans for \(address.short, privacy: .public): head \(head ?? 0) swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count)")
         var priced: [Address: Double] = fetchedPrices == nil ? prices : [:]
         if let map = fetchedPrices { for (address, info) in map { priced[address] = info.usd } }
         for stable in Self.stables { priced[stable] = 1 }
@@ -420,12 +423,32 @@ final class PortfolioModel {
 
         loadedFor = address
         hasLoaded = true
-        if !listing.complete || fetchedMoments == nil || !retired.complete || head == nil || fetchedPrices == nil {
+        applyHistory(env.history.snapshot, version: env.history.version, for: address, force: true)
+        Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio for \(address.short, privacy: .public): swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count) history \(self.historyProgress)")
+        if !listing.complete || fetchedMoments == nil || !retired.complete || fetchedPrices == nil {
             error = tr("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.")
             updatedAt = nil
         } else {
             error = nil
             updatedAt = .now
+        }
+    }
+
+    /// The wallet's on-chain history as the history model has it now (`HistoryModel.snapshot`): the swaps, launchpad
+    /// and Moments records the figures are built from, and how far it has got. Called whenever `HistoryModel.version`
+    /// moves, and at the end of a load; a snapshot for another wallet, or one already applied, changes nothing.
+    func applyHistory(_ snapshot: WalletHistorySnapshot, version: Int, for address: Address?, force: Bool = false) {
+        guard let address, loadedFor == address || loadingFor == address, force || version != historyVersion else { return }
+        historyVersion = version
+        swaps = snapshot.swaps
+        launchHistory = snapshot.launch
+        momentsHistory = snapshot.moments
+        historyFilling = snapshot.filling
+        historyComplete = snapshot.complete
+        historyUnreachable = snapshot.unreachable
+        historyProgress = snapshot.progress
+        if let anchor = snapshot.anchor, let floor = snapshot.status(WalletHistoryScans.transfersInId).floor {
+            historySince = BlockClock.time(of: floor, anchor: anchor, secondsPerBlock: BlockClock.fallbackSecondsPerBlock)
         }
     }
 
@@ -436,18 +459,16 @@ final class PortfolioModel {
         launchesByCurve = [:]; launchesByToken = [:]; momentsByCoin = [:]; momentsByKey = [:]
         tokens = [:]; prices = [:]
         hasLoaded = false; updatedAt = nil; loadedFor = nil; perpsNote = nil
+        historyFilling = false; historyComplete = false; historyUnreachable = false; historyProgress = 0; historySince = nil; historyVersion = -1
     }
 
-    /// The wallet's history on each retired cohort, each scanned from that cohort's own deployment block.
-    private static func retiredHistory(env: AppEnvironment, address: Address) async -> [MomentsAccountHistory] {
-        var out: [MomentsAccountHistory] = []
-        for cohort in env.retiredMoments { out.append(await cohort.history(account: address)) }
-        return out
-    }
-
-    /// Perpl history needs the account's API key (one-click trading); up to 1,000 fills and 1,000 closed events.
-    private func loadPerps(env: AppEnvironment, key: PerplApiKey?) async -> (fills: [PerplFill], closed: [PerplPositionRecord], note: String?) {
-        guard let key else { return ([], [], tr("Enable one-click trading in Profile → Perpl Trading to include your perps history.")) }
+    /// Perpl history needs the account's API key (one-click trading); up to 1,000 fills and 1,000 closed events. Without
+    /// a key — never enrolled, or a passkey account whose session is locked — what was last read stays, and the note says
+    /// what would load it.
+    private func loadPerps(env: AppEnvironment, key: PerplApiKey?, passkey: Bool) async -> (fills: [PerplFill], closed: [PerplPositionRecord], note: String?) {
+        guard let key else {
+            return (fills, closed, passkey ? tr("Your Perpl history loads while your passkey session is unlocked.") : tr("Enable one-click trading in Profile → Perpl Trading to include your perps history."))
+        }
         guard let markets = try? await env.perpl.markets(), !markets.isEmpty else { return (fills, closed, tr("Perpl markets could not be loaded.")) }
         do {
             let fills = try await Self.page(maxPages: 10) { try await env.perpl.fills(key: key, markets: markets, count: 100, cursor: $0) }

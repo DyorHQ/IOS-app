@@ -96,6 +96,23 @@ public extension MomentsService {
                                       complete: complete)
     }
 
+    /// `creatorEarnings(account:)` from logs already read — the history store's (`WalletHistoryService.momentsLogs`) —
+    /// with only the balances read from the chain. `complete` is whether the logs cover the cohort's whole window.
+    func creatorEarnings(account: Address, published: [Log], withdrawn: [Log], feesWithdrawn: [Log], complete: Bool) async throws -> MomentsCreatorEarnings {
+        guard isDeployed else { return .none }
+        let hook = addresses.hook
+        let ids = Self.createdIds(published, account: account, factory: addresses.factory)
+        guard !ids.isEmpty else { return MomentsCreatorEarnings(moments: [], complete: complete) }
+        var calls: [ContractCall] = ids.map { MomentsABI.call(addresses.collect, MomentsABI.Collect.ledger, [.uint($0)], returns: MomentsABI.ledgerTuple) }
+        if !hook.isZero { calls += ids.map { MomentsABI.call(hook, MomentsABI.Hook.creatorAccrued, [.uint($0)], returns: "uint256") } }
+        let values = try await multicall.readAll(calls)
+        let held = ids.enumerated().map { i, id in
+            (id: id, proceeds: MomentsABI.ledger(values[i][0]).creatorClaimable, fees: hook.isZero ? BigUInt(0) : values[ids.count + i][0].uint)
+        }
+        return MomentsCreatorEarnings(moments: Self.creatorEarnings(held: held, withdrawn: withdrawn, feesWithdrawn: feesWithdrawn, account: account, factory: addresses.factory),
+                                      complete: complete)
+    }
+
     /// The ids of the Moments `account` published on `factory`, from its `Published` logs, oldest first, each once.
     nonisolated static func createdIds(_ published: [Log], account: Address, factory: Address) -> [BigUInt] {
         var seen = Set<BigUInt>()
@@ -135,4 +152,12 @@ public extension RetiredMoments {
     func creatorEarnings(account: Address) async throws -> MomentsCreatorEarnings {
         try await service.creatorEarnings(account: account)
     }
+
+    /// The same from logs already read (`MomentsService.creatorEarnings(account:published:withdrawn:feesWithdrawn:complete:)`).
+    func creatorEarnings(account: Address, published: [Log], withdrawn: [Log], feesWithdrawn: [Log], complete: Bool) async throws -> MomentsCreatorEarnings {
+        try await service.creatorEarnings(account: account, published: published, withdrawn: withdrawn, feesWithdrawn: feesWithdrawn, complete: complete)
+    }
+
+    /// This cohort's addresses.
+    var cohort: MomentsAddresses { service.addresses }
 }

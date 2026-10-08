@@ -26,6 +26,12 @@ public struct SwapRecord: Identifiable, Sendable, Hashable {
         self.boughtToken = boughtToken
         self.boughtAmount = boughtAmount
     }
+
+    /// The same swap, its time estimated again from a newer head.
+    public func timed(anchor: BlockHeader, secondsPerBlock: Double) -> SwapRecord {
+        SwapRecord(hash: hash, block: block, time: BlockClock.time(of: block, anchor: anchor, secondsPerBlock: secondsPerBlock),
+                   soldToken: soldToken, soldAmount: soldAmount, boughtToken: boughtToken, boughtAmount: boughtAmount)
+    }
 }
 
 /// Reconstructs a wallet's swap history from on-chain `Transfer` events, with no per-token filter: one pair of
@@ -97,13 +103,38 @@ public struct SwapHistoryService: Sendable {
     }
 
     private func scan(wallet: Address, from: UInt64, to latest: UInt64, anchor: BlockHeader, secondsPerBlock: Double, decimals: [Address: Int], limit: Int) async -> [SwapRecord] {
-        func time(_ block: UInt64) -> Date { BlockClock.time(of: block, anchor: anchor, secondsPerBlock: secondsPerBlock) }
         let topic = ABI.eventTopic(Self.transferSig)
         let walletWord = wallet.data.leftPadded(to: 32)
         // No address filter: one scan for everything the wallet sent, one for everything it received.
         async let outgoing = rpc.chunkedLogs(address: nil, topics: [topic, walletWord, nil], fromBlock: from, toBlock: latest)
         async let incoming = rpc.chunkedLogs(address: nil, topics: [topic, nil, walletWord], fromBlock: from, toBlock: latest)
         let (outLogs, inLogs) = await (outgoing, incoming)
+        return await reconstruct(wallet: wallet, outgoing: outLogs, incoming: inLogs, anchor: anchor, secondsPerBlock: secondsPerBlock, decimals: decimals, limit: limit)
+    }
+
+    /// The wallet's swaps from its `Transfer` logs — those it sent (`outgoing`) and received (`incoming`), as the history
+    /// store keeps them — newest first, at most `limit`: a transaction with a spent leg and a received leg is a swap, and a
+    /// one-sided one whose other leg is native MON is read from the transaction itself (`rpc`).
+    public func reconstruct(wallet: Address, outgoing outLogs: [Log], incoming inLogs: [Log], anchor: BlockHeader, secondsPerBlock: Double, decimals: [Address: Int],
+                            limit: Int) async -> [SwapRecord] {
+        await reconstruct(wallet: wallet, outgoing: outLogs, incoming: inLogs, anchor: anchor, secondsPerBlock: secondsPerBlock, decimals: decimals, limit: limit, facts: [:]).records
+    }
+
+    /// What a transaction's own record says (`eth_getTransactionByHash`) and what a sale into native MON paid the wallet
+    /// (`withNativeReceived`), kept by the caller between reconstructions: once mined, neither changes, so a round that
+    /// added a few logs looks up the new transactions only.
+    public struct TransactionFacts: Sendable, Hashable {
+        public var from: Address?
+        public var to: Address?
+        public var value: BigUInt
+        public var nativeReceived: BigUInt?
+    }
+
+    /// `reconstruct`, with what was looked up per transaction before (`facts`) used again, and returned with the new.
+    public func reconstruct(wallet: Address, outgoing outLogs: [Log], incoming inLogs: [Log], anchor: BlockHeader, secondsPerBlock: Double, decimals: [Address: Int],
+                            limit: Int, facts known: [Data: TransactionFacts]) async -> (records: [SwapRecord], facts: [Data: TransactionFacts]) {
+        var facts = known
+        func time(_ block: UInt64) -> Date { BlockClock.time(of: block, anchor: anchor, secondsPerBlock: secondsPerBlock) }
 
         // Group both directions by transaction; a swap is a tx with a spent leg and a received leg.
         struct Leg { let token: Address; let amount: BigUInt; let block: UInt64 }
@@ -145,23 +176,28 @@ public struct SwapHistoryService: Sendable {
         // call into one of the swap routers.
         let receivedOnly = received.keys.filter { sent[$0] == nil }
         let sentOnly = sent.keys.filter { received[$0] == nil }
-        let oneSided = Array((receivedOnly + sentOnly).prefix(300))
-        if !oneSided.isEmpty, let answers = try? await rpc.batch(oneSided.map { ("eth_getTransactionByHash", [JSON.string($0.hexString)]) }) {
-            for (hash, answer) in zip(oneSided, answers) {
-                guard case .success(let tx) = answer, let from = tx["from"].string.flatMap(Address.init), from == wallet else { continue }
-                let to = tx["to"].string.flatMap(Address.init)
+        // Looked up for the ones not known yet, up to 300 a build; the rest at the next.
+        let oneSided = receivedOnly + sentOnly
+        let unknown = Array(oneSided.filter { facts[$0] == nil }.prefix(300))
+        if !unknown.isEmpty, let answers = try? await rpc.batch(unknown.map { ("eth_getTransactionByHash", [JSON.string($0.hexString)]) }) {
+            for (hash, answer) in zip(unknown, answers) {
+                // A node behind the one the logs came from answers null: not a fact, asked again next time.
+                guard case .success(let tx) = answer, let from = tx["from"].string.flatMap(Address.init) else { continue }
                 let value = tx["value"].string.map { BigUInt($0.hasPrefix("0x") ? String($0.dropFirst(2)) : $0, radix: 16) ?? 0 } ?? 0
-                if let recvLegs = received[hash], value > 0, let bought = dominant(recvLegs, excluding: nil) {
-                    records.append(SwapRecord(hash: hash, block: bought.block, time: time(bought.block),
-                                              soldToken: Monad.native, soldAmount: value, boughtToken: bought.token, boughtAmount: bought.amount))
-                } else if let sentLegs = sent[hash], let to, Self.swapRouters.contains(to), let sold = dominant(sentLegs, excluding: nil) {
-                    records.append(SwapRecord(hash: hash, block: sold.block, time: time(sold.block),
-                                              soldToken: sold.token, soldAmount: sold.amount, boughtToken: Monad.native, boughtAmount: 0))
-                }
+                facts[hash] = TransactionFacts(from: from, to: tx["to"].string.flatMap(Address.init), value: value, nativeReceived: nil)
             }
         }
-        records = await withNativeReceived(records.sorted { $0.block > $1.block }.prefix(limit), wallet: wallet)
-        return records
+        for hash in oneSided {
+            guard let fact = facts[hash], fact.from == wallet else { continue }
+            if let recvLegs = received[hash], fact.value > 0, let bought = dominant(recvLegs, excluding: nil) {
+                records.append(SwapRecord(hash: hash, block: bought.block, time: time(bought.block),
+                                          soldToken: Monad.native, soldAmount: fact.value, boughtToken: bought.token, boughtAmount: bought.amount))
+            } else if let sentLegs = sent[hash], let to = fact.to, Self.swapRouters.contains(to), let sold = dominant(sentLegs, excluding: nil) {
+                records.append(SwapRecord(hash: hash, block: sold.block, time: time(sold.block),
+                                          soldToken: sold.token, soldAmount: sold.amount, boughtToken: Monad.native, boughtAmount: 0))
+            }
+        }
+        return await withNativeReceived(records.sorted { $0.block > $1.block }.prefix(limit), wallet: wallet, facts: facts)
     }
 
     /// How many sales into native MON, newest first, a scan reads the MON of (`withNativeReceived`): five reads each.
@@ -171,11 +207,20 @@ public struct SwapHistoryService: Sendable {
     /// balance after the sale's block less its balance before it, plus the gas the sale cost (`nativeReceived`). A sale
     /// whose MON can't be read keeps 0, which the app shows as unknown ("→ MON"), never as "0 MON". Read for the newest
     /// `nativeReadLimit` such sales, in one batch.
-    private func withNativeReceived(_ records: ArraySlice<SwapRecord>, wallet: Address) async -> [SwapRecord] {
+    private func withNativeReceived(_ records: ArraySlice<SwapRecord>, wallet: Address, facts known: [Data: TransactionFacts]) async -> (records: [SwapRecord], facts: [Data: TransactionFacts]) {
         var records = Array(records)
-        let unread = records.indices.filter { records[$0].boughtToken == Monad.native && records[$0].boughtAmount == 0 && records[$0].block > 0 }
-            .prefix(Self.nativeReadLimit)
-        guard !unread.isEmpty else { return records }
+        var facts = known
+        func apply(_ i: Int, _ received: BigUInt) {
+            let swap = records[i]
+            records[i] = SwapRecord(hash: swap.hash, block: swap.block, time: swap.time, soldToken: swap.soldToken, soldAmount: swap.soldAmount,
+                                    boughtToken: swap.boughtToken, boughtAmount: received)
+        }
+        // What was read before is applied; the rest is read now, the newest `nativeReadLimit` of them.
+        var unread: [Int] = []
+        for i in records.indices where records[i].boughtToken == Monad.native && records[i].boughtAmount == 0 && records[i].block > 0 {
+            if let read = facts[records[i].hash]?.nativeReceived { apply(i, read) } else if unread.count < Self.nativeReadLimit { unread.append(i) }
+        }
+        guard !unread.isEmpty else { return (records, facts) }
         var calls: [(method: String, params: [JSON])] = []
         for i in unread {
             let block = records[i].block
@@ -185,7 +230,7 @@ public struct SwapHistoryService: Sendable {
                       ("eth_getTransactionCount", [.string(wallet.hex), BlockTag.number(block - 1).json]),
                       ("eth_getTransactionCount", [.string(wallet.hex), BlockTag.number(block).json])]
         }
-        guard let answers = try? await rpc.batch(calls), answers.count == calls.count else { return records }
+        guard let answers = try? await rpc.batch(calls), answers.count == calls.count else { return (records, facts) }
         func quantity(_ answer: Result<JSON, RPCError>, _ key: String? = nil) -> BigUInt? {
             guard case .success(let json) = answer else { return nil }
             return (key.map { json[$0] } ?? json).string.flatMap { BigUInt(hexQuantity: $0) }
@@ -199,11 +244,10 @@ public struct SwapHistoryService: Sendable {
                   let nonceBefore = quantity(answer[3]), let nonceAfter = quantity(answer[4]),
                   let received = Self.nativeReceived(balanceBefore: before, balanceAfter: after, gasFee: gasUsed * gasPrice,
                                                      noncesBefore: nonceBefore, noncesAfter: nonceAfter) else { continue }
-            let swap = records[i]
-            records[i] = SwapRecord(hash: swap.hash, block: swap.block, time: swap.time, soldToken: swap.soldToken, soldAmount: swap.soldAmount,
-                                    boughtToken: swap.boughtToken, boughtAmount: received)
+            apply(i, received)
+            facts[records[i].hash, default: TransactionFacts(from: nil, to: nil, value: 0, nativeReceived: nil)].nativeReceived = received
         }
-        return records
+        return (records, facts)
     }
 
     /// The MON a sale into native MON paid the wallet, from its balance on each side of the sale's block and the gas the
