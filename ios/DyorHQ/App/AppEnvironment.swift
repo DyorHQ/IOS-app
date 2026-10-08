@@ -101,6 +101,9 @@ final class AppEnvironment {
         logsRouter = LogsRouter(endpoints: isFork ? [LogsEndpoint(url: config.rpcURL, span: 50_000)] : LogsEndpoints.monadMainnet,
                                 store: isFork ? nil : UserDefaultsLogsCapabilityStore())
         logsClient = isFork ? RPCClient(url: config.rpcURL) : RPCClient(logsRouter: logsRouter)
+        // State at past blocks (a wallet's nonce at a block, for its first transaction): only the endpoints that answer
+        // it, failing over among them; rpc.monad.xyz (the primary client) and rpc3 refuse old blocks.
+        let archiveClient = isFork ? RPCClient(url: config.rpcURL) : RPCClient(urls: LogsEndpoints.archive)
         activity = TokenActivityService(rpc: logsClient, clock: clock)
         swapHistory = SwapHistoryService(rpc: logsClient, clock: clock)
         // Wallet discovery reads balances/metadata on the primary multicall.
@@ -128,15 +131,13 @@ final class AppEnvironment {
         retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc, logsClient, clock] in RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock) }
         walletHistory = WalletHistoryService(store: historyStore, swapHistory: swapHistory, clock: clock, stacks: { [launchpad] in await launchpad.stacks },
                                              cohorts: [config.moments] + MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory },
-                                             firstActivity: { [logsClient] wallet in
+                                             firstActivity: { [archiveClient] wallet in
                                                  // The block of the wallet's first transaction, found once (about 27 nonce reads at past blocks)
-                                                 // and kept: the transfer scans read back to it, so every swap the wallet ever made counts. Read
-                                                 // through the logs client: rpc1, rpc2 and rpc4 answer a nonce at any block, rpc.monad.xyz (the
-                                                 // primary client) refuses old state (measured 2026-10-08). A wallet that has sent none is asked
-                                                 // again next time, not kept as such.
+                                                 // and kept: the transfer scans read back to it, so every swap the wallet ever made counts. A
+                                                 // wallet that has sent none is asked again next time, not kept as such.
                                                  let key = "history.v1.firstBlock.\(wallet.hex.lowercased())"
                                                  if let kept = UserDefaults.standard.string(forKey: key).flatMap({ UInt64($0) }) { return kept }
-                                                 let first = try await logsClient.firstTransactionBlock(of: wallet, head: try await logsClient.blockNumber())
+                                                 let first = try await archiveClient.firstTransactionBlock(of: wallet, head: try await archiveClient.blockNumber())
                                                  if let first { UserDefaults.standard.set(String(first), forKey: key) }
                                                  return first
                                              })

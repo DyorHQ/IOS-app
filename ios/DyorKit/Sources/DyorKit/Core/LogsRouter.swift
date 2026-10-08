@@ -45,23 +45,30 @@ public struct LogsEndpoint: Sendable, Hashable {
     /// Ranges one request carries: 1 where the endpoint counts a request's ranges together (rpc3) or refuses a batch
     /// (rpc4 answers a batch of ranges with an internal error).
     public let batch: Int
+    /// Whether the endpoint answers state at any past block (a nonce, a balance): rpc1, rpc2 and rpc4 do; rpc3 and
+    /// rpc.monad.xyz refuse old blocks ("historical state that is not available", measured 2026-10-08).
+    public let archive: Bool
 
-    public init(url: URL, span: UInt64, batch: Int = 6) {
+    public init(url: URL, span: UInt64, batch: Int = 6, archive: Bool = false) {
         self.url = url
         self.span = max(1, span)
         self.batch = max(1, batch)
+        self.archive = archive
     }
 }
 
 public enum LogsEndpoints {
     /// Monad mainnet's public endpoints for logs, the widest first, as measured on 2026-10-08.
     public static let monadMainnet: [LogsEndpoint] = [
-        LogsEndpoint(url: URL(string: "https://rpc2.monad.xyz")!, span: 10_000),
-        LogsEndpoint(url: URL(string: "https://rpc4.monad.xyz")!, span: 1_000, batch: 1),
+        LogsEndpoint(url: URL(string: "https://rpc2.monad.xyz")!, span: 10_000, archive: true),
+        LogsEndpoint(url: URL(string: "https://rpc4.monad.xyz")!, span: 1_000, batch: 1, archive: true),
         LogsEndpoint(url: URL(string: "https://rpc3.monad.xyz")!, span: 1_000, batch: 1),
-        LogsEndpoint(url: URL(string: "https://rpc1.monad.xyz")!, span: 100),
+        LogsEndpoint(url: URL(string: "https://rpc1.monad.xyz")!, span: 100, archive: true),
         LogsEndpoint(url: URL(string: "https://rpc.monad.xyz")!, span: 100),
     ]
+    /// The endpoints that answer state at past blocks, in order: a client for old nonces and balances fails over
+    /// among these only (`RPCClient(urls:)`), never onto one that refuses them.
+    public static var archive: [URL] { monadMainnet.filter(\.archive).map(\.url) }
     /// The smallest range any endpoint is asked for: what every one of them answers.
     public static let floorSpan: UInt64 = 100
 }

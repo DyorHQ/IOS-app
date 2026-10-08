@@ -179,21 +179,22 @@ public actor WalletHistoryService {
 
     public var history: HistoryStore { store }
 
-    /// The scans for `wallet`.
-    public func scans(wallet: Address) async -> [HistoryScan] {
+    /// The scans for `wallet`. `findingFirstTransaction`: whether the wallet's first transaction may be looked up now
+    /// for the transfer scans' floor (`transferFloor`) — a refresh does, the instant read of the store doesn't wait.
+    public func scans(wallet: Address, findingFirstTransaction: Bool = true) async -> [HistoryScan] {
         let stacks = await stacks()
-        let floor = await transferFloor(wallet)
+        let floor = await transferFloor(wallet, lookup: findingFirstTransaction)
         return [WalletHistoryScans.transfersIn(wallet: wallet, floor: floor), WalletHistoryScans.transfersOut(wallet: wallet, floor: floor), WalletHistoryScans.launchpad(wallet: wallet),
                 WalletHistoryScans.feeSharing(wallet: wallet, stacks: stacks), WalletHistoryScans.moments(wallet: wallet, cohorts: cohorts)]
     }
 
     /// How far back the transfer scans read for `wallet`: to its first transaction when that is older than the usual
     /// window (`WalletHistoryScans.transferDays`), so every swap it ever made counts; the window alone when it never
-    /// sent one, or until its first transaction's block can be read.
-    private func transferFloor(_ wallet: Address) async -> HistoryScan.Floor {
+    /// sent one, or until its first transaction's block can be read (`lookup`: now, or only from what is known).
+    private func transferFloor(_ wallet: Address, lookup: Bool) async -> HistoryScan.Floor {
         let key = wallet.hex.lowercased()
         if let first = firstBlocks[key] { return .earliest(block: first, blocks: WalletHistoryScans.transferBlocks) }
-        guard let first = try? await firstActivity(wallet) else { return WalletHistoryScans.transferFloor }
+        guard lookup, let first = try? await firstActivity(wallet) else { return WalletHistoryScans.transferFloor }
         firstBlocks[key] = first
         return .earliest(block: first, blocks: WalletHistoryScans.transferBlocks)
     }
@@ -202,7 +203,7 @@ public actor WalletHistoryService {
     /// launches); `decimals`: the tokens' decimals, for telling a swap's legs apart.
     public func cached(wallet: Address, curves: Set<Address>, decimals: [Address: Int]) async -> WalletHistorySnapshot {
         var entries: [String: HistoryEntry] = [:]
-        for scan in await scans(wallet: wallet) { entries[scan.id] = await store.cached(scan, wallet: wallet) }
+        for scan in await scans(wallet: wallet, findingFirstTransaction: false) { entries[scan.id] = await store.cached(scan, wallet: wallet) }
         return await snapshot(wallet: wallet, entries: entries, curves: curves, decimals: decimals)
     }
 
