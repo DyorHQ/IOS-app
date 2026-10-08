@@ -14,7 +14,7 @@
 # testing
 /coverage
 
-# next.js
+# build output of the former web app (kept ignored so stale local folders never show up)
 /.next/
 /.vinext/
 /out/
@@ -32,14 +32,14 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
-# vercel
+# former web hosting (same reason)
 .vercel
 
-# nested Expo repo (tracked as its own git repo) and archive snapshot
+# the former Expo prototype and its archive, if still present locally (not part of this repository)
 /mainstreet-app/
 /mainstreet-repo.tar.gz
 
-# typescript
+# TypeScript and tool output
 *.tsbuildinfo
 next-env.d.ts
 /dist/

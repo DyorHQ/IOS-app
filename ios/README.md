@@ -1,9 +1,11 @@
 # DyorHQ for iOS
 
 The native SwiftUI app. It talks to Monad mainnet directly (JSON-RPC and Multicall3), quotes swaps across Kuru
-Flow, Uniswap v3/v4 and Monday Trade, trades perpetuals on Perpl's on-chain exchange, and drives the DyorHQ
-launchpad once its contracts are deployed. Sign-in and the embedded wallet come from Privy; transactions are
-signed on the device and broadcast by the app itself, so Monad never needs to be on Privy's hosted-network list.
+Flow, Uniswap v3/v4 and Monday Trade, trades perpetuals on Perpl's on-chain exchange, and runs the DyorHQ Launchpad
+and Moments on their live contracts (`contracts/`). Sign-in is Privy (email code, Apple, Google) with its embedded
+wallet, a passkey account (the Mera port), an on-device email-and-password wallet, an imported wallet, or a watch-only
+address. Transactions are signed on the device and broadcast by the app itself, so Monad never needs to be on Privy's
+hosted-network list.
 
 ## Layout
 
@@ -11,27 +13,36 @@ signed on the device and broadcast by the app itself, so Monad never needs to be
 ios/
 ├─ project.yml            XcodeGen spec (run `xcodegen generate` after editing)
 ├─ Package.resolved       package pins the Xcode Cloud build uses (see Xcode Cloud below)
-├─ ci_scripts/            Xcode Cloud post-clone script that generates the project in the cloud checkout
+├─ ci_scripts/            Xcode Cloud: generates the project after the clone, gates the archive after the build
+├─ scripts/               pin-packages.sh (refresh Package.resolved), testflight.sh (archive + upload, gated)
+├─ ExportOptions.plist    App Store export options used by testflight.sh
 ├─ DyorHQ/                the app target (SwiftUI, iOS 18+)
-│  ├─ App/                entry point, environment, root view, cross-tab router
+│  ├─ App/                entry point, environment, root view, cross-tab router, language store, update gate
 │  ├─ Config/             Secrets.example.xcconfig → Secrets.xcconfig (git-ignored), AppConfig
-│  ├─ Design/             shared components (logos, amounts, change badges, confirmation rows)
-│  ├─ Onboarding/         welcome, sign-in, email code, watch-only address
-│  ├─ Home/ Launchpad/ Swap/ Perps/ Profile/
-│  ├─ Wallet/             Session (Privy), PrivyWallet signer, TransactionRun + ConfirmationSheet
-│  └─ Resources/          asset catalog (monochrome accent, semantic colors, wordmark, icon), privacy manifest
+│  ├─ Design/             shared components (logos, amounts, change badges, confirmation rows, paragraphs)
+│  ├─ Onboarding/         welcome, sign-in methods, email code, import a wallet, watch-only address
+│  ├─ Home/ Trade/ Swap/ Perps/ Launchpad/ Moments/ Bridge/ Portfolio/ Social/ News/ Notifications/ Profile/
+│  ├─ Menu/ Support/      side menu, Get Help and the public links
+│  ├─ Backend/            Supabase session, sync and alerts
+│  ├─ Wallet/             Session, the Privy / Mera / password / imported signers, TransactionRun + ConfirmationSheet
+│  └─ Resources/          asset catalog, token logos, String Catalogs (en, es, fr, zh-Hans, ko), the chart web view,
+│                         the Google Sans subset, privacy manifest
 └─ DyorKit/               Swift package with everything testable without a simulator
-   ├─ Core/               Keccak-256, ABI codec, JSON-RPC client, Multicall3, RLP, formatting
-   ├─ Chain/              Monad constants, token list, ERC-20, transaction preparation and sending
-   └─ Services/           Perpl, Swap (Kuru, Uniswap, Monday, wrap), Prices, Launchpad
+   ├─ Sources/DyorKit/
+   │  ├─ Core/            Keccak-256, ABI codec, JSON-RPC client, Multicall3, formatting
+   │  ├─ Chain/           Monad constants, token list, ERC-20, RLP, transaction preparation and sending
+   │  ├─ Services/        Swap (Kuru, Uniswap, Monday, wrap), Perpl, Launchpad, Moments, DyorCoins, Prices,
+   │  │                   Aurora (bridge), Supabase, Mera (passkeys), News, Notifications, wallet holdings
+   │  └─ Resources/       DyorKit's String Catalog
+   └─ Tests/              unit tests with fixtures recorded against Monad mainnet
 ```
 
 ## Build and run
 
 1. Install XcodeGen once: `brew install xcodegen`.
 2. `cp DyorHQ/Config/Secrets.example.xcconfig DyorHQ/Config/Secrets.xcconfig` and fill in the Privy app id and the
-   mobile client id created for bundle id `fun.dyorhq.app` with URL scheme `dyorhq` (see
-   `DyorHQ/internal: ios-app/docs/env-setup.md`).
+   mobile client id created for bundle id `fun.dyorhq.app` with URL scheme `dyorhq` (the owner's values are in the
+   private repository DyorHQ/internal, `ios-app/docs/env-setup.md`).
    Without them the app still runs: sign-in shows what is missing and **Watch an Address** works.
 3. `xcodegen generate`, open `DyorHQ.xcodeproj`, pick a simulator or device, run.
 
@@ -81,8 +92,10 @@ The DyorHQ workflow archives `ios/DyorHQ.xcodeproj` on every push to `main`. Tha
   is not a build variable: it lives only in the `aurora-proxy` Edge Function's secrets, so it never ships in the app.
   Enter plain values (no quotes, URLs as-is). An archive fails without the two Privy ids, because sign-up needs them;
   any other missing value switches its feature off, exactly as in a local build.
-- After changing a package requirement in `project.yml` or `DyorKit/Package.swift`, run `scripts/pin-packages.sh`
-  and commit `Package.resolved`; the cloud build fails with an out-of-date resolved file until the pins match.
+- Xcode version: pin the workflow to the release the app is verified on (Xcode 26.6 at the time of writing) rather
+  than "Latest Release", which moves on its own; Xcode Cloud reports the version it used in each build's summary.
+- After changing a package requirement in `project.yml` or `DyorKit/Package.swift`, run `ios/scripts/pin-packages.sh`
+  and commit `ios/Package.resolved`; the cloud build fails with an out-of-date resolved file until the pins match.
 
 ## Contract addresses and the release gate
 
@@ -107,8 +120,9 @@ python3 ../scripts/dev/check-launchpad-addresses.py --release
 The first and the last fail while either table is pending. The first also fails when a key with a count is missing
 from the app's or DyorKit's catalog, or has no English "one" form there (a count of 1 would read "1 editions"): the
 strings tests skip that check outside the gate, until `scripts/dev/strings-sync.sh` has filled the catalogs. After
-changing any text, run `scripts/dev/strings-sync.sh` (it builds into a scratch folder; `--derived-data` reuses a
-build), give a new count key its English one and other forms, and run `scripts/dev/check-strings.py --enforce`.
+changing any text, run `scripts/dev/strings-sync.sh` from the repository root (it builds into a scratch folder;
+`--derived-data` reuses a build), give a new count key its English one and other forms, and run
+`scripts/dev/check-strings.py --enforce`.
 `ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud) and `scripts/testflight.sh` run the first command too, each refusing
 the archive. The last one also proves the retired Moments cohorts final on chain
 (read-only calls to a public Monad RPC): each factory's `momentCount()` equals its pin
@@ -129,13 +143,8 @@ be read, so publish the docs update for a new stack before its archive (`DYOR_LI
 `DocsLinksTests`).
 It runs in every archive: the DyorHQ target's install-only build phase (so Product › Archive in Xcode is gated too),
 `ci_scripts/ci_post_xcodebuild.sh` (Xcode Cloud) and `scripts/testflight.sh`, each refusing the archive.
-`python3 ../scripts/dev/check-launchpad-addresses.py --chain` runs the same chain checks without refusing the pending
-tables, so the pins can be confirmed before v2 is wired.
-
-Once build 16 is on TestFlight, raise `app_config` 'ios'.min_build to 16 (a production Supabase write, the owner's).
-Builds before 16 count cohort 3 as the live cohort: they can still publish there, and they give a name link to a
-cohort 3 Moment that build 16 leaves unnamed, so the same `dyorhq.fun/moments/<name>` could open different Moments on
-the two builds. Below min_build the update gate stops signing and drops Moment links.
+`python3 ../scripts/dev/check-launchpad-addresses.py --chain` runs the same chain checks without refusing a pending
+table, so the pins of a future stack can be confirmed before it is wired.
 
 A Debug build can point at a v2 deployment on a local fork: `MONAD_RPC_URL` plus the `LAUNCHPAD_*` and `MOMENTS_*` keys
 in `Secrets.xcconfig` (see the example file). Release builds never read them.
@@ -144,7 +153,7 @@ in `Secrets.xcconfig` (see the example file). Release builds never read them.
 
 - Apple's system: SF Pro through text styles (Dynamic Type), SF Symbols, system semantic colors, `List`, `Form`,
   sheets with detents, `ContentUnavailableView` for empty states, `.refreshable`, Swift Charts.
-- Palette from `public/brand/dyorhq-design-system.md`: the accent is the text/canvas pair inverted (ink on paper,
+- Palette from `brand/dyorhq-design-system.md`: the accent is the text/canvas pair inverted (ink on paper,
   paper on ink), Positive #126A4B / #77D8AC, Negative #AD3047 / #F496AA, Attention #775812 / #E4C67D. No decorative
   accent. Gains and losses always carry a sign or a word, never color alone.
 - The serif wordmark asset is the identity; the app icon is its D on paper.
@@ -157,4 +166,4 @@ in `Secrets.xcconfig` (see the example file). Release builds never read them.
   Google credentials configured in the Privy dashboard.
 - The passkey host `accounts.dyorhq.fun` (the constant `Mera.relyingParty`) serving the AASA file for `fun.dyorhq.app`,
   and Associated Domains enabled on that App ID.
-- The v2 launchpad and Moments addresses after deployment, wired into DyorKit (see the release gate above).
+- The addresses of any future contract stack, wired into DyorKit in one reviewed change (see the release gate above).

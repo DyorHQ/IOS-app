@@ -2,7 +2,7 @@ import BigInt
 import Foundation
 
 /// Monad mainnet (chain id 143). Every address here was verified for bytecode on 2026-09-08 and comes from the
-/// venue's own documentation; see docs/swap-spec.md and docs/app-wiring.md in the web repository.
+/// venue's own documentation; see docs/swap-spec.md and docs/app-wiring.md at the repository root.
 public enum Monad {
     public static let chainId = 143
     public static let chainIdHex = "0x8f"

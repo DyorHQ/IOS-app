@@ -1,13 +1,15 @@
 # DyorHQ backend (Supabase)
 
-Backs the *social trading HQ* features only — push & price alerts, social (profiles/follows/feed/comments/
-leaderboards/referrals), a launch-discovery index, and cross-device sync. The core app stays
-self-custodial and on-chain; **no private keys or the Perpl Ed25519 secret are ever stored here.**
+Backs the parts of DyorHQ that are not on chain: wallet sign-in sessions (`wallet-auth`), email-and-password
+accounts (`email-pepper`, `email-rebind`, `delete-account`), profiles, follows, feed, comments, leaderboards and
+referrals, price and push alerts with their devices, a launch-discovery index, activity and cross-device sync,
+Moment media pinning (`pin-media`) and the bridge quote proxy (`aurora-proxy`). The core app stays self-custodial and
+on-chain; **no private keys or the Perpl Ed25519 secret are ever stored here.**
 
 - **Project:** `DyorHQ` · ref `fmnjqrguvopusfufmirs` · region eu-west-1 · Postgres 17
 - **URL:** `https://fmnjqrguvopusfufmirs.supabase.co`
 - **App keys (safe to embed):** publishable key `sb_publishable_s1G3ns-jmzTfnFs7rTvdbQ_8FJYODhT` (RLS protects data).
-  Wired into the iOS app via `AppConfig` (defaults; overridable with `SupabaseURL` / `SupabaseKey` in Secrets.xcconfig).
+  Embedded in the iOS app (`ios/DyorHQ/Config/AppConfig.swift`).
 
 ## Auth (login stays in Privy)
 
@@ -35,14 +37,15 @@ for HS256 and the project's JWKS for ES256.
 | App sync (mig. 11) | `activity` (every action: kind, section, USD size + fee, tx hash), `notifications` |
 | Sessions (mig. 14) | `sessions` (one row per sign-in — `signed_in_at`, `signed_out_at`) |
 | Journey (mig. 12–14) | `user_journey` (view — one row per user: handle, wallet, `joined_at`, sign-in/out times, per-domain spot/perps/launchpad/moments/bridge/deposits/withdrawals rollup; **internal analytics only**, not granted to anon/authenticated), `platform_journey()` (platform totals by domain) |
-| Audit 2026-09-26 (mig. 24–29) | `app_config` (public, read-only: `ios.min_build`), `waitlist`, `upload_blocklist`, `storage_upload_events` (launch-media's overall budget), `edge_rate_events` / `edge_rate_salt` (owner-only rate ledger); triggers `dyorhq_storage_upload_gate` and `dyorhq_launch_media_write_once` on `storage.objects` |
+| Hardening 2026-09-26 (mig. 24–29) | `app_config` (public, read-only: `ios.min_build`), `waitlist`, `upload_blocklist`, `storage_upload_events` (launch-media's overall budget), `edge_rate_events` / `edge_rate_salt` (owner-only rate ledger); triggers `dyorhq_storage_upload_gate` and `dyorhq_launch_media_write_once` on `storage.objects` |
 
 `activity.kind` ∈ swap, buy, sell, launch, perp, moment, **bridge**, **deposit**, **withdraw**, send; `activity.section`
 ∈ spot, perps, launch(pad), moments, bridge, wallet. The whole user journey — username (`profiles.handle`), wallet,
 per-domain volume, deposits/withdrawals, notifications and activities — is stitched by the `user_journey` view.
 
-Every migration applied to the live project is now in `migrations/` (01–22); 23–29 (security audit 2026-09-26) are
-written but not yet applied. `migrations-deferred/` holds two that must wait for an app build AND for every older build
+`migrations/` holds every migration applied to the live project, 01–28 (23–28 are the 2026-09-26 hardening); 29
+(`waitlist`) is written but not applied, and its Edge Function is not deployed, because the website keeps its own
+signups. `migrations-deferred/` holds two that must wait for an app build AND for every older build
 to be expired in App Store Connect / TestFlight (each header says which build; each refuses to run until armed):
 `30_activity_primary_key_wallet_id.sql` (the build that upserts activity with `on_conflict=wallet,id`) and
 `31_launch_media_strict_write_once.sql` (the build that uploads launch-media with `x-upsert: false`). 01–07 and 11 were restored on 2026-09-26
@@ -67,7 +70,7 @@ root (the CLI bundles `functions/_shared/`). Never run `supabase config push` fr
 | `delete-account` | false | a Privy token (≤ 1 h old unless `DELETE_ACCOUNT_TOKEN_MAX_AGE_S` tightens it), or the wallet session with `{"method":"email-password"}` | per Privy user / wallet |
 | `pin-media` | true | a wallet session, verified in code too | `edge_rate_gate` per wallet, network and overall; 20 s budget |
 | `aurora-proxy` | true | a wallet session, verified in code too; quotes only to and from that wallet | `edge_rate_gate` per wallet and network |
-| `waitlist` | false | nothing (CORS: dyorhq.fun, www.dyorhq.fun; honeypot) | `edge_rate_gate` per network (IPv6 /48) and overall |
+| `waitlist` (not deployed) | false | nothing (CORS: dyorhq.fun, www.dyorhq.fun; honeypot) | `edge_rate_gate` per network (IPv6 /48) and overall |
 
 Secrets (names only): `APP_JWT_SECRET` or `APP_JWT_SIGNING_JWK` (wallet-auth; pin-media and aurora-proxy read
 `APP_JWT_SECRET` to verify HS256 sessions — secrets are project-wide), `PRIVY_APP_SECRET` (+ optional `PRIVY_APP_ID`),
@@ -77,21 +80,10 @@ Secrets (names only): `APP_JWT_SECRET` or `APP_JWT_SIGNING_JWK` (wallet-auth; pi
 Switches (unset = the behaviour the builds in use need; each header says when to flip it):
 `WALLET_AUTH_LEGACY_SIGNIN=off`, `WALLET_AUTH_SESSION_S`, `REBIND_REQUIRE_REPLACE=on`,
 `DELETE_ACCOUNT_TOKEN_MAX_AGE_S=900`. "Once build N is out" always means: build N has shipped AND every older build
-is expired in App Store Connect / TestFlight — no build reads `app_config` yet, so raising `min_build` alone changes
-nothing for the builds in use.
+is expired in App Store Connect / TestFlight, or is below `app_config` `min_build` (see below).
 
-### Deploying the audit changes (order matters)
-
-1. Apply migrations 23–29 in order, as `postgres` (none is live yet: checked read-only 2026-09-27), and run each
-   file's "Verify after apply" queries. 26 is safe for the builds in use (a same-media retry still works; see its
-   header). Apply nothing from `migrations-deferred/`.
-2. Deploy the functions only after that: `wallet-auth`, `pin-media`, `aurora-proxy` and `waitlist` fail closed (503)
-   without `edge_rate_gate` (migration 27) — wallet-auth only for a first sign-in — and `waitlist` also needs 29.
-   `email-pepper`, `email-rebind` and `delete-account` need only migration 20, which is live (24 changes the pepper
-   limits inside the database, whatever function version runs).
-3. Before deploying `aurora-proxy`, set `AURORA_FEE_RECIPIENT` (and `AURORA_FEE_BPS` if not 10), or confirm the
-   integrator fee is configured on the key in Aurora Studio: the proxy no longer forwards the app's `appFees`.
-4. Leave the switches unset. Flip each one, and apply 30 / 31, only once its build is out (see above).
+Owner procedures (the deploy order of the hardening changes, takedowns in the public buckets, the session signing
+key rotation) are in DyorHQ/internal (private): `ios-app/supabase/owner-procedures.md`.
 
 ## Tests
 
@@ -103,11 +95,11 @@ stands in for the platform (roles, auth/storage/vault stubs, default privileges)
 
 ## Minimum iOS build
 
-`app_config` row `ios` = `{"min_build", "message", "url"}` is a server switch only: **no build reads it yet**. A build
-that implements it shows a blocking "Update required" screen (balances and key export still work; nothing can be
-signed) when its CFBundleVersion is below `min_build`, and fails open on any error (migration 28 has the contract).
-Builds without the check — every build so far, including the 12-and-earlier builds that hard-code retired contracts
-(GP-2) — ignore it: retire those by expiring them in App Store Connect / TestFlight. Raise it in the SQL editor:
+`app_config` row `ios` = `{"min_build", "message", "url"}` is a server switch. A build that reads it (build 14 and
+later, `ios/DyorHQ/App/UpdateGate.swift`) shows a blocking "Update required" screen (balances and key export still
+work; nothing can be signed) when its CFBundleVersion is below `min_build`, and fails open on any error (migration 28
+has the contract). Older builds ignore it, including the ones that hard-code retired contracts: retire those by
+expiring them in App Store Connect / TestFlight. Raise it in the SQL editor:
 `update public.app_config set value = jsonb_set(value, '{min_build}', '<build>') where key = 'ios';` — the CHECK
 constraint refuses a row the app could not parse.
 
@@ -121,51 +113,7 @@ the service role, so the limits are enforced by triggers on `storage.objects` wh
 overall budget is spent every launch-media upload fails (403) until older uploads age out; the day's total is
 `select count(*), sum(bytes) from public.storage_upload_events where created_at > now() - interval '1 day';`.
 
-## Takedown (public buckets)
+## Not built yet
 
-Objects in `avatars` and `launch-media` are public, and launch-media is write-once with no owner delete (on-chain
-pointers must keep resolving), so removing content is an owner action:
-
-1. Block the wallet from uploading to either bucket (SQL editor, as postgres; it also stops uploads already under way):
-   `insert into public.upload_blocklist (wallet, reason) values (lower('0x…'), '<why, date>') on conflict (wallet) do nothing;`
-2. Delete the object through Storage, never with SQL on `storage.objects` (that orphans the file): Dashboard → Storage →
-   the bucket → the wallet's folder → Delete.
-3. For Moment media also pinned to IPFS, unpin the CID in the Pinata dashboard. The on-chain URI stays; other IPFS
-   nodes may still serve it.
-4. Record what was removed and why, and answer the report (the security/support contact published on dyorhq.fun).
-
-## Session signing key (OH-7)
-
-wallet-auth signs sessions with the project's legacy JWT secret (`APP_JWT_SECRET`), which also signs the legacy anon
-and service-role API keys and is shared by every function. Note what a dedicated key does NOT change: PostgREST and
-Storage trust any key in the project's JWT signing keys for any `role` claim, so `APP_JWT_SIGNING_JWK` can mint a
-service-role token just as the legacy secret can, and must be guarded the same way. What the move buys is that the
-session key can be rotated and revoked on its own, and that the legacy secret can then be retired. OH-7 stays open
-until it is revoked (step 6). The project's JWKS already lists two ES256 keys (read 2026-09-27), so the move to JWT
-signing keys has been started in the dashboard: check its state before step 2. Owner, dashboard; no downtime,
-reversible until the last step:
-
-1. `supabase gen signing-key --algorithm ES256` on a trusted machine, outside any repository; keep the private JWK
-   offline as the backup. (`*.jwk`, `signing_keys.json` and the CLI's `.temp/` and `.branches/` are git-ignored in
-   `supabase/`, but do not rely on that.)
-2. Dashboard → Settings → JWT Keys: if the project is still on the legacy secret only, "Migrate JWT secret" first; then
-   create a new standby key by importing that private JWK (same `kid`).
-3. "Rotate keys" so the imported key is in use; the legacy secret moves to "previously used" and stays trusted, so
-   existing sessions keep working. This project does not use Supabase Auth for users, so nothing else changes.
-4. Set the secret from a file, never on the command line (a command line lands in shell history and the process
-   list): write `APP_JWT_SIGNING_JWK=<the private JWK JSON on one line>` to a new file outside the repository with mode
-   0600 (`umask 077` first), run `supabase secrets set --env-file <that file>`, then delete the file. Redeploy
-   wallet-auth. New sessions are ES256 with that `kid`; check one sign-in, a PostgREST read, an upload, a pin-media
-   call and a bridge quote. pin-media and aurora-proxy verify ES256 sessions in code against the project's JWKS; if
-   the gateway's verify_jwt refuses them (401 before the function runs), redeploy those two with `--no-verify-jwt` —
-   the in-code check still admits only a valid wallet session — or unset `APP_JWT_SIGNING_JWK` to go back to HS256.
-5. After the session lifetime (12 hours unless `WALLET_AUTH_SESSION_S` is shorter), `supabase secrets unset
-   APP_JWT_SECRET`. pin-media and aurora-proxy then treat any HS256 token as no session (403), which is intended: no
-   HS256 session is valid any more.
-6. Revoke the legacy secret. This needs the functions moved to the new secret API keys first (they use the legacy
-   service-role key) — a separate step. Only then is OH-7 closed.
-
-## Still to build
-
-`alerts`/push watcher (needs an APNs auth key), launch indexer, leaderboard/stats Edge Functions; and the remaining
-iOS feature UIs (feed, follows, watchlist sync, alerts).
+Server-side push delivery (a watcher with an APNs auth key), a launch indexer job, and leaderboard/stats Edge
+Functions. The app computes alerts and the social views itself from the tables above.
