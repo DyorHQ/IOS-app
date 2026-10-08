@@ -41,6 +41,25 @@ final class WordWrapTests: XCTestCase {
         XCTAssertEqual(WordWrap.sentences("等待领取；", "一次领取"), "等待领取；一次领取")
         XCTAssertEqual(WordWrap.sentences("Paid straight.", ""), "Paid straight.", "nothing to add, no space")
         XCTAssertEqual(WordWrap.sentences("", "Only this."), "Only this.")
+        // Any number of them, in order: the Perps order sheet's warnings.
+        XCTAssertEqual(WordWrap.sentences(["Position opened.", "Order status unknown.", "Check Open Orders."]),
+                       "Position opened. Order status unknown. Check Open Orders.")
+        XCTAssertEqual(WordWrap.sentences(["已开仓。", "订单状态未知。"]), "已开仓。订单状态未知。")
+        XCTAssertEqual(WordWrap.sentences(["Sent.", "", "Check."]), "Sent. Check.", "an empty one adds nothing")
+        XCTAssertEqual(WordWrap.sentences(["Only this."]), "Only this.")
+        XCTAssertEqual(WordWrap.sentences([]), "")
+    }
+
+    /// The app joins two translated sentences with `WordWrap.sentences`, never with a plain space: `" " + tr(…)` puts a
+    /// space after a Chinese "。", and a line can then start with "。".
+    func testTheAppNeverJoinsTranslatedSentencesWithAPlainSpace() throws {
+        var found: [String] = []
+        for (path, text) in try FormattedTextIsolationTests.appSources() {
+            for (index, line) in text.components(separatedBy: "\n").enumerated() where line.contains("\" \" + tr(") {
+                found.append("\(path):\(index + 1)")
+            }
+        }
+        XCTAssertEqual(found, [], "join translated sentences with WordWrap.sentences")
     }
 
     /// A word keeps its attributes: a bold or linked word stays so, and the words read back as the text.

@@ -24,6 +24,12 @@ public enum WordWrap {
         return first + (fullWidthStops.contains(last) ? "" : " ") + second
     }
 
+    /// Any number of translated sentences as one paragraph, in order, each joined to the text before it as
+    /// `sentences(_:_:)` joins two.
+    public static func sentences(_ parts: [String]) -> String {
+        parts.reduce("") { sentences($0, $1) }
+    }
+
     /// The full-width punctuation a Chinese sentence or clause ends with.
     static let fullWidthStops: Set<Character> = ["。", "！", "？", "；", "：", "）", "」", "』", "】"]
 
