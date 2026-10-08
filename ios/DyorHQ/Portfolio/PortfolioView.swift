@@ -72,12 +72,22 @@ struct PortfolioView: View {
             }
             .refreshable { await reload(force: true) }
             .task(id: session.address) { await reload(force: false) }
+            // The history fills in behind the screen (`HistoryModel`): the figures follow it, and the holdings are read
+            // again once the transfer history has been read in full.
+            .task(id: env.history.version) { model.applyHistory(env.history.snapshot, version: env.history.version, for: session.address) }
+            .task(id: env.history.snapshot.status(WalletHistoryScans.transfersInId).complete) {
+                if env.history.snapshot.status(WalletHistoryScans.transfersInId).complete, !assets.complete { await assets.load(env: env, address: session.address, force: true) }
+            }
+            // A Perpl key that appears (a passkey session unlocked) loads the perps history the last load lacked.
+            .task(id: perplTrading.key != nil) { if perplTrading.key != nil { await reload(force: false) } }
         }
     }
 
-    /// The Portfolio's three reads — volume / history, My Holdings and Past Cohorts — side by side.
+    /// The Portfolio's three reads — volume / history, My Holdings and Past Cohorts — side by side. A pull reads the
+    /// history on as well.
     private func reload(force: Bool) async {
-        async let portfolio: () = model.load(env: env, address: session.address, perplKey: perplTrading.key, force: force)
+        if force { await env.history.refresh(env: env) }
+        async let portfolio: () = model.load(env: env, address: session.address, perplKey: perplTrading.key, force: force, passkey: session.isPasskeyAccount)
         async let holdings: () = assets.load(env: env, address: session.address, force: force)
         async let past: () = pastMoments.load(env: env, address: session.address, force: force)
         _ = await (portfolio, holdings, past)
@@ -115,6 +125,14 @@ struct PortfolioView: View {
                 HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Refreshing…").font(.caption2).foregroundStyle(.tertiary) }
             } else if let error = model.error {
                 Label(error, systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(Color.attention)
+            } else if model.historyUnreachable {
+                Label("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.", systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(Color.attention)
+            } else if model.historyFilling {
+                // The store is still reading the wallet's history: the figures grow as it does.
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("Reading your history… \(NumberStyle.percent(model.historyProgress * 100, fractionDigits: 0, signed: false))").font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+                }
             } else if let updated = model.updatedAt {
                 Text("Updated \(updated, style: .relative) ago").font(.caption2).foregroundStyle(.tertiary)
             }

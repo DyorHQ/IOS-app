@@ -28466,6 +28466,34 @@
         }
       }
     },
+    "Part of your history couldn't be read just now, so some activity may be missing. Pull to refresh." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer parte de tu historial en este momento, así que puede que falte alguna actividad. Desliza hacia abajo para actualizar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une partie de votre historique n'a pas pu être lue pour le moment : certaines activités peuvent donc manquer. Tirez pour actualiser."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 내역의 일부를 읽지 못해 일부 활동이 누락되었을 수 있어요. 당겨서 새로 고침하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的部分历史记录，因此某些动态可能缺失。下拉刷新。"
+          }
+        }
+      }
+    },
     "Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh." : {
       "localizations" : {
         "es" : {
@@ -32166,6 +32194,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在读取你的余额…"
+          }
+        }
+      }
+    },
+    "Reading your history… %@" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leyendo tu historial… %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lecture de votre historique… %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "내역을 읽는 중… %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在读取你的历史记录… %@"
           }
         }
       }

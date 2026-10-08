@@ -469,14 +469,20 @@ final class VenueTokensTests: XCTestCase {
         guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         // Read with every run of whitespace as one space (`squeezed`): the checks pin the code, not its indentation.
         let environment = squeezed(try String(contentsOf: app.appendingPathComponent("App/AppEnvironment.swift"), encoding: .utf8))
-        XCTAssertTrue(environment.contains("venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)"))
-        XCTAssertFalse(environment.contains("rpc3.monad.xyz"), "no scan on rpc3")
+        // The venue scan goes through the app's one logs client: the router over every public endpoint, behind the gate
+        // the wallet's history shares (`LogsRouter`), so the two never throttle each other.
+        XCTAssertTrue(environment.contains("venueTokens = VenueTokensService(logsRPC: logsClient, multicall: multicall)"))
+        XCTAssertTrue(environment.contains("logsClient = isFork ? RPCClient(url: config.rpcURL) : RPCClient(logsRouter: logsRouter)"))
+        XCTAssertFalse(environment.contains("rpc3.monad.xyz"), "no endpoint named here: the router's list (`LogsEndpoints.monadMainnet`) is the one place")
         XCTAssertTrue(environment.contains("venueList = VenueTokenList(service: venueTokens, logos: { [kuruTokens] in await kuruTokens.logos() },"))
         XCTAssertTrue(environment.contains("read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1, dropped: $2) })"))
         XCTAssertEqual(environment.components(separatedBy: "VenueTokenStore.").count - 1, 2, "the list reads and writes the store; nothing else does")
         // A cold launch runs the list; every return to the app resets log scans' outage and resumes a run that ended short.
         let root = squeezed(try String(contentsOf: app.appendingPathComponent("App/RootView.swift"), encoding: .utf8))
-        XCTAssertTrue(root.contains(".task { env.refreshVenueTokens() }"))
+        // ...the stored list read at once for search, and the run once the wallet's history is no longer filling in
+        // (the two share the gate), or at once with no wallet signed in.
+        XCTAssertTrue(root.contains(".task { await env.venueList.load() }"))
+        XCTAssertTrue(root.contains(".task(id: \"\\(session.address?.hex ?? \"\")-\\(env.history.filling)\") { if session.address == nil || !env.history.filling { env.refreshVenueTokens() } }"))
         // In the scene-phase handler, wherever its branches sit: the background is noted, and only the activation that
         // follows it, a return, resets log scans' outage and resumes the list (`LogScanClock`).
         let phases = try XCTUnwrap(root.range(of: ".onChange(of: scenePhase)")).upperBound

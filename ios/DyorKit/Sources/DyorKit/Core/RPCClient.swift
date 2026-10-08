@@ -48,12 +48,23 @@ public actor RPCClient {
     /// Answers of HTTP 429 or 503 this client has had (`post`, `isThrottle`): a request that then fails with no answer was
     /// throttled on its way (`chunkedLogsReport`, paced).
     private(set) var throttles = 0
+    /// Where this client's `chunkedLogsReport` reads: across every public endpoint, in ranges each answers, through the
+    /// app's one gate (`LogsRouter`). Nil: this client's own endpoint, in ranges sized by its URL (a local fork, tests).
+    public let logsRouter: LogsRouter?
+    /// Rounds a throttled request (HTTP 429 or 5xx, or a rate-limit error in an answer) is sent again: `throttleRetries`
+    /// for a client on its own; 0 for a router's client, whose router rests the endpoint and asks the next instead.
+    private let retries: Int
+    /// How long one request may take.
+    private let timeout: TimeInterval
 
-    public init(url: URL, session: URLSession = .shared, maxBatch: Int = 100) {
+    public init(url: URL, session: URLSession = .shared, maxBatch: Int = 100, retries: Int = RPCClient.throttleRetries, timeout: TimeInterval = 30) {
         self.url = url
         self.urls = [url]
         self.session = session
         self.maxBatch = max(1, maxBatch)
+        self.retries = max(0, retries)
+        self.timeout = timeout
+        logsRouter = nil
     }
 
     /// Several interchangeable endpoints for the same chain, in preference order.
@@ -63,6 +74,22 @@ public actor RPCClient {
         self.urls = urls
         self.session = session
         self.maxBatch = max(1, maxBatch)
+        retries = Self.throttleRetries
+        timeout = 30
+        logsRouter = nil
+    }
+
+    /// A client for history reads: head reads fail over across the router's endpoints, and every log scan goes through
+    /// the router.
+    public init(logsRouter: LogsRouter, session: URLSession = .shared, maxBatch: Int = 100) {
+        let urls = logsRouter.urls
+        self.url = urls[0]
+        self.urls = urls
+        self.session = session
+        self.maxBatch = max(1, maxBatch)
+        retries = Self.throttleRetries
+        timeout = 30
+        self.logsRouter = logsRouter
     }
 
     // MARK: Raw calls
@@ -101,7 +128,7 @@ public actor RPCClient {
     private func post(_ body: Data) async throws -> (data: Data, status: Int) {
         if preferred != 0, Date().timeIntervalSince(preferredSince) > Self.stickiness { preferred = 0 }
         var failure: Error = NetworkError.malformedResponse
-        for round in 0...Self.throttleRetries {
+        for round in 0...retries {
             if round > 0 { try await Task.sleep(for: .milliseconds(400 * round)) }
             var throttled = false
             for attempt in 0..<urls.count {
@@ -110,7 +137,7 @@ public actor RPCClient {
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "content-type")
                 request.httpBody = body
-                request.timeoutInterval = 30
+                request.timeoutInterval = timeout
                 let data: Data
                 let response: URLResponse
                 do {
@@ -154,7 +181,7 @@ public actor RPCClient {
         var results = try await exchange(calls)
         var throttled = results.indices.filter { if case .failure(let e) = results[$0] { return Self.isRateLimited(e) }; return false }
         var round = 0
-        while !throttled.isEmpty, round < Self.throttleRetries {
+        while !throttled.isEmpty, round < retries {
             round += 1
             if urls.count > 1 { preferred = (preferred + 1) % urls.count; preferredSince = Date() }
             if round > 1 { try await Task.sleep(for: .milliseconds(350 * (round - 1))) }
@@ -165,7 +192,8 @@ public actor RPCClient {
         return results
     }
 
-    private static let throttleRetries = 4
+    /// Rounds a throttled request is sent again by a client on its own (`retries`).
+    public static let throttleRetries = 4
 
     /// Whether `body` answers every call of a request with ids `ids` with a JSON-RPC error: one error object for a single
     /// call, an array of them for a batch.
@@ -242,6 +270,20 @@ public actor RPCClient {
 
     public func code(at address: Address) async throws -> Data {
         try bytes(await call("eth_getCode", [.string(address.hex), BlockTag.latest.json]))
+    }
+
+    /// The block of `address`'s first transaction — the first block its nonce is 1 at — found by bisection over its
+    /// nonce at past blocks (about 27 reads; the public endpoints answer a nonce at any block, measured 2026-10-08).
+    /// Nil when it has sent none by `head`.
+    public func firstTransactionBlock(of address: Address, head: UInt64) async throws -> UInt64? {
+        guard try await transactionCount(of: address, block: .number(head)) > 0 else { return nil }
+        var low: UInt64 = 0
+        var high = head
+        while low < high {
+            let mid = low + (high - low) / 2
+            if try await transactionCount(of: address, block: .number(mid)) > 0 { high = mid } else { low = mid + 1 }
+        }
+        return high
     }
 
     public func transactionCount(of address: Address, block: BlockTag = .pending) async throws -> UInt64 {

@@ -34,6 +34,15 @@ final class AppEnvironment {
     let activity: TokenActivityService
     let swapHistory: SwapHistoryService
     let walletDiscovery: WalletTokenDiscovery
+    /// Where every `eth_getLogs` goes on mainnet: across the public endpoints, in ranges each answers, through one gate
+    /// (`LogsRouter`), and the client every history reader scans through.
+    let logsRouter: LogsRouter
+    let logsClient: RPCClient
+    /// The wallet's history scans, kept on the device and refreshed incrementally (`HistoryStore`), and the records built
+    /// from them (`WalletHistoryService`); `history` is what the screens read.
+    let historyStore: HistoryStore
+    let walletHistory: WalletHistoryService
+    let history = HistoryModel()
     /// Every DyorHQ launchpad and Moments coin, read from the factories (`DyorCoinRegistry`, created here once): what a
     /// token's picture and label are drawn from (`TokenLogo`, `TokenBadgeView`) and which coins are the wallet's own on
     /// Home. Kept in Application Support, a fork's apart from mainnet's.
@@ -86,6 +95,28 @@ final class AppEnvironment {
         // A local fork (a Debug build pointed at 127.0.0.1) keeps its own logs and its own registry file.
         let host = config.rpcURL.host() ?? ""
         let isFork = host == "127.0.0.1" || host == "localhost"
+        // History reads go across the public endpoints, in ranges each answers, through one gate (`LogsRouter`): one
+        // client for every reader. A local fork keeps its own logs, so a development build pointed at 127.0.0.1 scans the
+        // fork instead.
+        logsRouter = LogsRouter(endpoints: isFork ? [LogsEndpoint(url: config.rpcURL, span: 50_000)] : LogsEndpoints.monadMainnet,
+                                store: isFork ? nil : UserDefaultsLogsCapabilityStore())
+        logsClient = isFork ? RPCClient(url: config.rpcURL) : RPCClient(logsRouter: logsRouter)
+        // State at past blocks (a wallet's nonce at a block, for its first transaction): only the endpoints that answer
+        // it, failing over among them; rpc.monad.xyz (the primary client) and rpc3 refuse old blocks.
+        let archiveClient = isFork ? RPCClient(url: config.rpcURL) : RPCClient(urls: LogsEndpoints.archive)
+        activity = TokenActivityService(rpc: logsClient, clock: clock)
+        swapHistory = SwapHistoryService(rpc: logsClient, clock: clock)
+        // Wallet discovery reads balances/metadata on the primary multicall.
+        walletDiscovery = WalletTokenDiscovery(logsRPC: logsClient, multicall: multicall)
+        nftDiscovery = WalletNFTDiscovery(logsRPC: logsClient, multicall: multicall)
+        kuruTokens = KuruTokenListClient()
+        // The venue-wide pool scan (from genesis, no wallet filter), one venue after the other, one request at a time, a
+        // throttle waited out rather than split (`VenueTokensService`), through the same router and gate.
+        venueTokens = VenueTokensService(logsRPC: logsClient, multicall: multicall)
+        // The wallet's history, kept in Application Support (a fork's apart from mainnet's).
+        let historyDirectory = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))?
+            .appendingPathComponent(isFork ? "history-fork" : "history")
+        historyStore = HistoryStore(router: logsRouter, directory: historyDirectory)
         // The registry reads every factory on the failover RPC; a Debug build on a local fork keeps its own file. The
         // price service asks it which tokens are DyorHQ coins, and which factory made each.
         let registry = DyorCoinRegistry(rpc: rpc, live: config.launchpad, liveMoments: config.moments, store: .applicationSupport(fork: isFork))
@@ -95,9 +126,21 @@ final class AppEnvironment {
         // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0.
         swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments)
         perpl = PerplService(rpc: rpc)
-        launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, clock: clock)
-        moments = MomentsService(rpc: rpc, addresses: config.moments, clock: clock)
-        retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc, clock] in RetiredMoments(rpc: rpc, addresses: $0, clock: clock) }
+        launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock)
+        moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock)
+        retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc, logsClient, clock] in RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock) }
+        walletHistory = WalletHistoryService(store: historyStore, swapHistory: swapHistory, clock: clock, stacks: { [launchpad] in await launchpad.stacks },
+                                             cohorts: [config.moments] + MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory },
+                                             firstActivity: { [archiveClient] wallet in
+                                                 // The block of the wallet's first transaction, found once (about 27 nonce reads at past blocks)
+                                                 // and kept: the transfer scans read back to it, so every swap the wallet ever made counts. A
+                                                 // wallet that has sent none is asked again next time, not kept as such.
+                                                 let key = "history.v1.firstBlock.\(wallet.hex.lowercased())"
+                                                 if let kept = UserDefaults.standard.string(forKey: key).flatMap({ UInt64($0) }) { return kept }
+                                                 let first = try await archiveClient.firstTransactionBlock(of: wallet, head: try await archiveClient.blockNumber())
+                                                 if let first { UserDefaults.standard.set(String(first), forKey: key) }
+                                                 return first
+                                             })
         #if DEBUG
         // A fork rehearsal (Secrets.xcconfig MOMENTS_*, Debug only): v2 links (c4) and names follow the Moments this build
         // shows. Without the override this is nil, and c4 stays MomentsAddresses.monadMainnet.
@@ -107,21 +150,6 @@ final class AppEnvironment {
         // their pinned counts, then v2 once it is wired.
         momentDirectory = MomentDirectory(rpc: rpc)
         news = NewsService()
-        // History reads want the larger log-chunk RPC (rpc1), like the launchpad does. A local fork keeps its own
-        // logs, so a development build pointed at 127.0.0.1 scans the fork instead.
-        let logsURL = isFork ? config.rpcURL : LaunchpadService.defaultLogsRPC
-        activity = TokenActivityService(rpc: RPCClient(url: logsURL), clock: clock)
-        swapHistory = SwapHistoryService(rpc: RPCClient(url: logsURL), clock: clock)
-        // Wallet discovery scans logs on rpc1 and reads balances/metadata on the primary multicall.
-        walletDiscovery = WalletTokenDiscovery(logsRPC: RPCClient(url: logsURL), multicall: multicall)
-        nftDiscovery = WalletNFTDiscovery(logsRPC: RPCClient(url: logsURL), multicall: multicall)
-        kuruTokens = KuruTokenListClient()
-        // The venue-wide pool scan (from genesis, no wallet filter) reads rpc1, which answers a range of any span up to 10K
-        // logs: one range a venue for each 5M-block segment, the venues one after the other, one request at a time, a
-        // throttle waited out rather than split (`VenueTokensService`). About 70 requests from genesis, so it doesn't crowd
-        // out the wallet's own history scans and every other reader there; rpc3 answers 1,000 blocks a request: about
-        // 330,000.
-        venueTokens = VenueTokensService(logsRPC: RPCClient(url: LaunchpadService.defaultLogsRPC), multicall: multicall)
         venueList = VenueTokenList(service: venueTokens, logos: { [kuruTokens] in await kuruTokens.logos() },
                                    read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1, dropped: $2) })
         dyorCoins = DyorCoinsModel(registry: registry, policy: ImageSourcePolicy(supabaseURL: config.supabaseURL))

@@ -75,11 +75,12 @@ final class RemoteFlagsTests: XCTestCase {
 
         let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
         for part in ["clock = BlockClock(rpc: rpc)", "prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true)",
-                     "launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, clock: clock)",
-                     "moments = MomentsService(rpc: rpc, addresses: config.moments, clock: clock)",
-                     "RetiredMoments(rpc: rpc, addresses: $0, clock: clock)",
-                     "activity = TokenActivityService(rpc: RPCClient(url: logsURL), clock: clock)",
-                     "swapHistory = SwapHistoryService(rpc: RPCClient(url: logsURL), clock: clock)",
+                     "launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock)",
+                     "moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock)",
+                     "RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock)",
+                     "activity = TokenActivityService(rpc: logsClient, clock: clock)",
+                     "swapHistory = SwapHistoryService(rpc: logsClient, clock: clock)",
+                     "walletHistory = WalletHistoryService(store: historyStore, swapHistory: swapHistory, clock: clock,",
                      "dyorCoins = DyorCoinsModel(registry: registry, policy: ImageSourcePolicy(supabaseURL: config.supabaseURL))",
                      "updateGate.onFlags = { [weak self] flags in self?.apply(flags) }",
                      "dyorCoins.showsDyorBadges = flags.dyorBadges",
@@ -87,7 +88,7 @@ final class RemoteFlagsTests: XCTestCase {
             XCTAssertTrue(environment.contains(part), part)
         }
         XCTAssertEqual(environment.components(separatedBy: "BlockClock(").count - 1, 1, "one clock")
-        XCTAssertEqual(environment.components(separatedBy: "clock: clock").count - 1, 6, "prices, the launchpad, Moments, past cohorts, activity, swap history")
+        XCTAssertEqual(environment.components(separatedBy: "clock: clock").count - 1, 7, "prices, the launchpad, Moments, past cohorts, activity, swap history, the wallet's history")
 
         let coins = try DocsLinksTests.appSource("App/DyorCoinsModel.swift")
         XCTAssertTrue(coins.contains("var showsDyorBadges = true"))

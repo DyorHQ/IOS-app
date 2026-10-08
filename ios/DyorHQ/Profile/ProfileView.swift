@@ -427,6 +427,10 @@ struct SendSheet: View {
                 }
             }
             .task(id: assetsReadKey) { loadAssets(assetsReadKey) }
+            // A list read while the wallet's transfer history was still filling in is read again once it is complete.
+            .task(id: env.history.snapshot.status(WalletHistoryScans.transfersInId).complete) {
+                if env.history.snapshot.status(WalletHistoryScans.transfersInId).complete, case .loaded(_, false, _, false) = assets { attempt += 1 }
+            }
             .task(id: balanceReadKey) {
                 // Available and Max are always the chosen token's, read fresh: never another token's balance. Read again
                 // for each new read of the list (Retry), which also sets the balance it read; coming back from the token
@@ -511,6 +515,13 @@ struct SendSheet: View {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Paragraph("Reading your wallet's history. Tokens found there will be added.").font(.footnote).foregroundStyle(.secondary)
+                }
+            } else if !complete, env.history.filling {
+                // The wallet's history is still filling in behind the app (`HistoryModel`): the list is read again once
+                // the transfer history is complete.
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Reading your history… \(NumberStyle.percent(env.history.snapshot.progress * 100, fractionDigits: 0, signed: false))").font(.footnote).foregroundStyle(.secondary).monospacedDigit()
                 }
             } else if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }
         }

@@ -33,14 +33,26 @@ enum WalletTokens {
         return try await read(env: env, address: address, history: scan)
     }
 
-    /// The ERC-20s the wallet's whole transfer history shows it received (`WalletTokenDiscovery.scan`, on rpc1): the slow
-    /// part of a read, so the Send sheet lists the rest while it runs. Tokens stored for the wallet are skipped: every read
-    /// has them. Read fail-fast (`LogScanMode.failFast`): an endpoint that stops answering ends the scan in a few requests,
-    /// and the Send sheet and the Portfolio say part of the wallet couldn't be read, with Retry, rather than wait on it.
+    /// The ERC-20s the wallet's transfer history shows it received (`WalletTokenDiscovery.held`, from the history model's
+    /// transfers): the slow part of a read while that history is still filling in, so the Send sheet lists the rest
+    /// meanwhile. Tokens stored for the wallet are skipped: every read has them. The Send sheet and the Portfolio say part
+    /// of the wallet couldn't be read, with Retry, when the history couldn't be read in full.
     static func history(env: AppEnvironment, address: Address) async -> WalletTokenDiscovery.Scan {
         let known = Set(KnownTokenStore.universe(owner: address).map(\.address))
-        return await env.walletDiscovery.scan(wallet: address, known: known, wholeHistory: true, logScan: .failFast)
+        // The history model's transfers (`HistoryModel`), no scan of its own. While the transfer scan is still filling in
+        // (a first read of the wallet), the list waits for it, as it waited for its own scan, up to `historyWait`; the
+        // list is complete once the scan has read its window, and says so otherwise.
+        let started = ContinuousClock.now
+        while env.history.wallet == address, !env.history.snapshot.status(WalletHistoryScans.transfersInId).complete, env.history.filling,
+              ContinuousClock.now - started < historyWait, !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(1))
+        }
+        let snapshot = env.history.wallet == address ? env.history.snapshot : .empty
+        return await env.walletDiscovery.held(wallet: address, incoming: snapshot.transfersIn, complete: snapshot.status(WalletHistoryScans.transfersInId).complete, known: known)
     }
+
+    /// The longest a list waits for the wallet's transfer history to fill in.
+    static let historyWait: Duration = .seconds(45)
 
     /// `read`, with the history already scanned (`history`), or not yet (nil): then the tokens are MON, the curated ones
     /// and every one stored for the wallet, what the Send sheet lists while the history is read, and `Read.complete`

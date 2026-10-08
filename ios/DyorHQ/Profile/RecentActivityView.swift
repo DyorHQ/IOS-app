@@ -14,14 +14,23 @@ struct RecentActivityView: View {
     var body: some View {
         List {
             if model.items.isEmpty {
-                if model.loading {
-                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading activity…").foregroundStyle(.secondary) }
-                } else if let incomplete = model.incomplete {
+                if model.loading || model.historyFilling {
+                    // Nothing recorded here yet, and the chain history still being read: how far it has got, never
+                    // "No Activity Yet" ahead of it.
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        if model.loading {
+                            Text("Loading activity…").foregroundStyle(.secondary)
+                        } else {
+                            Text("Reading your history… \(NumberStyle.percent(model.historyProgress * 100, fractionDigits: 0, signed: false))").foregroundStyle(.secondary).monospacedDigit()
+                        }
+                    }
+                } else if let incomplete = model.incomplete ?? model.historyUnread {
                     // Nothing to show because part of it couldn't be read: the error, with Retry, never "No Activity Yet".
                     HStack(alignment: .firstTextBaseline) {
                         InlineError(message: incomplete)
                         Spacer(minLength: 8)
-                        Button("Retry") { Task { await model.load(env: env, address: session.address) } }.font(.footnote.weight(.semibold))
+                        Button("Retry") { Task { await env.history.refresh(env: env); await model.load(env: env, address: session.address) } }.font(.footnote.weight(.semibold))
                     }
                 } else {
                     ContentUnavailableView {
@@ -33,8 +42,15 @@ struct RecentActivityView: View {
                     }
                 }
             } else {
-                if let incomplete = model.incomplete { InlineError(message: incomplete) }
+                if let incomplete = model.incomplete ?? model.historyUnread { InlineError(message: incomplete) }
                 Section {
+                    if model.historyFilling {
+                        // Older rows from the chain join the list as the history fills in.
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Reading your history… \(NumberStyle.percent(model.historyProgress * 100, fractionDigits: 0, signed: false))").font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                    }
                     ForEach(model.items) { RecentActivityRow(item: $0) }
                 } footer: {
                     if let address = session.address {
@@ -46,8 +62,13 @@ struct RecentActivityView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(tr("Recent Activity"))
         .navigationBarTitleDisplayMode(.inline)
-        .refreshable { await model.load(env: env, address: session.address) }
+        .refreshable {
+            await env.history.refresh(env: env)
+            await model.load(env: env, address: session.address)
+        }
         .task(id: session.address) { await model.load(env: env, address: session.address) }
+        // The history fills in behind the screen (`HistoryModel`): the backfill follows it.
+        .task(id: env.history.version) { model.applyHistory(env.history.snapshot, address: session.address) }
     }
 }
 
@@ -103,6 +124,12 @@ final class RecentActivityModel {
     /// Said when part of the launchpad activity couldn't be read (a launchpad's launches, or the activity scan): the
     /// rows last read stay, and the feed says it may be missing some.
     private(set) var incomplete: String?
+    /// Said when the chain history couldn't be read to the head (unreachable, or rounds of reading stopped short):
+    /// the rows it gave stay, and the feed says it may be missing some.
+    private(set) var historyUnread: String?
+    /// The chain history is still being read, and how far it has got (0 to 1).
+    private(set) var historyFilling = false
+    private(set) var historyProgress = 0.0
     /// The wallet the kept launches and launchpad activity were read for: another wallet starts from nothing.
     private var keptFor: Address?
     /// The last launches read, which a launchpad that can't be read now keeps (`LaunchListing.keeping`).
@@ -119,43 +146,52 @@ final class RecentActivityModel {
         // Whether this load may still publish: it is the newest, and not cancelled (the screen closed mid-load; reads cut
         // short that way aren't failures to show).
         func current() -> Bool { load == loads && !Task.isCancelled }
-        guard let address else { items = []; incomplete = nil; keptFor = nil; lastLaunches = []; lastActivity = []; loading = false; return }
-        if keptFor != address { items = []; incomplete = nil; lastLaunches = []; lastActivity = []; keptFor = address }
+        guard let address else {
+            items = []; incomplete = nil; historyUnread = nil; historyFilling = false; historyProgress = 0; keptFor = nil; lastLaunches = []; lastActivity = []; loading = false
+            return
+        }
+        if keptFor != address { items = []; incomplete = nil; historyUnread = nil; historyFilling = false; historyProgress = 0; lastLaunches = []; lastActivity = []; keptFor = address }
         loading = true
         defer { if load == loads { loading = false } }
-        // Pending rows are re-checked beside the history reads, not ahead of them (each can wait on the RPC); the feed is
-        // built once the history answers, and again once they are settled.
-        async let rechecked: Void = PendingActivity.recheck(owner: address, rpc: env.rpc)
-
         let tokenMap = Dictionary(KnownTokenStore.universe(owner: address).map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
-        async let launchesTask = env.launchpad.launchListing(limit: 60)
-        async let swapsTask = env.swapHistory.swaps(wallet: address, window: .week, decimals: tokenMap.mapValues(\.decimals))
-        // A launchpad whose launches couldn't be read keeps its last good ones, and a failed activity read keeps the rows
-        // last read: the feed says it is incomplete rather than show less as if that were all.
-        let listing = await launchesTask
-        let launches = listing.keeping(lastLaunches)
-        async let lpActivityTask = env.launchpad.activity(limit: 100, lookbackBlocks: LaunchpadService.recentActivityBlocks, launches: launches)
-
-        let byToken = Dictionary(launches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
-        var unread = !listing.complete
-        let lpActivity: [ActivityItem]
-        do {
-            lpActivity = try await lpActivityTask.filter { $0.actor == address }
-        } catch {
-            lpActivity = lastActivity
-            unread = true
-        }
-        let swaps = await swapsTask
-        // A load for a wallet that is no longer the one shown, or overtaken by a newer one, publishes nothing.
+        // The actions recorded on this device show at once; the on-chain backfill joins them below.
+        let byToken = Dictionary(lastLaunches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
+        items = Self.merge(ActivityLog.all(owner: address), lpActivity: lastActivity, byToken: byToken, swaps: [], tokens: tokenMap)
+        // Pending rows are re-checked beside the launch read, not ahead of it (each can wait on the RPC); the feed is
+        // built once the launches answer, and again once they are settled.
+        async let rechecked: Void = PendingActivity.recheck(owner: address, rpc: env.rpc)
+        // A launchpad whose launches couldn't be read keeps its last good ones: the feed says it is incomplete rather than
+        // show less as if that were all.
+        let listing = await env.launchpad.launchListing(limit: 60)
         guard current() else { await rechecked; return }
+        let launches = listing.keeping(lastLaunches)
         lastLaunches = launches
-        lastActivity = lpActivity
-        incomplete = unread ? tr("Some launchpad activity couldn't be read just now. Pull to refresh.") : nil
-
-        items = Self.merge(ActivityLog.all(owner: address), lpActivity: lpActivity, byToken: byToken, swaps: swaps, tokens: tokenMap)
+        incomplete = listing.complete ? nil : tr("Some launchpad activity couldn't be read just now. Pull to refresh.")
+        applyHistory(env.history.snapshot, address: address, tokens: tokenMap)
         await rechecked
         guard current() else { return }
-        items = Self.merge(ActivityLog.all(owner: address), lpActivity: lpActivity, byToken: byToken, swaps: swaps, tokens: tokenMap)
+        applyHistory(env.history.snapshot, address: address, tokens: tokenMap)
+    }
+
+    /// The on-chain backfill from the wallet's history as the history model has it (`HistoryModel`, no scan of its own):
+    /// the launchpad fills, and the swaps, over the last week, and how far the history has got. Called whenever
+    /// `HistoryModel.version` moves, and by `load`.
+    func applyHistory(_ snapshot: WalletHistorySnapshot, address: Address?, tokens: [Address: Token]? = nil) {
+        guard let address, keptFor == address else { return }
+        historyFilling = snapshot.filling
+        historyProgress = snapshot.progress
+        historyUnread = snapshot.unreachable ? tr("Part of your history couldn't be read just now, so some activity may be missing. Pull to refresh.") : nil
+        let tokenMap = tokens ?? Dictionary(KnownTokenStore.universe(owner: address).map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
+        let byToken = Dictionary(lastLaunches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
+        let byCurve = Dictionary(lastLaunches.map { ($0.curve, $0) }, uniquingKeysWith: { first, _ in first })
+        let since = Date().addingTimeInterval(-SwapHistoryService.Window.week.seconds)
+        let fills = snapshot.launch.fills.filter { $0.time >= since }.compactMap { fill -> ActivityItem? in
+            guard let launch = byCurve[fill.curve] else { return nil }
+            return ActivityItem(id: fill.id, block: fill.block, logIndex: fill.logIndex, time: Int(fill.time.timeIntervalSince1970), transactionHash: fill.hash,
+                                kind: .trade(token: launch.token, curve: fill.curve, trader: address, isBuy: fill.isBuy, quoteAmount: fill.quoteAmount, tokenAmount: fill.tokenAmount))
+        }
+        lastActivity = fills
+        items = Self.merge(ActivityLog.all(owner: address), lpActivity: fills, byToken: byToken, swaps: snapshot.swaps.filter { $0.time >= since }, tokens: tokenMap)
     }
 
     /// The feed, newest first: the actions recorded here — typed, exact, and the only source for perps — then the

@@ -57,16 +57,26 @@ struct HomeView: View {
             .background(Color(.systemGroupedBackground))
             .scrollIndicators(.hidden)
             .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .top, spacing: 0) { HomeHeader(showSearch: $showSearch, error: model.error, updatedAt: model.updatedAt) }
+            .safeAreaInset(edge: .top, spacing: 0) { HomeHeader(showSearch: $showSearch, error: model.error ?? historyError, updatedAt: model.updatedAt) }
             .navigationDestination(for: MarketRow.self) { row in TokenDetailView(row: row) }
             .navigationDestination(item: $searchTarget) { row in TokenDetailView(row: row) }
             .refreshable {
                 await model.load(env: env, address: session.address)
-                await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: true)
+                await env.history.refresh(env: env)
+                await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: true, passkey: session.isPasskeyAccount)
             }
             .task(id: session.address) { await model.poll(env: env, address: session.address) }
-            .task(id: session.address) { await model.discoverHeldTokens(env: env, address: session.address) }
-            .task(id: session.address) { await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: false) }
+            .task(id: session.address) { await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: false, passkey: session.isPasskeyAccount) }
+            // The history fills in behind the screen (`HistoryModel`): Total Volume follows it, and the tokens it shows
+            // the wallet received join the holdings.
+            .task(id: env.history.version) {
+                env.portfolio.applyHistory(env.history.snapshot, version: env.history.version, for: session.address)
+                await model.discoverHeldTokens(env: env, address: session.address)
+            }
+            // A Perpl key that appears (a passkey session unlocked) loads the perps history the last load lacked.
+            .task(id: perplTrading.key != nil) {
+                if perplTrading.key != nil { await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: false, passkey: session.isPasskeyAccount) }
+            }
             // The Add funds card's balance watch: a passkey account only, while Home is on screen and the app is active.
             .task(id: "\(session.isPasskeyAccount ? session.address?.hex ?? "" : "")-\(scenePhase == .active)") {
                 guard session.isPasskeyAccount, scenePhase == .active, let address = session.address else { return }
@@ -145,10 +155,19 @@ struct HomeView: View {
         return total - total / (1 + change / 100)
     }
 
+    /// The wallet's chain history couldn't be read to the head (the Portfolio says the same, in full): the header's
+    /// warning, so a Total Volume short of some trades is never taken for the whole.
+    private var historyError: String? {
+        env.portfolio.historyUnreachable ? tr("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.") : nil
+    }
+
     /// Total Volume for the period, right-aligned, with the period menu (24h · 7 days · 30 days · All) under it —
-    /// the same figure the Portfolio breaks down by section. Tapping the number opens the Portfolio.
+    /// the same figure the Portfolio breaks down by section. Tapping the number opens the Portfolio. A placeholder
+    /// until the Portfolio has loaded and the chain history has been read at all (never "$0.00" ahead of it): the
+    /// figure then follows the history as it fills in.
     private var totalVolume: some View {
         @Bindable var router = router
+        let unread = session.address != nil && env.history.snapshot.anchor == nil
         return VStack(alignment: .trailing, spacing: 4) {
             Button { Haptics.tap(); router.presented = .portfolio } label: {
                 VStack(alignment: .trailing, spacing: 2) {
@@ -156,11 +175,17 @@ struct HomeView: View {
                     Text(PriceFormat.usdValue(env.portfolio.totals(router.period).volume))
                         .font(.headline).monospacedDigit().foregroundStyle(.primary)
                         .contentTransition(.numericText(value: env.portfolio.totals(router.period).volume))
-                        .redacted(reason: env.portfolio.loading && !env.portfolio.hasLoaded ? .placeholder : [])
+                        .redacted(reason: (env.portfolio.loading && !env.portfolio.hasLoaded) || unread ? .placeholder : [])
                 }
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Total volume \(router.period.label)")
+            if env.portfolio.historyFilling {
+                // The figure follows the history as it fills in: how far that has got, so a figure short of older
+                // trades is never taken for the whole.
+                Text("Reading your history… \(NumberStyle.percent(env.portfolio.historyProgress * 100, fractionDigits: 0, signed: false))")
+                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            }
             Menu {
                 Picker("Period", selection: $router.period) {
                     ForEach(VolumePeriod.allCases) { Text($0.label).tag($0) }
@@ -679,7 +704,8 @@ final class HomeModel {
         }
     }
 
-    private var discoveredFor: Address?
+    /// The wallet and the state of its transfer history the tokens were last read for (`discoverHeldTokens`).
+    private var discoveredFor: String?
 
     func poll(env: AppEnvironment, address: Address?) async {
         while !Task.isCancelled {
@@ -692,11 +718,18 @@ final class HomeModel {
     /// bridged), persists them to the shared token store as Unverified, and reloads — so every held token appears in
     /// holdings, marked, while the swap picker lists it only when searched for (IOST-12). Runs once per wallet; the
     /// persisted tokens then price and balance like any curated asset.
+    /// The tokens the wallet's history shows it received, from the history model's transfers (no scan of its own): read
+    /// again as the history fills in, and once more after it is complete.
     func discoverHeldTokens(env: AppEnvironment, address: Address?) async {
-        guard let address, discoveredFor != address else { return }
-        discoveredFor = address
+        guard let address, address == env.history.wallet else { return }
+        let snapshot = env.history.snapshot
+        let stage = "\(address.hex)-\(snapshot.transfersIn.count)-\(snapshot.status(WalletHistoryScans.transfersInId).complete)"
+        guard discoveredFor != stage else { return }
         let known = Set(KnownTokenStore.universe(owner: address).map(\.address))
-        let found = await env.walletDiscovery.heldTokens(wallet: address, known: known)
+        let found = await env.walletDiscovery.held(wallet: address, incoming: snapshot.transfersIn, complete: snapshot.status(WalletHistoryScans.transfersInId).complete, known: known).tokens
+        // Cut short (the history moved on meanwhile): read again at its next move, never skipped for good.
+        guard !Task.isCancelled else { return }
+        discoveredFor = stage
         guard !found.isEmpty else { return }
         // Give each discovered token an accurate logo from Kuru's directory (the venues don't serve icons).
         let logos = await env.kuruTokens.logos()

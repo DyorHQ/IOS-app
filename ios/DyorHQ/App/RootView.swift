@@ -99,6 +99,8 @@ struct RootView: View {
                 // the bridges iOS suspended (GL-5).
                 Task { await PendingActivity.recheck(owner: session.address, rpc: env.rpc) }
                 env.bridgeTracker.resume()
+                // The wallet's history: rounds of reading that had stopped short start again.
+                env.history.resume(env: env)
                 // Reconnect the trading socket the instant the app returns (iOS drops it while suspended), so TP/SL is
                 // ready without waiting for the keep-alive loop's next tick. Never a prompt: a passkey account's
                 // socket reconnects only inside a live session, and there is none right after a return.
@@ -115,6 +117,8 @@ struct RootView: View {
         // authenticated Perpl trading session.
         .task(id: session.address) {
             env.social.bind(address: session.address)
+            // The wallet's on-chain history: from the store at once, filled in behind every screen (`HistoryModel`).
+            env.history.start(env: env, wallet: session.address)
             // Bridges are tracked for the account that sent them only: a sign-out or switch stops the rest (RS-2).
             env.bridgeTracker.bind(owner: session.address)
             // Perpl trading and the notification center follow the account at once, not after the backend sign-in's
@@ -158,7 +162,13 @@ struct RootView: View {
                   let address = session.address, env.social.isBound(to: address), let wallet = session.backgroundWallet else { return }
             await env.social.signIn(address: address, wallet: wallet)
         }
-        .task { env.refreshVenueTokens() }
+        // The venue token list: what the last run stored is read at once, for search. The run that reads on from it
+        // (from genesis, on a fresh install) goes through the same gate as the wallet's history, so it starts once the
+        // history is no longer filling in — read to the head, or stalled — or when no wallet is signed in.
+        .task { await env.venueList.load() }
+        .task(id: "\(session.address?.hex ?? "")-\(env.history.filling)") {
+            if session.address == nil || !env.history.filling { env.refreshVenueTokens() }
+        }
         // The DyorHQ coin registry: read at start, then every 5 minutes while the app is in the foreground.
         .task(id: scenePhase == .active) { if scenePhase == .active { await env.dyorCoins.keepFresh() } }
     }

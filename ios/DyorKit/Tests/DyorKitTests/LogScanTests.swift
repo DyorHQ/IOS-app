@@ -314,9 +314,12 @@ final class LogScanTests: XCTestCase {
                 if source.contains("failFast") { sayFailFast.append(file.lastPathComponent) }
             }
         }
-        XCTAssertEqual(Set(sayFailFast), ["Logs.swift", "WalletTokenDiscovery.swift", "WalletTokens.swift"])
+        // LogsRouter.swift: the budget each mode spends. The wallet's history itself no longer scans: it comes from the
+        // history store (`WalletTokens.history`), so nothing in the app reads fail-fast any more.
+        XCTAssertEqual(Set(sayFailFast), ["Logs.swift", "LogsRouter.swift", "WalletTokenDiscovery.swift"])
         let tokens = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
-        XCTAssertEqual(tokens.components(separatedBy: "logScan: .failFast").count - 1, 1, "WalletTokens.history only")
+        XCTAssertEqual(tokens.components(separatedBy: "logScan: .failFast").count - 1, 0, "the history comes from the store")
+        XCTAssertTrue(tokens.contains("env.walletDiscovery.held(wallet: address, incoming: snapshot.transfersIn, complete: snapshot.status(WalletHistoryScans.transfersInId).complete, known: known)"))
         let discovery = try String(contentsOf: kit.appendingPathComponent("Services/WalletTokenDiscovery.swift"), encoding: .utf8)
         XCTAssertTrue(discovery.contains("logScan: LogScanMode = .patient"))
         XCTAssertTrue(discovery.contains("fromBlock: from, toBlock: latest, mode: logScan)"))
@@ -652,6 +655,8 @@ final class LogsStub: URLProtocol {
     }
 
     typealias Rule = @Sendable (Range) -> Failure?
+    /// A rule by host as well (`LogsRouter` tests): consulted before `rule`.
+    typealias HostRule = @Sendable (String, Range) -> Failure?
 
     static let url = URL(string: "https://rpc1.logs-stub.invalid")!
     static let rpc3 = URL(string: "https://rpc3.logs-stub.invalid")!
@@ -659,6 +664,10 @@ final class LogsStub: URLProtocol {
     nonisolated(unsafe) private static var head: UInt64 = 0
     nonisolated(unsafe) private static var chainLogs: [Log] = []
     nonisolated(unsafe) private static var rule: Rule = { _ in nil }
+    nonisolated(unsafe) private static var hostRule: HostRule?
+    nonisolated(unsafe) private static var askedHosts: [String] = []
+    /// Every head read gets no answer (`HistoryStoreTests`).
+    nonisolated(unsafe) static var failHead = false
     nonisolated(unsafe) private static var asked: [Range] = []
     nonisolated(unsafe) private static var batchSpan: UInt64?
     nonisolated(unsafe) private static var singleErrorStatus = 200
@@ -668,11 +677,14 @@ final class LogsStub: URLProtocol {
     nonisolated(unsafe) private static var logCap: Int?
     nonisolated(unsafe) private static var inFlight = 0
     nonisolated(unsafe) private static var mostInFlight = 0
+    /// The block the stub wallet sent its first transaction in (`eth_getTransactionCount` answers 1 from it on); nil
+    /// says it never did.
+    nonisolated(unsafe) private static var firstTransaction: UInt64?
 
     /// `latency`: how long each request takes to answer, so requests sent together overlap (`maxInFlight()`). `logCap`: a
     /// range matching more logs is refused as rpc1 refuses one over its 10K, naming the range from its start that fits.
     static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, singleErrorStatus: Int = 200, latency: TimeInterval = 0,
-                        logCap: Int? = nil, rule: @escaping Rule) {
+                        logCap: Int? = nil, firstTransaction: UInt64? = nil, hostRule: HostRule? = nil, rule: @escaping Rule) {
         lock.lock(); defer { lock.unlock() }
         self.head = head
         chainLogs = logs
@@ -680,9 +692,13 @@ final class LogsStub: URLProtocol {
         self.singleErrorStatus = singleErrorStatus
         self.latency = latency
         self.logCap = logCap
+        self.firstTransaction = firstTransaction
         self.rule = rule
+        self.hostRule = hostRule
+        failHead = false
         asked = []
         askedAddresses = []
+        askedHosts = []
         requestCount = 0
         inFlight = 0
         mostInFlight = 0
@@ -692,6 +708,12 @@ final class LogsStub: URLProtocol {
     static func addresses() -> [Address?] {
         lock.lock(); let asked = askedAddresses; lock.unlock()
         return asked.map { $0.flatMap(Address.init) }
+    }
+
+    /// The host each range in `queries()` was asked of, in the same order.
+    static func hosts() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return askedHosts
     }
 
     /// The most requests that were being answered at once.
@@ -735,7 +757,8 @@ final class LogsStub: URLProtocol {
         defer { Self.lock.lock(); Self.inFlight -= 1; Self.lock.unlock() }
         // Every call is recorded, even in a request that is to get no answer.
         var spent: UInt64 = 0
-        let answers = calls.map { Self.reply($0, spent: &spent) }
+        let host = request.url?.host() ?? ""
+        let answers = calls.map { Self.reply($0, host: host, spent: &spent) }
         let replies = answers.compactMap { $0 }
         guard replies.count == answers.count else {
             client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
@@ -758,37 +781,52 @@ final class LogsStub: URLProtocol {
 
     /// The answer to one call; nil when the request is to get no answer at all. `spent`: the blocks the ranges answered
     /// before it in the same request used (`batchSpan`).
-    private static func reply(_ call: JSON, spent: inout UInt64) -> JSON? {
+    private static func reply(_ call: JSON, host: String, spent: inout UInt64) -> JSON? {
         let id = call["id"]
         func result(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
         func error(_ code: Int, _ message: String) -> JSON {
             .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(Double(code)), "message": .string(message)])])
         }
-        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; let budget = batchSpan; let cap = logCap; lock.unlock()
+        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; let hostRule = self.hostRule; let budget = batchSpan; let cap = logCap; let failHead = self.failHead; lock.unlock()
         switch call["method"].string {
         case "eth_getBlockByNumber":
+            if failHead { return nil }
             return result(.object(["number": .string(BigUInt(head).hexQuantity), "timestamp": .string(BigUInt(1_790_000_000).hexQuantity)]))
+        case "eth_blockNumber":
+            if failHead { return nil }
+            return result(.string(BigUInt(head).hexQuantity))
+        case "eth_getTransactionCount":
+            // The nonce at a block: 1 from the first transaction's block on, 0 before it or ever.
+            lock.lock(); let first = firstTransaction; lock.unlock()
+            let tag = call["params"][1].string ?? "latest"
+            let at = tag.hasPrefix("0x") ? BigUInt(hexQuantity: tag).map { UInt64($0) } ?? head : head
+            return result(.string(BigUInt(first.map { at >= $0 ? 1 : 0 } ?? 0).hexQuantity))
         case "eth_getLogs":
             let filter = call["params"][0]
             let from = filter["fromBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? 0
             let to = filter["toBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? head
             let range = Range(from: from, to: to)
-            lock.lock(); asked.append(range); askedAddresses.append(filter["address"].string); lock.unlock()
+            lock.lock(); asked.append(range); askedAddresses.append(filter["address"].string); askedHosts.append(host); lock.unlock()
             if let budget {
                 guard spent + range.span <= budget else { return error(-32062, "Block range is too large") }
                 spent += range.span
             }
-            switch rule(range) {
+            switch hostRule?(host, range) ?? rule(range) {
             case .error(let code, let message)?: return error(code, message)
             case .noAnswer?: return nil
             case .status(let code)?: return .object(["httpStatus": .number(Double(code))])
             case nil: break
             }
-            let address = filter["address"].string.flatMap(Address.init)
-            let topics = (filter["topics"].array ?? []).map { $0.string.flatMap { Data(hex: $0) } }
+            // An address or a list of them; at each topic position a topic, a list of them, or anything (null).
+            let addresses: [Address] = filter["address"].string.flatMap(Address.init).map { [$0] } ?? (filter["address"].array ?? []).compactMap { $0.string.flatMap(Address.init) }
+            let topics: [[Data]?] = (filter["topics"].array ?? []).map { position in
+                if let one = position.string { return Data(hex: one).map { [$0] } }
+                if let list = position.array { return list.compactMap { $0.string.flatMap { Data(hex: $0) } } }
+                return nil
+            }
             let matching = logs.filter { log in
-                (address == nil || address == log.address) && range.contains(log.blockNumber)
-                    && topics.enumerated().allSatisfy { i, topic in topic == nil || (log.topics.indices.contains(i) && log.topics[i] == topic) }
+                (addresses.isEmpty || addresses.contains(log.address)) && range.contains(log.blockNumber)
+                    && topics.enumerated().allSatisfy { i, topic in topic == nil || (log.topics.indices.contains(i) && topic!.contains(log.topics[i])) }
             }
             if let cap, matching.count > cap {
                 let fits = matching.map(\.blockNumber).sorted()[cap] - 1

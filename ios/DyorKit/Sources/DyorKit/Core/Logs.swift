@@ -32,8 +32,10 @@ enum LogsAnswer: Sendable {
     case logs([Log])
     /// Refused for its size: its block span, or how many logs it would return, is over the endpoint's cap
     /// (`RPCClient.refusesSize`). A smaller range is answered: `cut`, when the endpoint names one, is the last block of a
-    /// range from the same start it can answer (`RPCClient.suggestedEnd`).
-    case tooLarge(cut: UInt64?)
+    /// range from the same start it can answer (`RPCClient.suggestedEnd`). `dense`: refused for how many logs the range
+    /// holds, not for how wide it is (`RPCClient.refusesCount`, or a range suggested from the same start) — a narrower
+    /// range is answered, and the endpoint's span is no lesson from it (`LogsRouter`).
+    case tooLarge(cut: UInt64?, dense: Bool = false)
     /// Refused for ending past the head of the node that answered (`RPCClient.refusesPastHead`): rpc1's nodes can be a
     /// few blocks apart, the head read from one and the logs from another. Asked again once that node has had time to
     /// catch up (`LogScanLimits.headPause`), while the scan's waits for it last; past them, read in halves as a size
@@ -209,7 +211,7 @@ struct LogScan {
         switch answer {
         case .logs:
             return nil
-        case .tooLarge(let cut):
+        case .tooLarge(let cut, _):
             let named = cuts > 0 ? cut : nil
             if named != nil { cuts -= 1 }
             parts = RPCClient.split(part, at: named, floor: floor)
@@ -402,6 +404,11 @@ public extension RPCClient {
         var fromBlock = fromBlock
         if isLocal, let forkBlock = await localForkBlock() { fromBlock = max(fromBlock, forkBlock) }
         guard fromBlock <= toBlock else { return ([], true) }
+        // On mainnet: across the public endpoints, in ranges each answers, within the mode's budget (`LogsRouter`).
+        if let logsRouter {
+            let read = await logsRouter.read(LogsQuery(address: address, topics: topics), from: fromBlock, to: toBlock, budget: LogsBudget(mode: mode))
+            return (read.logs, read.covers(fromBlock, toBlock))
+        }
         let chunk = max(1, chunkSize ?? logChunkSize)
         var ranges: [LogFilter] = []
         var start = fromBlock
@@ -424,8 +431,8 @@ public extension RPCClient {
             let answer = await logsAnswer(whole, tries: 3, scan: &scan)
             switch answer {
             case .logs(let found): return (found, true)
-            case .tooLarge(_?): return await narrowedLogs(whole, after: answer, scan: &scan)
-            case .tooLarge(nil), .failed, .pastHead, .throttled: if Task.isCancelled || scan.down { return ([], false) }
+            case .tooLarge(_?, _): return await narrowedLogs(whole, after: answer, scan: &scan)
+            case .tooLarge(nil, _), .failed, .pastHead, .throttled: if Task.isCancelled || scan.down { return ([], false) }
             }
         }
         var out: [Log] = []
@@ -581,6 +588,16 @@ public extension RPCClient {
         if sizes.contains(where: message.contains) { return true }
         if isRateLimited(error) { return false }
         return error.code == -32614 || error.code == -32062
+    }
+
+    /// Whether an `eth_getLogs` size refusal is about how many logs the range holds — "query returned more than 10000
+    /// results", "too many logs", rpc1's "Log response size exceeded" — rather than how wide it is: a narrower range
+    /// from the same start is answered, and the refusal says nothing about the endpoint's span (`LogsRouter`, which
+    /// reads a span the message names first).
+    internal static func refusesCount(_ error: RPCError) -> Bool {
+        let message = error.message.lowercased()
+        // not localized: the endpoints' own English, matched as they send it
+        return ["returned more than", "too many logs", "too many results", "response size"].contains(where: message.contains)
     }
 
     /// Whether an `eth_getLogs` error refuses the range for ending past the head of the node that answered it — rpc1's
