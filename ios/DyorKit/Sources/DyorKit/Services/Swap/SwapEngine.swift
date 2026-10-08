@@ -55,7 +55,7 @@ public actor SwapEngine {
             switch outcomes[venue] {
             case .success(let quote?)?: quotes.append(quote)
             case .failure(let error)?: errors[venue] = SwapMath.describe(error)
-            default: errors[venue] = "No route for this pair."
+            default: errors[venue] = L10n.tr("No route for this pair.")
             }
         }
         return QuoteResult(quotes: Self.rank(quotes), errors: errors)
@@ -175,11 +175,11 @@ public actor SwapEngine {
     static func wrapQuote(_ request: SwapRequest) -> VenueQuote {
         let wrapping = request.tokenIn.isNative
         let amount = request.amountIn
-        return VenueQuote(venue: .wrap, amountOut: amount, minOut: amount, route: wrapping ? "Wrap MON → WMON, 1:1" : "Unwrap WMON → MON, 1:1", gasEstimate: 50_000, priceImpactBps: 0) { _ in
+        return VenueQuote(venue: .wrap, amountOut: amount, minOut: amount, route: wrapping ? L10n.tr("Wrap MON → WMON, 1:1") : L10n.tr("Unwrap WMON → MON, 1:1"), gasEstimate: 50_000, priceImpactBps: 0) { _ in
             let request = wrapping
                 ? TransactionRequest(to: Monad.wmon, data: try SwapCalldata.wmonDeposit(), value: amount)
                 : TransactionRequest(to: Monad.wmon, data: try SwapCalldata.wmonWithdraw(amount: amount))
-            return [.call(request, label: wrapping ? "Wrap MON" : "Unwrap WMON")]
+            return [.call(request, label: wrapping ? L10n.tr("Wrap MON") : L10n.tr("Unwrap WMON"))]
         }
     }
 

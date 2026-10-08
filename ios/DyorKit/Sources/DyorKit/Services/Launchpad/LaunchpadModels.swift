@@ -45,6 +45,7 @@ public struct LaunchpadAddresses: Sendable, Hashable {
 
         public var description: String {
             switch self {
+            // not localized: identifiers, never shown
             case .legacy: return "legacy"
             case .preAudit: return "pre-audit"
             case .v1: return "v1"
@@ -159,10 +160,10 @@ public enum LaunchPhase: Int, Sendable, Hashable, CaseIterable {
 
     public var title: String {
         switch self {
-        case .bonding: return "Bonding"
-        case .migrating: return "Migrating"
-        case .graduated: return "Graduated"
-        case .refund: return "Refund mode"
+        case .bonding: return L10n.string(LocalizedStringResource("Bonding", bundle: L10n.kit, comment: "[tight] A launch's phase: its coin trades on its bonding curve."))
+        case .migrating: return L10n.string(LocalizedStringResource("Migrating", bundle: L10n.kit, comment: "[tight] A launch's phase: its coin moves from its curve to its pool."))
+        case .graduated: return L10n.string(LocalizedStringResource("Graduated", bundle: L10n.kit, comment: "[tight] A status: a launch's coin or a Moment has graduated, and trades in its pool."))
+        case .refund: return L10n.string(LocalizedStringResource("Refund mode", bundle: L10n.kit, comment: "[tight] A launch's phase: its coin can only be sold back into its curve."))
         }
     }
 
@@ -213,8 +214,8 @@ public enum LaunchBoard {
     /// graduate can't be sold until it does.
     public static func sellOnlySubtitle(_ coins: [Launch]) -> String {
         coins.allSatisfy(\.curveSellsOpen)
-            ? "From retired launchpads: sell them on their page. They can't be bought."
-            : "From retired launchpads: sell them on their page. They can't be bought, and a coin waiting to graduate can't be sold until it does."
+            ? L10n.tr("From retired launchpads: sell them on their page. They can't be bought.")
+            : L10n.tr("From retired launchpads: sell them on their page. They can't be bought, and a coin waiting to graduate can't be sold until it does.")
     }
 }
 
@@ -226,6 +227,7 @@ public enum GraduationVenue: UInt8, Sendable, Hashable, CaseIterable {
 
     public var title: String {
         switch self {
+        // not localized: the venues' names
         case .uniswapV4: return "Uniswap v4"
         case .monday: return "Monday Trade"
         }
@@ -355,10 +357,10 @@ public enum LaunchBlocker: Hashable, Sendable {
 
     public var message: String {
         switch self {
-        case .modulesNotSealed: return "The launchpad's contracts aren't locked yet, so launching stays off for now."
-        case .modulesChanged: return "The launchpad's contracts aren't the ones this version of DyorHQ was built for, so launching is off. Update the app."
-        case .configDisabled: return "New launches are paused right now."
-        case .notAllowed: return "Launching is limited to approved wallets right now, and this wallet isn't one."
+        case .modulesNotSealed: return L10n.tr("The launchpad's contracts aren't locked yet, so launching stays off for now.")
+        case .modulesChanged: return L10n.tr("The launchpad's contracts aren't the ones this version of DyorHQ was built for, so launching is off. Update the app.")
+        case .configDisabled: return L10n.tr("New launches are paused right now.")
+        case .notAllowed: return L10n.tr("Launching is limited to approved wallets right now, and this wallet isn't one.")
         }
     }
 
@@ -575,11 +577,15 @@ public struct Launch: Identifiable, Hashable, Sendable {
     public var awaitsGraduation: Bool { phase == .bonding && completed && !rescued }
 
     /// The coin page's status line: "Graduation pending" for a completed curve waiting to graduate, else the phase.
-    public var statusTitle: String { awaitsGraduation ? "Graduation pending" : phase.title }
+    public var statusTitle: String {
+        awaitsGraduation ? L10n.string(LocalizedStringResource("Graduation pending", bundle: L10n.kit, comment: "[tight] A status: a launch's coin or a Moment waits to graduate into its pool.")) : phase.title
+    }
 
     /// A sell-only coin's badge on its card: "Sell only" while its curve takes a sell, else what it waits for
     /// (`statusTitle`: "Graduation pending" or "Migrating"), when nothing trades until it graduates.
-    public var sellOnlyBadge: String { curveSellsOpen ? "Sell only" : statusTitle }
+    public var sellOnlyBadge: String {
+        curveSellsOpen ? L10n.string(LocalizedStringResource("Sell only", bundle: L10n.kit, comment: "[tight] A badge on a coin from a retired launchpad: it can be sold, not bought.")) : statusTitle
+    }
 }
 
 /// Everything the token page needs beyond the list row.
@@ -961,13 +967,13 @@ public enum LaunchpadError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .notDeployed: return "The launchpad contracts are not deployed yet."
-        case .launchFeeChanged(let fee): return "The launch fee changed to \(NumberStyle.units(fee, decimals: 18)) MON since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new fee."
-        case .termsChanged: return "The launch terms changed since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new terms."
-        case .launchBlocked(let blocker): return "\(blocker.message) Nothing was sent."
-        case .retiredLaunchpad: return "\(RetiredLaunchpad.notice) Nothing was sent."
-        case .graduateFallbackByKeepers: return "DyorHQ's keepers will finish this graduation: they retry it with the gas it needs and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool. Nothing was sent."
-        case .unexpectedResponse(let what): return "The launchpad returned something the app could not read (\(what))."
+        case .notDeployed: return L10n.tr("The launchpad contracts are not deployed yet.")
+        case .launchFeeChanged(let fee): return L10n.tr("The launch fee changed to \(NumberStyle.units(fee, decimals: 18)) MON since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new fee.")
+        case .termsChanged: return L10n.tr("The launch terms changed since this screen loaded, so nothing was sent. Close this screen, refresh the Launchpad and review the new terms.")
+        case .launchBlocked(let blocker): return L10n.string(LocalizedStringResource("\(blocker.message) Nothing was sent.", bundle: L10n.kit, comment: "The value is a sentence that says why; this one adds that no transaction was sent."))
+        case .retiredLaunchpad: return L10n.string(LocalizedStringResource("\(RetiredLaunchpad.notice) Nothing was sent.", bundle: L10n.kit, comment: "The value is a sentence that says why; this one adds that no transaction was sent."))
+        case .graduateFallbackByKeepers: return L10n.tr("DyorHQ's keepers will finish this graduation: they retry it with the gas it needs and, if Monday Trade still refuses it, move it to a locked Uniswap v4 pool. Nothing was sent.")
+        case .unexpectedResponse(let what): return L10n.tr("The launchpad returned something the app could not read (\(what)).")
         }
     }
 }

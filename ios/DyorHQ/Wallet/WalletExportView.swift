@@ -51,7 +51,7 @@ struct WalletExportView: View {
                 privySections
             }
         }
-        .navigationTitle("Export Wallet")
+        .navigationTitle(tr("Export Wallet"))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showPrivyExport) {
             if let url = env.config.walletExportURL { PrivyExportSheet(url: url) }
@@ -69,7 +69,7 @@ struct WalletExportView: View {
             if let key = revealedKey {
                 // Hidden while the screen is being recorded or mirrored; no system text selection (its Copy has no
                 // expiry and syncs to other devices) — the Copy button below is the only, expiring, local-only path.
-                Text(isCaptured ? "Hidden while the screen is being recorded" : key)
+                (isCaptured ? Text("Hidden while the screen is being recorded") : Text(verbatim: key))
                     .speechSpellsOutCharacters(!isCaptured) // a key read out character by character, not as words (AI-13)
                     .font(.footnote.monospaced())
                     .privacySensitive()
@@ -153,7 +153,11 @@ struct WalletExportView: View {
                 .font(.footnote).foregroundStyle(.secondary)
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("This is the key for \(session.address?.short ?? "your wallet"). Treat it like the keys to a safe.")
+                if let short = session.address?.short {
+                    Text("This is the key for \(short). Treat it like the keys to a safe.")
+                } else {
+                    Text("This is the key for your wallet. Treat it like the keys to a safe.")
+                }
                 LearnMoreLink(.exportSignOutDelete)
             }
         }
@@ -165,18 +169,18 @@ struct WalletExportView: View {
         Task {
             // Always gated, whatever the App Lock setting: revealing the key hands over the wallet.
             guard BiometricGate.canAuthenticateOwner else {
-                error = "Set a device passcode in iOS Settings to reveal your key — it protects the key if your phone is lost."
+                error = tr("Set a device passcode in iOS Settings to reveal your key — it protects the key if your phone is lost.")
                 working = false
                 return
             }
             let ok = await BiometricGate.authenticate(reason: "Reveal your wallet's private key")
             guard ok else {
-                error = "\(BiometricGate.typeName) or your passcode is required to reveal your key."
+                error = tr("\(BiometricGate.typeName) or your passcode is required to reveal your key.")
                 working = false
                 return
             }
             guard let account = ImportedWalletStore.loadAccount() else {
-                error = "Couldn't read the key from this device's Keychain."
+                error = tr("Couldn't read the key from this device's Keychain.")
                 working = false
                 return
             }
@@ -210,11 +214,11 @@ private struct PrivyExportSheet: View {
     var body: some View {
         NavigationStack {
             PrivyExportWebView(url: url) { result in
-                if result == "success" { dismiss() }
-                else { status = "Export was cancelled or didn't finish." }
+                if result == "success" { dismiss() } // not localized: the export page's status value
+                else { status = tr("Export was cancelled or didn't finish.") }
             }
             .ignoresSafeArea(edges: .bottom)
-            .navigationTitle("Export Wallet")
+            .navigationTitle(tr("Export Wallet"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .safeAreaInset(edge: .bottom) {
@@ -236,7 +240,7 @@ private struct PrivyExportWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent() // don't cache Privy login / export material on device
-        config.userContentController.add(context.coordinator, name: "exportResult")
+        config.userContentController.add(context.coordinator, name: "exportResult") // not localized: the page's message name
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.load(URLRequest(url: url))
         return webView

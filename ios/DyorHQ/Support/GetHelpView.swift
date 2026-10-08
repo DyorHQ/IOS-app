@@ -3,10 +3,13 @@ import SwiftUI
 import UIKit
 
 /// DyorHQ's brand line and the places to reach it: the site, the Help Center (the docs), the X profile and the support
-/// inbox.
+/// inbox. The name, the addresses and the handle are never translated.
 enum SupportLinks {
-    static let name = "DyorHQ"
-    static let tagline = "The RWA HQ for social trading"
+    static let name = "DyorHQ" // not localized: the app's name
+    /// The brand line, in the app's language (the catalog may keep it in English: the owner decides).
+    static var tagline: String {
+        tr(LocalizedStringResource("The RWA HQ for social trading", comment: "DyorHQ's tagline, under the wordmark. Ask the owner before translating it."))
+    }
     static let site = URL(string: "https://dyorhq.fun")!
     /// The docs home (dyorhq.gitbook.io/docs).
     static let helpCenter = DocsLinks.home.url
@@ -16,10 +19,12 @@ enum SupportLinks {
     static let xHandle = "@DyorHQ_"
     static let x: URL? = URL(string: "https://x.com/DyorHQ_")
 
-    /// A mail link with the subject and the app / device details support asks for.
+    /// A mail link with the subject and the app / device details support asks for. The subject and the details are for
+    /// the support team and stay in English; the body is the user's to write, so its prompts are in the app's language.
     static func mail(subject: String, body: String = "") -> URL? {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+        // not localized: for the support team
         let details = "\n\n—\nDyorHQ iOS \(version) (\(build)) · iOS \(UIDevice.current.systemVersion) · \(UIDevice.current.model)"
         var components = URLComponents()
         components.scheme = "mailto"
@@ -39,7 +44,7 @@ struct GetHelpView: View {
         NavigationStack {
             ScrollView { GetHelpContent().padding(16) }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Support")
+            .navigationTitle(tr("Support"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -67,18 +72,21 @@ struct GetHelpContent: View {
                 HelpRow(symbol: "checkmark.seal", title: "Contracts & Addresses", detail: "Verify every contract DyorHQ uses") { openURL(DocsLinks.contractsAndAddresses.url) }
             }
             group("Get Help") {
+                // not localized: the subjects are for the support team
                 HelpRow(symbol: "envelope", title: "Contact Support", detail: SupportLinks.supportEmail) { mail(subject: "DyorHQ support") }
-                HelpRow(symbol: "ladybug", title: "Report a Bug", detail: "Tell us what went wrong") { mail(subject: "DyorHQ bug report", body: "What happened:\n\nWhat I expected:\n\nSteps to reproduce:\n") }
+                HelpRow(symbol: "ladybug", title: "Report a Bug", detail: "Tell us what went wrong") {
+                    mail(subject: "DyorHQ bug report", body: tr("What happened:\n\nWhat I expected:\n\nSteps to reproduce:\n")) // not localized: the subject
+                }
             }
             if let x = SupportLinks.x {
                 group("Community") {
-                    HelpRow(symbol: "at", title: "X", detail: SupportLinks.xHandle) { openURL(x) }
+                    HelpRow(symbol: "at", title: Text(verbatim: "X"), detail: Text(verbatim: SupportLinks.xHandle)) { openURL(x) }
                 }
             }
             group("About") {
-                HelpRow(symbol: "globe", title: "dyorhq.fun", detail: SupportLinks.tagline) { openURL(SupportLinks.site) }
-                HelpRow(symbol: "doc.text", title: "Terms of Use", detail: "dyorhq.fun/terms") { openURL(SupportLinks.terms) }
-                HelpRow(symbol: "hand.raised", title: "Privacy Policy", detail: "dyorhq.fun/privacy") { openURL(SupportLinks.privacy) }
+                HelpRow(symbol: "globe", title: Text(verbatim: "dyorhq.fun"), detail: Text(verbatim: SupportLinks.tagline)) { openURL(SupportLinks.site) }
+                HelpRow(symbol: "doc.text", title: Text("Terms of Use"), detail: Text(verbatim: "dyorhq.fun/terms")) { openURL(SupportLinks.terms) }
+                HelpRow(symbol: "hand.raised", title: Text("Privacy Policy"), detail: Text(verbatim: "dyorhq.fun/privacy")) { openURL(SupportLinks.privacy) }
             }
             Text("Self-custodial: support can never reach your keys or funds. Never share a recovery phrase with anyone.")
                 .font(.footnote)
@@ -87,7 +95,7 @@ struct GetHelpContent: View {
         }
     }
 
-    private func group<Content: View>(_ title: String, @ViewBuilder rows: () -> Content) -> some View {
+    private func group<Content: View>(_ title: LocalizedStringKey, @ViewBuilder rows: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title).font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 4)
             rows()
@@ -101,12 +109,30 @@ struct GetHelpContent: View {
 
 }
 
-/// One support row: a symbol on a tinted square, a title and a one-line description, a chevron.
+/// One support row: a symbol on a tinted square, a title and a one-line description, a chevron. The description is a
+/// catalog key when written in the code, or a `String` shown as it is (the support address). A name or an address that
+/// is never translated (X, dyorhq.fun) is given as a `Text(verbatim:)`.
 private struct HelpRow: View {
     let symbol: String
-    let title: String
-    let detail: String
+    private let title: Text
+    private let detail: Text
     let action: () -> Void
+
+    init(symbol: String, title: LocalizedStringKey, detail: LocalizedStringKey, action: @escaping () -> Void) {
+        self.init(symbol: symbol, title: Text(title), detail: Text(detail), action: action)
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(symbol: String, title: LocalizedStringKey, detail: S, action: @escaping () -> Void) {
+        self.init(symbol: symbol, title: Text(title), detail: Text(verbatim: String(detail)), action: action)
+    }
+
+    init(symbol: String, title: Text, detail: Text, action: @escaping () -> Void) {
+        self.symbol = symbol
+        self.title = title
+        self.detail = detail
+        self.action = action
+    }
 
     var body: some View {
         Button { Haptics.tap(); action() } label: {
@@ -117,8 +143,8 @@ private struct HelpRow: View {
                     .frame(width: 40, height: 40)
                     .background(Color.brand.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.body.weight(.semibold)).foregroundStyle(.primary)
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                    title.font(.body.weight(.semibold)).foregroundStyle(.primary)
+                    detail.font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
@@ -129,6 +155,6 @@ private struct HelpRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title). \(detail)")
+        .accessibilityLabel(title + Text(verbatim: ". ") + detail)
     }
 }

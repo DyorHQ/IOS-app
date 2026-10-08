@@ -23,7 +23,7 @@ struct PrivyWallet: Wallet {
             maxPriorityFeePerGas: .hexadecimalNumber(tx.maxPriorityFeePerGas.hexQuantity)
         )
         let signed = try await provider.request(.ethSignTransaction(transaction: unsigned))
-        guard let bytes = Data(hex: signed) else { throw TransactionError.rejected("The wallet returned an unreadable signature.") }
+        guard let bytes = Data(hex: signed) else { throw TransactionError.rejected(tr("The wallet returned an unreadable signature.")) }
         // Privy returns the RLP-encoded signed transaction. A bare 65-byte signature is assembled here just in case.
         if bytes.count == 65 {
             let r = BigUInt(bytes.prefix(32))
@@ -37,7 +37,7 @@ struct PrivyWallet: Wallet {
 
     func signMessage(_ message: Data) async throws -> Data {
         let signature = try await provider.request(.personalSign(message: message.hexString, address: address.checksummed))
-        guard let bytes = Data(hex: signature) else { throw TransactionError.rejected("The wallet returned an unreadable signature.") }
+        guard let bytes = Data(hex: signature) else { throw TransactionError.rejected(tr("The wallet returned an unreadable signature.")) }
         return bytes
     }
 
@@ -46,7 +46,7 @@ struct PrivyWallet: Wallet {
     /// Ed25519 proof-of-possession covers.
     func signDigest(_ digest: Data) async throws -> String {
         let signature = try await provider.request(.secp256k1Sign(hash: digest.hexString))
-        guard var bytes = Data(hex: signature) else { throw TransactionError.rejected("The wallet returned an unreadable signature.") }
+        guard var bytes = Data(hex: signature) else { throw TransactionError.rejected(tr("The wallet returned an unreadable signature.")) }
         if bytes.count == 65, bytes[64] < 27 { bytes[64] += 27 }
         return bytes.hexString
     }

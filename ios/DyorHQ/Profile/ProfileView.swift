@@ -13,6 +13,7 @@ struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
+    @Environment(LanguageStore.self) private var language
     @Environment(PerplTrading.self) private var perplTrading
     @Environment(SocialSession.self) private var social
     @State private var showReceive = false
@@ -28,13 +29,13 @@ struct ProfileView: View {
     private var signOutMessage: String {
         switch session.account?.method {
         case .watchOnly?, nil:
-            return "Balances and positions for this address will no longer be shown."
+            return tr("Balances and positions for this address will no longer be shown.")
         case .imported?:
-            return "This removes the imported key from this iPhone. You'll need its recovery phrase or private key to use this wallet again — export it first (Manage Wallets → Export Wallet) if you haven't saved it."
+            return tr("This removes the imported key from this iPhone. You'll need its recovery phrase or private key to use this wallet again — export it first (Manage Wallets → Export Wallet) if you haven't saved it.")
         case .emailPassword?:
-            return "Sign in again with your email and password to use this wallet."
+            return tr("Sign in again with your email and password to use this wallet.")
         default:
-            return "Your wallet stays with your account. Sign in again to use it."
+            return tr("Your wallet stays with your account. Sign in again to use it.")
         }
     }
 
@@ -59,7 +60,7 @@ struct ProfileView: View {
                         HStack {
                             SettingsRow("DyorHQ Social", symbol: "person.2.circle", tint: .accent)
                             Spacer()
-                            if social.isSignedIn { Text(social.profile?.handle.map { "@\($0)" } ?? "Connected").font(.footnote).foregroundStyle(.secondary) }
+                            if social.isSignedIn { Text(social.profile?.handle.map { "@\($0)" } ?? tr("Connected")).font(.footnote).foregroundStyle(.secondary) }
                         }
                     }
                     NavigationLink { ManageWalletsView() } label: { SettingsRow("Manage Wallets", symbol: "wallet.bifold", tint: .accent) }
@@ -81,12 +82,12 @@ struct ProfileView: View {
                         }
                     }
                     NavigationLink { LanguageView() } label: {
-                        HStack { SettingsRow("Language", symbol: "globe", tint: .accent); Spacer(); Text("English").foregroundStyle(.secondary) }
+                        HStack { SettingsRow("Language", symbol: "globe", tint: .accent); Spacer(); Text(language.resolved.endonym).foregroundStyle(.secondary) }
                     }
                     NavigationLink {
                         ScrollView { GetHelpContent().padding(16) }
                             .background(Color(.systemGroupedBackground))
-                            .navigationTitle("Support")
+                            .navigationTitle(tr("Support"))
                             .navigationBarTitleDisplayMode(.inline)
                     } label: { SettingsRow("Support", symbol: "questionmark.circle", tint: .accent) }
                     Link(destination: SupportLinks.helpCenter) { SettingsRow("Help Center", symbol: "book", tint: .accent) }
@@ -95,7 +96,7 @@ struct ProfileView: View {
                 }
 
                 Section("Network") {
-                    LabeledContent("Chain", value: "Monad mainnet")
+                    LabeledContent("Chain", value: tr("Monad mainnet"))
                     LabeledContent("RPC", value: env.config.rpcURL.host() ?? env.config.rpcURL.absoluteString)
                 }
 
@@ -129,13 +130,14 @@ struct ProfileView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Profile")
+            .navigationTitle(tr("Profile"))
             .navigationBarTitleDisplayMode(presented ? .inline : .large)
             .foregroundStyle(.primary)
             .toolbar {
                 if presented {
                     ToolbarItem(placement: .topBarLeading) {
-                        Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }.accessibilityLabel("Close")
+                        Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }
+                            .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
                     }
                 }
             }
@@ -211,21 +213,29 @@ struct ProfileView: View {
     }
 }
 
-/// A settings row: a symbol in the accent tint, then the title. Matches Apple's own settings rows.
+/// A settings row: a symbol in the accent tint, then the title. Matches Apple's own settings rows. The title is a catalog
+/// key when written in the code, or a `String` shown as it is.
 struct SettingsRow: View {
-    let title: String
+    private let title: Text
     let symbol: String
     var tint: Color = .accent
 
-    init(_ title: String, symbol: String, tint: Color = .accent) {
-        self.title = title
+    init(_ title: LocalizedStringKey, symbol: String, tint: Color = .accent) {
+        self.title = Text(title)
+        self.symbol = symbol
+        self.tint = tint
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(_ title: S, symbol: String, tint: Color = .accent) {
+        self.title = Text(verbatim: String(title))
         self.symbol = symbol
         self.tint = tint
     }
 
     var body: some View {
         Label {
-            Text(title).foregroundStyle(.primary)
+            title.foregroundStyle(.primary)
         } icon: {
             Image(systemName: symbol).foregroundStyle(tint)
         }
@@ -273,7 +283,7 @@ struct ReceiveSheet: View {
                 Spacer()
             }
             .padding(.top, 24)
-            .navigationTitle("Receive")
+            .navigationTitle(tr("Receive"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .sensoryFeedback(.success, trigger: copied)
@@ -338,12 +348,12 @@ struct SendSheet: View {
     private var problem: String? {
         if let issue = Address.inputProblem(recipientText) { return issue }
         if let to = recipientAddress {
-            if to.isZero { return "That's the zero address: anything sent there is lost for good." }
+            if to.isZero { return tr("That's the zero address: anything sent there is lost for good.") }
             // Tokens sent to their own contract are stuck there: almost no token can send them back (GR-3).
-            if let token, !token.isNative, to == token.address { return "That's the \(token.symbol) token contract itself. Tokens sent to it are almost always lost for good." }
+            if let token, !token.isNative, to == token.address { return tr("That's the \(token.symbol) token contract itself. Tokens sent to it are almost always lost for good.") }
         }
         if let rawAmount, let balance, let token, rawAmount > balance {
-            return "More than your \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)."
+            return tr("More than your \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol).")
         }
         return nil
     }
@@ -378,12 +388,16 @@ struct SendSheet: View {
                             .tint(Color.attention)
                     }
                 } header: {
-                    Text("To")
+                    Text("To", comment: "The address the tokens are sent to, a section header [tight]")
                 } footer: {
                     if let cleanedPaste, cleanedPaste == recipient { Text("Hidden characters were removed from the pasted address. Check it matches the source.") }
                     if let to = recipientAddress, to == session.address { Text("That's your own address.") }
                     if recipientIsContract == true {
-                        Text("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts \(token?.symbol ?? "this token").")
+                        if let token {
+                            Text("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts \(token.symbol).")
+                        } else {
+                            Text("This address is a contract, not a wallet. Most contracts can't send tokens back, so funds sent to the wrong one are lost. Send only if you know this contract accepts this token.")
+                        }
                     } else if recipientCheckFailed {
                         Text("Couldn't check whether this address is a contract. Check it before sending.")
                     }
@@ -399,7 +413,7 @@ struct SendSheet: View {
                     else if let balance, let token { Text("Available: \(NumberStyle.units(balance, decimals: token.decimals)) \(token.symbol)") }
                 }
             }
-            .navigationTitle("Send")
+            .navigationTitle(tr("Send"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -435,23 +449,23 @@ struct SendSheet: View {
                         throw TransactionError.rejected(refusal)
                     }
                     let request = try review.request()
-                    return [.call(request, label: "Send \(review.token.symbol)")]
+                    return [.call(request, label: tr("Send \(review.token.symbol)"))]
                 }, onDone: { dismiss() }, onCompleted: { hash in
                     // A send out of the wallet is a withdrawal in the journey. USD is exact for the curated dollar
                     // stables, matched by contract address — a token that only calls itself "USDC" is not dollars —
                     // and left unknown otherwise rather than guessed.
-                    Activity.record(ActivityRecord(kind: .withdraw, title: "Sent \(review.token.symbol)",
+                    Activity.record(ActivityRecord(kind: .withdraw, title: tr("Sent \(review.token.symbol)"),
                         subtitle: "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol) → \(review.to.short)",
                         hash: hash, section: "wallet", usd: WalletHoldings.stableUSD(review.token, amount: review.amount)), owner: session.address)
                 }, intent: .alwaysAsks(.send)) {
                     DetailRow("To", review.to.checksummed, spellsOut: true) // in full: this review is the last check before funds leave
                     if review.toContract { DetailRow("Recipient", "A contract, not a wallet", tint: .attention) }
-                    DetailRow("Amount", "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol)")
+                    DetailRow("Amount", verbatim: "\(NumberStyle.units(review.amount, decimals: review.token.decimals)) \(review.token.symbol)")
                     // In full, like the recipient: a look-alike's contract can be made to match a short form.
                     if !review.token.isNative { DetailRow("Token contract", review.token.address.checksummed, spellsOut: true) }
                     if review.badge.isImitation, let title = review.badge.title { DetailRow("Token", title, tint: .attention) }
                     if review.unverified { DetailRow("Token", review.receivedNote, tint: .attention) }
-                    DetailRow("Network", "Monad")
+                    DetailRow("Network", verbatim: "Monad") // not localized: the chain's name
                 }
             }
         }
@@ -507,16 +521,26 @@ struct SendSheet: View {
     private static func readGap(complete: Bool, pricesFailed: Bool) -> String? {
         switch (complete, pricesFailed) {
         case (true, false): return nil
-        case (true, true): return "Some prices couldn't be read, so values are missing and no token was picked for you."
-        case (false, false): return "Part of your wallet couldn't be read, so a token may be missing from the list."
-        case (false, true): return "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no token was picked for you."
+        case (true, true): return tr("Some prices couldn't be read, so values are missing and no token was picked for you.")
+        case (false, false): return tr("Part of your wallet couldn't be read, so a token may be missing from the list.")
+        case (false, true): return tr("Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no token was picked for you.")
         }
     }
 
     /// What a read that came back partly empty-handed left out, with Retry: never passed off as all the wallet holds.
-    private func readNotice(_ text: String) -> some View {
+    private func readNotice(_ text: LocalizedStringKey) -> some View {
+        readNotice(Text(text))
+    }
+
+    /// A notice worded at run time (`readGap`), shown as it is.
+    @_disfavoredOverload
+    private func readNotice<S: StringProtocol>(_ text: S) -> some View {
+        readNotice(Text(verbatim: String(text)))
+    }
+
+    private func readNotice(_ text: Text) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(text).font(.footnote).foregroundStyle(.secondary)
+            text.font(.footnote).foregroundStyle(.secondary)
             Button("Retry", systemImage: "arrow.clockwise") { attempt += 1 }
         }
     }
@@ -667,8 +691,12 @@ private struct SendReview: Identifiable {
 
     /// What the review says of a token sent to the wallet unasked: a DyorHQ coin by its DyorHQ label, never as Unverified.
     var receivedNote: String {
-        if badge.isDyorHQ, let title = badge.title { return "\(title): sent to you, not chosen here" }
-        return "Unverified: sent to you, not chosen here"
+        if badge.isDyorHQ, let title = badge.title {
+            return tr(LocalizedStringResource("\(title): sent to you, not chosen here",
+                                              comment: "Send review: a token someone sent to this wallet, not one chosen in the app. %@ is its DyorHQ label, DyorHQ Launch or DyorHQ Moment"))
+        }
+        return tr(LocalizedStringResource("Unverified: sent to you, not chosen here",
+                                          comment: "Send review: a token someone sent to this wallet, not one chosen in the app, so its name proves nothing"))
     }
 
     func request() throws -> TransactionRequest { try TokenTransfer.request(token, to: to, amount: amount) }
@@ -732,8 +760,8 @@ private struct SendAssetPicker: View {
             }
         }
         .listStyle(.insetGrouped)
-        .searchable(text: $query, prompt: "Symbol, name or address")
-        .navigationTitle("Choose a Token")
+        .searchable(text: $query, prompt: tr("Symbol, name or address"))
+        .navigationTitle(tr("Choose a Token"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -772,11 +800,11 @@ private struct SendAssetRow: View {
     }
 
     private var subtitle: String {
-        return asset.unverified || !asset.plainSymbol || badge.isWarning ? "\(asset.token.name) · \(asset.token.address.short)" : asset.token.name
+        return asset.unverified || !asset.plainSymbol || badge.isWarning ? "\(asset.token.displayName) · \(asset.token.address.short)" : asset.token.displayName
     }
 
     private var valueText: String {
-        guard let value = asset.value else { return "No price" }
+        guard let value = asset.value else { return tr("No price") }
         return PriceFormat.usdValue(value)
     }
 }

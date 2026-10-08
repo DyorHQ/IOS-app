@@ -53,13 +53,13 @@ final class AssetsModel {
     /// What part of the read failed, in words, as the Send sheet says it: nil when all of it was read. Nothing about
     /// prices when there is nothing to value.
     var readGap: String? {
-        if balancesUnread { return "Your balances couldn't be read. Check your connection and try again." }
+        if balancesUnread { return tr("Your balances couldn't be read. Check your connection and try again.") }
         switch (complete, pricesFailed) {
         case (true, false): return nil
-        case (true, true): return tokens.isEmpty ? nil : "Some prices couldn't be read, so values are missing and no total is shown."
-        case (false, _) where tokens.isEmpty: return "No tokens found, but part of your wallet couldn't be read, so some may be missing."
-        case (false, false): return "Part of your wallet couldn't be read, so a token may be missing from the list and the total."
-        case (false, true): return "Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no total is shown."
+        case (true, true): return tokens.isEmpty ? nil : tr("Some prices couldn't be read, so values are missing and no total is shown.")
+        case (false, _) where tokens.isEmpty: return tr("No tokens found, but part of your wallet couldn't be read, so some may be missing.")
+        case (false, false): return tr("Part of your wallet couldn't be read, so a token may be missing from the list and the total.")
+        case (false, true): return tr("Some prices and part of your wallet couldn't be read, so values and tokens may be missing, and no total is shown.")
         }
     }
 
@@ -131,7 +131,12 @@ struct AssetsCard: View {
     private enum Kind: String, CaseIterable, Identifiable {
         case assets, nfts
         var id: String { rawValue }
-        var label: String { self == .assets ? "Assets" : "NFTs" }
+        var label: String {
+            switch self {
+            case .assets: return tr(LocalizedStringResource("Assets", comment: "A tab: in My Holdings the tokens held, on Perps the trading account's balance [tight]"))
+            case .nfts: return tr(LocalizedStringResource("NFTs", comment: "My Holdings tab: the NFTs held [tight]"))
+            }
+        }
     }
 
     private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
@@ -143,7 +148,7 @@ struct AssetsCard: View {
                 Spacer()
                 if model.loading { ProgressView().controlSize(.mini) }
                 else if kind == .assets, model.showsTotal { Text(PriceFormat.usdValue(model.totalValue)).font(.subheadline.weight(.semibold)).monospacedDigit() }
-                else if kind == .nfts, !model.nfts.isEmpty { Text("\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
+                else if kind == .nfts, !model.nfts.isEmpty { Text(verbatim: "\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
             }
 
             Picker("Holdings", selection: $kind) {
@@ -213,11 +218,11 @@ struct AssetsCard: View {
                             // A past-cohort edition opens its claim-only page, here in the Portfolio.
                             NavigationLink(value: PastMomentRoute(info: retired)) { nftTile(nft, caption: "Past cohort Moment") }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("\(nft.name), \(nft.collection)")
+                                .accessibilityLabel(Text(verbatim: "\(nft.name), \(nft.collection)"))
                         } else if model.momentsByNFT[nft.contract] != nil {
                             Button { open(nft) } label: { nftTile(nft, caption: "Moment · OpenSea") }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("\(nft.name), \(nft.collection)")
+                                .accessibilityLabel(Text(verbatim: "\(nft.name), \(nft.collection)"))
                         } else {
                             // Any other collection was sent to the wallet, not chosen here: its name and art prove nothing.
                             Button { open(nft) } label: { nftTile(nft, caption: "OpenSea", unverified: true) }
@@ -232,7 +237,7 @@ struct AssetsCard: View {
         .cardBackground()
     }
 
-    private func nftTile(_ nft: NFTAsset, caption: String, unverified: Bool = false) -> some View {
+    private func nftTile(_ nft: NFTAsset, caption: LocalizedStringKey, unverified: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Color(.tertiarySystemFill)
                 .aspectRatio(1, contentMode: .fit)
@@ -259,7 +264,18 @@ struct AssetsCard: View {
         .contentShape(Rectangle())
     }
 
+    private func tokenRow(_ asset: AssetsModel.TokenAsset, note: LocalizedStringKey, unverified: Bool = false) -> some View {
+        tokenRow(asset, note: Text(note), unverified: unverified)
+    }
+
+    /// A row whose note is worded at run time (a curve route's `rowNote`), shown as it is: the token's name when there is
+    /// none.
+    @_disfavoredOverload
     private func tokenRow(_ asset: AssetsModel.TokenAsset, note: String? = nil, unverified: Bool = false) -> some View {
+        tokenRow(asset, note: note.map { Text(verbatim: $0) }, unverified: unverified)
+    }
+
+    private func tokenRow(_ asset: AssetsModel.TokenAsset, note: Text?, unverified: Bool) -> some View {
         HStack(spacing: 12) {
             TokenLogo(token: asset.token, size: 34)
             VStack(alignment: .leading, spacing: 2) {
@@ -267,7 +283,7 @@ struct AssetsCard: View {
                     Text(asset.token.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                     TokenBadgeView(token: asset.token, receivedUnasked: unverified)
                 }
-                Text(note ?? asset.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                (note ?? Text(verbatim: asset.token.displayName)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {

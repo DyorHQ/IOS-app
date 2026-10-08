@@ -96,9 +96,20 @@
       return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
     }
 
+    // The legend's labels, in the app's language once the app sends them.
+    let legendLabels = { o: 'O', h: 'H', l: 'L', c: 'C' };
+
+    function escapeHTML(text) {
+      return String(text).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+    }
+
+    // The app's settings: the palette, and the app's language. Dates on the time scale and the crosshair are written in
+    // `locale` (the app's language, not the device's); prices keep the app's one number style (formatPrice).
     window.__configure = function (p) {
-      palette = Object.assign(palette, p);
+      palette = Object.assign(palette, p.palette || {});
       applyPalette();
+      if (p.locale) chart.applyOptions({ localization: { locale: p.locale, priceFormatter: (v) => formatPrice(v) } });
+      if (p.legend) legendLabels = Object.assign(legendLabels, p.legend);
     };
 
     window.__setData = function (rows) {
@@ -161,10 +172,10 @@
       const up = c.close >= c.open;
       const col = up ? palette.up : palette.down;
       legend.innerHTML =
-        '<span><span class="k">O</span> ' + formatPrice(c.open) + '</span>' +
-        '<span><span class="k">H</span> ' + formatPrice(c.high) + '</span>' +
-        '<span><span class="k">L</span> ' + formatPrice(c.low) + '</span>' +
-        '<span style="color:' + col + '"><span class="k" style="color:inherit;opacity:.55">C</span> ' + formatPrice(c.close) + '</span>';
+        '<span><span class="k">' + escapeHTML(legendLabels.o) + '</span> ' + formatPrice(c.open) + '</span>' +
+        '<span><span class="k">' + escapeHTML(legendLabels.h) + '</span> ' + formatPrice(c.high) + '</span>' +
+        '<span><span class="k">' + escapeHTML(legendLabels.l) + '</span> ' + formatPrice(c.low) + '</span>' +
+        '<span style="color:' + col + '"><span class="k" style="color:inherit;opacity:.55">' + escapeHTML(legendLabels.c) + '</span> ' + formatPrice(c.close) + '</span>';
       legend.style.opacity = '1';
     });
 

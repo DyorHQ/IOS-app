@@ -25,14 +25,15 @@ struct AppNotification: Codable, Identifiable, Hashable {
             }
         }
 
+        /// The kind's name on the notification center's filter chips, in the app's language.
         var title: String {
             switch self {
-            case .transaction: return "Transactions"
-            case .swap: return "Swaps"
-            case .perp: return "Perps"
-            case .priceAlert: return "Price alerts"
-            case .moments: return "Moments"
-            case .system: return "DyorHQ"
+            case .transaction: return tr(LocalizedStringResource("Transactions", comment: "A notification center filter [tight]"))
+            case .swap: return tr(LocalizedStringResource("Swaps", comment: "A notification center filter [tight]"))
+            case .perp: return tr(LocalizedStringResource("Perps", comment: "Perpetual futures [tight]"))
+            case .priceAlert: return tr(LocalizedStringResource("Price alerts", comment: "A notification center filter [tight]"))
+            case .moments: return tr(LocalizedStringResource("Moments", comment: "The Moments feature's name [tight]"))
+            case .system: return "DyorHQ" // not localized: the app's name
             }
         }
     }
@@ -138,6 +139,9 @@ final class NotificationHub {
               deliver: Bool = true, owner account: Address? = nil) {
         post(AppNotification(kind: kind, title: title, body: body, route: route, reference: reference), deliver: deliver, owner: account)
     }
+
+    /// The record `id` in the center on screen, if it is there.
+    func item(_ id: UUID) -> AppNotification? { items.first { $0.id == id } }
 
     func markRead(_ id: UUID) {
         guard let i = items.firstIndex(where: { $0.id == id }), !items[i].read else { return }

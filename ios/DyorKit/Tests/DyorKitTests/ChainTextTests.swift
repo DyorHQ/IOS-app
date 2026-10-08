@@ -154,13 +154,13 @@ final class ChainTextTests: XCTestCase {
             let listed = try await service.launches()
             XCTFail("listed \(listed.map(\.token))")
         } catch {
-            XCTAssertEqual(error as? ChainListUnread, ChainListUnread("A launch"))
+            XCTAssertEqual(error as? ChainListUnread, ChainListUnread(.launch))
         }
         do {
             let page = try await service.launch(token: C.broken)
             XCTFail("the page read as \(String(describing: page))")
         } catch {
-            XCTAssertEqual(error as? ChainListUnread, ChainListUnread("A launch"))
+            XCTAssertEqual(error as? ChainListUnread, ChainListUnread(.launch))
         }
         let plain = try await service.launch(token: C.plain)
         XCTAssertEqual(plain?.launch.name, "Plain Coin")
@@ -216,7 +216,7 @@ final class ChainTextTests: XCTestCase {
                 try await read()
                 XCTFail("\(label) answered")
             } catch {
-                XCTAssertEqual(error as? ChainListUnread, ChainListUnread("A Moment"), label)
+                XCTAssertEqual(error as? ChainListUnread, ChainListUnread(.moment), label)
             }
         }
         let plain = try await service.info(id: 1)

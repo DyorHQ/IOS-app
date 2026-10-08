@@ -52,13 +52,18 @@ final class AppEnvironment {
     /// Every bridge deposit sent, tracked until it settles — across relaunches, for the account that sent it.
     let bridgeTracker: BridgeTracker
     let settings = AppSettings()
+    /// The app's language, decided before any screen: English on an install's first launch, then what the user chose
+    /// (`LanguageStore`).
+    let language = LanguageStore()
     /// The minimum supported build: below it, "Update required" replaces the app (GP-2).
     let updateGate = UpdateGate()
     /// Authenticated Perpl trading. A passkey account's trading key lives and dies with its session (`session.mera`).
     let perplTrading: PerplTrading
     /// The wallet's cross-section volume / fees / P&L model, shared by Home's Total Volume and the Portfolio page.
     let portfolio = PortfolioModel()
-    let alertWatcher = AlertWatcher()
+    /// The one alert watcher while the app is open: price alerts, Perps margin warnings, fills and closes, on any screen
+    /// (`AlertCenter`). RootView binds it to the account signed in.
+    let alerts = AlertCenter()
     let social: SocialSession
     /// Mirrors activity, notifications, alerts and settings to Supabase, and restores them on a new device.
     let sync: BackendSync
@@ -125,6 +130,8 @@ final class AppEnvironment {
         session.dyorCoins = dyorCoins
         // An erase of this device's data saves App Lock as a new install has it, and sets it here too (R4).
         session.settings = settings
+        // An erase of this device's data sets the language back to English, as on a new install.
+        session.language = language
         // A passkey session's scope check trusts only the configured Moments cohorts — v2 (collects, once deployed), then
         // cohorts 3, 2 and 1 (claims and creator withdrawals) — and signs a launchpad trade only against the curve a
         // known factory recorded on-chain (MERA-PLAN §3).
@@ -141,7 +148,7 @@ final class AppEnvironment {
             guard let account = try await perpl.account(address) else { return [] }
             let positions = try await perpl.positions(account, markets: markets)
             guard Set(positions.map(\.perpId)).isSuperset(of: account.positionPerpIds) else {
-                throw PerplTradeError.unavailable("Perpl positions couldn't be read in full.")
+                throw PerplTradeError.unavailable(tr("Perpl positions couldn't be read in full."))
             }
             return positions
         }

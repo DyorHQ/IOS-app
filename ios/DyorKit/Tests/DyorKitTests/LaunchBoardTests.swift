@@ -259,7 +259,7 @@ final class LaunchBoardTests: XCTestCase {
 
         // Captions: a sell-only coin's only. QT reads "Graduated".
         XCTAssertTrue(source.contains("if launch.isSellOnly { Text(\"Retired launchpad\")"))
-        XCTAssertTrue(source.contains("Text(launch.isSellOnly ? \"\\(launch.statusTitle) · Retired launchpad\" : launch.statusTitle)"))
+        XCTAssertTrue(source.contains("Text(verbatim: launch.isSellOnly ? \"\\(launch.statusTitle) · \\(tr(\"Retired launchpad\"))\" : launch.statusTitle)"))
         XCTAssertFalse(source.contains("if launch.isRetiredLaunchpad { Text(\"Retired launchpad\")"))
         // The badge and the section's subtitle follow whether the curve takes a sell (`Launch.sellOnlyBadge`,
         // `LaunchBoard.sellOnlySubtitle`): never "Sell only" on a coin nobody can sell.

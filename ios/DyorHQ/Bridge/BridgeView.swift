@@ -51,10 +51,10 @@ struct BridgeView: View {
                 }
                 #endif
             }
-            .navigationTitle("Bridge")
+            .navigationTitle(tr("Bridge"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Text("Close", comment: "Closes this screen or sheet (a verb)") } }
                 ToolbarItem(placement: .keyboard) { HStack { Spacer(); Button("Done") { amountFocused = false } } }
             }
         }
@@ -77,7 +77,7 @@ struct BridgeView: View {
         ContentUnavailableView {
             Label("Unlock to bridge", systemImage: "lock.fill")
         } description: {
-            Text(unlockError ?? "Bridge routes load once your passkey session is open.")
+            unlockError.map { Text(verbatim: $0) } ?? Text("Bridge routes load once your passkey session is open.")
         } actions: {
             Button {
                 Haptics.tap()
@@ -169,7 +169,7 @@ struct BridgeView: View {
             HStack(spacing: 10) {
                 selectorStack(chain: model.fromChain, token: model.fromToken) { openFromTokenPicker() }
                 Spacer(minLength: 8)
-                TextField("0", text: Binding(get: { model.amountText }, set: { model.amountText = $0; model.amountChanged() }))
+                TextField("0" as String, text: Binding(get: { model.amountText }, set: { model.amountText = $0; model.amountChanged() }))
                     .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                     .font(.system(size: 30, weight: .semibold)).monospacedDigit()
                     .lineLimit(1).minimumScaleFactor(0.4)
@@ -180,7 +180,7 @@ struct BridgeView: View {
             HStack(spacing: 8) {
                 ForEach([0.25, 0.5, 0.75, 1.0], id: \.self) { fraction in
                     Button { model.usePercent(fraction) } label: {
-                        Text(fraction >= 1 ? "Max" : "\(Int(fraction * 100))%")
+                        (fraction >= 1 ? Text("Max", comment: "The most allowed: a button or chip that fills in the whole balance, or the highest leverage or amount [tight]") : Text(verbatim: "\(Int(fraction * 100))%"))
                             .font(.caption.weight(.medium)).frame(maxWidth: .infinity).padding(.vertical, 7)
                             .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
@@ -204,7 +204,7 @@ struct BridgeView: View {
                 Spacer(minLength: 8)
                 if model.quoting { ProgressView().controlSize(.small) }
                 else {
-                    Text(model.quote?.amountOutFormatted.map { "≈ \($0)" } ?? "—")
+                    Text(verbatim: model.quote?.amountOutFormatted.map { "≈ \($0)" } ?? "—")
                         .font(.system(size: 26, weight: .semibold)).monospacedDigit().foregroundStyle(.secondary)
                         .lineLimit(1).minimumScaleFactor(0.5)
                 }
@@ -243,7 +243,7 @@ struct BridgeView: View {
         HStack(spacing: 6) {
             if let token { MarketLogo(symbol: token.symbol, url: token.logoURL, size: 20) }
             else { Image(systemName: "circle.dashed").font(.subheadline).foregroundStyle(.secondary).frame(width: 20, height: 20) }
-            Text(token?.symbol ?? "Token")
+            (token.map { Text(verbatim: $0.symbol) } ?? Text("Token"))
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)
             Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
@@ -292,7 +292,7 @@ struct BridgeView: View {
                 // The source chain's own network fee for the deposit, which the bridge's fee doesn't include (IOST-1).
                 if let fee = model.networkFee { summaryRow("Max network fee", fee.summary) }
                 summaryRow("Slippage", model.slippageText)
-                if let secs = quote.timeEstimate, secs > 0 { summaryRow("Estimated time", "≈ \(Int(secs))s") }
+                if let secs = quote.timeEstimate, secs > 0 { summaryRow("Estimated time", "≈ \(RelativeTime.seconds(Int(secs)))") }
                 summaryRow("Route", "\(model.fromChain.name) → \(model.toChain.name)")
                 // Where the funds actually go on the source chain: Aurora's one-time deposit address for this quote.
                 if let deposit = quote.depositAddress.flatMap(Address.init) { summaryRow("Deposit to", deposit.short) }
@@ -302,7 +302,7 @@ struct BridgeView: View {
         }
     }
 
-    private func summaryRow(_ label: String, _ value: String, tint: Color = .primary, bold: Bool = false) -> some View {
+    private func summaryRow(_ label: LocalizedStringKey, _ value: String, tint: Color = .primary, bold: Bool = false) -> some View {
         HStack {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
             Spacer(minLength: 8)
@@ -320,7 +320,7 @@ struct BridgeView: View {
                 Text(progressText).font(.subheadline)
                 Spacer()
                 if let url = model.completedTxURL {
-                    Link("View", destination: url).font(.subheadline.weight(.semibold))
+                    Link(destination: url) { Text("View", comment: "Opens the transaction in a block explorer: a verb [tight]") }.font(.subheadline.weight(.semibold))
                 }
             }
             .padding(14).background(Color.brand.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -333,7 +333,7 @@ struct BridgeView: View {
                 }
                 Spacer()
                 if let url = model.completedTxURL {
-                    Link("View", destination: url).font(.subheadline.weight(.semibold))
+                    Link(destination: url) { Text("View", comment: "Opens the transaction in a block explorer: a verb [tight]") }.font(.subheadline.weight(.semibold))
                 }
             }
             .padding(14).background(Color.positive.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -343,7 +343,7 @@ struct BridgeView: View {
                 Text(message).font(.caption)
                 Spacer()
                 if let url = model.completedTxURL {
-                    Link("View", destination: url).font(.footnote.weight(.semibold))
+                    Link(destination: url) { Text("View", comment: "Opens the transaction in a block explorer: a verb [tight]") }.font(.footnote.weight(.semibold))
                 }
             }
             .padding(14).background(Color.attention.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -354,8 +354,8 @@ struct BridgeView: View {
 
     private var progressText: String {
         switch model.phase {
-        case .signing: return "Sending on \(model.fromChain.name)…"
-        case .submitting: return "Notifying the bridge…"
+        case .signing: return tr("Sending on \(model.fromChain.name)…")
+        case .submitting: return tr("Notifying the bridge…")
         case .bridging(let s): return s.label
         default: return ""
         }
@@ -365,11 +365,11 @@ struct BridgeView: View {
 
     private var primaryTitle: String {
         switch model.phase {
-        case .done: return "Bridge again"
-        case .settling: return "Done"
-        case .failed: return "Try again"
-        case .signing, .submitting, .bridging: return "Bridging…"
-        default: return model.intoMonad ? "Bridge to Monad" : "Bridge to \(model.toChain.name)"
+        case .done: return tr("Bridge again")
+        case .settling: return tr("Done")
+        case .failed: return tr("Try again")
+        case .signing, .submitting, .bridging: return tr("Bridging…")
+        default: return model.intoMonad ? tr("Bridge to Monad") : tr("Bridge to \(model.toChain.name)")
         }
     }
 
@@ -408,7 +408,7 @@ struct BridgeView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .navigationTitle(model.intoMonad ? "Bridge from" : "Bridge to")
+            .navigationTitle(model.intoMonad ? tr("Bridge from") : tr("Bridge to"))
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])
@@ -452,7 +452,7 @@ struct BridgeView: View {
                     ProgressView("Reading your balances…").font(.footnote)
                 }
             }
-            .navigationTitle("Bridge from")
+            .navigationTitle(tr("Bridge from"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSourcePicker = false } } }
             .task { await model.loadBalances() } // ensure balances are read (retries if a first load failed)
@@ -483,7 +483,7 @@ struct BridgeView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .navigationTitle("\(chain.name) token")
+            .navigationTitle(tr("\(chain.name) token"))
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])

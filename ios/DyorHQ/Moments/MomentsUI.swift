@@ -160,14 +160,16 @@ struct MomentStateBadge: View {
     /// On top of a photo the badge sits on a material so it stays legible whatever the image.
     var onMedia = false
 
+    /// The badge's words, in the app's language.
     private var text: String {
         switch info.state {
         case .collecting:
-            if now >= info.moment.deadline { return "Window closed" }
-            return onMedia ? MomentsFormat.countdown(info.secondsLeft(at: now), short: true) : "Collecting · \(MomentsFormat.countdown(info.secondsLeft(at: now)))"
-        case .graduationPending: return "Graduation pending"
-        case .graduated: return "Graduated"
-        case .expired: return "Expired"
+            if now >= info.moment.deadline { return tr(LocalizedStringResource("Window closed", comment: "[tight] Moment badge: its collect window has closed")) }
+            let left = MomentsFormat.countdown(info.secondsLeft(at: now), short: onMedia)
+            return onMedia ? left : tr(LocalizedStringResource("Collecting · \(left)", comment: "[tight] Moment badge: still collecting, then the time left (\"2d 3h left\")"))
+        case .graduationPending: return tr(LocalizedStringResource("Graduation pending", comment: "[tight] Moment badge: its graduation has not completed yet"))
+        case .graduated: return tr(LocalizedStringResource("Graduated", comment: "[tight] A status: the coin graduated into its pool. A badge on Moments, a section of the Launch board and a date row: use a form that fits each"))
+        case .expired: return tr(LocalizedStringResource("Expired", comment: "[tight] The Moment expired before graduating: a badge, a status and a section header"))
         }
     }
 
@@ -218,20 +220,21 @@ struct MomentCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(info.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text("$\(info.symbol)").font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(verbatim: "$\(info.symbol)").font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 0)
                 }
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 1) {
                         // A graduated coin's per-unit price is a tiny fraction of a cent; the fully diluted value reads better in a card.
-                        Text(info.graduated ? "FDV" : "Per edition").font(.caption2).foregroundStyle(.secondary)
+                        (info.graduated ? Text("FDV", comment: "[tight] Fully diluted valuation: a stat on a Moment's page and on its card") : Text("Per edition", comment: "[tight] The price of one edition: a stat on a Moment's page and on its card"))
+                            .font(.caption2).foregroundStyle(.secondary)
                         Text(info.graduated ? MomentsFormat.usd(info.pool?.fdvUSD ?? 0) : MomentsFormat.usdc(info.moment.price))
                             .font(.footnote.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 1) {
-                        Text("Editions").font(.caption2).foregroundStyle(.secondary)
-                        Text("\(info.editions)").font(.footnote.weight(.semibold)).monospacedDigit()
+                        Text("Editions", comment: "[tight] How many editions of a Moment were collected: a stat on the Moment's page and on its card").font(.caption2).foregroundStyle(.secondary)
+                        Text(verbatim: "\(info.editions)").font(.footnote.weight(.semibold)).monospacedDigit()
                     }
                 }
                 if !info.graduated, info.state != .expired {
@@ -243,7 +246,8 @@ struct MomentCard: View {
                             }
                         }
                         .frame(height: 5)
-                        Text("\(info.progressBps / 100)% to graduation").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                        Text("\(String(info.progressBps / 100))% to graduation", comment: "[tight] Moment card: how far the reserve is toward graduation")
+                            .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
                     }
                 }
             }
@@ -297,23 +301,35 @@ enum MomentsFormat {
         PriceFormat.usdValue(value, fractionDigits: value < 100 ? 2...2 : 0...0)
     }
 
-    /// "2d 3h left", "45m left", "closed"; `short` drops the word for tight spaces ("2d 3h").
+    /// "2d 3h left", "45m left", "closed"; `short` drops the word for tight spaces ("2d 3h"). The units are the system's
+    /// narrow ones in the app's language ("2j 3h" in French), whole units only: minutes under an hour (at least one),
+    /// hours and minutes under a day, then days and hours.
     static func countdown(_ seconds: Int, short: Bool = false) -> String {
-        guard seconds > 0 else { return "closed" }
-        let suffix = short ? "" : " left"
-        if seconds < 3_600 { return "\(max(1, seconds / 60))m" + suffix }
-        if seconds < 86_400 { return "\(seconds / 3_600)h \((seconds % 3_600) / 60)m" + suffix }
-        return "\(seconds / 86_400)d \((seconds % 86_400) / 3_600)h" + suffix
+        guard seconds > 0 else { return tr(LocalizedStringResource("closed", comment: "[tight] A Moment's collect window: it has closed")) }
+        let units: Set<Duration.UnitsFormatStyle.Unit> = seconds < 3_600 ? [.minutes] : seconds < 86_400 ? [.hours, .minutes] : [.days, .hours]
+        let time = Duration.seconds(max(60, seconds)).formatted(remaining(units))
+        return short ? time : tr(LocalizedStringResource("\(time) left", comment: "[tight] The time left to collect a Moment (\"2d 3h left\")"))
     }
 
+    /// The countdown's style: narrow units in the app's language, a zero unit still shown ("1h 0m"), never rounded up.
+    static func remaining(_ units: Set<Duration.UnitsFormatStyle.Unit>) -> Duration.UnitsFormatStyle {
+        Duration.UnitsFormatStyle(allowedUnits: units, width: .narrow, zeroValueUnits: .show(length: 1), fractionalPart: .hide(rounded: .down)).locale(L10n.locale)
+    }
+
+    /// A day and time ("Oct 1, 2026 at 9:41 AM"), in the app's language.
     static func date(_ unix: Int) -> String {
         guard unix > 0 else { return "—" }
-        return Date(timeIntervalSince1970: TimeInterval(unix)).formatted(date: .abbreviated, time: .shortened)
+        return date(Date(timeIntervalSince1970: TimeInterval(unix)))
     }
 
+    static func date(_ date: Date) -> String {
+        date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(L10n.locale))
+    }
+
+    /// A day ("October 1, 2026"), in the app's language.
     static func day(_ unix: Int) -> String {
         guard unix > 0 else { return "—" }
-        return Date(timeIntervalSince1970: TimeInterval(unix)).formatted(date: .long, time: .omitted)
+        return Date(timeIntervalSince1970: TimeInterval(unix)).formatted(Date.FormatStyle(date: .long, time: .omitted).locale(L10n.locale))
     }
 }
 

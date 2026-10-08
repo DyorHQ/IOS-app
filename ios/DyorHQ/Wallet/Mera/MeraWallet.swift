@@ -129,14 +129,15 @@ final class MeraSession {
         case phraseUnavailable
         /// A transaction no approval makes acceptable (`Mera.SigningPolicy.refusal`): refused before any prompt.
         case refused(Mera.SigningPolicy.Reason)
+        /// The failure in the app's language (the policy's reason comes from DyorKit, in it too).
         var errorDescription: String? {
             switch self {
-            case .differentPasskey(let expected, let got): return "That passkey belongs to \(got.short), not to this account (\(expected.short)). Sign out to switch accounts."
-            case .noUtilityNamespace: return "This passkey provider evaluates one PRF salt only; capability keys are unavailable."
-            case .noAccount: return "No passkey account is signed in on this device."
-            case .promptNeeded: return "Confirm with your passkey to continue."
-            case .phraseUnavailable: return "Couldn’t make a recovery phrase that restores this wallet, so none is shown. Try again."
-            case .refused(let reason): return "Blocked for your safety: \(reason.summary). This transaction wasn’t signed."
+            case .differentPasskey(let expected, let got): return tr("That passkey belongs to \(got.short), not to this account (\(expected.short)). Sign out to switch accounts.")
+            case .noUtilityNamespace: return tr("This passkey provider evaluates one PRF salt only; capability keys are unavailable.")
+            case .noAccount: return tr("No passkey account is signed in on this device.")
+            case .promptNeeded: return tr("Confirm with your passkey to continue.")
+            case .phraseUnavailable: return tr("Couldn’t make a recovery phrase that restores this wallet, so none is shown. Try again.")
+            case .refused(let reason): return tr("Blocked for your safety: \(reason.summary). This transaction wasn’t signed.")
             }
         }
     }
@@ -160,7 +161,9 @@ final class MeraSession {
             case .reduceOnlyClose: return Mera.AlwaysAsk.closePosition.summary
             }
         }
-        var errorDescription: String? { "\(BiometricGate.promptName) required: \(summary)." }
+        var errorDescription: String? {
+            tr(LocalizedStringResource("\(BiometricGate.promptName) required: \(summary).", comment: "“Face ID required: <why>.” The first value is Face ID, Touch ID, Optic ID or Passcode."))
+        }
     }
 
     /// Proof that the owner just passed a forced pinned ceremony, for the one action that asked for it. Only `stepUp`
@@ -202,11 +205,13 @@ final class MeraSession {
 
         var needsFaceID: Bool { if case .faceID = self { return true } else { return false } }
         var isRefused: Bool { if case .refused = self { return true } else { return false } }
+        /// The badge in the app's language.
         var badge: String {
             switch self {
-            case .promptFree: return "No \(BiometricGate.promptName) needed"
-            case .faceID(let reason): return "\(BiometricGate.promptName) required: \(reason)"
-            case .refused(let reason): return "Blocked for your safety: \(reason)"
+            case .promptFree: return tr("No \(BiometricGate.promptName) needed")
+            case .faceID(let reason):
+                return tr(LocalizedStringResource("\(BiometricGate.promptName) required: \(reason)", comment: "“Face ID required: <why>” on a confirmation sheet. The first value is Face ID, Touch ID, Optic ID or Passcode."))
+            case .refused(let reason): return tr("Blocked for your safety: \(reason)")
             }
         }
     }
@@ -574,7 +579,7 @@ final class MeraSession {
         endsWhenIdle = true
         guard idleDeadline == nil else { return }
         idleDeadline = Date().addingTimeInterval(Self.backgroundGrace)
-        backgroundTime = BackgroundTime("Passkey session") { [weak self] in self?.end() }
+        backgroundTime = BackgroundTime("Passkey session") { [weak self] in self?.end() } // not localized: the task's name, never shown
         idleDeadlineTimer = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(Self.backgroundGrace))
             guard !Task.isCancelled, let self, self.endsWhenIdle else { return }

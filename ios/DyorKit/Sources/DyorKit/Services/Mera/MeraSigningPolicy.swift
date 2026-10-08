@@ -197,21 +197,21 @@ extension Mera {
         /// Anything no sheet declared as session-OK.
         case unlisted
 
-        /// The "<reason>" in "Face ID required: <reason>".
+        /// The "<reason>" in "Face ID required: <reason>", in the app's language.
         public var summary: String {
             switch self {
-            case .send: return "sending to another address"
-            case .bridge: return "bridging to another chain"
-            case .launch: return "launching or creating"
-            case .withdrawElsewhere: return "withdrawing to another address"
-            case .export: return "showing your recovery phrase"
-            case .deletion: return "deleting your account"
-            case .lengthenSession: return "making sessions longer"
-            case .rawDigest: return "signing raw data"
-            case .message: return "signing a message"
-            case .cancelOrder: return "cancelling an order"
-            case .closePosition: return "closing a position"
-            case .unlisted: return "this action always asks"
+            case .send: return L10n.string(LocalizedStringResource("sending to another address", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .bridge: return L10n.string(LocalizedStringResource("bridging to another chain", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .launch: return L10n.string(LocalizedStringResource("launching or creating", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .withdrawElsewhere: return L10n.string(LocalizedStringResource("withdrawing to another address", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .export: return L10n.string(LocalizedStringResource("showing your recovery phrase", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .deletion: return L10n.string(LocalizedStringResource("deleting your account", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .lengthenSession: return L10n.string(LocalizedStringResource("making sessions longer", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .rawDigest: return L10n.string(LocalizedStringResource("signing raw data", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .message: return L10n.string(LocalizedStringResource("signing a message", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .cancelOrder: return L10n.string(LocalizedStringResource("cancelling an order", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .closePosition: return L10n.string(LocalizedStringResource("closing a position", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .unlisted: return L10n.string(LocalizedStringResource("this action always asks", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
             }
         }
     }
@@ -245,32 +245,37 @@ extension Mera {
             case retiredLaunchpad
             case unpriced, overActionCap, overSessionCap
 
-            /// The "<reason>" in "Face ID required: <reason>".
+            /// The "<reason>" in "Face ID required: <reason>", in the app's language.
             public var summary: String {
                 switch self {
-                case .locked: return "your session is locked"
+                case .locked: return L10n.string(LocalizedStringResource("your session is locked", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
                 case .alwaysAsks(let what): return what.summary
-                case .wrongChain: return "a transaction on another chain"
-                case .wrongSender: return "a transaction from another account"
-                case .notAllowlisted: return "a contract call DyorHQ doesn’t sign on its own"
-                case .approval(.token): return "an approval for a token not shown"
-                case .approval(.spender): return "an approval for an unknown spender"
-                case .approval(.amount): return "an approval above the amount shown"
-                case .approval(.expiration): return "an allowance that outlasts this session"
-                case .approval(.value): return "MON sent with an approval"
-                case .valueOverDeclared: return "more MON than shown"
-                case .amountOverDeclared: return "more than the amount shown"
-                case .differentToken: return "a different token than shown"
-                case .unverifiedCurve: return "a launchpad curve DyorHQ can’t verify"
-                case .recipient: return "the output going to another address"
-                case .minimumOut: return "a minimum received below 99% of the quote"
-                case .fee: return "a swap that pays a fee to someone else"
-                case .networkFee: return "an unusually high network fee"
-                case .graduateFallback: return "a graduation fallback, which only DyorHQ’s keepers send"
-                case .retiredLaunchpad: return "a buy on a retired launchpad, which only takes sells"
-                case .unpriced: return "this can’t be priced"
-                case .overActionCap: return "over the $\(Int(SpendingCaps.perActionUSD)) limit per action"
-                case .overSessionCap: return "over this session’s $\(Int(SpendingCaps.perSessionUSD)) limit"
+                case .wrongChain: return L10n.string(LocalizedStringResource("a transaction on another chain", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .wrongSender: return L10n.string(LocalizedStringResource("a transaction from another account", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .notAllowlisted: return L10n.string(LocalizedStringResource("a contract call DyorHQ doesn’t sign on its own", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .approval(.token): return L10n.string(LocalizedStringResource("an approval for a token not shown", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .approval(.spender): return L10n.string(LocalizedStringResource("an approval for an unknown spender", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .approval(.amount): return L10n.string(LocalizedStringResource("an approval above the amount shown", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .approval(.expiration): return L10n.string(LocalizedStringResource("an allowance that outlasts this session", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .approval(.value): return L10n.string(LocalizedStringResource("MON sent with an approval", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .valueOverDeclared: return L10n.string(LocalizedStringResource("more MON than shown", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .amountOverDeclared: return L10n.string(LocalizedStringResource("more than the amount shown", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .differentToken: return L10n.string(LocalizedStringResource("a different token than shown", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .unverifiedCurve: return L10n.string(LocalizedStringResource("a launchpad curve DyorHQ can’t verify", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .recipient: return L10n.string(LocalizedStringResource("the output going to another address", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .minimumOut: return L10n.string(LocalizedStringResource("a minimum received below 99% of the quote", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .fee: return L10n.string(LocalizedStringResource("a swap that pays a fee to someone else", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .networkFee: return L10n.string(LocalizedStringResource("an unusually high network fee", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .graduateFallback: return L10n.string(LocalizedStringResource("a graduation fallback, which only DyorHQ’s keepers send", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .retiredLaunchpad: return L10n.string(LocalizedStringResource("a buy on a retired launchpad, which only takes sells", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .unpriced: return L10n.string(LocalizedStringResource("this can’t be priced", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .overActionCap:
+                    // The cap in the app's one style for dollars, whatever the language ("$100").
+                    let cap = PriceFormat.usdValue(SpendingCaps.perActionUSD, fractionDigits: 0...0)
+                    return L10n.string(LocalizedStringResource("over the \(cap) limit per action", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.” The value is an amount in US dollars ($100)."))
+                case .overSessionCap:
+                    let cap = PriceFormat.usdValue(SpendingCaps.perSessionUSD, fractionDigits: 0...0)
+                    return L10n.string(LocalizedStringResource("over this session’s \(cap) limit", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.” The value is an amount in US dollars ($250)."))
                 }
             }
         }
@@ -638,6 +643,7 @@ extension Mera {
         /// longer signs it.
         public static func check(message: Data, account: Address, now: Date = Date()) -> Verdict {
             guard let text = String(data: message, encoding: .utf8) else { return .ask(.alwaysAsks(.message)) }
+            // not localized: the sign-in message's own fields (EIP-4361), compared as written
             let lines = text.components(separatedBy: "\n")
             guard lines.count == 11, lines[8].hasPrefix("Nonce: "), lines[9].hasPrefix("Issued At: ") else { return .ask(.alwaysAsks(.message)) }
             let nonce = String(lines[8].dropFirst("Nonce: ".count))

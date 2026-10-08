@@ -26,10 +26,10 @@ struct MondayVenue: Sendable {
 
         return VenueQuote(venue: .monday, amountOut: best.amountOut, minOut: minOut, route: V3Router.describe(best.route, symbols: symbols), gasEstimate: best.gas, priceImpactBps: priceImpactBps) { account in
             var steps: [TransactionStep] = []
-            if !nativeIn { steps.append(.approve(token: inToken.address, spender: MondayTrade.swapRouter, amount: amountIn, label: "Approve \(inToken.symbol) for Monday Trade")) }
+            if !nativeIn { steps.append(.approve(token: inToken.address, spender: MondayTrade.swapRouter, amount: amountIn, label: L10n.tr("Approve \(inToken.symbol) for Monday Trade"))) }
             let deadline = BigUInt(SwapMath.nowSeconds + SwapCalldata.deadlineSeconds)
             let request = try SwapCalldata.mondaySwap(route: best.route, amountIn: amountIn, minOut: minOut, account: account, nativeIn: nativeIn, nativeOut: nativeOut, deadline: deadline)
-            steps.append(.call(request, label: "Swap on Monday Trade"))
+            steps.append(.call(request, label: L10n.string(LocalizedStringResource("Swap on Monday Trade", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The venue's name is never translated."))))
             return steps
         }
     }

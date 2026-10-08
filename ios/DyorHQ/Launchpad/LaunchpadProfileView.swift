@@ -20,7 +20,7 @@ struct LaunchpadProfileView: View {
         return URL(string: raw)
     }
     private var displayName: String {
-        social.profile?.display_name ?? session.account?.label ?? session.address?.short ?? "My Launchpad"
+        social.profile?.display_name ?? session.account?.label ?? session.address?.short ?? tr("My Launchpad")
     }
     private var initials: String {
         let source = social.profile?.display_name ?? social.profile?.handle ?? session.account?.label ?? ""
@@ -29,15 +29,21 @@ struct LaunchpadProfileView: View {
     }
     private var subtitle: String {
         if let handle = social.profile?.handle { return "@\(handle)" }
-        if let method = session.account?.method { return method == .watchOnly ? "Watching this address" : "Signed in with \(method.title)" }
-        return "Launchpad profile"
+        if let method = session.account?.method { return method == .watchOnly ? tr("Watching this address") : tr("Signed in with \(method.title)") }
+        return tr("Launchpad profile")
     }
     @State private var tab: Tab = .positions
     @State private var claimTarget: ClaimTarget?
 
     private enum Tab: String, CaseIterable, Identifiable { case positions, launches, activity
         var id: String { rawValue }
-        var label: String { self == .positions ? "Holdings" : rawValue.capitalized }
+        var label: String {
+            switch self {
+            case .positions: return tr(LocalizedStringResource("Holdings", comment: "What a wallet holds: a tab of My Launchpad, a stat and a section header [tight]"))
+            case .launches: return tr(LocalizedStringResource("Launches", comment: "My Launchpad tab: the coins this wallet launched [tight]"))
+            case .activity: return tr(LocalizedStringResource("Activity", comment: "My Launchpad tab: this wallet's launchpad trades and launches [tight]"))
+            }
+        }
     }
 
     /// What a claim action withdraws: one creator-fee asset, one coin's holder rewards, or everything at once.
@@ -60,7 +66,7 @@ struct LaunchpadProfileView: View {
                 headerSection
                 claimSection
                 Section {
-                    Picker("View", selection: $tab) { ForEach(Tab.allCases) { Text($0.label).tag($0) } }
+                    Picker(tr(LocalizedStringResource("myLaunchpad.view", defaultValue: "View", comment: "The name VoiceOver reads for My Launchpad's switch between its tabs (Holdings, Launches, Activity): a noun")), selection: $tab) { ForEach(Tab.allCases) { Text($0.label).tag($0) } }
                         .pickerStyle(.segmented)
                         .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 }
@@ -71,7 +77,7 @@ struct LaunchpadProfileView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("My Launchpad")
+            .navigationTitle(tr("My Launchpad"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .overlay { if model.loading, model.isEmpty { ProgressView().controlSize(.large) } }
@@ -148,13 +154,13 @@ struct LaunchpadProfileView: View {
         }
     }
 
-    private func claimRow(icon: String, title: String, amount: String, usd: Double?, caption: String? = nil, action: @escaping () -> Void) -> some View {
+    private func claimRow(icon: String, title: LocalizedStringKey, amount: String, usd: Double?, caption: String? = nil, action: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon).font(.subheadline.weight(.semibold)).frame(width: 30, height: 30)
                 .background(Color.brand.opacity(0.14), in: Circle()).foregroundStyle(Color.brand)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.medium))
-                Text(amount + (usd.map { " · \(PriceFormat.usdValue($0))" } ?? "")).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                Text(verbatim: amount + (usd.map { " · \(PriceFormat.usdValue($0))" } ?? "")).font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 if let caption { Text(caption).font(.caption2).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 8)
@@ -162,7 +168,7 @@ struct LaunchpadProfileView: View {
         }
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
+    private func stat(_ label: LocalizedStringKey, _ value: String) -> some View {
         VStack(spacing: 3) {
             Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
             Text(label).font(.caption2).foregroundStyle(.secondary)
@@ -210,7 +216,7 @@ struct LaunchpadProfileView: View {
         } header: { Text("Your Launchpad Activity") }
     }
 
-    private func emptyRow(_ title: String, _ detail: String) -> some View {
+    private func emptyRow(_ title: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.subheadline.weight(.medium))
             Text(detail).font(.caption).foregroundStyle(.secondary)
@@ -231,7 +237,7 @@ struct LaunchpadProfileView: View {
                 build: { env.launchpad.claimEscrowPlan(native: asset.isNative, tokens: asset.isNative ? [] : [asset.token], escrow: asset.escrow) },
                 onDone: { Task { await model.load(env: env, address: session.address) } },
                 onCompleted: { hash in
-                    Activity.record(ActivityRecord(kind: .fees, title: "Collected \(asset.symbol) creator fees", subtitle: asset.current ? asset.amountText : "", hash: hash, section: "launch"), owner: session.address)
+                    Activity.record(ActivityRecord(kind: .fees, title: tr("Collected \(asset.symbol) creator fees"), subtitle: asset.current ? asset.amountText : "", hash: hash, section: "launch"), owner: session.address)
                     model.claimed([asset], for: session.address)
                 }
             ) {
@@ -244,7 +250,7 @@ struct LaunchpadProfileView: View {
                 title: "Claim \(reward.launch.symbol) Rewards", confirmTitle: "Claim",
                 build: { env.launchpad.claimRewardsPlan(launch: reward.launch, view: nil) },
                 onDone: { Task { await model.load(env: env, address: session.address) } },
-                onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed \(reward.launch.symbol) rewards", subtitle: reward.amountText, hash: hash, section: "launch"), owner: session.address) }
+                onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: tr("Claimed \(reward.launch.symbol) rewards"), subtitle: reward.amountText, hash: hash, section: "launch"), owner: session.address) }
             ) {
                 DetailRow("Holder rewards", reward.amountText)
                 DetailRow("To", session.address?.short ?? "—")
@@ -255,11 +261,11 @@ struct LaunchpadProfileView: View {
                 build: { await model.claimAllPlan(env: env) },
                 onDone: { Task { await model.load(env: env, address: session.address) } },
                 onCompleted: { hash in
-                    Activity.record(ActivityRecord(kind: .fees, title: "Claimed all Launch earnings", subtitle: "\(model.claimAllCount) \(model.claimAllCount == 1 ? "claim" : "claims") · fees and rewards", hash: hash, section: "launch"), owner: session.address)
+                    Activity.record(ActivityRecord(kind: .fees, title: tr("Claimed all Launch earnings"), subtitle: tr("\(model.claimAllCount) claims · fees and rewards"), hash: hash, section: "launch"), owner: session.address)
                     model.claimed(model.claimAllCreatorClaimables, for: session.address)
                 }
             ) {
-                ForEach(model.claimAllCreatorClaimables) { asset in DetailRow("Creator · \(asset.symbol)\(asset.retired ? " (retired launchpad)" : "")", asset.amountText) }
+                ForEach(model.claimAllCreatorClaimables) { asset in DetailRow(asset.retired ? "Creator · \(asset.symbol) (retired launchpad)" : "Creator · \(asset.symbol)", asset.amountText) }
                 ForEach(model.rewardClaimables) { reward in DetailRow("\(reward.launch.symbol) rewards", reward.amountText) }
             }
         }
@@ -277,7 +283,7 @@ private struct PositionRow: View {
                 .frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(position.launch.symbol).font(.subheadline.weight(.semibold))
-                Text("\(NumberStyle.units(position.balance, decimals: 18, compact: true)) · MC \(position.mcapText)")
+                Text("\(NumberStyle.units(position.balance, decimals: 18, compact: true)) · MC \(position.mcapText)", comment: "Coins held, then the coin's market cap (MC) [tight]")
                     .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
                 if position.claimableRewards > 0 {
                     Text("Rewards: \(NumberStyle.units(position.claimableRewards, decimals: position.launch.pair.decimals, compact: true)) \(position.launch.pair.symbol)")
@@ -288,7 +294,7 @@ private struct PositionRow: View {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(PriceFormat.usdValue(position.valueUSD)).font(.subheadline.weight(.medium)).monospacedDigit()
                 if let pnlUSD = position.pnlUSD {
-                    Text("\(PriceFormat.usdValue(pnlUSD, signed: true))\(position.pnlPercent.map { " (\($0 >= 0 ? "+" : ""))\(NumberStyle.number($0, maximumFractionDigits: 1))%)" } ?? "")")
+                    Text(verbatim: "\(PriceFormat.usdValue(pnlUSD, signed: true))\(position.pnlPercent.map { " (\($0 >= 0 ? "+" : ""))\(NumberStyle.number($0, maximumFractionDigits: 1))%)" } ?? "")")
                         .font(.caption2).monospacedDigit()
                         .foregroundStyle(pnlUSD >= 0 ? Color.positive : Color.negative)
                 }
@@ -313,12 +319,12 @@ private struct CreatedRow: View {
                         .padding(.horizontal, 6).padding(.vertical, 1)
                         .background(Color(.tertiarySystemFill), in: Capsule()).foregroundStyle(.secondary)
                 }
-                Text(item.launch.phase == .bonding ? "\(item.launch.progressBps / 100)% to graduation" : item.launch.phase.title)
+                (item.launch.phase == .bonding ? Text("\(item.launch.progressBps / 100)% to graduation") : Text(verbatim: item.launch.phase.title))
                     .font(.caption2).foregroundStyle(item.launch.phase == .graduated ? Color.positive : .secondary).monospacedDigit()
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-                Text(item.mcapUSD.map { PriceFormat.usdValue($0) } ?? item.launch.marketCapInPair.map { "\(NumberStyle.number($0, compact: true)) \(item.launch.pair.symbol)" } ?? "—")
+                Text(verbatim: item.mcapUSD.map { PriceFormat.usdValue($0) } ?? item.launch.marketCapInPair.map { "\(NumberStyle.number($0, compact: true)) \(item.launch.pair.symbol)" } ?? "—")
                     .font(.subheadline.weight(.medium)).monospacedDigit()
                 Text("Market cap").font(.caption2).foregroundStyle(.secondary)
             }
@@ -438,7 +444,7 @@ final class LaunchpadProfileModel {
         var amountText: String { "\(NumberStyle.units(amount, decimals: decimals, compact: true)) \(symbol)" }
         /// Under the row: a retired launchpad's escrow, and balances kept from an earlier read.
         var caption: String? {
-            let parts = [retired ? "Retired launchpad" : nil, current ? nil : "As last read"].compactMap { $0 }
+            let parts = [retired ? tr("Retired launchpad") : nil, current ? nil : tr("As last read")].compactMap { $0 }
             return parts.isEmpty ? nil : parts.joined(separator: " · ")
         }
     }
@@ -483,9 +489,9 @@ final class LaunchpadProfileModel {
     var claimAllCount: Int { claimAllCreatorClaimables.count + rewardClaimables.count }
 
     var claimableSummary: String {
-        guard hasClaimable else { return feesUnread ? "Creator fees couldn't be read" : "Nothing to claim yet" }
+        guard hasClaimable else { return feesUnread ? tr("Creator fees couldn't be read") : tr("Nothing to claim yet") }
         if totalClaimableUSD > 0 { return PriceFormat.usdValue(totalClaimableUSD) }
-        return "\(claimableCount) to claim"
+        return tr("\(claimableCount) to claim")
     }
 
     /// Claims everything at once: every escrow read in the latest load, across every asset, plus every coin's holder
@@ -572,7 +578,7 @@ final class LaunchpadProfileModel {
         for token in Token.launchpadPairAssets where pairMeta[token] == nil {
             if let core = Token.core(token) { pairMeta[token] = (core.symbol, core.decimals) }
         }
-        incomplete = unread ? "Part of your launchpad couldn't be read just now, so some coins or fees may be missing. Pull to refresh." : nil
+        incomplete = unread ? tr("Part of your launchpad couldn't be read just now, so some coins or fees may be missing. Pull to refresh.") : nil
         guard !launches.isEmpty else { positions = []; created = []; activity = []; return }
 
         // Balances across every launch token in one multicall.
@@ -649,14 +655,14 @@ final class LaunchpadProfileModel {
         let hash = activity.transactionHash
         switch activity.kind {
         case .launch:
-            return FeedItem(id: hash.hexString, icon: "flame.fill", title: "Launched $\(symbol)", subtitle: launch?.name ?? "", time: time, hash: hash)
+            return FeedItem(id: hash.hexString, icon: "flame.fill", title: tr("Launched $\(symbol)"), subtitle: launch?.name ?? "", time: time, hash: hash)
         case .trade(_, _, _, let isBuy, let quoteAmount, let tokenAmount):
             let pairDecimals = launch?.pair.decimals ?? 18
             let pairSymbol = launch?.pair.symbol ?? ""
             let subtitle = "\(NumberStyle.units(tokenAmount, decimals: 18, compact: true)) \(symbol) · \(NumberStyle.units(quoteAmount, decimals: pairDecimals, compact: true)) \(pairSymbol)"
-            return FeedItem(id: hash.hexString, icon: isBuy ? "arrow.down" : "arrow.up", title: isBuy ? "Bought \(symbol)" : "Sold \(symbol)", subtitle: subtitle, time: time, hash: hash)
+            return FeedItem(id: hash.hexString, icon: isBuy ? "arrow.down" : "arrow.up", title: isBuy ? tr("Bought \(symbol)") : tr("Sold \(symbol)"), subtitle: subtitle, time: time, hash: hash)
         case .graduated:
-            return FeedItem(id: hash.hexString, icon: "checkmark.seal.fill", title: "\(symbol) graduated", subtitle: "", time: time, hash: hash)
+            return FeedItem(id: hash.hexString, icon: "checkmark.seal.fill", title: tr("\(symbol) graduated"), subtitle: "", time: time, hash: hash)
         }
     }
 }

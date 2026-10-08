@@ -17,6 +17,7 @@ struct NotificationCenterView: View {
         return hub.items.filter { $0.kind == filter }
     }
 
+    /// The notifications by day, each day named in the app's language: Today, Yesterday, or its date.
     private var groups: [(day: String, items: [AppNotification])] {
         let calendar = Calendar.current
         var order: [Date] = []
@@ -27,7 +28,8 @@ struct NotificationCenterView: View {
             byDay[day, default: []].append(item)
         }
         return order.map { day in
-            let label = calendar.isDateInToday(day) ? "Today" : calendar.isDateInYesterday(day) ? "Yesterday" : day.formatted(date: .abbreviated, time: .omitted)
+            let label = calendar.isDateInToday(day) ? tr("Today") : calendar.isDateInYesterday(day) ? tr("Yesterday")
+                : day.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(L10n.locale))
             return (label, byDay[day] ?? [])
         }
     }
@@ -62,11 +64,12 @@ struct NotificationCenterView: View {
                 }
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Notifications")
+            .navigationTitle(tr("Notifications"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }.accessibilityLabel("Close")
+                    Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }
+                        .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -86,7 +89,7 @@ struct NotificationCenterView: View {
     private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                chip("All", selected: filter == nil) { filter = nil }
+                chip(Text(verbatim: tr(LocalizedStringResource("notificationFilter.all", defaultValue: "All", comment: "Notification center filter: every kind of notification [tight]"))), selected: filter == nil) { filter = nil }
                 ForEach(presentKinds, id: \.self) { kind in
                     chip(kind.title, selected: filter == kind) { filter = kind }
                 }
@@ -95,9 +98,19 @@ struct NotificationCenterView: View {
         }
     }
 
-    private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func chip(_ title: LocalizedStringKey, selected: Bool, action: @escaping () -> Void) -> some View {
+        chip(Text(title), selected: selected, action: action)
+    }
+
+    /// A kind's chip, named by the model (`AppNotification.Kind.title`).
+    @_disfavoredOverload
+    private func chip<S: StringProtocol>(_ title: S, selected: Bool, action: @escaping () -> Void) -> some View {
+        chip(Text(verbatim: String(title)), selected: selected, action: action)
+    }
+
+    private func chip(_ title: Text, selected: Bool, action: @escaping () -> Void) -> some View {
         Button { Haptics.selection(); action() } label: {
-            Text(title)
+            title
                 .font(.subheadline.weight(selected ? .semibold : .regular))
                 .foregroundStyle(selected ? Color.white : Color.primary)
                 .padding(.horizontal, 14).padding(.vertical, 7)

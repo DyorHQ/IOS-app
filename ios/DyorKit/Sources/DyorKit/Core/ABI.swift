@@ -131,12 +131,12 @@ public enum ABIError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .invalidType(let t): return "Invalid ABI type: \(t)"
-        case .invalidSignature(let s): return "Invalid function signature: \(s)"
-        case .typeMismatch(let expected): return "ABI value does not match type \(expected)"
-        case .truncated: return "ABI data is shorter than its declared layout"
-        case .invalidOffset: return "ABI data contains an out-of-range offset"
-        case .invalidUTF8: return "ABI string is not valid UTF-8"
+        case .invalidType(let t): return L10n.tr("Invalid ABI type: \(t)")
+        case .invalidSignature(let s): return L10n.tr("Invalid function signature: \(s)")
+        case .typeMismatch(let expected): return L10n.tr("ABI value does not match type \(expected)")
+        case .truncated: return L10n.tr("ABI data is shorter than its declared layout")
+        case .invalidOffset: return L10n.tr("ABI data contains an out-of-range offset")
+        case .invalidUTF8: return L10n.tr("ABI string is not valid UTF-8")
         }
     }
 }

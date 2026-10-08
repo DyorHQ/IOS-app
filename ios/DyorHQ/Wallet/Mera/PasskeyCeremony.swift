@@ -52,13 +52,14 @@ final class PasskeyCeremony {
 
     enum Failure: LocalizedError {
         case prfUnavailable, cancelled, associationUnavailable, wrongCredential, failed
+        /// The failure in the app's language.
         var errorDescription: String? {
             switch self {
-            case .prfUnavailable: return "This passkey provider can’t create a DyorHQ account: it doesn’t support the passkey feature DyorHQ needs (PRF). Use Passwords (iCloud Keychain) on iOS 18 or later."
-            case .cancelled: return "Cancelled."
-            case .associationUnavailable: return "Passkeys aren’t set up for DyorHQ on this device yet: iOS couldn’t confirm the app belongs to accounts.dyorhq.fun. Check your connection and try again, or update the app."
-            case .wrongCredential: return "The passkey that answered isn’t the one this account uses."
-            case .failed: return "The passkey request didn’t complete. Please try again."
+            case .prfUnavailable: return tr("This passkey provider can’t create a DyorHQ account: it doesn’t support the passkey feature DyorHQ needs (PRF). Use Passwords (iCloud Keychain) on iOS 18 or later.")
+            case .cancelled: return tr("Cancelled.")
+            case .associationUnavailable: return tr("Passkeys aren’t set up for DyorHQ on this device yet: iOS couldn’t confirm the app belongs to accounts.dyorhq.fun. Check your connection and try again, or update the app.")
+            case .wrongCredential: return tr("The passkey that answered isn’t the one this account uses.")
+            case .failed: return tr("The passkey request didn’t complete. Please try again.")
             }
         }
     }

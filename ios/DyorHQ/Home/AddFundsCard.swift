@@ -117,7 +117,7 @@ struct AddFundsCard: View {
         .accessibilityHint(revealed ? "Shows the short address" : "Shows the full address")
     }
 
-    private func copyButton(_ title: String) -> some View {
+    private func copyButton(_ title: LocalizedStringKey) -> some View {
         Button(copied ? "Copied" : title, systemImage: copied ? "checkmark" : "doc.on.doc") {
             UIPasteboard.general.string = address.checksummed
             copied = true
@@ -168,7 +168,7 @@ struct AddFundsCard: View {
         }
     }
 
-    private func header(_ symbol: String, tint: Color, title: String, detail: String) -> some View {
+    private func header(_ symbol: String, tint: Color, title: LocalizedStringKey, detail: LocalizedStringKey) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: symbol)
                 .font(.body.weight(.semibold))
@@ -200,7 +200,7 @@ final class FundingWatch {
             let before = phase
             update(FirstFunding.next(after: before, reading: reading, now: .now))
             if case .arrived(_, let since) = phase {
-                if !before.isArrival { AccessibilityNotification.Announcement("Funds arrived").post() }
+                if !before.isArrival { AccessibilityNotification.Announcement(tr("Funds arrived")).post() }
                 // "Funds arrived" holds while the deposit ages the 3 blocks Monad needs before an account can spend it.
                 try? await Task.sleep(for: .seconds(max(0, since.addingTimeInterval(FirstFunding.arrivalPause).timeIntervalSinceNow)))
                 guard !Task.isCancelled else { return }

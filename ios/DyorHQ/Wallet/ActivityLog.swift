@@ -192,7 +192,7 @@ enum Activity {
 /// not found. Local only: these rows are never mirrored to the backend.
 @MainActor
 enum PendingActivity {
-    /// `ActivityRecord.status` values.
+    /// `ActivityRecord.status` values, stored with the row (not localized: identifiers).
     nonisolated static let pendingStatus = "pending"
     nonisolated static let confirmedStatus = "confirmed"
     nonisolated static let revertedStatus = "reverted"
@@ -208,12 +208,13 @@ enum PendingActivity {
         }
     }
 
-    /// A step just sent: a pending row under its hash, unless the hash already has one.
+    /// A step just sent: a pending row under its hash, unless the hash already has one. The row's text is in the app's
+    /// language when it is written, and keeps it.
     static func sent(_ hash: Data, label: String, owner: Address?) {
         guard let owner else { return }
         ActivityLog.update(owner: owner) { list in
             guard !list.contains(where: { $0.txHashHex == hash.hexString }) else { return }
-            var row = ActivityRecord(kind: .send, title: label, subtitle: "Sent — confirmation not seen yet", hash: hash)
+            var row = ActivityRecord(kind: .send, title: label, subtitle: tr("Sent — confirmation not seen yet"), hash: hash)
             row.status = pendingStatus
             list.insert(row, at: 0)
         }
@@ -275,8 +276,8 @@ enum PendingActivity {
     private static func resolve(owner: Address, as outcome: String, matching: (ActivityRecord) -> Bool) {
         ActivityLog.update(owner: owner) { list in
             for i in list.indices where list[i].status == pendingStatus && matching(list[i]) {
-                let subtitle = outcome == revertedStatus ? "Reverted — only the network fee was spent"
-                    : outcome == notFoundStatus ? "Not found on the network — it never confirmed" : "Confirmed"
+                let subtitle = outcome == revertedStatus ? tr("Reverted — only the network fee was spent")
+                    : outcome == notFoundStatus ? tr("Not found on the network — it never confirmed") : tr("Confirmed")
                 var row = ActivityRecord(kind: list[i].kind, title: list[i].title, subtitle: subtitle, hash: list[i].txHash, time: list[i].time, section: list[i].section)
                 row.id = list[i].id
                 row.status = outcome

@@ -227,10 +227,10 @@ public enum MomentState: Int, Sendable, Hashable, CaseIterable {
 
     public var title: String {
         switch self {
-        case .collecting: return "Collecting"
-        case .graduationPending: return "Graduation pending"
-        case .graduated: return "Graduated"
-        case .expired: return "Expired"
+        case .collecting: return L10n.string(LocalizedStringResource("Collecting", bundle: L10n.kit, comment: "[tight] A Moment's state: its editions can be collected."))
+        case .graduationPending: return L10n.string(LocalizedStringResource("Graduation pending", bundle: L10n.kit, comment: "[tight] A status: a launch's coin or a Moment waits to graduate into its pool."))
+        case .graduated: return L10n.string(LocalizedStringResource("Graduated", bundle: L10n.kit, comment: "[tight] A status: a launch's coin or a Moment has graduated, and trades in its pool."))
+        case .expired: return L10n.string(LocalizedStringResource("Expired", bundle: L10n.kit, comment: "[tight] A Moment's state: its collect window closed before it graduated."))
         }
     }
 
@@ -300,10 +300,10 @@ public struct MomentPolicy: Sendable, Hashable {
 
         public var message: String {
             switch self {
-            case .publishingPaused: return "Publishing is paused by governance; collecting continues."
-            case .guardianPaused: return "Publishing is paused by the Moments guardian; collecting continues."
-            case .unexpectedLinkBase: return "Publishing is off: the Moments contract would link new Moments somewhere other than dyorhq.fun."
-            case .unverifiedTerms: return "Publishing is off: the Moments terms couldn't be verified."
+            case .publishingPaused: return L10n.tr("Publishing is paused by governance; collecting continues.")
+            case .guardianPaused: return L10n.tr("Publishing is paused by the Moments guardian; collecting continues.")
+            case .unexpectedLinkBase: return L10n.tr("Publishing is off: the Moments contract would link new Moments somewhere other than dyorhq.fun.")
+            case .unverifiedTerms: return L10n.tr("Publishing is off: the Moments terms couldn't be verified.")
             }
         }
     }
@@ -405,7 +405,7 @@ public struct MomentsBoard: Sendable {
     /// Why Publish is unavailable when the policy couldn't be read; nil when it was.
     public var policyUnread: String? {
         guard case .failure = policy else { return nil }
-        return "Publishing is unavailable right now: the Moments terms couldn't be read. Pull to refresh."
+        return L10n.tr("Publishing is unavailable right now: the Moments terms couldn't be read. Pull to refresh.")
     }
 }
 

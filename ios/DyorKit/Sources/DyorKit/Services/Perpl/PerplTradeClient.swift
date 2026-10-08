@@ -123,13 +123,13 @@ public enum PerplOrders {
         case .cancel, .change, .increasePositionCollateral:
             return nil
         case .openLong, .openShort, .closeLong, .closeShort:
-            if frame.lotLNS <= 0 { return "The order size rounds to zero on this market." }
+            if frame.lotLNS <= 0 { return L10n.tr("The order size rounds to zero on this market.") }
             if frame.triggerCondition != nil || frame.triggerPricePNS != nil {
-                guard frame.type == .closeLong || frame.type == .closeShort else { return "A take-profit or stop-loss can only close a position." }
-                guard (frame.triggerPricePNS ?? 0) > 0, frame.triggerCondition != nil else { return "The take-profit or stop-loss price rounds to zero on this market." }
+                guard frame.type == .closeLong || frame.type == .closeShort else { return L10n.tr("A take-profit or stop-loss can only close a position.") }
+                guard (frame.triggerPricePNS ?? 0) > 0, frame.triggerCondition != nil else { return L10n.tr("The take-profit or stop-loss price rounds to zero on this market.") }
                 return nil
             }
-            if !frame.ioc, frame.pricePNS <= 0 { return "The limit price rounds to zero on this market." }
+            if !frame.ioc, frame.pricePNS <= 0 { return L10n.tr("The limit price rounds to zero on this market.") }
             return nil
         }
     }
@@ -168,10 +168,10 @@ public enum PerplTradeError: LocalizedError {
     }
     public var errorDescription: String? {
         switch self {
-        case .notSignedIn: return "Not connected to Perpl trading."
-        case .noAccount: return "No Perpl trading account. Deposit AUSD first."
-        case .forwardingDisabled: return "Enable one-click trading (order forwarding) on your Perpl account first."
-        case .timeout: return "Perpl did not acknowledge the order in time."
+        case .notSignedIn: return L10n.tr("Not connected to Perpl trading.")
+        case .noAccount: return L10n.tr("No Perpl trading account. Deposit AUSD first.")
+        case .forwardingDisabled: return L10n.tr("Enable one-click trading (order forwarding) on your Perpl account first.")
+        case .timeout: return L10n.tr("Perpl did not acknowledge the order in time.")
         case .closed(let why): return why // already a full sentence from PerplClose.message
         case .unavailable(let why): return why
         case .invalidOrder(let why): return why
@@ -190,29 +190,30 @@ public struct PerplClose: Sendable, Equatable {
     /// 3401 — the API key was rejected. Retrying with the same key can never succeed; the user must re-enroll.
     public var isAuthFailure: Bool { code == 3401 }
     /// 1008 "too many connections" — Perpl allows 4 trading sockets per WALLET (shared with app.perpl.xyz tabs).
+    // not localized: Perpl's own English close reasons, matched as it sends them
     public var isConnectionCap: Bool { code == 1008 && reason.localizedCaseInsensitiveContains("too many connections") }
     public var isRateLimit: Bool { code == 1008 && reason.localizedCaseInsensitiveContains("too many requests") }
 
     public var message: String {
         switch code {
         case 3401:
-            return "Perpl rejected this trading key. Remove the API key below and connect again to enroll a fresh one."
+            return L10n.tr("Perpl rejected this trading key. Remove the API key below and connect again to enroll a fresh one.")
         case 1008 where isConnectionCap:
-            return "Too many Perpl trading connections for this wallet — Perpl allows 4, shared with the Perpl web app. Close other Perpl sessions (or wait a minute) and try again."
+            return L10n.tr("Too many Perpl trading connections for this wallet — Perpl allows 4, shared with the Perpl web app. Close other Perpl sessions (or wait a minute) and try again.")
         case 1008 where isRateLimit:
-            return "Perpl's trading rate limit was hit. Wait a moment and try again."
+            return L10n.tr("Perpl's trading rate limit was hit. Wait a moment and try again.")
         case 1008:
-            return "Perpl closed the idle trading connection (\(reason)). It reconnects on your next order."
+            return L10n.tr("Perpl closed the idle trading connection (\(reason)). It reconnects on your next order.")
         case 1011:
-            return "Perpl couldn't process a trading frame (\(reason)). Reconnect and try again."
+            return L10n.tr("Perpl couldn't process a trading frame (\(reason)). Reconnect and try again.")
         case 1013:
-            return "Perpl dropped the trading connection because the app fell behind reading it. Try again."
+            return L10n.tr("Perpl dropped the trading connection because the app fell behind reading it. Try again.")
         case 1001:
-            return "Perpl's trading server is restarting. Try again in a moment."
+            return L10n.tr("Perpl's trading server is restarting. Try again in a moment.")
         case 0:
-            return reason.isEmpty ? "Perpl trading connection was lost." : "Perpl trading connection was lost: \(reason)."
+            return reason.isEmpty ? L10n.tr("Perpl trading connection was lost.") : L10n.tr("Perpl trading connection was lost: \(reason).")
         default:
-            return reason.isEmpty ? "Perpl trading connection closed (code \(code))." : "Perpl trading connection closed (\(code): \(reason))."
+            return reason.isEmpty ? L10n.tr("Perpl trading connection closed (code \(String(code))).") : L10n.tr("Perpl trading connection closed (\(String(code)): \(reason)).")
         }
     }
 }
@@ -430,7 +431,7 @@ public final class PerplTradeClient {
         hasOrdersSnapshot = false
         hasPositionsSnapshot = false
         open?.cancel(with: .goingAway, reason: nil)
-        let closed = PerplTradeError.closed("Trading connection was closed.")
+        let closed = PerplTradeError.closed(L10n.tr("Trading connection was closed."))
         failConnect(closed)
         for (_, c) in pending { c.resume(throwing: closed) }
         pending.removeAll()
@@ -448,7 +449,7 @@ public final class PerplTradeClient {
             if firstAck == nil { firstAck = ack }
             if !ack.accepted { break }
         }
-        return firstAck ?? PerplOrderAck(code: -1, error: "No frames")
+        return firstAck ?? PerplOrderAck(code: -1, error: "No frames") // not localized: an ack's error, as Perpl's own are
     }
 
     /// Places the frames in order and returns EVERY frame's ack (stopping after the first rejection). Lets a caller
@@ -467,7 +468,7 @@ public final class PerplTradeClient {
                 // The entry was already acknowledged: this trigger isn't accepted, so the caller warns that the position
                 // may be unprotected, instead of failing the whole bracket, which the order sheet would show as a failed
                 // order — inviting a second entry. Sent and unanswered is "unknown" (it may be live); never sent is not.
-                acks.append(Self.unanswered(error, fallback: "Perpl did not confirm this trigger."))
+                acks.append(Self.unanswered(error, fallback: L10n.tr("Perpl did not confirm this trigger.")))
                 continue
             }
             acks.append(ack)
@@ -486,7 +487,7 @@ public final class PerplTradeClient {
         defer { requestsInFlight -= 1 }
         var acks: [PerplOrderAck] = []
         for frame in frames {
-            do { acks.append(try await send(frame)) } catch { acks.append(Self.unanswered(error, fallback: "Perpl did not confirm this request.")) }
+            do { acks.append(try await send(frame)) } catch { acks.append(Self.unanswered(error, fallback: L10n.tr("Perpl did not confirm this request."))) }
         }
         return acks
     }
@@ -707,6 +708,7 @@ public final class PerplTradeClient {
         return nil
     }
 
+    // not localized: an identifier, the key that keeps an event from being announced twice
     private static func eventName(_ outcome: PerplTriggerEvent.Outcome) -> String {
         switch outcome {
         case .triggered: return "fired"

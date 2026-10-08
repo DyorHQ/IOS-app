@@ -44,7 +44,7 @@ struct RecentActivityView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Recent Activity")
+        .navigationTitle(tr("Recent Activity"))
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await model.load(env: env, address: session.address) }
         .task(id: session.address) { await model.load(env: env, address: session.address) }
@@ -150,7 +150,7 @@ final class RecentActivityModel {
         guard current() else { await rechecked; return }
         lastLaunches = launches
         lastActivity = lpActivity
-        incomplete = unread ? "Some launchpad activity couldn't be read just now. Pull to refresh." : nil
+        incomplete = unread ? tr("Some launchpad activity couldn't be read just now. Pull to refresh.") : nil
 
         items = Self.merge(ActivityLog.all(owner: address), lpActivity: lpActivity, byToken: byToken, swaps: swaps, tokens: tokenMap)
         await rechecked
@@ -177,7 +177,7 @@ final class RecentActivityModel {
         }
         // Swap backfill for swaps made before recording or on another device.
         for swap in swaps where seen.insert(swap.hash.hexString).inserted {
-            out.append(FeedItem(id: swap.hash.hexString, icon: "arrow.left.arrow.right", title: "Swapped", subtitle: SwapHistoryItem.describe(swap, tokens: tokens), time: swap.time, hash: swap.hash))
+            out.append(FeedItem(id: swap.hash.hexString, icon: "arrow.left.arrow.right", title: tr("Swapped"), subtitle: SwapHistoryItem.describe(swap, tokens: tokens), time: swap.time, hash: swap.hash))
         }
         for record in records { if let status = record.status { add(record, icon: PendingActivity.symbol(for: status)) } }
         return out.sorted { $0.time > $1.time }
@@ -189,14 +189,14 @@ final class RecentActivityModel {
         let hash = activity.transactionHash
         switch activity.kind {
         case .launch:
-            return FeedItem(id: hash.hexString, icon: "flame.fill", title: "Launched $\(symbol)", subtitle: launch?.name ?? "", time: time, hash: hash)
+            return FeedItem(id: hash.hexString, icon: "flame.fill", title: tr("Launched $\(symbol)"), subtitle: launch?.name ?? "", time: time, hash: hash)
         case .trade(_, _, _, let isBuy, let quoteAmount, let tokenAmount):
             let pairDecimals = launch?.pair.decimals ?? 18
             let pairSymbol = launch?.pair.symbol ?? ""
             let subtitle = "\(NumberStyle.units(tokenAmount, decimals: 18, compact: true)) \(symbol) · \(NumberStyle.units(quoteAmount, decimals: pairDecimals, compact: true)) \(pairSymbol)"
-            return FeedItem(id: hash.hexString, icon: isBuy ? "arrow.down" : "arrow.up", title: isBuy ? "Bought \(symbol)" : "Sold \(symbol)", subtitle: subtitle, time: time, hash: hash)
+            return FeedItem(id: hash.hexString, icon: isBuy ? "arrow.down" : "arrow.up", title: isBuy ? tr("Bought \(symbol)") : tr("Sold \(symbol)"), subtitle: subtitle, time: time, hash: hash)
         case .graduated:
-            return FeedItem(id: hash.hexString, icon: "checkmark.seal.fill", title: "\(symbol) graduated", subtitle: "", time: time, hash: hash)
+            return FeedItem(id: hash.hexString, icon: "checkmark.seal.fill", title: tr("\(symbol) graduated"), subtitle: "", time: time, hash: hash)
         }
     }
 }

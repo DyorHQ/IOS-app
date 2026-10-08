@@ -129,10 +129,10 @@ struct HomeView: View {
             Divider()
 
             HStack(spacing: 10) {
-                splitStat("Spot", model.spotValue, .allocationSpot)
-                splitStat("Perps", model.perpsValue, .allocationPerps)
-                splitStat("Launch", model.launchpadValue, .allocationLaunchpad)
-                splitStat("Moments", model.momentsValue, .allocationMoments)
+                splitStat(.spot, model.spotValue, .allocationSpot)
+                splitStat(.perps, model.perpsValue, .allocationPerps)
+                splitStat(.launchpad, model.launchpadValue, .allocationLaunchpad)
+                splitStat(.moments, model.momentsValue, .allocationMoments)
             }
         }
         .padding(16)
@@ -179,18 +179,19 @@ struct HomeView: View {
         }
     }
 
-    private func statColumn(_ title: String, value: Double, tint: Color, alignment: HorizontalAlignment = .leading) -> some View {
+    private func statColumn(_ title: LocalizedStringKey, value: Double, tint: Color, alignment: HorizontalAlignment = .leading) -> some View {
         VStack(alignment: alignment, spacing: 2) {
             Text(title).font(.footnote).foregroundStyle(.secondary)
             Text(PriceFormat.usdValue(value)).font(.headline).monospacedDigit().foregroundStyle(tint)
         }
     }
 
-    private func splitStat(_ title: String, _ value: Double, _ dot: Color) -> some View {
+    /// One of the four categories under the balance, named as My Holdings' switch names it.
+    private func splitStat(_ category: HoldingCategory, _ value: Double, _ dot: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 Circle().fill(dot).frame(width: 7, height: 7)
-                Text(title).font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: category.label).font(.caption).foregroundStyle(.secondary)
             }
             Text(PriceFormat.usdValue(value))
                 .font(.subheadline.weight(.medium)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
@@ -217,10 +218,10 @@ struct HomeView: View {
             Text("Allocation").font(.headline)
             AllocationDonut(
                 segments: [
-                    .init(label: "Spot", value: model.spotValue, color: .allocationSpot),
-                    .init(label: "Perps", value: model.perpsValue, color: .allocationPerps),
-                    .init(label: "Launchpad", value: model.launchpadValue, color: .allocationLaunchpad),
-                    .init(label: "Moments", value: model.momentsValue, color: .allocationMoments),
+                    .init(label: tr("Spot"), value: model.spotValue, color: .allocationSpot),
+                    .init(label: tr("Perps"), value: model.perpsValue, color: .allocationPerps),
+                    .init(label: tr("Launchpad"), value: model.launchpadValue, color: .allocationLaunchpad),
+                    .init(label: tr("Moments"), value: model.momentsValue, color: .allocationMoments),
                 ],
                 total: model.totalValue ?? 0
             )
@@ -323,7 +324,7 @@ struct HomeView: View {
         .cardBackground()
     }
 
-    private func holdingsEmpty(_ title: String, _ detail: String) -> some View {
+    private func holdingsEmpty(_ title: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
         VStack(spacing: 4) {
             Text(title).font(.subheadline.weight(.medium))
             Text(detail).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -338,26 +339,44 @@ struct HomeView: View {
 enum HomeTokenTab: String, CaseIterable, Identifiable {
     case popular, hot, gainers, losers
     var id: String { rawValue }
-    var label: String { rawValue.capitalized }
+    var label: String {
+        switch self {
+        case .popular: return tr(LocalizedStringResource("Popular", comment: "Top Tokens tab: the curated list [tight]"))
+        case .hot: return tr(LocalizedStringResource("Hot", comment: "Top Tokens tab: the biggest moves either way [tight]"))
+        case .gainers: return tr(LocalizedStringResource("Gainers", comment: "Top Tokens tab: rising most in 24h [tight]"))
+        case .losers: return tr(LocalizedStringResource("Losers", comment: "Top Tokens tab: falling most in 24h [tight]"))
+        }
+    }
 }
 
 enum HoldingCategory: String, CaseIterable, Identifiable {
     case spot, perps, launchpad, moments
     var id: String { rawValue }
-    var label: String { self == .launchpad ? "Launch" : rawValue.capitalized }
+    /// The category's name where four share Home's card: My Holdings' switch and the balance card's split. Keys of their
+    /// own, apart from the tabs' and the menu's names, so a language whose tab names are long can keep these short.
+    var label: String {
+        switch self {
+        case .spot: return tr(LocalizedStringResource("homeCategory.spot", defaultValue: "Spot", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. The wallet's own tokens, as against Perps"))
+        case .perps: return tr(LocalizedStringResource("homeCategory.perps", defaultValue: "Perps", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. Perpetual futures"))
+        case .launchpad: return tr(LocalizedStringResource("homeCategory.launch", defaultValue: "Launch", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. The launchpad's coins (a noun), as the Launch tab"))
+        case .moments: return tr(LocalizedStringResource("homeCategory.moments", defaultValue: "Moments", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. The Moments feature's name"))
+        }
+    }
 }
 
 /// One of the four home actions: an SF Symbol over a label, filling its share of the row.
 private struct HomeAction: View {
-    let title: String
+    let title: LocalizedStringKey
     let symbol: String
     let action: () -> Void
+    /// One height for every symbol, so the four tiles and their labels line up: Transfer's arrows stand taller.
+    @ScaledMetric(relativeTo: .body) private var symbolHeight: CGFloat = 24
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                Image(systemName: symbol).font(.body.weight(.semibold))
-                Text(title).font(.caption).fontWeight(.medium)
+                Image(systemName: symbol).font(.body.weight(.semibold)).frame(height: symbolHeight)
+                Text(title).font(.caption).fontWeight(.medium).lineLimit(1).minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
@@ -433,7 +452,7 @@ private struct TokenListRow: View {
 
     var body: some View {
         HStack(spacing: Self.spacing) {
-            Text("\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: rankWidth, alignment: .center)
+            Text(verbatim: "\(rank)").font(.footnote.monospacedDigit()).foregroundStyle(.tertiary).frame(width: rankWidth, alignment: .center)
             TokenLogo(token: row.token, size: Self.logoSize)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
@@ -441,7 +460,7 @@ private struct TokenListRow: View {
                     // Top Tokens lists no token the wallet was sent unasked (`HomeModel.topTokens`).
                     TokenBadgeView(token: row.token, receivedUnasked: false)
                 }
-                Text(row.token.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(row.token.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
             USDText(price: row.usd, font: .subheadline.weight(.medium))
@@ -502,13 +521,13 @@ private struct LaunchHoldingRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(holding.launch.symbol).font(.subheadline.weight(.semibold))
-                Text("\(NumberStyle.units(holding.balance, decimals: 18, compact: true)) \(holding.launch.symbol)")
+                Text(verbatim: "\(NumberStyle.units(holding.balance, decimals: 18, compact: true)) \(holding.launch.symbol)")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
                 USDText(value: value, font: .subheadline.weight(.medium))
-                Text(holding.launch.phase == .bonding ? "\(holding.launch.progressBps / 100)% to graduation" : holding.launch.phase.title)
+                (holding.launch.phase == .bonding ? Text("\(holding.launch.progressBps / 100)% to graduation") : Text(verbatim: holding.launch.phase.title))
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }
@@ -526,13 +545,13 @@ private struct PositionSummaryRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(position.symbol).font(.subheadline.weight(.semibold))
-                    Text("\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.leverage, maximumFractionDigits: 1))×")
+                    Text(verbatim: "\(sideLabel) \(NumberStyle.number(position.leverage, maximumFractionDigits: 1))×")
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background((position.side == .long ? Color.positive : Color.negative).opacity(0.15), in: Capsule())
                         .foregroundStyle(position.side == .long ? Color.positive : Color.negative)
                 }
-                Text("\(NumberStyle.number(position.size)) at \(NumberStyle.number(position.entry))")
+                Text("\(NumberStyle.number(position.size)) at \(NumberStyle.number(position.entry))", comment: "A perp position's size, then the price it was opened at")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer(minLength: 8)
@@ -540,11 +559,18 @@ private struct PositionSummaryRow: View {
                 Text(PriceFormat.usdValue(position.unrealized, signed: true))
                     .font(.subheadline.weight(.medium)).monospacedDigit()
                     .foregroundStyle(position.unrealized < 0 ? Color.negative : Color.positive)
-                Text("Unrealized").font(.caption2).foregroundStyle(.secondary)
+                Text("Unrealized", comment: "Under a perp position's unrealized profit or loss [tight]").font(.caption2).foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 8)
         .contentShape(Rectangle())
+    }
+
+    /// The position's side, for the chip beside its leverage ("Long 5×").
+    private var sideLabel: String {
+        position.side == .long
+            ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]"))
+            : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]"))
     }
 }
 
@@ -747,9 +773,9 @@ final class HomeModel {
         if let priceError {
             error = describe(priceError)
         } else if balanceMap == nil {
-            error = "Your balances couldn't be read just now — showing the last ones read."
+            error = tr("Your balances couldn't be read just now — showing the last ones read.")
         } else if !listing.complete {
-            error = "Some launch coins couldn't be read just now — showing the last ones read."
+            error = tr("Some launch coins couldn't be read just now — showing the last ones read.")
         } else {
             error = nil
             updatedAt = .now
@@ -896,7 +922,7 @@ struct TokenDetailView: View {
                 }
             }
             Section("About") {
-                LabeledContent("Name", value: row.token.name)
+                LabeledContent("Name", value: row.token.displayName)
                 if !row.token.isNative { AddressRow(title: "Contract", address: row.token.address) }
                 LabeledContent("Decimals", value: String(row.token.decimals))
             }
@@ -948,7 +974,7 @@ struct TokenDetailView: View {
     /// launch one, which the footer says.
     private func launchedOnDyorHQ(_ coin: DyorCoin) -> some View {
         Section {
-            LabeledContent("Made on", value: coin.isMoment ? (coin.retired ? "A past Moments cohort" : "DyorHQ Moments") : (coin.retired ? "A retired DyorHQ launchpad" : "The DyorHQ launchpad"))
+            LabeledContent("Made on", value: coin.isMoment ? (coin.retired ? tr("A past Moments cohort") : tr("DyorHQ Moments")) : (coin.retired ? tr("A retired DyorHQ launchpad") : tr("The DyorHQ launchpad")))
             if let phase = launchPhase { LabeledContent("Phase", value: phase.title) }
             AddressRow(title: "Creator", address: coin.creator)
             if let key = coin.momentKey {
@@ -993,7 +1019,7 @@ struct TokenDetailView: View {
 /// "New" in place of a 24h change: a DyorHQ coin its factory hadn't recorded 24 hours ago (`PriceInfo.isNew`).
 private struct NewBadge: View {
     var body: some View {
-        Text("New")
+        Text("New", comment: "A badge on a new coin: just launched, or too new to have a 24h change [tight]")
             .font(.footnote.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -1006,6 +1032,9 @@ struct PriceChart: View {
     let points: [PricePoint]
     let isLoading: Bool
     let tint: Color
+    /// The app's language: a chart draws its axis labels once, so they are formatted in it explicitly, and a change of
+    /// language draws them again (a page open during the change kept French dates in Chinese).
+    @Environment(\.locale) private var locale
 
     /// The plotted range with a little headroom. An area mark anchors at zero by default, which flattens a
     /// 24-hour price line into a ruler, so the fill starts at this floor instead.
@@ -1015,6 +1044,15 @@ struct PriceChart: View {
         let high = values.max() ?? 1
         let padding = max((high - low) * 0.08, abs(high) * 0.0005, 1e-12)
         return (low - padding)...(high + padding)
+    }
+
+    /// The time axis's labels: hours for a day's line (Home's token page), days for a longer one (a launch page charts a
+    /// coin since its launch). A mark every 6 hours over weeks drew a hundred grid lines and labels piled into one strip.
+    private var timeFormat: Date.FormatStyle {
+        guard let first = points.first?.time, let last = points.last?.time, last.timeIntervalSince(first) > 36 * 3600 else {
+            return Date.FormatStyle.dateTime.hour().locale(locale)
+        }
+        return Date.FormatStyle.dateTime.month(.abbreviated).day().locale(locale)
     }
 
     var body: some View {
@@ -1028,7 +1066,8 @@ struct PriceChart: View {
                     .foregroundStyle(LinearGradient(colors: [tint.opacity(0.25), .clear], startPoint: .top, endPoint: .bottom))
             }
             .chartYScale(domain: domain)
-            .chartXAxis { AxisMarks(values: .stride(by: .hour, count: 6)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.hour()) } }
+            // Centred on their marks: a date label starts at its mark by default, so the last one ran past the plot ("Oc…").
+            .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisGridLine(); AxisValueLabel(format: timeFormat, centered: true) } }
             .chartYAxis {
                 // Labels as fine as the plotted range needs (`PriceFormat.axis`), so a dust coin's ticks don't all read "0".
                 AxisMarks(position: .trailing) { value in
@@ -1070,7 +1109,7 @@ struct HomeHeader: View {
             Button { Haptics.tap(); showSearch = true } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    Text("Search tokens…").foregroundStyle(.secondary)
+                    Text("Search tokens…").foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: 0)
                     if let error {
                         Image(systemName: "wifi.exclamationmark").foregroundStyle(Color.attention).accessibilityLabel(error)
@@ -1096,7 +1135,7 @@ struct HomeHeader: View {
                     .overlay(alignment: .topTrailing) {
                         let unread = NotificationHub.shared.unreadCount
                         if unread > 0 {
-                            Text(unread > 99 ? "99+" : "\(unread)")
+                            Text(verbatim: unread > 99 ? "99+" : "\(unread)")
                                 .font(.caption2.weight(.bold)).foregroundStyle(.white)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
                                 .background(Color.negative, in: Capsule())
@@ -1152,7 +1191,7 @@ private struct MomentHoldingRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.moment.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Text("\(row.nftBalance) \(row.nftBalance == 1 ? "edition" : "editions") · \(NumberStyle.number(coins, compact: true)) \(row.moment.symbol)")
+                Text(verbatim: "\(tr("\(row.nftBalance) editions")) · \(NumberStyle.number(coins, compact: true)) \(row.moment.symbol)")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
             }
             Spacer(minLength: 8)

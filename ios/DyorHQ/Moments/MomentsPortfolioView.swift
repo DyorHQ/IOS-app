@@ -22,10 +22,14 @@ struct MomentsPortfolioView: View {
                 if let portfolio {
                     Section {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                            tile("Pending", portfolio.pending, "promised, not graduated yet")
-                            tile("Claimable now", portfolio.claimable, "vested and unclaimed", tint: portfolio.claimable > 0 ? .brand : .primary)
-                            tile("Still vesting", portfolio.vesting, "unlocks at the monthly cliffs")
-                            tile("Claimed", portfolio.claimed, "already in your wallet")
+                            tile(Text("Pending", comment: "[tight] My Moments tile: coins promised, not graduated yet"), portfolio.pending,
+                                 Text("promised, not graduated yet", comment: "[tight] My Moments tile, under the amount"))
+                            tile(Text("Claimable now", comment: "[tight] My Moments tile: vested coins to claim"), portfolio.claimable,
+                                 Text("vested and unclaimed", comment: "[tight] My Moments tile, under the amount"), tint: portfolio.claimable > 0 ? .brand : .primary)
+                            tile(Text("Still vesting", comment: "[tight] My Moments tile: coins not vested yet"), portfolio.vesting,
+                                 Text("unlocks at the monthly cliffs", comment: "[tight] My Moments tile, under the amount"))
+                            tile(Text("Claimed", comment: "[tight] Already claimed: coins on My Moments and a Moment's page, fees and rewards on Portfolio"), portfolio.claimed,
+                                 Text("already in your wallet", comment: "[tight] My Moments tile, under the amount"))
                         }
                         .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
                         if portfolio.claimable > 0 {
@@ -73,28 +77,30 @@ struct MomentsPortfolioView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("My Moments")
+            .navigationTitle(tr("My Moments"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .refreshable { await load() }
             .task { await load() }
             .sheet(isPresented: $showClaimAll) {
                 ConfirmationSheet(title: "Claim All", confirmTitle: "Claim All", build: { await env.moments.claimAllPlan(momentIds: portfolio?.claimableIds ?? []) }, onDone: { Task { await load() } },
-                                  onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed vested coins", subtitle: "across \(portfolio?.claimableIds.count ?? 0) \((portfolio?.claimableIds.count ?? 0) == 1 ? "Moment" : "Moments")", hash: hash, section: "moments"), owner: session.address) },
+                                  // Recorded in the language in use; `section` is an identifier, never translated.
+                                  onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: tr("Claimed vested coins"), subtitle: tr("across \(portfolio?.claimableIds.count ?? 0) Moments"), hash: hash, section: "moments"), owner: session.address) },
                                   intent: .momentsClaim) {
                     ForEach(portfolio?.rows.filter { $0.moment.graduated && $0.claimable > 0 } ?? []) { row in
-                        DetailRow("$\(row.moment.symbol)", MomentsFormat.coins(row.claimable))
+                        DetailRow(Text(verbatim: "$\(row.moment.symbol)"), Text(verbatim: MomentsFormat.coins(row.claimable)))
                     }
                 }
             }
         }
     }
 
-    private func tile(_ title: String, _ coins: BigUInt, _ subtitle: String, tint: Color = .primary) -> some View {
+    /// `title` and `subtitle` are `Text`s so their keys carry a translator's note: both are tight.
+    private func tile(_ title: Text, _ coins: BigUInt, _ subtitle: Text, tint: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            title.font(.caption).foregroundStyle(.secondary)
             Text(MomentsFormat.coins(coins)).font(.headline).monospacedDigit().foregroundStyle(tint)
-            Text(subtitle).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            subtitle.font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -129,18 +135,32 @@ private struct PortfolioRowView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(row.moment.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text("$\(row.moment.symbol)").font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: "$\(row.moment.symbol)").font(.caption).foregroundStyle(.secondary)
                 }
-                Text("\(row.nftBalance) \(row.nftBalance == 1 ? "edition" : "editions") · promised \(MomentsFormat.coins(row.entitlement)) · claimed \(MomentsFormat.coins(row.claimed)) · in wallet \(MomentsFormat.coins(row.coinBalance))\(row.isCreator ? " · creator" : "")")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                summary.font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
                 Text(row.moment.graduated ? MomentsFormat.coins(row.claimable) : MomentsFormat.coins(row.entitlement)).font(.subheadline.weight(.semibold)).monospacedDigit()
-                Text(row.moment.graduated ? "claimable" : row.moment.state == .expired ? "expired" : "pending").font(.caption2).foregroundStyle(row.moment.graduated && row.claimable > 0 ? Color.brand : .secondary)
+                status.font(.caption2).foregroundStyle(row.moment.graduated && row.claimable > 0 ? Color.brand : .secondary)
             }
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+
+    /// The row's editions and coins, one sentence (with "· creator" for its creator).
+    private var summary: Text {
+        let promised = MomentsFormat.coins(row.entitlement), claimed = MomentsFormat.coins(row.claimed), held = MomentsFormat.coins(row.coinBalance)
+        return row.isCreator
+            ? Text("\(row.nftBalance) editions · promised \(promised) · claimed \(claimed) · in wallet \(held) · creator")
+            : Text("\(row.nftBalance) editions · promised \(promised) · claimed \(claimed) · in wallet \(held)")
+    }
+
+    /// What the amount on the right is.
+    private var status: Text {
+        if row.moment.graduated { return Text("claimable", comment: "[tight] My Moments row, under an amount of coins: they can be claimed now") }
+        if row.moment.state == .expired { return Text("expired", comment: "[tight] My Moments row, under an amount of coins: the Moment expired") }
+        return Text("pending", comment: "[tight] My Moments row, under an amount of coins: promised, the Moment has not graduated")
     }
 }

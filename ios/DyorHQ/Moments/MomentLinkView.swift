@@ -33,7 +33,7 @@ struct MomentLinkView: View {
                     ProgressView("Opening Moment…")
                 }
             }
-            .navigationTitle("Moment")
+            .navigationTitle(tr("Moment"))
             .navigationBarTitleDisplayMode(.inline)
             .task(id: link) { await load() }
         }

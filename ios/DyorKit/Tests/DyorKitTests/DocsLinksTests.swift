@@ -155,7 +155,7 @@ final class DocsLinksTests: XCTestCase {
             // Perpl Trading: the trading key's footer.
             .init("oneClickTrading", "Profile/Settings.swift", "PerplTradingView", follows: "Your trading key is generated on this device"),
             // Notifications: what reaches you, and when.
-            .init("notificationsAndPriceAlerts", "Profile/Settings.swift", "NotificationsView", follows: "DyorHQ notices fills and price alerts only while it's open"),
+            .init("notificationsAndPriceAlerts", "Profile/Settings.swift", "NotificationsView", follows: "Alerts arrive while DyorHQ is open."),
             // Create Account: the first deposit, which opens the Perpl account.
             .init("depositAndWithdraw", "Perps/PerpsView.swift", "CollateralSheet", follows: "Your first deposit opens your Perpl account"),
             // The slippage sheet's explanation.
@@ -223,7 +223,7 @@ final class DocsLinksTests: XCTestCase {
         XCTAssertTrue(launchpad.contains("if launch.curveSellsOpen { ticketSection } else { graduatedSection }"))
         // The first deposit's link stays while an amount under the minimum is typed: the problem takes the text's place.
         let perps = try Self.appSource("Perps/PerpsView.swift")
-        XCTAssertTrue(perps.contains("Text(problem ?? \"Your first deposit opens your Perpl account. Minimum 10 AUSD."))
+        XCTAssertTrue(perps.contains("if let problem { Text(verbatim: problem) }\n                            else { Text(\"Your first deposit opens your Perpl account. Minimum 10 AUSD."))
 
         let linked = Set(placements.map(\.page)).union(["home", "quickstart", "riskDisclosures", "contractsAndAddresses"])
         XCTAssertEqual(linked, Set(DocsLinks.allCases.map { "\($0)" }), "one case per page the app opens, plus the home")

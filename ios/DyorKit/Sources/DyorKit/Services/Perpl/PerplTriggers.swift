@@ -40,8 +40,10 @@ public enum PerplTriggerRules {
     }
 
     /// Why a stop-loss is refused while the market's maintenance margin (so the liquidation price) can't be read: it
-    /// can't be checked against liquidation. A take-profit doesn't depend on it.
-    public static let liquidationUnknownMessage = "The liquidation price can't be read right now, so this stop-loss can't be checked against it. Try again in a moment."
+    /// can't be checked against liquidation. A take-profit doesn't depend on it. In the app's language.
+    public static var liquidationUnknownMessage: String {
+        L10n.tr("The liquidation price can't be read right now, so this stop-loss can't be checked against it. Try again in a moment.")
+    }
 
     /// The price as a whole number of ticks (`price × 10^decimals`), or nil when it isn't one: off the tick grid,
     /// below one tick, or not representable.
@@ -85,27 +87,45 @@ public enum PerplTriggerRules {
 }
 
 extension PerplTriggerRules.Problem {
-    /// What to tell the user. `referenceName` names the price a wrong-sided trigger is measured against.
-    public func message(market: PerpMarket, referenceName: String = "your entry") -> String {
-        func name(_ kind: PerplTriggerKind) -> String { kind == .takeProfit ? "Take-profit" : "Stop-loss" }
+    /// What to tell the user, in the app's language. `referenceName` names the price a wrong-sided trigger is measured
+    /// against ("the mark price"); nil names the entry. Each case is a whole sentence for each trigger and side, so no
+    /// word is put into another language's sentence in English.
+    public func message(market: PerpMarket, referenceName: String? = nil) -> String {
+        let asset = market.asset
         switch self {
         case .tooLow(let kind, let minimum):
-            return "\(name(kind)) must be at least \(NumberStyle.number(minimum)) on \(market.asset)."
+            let minimum = NumberStyle.number(minimum)
+            return kind == .takeProfit ? L10n.tr("Take-profit must be at least \(minimum) on \(asset).")
+                : L10n.tr("Stop-loss must be at least \(minimum) on \(asset).")
+        case .offTick(let kind, let decimals) where decimals == 0:
+            return kind == .takeProfit ? L10n.tr("Take-profit must be a whole number on \(asset).") : L10n.tr("Stop-loss must be a whole number on \(asset).")
         case .offTick(let kind, let decimals):
-            return decimals == 0 ? "\(name(kind)) must be a whole number on \(market.asset)."
-                : "\(name(kind)) can have at most \(decimals) decimal place\(decimals == 1 ? "" : "s") on \(market.asset)."
+            return kind == .takeProfit ? L10n.tr("Take-profit can have at most \(decimals) decimal places on \(asset).")
+                : L10n.tr("Stop-loss can have at most \(decimals) decimal places on \(asset).")
         case .outOfRange(let kind):
-            return "\(name(kind)) is not a valid price."
+            return kind == .takeProfit ? L10n.tr("Take-profit is not a valid price.") : L10n.tr("Stop-loss is not a valid price.")
         case .wrongSide(let kind, let side, let reference):
-            let above = (kind == .takeProfit) == (side == .long)
-            return "\(name(kind)) must be \(above ? "above" : "below") \(referenceName) (\(NumberStyle.number(reference))) for a \(side == .long ? "long" : "short")."
+            // A long takes profit above and stops out below; a short the reverse.
+            let name = referenceName ?? L10n.string(LocalizedStringResource("your entry", bundle: L10n.kit,
+                comment: "Completes a sentence about where a take-profit or stop-loss must sit: “… above your entry (950) for a long”."))
+            let price = NumberStyle.number(reference)
+            switch (kind, side) {
+            case (.takeProfit, .long): return L10n.tr("Take-profit must be above \(name) (\(price)) for a long.")
+            case (.takeProfit, .short): return L10n.tr("Take-profit must be below \(name) (\(price)) for a short.")
+            case (.stopLoss, .long): return L10n.tr("Stop-loss must be below \(name) (\(price)) for a long.")
+            case (.stopLoss, .short): return L10n.tr("Stop-loss must be above \(name) (\(price)) for a short.")
+            }
         case .beyondLiquidation(let side, let liquidation):
-            return "Stop-loss must be \(side == .long ? "above" : "below") the liquidation price (\(NumberStyle.number(liquidation))). Liquidation would come first, so it would never protect you."
+            let price = NumberStyle.number(liquidation)
+            return side == .long
+                ? L10n.tr("Stop-loss must be above the liquidation price (\(price)). Liquidation would come first, so it would never protect you.")
+                : L10n.tr("Stop-loss must be below the liquidation price (\(price)). Liquidation would come first, so it would never protect you.")
         case .reduceOnly:
-            return "Take-profit and stop-loss can't be attached to a reduce-only order. Set them on the position instead."
+            return L10n.tr("Take-profit and stop-loss can't be attached to a reduce-only order. Set them on the position instead.")
         case .reducesPosition(let side):
-            let other = side == .long ? "short" : "long"
-            return "This order only reduces your \(side == .long ? "long" : "short"), so its take-profit and stop-loss would have no \(other) to close and would stay armed for your next \(other) here. Set them with TP/SL on the position instead."
+            return side == .long
+                ? L10n.tr("This order only reduces your long, so its take-profit and stop-loss would have no short to close and would stay armed for your next short here. Set them with TP/SL on the position instead.")
+                : L10n.tr("This order only reduces your short, so its take-profit and stop-loss would have no long to close and would stay armed for your next long here. Set them with TP/SL on the position instead.")
         }
     }
 }

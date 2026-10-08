@@ -9,7 +9,7 @@ struct TransferSheet: View {
     enum Direction: String, CaseIterable, Identifiable {
         case toPerps, toSpot
         var id: String { rawValue }
-        var label: String { self == .toPerps ? "Spot → Perps" : "Perps → Spot" }
+        var label: String { self == .toPerps ? tr("Spot → Perps") : tr("Perps → Spot") }
     }
 
     @Environment(AppEnvironment.self) private var env
@@ -43,16 +43,16 @@ struct TransferSheet: View {
         guard raw > 0, loaded else { return nil }
         switch direction {
         case .toPerps:
-            if isCreating, raw < Perpl.minimumDeposit { return "The first deposit opens your Perpl account and must be at least 10 AUSD." }
+            if isCreating, raw < Perpl.minimumDeposit { return tr("The first deposit opens your Perpl account and must be at least 10 AUSD.") }
             if needsSwap {
-                guard let monUSD, monUSD > 0 else { return "MON has no price right now; deposit AUSD you already hold." }
-                if walletMON == 0 { return "Not enough AUSD, and no MON to convert." }
+                guard let monUSD, monUSD > 0 else { return tr("MON has no price right now; deposit AUSD you already hold.") }
+                if walletMON == 0 { return tr("Not enough AUSD, and no MON to convert.") }
                 if let quoteError { return quoteError }
-                if let quote, quote.minOut < shortfall { return "MON on hand does not cover the difference at today's price." }
+                if let quote, quote.minOut < shortfall { return tr("MON on hand does not cover the difference at today's price.") }
             }
             return nil
         case .toSpot:
-            if raw > perpsAvailable { return "More than the balance free on Perpl." }
+            if raw > perpsAvailable { return tr("More than the balance free on Perpl.") }
             return nil
         }
     }
@@ -75,7 +75,7 @@ struct TransferSheet: View {
                     }
                 }
                 Section {
-                    AmountField(title: "0", text: $amountText, token: .ausd) {
+                    AmountField(title: "0" as String, text: $amountText, token: .ausd) {
                         Haptics.selection()
                         amountText = Amount.exact(direction == .toPerps ? walletAUSD : perpsAvailable, decimals: 6)
                     }
@@ -91,7 +91,7 @@ struct TransferSheet: View {
                     else { Text("Free on Perpl: \(NumberStyle.units(perpsAvailable, decimals: 6)) AUSD") }
                 }
             }
-            .navigationTitle("Transfer")
+            .navigationTitle(tr("Transfer"))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .toolbar {
@@ -106,14 +106,14 @@ struct TransferSheet: View {
                                   build: { try await plan() },
                                   onDone: { dismiss() },
                                   onCompleted: { hash in
-                                      Activity.record(ActivityRecord(kind: direction == .toPerps ? .deposit : .withdraw, title: direction == .toPerps ? "Transferred to Perps" : "Withdrawn to Spot", subtitle: "\(NumberStyle.units(raw, decimals: 6)) AUSD", hash: hash, section: "perps", usd: Amount.units(raw, decimals: 6)), owner: session.address)
+                                      Activity.record(ActivityRecord(kind: direction == .toPerps ? .deposit : .withdraw, title: direction == .toPerps ? tr("Transferred to Perps") : tr("Withdrawn to Spot"), subtitle: "\(NumberStyle.units(raw, decimals: 6)) AUSD", hash: hash, section: "perps", usd: Amount.units(raw, decimals: 6)), owner: session.address)
                                   },
                                   intent: intent) {
-                    DetailRow("Amount", "\(NumberStyle.units(raw, decimals: 6)) AUSD")
+                    DetailRow("Amount", verbatim: "\(NumberStyle.units(raw, decimals: 6)) AUSD")
                     if direction == .toPerps, needsSwap, let quote {
                         DetailRow("Swap first", "≈ \(NumberStyle.units(quoteMON, decimals: 18, compact: true)) MON → \(NumberStyle.units(quote.amountOut, decimals: 6)) AUSD on \(quote.venue.displayName)")
                     }
-                    DetailRow(direction == .toPerps ? "To" : "From", "Perpl Exchange")
+                    DetailRow(direction == .toPerps ? "To" : "From", verbatim: "Perpl Exchange") // not localized: Perpl's contract, by its own name
                     if isCreating { DetailRow("Account", "Opens a new trading account") }
                 }
             }
@@ -141,7 +141,7 @@ struct TransferSheet: View {
             walletMON = mon
             loaded = true
         } catch {
-            loadError = "Couldn't read your balances or your Perpl account, so nothing can be planned yet. \(describe(error))"
+            loadError = tr("Couldn't read your balances or your Perpl account, so nothing can be planned yet. \(describe(error))")
         }
     }
 
@@ -157,16 +157,16 @@ struct TransferSheet: View {
         let shortfallUSD = Amount.units(shortfall, decimals: 6)
         var monNeeded = Amount.raw(shortfallUSD / monUSD * 1.01, decimals: 18)
         for _ in 0..<2 {
-            guard monNeeded <= walletMON else { quoteError = "Not enough MON to cover the difference."; return }
+            guard monNeeded <= walletMON else { quoteError = tr("Not enough MON to cover the difference."); return }
             let request = SwapRequest(tokenIn: .mon, tokenOut: .ausd, amountIn: monNeeded, slippageBps: settings.slippageBps, account: address)
             let outcome = await env.swap.quotes(for: request)
             if Task.isCancelled { return }
-            guard let best = outcome.best else { quoteError = outcome.errors.values.first ?? "No venue can price MON → AUSD right now."; return }
+            guard let best = outcome.best else { quoteError = outcome.errors.values.first ?? tr("No venue can price MON → AUSD right now."); return }
             if best.minOut >= shortfall { quote = best; quoteMON = monNeeded; return }
             // Undershot (price moved or impact): scale the MON up by the ratio and try once more.
             monNeeded = monNeeded * shortfall / max(best.minOut, 1) * 102 / 100
         }
-        quoteError = "The MON → AUSD price moved; try again."
+        quoteError = tr("The MON → AUSD price moved; try again.")
     }
 
     /// A withdrawal to this wallet, or a deposit into its own Perpl account — after a MON → AUSD swap for any shortfall,

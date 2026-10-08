@@ -75,22 +75,19 @@ final class PerpsModel {
     var cancelling: PerpOrder?
     private var perpl: PerplService?
 
-    /// Fill detection: increments whenever an open order fills (a position appears or grows between polls), with
-    /// `lastFilledPerpId` naming the market so the trade screen can jump to Positions. Position size is in base
-    /// contracts — it moves only on fills and closes, never with the mark — so a size increase is an unambiguous
-    /// fill signal that never fires on a cancel or a price move.
+    /// Fill detection for this screen: increments whenever an open order fills (a position appears or grows between
+    /// polls), with `lastFilledPerpId` naming the market so the trade screen can jump to Positions. Position size is in
+    /// base contracts — it moves only on fills and closes, never with the mark — so a size increase is an unambiguous
+    /// fill signal that never fires on a cancel or a price move. The fill and close NOTICES come from the app-wide
+    /// watcher (`AlertCenter`), on any screen, so this screen never posts one of its own (one notice, not two).
     private(set) var fillSignal = 0
     private(set) var lastFilledPerpId: Int?
-    private var lastPositionSize: [Int: Double] = [:]
-    private var fillPrimed = false
-    /// The positions at the last good read, and the markets that had a resting reduce-only (close) order then — to
-    /// tell a position that closed from one that is merely missing from a failed read.
-    private var lastPositions: [Int: PerpPosition] = [:]
-    private var restingCloseMarkets: Set<Int> = []
-    /// Markets the user closed, or sent a close for, from this app — and when.
-    private var userCloses: [Int: Date] = [:]
-    /// Whose positions the diff state above describes; a different account starts over.
+    /// The positions at the last good read (`PerpPositionWatch`): what opened, grew or ended since.
+    private var watch = PerpPositionWatch()
+    /// Whose positions `watch` describes; a different account starts over.
     private var diffOwner: Address?
+    /// The app-wide watcher, told when the user closes a position from here.
+    @ObservationIgnored private var alerts: AlertCenter?
 
     var unrealizedTotal: Double { positions.reduce(0) { $0 + $1.unrealized } }
     var equity: Double? { account.map { Amount.units($0.balance, decimals: 6) + unrealizedTotal } }
@@ -107,26 +104,25 @@ final class PerpsModel {
         }
     }
 
-    /// The user closed this market's position, or sent a close for it, from this app: its disappearance is expected.
-    /// Noted when the close is sent, before the next poll can see the position gone (GT-9).
-    func noteUserClose(_ perpId: Int) { userCloses[perpId] = Date() }
+    /// The user closed this market's position on `side`, or sent an order that closes it (`PerpCloseOrder.closes`: a
+    /// reduce-only order, or one on the other side of the position), from this app: its disappearance is expected, and
+    /// the app-wide watcher stays quiet about it. Noted when the close is sent, before the next poll can see the position
+    /// gone (GT-9).
+    func noteUserClose(_ perpId: Int, closing side: PositionSide) { alerts?.noteUserClose(perpId, closing: side) }
 
     /// A close noted as sent never left the device: the position's disappearance is news again.
-    func forgetUserClose(_ perpId: Int) { userCloses[perpId] = nil }
+    func forgetUserClose(_ perpId: Int) { alerts?.forgetUserClose(perpId) }
 
     func load(env: AppEnvironment, address: Address?) async {
         perpl = env.perpl
+        alerts = env.alerts
         loading = true
         defer { loading = false }
         async let ctx = env.perpl.context()
         if address != diffOwner {
             // Another account: its positions are not "new fills" or "closes" of the previous one's.
             diffOwner = address
-            lastPositionSize = [:]
-            fillPrimed = false
-            lastPositions = [:]
-            restingCloseMarkets = []
-            userCloses = [:]
+            watch = PerpPositionWatch()
         }
         do {
             let fetched = try await env.perpl.markets()
@@ -142,14 +138,10 @@ final class PerpsModel {
                     async let o = env.perpl.openOrders(acct, markets: fetched)
                     // A failed read returns nil (keep the last good list); only diff for fills on a successful read.
                     if let fresh = try? await p {
-                        detectFills(fresh)
-                        detectCloses(fresh, stillOpen: Set(acct.positionPerpIds), trading: env.perplTrading, owner: address)
+                        detectChanges(fresh, stillOpen: Set(acct.positionPerpIds), trading: env.perplTrading)
                         positions = fresh
                     }
-                    if let freshOrders = try? await o {
-                        orders = freshOrders
-                        restingCloseMarkets = Set(freshOrders.filter(\.reduceOnly).map(\.perpId))
-                    }
+                    if let freshOrders = try? await o { orders = freshOrders }
                     // Reconcile the app's recorded TP/SL: a trigger lives while its market has a position or a resting
                     // entry, so a fired/closed trigger drops off instead of lingering — pruned only while Perpl's live
                     // list can confirm it (offline, an echo may be the only trace of a trigger still armed).
@@ -159,9 +151,7 @@ final class PerpsModel {
                     positions = []
                     orders = []
                     triggers = TriggerStore.reconcile(owner: address, openPerpIds: [], verified: env.perplTrading.ordersAreLive)
-                    lastPositionSize = [:]
-                    fillPrimed = false
-                    lastPositions = [:]
+                    watch = PerpPositionWatch()
                 }
                 collateral = (try? await collateralTask) ?? collateral
             } else {
@@ -169,7 +159,7 @@ final class PerpsModel {
                 positions = []
                 orders = []
                 triggers = []
-                lastPositions = [:]
+                watch = PerpPositionWatch()
             }
         } catch {
             self.error = describe(error)
@@ -177,48 +167,16 @@ final class PerpsModel {
         if let list = try? await ctx { context = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) }) }
     }
 
-    /// A position that was open at the last good read and that the account no longer holds (security audit GT-9).
-    /// The trading stream reports a fired TP/SL or a liquidation precisely when it is live (`PerplTrading`); this is the
-    /// fallback for when it isn't — no one-click trading, or a dropped socket — and can only say the position closed,
-    /// not how. Quiet when the user closed it from here, or the stream already reported the ending. It also has
-    /// Perpl trading cancel the TP/SL that position leaves behind, in case the stream's own report was missed (GT-2).
-    private func detectCloses(_ fresh: [PerpPosition], stillOpen: Set<Int>, trading: PerplTrading, owner: Address) {
-        let freshIds = Set(fresh.map(\.perpId))
-        defer {
-            // A position the account still holds but this read missed stays known, so its close is still noticed later.
-            var next = Dictionary(fresh.map { ($0.perpId, $0) }, uniquingKeysWith: { first, _ in first })
-            for (perpId, old) in lastPositions where !freshIds.contains(perpId) && stillOpen.contains(perpId) { next[perpId] = old }
-            lastPositions = next
-        }
-        // Gone from the read AND from the account's own position bitmap: closed, not a sub-call that failed.
-        for (perpId, old) in lastPositions where !freshIds.contains(perpId) && !stillOpen.contains(perpId) {
-            trading.positionClosedOnChain(marketId: perpId, isLong: old.side == .long)
-            if let at = userCloses[perpId], Date().timeIntervalSince(at) < 600 { continue }
-            if trading.sawEnding(marketId: perpId) { continue }
-            let asset = markets.first { $0.id == perpId }?.asset ?? old.symbol
-            let side = old.side == .long ? "long" : "short"
-            let size = "\(NumberStyle.number(old.size)) \(asset)"
-            let record = restingCloseMarkets.contains(perpId)
-                ? ActivityRecord(kind: .perp, title: "Close order filled", subtitle: "Your \(asset)-PERP \(side) (\(size)) is closed.", hash: nil, section: "perps")
-                : ActivityRecord(kind: .perp, title: "\(asset)-PERP \(side) closed",
-                                 subtitle: "Your \(size) \(side) is no longer open, and it wasn't closed from this app. It may have hit a take-profit or stop-loss, been liquidated, or been closed on another device. Trade History shows how.",
-                                 hash: nil, section: "perps")
-            Activity.record(record, owner: owner)
-        }
-    }
-
-    /// Compares the fresh positions against the previous snapshot and fires a fill signal + local notification for
-    /// any market whose position opened or grew. Skips the very first snapshot so an already-open position on launch
-    /// isn't reported as a new fill. Only this screen's poll reads positions, so a fill is noticed only while the Perps
-    /// screen is open (security audit 2026-09-26, GL-4: the copy says so).
-    private func detectFills(_ fresh: [PerpPosition]) {
-        let sizes = Dictionary(fresh.map { ($0.perpId, $0.size) }, uniquingKeysWith: +)
-        defer { lastPositionSize = sizes; fillPrimed = true }
-        guard fillPrimed else { return }
-        for position in fresh where position.size > (lastPositionSize[position.perpId] ?? 0) + 1e-9 {
+    /// What changed since the last good read (`PerpPositionWatch`): a position that opened or grew raises the fill
+    /// signal, so the trade screen can jump to Positions; one the account no longer holds has Perpl trading cancel the
+    /// TP/SL it leaves behind, in case the stream's own report was missed (security audit GT-2). Neither posts a notice:
+    /// the app-wide watcher (`AlertCenter`) posts the fill and the close on any screen, including this one.
+    private func detectChanges(_ fresh: [PerpPosition], stillOpen: Set<Int>, trading: PerplTrading) {
+        let changes = watch.update(fresh, stillOpen: stillOpen)
+        for ended in changes.ended { trading.positionClosedOnChain(marketId: ended.perpId, isLong: ended.side == .long) }
+        for position in changes.filled {
             lastFilledPerpId = position.perpId
             fillSignal &+= 1
-            Notifications.perpOrder(.filled, side: position.side == .long ? "Long" : "Short", market: position.symbol)
         }
     }
 }
@@ -238,10 +196,11 @@ struct CollateralSheet: View {
     private var limit: BigUInt { kind == .deposit ? model.collateral.wallet : (model.account.map { $0.balance - min($0.balance, $0.locked) } ?? 0) }
     /// A first deposit with no account yet is really account creation — the plan calls `createAccount`, not `depositCollateral`.
     private var isCreating: Bool { kind == .deposit && model.account == nil }
+    /// What's wrong with the amount, in the app's language.
     private var problem: String? {
         if raw == 0 { return nil }
-        if raw > limit { return kind == .deposit ? "Not enough AUSD in your wallet." : "More than your available balance." }
-        if kind == .deposit, model.account == nil, raw < Perpl.minimumDeposit { return "The first deposit must be at least 10 AUSD." }
+        if raw > limit { return kind == .deposit ? tr("Not enough AUSD in your wallet.") : tr("More than your available balance.") }
+        if kind == .deposit, model.account == nil, raw < Perpl.minimumDeposit { return tr("The first deposit must be at least 10 AUSD.") }
         return nil
     }
 
@@ -249,7 +208,7 @@ struct CollateralSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    AmountField(title: "0", text: $amountText, token: .ausd) { Haptics.selection(); amountText = Amount.exact(limit, decimals: 6) }
+                    AmountField(title: "0" as String, text: $amountText, token: .ausd) { Haptics.selection(); amountText = Amount.exact(limit, decimals: 6) }
                 } header: {
                     Text(isCreating ? "Open your Perpl account" : (kind == .deposit ? "Deposit AUSD" : "Withdraw AUSD"))
                 } footer: {
@@ -257,15 +216,17 @@ struct CollateralSheet: View {
                         // The Perps screen's first run: opening the account is where someone new to Perps starts. A problem
                         // with the amount takes the explanation's place, and the link stays while it's typed.
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(problem ?? "Your first deposit opens your Perpl account. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.")
+                            if let problem { Text(verbatim: problem) }
+                            else { Text("Your first deposit opens your Perpl account. Minimum 10 AUSD. In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD.") }
                             LearnMoreLink(.depositAndWithdraw)
                         }
                     }
-                    else if let problem { Text(problem) }
-                    else { Text("\(kind == .deposit ? "In wallet" : "Available"): \(NumberStyle.units(limit, decimals: 6)) AUSD") }
+                    else if let problem { Text(verbatim: problem) }
+                    else if kind == .deposit { Text("In wallet: \(NumberStyle.units(limit, decimals: 6)) AUSD") }
+                    else { Text("Available: \(NumberStyle.units(limit, decimals: 6)) AUSD") }
                 }
             }
-            .navigationTitle(isCreating ? "Create Account" : (kind == .deposit ? "Deposit" : "Withdraw"))
+            .navigationTitle(isCreating ? tr("Create Account") : (kind == .deposit ? tr("Deposit") : tr("Withdraw")))
             .navigationBarTitleDisplayMode(.inline)
             .keyboardDoneButton()
             .toolbar {
@@ -274,9 +235,9 @@ struct CollateralSheet: View {
             }
             .sheet(isPresented: $showConfirm) {
                 ConfirmationSheet(title: isCreating ? "Create Trading Account" : (kind == .deposit ? "Confirm Deposit" : "Confirm Withdrawal"), confirmTitle: isCreating ? "Create Account" : (kind == .deposit ? "Deposit" : "Withdraw"), build: { kind == .deposit ? env.perpl.depositPlan(amountCNS: raw, hasAccount: model.account != nil) : env.perpl.withdrawPlan(amountCNS: raw) }, onDone: { dismiss(); Task { await model.load(env: env, address: session.address) } },
-                                  onCompleted: { hash in Activity.record(ActivityRecord(kind: kind == .deposit ? .deposit : .withdraw, title: isCreating ? "Opened trading account" : (kind == .deposit ? "Deposited to Perps" : "Withdrew from Perps"), subtitle: "\(NumberStyle.units(raw, decimals: 6)) AUSD", hash: hash, section: "perps", usd: Amount.units(raw, decimals: 6)), owner: session.address) },
+                                  onCompleted: { hash in Activity.record(ActivityRecord(kind: kind == .deposit ? .deposit : .withdraw, title: isCreating ? tr("Opened trading account") : (kind == .deposit ? tr("Deposited to Perps") : tr("Withdrew from Perps")), subtitle: "\(NumberStyle.units(raw, decimals: 6)) AUSD", hash: hash, section: "perps", usd: Amount.units(raw, decimals: 6)), owner: session.address) },
                                   intent: kind == .deposit ? .perplDeposit(amount: raw) : .perplWithdraw) {
-                    DetailRow("Amount", "\(NumberStyle.units(raw, decimals: 6)) AUSD")
+                    DetailRow("Amount", verbatim: "\(NumberStyle.units(raw, decimals: 6)) AUSD")
                     DetailRow(kind == .deposit ? "To" : "From", "Perpl Exchange")
                     if kind == .deposit, model.account == nil { DetailRow("Account", "Opens a new trading account") }
                 }

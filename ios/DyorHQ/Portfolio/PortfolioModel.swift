@@ -20,11 +20,11 @@ final class PortfolioModel {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .spot: return "Spot"
-            case .perps: return "Perps"
-            case .launch: return "Launch"
-            case .moments: return "Moments"
-            case .bridge: return "Bridge"
+            case .spot: return tr(LocalizedStringResource("Spot", comment: "Spot, as against perpetual futures (Perps): the wallet's own tokens, and trading them by swaps [tight]"))
+            case .perps: return tr(LocalizedStringResource("Perps", comment: "Perpetual futures [tight]"))
+            case .launch: return tr(LocalizedStringResource("Launch", comment: "A noun: the Launch tab, the launchpad's coins [tight]"))
+            case .moments: return tr(LocalizedStringResource("Moments", comment: "The Moments feature's name [tight]"))
+            case .bridge: return tr(LocalizedStringResource("Bridge", comment: "A noun: the cross-chain bridge [tight]"))
             }
         }
         var symbol: String {
@@ -135,40 +135,40 @@ final class PortfolioModel {
         for swap in swaps where swap.time >= since {
             let kind = classify(swap)
             let section: Section = kind == .launch ? .launch : kind == .moments ? .moments : .spot
-            out.append(Activity(id: "swap-\(swap.id)", section: section, title: kind == .spot ? "Swapped" : "Traded on \(section.title)", subtitle: SwapHistoryItem.describe(swap, tokens: tokens), time: swap.time, usd: swapUSD(swap), hash: swap.hash))
+            out.append(Activity(id: "swap-\(swap.id)", section: section, title: kind == .spot ? tr("Swapped") : tr("Traded on \(section.title)"), subtitle: SwapHistoryItem.describe(swap, tokens: tokens), time: swap.time, usd: swapUSD(swap), hash: swap.hash))
         }
         for fill in fills where fill.time >= since {
-            out.append(Activity(id: "fill-\(fill.id)", section: .perps, title: "\(fill.direction) \(fill.symbol)", subtitle: "\(NumberStyle.number(fill.size)) at \(NumberStyle.number(fill.price)) · fee \(PriceFormat.usdValue(fill.fee))", time: fill.time, usd: fill.notional, hash: nil))
+            out.append(Activity(id: "fill-\(fill.id)", section: .perps, title: "\(fill.direction) \(fill.symbol)", subtitle: tr("\(NumberStyle.number(fill.size)) at \(NumberStyle.number(fill.price)) · fee \(PriceFormat.usdValue(fill.fee))"), time: fill.time, usd: fill.notional, hash: nil))
         }
         for f in launchHistory.fills where f.time >= since {
             let launch = launchesByCurve[f.curve]
             let symbol = launch?.symbol ?? f.curve.short
             let pair = launch?.pair
             let quote = pair.map { "\(NumberStyle.units(f.quoteAmount, decimals: $0.decimals, compact: true)) \($0.symbol)" } ?? ""
-            out.append(Activity(id: "curve-\(f.id)", section: .launch, title: f.isBuy ? "Bought \(symbol)" : "Sold \(symbol)", subtitle: "\(NumberStyle.units(f.tokenAmount, decimals: 18, compact: true)) \(symbol) · \(quote)", time: f.time, usd: launchQuoteUSD(f), hash: f.hash))
+            out.append(Activity(id: "curve-\(f.id)", section: .launch, title: f.isBuy ? tr("Bought \(symbol)") : tr("Sold \(symbol)"), subtitle: "\(NumberStyle.units(f.tokenAmount, decimals: 18, compact: true)) \(symbol) · \(quote)", time: f.time, usd: launchQuoteUSD(f), hash: f.hash))
         }
         for c in launchHistory.claims where c.time >= since {
             let usd = claimUSD(c)
-            out.append(Activity(id: "lclaim-\(c.id)", section: .launch, title: c.kind == .creatorFees ? "Claimed creator fees" : "Claimed holder rewards", subtitle: c.launchToken.flatMap { launchesByToken[$0]?.symbol }.map { "$\($0)" } ?? "", time: c.time, usd: usd, hash: c.hash))
+            out.append(Activity(id: "lclaim-\(c.id)", section: .launch, title: c.kind == .creatorFees ? tr("Claimed creator fees") : tr("Claimed holder rewards"), subtitle: c.launchToken.flatMap { launchesByToken[$0]?.symbol }.map { "$\($0)" } ?? "", time: c.time, usd: usd, hash: c.hash))
         }
         for c in momentsHistory.collects where c.time >= since {
             let m = momentsByKey[c.key]
-            out.append(Activity(id: "collect-\(c.id)", section: .moments, title: "Collected \(m?.name ?? "Moment #\(c.momentId)")", subtitle: "\(c.editions) \(c.editions == 1 ? "edition" : "editions") · \(NumberStyle.number(MomentsMath.coins(c.entitlement), compact: true)) \(m?.symbol ?? "coins")", time: c.time, usd: MomentsMath.usdc(c.gross), hash: c.hash))
+            out.append(Activity(id: "collect-\(c.id)", section: .moments, title: tr("Collected \(m?.name ?? tr("Moment #\(String(c.momentId))"))"), subtitle: tr("\(c.editions) editions · \(NumberStyle.number(MomentsMath.coins(c.entitlement), compact: true)) \(m?.symbol ?? tr("coins"))"), time: c.time, usd: MomentsMath.usdc(c.gross), hash: c.hash))
         }
         for c in momentsHistory.claims where c.time >= since {
             let m = momentsByKey[c.key]
-            out.append(Activity(id: "mclaim-\(c.id)", section: .moments, title: "Claimed \(m?.symbol ?? "coins")", subtitle: "\(NumberStyle.number(MomentsMath.coins(c.total), compact: true)) \(m?.symbol ?? "") vested", time: c.time, usd: m?.pool.map { MomentsMath.coins(c.total) * $0.usdcPerCoin }, hash: c.hash))
+            out.append(Activity(id: "mclaim-\(c.id)", section: .moments, title: m.map { tr("Claimed \($0.symbol)") } ?? tr("Claimed coins"), subtitle: tr("\(NumberStyle.number(MomentsMath.coins(c.total), compact: true)) \(m?.symbol ?? "") vested"), time: c.time, usd: m?.pool.map { MomentsMath.coins(c.total) * $0.usdcPerCoin }, hash: c.hash))
         }
         for w in momentsHistory.withdrawals where w.time >= since {
             let m = momentsByKey[w.key]
-            out.append(Activity(id: "mwd-\(w.id)", section: .moments, title: w.kind == .poolFees ? "Withdrew pool fees" : "Withdrew proceeds", subtitle: m?.name ?? "Moment #\(w.momentId)", time: w.time, usd: MomentsMath.usdc(w.amount), hash: w.hash))
+            out.append(Activity(id: "mwd-\(w.id)", section: .moments, title: w.kind == .poolFees ? tr("Withdrew pool fees") : tr("Withdrew proceeds"), subtitle: m?.name ?? tr("Moment #\(String(w.momentId))"), time: w.time, usd: MomentsMath.usdc(w.amount), hash: w.hash))
         }
         for p in momentsHistory.publishes where p.time >= since {
             let m = momentsByKey[p.key]
-            out.append(Activity(id: "pub-\(p.id)", section: .moments, title: "Published \(m?.name ?? "Moment #\(p.momentId)")", subtitle: m.map { "$\($0.symbol)" } ?? "", time: p.time, usd: nil, hash: p.hash))
+            out.append(Activity(id: "pub-\(p.id)", section: .moments, title: tr("Published \(m?.name ?? tr("Moment #\(String(p.momentId))"))"), subtitle: m.map { "$\($0.symbol)" } ?? "", time: p.time, usd: nil, hash: p.hash))
         }
         for b in BridgeStore.all(owner: loadedFor) where b.time >= since {
-            out.append(Activity(id: "bridge-\(b.id)", section: .bridge, title: "Bridged \(b.inSymbol) → \(b.outSymbol)", subtitle: "\(b.fromChain) → \(b.toChain)", time: b.time, usd: b.usd, hash: nil))
+            out.append(Activity(id: "bridge-\(b.id)", section: .bridge, title: tr("Bridged \(b.inSymbol) → \(b.outSymbol)"), subtitle: "\(b.fromChain) → \(b.toChain)", time: b.time, usd: b.usd, hash: nil))
         }
         return out.sorted { $0.time > $1.time }
     }
@@ -192,7 +192,7 @@ final class PortfolioModel {
         if Self.stables.contains(swap.soldToken) { return units(swap.soldToken, swap.soldAmount) }
         if Self.stables.contains(swap.boughtToken) { return units(swap.boughtToken, swap.boughtAmount) }
         if let price = prices[swap.soldToken] { return units(swap.soldToken, swap.soldAmount) * price }
-        if let price = prices[swap.boughtToken] { return units(swap.boughtToken, swap.boughtAmount) * price }
+        if !swap.boughtNativeUnknown, let price = prices[swap.boughtToken] { return units(swap.boughtToken, swap.boughtAmount) * price }
         return nil
     }
 
@@ -207,6 +207,9 @@ final class PortfolioModel {
             let usd = swapUSD(swap)
             stats.volume += usd ?? 0
             if kind == .moments, let usd { stats.fees += usd * Double(MomentsConstants.totalTradeFeeBps) / 10_000 }
+            // A sale into MON whose MON couldn't be read counts in volume, not in P&L: as "0 MON" it read as a loss of
+            // everything sold. The P&L says it is incomplete.
+            if swap.boughtNativeUnknown { stats.pnlComplete = false; continue }
             if Self.stables.contains(swap.soldToken) { spent += units(swap.soldToken, swap.soldAmount) } else { deltas[swap.soldToken, default: 0] -= units(swap.soldToken, swap.soldAmount) }
             if Self.stables.contains(swap.boughtToken) { received += units(swap.boughtToken, swap.boughtAmount) } else { deltas[swap.boughtToken, default: 0] += units(swap.boughtToken, swap.boughtAmount) }
         }
@@ -395,7 +398,7 @@ final class PortfolioModel {
         loadedFor = address
         hasLoaded = true
         if !listing.complete || fetchedMoments == nil || !retired.complete || head == nil || fetchedPrices == nil {
-            error = "Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh."
+            error = tr("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.")
             updatedAt = nil
         } else {
             error = nil
@@ -421,14 +424,14 @@ final class PortfolioModel {
 
     /// Perpl history needs the account's API key (one-click trading); up to 1,000 fills and 1,000 closed events.
     private func loadPerps(env: AppEnvironment, key: PerplApiKey?) async -> (fills: [PerplFill], closed: [PerplPositionRecord], note: String?) {
-        guard let key else { return ([], [], "Enable one-click trading in Profile → Perpl Trading to include your perps history.") }
-        guard let markets = try? await env.perpl.markets(), !markets.isEmpty else { return (fills, closed, "Perpl markets could not be loaded.") }
+        guard let key else { return ([], [], tr("Enable one-click trading in Profile → Perpl Trading to include your perps history.")) }
+        guard let markets = try? await env.perpl.markets(), !markets.isEmpty else { return (fills, closed, tr("Perpl markets could not be loaded.")) }
         do {
             let fills = try await Self.page(maxPages: 10) { try await env.perpl.fills(key: key, markets: markets, count: 100, cursor: $0) }
             let closed = try await Self.page(maxPages: 10) { try await env.perpl.positionHistory(key: key, markets: markets, count: 100, cursor: $0) }
             return (fills, closed, nil)
         } catch {
-            return (self.fills, self.closed, "Perpl history: \(describe(error))")
+            return (self.fills, self.closed, tr("Perpl history: \(describe(error))"))
         }
     }
 

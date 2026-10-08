@@ -82,9 +82,9 @@ public enum NetworkFeeLimits {
         let fee = "\(NumberStyle.units(gasLimit * maxFeePerGas, decimals: 18)) \(symbol)"
         switch violation {
         case .gasLimit, .total:
-            return "The network asked for an unusually high fee (up to \(fee)), so nothing was signed. Try again in a moment."
+            return L10n.tr("The network asked for an unusually high fee (up to \(fee)), so nothing was signed. Try again in a moment.")
         case .feePerGas, .tip:
-            return "The network quoted an unusual gas price, so nothing was signed. Try again in a moment."
+            return L10n.tr("The network quoted an unusual gas price, so nothing was signed. Try again in a moment.")
         }
     }
 

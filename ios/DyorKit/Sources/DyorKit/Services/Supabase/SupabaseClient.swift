@@ -26,17 +26,18 @@ public enum SupabaseError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .http(let code, let body):
-            if code == 500, body.contains("APP_JWT_SECRET") { return "Sign-in isn't finished on the server yet (APP_JWT_SECRET not set)." }
-            if (500...599).contains(code) { return "DyorHQ's server isn't answering right now (\(code)). Try again in a minute." }
-            return "Supabase request failed (\(code))."
-        case .notSignedIn: return "Sign in to DyorHQ to continue."
-        case .decoding(let what): return "Could not read \(what) from the server."
+            if code == 500, body.contains("APP_JWT_SECRET") { return L10n.tr("Sign-in isn't finished on the server yet (APP_JWT_SECRET not set).") }
+            if (500...599).contains(code) { return L10n.tr("DyorHQ's server isn't answering right now (\(String(code))). Try again in a minute.") }
+            return L10n.tr("Supabase request failed (\(String(code))).")
+        case .notSignedIn: return L10n.tr("Sign in to DyorHQ to continue.")
+        case .decoding(let what): return L10n.tr("Could not read \(what) from the server.")
         case .signInRejected(let reason):
-            if reason.contains("nonce") { return "That sign-in expired or was already used. Please try again." }
-            return reason.isEmpty ? "Sign-in was refused. Please try again." : "Sign-in was refused (\(reason)). Please try again."
+            // not localized: the server's own English reason, matched as it sends it
+            if reason.contains("nonce") { return L10n.tr("That sign-in expired or was already used. Please try again.") }
+            return reason.isEmpty ? L10n.tr("Sign-in was refused. Please try again.") : L10n.tr("Sign-in was refused (\(reason)). Please try again.")
         case .rateLimited(let retryAfter):
-            guard let seconds = retryAfter, seconds > 0 else { return "Too many attempts. Please wait a few minutes and try again." }
-            return "Too many attempts. Try again in \(max(1, (seconds + 59) / 60)) min."
+            guard let seconds = retryAfter, seconds > 0 else { return L10n.tr("Too many attempts. Please wait a few minutes and try again.") }
+            return L10n.tr("Too many attempts. Try again in \(String(max(1, (seconds + 59) / 60))) min.")
         }
     }
 
@@ -63,9 +64,9 @@ public enum EmailPepperError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .verificationRequired: return "Too many attempts for this email. Verify your email to continue."
-        case .verificationExpired: return "Your email verification expired. Verify your email again to continue."
-        case .verificationMismatch: return "That verification was for a different email. Verify this email to continue."
+        case .verificationRequired: return L10n.tr("Too many attempts for this email. Verify your email to continue.")
+        case .verificationExpired: return L10n.tr("Your email verification expired. Verify your email again to continue.")
+        case .verificationMismatch: return L10n.tr("That verification was for a different email. Verify this email to continue.")
         }
     }
 }
@@ -126,7 +127,7 @@ public actor SupabaseClient {
         let body = try JSONSerialization.data(withJSONObject: ["address": address, "message": message, "signature": signature])
         let data = try await walletAuth(body)
         struct AuthResponse: Decodable { let access_token: String; let expires_in: Int; let wallet: String }
-        guard let response = try? JSONDecoder().decode(AuthResponse.self, from: data) else { throw SupabaseError.decoding("the sign-in response") }
+        guard let response = try? JSONDecoder().decode(AuthResponse.self, from: data) else { throw SupabaseError.decoding(L10n.string(LocalizedStringResource("the sign-in response", bundle: L10n.kit, comment: "What the app could not read, completing “Could not read <this> from the server.”"))) }
         let created = SupabaseSession(accessToken: response.access_token, wallet: response.wallet, expiresAt: Date().addingTimeInterval(Double(response.expires_in)))
         if adopt { current = created }
         return created
@@ -137,6 +138,7 @@ public actor SupabaseClient {
     /// milliseconds). The server's parse is anchored, so not a byte may differ: `address` is the wallet with its EIP-55
     /// checksum, lines are separated by a single "\n", and there is no trailing newline.
     public static func signInMessage(address: String, nonce: String, issuedAt: Int) -> String {
+        // not localized: the message the server parses, byte for byte, in every language
         [
             "\(signInDomain) wants you to sign in with your Ethereum account:",
             address,
@@ -199,7 +201,7 @@ public actor SupabaseClient {
         let data = try await walletAuth(body)
         struct NonceResponse: Decodable { let nonce: String }
         guard let nonce = try? JSONDecoder().decode(NonceResponse.self, from: data).nonce, Self.isHex32Bytes(nonce) else {
-            throw SupabaseError.decoding("the sign-in nonce")
+            throw SupabaseError.decoding(L10n.string(LocalizedStringResource("the sign-in nonce", bundle: L10n.kit, comment: "What the app could not read, completing “Could not read <this> from the server.”")))
         }
         return nonce
     }
@@ -303,6 +305,7 @@ public actor SupabaseClient {
         guard case .http(let code, let body)? = error as? SupabaseError else { return false }
         if code == 409 { return true }
         guard code == 400, let object = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any] else { return false }
+        // not localized: Storage's own English, matched as it sends it
         return (object["statusCode"].map { "\($0)" } == "409") || (object["error"] as? String) == "Duplicate"
     }
 
@@ -384,7 +387,7 @@ public actor SupabaseClient {
         }
         struct Response: Decodable { let uri: String }
         guard let response = try? JSONDecoder().decode(Response.self, from: data), response.uri.hasPrefix("ipfs://") else {
-            throw SupabaseError.decoding("the pin-media response")
+            throw SupabaseError.decoding(L10n.string(LocalizedStringResource("the pin-media response", bundle: L10n.kit, comment: "What the app could not read, completing “Could not read <this> from the server.”")))
         }
         return response.uri
     }
@@ -415,7 +418,7 @@ public actor SupabaseClient {
         }
         struct Response: Decodable { let p: String }
         guard let p = try? JSONDecoder().decode(Response.self, from: data).p, Self.isHex32Bytes(p), let pepper = Data(hex: p) else {
-            throw SupabaseError.decoding("the email pepper")
+            throw SupabaseError.decoding(L10n.string(LocalizedStringResource("the email pepper", bundle: L10n.kit, comment: "What the app could not read, completing “Could not read <this> from the server.”")))
         }
         return pepper
     }
@@ -465,6 +468,7 @@ public actor SupabaseClient {
     /// `email-pepper`'s 400s for a proof that doesn't cover the e it was sent with.
     private static func isProofMismatch(_ text: String) -> Bool {
         let reason = serverField(text, "error") as? String
+        // not localized: email-pepper's own English, matched as it sends it
         return reason == "the verified email does not match" || reason == "no verified email on this Privy account"
     }
 

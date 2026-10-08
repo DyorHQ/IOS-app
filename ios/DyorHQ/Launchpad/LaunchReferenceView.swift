@@ -33,7 +33,7 @@ struct LaunchReferenceView: View {
                     ProgressView("Opening launch…")
                 }
             }
-            .navigationTitle("Launch")
+            .navigationTitle(tr("Launch"))
             .navigationBarTitleDisplayMode(.inline)
             .task(id: reference) { await load() }
         }

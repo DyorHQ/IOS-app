@@ -38,7 +38,7 @@ struct PortfolioView: View {
                 .padding(.vertical, 12)
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Portfolio")
+            .navigationTitle(tr("Portfolio"))
             .navigationBarTitleDisplayMode(.inline)
             // A retired-cohort Moment opens its claim-only page, read from its own cohort (keyed by factory, id).
             .navigationDestination(for: PastMomentRoute.self) { route in
@@ -49,7 +49,8 @@ struct PortfolioView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }.accessibilityLabel("Close")
+                    Button { Haptics.tap(); dismiss() } label: { Image(systemName: "xmark").fontWeight(.semibold) }
+                        .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -118,7 +119,7 @@ struct PortfolioView: View {
         .cardBackground()
     }
 
-    private func metric(_ title: String, _ value: String, tint: Color) -> some View {
+    private func metric(_ title: LocalizedStringKey, _ value: String, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.headline).monospacedDigit().foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7)
@@ -213,14 +214,14 @@ struct PortfolioView: View {
             if section == .perps, let note = model.perpsNote {
                 Text(note).font(.caption2).foregroundStyle(.secondary)
             } else if section != .perps {
-                Text("\(stats.trades) \(stats.trades == 1 ? "trade" : "trades") in the period").font(.caption2).foregroundStyle(.tertiary)
+                Text("\(stats.trades) trades in the period").font(.caption2).foregroundStyle(.tertiary)
             }
         }
         .padding(16)
         .cardBackground()
     }
 
-    private func small(_ title: String, _ value: String, tint: Color = .primary) -> some View {
+    private func small(_ title: LocalizedStringKey, _ value: String, tint: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.caption2).foregroundStyle(.secondary)
             Text(value).font(.footnote.weight(.semibold)).monospacedDigit().foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.6)
@@ -237,7 +238,7 @@ struct PortfolioView: View {
             HStack {
                 Text("Activity").font(.headline)
                 Spacer()
-                Text("\(items.count)").font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: "\(items.count)").font(.caption).foregroundStyle(.secondary)
             }
             if items.isEmpty {
                 Text(model.hasLoaded ? "Nothing in this period." : "Loading…").font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)

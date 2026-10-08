@@ -51,6 +51,10 @@ struct PerpTradeView: View {
     /// The order as it stood when Review was tapped: the review renders it and the plan signs it, so a mark that moves
     /// under an open review (a USD-sized order re-derives its size from the price) can't change one without the other.
     @State private var reviewInput: OrderInput?
+    /// The side of the position the order under review closes, as the account held it when Review was tapped
+    /// (`PerpCloseOrder.closes`): a reduce-only order, or one on the other side of the position, which Perpl nets against
+    /// it. Noted once the order is sent, so its ending is not reported as a close from elsewhere.
+    @State private var reviewCloses: PositionSide?
     @State private var showLeverage = false
     @State private var showOrderType = false
     @State private var showUnitPref = false
@@ -70,10 +74,40 @@ struct PerpTradeView: View {
     @State private var loadingFills = false
     @State private var fillsError: String?
 
-    enum ViewMode: String, CaseIterable, Identifiable { case chart = "Chart", trade = "Trade"; var id: String { rawValue } }
-    enum ChartDataTab: String, CaseIterable, Identifiable { case book = "Order Book", trades = "Trades"; var id: String { rawValue } }
-    enum BottomTab: String, CaseIterable, Identifiable { case positions = "Positions", orders = "Orders", assets = "Assets", history = "Trade History"; var id: String { rawValue } }
-    enum PriceType: String, CaseIterable, Identifiable { case last = "Last", mid = "Mid"; var id: String { rawValue } }
+    // The raw values are identifiers; each tab's name on screen is its `title`.
+    enum ViewMode: String, CaseIterable, Identifiable { case chart = "Chart", trade = "Trade"; var id: String { rawValue } } // not localized: identifiers
+    enum ChartDataTab: String, CaseIterable, Identifiable {
+        case book = "Order Book", trades = "Trades" // not localized: identifiers
+        var id: String { rawValue }
+        var title: Text {
+            switch self {
+            case .book: Text("Order Book", comment: "A tab under the chart: the market's bids and asks. [tight]")
+            case .trades: Text("Trades", comment: "Trades: a tab under the Perps chart with the market's latest trades, and a count of trades on Portfolio [tight]")
+            }
+        }
+    }
+    enum BottomTab: String, CaseIterable, Identifiable {
+        case positions = "Positions", orders = "Orders", assets = "Assets", history = "Trade History" // not localized: identifiers
+        var id: String { rawValue }
+        var title: Text {
+            switch self {
+            case .positions: Text("Positions", comment: "A tab of the Perps screen: the open positions. [tight]")
+            case .orders: Text("Orders", comment: "A tab of the Perps screen: the open orders. [tight]")
+            case .assets: Text("Assets", comment: "A tab: in My Holdings the tokens held, on Perps the trading account's balance [tight]")
+            case .history: Text("Trade History", comment: "A tab of the Perps screen: this market's past trades. [tight]")
+            }
+        }
+    }
+    enum PriceType: String, CaseIterable, Identifiable {
+        case last = "Last", mid = "Mid" // not localized: identifiers
+        var id: String { rawValue }
+        var title: Text {
+            switch self {
+            case .last: Text("Last", comment: "The price a limit order starts from: the last traded price. [tight]")
+            case .mid: Text("Mid", comment: "The price a limit order starts from: the middle of the order book. [tight]")
+            }
+        }
+    }
 
     private var position: PerpPosition? { model.positions.first { $0.perpId == market.id } }
     private var live: PerplLiveState? { feed.state }
@@ -139,7 +173,7 @@ struct PerpTradeView: View {
         .onChange(of: ticket.reduceOnly) { _, on in if on { ticket.tpslEnabled = false } }
         .onChange(of: bottomTab) { _, tab in if tab == .history { Task { await loadFills() } } }
         .onChange(of: model.fillSignal) { _, _ in if model.lastFilledPerpId == market.id { Task { await loadFills() } } }
-        .sheet(isPresented: $showConfirm, onDismiss: { reviewInput = nil }) { orderConfirmSheet }
+        .sheet(isPresented: $showConfirm, onDismiss: { reviewInput = nil; reviewCloses = nil }) { orderConfirmSheet }
         .sheet(isPresented: $showLeverage) {
             LeverageSheet(leverage: ticket.leverage, maxLeverage: maxLeverage) { chosen in
                 ticket.leverage = chosen
@@ -180,7 +214,7 @@ struct PerpTradeView: View {
         .sheet(isPresented: $showPortfolio) { PerpsPortfolioView(model: model) }
         .sheet(item: $closingPosition) { position in
             ClosePositionSheet(market: market, position: position, mark: mark, leftoverTriggers: triggersProtecting(position),
-                               onSending: { model.noteUserClose(market.id) }, onNotSent: { model.forgetUserClose(market.id) }) {
+                               onSending: { model.noteUserClose(market.id, closing: position.side) }, onNotSent: { model.forgetUserClose(market.id) }) {
                 Task { await model.load(env: env, address: session.address) }
             }
         }
@@ -243,10 +277,11 @@ struct PerpTradeView: View {
             if let abs = change24hAbs {
                 Text(PriceFormat.usdPrice(abs, signed: true))
             }
-            if change24hAbs != nil, change24h != nil { Text("/") }
+            if change24hAbs != nil, change24h != nil { Text(verbatim: "/") }
             if let pct = change24h { Text(NumberStyle.percent(pct)) }
         }
         .font(.footnote.weight(.medium)).monospacedDigit()
+        .lineLimit(1).minimumScaleFactor(0.7) // one line: a signed dollar figure wrapped after its "−"
         .foregroundStyle(tint)
     }
 
@@ -304,7 +339,7 @@ struct PerpTradeView: View {
                 }
             timeframePicker
             Picker("Data", selection: $chartDataTab) {
-                ForEach(ChartDataTab.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(ChartDataTab.allCases) { $0.title.tag($0) }
             }
             .pickerStyle(.segmented)
             switch chartDataTab {
@@ -317,14 +352,22 @@ struct PerpTradeView: View {
         }
     }
 
-    /// The chart in words: the period, the last price, the change over the period, and its range.
+    /// The chart in words, in the app's language: the period, the last price, the change over the period, and its range.
+    /// The candle count is a plural.
     private var chartSummary: String {
-        guard let first = shownCandles.first, let last = shownCandles.last else { return loadingCandles ? "Loading" : candlesFailed ? "Couldn't load the chart" : "No candle history yet" }
+        guard let first = shownCandles.first, let last = shownCandles.last else {
+            return loadingCandles ? tr("Loading") : candlesFailed ? tr("Couldn't load the chart") : tr("No candle history yet")
+        }
         let span = Self.resolutions.first { $0.0 == resolution }?.1 ?? ""
-        let high = shownCandles.map(\.high).max() ?? last.high
-        let low = shownCandles.map(\.low).min() ?? last.low
+        let high = NumberStyle.number(shownCandles.map(\.high).max() ?? last.high)
+        let low = NumberStyle.number(shownCandles.map(\.low).min() ?? last.low)
         let change = first.open > 0 ? (last.close - first.open) / first.open * 100 : 0
-        return "\(shownCandles.count) \(span) candles. Last \(NumberStyle.number(last.close)), \(change >= 0 ? "up" : "down") \(NumberStyle.percent(abs(change), signed: false)) over the period. High \(NumberStyle.number(high)), low \(NumberStyle.number(low))."
+        let close = NumberStyle.number(last.close)
+        let move = NumberStyle.percent(abs(change), signed: false)
+        let count = shownCandles.count
+        return change >= 0
+            ? tr("\(count) \(span) candles. Last \(close), up \(move) over the period. High \(high), low \(low).")
+            : tr("\(count) \(span) candles. Last \(close), down \(move) over the period. High \(high), low \(low).")
     }
 
     private var timeframePicker: some View {
@@ -340,7 +383,15 @@ struct PerpTradeView: View {
         }
     }
 
-    static let resolutions: [(Int, String)] = [(60, "1m"), (300, "5m"), (900, "15m"), (3600, "1h"), (14400, "4h"), (86400, "1D")]
+    /// The chart's timeframes in seconds, each with its label in the app's language (written as trading charts write them).
+    static var resolutions: [(Int, String)] {
+        [(60, tr(LocalizedStringResource("1m", comment: "Chart timeframe: one minute. [tight]"))),
+         (300, tr(LocalizedStringResource("5m", comment: "Chart timeframe: five minutes. [tight]"))),
+         (900, tr(LocalizedStringResource("15m", comment: "Chart timeframe: fifteen minutes. [tight]"))),
+         (3600, tr(LocalizedStringResource("1h", comment: "Chart timeframe: one hour. [tight]"))),
+         (14400, tr(LocalizedStringResource("4h", comment: "Chart timeframe: four hours. [tight]"))),
+         (86400, tr(LocalizedStringResource("1D", comment: "Chart timeframe: one day. [tight]")))]
+    }
 
     // MARK: Trade grid — order ticket beside the live book
 
@@ -358,10 +409,11 @@ struct PerpTradeView: View {
 
     private var fundingPanel: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("Funding (1h) / Countdown").font(.caption2).foregroundStyle(.secondary)
+            Text("Funding (1h) / Countdown", comment: "Over the funding rate and the time to the next funding, in a narrow column. [tight]")
+                .font(.caption2).foregroundStyle(.secondary)
             HStack(spacing: 4) {
                 Text(fundingText).foregroundStyle(fundingTint)
-                Text("/").foregroundStyle(.secondary)
+                Text(verbatim: "/").foregroundStyle(.secondary)
                 // A 1s timeline so the countdown ticks smoothly instead of only refreshing on incidental re-renders.
                 TimelineView(.periodic(from: .now, by: 1)) { ctx in
                     Text(countdownText(now: ctx.date)).foregroundStyle(.primary)
@@ -381,7 +433,7 @@ struct PerpTradeView: View {
                 // button beside it — Perpl only offers isolated margin, so there's nothing to toggle.
                 HStack(spacing: 5) {
                     Image(systemName: "lock.fill").font(.caption2)
-                    Text("Isolated").font(.subheadline.weight(.semibold))
+                    Text("Isolated", comment: "Isolated margin: Perpl's only margin mode. [tight]").font(.subheadline.weight(.semibold))
                 }
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity).padding(.vertical, 10)
@@ -392,7 +444,7 @@ struct PerpTradeView: View {
                 Button {
                     Haptics.selection(); showLeverage = true
                 } label: {
-                    Text("\(NumberStyle.number(ticket.leverage, maximumFractionDigits: ticket.leverage.truncatingRemainder(dividingBy: 1) == 0 ? 0 : 1))x")
+                    Text(verbatim: "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: ticket.leverage.truncatingRemainder(dividingBy: 1) == 0 ? 0 : 1))x")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity).padding(.vertical, 10)
                         .background(Color(.tertiarySystemFill), in: Capsule())
@@ -406,7 +458,7 @@ struct PerpTradeView: View {
             HStack {
                 Text("Available").font(.subheadline).foregroundStyle(.secondary)
                 Spacer(minLength: 6)
-                Text("\(NumberStyle.number(availableMargin, maximumFractionDigits: 2)) AUSD")
+                Text(verbatim: "\(NumberStyle.number(availableMargin, maximumFractionDigits: 2)) AUSD")
                     .font(.subheadline.weight(.medium)).monospacedDigit()
                 Button {
                     Haptics.selection(); showDeposit = true
@@ -422,7 +474,8 @@ struct PerpTradeView: View {
             HStack(spacing: 8) {
                 Button { Haptics.selection(); showOrderType = true } label: {
                     HStack {
-                        Text(ticket.kind == .market ? "Market" : "Limit").fontWeight(.semibold)
+                        (ticket.kind == .market ? Text("Market", comment: "Order type: a market order, which fills at once at the market price. [tight]")
+                                                : Text("Limit", comment: "Order type: rests at the price you set until it fills. [tight]")).fontWeight(.semibold)
                         Image(systemName: "chevron.down").font(.caption2)
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 11)
@@ -431,7 +484,7 @@ struct PerpTradeView: View {
                 .buttonStyle(.plain).foregroundStyle(.primary)
                 if ticket.kind == .limit {
                     Button { Haptics.selection(); showPriceType = true } label: {
-                        Text(priceType.rawValue).font(.subheadline.weight(.semibold))
+                        priceType.title.font(.subheadline.weight(.semibold))
                             .padding(.horizontal, 14).padding(.vertical, 11)
                             .background(Color.brand.opacity(0.15), in: Capsule())
                             .foregroundStyle(Color.brand)
@@ -554,14 +607,14 @@ struct PerpTradeView: View {
         HStack {
             Text("Slippage").font(.caption).foregroundStyle(.secondary)
             Spacer()
-            TextField("0.5", text: Binding(
+            TextField("0.5" as String, text: Binding(
                 get: { ticket.slippageBps == 0 ? "" : NumberStyle.number(Double(ticket.slippageBps) / 100, maximumFractionDigits: 2) },
                 // 0 (the default) to 50%, as the swap slippage sheet: never negative, never past 100%, never a trap.
                 set: { ticket.slippageBps = min(5_000, max(0, Int(exactly: (($0.perpDouble ?? 0) * 100).rounded(.towardZero)) ?? 0)) }
             ))
             .keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
             .font(.caption.weight(.medium)).frame(width: 60)
-            Text("%").font(.caption).foregroundStyle(.secondary)
+            Text(verbatim: "%").font(.caption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 8).padding(.horizontal, 12)
         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -578,7 +631,7 @@ struct PerpTradeView: View {
         }
     }
 
-    private func checkRow(_ label: String, isOn: Binding<Bool>) -> some View {
+    private func checkRow(_ label: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
         Button {
             Haptics.selection(); isOn.wrappedValue.toggle()
         } label: {
@@ -598,7 +651,7 @@ struct PerpTradeView: View {
         .accessibilityAddTraits(isOn.wrappedValue ? [.isButton, .isSelected] : .isButton)
     }
 
-    private func summaryRow(_ label: String, _ value: String, tint: Color? = nil) -> some View {
+    private func summaryRow(_ label: LocalizedStringKey, _ value: String, tint: Color? = nil) -> some View {
         HStack {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
             Spacer(minLength: 8)
@@ -612,19 +665,19 @@ struct PerpTradeView: View {
 
     private var longShortButtons: some View {
         VStack(spacing: 10) {
-            sideButton(.long, "Long", .positive)
-            sideButton(.short, "Short", .negative)
+            sideButton(.long, Text("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]"), .positive)
+            sideButton(.short, Text("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]"), .negative)
             if !session.canSign {
                 Text("Sign in to trade.").font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity)
             }
         }
     }
 
-    private func sideButton(_ side: PositionSide, _ label: String, _ color: Color) -> some View {
+    private func sideButton(_ side: PositionSide, _ label: Text, _ color: Color) -> some View {
         Button {
             attemptOrder(side)
         } label: {
-            Text(label)
+            label
                 .font(.headline.weight(.semibold))
                 .frame(maxWidth: .infinity).padding(.vertical, 15)
                 .foregroundStyle(Color.onStatus)
@@ -647,6 +700,7 @@ struct PerpTradeView: View {
         }
         ticketError = nil
         reviewInput = ticket.input(market: market, refPrice: refPrice)
+        reviewCloses = PerpCloseOrder.closes(orderSide: side, reduceOnly: ticket.effectiveReduceOnly, held: position?.side)
         Haptics.commit()
         // Use the authenticated path when the socket is live, OR when the wallet has an enrolled key and the user wants
         // TP/SL (its submit awaits ensureConnected()); otherwise the on-chain path. Decided here, once per confirmation.
@@ -668,7 +722,9 @@ struct PerpTradeView: View {
         }
         for (kind, text) in [(PerplTriggerKind.takeProfit, ticket.takeProfitText), (.stopLoss, ticket.stopLossText)] {
             guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
-            guard let price = text.perpDouble else { return "Enter the \(kind == .takeProfit ? "take-profit" : "stop-loss") as a number, or leave it empty." }
+            guard let price = text.perpDouble else {
+                return kind == .takeProfit ? tr("Enter the take-profit as a number, or leave it empty.") : tr("Enter the stop-loss as a number, or leave it empty.")
+            }
             if kind == .stopLoss, market.maintMarginFraction == nil { return PerplTriggerRules.liquidationUnknownMessage }
             if let problem = PerplTriggerRules.problem(kind, price: price, side: side, reference: refPrice, liquidation: projectedLiquidation(side: side), priceDecimals: market.priceDecimals) {
                 return problem.message(market: market)
@@ -702,7 +758,7 @@ struct PerpTradeView: View {
                     ForEach(rows) { row in
                         TriggerCard(row: row, mark: mark) {
                             guard let order = row.order else { return }
-                            cancellingTriggers = TriggerCancelRequest(orders: [order], title: "Cancel \(row.kind.label)", note: nil)
+                            cancellingTriggers = TriggerCancelRequest(orders: [order], title: row.kind == .takeProfit ? "Cancel Take Profit" : "Cancel Stop Loss", note: nil)
                         }
                     }
                 }
@@ -729,7 +785,7 @@ struct PerpTradeView: View {
                 Button {
                     if bottomTab != tab { Haptics.selection(); withAnimation(.easeInOut(duration: 0.15)) { bottomTab = tab } }
                 } label: {
-                    Text(tab.rawValue)
+                    tab.title
                         .font(.subheadline.weight(active ? .semibold : .regular))
                         .foregroundStyle(active ? Color.primary : Color.secondary)
                         .frame(maxWidth: .infinity)
@@ -764,10 +820,10 @@ struct PerpTradeView: View {
         let orphans = orphanedTriggers
         if !orphans.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Label("\(orphans.count) TP/SL on \(market.asset) \(orphans.count == 1 ? "has" : "have") no position to close. Left armed, \(orphans.count == 1 ? "it" : "they") would fire on your next position here.",
+                Label("\(orphans.count) TP/SL on \(market.asset) have no position to close. Left armed, they would fire on your next position here.",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote).foregroundStyle(Color.attention)
-                Button("Cancel \(orphans.count == 1 ? "It" : "Them")") {
+                Button(orphans.count == 1 ? "Cancel It" : "Cancel Them") {
                     cancellingTriggers = TriggerCancelRequest(orders: orphans, title: "Leftover TP/SL", note: "There is no open position on \(market.asset) for these to close.")
                 }
                 .buttonStyle(.bordered).controlSize(.small).tint(.negative)
@@ -803,7 +859,7 @@ struct PerpTradeView: View {
         }
     }
 
-    private func emptyRow(_ text: String) -> some View {
+    private func emptyRow(_ text: LocalizedStringKey) -> some View {
         Text(text).font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 30)
     }
 
@@ -851,7 +907,7 @@ struct PerpTradeView: View {
         .padding(.vertical, 10)
     }
 
-    private func historyStat(_ label: String, _ value: String, align: HorizontalAlignment) -> some View {
+    private func historyStat(_ label: LocalizedStringKey, _ value: String, align: HorizontalAlignment) -> some View {
         VStack(alignment: align, spacing: 1) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
             Text(value).font(.caption.weight(.medium)).monospacedDigit()
@@ -867,7 +923,7 @@ struct PerpTradeView: View {
                     .font(.caption.weight(.medium)).monospacedDigit()
                     .foregroundStyle(pnl < 0 ? Color.negative : (pnl > 0 ? Color.positive : Color.primary))
             } else {
-                Text("—").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                Text(verbatim: "—").font(.caption.weight(.medium)).foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -903,7 +959,7 @@ struct PerpTradeView: View {
         if let accountId = authedOrderAccount {
             AuthedOrderSheet(market: market, input: reviewedInput, takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1),
                              triggerSize: invertedSize(side: ticket.side), triggerNote: turnaroundNote, onChainPositions: model.positions, onChainOrders: model.orders,
-                             onSent: { if ticket.effectiveReduceOnly { model.noteUserClose(market.id) } }) {
+                             onSent: { if let reviewCloses { model.noteUserClose(market.id, closing: reviewCloses) } }) {
                 ticket.sizeText = ""; ticket.takeProfitText = ""; ticket.stopLossText = ""; sizePercent = 0
                 Task { await model.load(env: env, address: session.address) }
             }
@@ -914,16 +970,17 @@ struct PerpTradeView: View {
 
     private var confirmSheet: some View {
         ConfirmationSheet(title: "Review Order", confirmTitle: ticket.side == .long ? "Long \(market.asset)" : "Short \(market.asset)", build: { try await checkedOrderPlan() }, onDone: { ticket.sizeText = ""; sizePercent = 0; Task { await model.load(env: env, address: session.address) } }, onCompleted: { hash in
-            if ticket.effectiveReduceOnly { model.noteUserClose(market.id) }
-            Activity.record(ActivityRecord(kind: .perp, title: "\(ticket.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
+            if let reviewCloses { model.noteUserClose(market.id, closing: reviewCloses) }
+            let perp = "\(market.asset)-PERP"
+            Activity.record(ActivityRecord(kind: .perp, title: ticket.side == .long ? tr("Long \(perp)") : tr("Short \(perp)"), subtitle: "\(ticket.sizeText) \(market.asset) · \(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×", hash: hash, usd: notional > 0 ? notional : nil), owner: session.address)
         }, intent: orderIntent) {
             let signed = reviewedInput
-            DetailRow("Market", "\(market.asset)-PERP")
+            DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: "\(market.asset)-PERP"))
             DetailRow("Side", ticket.side == .long ? "Long" : "Short", tint: sideColor)
             DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(NumberStyle.number(signed.price ?? mark, maximumFractionDigits: market.priceDecimals))")
             // The parsed values this order signs, not the typed text (audit F4), at the market's full precision.
-            DetailRow("Size", "\(NumberStyle.number(signed.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
-            DetailRow("Leverage", "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
+            DetailRow("Size", verbatim: "\(NumberStyle.number(signed.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
+            DetailRow("Leverage", verbatim: "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
             DetailRow("Margin", PriceFormat.usdValue(notional / max(ticket.leverage, 1)))
             // This path (perplTrading not ready) places a bare on-chain entry — it cannot attach TP/SL. Don't advertise
             // triggers the order won't carry; tell the user they need one-click trading for them.
@@ -934,7 +991,9 @@ struct PerpTradeView: View {
                 // The stream came up after the plan was prepared: the check runs here too.
                 Text(leftover).font(.footnote).foregroundStyle(Color.attention)
             } else if leftoversUnchecked {
-                Text("Take-profit and stop-loss left from an earlier \(market.asset) \(ticket.side == .long ? "long" : "short") can't be checked while Perpl trading is offline. If you had any, check Orders first: they would act on this position.")
+                Text(ticket.side == .long
+                     ? "Take-profit and stop-loss left from an earlier \(market.asset) long can't be checked while Perpl trading is offline. If you had any, check Orders first: they would act on this position."
+                     : "Take-profit and stop-loss left from an earlier \(market.asset) short can't be checked while Perpl trading is offline. If you had any, check Orders first: they would act on this position.")
                     .font(.footnote).foregroundStyle(Color.attention)
             }
         }
@@ -948,11 +1007,14 @@ struct PerpTradeView: View {
     }
 
     private func cancelOrderSheet(_ order: PerpOrder) -> some View {
-        ConfirmationSheet(title: "Cancel Order", confirmTitle: "Cancel Order", build: { env.perpl.cancelPlan(perpId: order.perpId, orderId: order.orderId) }, onDone: { Task { await model.load(env: env, address: session.address) } },
-                          onCompleted: { hash in Activity.record(ActivityRecord(kind: .perp, title: "Cancelled \(order.symbol) order", subtitle: "\(order.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(order.size)) at \(NumberStyle.number(order.price))", hash: hash, section: "perps"), owner: session.address) },
+        let size = NumberStyle.number(order.size)
+        let price = NumberStyle.number(order.price)
+        let what = order.side == .buy ? tr("Buy \(size) at \(price)") : tr("Sell \(size) at \(price)")
+        return ConfirmationSheet(title: "Cancel Order", confirmTitle: "Cancel Order", build: { env.perpl.cancelPlan(perpId: order.perpId, orderId: order.orderId) }, onDone: { Task { await model.load(env: env, address: session.address) } },
+                          onCompleted: { hash in Activity.record(ActivityRecord(kind: .perp, title: tr("Cancelled \(order.symbol) order"), subtitle: what, hash: hash, section: "perps"), owner: session.address) },
                           intent: .alwaysAsks(.cancelOrder)) {
-            DetailRow("Market", order.symbol)
-            DetailRow("Order", "\(order.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(order.size)) at \(NumberStyle.number(order.price))")
+            DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: order.symbol))
+            DetailRow("Order", verbatim: what)
         }
     }
 
@@ -1028,11 +1090,15 @@ struct PerpTradeView: View {
     }
     private var sideColor: Color { ticket.side == .long ? .positive : .negative }
 
-    /// For an order that turns the position around (GT-6): what its triggers act on.
+    /// For an order that turns the position around (GT-6): what its triggers act on, in the app's language. The order is
+    /// on the other side of the position, so a long turns into a short or a short into a long.
     private var turnaroundNote: String? {
         guard wantsTriggers, let position, let residual = invertedSize(side: ticket.side) else { return nil }
-        let new = ticket.side == .long ? "long" : "short"
-        return "This order closes your \(NumberStyle.number(position.size)) \(market.asset) \(position.side == .long ? "long" : "short") and opens a \(NumberStyle.number(residual)) \(market.asset) \(new): its take-profit and stop-loss close that \(new) only."
+        let held = "\(NumberStyle.number(position.size)) \(market.asset)"
+        let opened = "\(NumberStyle.number(residual)) \(market.asset)"
+        return ticket.side == .long
+            ? tr("This order closes your \(held) short and opens a \(opened) long: its take-profit and stop-loss close that long only.")
+            : tr("This order closes your \(held) long and opens a \(opened) short: its take-profit and stop-loss close that short only.")
     }
 
     /// What to tell the user about whether their take-profit / stop-loss will actually be placed, and whether it needs
@@ -1043,19 +1109,24 @@ struct PerpTradeView: View {
         case .connected:
             // Sized to this order, and they stay that size (security audit GT-5): say so, rather than "linked to this
             // position", and point at the position's own TP/SL for the whole of it.
-            let size = baseSize > 0 ? " (\(NumberStyle.number(baseSize)) \(market.asset))" : ""
+            let size = "\(NumberStyle.number(baseSize)) \(market.asset)"
             if let position {
-                return ("Placed on Perpl as keeper triggers that close this order's size only\(size), not your whole \(NumberStyle.number(position.size)) \(market.asset) position. For all of it, use TP/SL on the position.", false)
+                let whole = "\(NumberStyle.number(position.size)) \(market.asset)"
+                return (baseSize > 0
+                    ? tr("Placed on Perpl as keeper triggers that close this order's size only (\(size)), not your whole \(whole) position. For all of it, use TP/SL on the position.")
+                    : tr("Placed on Perpl as keeper triggers that close this order's size only, not your whole \(whole) position. For all of it, use TP/SL on the position."), false)
             }
-            return ("Placed on Perpl as keeper triggers that close this order's size\(size). The size is fixed: they don't grow if you add to the position later.", false)
+            return (baseSize > 0
+                ? tr("Placed on Perpl as keeper triggers that close this order's size (\(size)). The size is fixed: they don't grow if you add to the position later.")
+                : tr("Placed on Perpl as keeper triggers that close this order's size. The size is fixed: they don't grow if you add to the position later."), false)
         case .connecting, .enrolled:
-            return ("Connecting to Perpl trading to place your take-profit and stop-loss.", false)
+            return (tr("Connecting to Perpl trading to place your take-profit and stop-loss."), false)
         case .needsForwarding:
-            return ("Enable one-click trading in Profile to place take-profit and stop-loss.", true)
+            return (tr("Enable one-click trading in Profile to place take-profit and stop-loss."), true)
         case .notEnrolled:
-            return ("Connect Perpl trading in Profile to place take-profit and stop-loss.", true)
+            return (tr("Connect Perpl trading in Profile to place take-profit and stop-loss."), true)
         case .failed:
-            return ("Couldn’t reach Perpl trading — retrying. Take-profit and stop-loss need it live.", true)
+            return (tr("Couldn’t reach Perpl trading — retrying. Take-profit and stop-loss need it live."), true)
         }
     }
 
@@ -1073,9 +1144,10 @@ struct PerpTradeView: View {
     private var tpMetrics: (pct: Double, pnl: Double)? { triggerMetrics(tpValue, isProfit: true) }
     private var slMetrics: (pct: Double, pnl: Double)? { triggerMetrics(slValue, isProfit: false) }
 
-    private func triggerMetricRow(_ label: String, _ m: (pct: Double, pnl: Double)) -> some View {
+    private func triggerMetricRow(_ label: LocalizedStringKey, _ m: (pct: Double, pnl: Double)) -> some View {
         HStack {
-            Text("\(label) \(PriceFormat.usdValue(m.pnl, signed: true))")
+            // The label is a key, the amount is shown as it is: one line, never a placeholder-only key.
+            Text(label) + Text(verbatim: " \(PriceFormat.usdValue(m.pnl, signed: true))")
             Spacer()
             Text(NumberStyle.percent(m.pct))
         }
@@ -1083,7 +1155,7 @@ struct PerpTradeView: View {
         .foregroundStyle(m.pnl >= 0 ? Color.positive : Color.negative)
     }
 
-    private func fieldRow(_ title: String, text: Binding<String>, unit: String, placeholder: String) -> some View {
+    private func fieldRow(_ title: LocalizedStringKey, text: Binding<String>, unit: String, placeholder: LocalizedStringKey) -> some View {
         HStack {
             Text(title).font(.subheadline).foregroundStyle(.secondary)
             Spacer()
@@ -1110,7 +1182,7 @@ struct PerpTradeView: View {
     private var maxLeverage: Double { max(1, (1 / max(market.initMarginFraction ?? 1, 0.01)).rounded(.down)) }
     /// What a liquidation price that can't be computed reads as: unknown when the maintenance margin couldn't be read
     /// (never a guessed 5%, which would understate the risk), a dash when there is nothing to compute yet.
-    private var liquidationFallback: String { market.maintMarginFraction == nil ? "Unknown" : "—" }
+    private var liquidationFallback: String { market.maintMarginFraction == nil ? PositionText.unknown : "—" }
     private var minSize: Double { pow(10, -Double(market.lotDecimals)) }
     private func referencePrice(_ type: PriceType) -> Double {
         switch type {
@@ -1163,17 +1235,27 @@ struct PerpTradeView: View {
 
     private var chartLevels: [ChartLevel] {
         var out: [ChartLevel] = []
+        // Each line's title is on the chart's price axis, in the app's language.
         if let position {
-            out.append(ChartLevel(price: position.entry, colorHex: position.side == .long ? "#1F9E5B" : "#D2483F", title: "Entry"))
+            out.append(ChartLevel(price: position.entry, colorHex: position.side == .long ? "#1F9E5B" : "#D2483F",
+                                  title: tr(LocalizedStringResource("Entry", comment: "The position's entry price: a chart line and a stat on the position [tight]"))))
             if let liq = position.liquidation, liq > 0 {
-                out.append(ChartLevel(price: liq, colorHex: "#F5A623", title: "Liq", dashed: true))
+                out.append(ChartLevel(price: liq, colorHex: "#F5A623", title: tr(LocalizedStringResource("Liq", comment: "A chart line at the liquidation price, short for Liquidation. [tight]")), dashed: true))
             }
         }
         for order in model.orders where order.perpId == market.id {
             out.append(ChartLevel(price: order.price, colorHex: order.side == .buy ? "#1F9E5B" : "#D2483F",
-                                  title: order.reduceOnly ? "Close" : "Limit", dashed: true))
+                                  title: order.reduceOnly ? tr(LocalizedStringResource("chartLine.close", defaultValue: "Close", comment: "A chart line at a resting order that closes the position (a noun, as the order's name). [tight]"))
+                                                          : tr(LocalizedStringResource("Limit", comment: "Order type: rests at the price you set until it fills. [tight]")),
+                                  dashed: true))
         }
         return out
+    }
+
+    /// "Long 5×" or "Short 5×": a position's side and its leverage.
+    static func sideLeverage(_ position: PerpPosition) -> Text {
+        let leverage = NumberStyle.number(position.leverage, maximumFractionDigits: 1)
+        return position.side == .long ? Text("Long \(leverage)×") : Text("Short \(leverage)×")
     }
 
     @ViewBuilder private var positionBadge: some View {
@@ -1181,7 +1263,7 @@ struct PerpTradeView: View {
             let dir = position.side == .long ? 1.0 : -1.0
             let pnl = dir * (mark - position.entry) * position.size + position.premium
             HStack(spacing: 6) {
-                Text("\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.leverage, maximumFractionDigits: 1))×")
+                PerpTradeView.sideLeverage(position)
                     .foregroundStyle(position.side == .long ? Color.positive : Color.negative)
                 Text(PriceFormat.usdValue(pnl, signed: true))
                     .foregroundStyle(pnl < 0 ? Color.negative : Color.positive)
@@ -1354,7 +1436,8 @@ struct SideOrderBook: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, wide ? 6 : 4)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Mid price \(NumberStyle.number(centerPrice))\(book.spread.map { ", spread \(NumberStyle.number($0))" } ?? "")")
+                .accessibilityLabel(book.spread.map { Text("Mid price \(NumberStyle.number(centerPrice)), spread \(NumberStyle.number($0))") }
+                                    ?? Text("Mid price \(NumberStyle.number(centerPrice))"))
 
                 ForEach(bids, id: \.price) { level in
                     bookRow(level, side: "Bid", tint: .positive, maxTotal: maxTotal)
@@ -1368,9 +1451,10 @@ struct SideOrderBook: View {
         .accessibilityLabel(bookSummary)
     }
 
+    /// The book in words, in the app's language.
     private var bookSummary: String {
-        guard let bid = book.bestBid, let ask = book.bestAsk else { return "Order book" }
-        return "Order book. Best bid \(NumberStyle.number(bid)), best ask \(NumberStyle.number(ask))."
+        guard let bid = book.bestBid, let ask = book.bestAsk else { return tr("Order book") }
+        return tr("Order book. Best bid \(NumberStyle.number(bid)), best ask \(NumberStyle.number(ask)).")
     }
 
     private struct Level { let price: Double; let total: Double }
@@ -1392,7 +1476,7 @@ struct SideOrderBook: View {
         return levels.map { running += $0.size; return Level(price: $0.price, total: running) }
     }
 
-    private func bookRow(_ level: Level, side: String, tint: Color, maxTotal: Double) -> some View {
+    private func bookRow(_ level: Level, side: LocalizedStringKey, tint: Color, maxTotal: Double) -> some View {
         ZStack(alignment: .leading) {
             GeometryReader { geo in
                 Rectangle().fill(tint.opacity(0.16))
@@ -1408,7 +1492,7 @@ struct SideOrderBook: View {
         }
         .frame(height: wide ? 22 : 19)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(side) \(NumberStyle.number(level.price)), total \(NumberStyle.number(level.total, compact: true)) \(symbol)")
+        .accessibilityLabel(Text("\(Text(side)) \(NumberStyle.number(level.price)), total \(NumberStyle.number(level.total, compact: true)) \(symbol)"))
     }
 
     private var ratioBar: some View {
@@ -1448,7 +1532,7 @@ struct PercentSizeSlider: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(Int(percent.rounded()))%")
+            Text(verbatim: "\(Int(percent.rounded()))%")
                 .font(.caption.weight(.semibold)).monospacedDigit()
                 .foregroundStyle(percent > 0 ? Color.brand : Color.secondary)
             GeometryReader { geo in
@@ -1551,7 +1635,7 @@ struct LeverageSheet: View {
                         .frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Close")
+                .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
             }
             .padding(.top, 22).padding(.horizontal, 22)
 
@@ -1566,7 +1650,7 @@ struct LeverageSheet: View {
                         Haptics.selection()
                         withAnimation(.easeOut(duration: 0.2)) { value = Double(pick) }
                     } label: {
-                        Text(pick == Int(maxLeverage) ? "Max" : "\(pick)x")
+                        (pick == Int(maxLeverage) ? Text("Max", comment: "The most allowed: a button or chip that fills in the whole balance, or the highest leverage or amount [tight]") : Text(verbatim: "\(pick)x"))
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity).padding(.vertical, 14)
                             .background(Int(rounded) == pick ? Color.brand.opacity(0.15) : Color(.tertiarySystemFill), in: Capsule())
@@ -1668,7 +1752,7 @@ struct LeverageRuler: View {
                         let dist = abs(Double(i) - value)          // distance from the centred value, in leverage units
                         let p = max(0, 1 - dist)
                         let prox = p * p * (3 - 2 * p)              // smoothstep, so the nearest number pops cleanly
-                        Text("\(i)X")
+                        Text(verbatim: "\(i)X")
                             .font(.system(size: rowSize + (bigSize - rowSize) * prox, weight: prox > 0.55 ? .bold : .medium))
                             .monospacedDigit()
                             .foregroundStyle(Color.primary.opacity(0.4 + 0.6 * prox))
@@ -1681,7 +1765,7 @@ struct LeverageRuler: View {
                 // Fixed centre — brand indicator line and the value pill (the precise, possibly-fractional value).
                 Rectangle().fill(Color.brand).frame(width: 2.5, height: 70)
                     .position(x: center, y: 58)
-                Text("\(NumberStyle.number(value, maximumFractionDigits: 1))x")
+                Text(verbatim: "\(NumberStyle.number(value, maximumFractionDigits: 1))x")
                     .font(.caption2.weight(.bold)).monospacedDigit()
                     .foregroundStyle(.white)
                     .padding(.horizontal, 8).padding(.vertical, 3)
@@ -1747,7 +1831,7 @@ struct OrderTypeSheet: View {
         .presentationDragIndicator(.visible)
     }
 
-    private func optionRow(_ value: OrderKind, icon: String, title: String, subtitle: String) -> some View {
+    private func optionRow(_ value: OrderKind, icon: String, title: LocalizedStringKey, subtitle: LocalizedStringKey) -> some View {
         let selected = kind == value
         return Button {
             Haptics.selection(); onSelect(value); dismiss()
@@ -1794,7 +1878,8 @@ struct UnitPreferenceSheet: View {
         .presentationDragIndicator(.visible)
     }
 
-    private func optionRow(_ value: OrderTicket.AmountUnit, symbol: String, title: String, subtitle: String) -> some View {
+    /// `title` is the unit's symbol (the market's asset, or AUSD), shown as it is.
+    private func optionRow(_ value: OrderTicket.AmountUnit, symbol: String, title: String, subtitle: LocalizedStringKey) -> some View {
         let selected = unit == value
         return Button {
             Haptics.selection(); onSelect(value); dismiss()
@@ -1802,7 +1887,7 @@ struct UnitPreferenceSheet: View {
             HStack(spacing: 14) {
                 MarketLogo(symbol: symbol, url: nil, size: 30)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.body.weight(.semibold))
+                    Text(verbatim: title).font(.body.weight(.semibold))
                     Text(subtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
@@ -1837,7 +1922,7 @@ struct PriceTypeSheet: View {
         .presentationDragIndicator(.visible)
     }
 
-    private func optionRow(_ value: PerpTradeView.PriceType, title: String, subtitle: String) -> some View {
+    private func optionRow(_ value: PerpTradeView.PriceType, title: LocalizedStringKey, subtitle: LocalizedStringKey) -> some View {
         let isSel = selected == value
         return Button {
             Haptics.selection(); onSelect(value); dismiss()
@@ -1924,7 +2009,7 @@ struct SelectPerpetualSheet: View {
 }
 
 /// Shared sheet header: a bold title on the left and a round close button on the right.
-private func sheetHeader(_ title: String, onClose: @escaping () -> Void) -> some View {
+private func sheetHeader(_ title: LocalizedStringKey, onClose: @escaping () -> Void) -> some View {
     HStack {
         Text(title).font(.title2.weight(.bold))
         Spacer()
@@ -1934,7 +2019,7 @@ private func sheetHeader(_ title: String, onClose: @escaping () -> Void) -> some
                 .frame(width: 44, height: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Close")
+        .accessibilityLabel(Text("Close", comment: "Closes this screen or sheet (a verb)"))
     }
     .padding(.top, 20).padding(.horizontal, 20).padding(.bottom, 8)
 }
@@ -1968,10 +2053,20 @@ struct TradesTape: View {
                     .frame(height: 18)
                     // Buy or sell is shown by colour only; say it (AI-10).
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(trade.side == .buy ? "Buy" : "Sell") \(NumberStyle.number(trade.size, maximumFractionDigits: 4)) \(symbol) at \(NumberStyle.number(trade.price)), \(trade.time.formatted(date: .omitted, time: .standard))")
+                    .accessibilityLabel(tapeLabel(trade))
                 }
             }
         }
+    }
+}
+
+extension TradesTape {
+    /// A trade in words, in the app's language: its side, size, price and time.
+    fileprivate func tapeLabel(_ trade: PerpTrade) -> Text {
+        let size = "\(NumberStyle.number(trade.size, maximumFractionDigits: 4)) \(symbol)"
+        let price = NumberStyle.number(trade.price)
+        let time = trade.time.formatted(Date.FormatStyle(date: .omitted, time: .standard).locale(L10n.locale))
+        return trade.side == .buy ? Text("Buy \(size) at \(price), \(time)") : Text("Sell \(size) at \(price), \(time)")
     }
 }
 
@@ -1995,7 +2090,7 @@ private struct PositionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.leverage, maximumFractionDigits: 1))×")
+                PerpTradeView.sideLeverage(position)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(position.side == .long ? Color.positive : Color.negative)
                 Spacer()
@@ -2003,7 +2098,7 @@ private struct PositionCard: View {
                     Text(PriceFormat.usdValue(livePnl, signed: true))
                         .font(.subheadline.weight(.semibold)).monospacedDigit()
                     if let pnlPct {
-                        Text(pnlPct, format: .number.precision(.fractionLength(2)).sign(strategy: .always())) + Text("%")
+                        Text(pnlPct, format: .number.precision(.fractionLength(2)).sign(strategy: .always())) + Text(verbatim: "%")
                     }
                 }
                 .foregroundStyle(livePnl < 0 ? Color.negative : Color.positive)
@@ -2015,7 +2110,7 @@ private struct PositionCard: View {
                 stat("Mark", NumberStyle.number(liveMark > 0 ? liveMark : position.mark))
                 stat("Margin", PriceFormat.usdValue(position.margin))
                 // An open position's liquidation price is nil only when its maintenance margin couldn't be read.
-                stat("Liq.", position.liquidation.map { NumberStyle.number($0) } ?? "Unknown")
+                stat("Liq.", position.liquidation.map { NumberStyle.number($0) } ?? PositionText.unknown)
                 stat("Notional", PriceFormat.usdValue(position.notional))
             }
             if !triggers.isEmpty {
@@ -2027,20 +2122,22 @@ private struct PositionCard: View {
                 Button("TP/SL", action: onTriggers)
                     .buttonStyle(.bordered).controlSize(.small).tint(.brand)
                     .accessibilityLabel("Take profit and stop loss")
-                Button("Close", action: onClose)
+                Button(action: onClose) { Text(verbatim: tr(LocalizedStringResource("position.close", defaultValue: "Close", comment: "Closes the open position (a verb), a button on the position. [tight]"))) }
                     .buttonStyle(.bordered).controlSize(.small).tint(.negative)
             }
         }
         .padding(.vertical, 4)
     }
 
+    /// "TP 72,000 · SL 61,500", in the app's language.
     private var triggerSummary: String {
-        let parts = triggers.map { "\($0.kind == .takeProfit ? "TP" : "SL") \(NumberStyle.number($0.price))" }
+        let parts = triggers.map { PositionText.trigger($0.kind == .takeProfit, at: $0.price) }
         let verified = triggers.allSatisfy { $0.source == .live }
-        return parts.joined(separator: " · ") + (verified ? "" : " · unverified")
+        let unverified = tr(LocalizedStringResource("unverified", comment: "Ends a TP/SL summary when Perpl's live list couldn't confirm it: “TP 72,000 · unverified”."))
+        return (parts + (verified ? [] : [unverified])).joined(separator: " · ")
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
+    private func stat(_ label: LocalizedStringKey, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
             Text(value).font(.caption.weight(.medium)).monospacedDigit()
@@ -2050,7 +2147,7 @@ private struct PositionCard: View {
 
 /// A small labelled figure used across the order / trigger cards.
 private struct MiniStat: View {
-    let label: String
+    let label: LocalizedStringKey
     let value: String
     var tint: Color = .primary
     var body: some View {
@@ -2067,7 +2164,10 @@ private struct OrderCard: View {
     let mark: Double
     let onCancel: () -> Void
 
-    private var typeLabel: String { order.reduceOnly ? "Limit · reduce-only" : "Limit" }
+    private var typeLabel: String {
+        order.reduceOnly ? tr("Limit · reduce-only")
+            : tr(LocalizedStringResource("Limit", comment: "Order type: rests at the price you set until it fills. [tight]"))
+    }
     private var distance: Double? { mark > 0 ? (order.price - mark) / mark * 100 : nil }
 
     var body: some View {
@@ -2121,12 +2221,13 @@ struct TriggerRow: Identifiable {
     /// The size of the open position on the side this trigger closes, if there is one.
     let positionSize: Double?
 
+    /// Where the row comes from, in the app's language.
     var label: String {
         switch source {
-        case .live: return "Keeper trigger"
-        case .lastKnown: return "Last seen on Perpl"
-        case .pending: return "Pending…"
-        case .unverified: return "Saved on this device · unverified"
+        case .live: return tr("Keeper trigger")
+        case .lastKnown: return tr("Last seen on Perpl")
+        case .pending: return tr("Pending…")
+        case .unverified: return tr("Saved on this device · unverified")
         }
     }
 
@@ -2135,8 +2236,9 @@ struct TriggerRow: Identifiable {
     var coverage: String? {
         guard let positionSize, positionSize > 0, size > 0 else { return nil }
         let tolerance = max(positionSize, size) * 1e-6
-        if size < positionSize - tolerance { return "Closes \(NumberStyle.number(size)) of your \(NumberStyle.number(positionSize)) \(symbol)" }
-        if size > positionSize + tolerance { return "Larger than your \(NumberStyle.number(positionSize)) \(symbol) position" }
+        let held = "\(NumberStyle.number(positionSize)) \(symbol)"
+        if size < positionSize - tolerance { return tr("Closes \(NumberStyle.number(size)) of your \(held)") }
+        if size > positionSize + tolerance { return tr("Larger than your \(held) position") }
         return nil
     }
 }
@@ -2160,7 +2262,7 @@ private struct TriggerCard: View {
                 Spacer()
                 if row.source == .live, row.order != nil {
                     Button("Cancel", action: onCancel).buttonStyle(.bordered).controlSize(.small).tint(.negative)
-                        .accessibilityLabel("Cancel \(row.kind.label.lowercased()) at \(NumberStyle.number(row.price))")
+                        .accessibilityLabel(row.kind == .takeProfit ? "Cancel take profit at \(NumberStyle.number(row.price))" : "Cancel stop loss at \(NumberStyle.number(row.price))")
                 } else {
                     Text(row.label).font(.caption2).foregroundStyle(row.source == .live || row.source == .pending ? Color.secondary : Color.attention)
                 }
@@ -2182,12 +2284,12 @@ private struct TriggerCard: View {
     }
 }
 
-/// Which triggers a Cancel sheet is for.
+/// Which triggers a Cancel sheet is for, and the sheet's title and note, written where the request is made.
 struct TriggerCancelRequest: Identifiable {
     let id = UUID()
     let orders: [PerplOpenOrder]
-    let title: String
-    let note: String?
+    let title: LocalizedStringResource
+    let note: LocalizedStringResource?
 }
 
 /// Closes a position at market or with a resting reduce-only limit order (optionally post-only).
@@ -2236,14 +2338,14 @@ private struct ClosePositionSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Position", "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
+                    DetailRow("Position", verbatim: PositionText.amount(isLong: position.side == .long, size: position.size, asset: position.symbol), tint: position.side == .long ? .positive : .negative)
                     DetailRow("Mark price", NumberStyle.number(mark))
                     DetailRow("Unrealized", PriceFormat.usdValue(position.unrealized, signed: true), tint: position.unrealized < 0 ? .negative : .positive)
                 }
                 Section("Close order") {
                     Picker("Type", selection: $kind) {
-                        Text("Market").tag(OrderKind.market)
-                        Text("Limit").tag(OrderKind.limit)
+                        Text("Market", comment: "Order type: a market order, which fills at once at the market price. [tight]").tag(OrderKind.market)
+                        Text("Limit", comment: "Order type: rests at the price you set until it fills. [tight]").tag(OrderKind.limit)
                     }
                     .pickerStyle(.segmented)
                     if isLimit {
@@ -2265,10 +2367,7 @@ private struct ClosePositionSheet: View {
                 }
                 if !leftoverTriggers.isEmpty {
                     Section("Take-profit / stop-loss") {
-                        let count = leftoverTriggers.count
-                        Text(session.isPasskeyAccount
-                             ? "This position has \(count) TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next \(position.side == .long ? "long" : "short") here)."
-                             : "This position has \(count) TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next \(position.side == .long ? "long" : "short") here. Check Orders afterwards.")
+                        leftoverNote(count: leftoverTriggers.count)
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
@@ -2278,7 +2377,7 @@ private struct ClosePositionSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Close Position")
+            .navigationTitle(tr("Close Position"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -2319,12 +2418,29 @@ private struct ClosePositionSheet: View {
             switch phase {
             case .done(let hash):
                 onSending() // settled: expected from now on, whenever the poll next reads
-                Activity.record(ActivityRecord(kind: .perp, title: isLimit ? "Close order placed" : "Closed \(position.symbol)", subtitle: "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)\(isLimit ? " · Limit" : "")", hash: hash, section: "perps", usd: position.notional > 0 ? position.notional : nil), owner: session.address)
+                let closed = PositionText.amount(isLong: position.side == .long, size: position.size, asset: position.symbol)
+                let limit = tr(LocalizedStringResource("Limit", comment: "Order type: rests at the price you set until it fills. [tight]"))
+                Activity.record(ActivityRecord(kind: .perp, title: isLimit ? tr("Close order placed") : tr("Closed \(position.symbol)"), subtitle: isLimit ? "\(closed) · \(limit)" : closed, hash: hash, section: "perps", usd: position.notional > 0 ? position.notional : nil), owner: session.address)
             case .failed where !run.sentSomething:
                 onNotSent()
             case .idle, .running, .failed:
                 break
             }
+        }
+    }
+
+    /// What happens to the position's TP/SL once it is closed, for its side and the kind of account. The count is a
+    /// plural.
+    private func leftoverNote(count: Int) -> Text {
+        switch (session.isPasskeyAccount, position.side == .long) {
+        case (true, true):
+            Text("This position has \(count) TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next long here).")
+        case (true, false):
+            Text("This position has \(count) TP/SL on Perpl. Once it is fully closed, cancel them from Orders (they would otherwise stay armed for your next short here).")
+        case (false, true):
+            Text("This position has \(count) TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next long here. Check Orders afterwards.")
+        case (false, false):
+            Text("This position has \(count) TP/SL on Perpl. Once it is fully closed, the app cancels them while Perpl trading is connected, so they can't fire on your next short here. Check Orders afterwards.")
         }
     }
 
@@ -2366,7 +2482,7 @@ private struct AddMarginSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Position", "\(position.side == .long ? "Long" : "Short") \(NumberStyle.number(position.size)) \(position.symbol)", tint: position.side == .long ? .positive : .negative)
+                    DetailRow("Position", verbatim: PositionText.amount(isLong: position.side == .long, size: position.size, asset: position.symbol), tint: position.side == .long ? .positive : .negative)
                     DetailRow("Current margin", PriceFormat.usdValue(position.margin))
                     DetailRow("Available", PriceFormat.usdValue(available))
                 }
@@ -2374,13 +2490,15 @@ private struct AddMarginSheet: View {
                     HStack {
                         Text("Amount").foregroundStyle(.secondary)
                         Spacer()
-                        TextField("0", text: $amountText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
+                        TextField("0" as String, text: $amountText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
                         Text("AUSD").foregroundStyle(.secondary)
                     }
                     HStack(spacing: 8) {
                         ForEach([0.25, 0.5, 1.0], id: \.self) { frac in
-                            Button(frac == 1.0 ? "Max" : "\(Int(frac * 100))%") { amountText = plainAmount(available * frac) }
-                                .buttonStyle(.bordered).controlSize(.small).frame(maxWidth: .infinity)
+                            Button { amountText = plainAmount(available * frac) } label: {
+                                frac == 1.0 ? Text("Max", comment: "The most allowed: a button or chip that fills in the whole balance, or the highest leverage or amount [tight]") : Text(verbatim: "\(Int(frac * 100))%")
+                            }
+                            .buttonStyle(.bordered).controlSize(.small).frame(maxWidth: .infinity)
                         }
                     }
                     if overBalance { Text("More than your available balance.").font(.caption).foregroundStyle(.negative) }
@@ -2388,8 +2506,8 @@ private struct AddMarginSheet: View {
                 if amount > 0, !overBalance {
                     Section("After") {
                         DetailRow("Margin", PriceFormat.usdValue(projMargin))
-                        DetailRow("Leverage", "\(NumberStyle.number(projLeverage, maximumFractionDigits: 1))×")
-                        DetailRow("Liq. price", projLiquidation.map { NumberStyle.number($0) } ?? (market.maintMarginFraction == nil ? "Unknown" : "—"))
+                        DetailRow("Leverage", verbatim: "\(NumberStyle.number(projLeverage, maximumFractionDigits: 1))×")
+                        DetailRow("Liq. price", verbatim: projLiquidation.map { NumberStyle.number($0) } ?? (market.maintMarginFraction == nil ? PositionText.unknown : "—"))
                     }
                 }
                 if !run.events.isEmpty { Section("Progress") { TransactionProgress(events: run.events) } }
@@ -2398,7 +2516,7 @@ private struct AddMarginSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Add Margin")
+            .navigationTitle(tr("Add Margin"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -2445,7 +2563,7 @@ private struct AddMarginSheet: View {
         let added = amount
         dismiss()
         if done {
-            Activity.record(ActivityRecord(kind: .deposit, title: "Added \(position.symbol) margin", subtitle: "\(NumberStyle.number(added)) AUSD", hash: hash, section: "perps", usd: added), owner: session.address)
+            Activity.record(ActivityRecord(kind: .deposit, title: tr("Added \(position.symbol) margin"), subtitle: "\(NumberStyle.number(added)) AUSD", hash: hash, section: "perps", usd: added), owner: session.address)
             onDone()
         }
     }
@@ -2501,11 +2619,11 @@ struct AuthedOrderSheet: View {
         NavigationStack {
             List {
                 Section {
-                    DetailRow("Market", "\(market.asset)-PERP")
+                    DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: "\(market.asset)-PERP"))
                     DetailRow("Side", input.side == .long ? "Long" : "Short", tint: sideColor)
                     DetailRow("Type", input.kind == .market ? "Market · \(NumberStyle.basisPoints(input.slippageBps)) slippage" : "Limit at \(NumberStyle.number(input.price ?? market.mark, maximumFractionDigits: market.priceDecimals))")
-                    DetailRow("Size", "\(NumberStyle.number(input.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
-                    DetailRow("Leverage", "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
+                    DetailRow("Size", verbatim: "\(NumberStyle.number(input.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
+                    DetailRow("Leverage", verbatim: "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
                     DetailRow("Margin", PriceFormat.usdValue(summaryMargin))
                     // Each closes this order's size, fixed when placed (security audit GT-5).
                     if let takeProfit { DetailRow("Take profit", "\(NumberStyle.number(takeProfit)) · closes \(NumberStyle.number(triggerSize ?? input.size)) \(market.asset)", tint: .positive) }
@@ -2514,7 +2632,7 @@ struct AuthedOrderSheet: View {
                     Text("Review Order · Perpl")
                 } footer: {
                     if let triggerNote, takeProfit != nil || stopLoss != nil {
-                        Text(triggerNote + " Signed and forwarded by your Perpl API key over the trading connection.")
+                        Text(verbatim: triggerNote + " " + tr("Signed and forwarded by your Perpl API key over the trading connection."))
                     } else {
                         Text("Signed and forwarded by your Perpl API key over the trading connection.")
                     }
@@ -2541,7 +2659,7 @@ struct AuthedOrderSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Place Order")
+            .navigationTitle(tr("Place Order"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -2581,7 +2699,7 @@ struct AuthedOrderSheet: View {
             // about). Perpl offers no read-back for keeper triggers, so the accepted ones are remembered locally.
             let result = try await perplTrading.submitBracket(input: input, accountId: accountId, takeProfit: takeProfit, stopLoss: stopLoss, env: env, ttlBlocks: 100, approval: approval,
                                                               onChainPositions: onChainPositions, onChainOrders: onChainOrders)
-            guard result.entry else { phase = .failed(result.error ?? "Perpl rejected the order."); return }
+            guard result.entry else { phase = .failed(result.error ?? tr("Perpl rejected the order.")); return }
             onSent()
 
             var placed: [PlacedTrigger] = []
@@ -2600,9 +2718,16 @@ struct AuthedOrderSheet: View {
             phase = warning.map { .doneWarning($0) } ?? .done
             // notify:false — this advanced path posts its own fills-gated notification just below, so a unified
             // notification here would double it.
-            Activity.record(ActivityRecord(kind: .perp, title: "\(input.side == .long ? "Long" : "Short") \(market.asset)-PERP", subtitle: "\(NumberStyle.number(input.size)) \(market.asset)\(input.kind == .market ? " · Market" : " · Limit")", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address, notify: false)
+            let perp = "\(market.asset)-PERP"
+            let kind = input.kind == .market
+                ? tr(LocalizedStringResource("Market", comment: "Order type: a market order, which fills at once at the market price. [tight]"))
+                : tr(LocalizedStringResource("Limit", comment: "Order type: rests at the price you set until it fills. [tight]"))
+            Activity.record(ActivityRecord(kind: .perp, title: input.side == .long ? tr("Long \(perp)") : tr("Short \(perp)"), subtitle: "\(NumberStyle.number(input.size)) \(market.asset) · \(kind)", hash: nil, usd: input.size * market.mark > 0 ? input.size * market.mark : nil), owner: session.address, notify: false)
             if settings.notificationsEnabled, settings.notifyFills {
-                Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side: input.side == .long ? "Long" : "Short", market: "\(market.asset)-PERP")
+                let side = input.side == .long
+                    ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]"))
+                    : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]"))
+                Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side: side, market: "\(market.asset)-PERP", perpId: market.id)
             }
         } catch is MeraSession.StepUpRequired where approval == nil {
             // A passkey account whose session can't place this order prompt-free (locked, over a cap, a reduce-only
@@ -2611,7 +2736,7 @@ struct AuthedOrderSheet: View {
                 let approval = try await session.mera.stepUp()
                 await place(approval: approval)
             } catch where isUserCancellation(error) {
-                phase = .failed("Not sent. Nothing left your account.")
+                phase = .failed(TransactionRun.notSent)
             } catch {
                 phase = .failed(describe(error))
             }
@@ -2620,11 +2745,12 @@ struct AuthedOrderSheet: View {
             // order, so this sheet only closes (and reloads orders and positions) from here. Its triggers are sent only
             // after the entry is answered, so none of them went out (GL-1): if the entry is live, it has no TP/SL.
             onSent()
-            let triggers = [takeProfit != nil ? "take-profit" : nil, stopLoss != nil ? "stop-loss" : nil].compactMap { $0 }
-            var message = "Order status unknown — Perpl didn't confirm this order, so it may have been placed. Check Open Orders and Positions before placing it again."
-            if !triggers.isEmpty {
-                let one = triggers.count == 1
-                message += " Its \(triggers.joined(separator: " and ")) \(one ? "was" : "were") not sent: if the order is open, set \(one ? "it" : "them") with TP/SL on the position."
+            var message = tr("Order status unknown — Perpl didn't confirm this order, so it may have been placed. Check Open Orders and Positions before placing it again.")
+            switch (takeProfit != nil, stopLoss != nil) {
+            case (true, true): message += " " + tr("Its take-profit and stop-loss were not sent: if the order is open, set them with TP/SL on the position.")
+            case (true, false): message += " " + tr("Its take-profit was not sent: if the order is open, set it with TP/SL on the position.")
+            case (false, true): message += " " + tr("Its stop-loss was not sent: if the order is open, set it with TP/SL on the position.")
+            case (false, false): break
             }
             phase = .unknown(message)
         } catch {
@@ -2635,20 +2761,34 @@ struct AuthedOrderSheet: View {
     /// What to say about requested triggers that aren't known to be live: `false` refused (or never sent), `true`
     /// sent but unanswered — it may be live, so it must not be placed again blindly (security audit GL-1). Refused
     /// ones are set again from the position's TP/SL, not by opening more size (GT-1).
+    /// In the app's language; each combination is a sentence of its own.
     private func triggerWarning(tp: Bool?, sl: Bool?) -> String? {
-        let refused = [tp == false ? "take-profit" : nil, sl == false ? "stop-loss" : nil].compactMap { $0 }
-        let unknown = [tp == true ? "take-profit" : nil, sl == true ? "stop-loss" : nil].compactMap { $0 }
-        guard !refused.isEmpty || !unknown.isEmpty else { return nil }
         var parts: [String] = []
-        if !refused.isEmpty {
-            let them = refused.count == 1 ? "it" : "them"
-            parts.append("\(input.kind == .market ? "Position opened" : "Order sent"), but Perpl didn't accept the \(refused.joined(separator: " and ")). Set \(them) with TP/SL on the position\(input.kind == .market ? "" : " once the order fills").")
+        let market = input.kind == .market
+        switch (tp == false, sl == false) {
+        case (true, true):
+            parts.append(market ? tr("Position opened, but Perpl didn't accept the take-profit and stop-loss. Set them with TP/SL on the position.")
+                                : tr("Order sent, but Perpl didn't accept the take-profit and stop-loss. Set them with TP/SL on the position once the order fills."))
+        case (true, false):
+            parts.append(market ? tr("Position opened, but Perpl didn't accept the take-profit. Set it with TP/SL on the position.")
+                                : tr("Order sent, but Perpl didn't accept the take-profit. Set it with TP/SL on the position once the order fills."))
+        case (false, true):
+            parts.append(market ? tr("Position opened, but Perpl didn't accept the stop-loss. Set it with TP/SL on the position.")
+                                : tr("Order sent, but Perpl didn't accept the stop-loss. Set it with TP/SL on the position once the order fills."))
+        case (false, false):
+            break
         }
-        if !unknown.isEmpty {
-            let them = unknown.count == 1 ? "it" : "them"
-            parts.append("Order status unknown for the \(unknown.joined(separator: " and ")) — Perpl didn't confirm \(them). Check Open Orders before placing \(them) again.")
+        switch (tp == true, sl == true) {
+        case (true, true):
+            parts.append(tr("Order status unknown for the take-profit and stop-loss — Perpl didn't confirm them. Check Open Orders before placing them again."))
+        case (true, false):
+            parts.append(tr("Order status unknown for the take-profit — Perpl didn't confirm it. Check Open Orders before placing it again."))
+        case (false, true):
+            parts.append(tr("Order status unknown for the stop-loss — Perpl didn't confirm it. Check Open Orders before placing it again."))
+        case (false, false):
+            break
         }
-        return parts.joined(separator: " ")
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 }
 
@@ -2687,18 +2827,19 @@ struct OrderTicket {
         return (raw * scale).rounded(.down) / scale
     }
 
+    /// What's wrong with the ticket, in the app's language.
     /// - mark: the live mark the order is measured against (the market's listed mark when the live one is unknown).
     func problem(market: PerpMarket, mark: Double, account: PerpAccount?, available: Double) -> String? {
         let ref = mark > 0 ? mark : market.mark
         let price = kind == .limit ? (priceText.perpDouble ?? ref) : ref
         let size = baseSize(market: market, price: price)
-        guard size > 0 else { return amountUnit == .usd ? "Enter an amount in AUSD." : "Enter a size in \(market.asset)." }
-        if kind == .limit, (priceText.perpDouble ?? 0) <= 0 { return "Enter a limit price." }
+        guard size > 0 else { return amountUnit == .usd ? tr("Enter an amount in AUSD.") : tr("Enter a size in \(market.asset).") }
+        if kind == .limit, (priceText.perpDouble ?? 0) <= 0 { return tr("Enter a limit price.") }
         if kind == .limit, let limit = priceText.perpDouble, let reason = Self.offTickProblem(price: limit, market: market) { return reason }
         if kind == .limit, let limit = priceText.perpDouble, let reason = Self.throughMarkProblem(price: limit, side: side, mark: mark, market: market) { return reason }
-        if account == nil, !effectiveReduceOnly { return "Deposit AUSD to open a trading account first." }
+        if account == nil, !effectiveReduceOnly { return tr("Deposit AUSD to open a trading account first.") }
         if account != nil, !effectiveReduceOnly {
-            if size * price / max(leverage, 1) > available * 1.0001 { return "Not enough available margin." }
+            if size * price / max(leverage, 1) > available * 1.0001 { return tr("Not enough available margin.") }
         }
         return nil
     }
@@ -2711,15 +2852,18 @@ struct OrderTicket {
         let above = side == .long && price > mark * 1.05
         let below = side == .short && price < mark * 0.95
         guard above || below else { return nil }
-        return "Limit \(NumberStyle.number(price, maximumFractionDigits: market.priceDecimals)) is \(above ? "above" : "below") the mark (\(NumberStyle.number(mark))) and would fill at once. Check the price."
+        let limit = NumberStyle.number(price, maximumFractionDigits: market.priceDecimals)
+        let markText = NumberStyle.number(mark)
+        return above ? tr("Limit \(limit) is above the mark (\(markText)) and would fill at once. Check the price.")
+            : tr("Limit \(limit) is below the mark (\(markText)) and would fill at once. Check the price.")
     }
 
     /// A limit between ticks: refused rather than rounded, so the price reviewed is the price signed.
     static func offTickProblem(price: Double, market: PerpMarket) -> String? {
         guard PerplTriggerRules.ticks(price, decimals: market.priceDecimals) == nil else { return nil }
         let d = market.priceDecimals
-        return d == 0 ? "The limit price must be a whole number on \(market.asset)."
-            : "The limit price can have at most \(d) decimal\(d == 1 ? " place" : " places") on \(market.asset)."
+        return d == 0 ? tr("The limit price must be a whole number on \(market.asset).")
+            : tr("The limit price can have at most \(d) decimal places on \(market.asset).")
     }
 
     func input(market: PerpMarket, refPrice: Double) -> OrderInput {

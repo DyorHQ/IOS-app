@@ -47,8 +47,10 @@ final class PerplTrading: MeraSessionLifecycle {
     private var cancelsSent: Set<PerplOpenOrder.Key> = []
     /// Sides of markets an entry was sent to recently: its triggers may be on the stream before the entry is.
     private var recentEntries: [PerplMarketSide: Date] = [:]
-    /// Markets whose position the trading stream saw end (any way), so the positions poll doesn't report it again.
-    private var endingsSeen: [Int: Date] = [:]
+    /// Markets whose position the trading stream explained as it happened — liquidated, deleveraged or unwound by Perpl,
+    /// or a take-profit / stop-loss on it triggered — and when, so the app-wide watcher doesn't report the ending again
+    /// (`endingExplained`, `PerpEndingNotice`).
+    private var explainedEndings: [Int: Date] = [:]
     private var client: PerplTradeClient?
     /// The wallet (checksummed address) the trading session is bound to, so a wallet change tears the session down.
     private var boundAddress: String?
@@ -202,7 +204,7 @@ final class PerplTrading: MeraSessionLifecycle {
         draining?.disconnect()
         draining = socket
         // Held so iOS doesn't suspend the app, and freeze the socket, before its answers are in (GL-1).
-        let background = PerplBackgroundTime("Perpl trading")
+        let background = PerplBackgroundTime("Perpl trading") // not localized: the task's name, never shown
         Task { @MainActor [weak self] in
             defer { background.end() }
             let start = Date()
@@ -219,6 +221,7 @@ final class PerplTrading: MeraSessionLifecycle {
 
     /// Starts an operation the user approved (a bracket, a TP/SL change, a cancel): it holds background time, and a
     /// passkey session that ends meanwhile keeps its socket until it is done (`drain`, GL-1). Call the result when it is.
+    /// `name` names the background task for iOS (not localized: never shown).
     private func operation(_ name: String) -> () -> Void {
         let background = PerplBackgroundTime(name)
         operationsRunning += 1
@@ -293,7 +296,7 @@ final class PerplTrading: MeraSessionLifecycle {
                 guard boundToPasskey, boundAddress == address.checksummed else { throw PerplTradeError.notSignedIn }
                 // A fresh key for every enrolment (Perpl never registers one twice), so a new device — or this one after
                 // it forgot its token — enrols again with one passkey prompt at most, none inside a live session.
-                let enrolled = try await passkey.session.enrollPerpl(label: "DyorHQ")
+                let enrolled = try await passkey.session.enrollPerpl(label: "DyorHQ") // not localized: the key's label at Perpl
                 let token = PerplToken(enrolled.key, keyNonce: enrolled.keyNonce)
                 // Stored under the address it was enrolled for, whoever is signed in now (the Keychain is per address).
                 PerplKeychain.saveToken(token, address: address.checksummed)
@@ -306,7 +309,7 @@ final class PerplTrading: MeraSessionLifecycle {
                 let secret = PerplAuth.newSecret()
                 let publicKeyHex = try PerplAuth.publicKeyHex(secret: secret)
                 let auth = PerplAuthClient(chainId: Monad.chainId)
-                let payload = try await auth.requestPayload(address: address.checksummed, publicKeyHex: publicKeyHex, scopeMask: PerplScope.trade, label: "DyorHQ")
+                let payload = try await auth.requestPayload(address: address.checksummed, publicKeyHex: publicKeyHex, scopeMask: PerplScope.trade, label: "DyorHQ") // not localized: the key's label
                 let walletSignature = try await signer.signDigest(payload.digest)
                 let enrolled = try await auth.enroll(address: address.checksummed, secret: secret, payload: payload, walletSignature: walletSignature, scopeMask: PerplScope.trade)
                 PerplKeychain.save(enrolled, address: address.checksummed)
@@ -336,7 +339,7 @@ final class PerplTrading: MeraSessionLifecycle {
 
     private func requireBound(to address: Address, passkey: Bool) throws {
         guard isBound(to: address, passkey: passkey) else {
-            throw PerplTradeError.unavailable("You switched accounts while this was in progress. Nothing was applied to the account you're signed in to now.")
+            throw PerplTradeError.unavailable(tr("You switched accounts while this was in progress. Nothing was applied to the account you're signed in to now."))
         }
     }
 
@@ -466,8 +469,8 @@ final class PerplTrading: MeraSessionLifecycle {
     func enableForwarding(env: AppEnvironment, wallet: Wallet) async throws {
         let passkey = boundToPasskey
         let data = try ABI.encodeCall("allowOrderForwarding(bool)", [.bool(true)])
-        let hash = try await env.sender.run([.call(TransactionRequest(to: Perpl.exchange, data: data), label: "Enable one-click trading")], from: wallet) { _ in }
-        Activity.record(ActivityRecord(kind: .perp, title: "One-click trading enabled", subtitle: "Order forwarding authorized on Perpl", hash: hash, section: "perps"), owner: wallet.address)
+        let hash = try await env.sender.run([.call(TransactionRequest(to: Perpl.exchange, data: data), label: tr("Enable one-click trading"))], from: wallet) { _ in }
+        Activity.record(ActivityRecord(kind: .perp, title: tr("One-click trading enabled"), subtitle: tr("Order forwarding authorized on Perpl"), hash: hash, section: "perps"), owner: wallet.address)
         // The grant is for `wallet`'s Perpl account. If the user switched accounts while it confirmed, the account bound
         // now must not be marked as forwarding (its orders would be sent and refused), nor reconnected on its behalf.
         try requireBound(to: wallet.address, passkey: passkey)
@@ -611,13 +614,13 @@ final class PerplTrading: MeraSessionLifecycle {
                         approval: MeraSession.StepUp? = nil) async throws -> [PerplTriggerKind: TriggerChangeOutcome] {
         let side: PositionSide = position.isLong ? .long : .short
         let size = Double(position.sizeRaw) / pow(10, Double(market.lotDecimals))
-        guard position.isOpen, position.marketId == market.id, size > 0 else { throw PerplTradeError.invalidOrder("This position is no longer open.") }
+        guard position.isOpen, position.marketId == market.id, size > 0 else { throw PerplTradeError.invalidOrder(tr("This position is no longer open.")) }
         for change in changes {
             guard change.replacing.allSatisfy({ $0.marketId == market.id && $0.isTrigger && $0.protectsLong == position.isLong }) else {
-                throw PerplTradeError.invalidOrder("That trigger isn't on this position.")
+                throw PerplTradeError.invalidOrder(tr("That trigger isn't on this position."))
             }
             if let price = change.price, let problem = PerplTriggerRules.problem(change.kind, price: price, side: side, reference: reference, liquidation: liquidation, priceDecimals: market.priceDecimals) {
-                throw PerplTradeError.invalidOrder(problem.message(market: market, referenceName: "the mark price"))
+                throw PerplTradeError.invalidOrder(problem.message(market: market, referenceName: Self.markPriceName))
             }
         }
         if boundToPasskey {
@@ -627,7 +630,7 @@ final class PerplTrading: MeraSessionLifecycle {
         }
         // Cancel-then-place: leaving the app between the two must not freeze or close the socket with the old stop gone
         // and the new one unsent (GL-1).
-        let done = operation("Perpl TP/SL")
+        let done = operation("Perpl TP/SL") // not localized: the task's name
         defer { done() }
         await ensureConnected()
         let client = try liveClient()
@@ -646,7 +649,7 @@ final class PerplTrading: MeraSessionLifecycle {
                 }
                 cancelsSent.formUnion(change.replacing.map(\.id))
                 if let refused = acks.first(where: { !$0.accepted && !$0.outcomeUnknown }) {
-                    let why = refused.error ?? "Perpl refused the cancel."
+                    let why = refused.error ?? tr("Perpl refused the cancel.")
                     outcomes[change.kind] = acks.contains(where: \.accepted) ? .partlyRemoved(why) : .unchanged(why)
                     continue
                 }
@@ -662,7 +665,7 @@ final class PerplTrading: MeraSessionLifecycle {
                 : PerplOrders.stopLoss(side: side, price: price, size: size, market: market, accountId: accountId, linkedPositionId: position.pid)
             let ack: PerplOrderAck
             do {
-                ack = try await client.sendEach([frame]).first ?? PerplOrderAck(code: -1, error: "Not sent.")
+                ack = try await client.sendEach([frame]).first ?? PerplOrderAck(code: -1, error: tr("Not sent."))
             } catch {
                 ack = PerplOrderAck(code: -1, error: describe(error)) // never sent: refused on the device or no socket
             }
@@ -671,7 +674,8 @@ final class PerplTrading: MeraSessionLifecycle {
             } else if ack.outcomeUnknown {
                 outcomes[change.kind] = .placementUnknown
             } else {
-                outcomes[change.kind] = change.replacing.isEmpty ? .unchanged(ack.error ?? "Perpl refused it.") : .unprotected(ack.error ?? "Perpl refused it.")
+                let why = ack.error ?? tr("Perpl refused it.")
+                outcomes[change.kind] = change.replacing.isEmpty ? .unchanged(why) : .unprotected(why)
             }
         }
         return outcomes
@@ -798,7 +802,7 @@ final class PerplTrading: MeraSessionLifecycle {
             try? await Task.sleep(for: .milliseconds(100))
         }
         guard self.client === client, ordersAreLive, positionsAreLive else {
-            throw PerplTradeError.unavailable("Perpl hasn't sent your open orders yet, so take-profit and stop-loss left from an earlier position can't be checked. Nothing was sent. Try again in a moment.")
+            throw PerplTradeError.unavailable(tr("Perpl hasn't sent your open orders yet, so take-profit and stop-loss left from an earlier position can't be checked. Nothing was sent. Try again in a moment."))
         }
         let side = PerplMarketSide(marketId: input.market.id, isLong: input.side == .long)
         let leftovers = orphanedTriggers(onChainPositions: onChainPositions, onChainOrders: onChainOrders).filter { $0.side == side }
@@ -814,10 +818,25 @@ final class PerplTrading: MeraSessionLifecycle {
         }
     }
 
-    /// Why an order can't open on a side of a market where TP/SL from an earlier position are still armed.
+    /// Why an order can't open on a side of a market where TP/SL from an earlier position are still armed, in the app's
+    /// language. The count is a plural.
     static func leftoverMessage(count: Int, asset: String, side: PositionSide) -> String {
-        let one = count == 1
-        return "\(count) take-profit/stop-loss order\(one ? "" : "s") from an earlier \(asset) \(side == .long ? "long" : "short") \(one ? "is" : "are") still armed on Perpl and would act on this new position. Cancel \(one ? "it" : "them") from Orders first."
+        side == .long
+            ? tr("\(count) take-profit/stop-loss orders from an earlier \(asset) long are still armed on Perpl and would act on this new position. Cancel them from Orders first.")
+            : tr("\(count) take-profit/stop-loss orders from an earlier \(asset) short are still armed on Perpl and would act on this new position. Cancel them from Orders first.")
+    }
+
+    /// "the mark price", the price a trigger is checked against, in the app's language: it completes DyorKit's
+    /// trigger messages (`PerplTriggerRules.Problem.message`).
+    static var markPriceName: String {
+        tr(LocalizedStringResource("the mark price", comment: "Completes a sentence about where a take-profit or stop-loss must sit: “… above the mark price”."))
+    }
+
+    /// A position by its market and side, "BTC-PERP long", in the app's language.
+    static func positionName(market: String, isLong: Bool) -> String {
+        isLong
+            ? tr(LocalizedStringResource("\(market) long", comment: "A long position on the market that comes first: “BTC-PERP long”."))
+            : tr(LocalizedStringResource("\(market) short", comment: "A short position on the market that comes first: “BTC-PERP short”."))
     }
 
     /// Brings the trading stream up without a prompt (a key account, or a passkey account whose session is open) and
@@ -860,10 +879,12 @@ final class PerplTrading: MeraSessionLifecycle {
         for market in list { markets[market.id] = market }
     }
 
-    /// The trading stream saw this market's position end in the last few minutes (by an order, a trigger or the
-    /// protocol) and has already said so — the positions poll then stays quiet about it.
-    func sawEnding(marketId: Int, within window: TimeInterval = 300) -> Bool {
-        endingsSeen[marketId].map { Date().timeIntervalSince($0) < window } ?? false
+    /// The trading stream already said, in the last few minutes, how this market's position ended or was closing: Perpl
+    /// liquidated, deleveraged or unwound it, or a take-profit / stop-loss on it triggered. The app-wide watcher then
+    /// stays quiet about the position's ending, so it is one notice, not two. An ending the stream saw but didn't explain
+    /// (an order closed it, on this device or another) is the watcher's to report.
+    func endingExplained(marketId: Int, within window: TimeInterval = 300) -> Bool {
+        explainedEndings[marketId].map { Date().timeIntervalSince($0) < window } ?? false
     }
 
     func dismissProtectionNotice() { protectionNotice = nil }
@@ -891,14 +912,14 @@ final class PerplTrading: MeraSessionLifecycle {
         protectionNotice = nil
         cancelsSent = []
         recentEntries = [:]
-        endingsSeen = [:]
+        explainedEndings = [:]
     }
 
     /// The bound wallet, for owner-keyed records.
     private var boundOwner: Address? { boundAddress.flatMap { Address($0) } }
 
     private func marketName(_ id: Int) -> String {
-        let asset = markets[id]?.asset ?? PerplService.markets.first(where: { $0.id == id })?.symbol ?? "Market \(id)"
+        let asset = markets[id]?.asset ?? PerplService.markets.first(where: { $0.id == id })?.symbol ?? tr("Market \(String(id))")
         return "\(asset)-PERP"
     }
 
@@ -907,9 +928,8 @@ final class PerplTrading: MeraSessionLifecycle {
     /// most — the position is still open without it.
     private func triggerChanged(_ event: PerplTriggerEvent) {
         let order = event.order
-        let kind = order.isStopLoss ? "Stop-loss" : "Take-profit"
-        let side = order.protectsLong ? "long" : "short"
-        var detail = "\(marketName(order.marketId)) \(side)"
+        let stop = order.isStopLoss
+        var detail = Self.positionName(market: marketName(order.marketId), isLong: order.protectsLong)
         if let market = markets[order.marketId], let raw = order.triggerPriceRaw {
             detail += " · \(NumberStyle.number(Double(raw) / pow(10, Double(market.priceDecimals)))) · \(NumberStyle.number(Double(order.sizeRaw) / pow(10, Double(market.lotDecimals)))) \(market.asset)"
         }
@@ -918,18 +938,24 @@ final class PerplTrading: MeraSessionLifecycle {
         let warning: Bool
         switch event.outcome {
         case .triggered:
-            title = "\(kind) triggered"
-            body = "\(detail). Perpl is closing that part of the position."
+            title = stop ? tr("Stop-loss triggered") : tr("Take-profit triggered")
+            body = tr("\(detail). Perpl is closing that part of the position.")
             warning = false
+            explainedEndings[order.marketId] = Date()
         case .failed(let reason):
             // 64/67/68: it fired but couldn't execute; otherwise Perpl refused it after admitting it.
             let fired = [64, 67, 68].contains(reason)
-            title = fired ? "\(kind) couldn't execute" : "\(kind) not placed"
-            body = "\(detail). " + (fired ? "It triggered but Perpl couldn't close the position, so it is still open." : "Perpl refused it after accepting the order, so it isn't protecting your position.") + " Check the position on Perps."
+            if fired {
+                title = stop ? tr("Stop-loss couldn't execute") : tr("Take-profit couldn't execute")
+                body = tr("\(detail). It triggered but Perpl couldn't close the position, so it is still open. Check the position on Perps.")
+            } else {
+                title = stop ? tr("Stop-loss not placed") : tr("Take-profit not placed")
+                body = tr("\(detail). Perpl refused it after accepting the order, so it isn't protecting your position. Check the position on Perps.")
+            }
             warning = true
         case .expired:
-            title = "\(kind) expired"
-            body = "\(detail). It expired without triggering, so it no longer protects your position. Check the position on Perps."
+            title = stop ? tr("Stop-loss expired") : tr("Take-profit expired")
+            body = tr("\(detail). It expired without triggering, so it no longer protects your position. Check the position on Perps.")
             warning = true
         }
         publish(ProtectionNotice(marketId: order.marketId, title: title, body: body, warning: warning))
@@ -938,11 +964,22 @@ final class PerplTrading: MeraSessionLifecycle {
     /// A position ended on the stream. Liquidation, deleveraging or an unwind is reported like a fired trigger; any
     /// ending then cancels the TP/SL left over for that side (below).
     private func positionEnded(_ position: PerplLivePosition) {
-        endingsSeen[position.marketId] = Date()
         if position.endedByProtocol {
-            let how = position.wasLiquidated ? "liquidated" : position.statusRaw == 4 ? "deleveraged" : "unwound"
-            publish(ProtectionNotice(marketId: position.marketId, title: "Position \(how)",
-                                     body: "Your \(marketName(position.marketId)) \(position.isLong ? "long" : "short") was \(how) by Perpl.", warning: true))
+            explainedEndings[position.marketId] = Date()
+            let name = Self.positionName(market: marketName(position.marketId), isLong: position.isLong)
+            let title: String
+            let body: String
+            if position.wasLiquidated {
+                title = tr("Position liquidated")
+                body = tr("Your \(name) was liquidated by Perpl.")
+            } else if position.statusRaw == 4 {
+                title = tr("Position deleveraged")
+                body = tr("Your \(name) was deleveraged by Perpl.")
+            } else {
+                title = tr("Position unwound")
+                body = tr("Your \(name) was unwound by Perpl.")
+            }
+            publish(ProtectionNotice(marketId: position.marketId, title: title, body: body, warning: true))
         }
         cancelLeftovers(of: position)
     }
@@ -950,7 +987,9 @@ final class PerplTrading: MeraSessionLifecycle {
     private func publish(_ notice: ProtectionNotice) {
         protectionNotice = notice
         guard let owner = boundOwner else { return }
-        Activity.record(ActivityRecord(kind: .perp, title: notice.title, subtitle: notice.body, hash: nil, section: "perps"), owner: owner)
+        // A tap opens that market's position (`PerpAlertText.reference`).
+        Activity.record(ActivityRecord(kind: .perp, title: notice.title, subtitle: notice.body, hash: nil, section: "perps",
+                                       reference: PerpAlertText.reference(perpId: notice.marketId)), owner: owner)
     }
 
     /// Cancels the TP/SL that were closing `ended`'s side of its market, once it has closed (security audit GT-2).
@@ -977,7 +1016,7 @@ final class PerplTrading: MeraSessionLifecycle {
                 guard self.boundOwner == owner, let client = self.client, let accountId = client.accountId,
                       let leftovers = self.leftovers(of: ended) else { return }
                 self.cancelsSent.formUnion(leftovers.map(\.id))
-                let background = PerplBackgroundTime("Cancel leftover TP/SL")
+                let background = PerplBackgroundTime("Cancel leftover TP/SL") // not localized: the task's name
                 defer { background.end() }
                 guard let acks = try? await client.sendEach(leftovers.map { PerplOrders.cancel(perpId: $0.marketId, orderId: $0.oid, accountId: accountId, head: 0) }) else { return }
                 self.recordLeftoversCancelled(acks.filter(\.accepted).count, of: ended, owner: owner)
@@ -998,9 +1037,10 @@ final class PerplTrading: MeraSessionLifecycle {
     private func recordLeftoversCancelled(_ cancelled: Int, of ended: PerplLivePosition, owner: Address) {
         guard cancelled > 0 else { return }
         // Recorded quietly: the ending itself was the news.
-        Activity.record(ActivityRecord(kind: .perp, title: "Cancelled leftover TP/SL",
-                                       subtitle: "\(marketName(ended.marketId)) · \(cancelled) order\(cancelled == 1 ? "" : "s") from the closed \(ended.isLong ? "long" : "short")",
-                                       hash: nil, section: "perps"), owner: owner, notify: false)
+        let market = marketName(ended.marketId)
+        let subtitle = ended.isLong ? tr("\(market) · \(cancelled) orders from the closed long") : tr("\(market) · \(cancelled) orders from the closed short")
+        Activity.record(ActivityRecord(kind: .perp, title: tr("Cancelled leftover TP/SL"), subtitle: subtitle, hash: nil, section: "perps"),
+                        owner: owner, notify: false)
     }
 
     func forget(address: Address) {

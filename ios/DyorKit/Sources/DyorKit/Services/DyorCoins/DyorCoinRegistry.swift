@@ -315,7 +315,7 @@ public actor DyorCoinRegistry {
         let all = lists.flatMap { $0 }
         guard !all.isEmpty else { return lists.map { _ in [] } }
         do {
-            let answers = try await multicall.readItems(all.map(\.reads), text: Self.textCalls, what: "A DyorHQ coin")
+            let answers = try await multicall.readItems(all.map(\.reads), text: Self.textCalls, what: .dyorCoin)
             var out: [[[Result<[ABIValue], Error>]]?] = []
             var at = 0
             for list in lists {
@@ -326,7 +326,7 @@ public actor DyorCoinRegistry {
         } catch is ChainListUnread where lists.filter({ !$0.isEmpty }).count > 1 {
             var out: [[[Result<[ABIValue], Error>]]?] = []
             for list in lists {
-                out.append(list.isEmpty ? [] : try? await multicall.readItems(list.map(\.reads), text: Self.textCalls, what: "A DyorHQ coin"))
+                out.append(list.isEmpty ? [] : try? await multicall.readItems(list.map(\.reads), text: Self.textCalls, what: .dyorCoin))
             }
             return out
         } catch {
@@ -673,6 +673,6 @@ public actor DyorCoinRegistry {
     /// be read or no answer came.
     private func readItems(_ items: [[ContractCall]]) async -> [[Result<[ABIValue], Error>]]? {
         guard !items.isEmpty else { return [] }
-        return try? await multicall.readItems(items, text: Self.textCalls, what: "A DyorHQ coin")
+        return try? await multicall.readItems(items, text: Self.textCalls, what: .dyorCoin)
     }
 }

@@ -52,7 +52,7 @@ final class PastMomentsModel {
         guard requested == address else { return }
         positions = found
         error = failure
-        incomplete = cut ? "A past cohort has more Moments than the app reads at once, so one of yours may be missing here." : nil
+        incomplete = cut ? tr("A past cohort has more Moments than the app reads at once, so one of yours may be missing here.") : nil
         loadedFor = address
     }
 
@@ -103,11 +103,11 @@ struct PastMomentRow: View {
 
     private var summary: String {
         var parts: [String] = []
-        if position.row.nftBalance > 0 { parts.append("\(position.row.nftBalance) \(position.row.nftBalance == 1 ? "edition" : "editions")") }
-        if position.row.isCreator { parts.append("creator") }
-        if info.graduated, position.row.vesting > 0 { parts.append("\(MomentsFormat.coins(position.row.vesting)) vesting") }
-        if position.row.coinBalance > 0 { parts.append("\(MomentsFormat.coins(position.row.coinBalance)) in wallet") }
-        return parts.isEmpty ? "Collecting closed" : parts.joined(separator: " · ")
+        if position.row.nftBalance > 0 { parts.append(tr("\(position.row.nftBalance) editions")) }
+        if position.row.isCreator { parts.append(tr(LocalizedStringResource("creator", comment: "Among a Moment's summary parts: you published it"))) }
+        if info.graduated, position.row.vesting > 0 { parts.append(tr("\(MomentsFormat.coins(position.row.vesting)) vesting")) }
+        if position.row.coinBalance > 0 { parts.append(tr("\(MomentsFormat.coins(position.row.coinBalance)) in wallet")) }
+        return parts.isEmpty ? tr("Collecting closed") : parts.joined(separator: " · ")
     }
 
     var body: some View {
@@ -118,7 +118,7 @@ struct PastMomentRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(info.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text("$\(info.symbol)").font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: "$\(info.symbol)").font(.caption).foregroundStyle(.secondary)
                 }
                 Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
@@ -131,7 +131,9 @@ struct PastMomentRow: View {
                     Text(MomentsFormat.usdc(position.creatorWithdrawable)).font(.subheadline.weight(.semibold)).monospacedDigit()
                     Text("to withdraw").font(.caption2).foregroundStyle(.secondary)
                 } else {
-                    Text(info.graduated ? "Graduated" : info.state == .expired ? "Expired" : "Closed").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    (info.graduated ? Text("Graduated") : info.state == .expired ? Text("Expired")
+                        : Text(verbatim: tr(LocalizedStringResource("pastCohort.closed", defaultValue: "Closed", comment: "[tight] A past cohort Moment's status when it neither graduated nor expired: collecting it is closed in the app"))))
+                        .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
             }
             Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)

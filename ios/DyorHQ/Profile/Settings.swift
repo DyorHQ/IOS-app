@@ -21,7 +21,11 @@ struct ManageWalletsView: View {
             if let account = session.account {
                 Section {
                     AddressRow(title: "Address", address: account.address)
-                    LabeledContent("Sign-in", value: account.method.title)
+                    LabeledContent {
+                        Text(verbatim: account.method.title)
+                    } label: {
+                        Text("Sign-in", comment: "How this wallet signs in (Apple, Google, Email…), a noun [tight]")
+                    }
                     if let label = account.label { LabeledContent("Account", value: label) }
                 } header: {
                     Text("This Wallet")
@@ -67,12 +71,12 @@ struct ManageWalletsView: View {
                 }
             }
             Section("Network") {
-                LabeledContent("Chain", value: "Monad mainnet")
+                LabeledContent("Chain", value: tr("Monad mainnet"))
                 LabeledContent("Chain ID", value: "143")
                 LabeledContent("RPC", value: env.config.rpcURL.host() ?? "—")
             }
         }
-        .navigationTitle("Manage Wallets")
+        .navigationTitle(tr("Manage Wallets"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -93,7 +97,8 @@ struct SecurityView: View {
                     Button {
                         busy = true; message = nil
                         Task {
-                            do { try await session.createPasskey(displayName: "DyorHQ"); message = "Passkey added."; isError = false }
+                            // not localized: the passkey's name, the app's
+                            do { try await session.createPasskey(displayName: "DyorHQ"); message = tr("Passkey added."); isError = false }
                             catch { message = describe(error); isError = true }
                             busy = false
                         }
@@ -147,13 +152,14 @@ struct SecurityView: View {
                 }
             }
         }
-        .navigationTitle("Security")
+        .navigationTitle(tr("Security"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
 
 /// Notification preferences. Turning them on requests the system permission. Every notification is made on the
-/// device while DyorHQ runs — there is no push server — and the copy says so (security audit 2026-09-26, GL-4).
+/// device while DyorHQ runs — there is no push server — and the copy says so (security audit 2026-09-26, GL-4): alerts
+/// arrive while DyorHQ is open, on any screen (`AlertCenter`), and never while it is closed.
 struct NotificationsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(Session.self) private var session
@@ -167,28 +173,29 @@ struct NotificationsView: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     if denied { Text("Notifications are turned off for DyorHQ in iOS Settings. Enable them there to receive alerts.").foregroundStyle(Color.attention) }
-                    else { Text("DyorHQ notices fills and price alerts only while it's open. iOS pauses the app in the background, so they can't reach your lock screen while DyorHQ is closed.") }
+                    else { Text("Alerts arrive while DyorHQ is open. iOS pauses the app in the background, so nothing reaches your lock screen while DyorHQ is closed.") }
                     LearnMoreLink(.notificationsAndPriceAlerts)
                 }
             }
             Section {
                 Toggle("Swaps & Fills", isOn: $settings.notifyFills)
+                Toggle("Perps Margin Warnings", isOn: $settings.notifyMargin)
                 Toggle("Price Alerts", isOn: $settings.notifyPriceAlerts)
                 NavigationLink { PriceAlertsView() } label: {
                     HStack {
                         Label("Manage Price Alerts", systemImage: "bell.badge")
                         Spacer()
-                        Text("\(PriceAlertStore.all(owner: session.address).count)").foregroundStyle(.secondary)
+                        Text(verbatim: "\(PriceAlertStore.all(owner: session.address).count)").foregroundStyle(.secondary)
                     }
                 }
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("Order fills are noticed while the Perps screen is open, and price alerts while DyorHQ is open. Don't rely on either to protect a position: set a stop-loss on it. Everything is also kept in the in-app center.")
+                Text("Alerts arrive while DyorHQ is open, on any screen: order fills, a Perps position at 80% and 90% of its margin in use, and price alerts. Nothing arrives while DyorHQ is closed, so don't rely on them to protect a position: set a stop-loss on it. Everything is also kept in the in-app center.")
             }
             .disabled(!settings.notificationsEnabled)
         }
-        .navigationTitle("Notifications")
+        .navigationTitle(tr("Notifications"))
         .navigationBarTitleDisplayMode(.inline)
         .task { denied = await Notifications.authorizationStatus() == .denied }
         .onChange(of: settings.notificationsEnabled) { _, on in
@@ -225,7 +232,7 @@ struct TradingPreferencesView: View {
                 Text("The furthest a market order or swap may move from its quote before it is cancelled.")
             }
         }
-        .navigationTitle("Trading Preferences")
+        .navigationTitle(tr("Trading Preferences"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -319,14 +326,14 @@ struct PerplTradingView: View {
                 } message: {
                     // Removing the key cancels nothing (security audit GT-3): say what stays armed where the app can't see it.
                     if liveTriggerCount > 0 {
-                        Text("You have \(liveTriggerCount) take-profit/stop-loss order\(liveTriggerCount == 1 ? "" : "s") live on Perpl. Removing the key doesn't cancel \(liveTriggerCount == 1 ? "it" : "them"): \(liveTriggerCount == 1 ? "it stays" : "they stay") armed, and this device can't show or cancel \(liveTriggerCount == 1 ? "it" : "them") until you connect again.")
+                        Text("You have \(liveTriggerCount) take-profit/stop-loss orders live on Perpl. Removing the key doesn't cancel them: they stay armed, and this device can't show or cancel them until you connect again.")
                     } else {
                         Text("Any take-profit or stop-loss you have on Perpl stays live. This device can't show or cancel them until you connect again.")
                     }
                 }
             }
         }
-        .navigationTitle("Perpl Trading")
+        .navigationTitle(tr("Perpl Trading"))
         .navigationBarTitleDisplayMode(.inline)
         .task { trading.refresh(account: session.account) }
     }
@@ -339,11 +346,11 @@ struct PerplTradingView: View {
     @ViewBuilder private var statusLabel: some View {
         switch trading.status {
         case .notEnrolled: Text("Not connected").foregroundStyle(.secondary)
-        case .enrolled: Text("Enrolled").foregroundStyle(.secondary)
+        case .enrolled: Text("Enrolled", comment: "Perpl trading's status: a trading key is set up, not connected yet [tight]").foregroundStyle(.secondary)
         case .connecting: Text("Connecting…").foregroundStyle(.secondary)
-        case .needsForwarding: Text("Enable one-click").foregroundStyle(Color.attention)
-        case .connected: Text("Ready").foregroundStyle(Color.positive)
-        case .failed: Text("Error").foregroundStyle(Color.attention)
+        case .needsForwarding: Text("Enable one-click", comment: "Perpl trading's status: one-click trading still needs enabling [tight]").foregroundStyle(Color.attention)
+        case .connected: Text("Ready", comment: "Perpl trading's status: connected and ready to trade [tight]").foregroundStyle(Color.positive)
+        case .failed: Text("Error", comment: "Perpl trading's status: the connection failed, a noun [tight]").foregroundStyle(Color.attention)
         }
     }
 
@@ -369,17 +376,72 @@ struct PerplTradingView: View {
     }
 }
 
+/// The Language screen: System (the device's language, among those this build ships), then each language this build
+/// ships, in its own name. A choice applies at once and is saved as iOS's per-app language (`LanguageStore`), which
+/// Settings › Apps › DyorHQ › Language shows too. While English is the only language, the footer says more are coming.
 struct LanguageView: View {
+    @Environment(LanguageStore.self) private var language
+
     var body: some View {
         List {
             Section {
-                LabeledContent("Language", value: "English")
+                row(.system) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("System", comment: "Follows the device's own setting: on Appearance its light or dark look, on the Language screen and menu its language [tight]")
+                        Text("Uses your device language (\(language.deviceLanguageName))")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(language.available) { option in
+                    row(.language(option)) { Text(verbatim: option.endonym) }
+                }
             } footer: {
-                Text("DyorHQ follows your device language. More languages are coming.")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Screens iOS draws itself, such as Face ID and permission prompts, change the next time you open DyorHQ.")
+                    if language.available.count < 2 { Text("More languages are coming in the next update.") }
+                }
             }
         }
-        .navigationTitle("Language")
+        .navigationTitle(tr("Language"))
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// A choice, checked while it is the one in use.
+    private func row(_ choice: LanguageChoice, @ViewBuilder label: () -> some View) -> some View {
+        Button { language.select(choice) } label: {
+            HStack {
+                label()
+                Spacer()
+                if language.choice == choice {
+                    Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(.tint)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .foregroundStyle(.primary)
+        .accessibilityAddTraits(language.choice == choice ? .isSelected : [])
+    }
+}
+
+/// The onboarding hub's globe menu (owner decision 21): the Language screen's choices, before sign-in, through the same
+/// store. Offered once a second language ships; until then there is nothing to choose.
+struct LanguageMenu: View {
+    @Environment(LanguageStore.self) private var language
+
+    var body: some View {
+        Menu {
+            Picker("Language", selection: Binding(get: { language.choice }, set: { language.select($0) })) {
+                Text("System", comment: "Follows the device's own setting: on Appearance its light or dark look, on the Language screen and menu its language [tight]")
+                    .tag(LanguageChoice.system)
+                ForEach(language.available) { option in
+                    Text(verbatim: option.endonym).tag(LanguageChoice.language(option))
+                }
+            }
+        } label: {
+            Image(systemName: "globe")
+        }
+        .accessibilityLabel("Language")
     }
 }
 
@@ -419,7 +481,7 @@ struct AppearanceSheet: View {
                 Spacer()
             }
             .padding(20)
-            .navigationTitle("Appearance")
+            .navigationTitle(tr("Appearance"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
@@ -431,7 +493,7 @@ struct AppearanceSheet: View {
         .presentationBackground(Color(uiColor: .systemGroupedBackground.resolvedColor(with: UITraitCollection(userInterfaceStyle: settings.appearance.resolved == .dark ? .dark : .light))))
     }
 
-    private func swatch(_ color: Color, _ label: String) -> some View {
+    private func swatch(_ color: Color, _ label: LocalizedStringKey) -> some View {
         HStack(spacing: 8) {
             Circle().fill(color).frame(width: 12, height: 12)
             Text(label).font(.subheadline)
@@ -452,18 +514,21 @@ private struct MeraSessionSection: View {
         let mera = session.mera
         Section {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                LabeledContent("Session") {
+                LabeledContent {
                     if let expiresAt = mera.expiresAt, expiresAt > ctx.date {
                         let left = Int(expiresAt.timeIntervalSince(ctx.date))
-                        Text(String(format: "Unlocked · %02d:%02d left", left / 60, left % 60)).monospacedDigit().foregroundStyle(Color.positive)
+                        let clock = String(format: "%02d:%02d", left / 60, left % 60) // not localized: minutes and seconds
+                        Text("Unlocked · \(clock) left").monospacedDigit().foregroundStyle(Color.positive)
                     } else {
-                        Text("Locked").foregroundStyle(.secondary)
+                        Text("Locked", comment: "The passkey session is locked or has ended: the next signature asks for the passkey [tight]").foregroundStyle(.secondary)
                     }
+                } label: {
+                    Text("Session", comment: "The passkey's signing session, a label [tight]")
                 }
             }
             Picker("Prompt-free for", selection: Binding(get: { Int(mera.sessionLength) }, set: { change(to: TimeInterval($0)) })) {
                 ForEach(Mera.SessionLength.choices, id: \.self) { length in
-                    Text(length >= 3600 ? "1 hour" : "\(Int(length / 60)) minutes").tag(Int(length))
+                    Text(verbatim: Self.lengthText(length)).tag(Int(length))
                 }
             }
             .disabled(changing)
@@ -474,6 +539,11 @@ private struct MeraSessionSection: View {
             if let error { InlineError(message: error) }
             else { Text("Signs without another prompt until the session ends; then \(BiometricGate.promptName) again. A new length applies from the next session, and a longer one needs \(BiometricGate.promptName).") }
         }
+    }
+
+    /// A session length in the app's language's own units ("15 minutes", "1 hour").
+    private static func lengthText(_ length: TimeInterval) -> String {
+        Duration.seconds(Int(length)).formatted(.units(allowed: [.hours, .minutes], width: .wide).locale(L10n.locale))
     }
 
     /// Shorter is immediate; longer asks for the passkey (Face ID) and leaves the live session's end time as it is.

@@ -14,6 +14,11 @@ final class AppSettings {
     /// permission).
     var notifyFills: Bool { didSet { store(notifyFills, "settings.notifyFills") } }
     var notifyPriceAlerts: Bool { didSet { store(notifyPriceAlerts, "settings.notifyPrice") } }
+    /// Notify when an open Perps position's margin usage reaches 80% or 90%, or its mark comes within 10% of the
+    /// liquidation price (`PerpRiskLevel`), on any screen while the app is open. On by default. Like every switch here it
+    /// is saved only when changed (`didSet`), never by `init`, so it can't make a new install look like an earlier one
+    /// before App Lock's default is decided (rule R4).
+    var notifyMargin: Bool { didSet { store(notifyMargin, "settings.notifyMargin") } }
     /// Require Face ID / Touch ID before signing a transaction — a device-side second factor for a self-custodial
     /// wallet, enforced in the confirmation sheet. On by default for a new install (`appLockDefault`), and after this
     /// device's data is erased (`Session.eraseLocalData`). This device's own: it isn't mirrored to the backend (not in
@@ -32,6 +37,7 @@ final class AppSettings {
         notificationsEnabled = defaults.object(forKey: "settings.notifications") as? Bool ?? true
         notifyFills = defaults.object(forKey: "settings.notifyFills") as? Bool ?? true
         notifyPriceAlerts = defaults.object(forKey: "settings.notifyPrice") as? Bool ?? false
+        notifyMargin = defaults.object(forKey: "settings.notifyMargin") as? Bool ?? true
         requireBiometrics = defaults.object(forKey: "settings.biometrics") as? Bool ?? Self.appLockDefault(defaults)
         defaultLeverage = defaults.object(forKey: "settings.leverage") as? Double ?? TradingDefaults.leverage
         slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? TradingDefaults.slippageBps
@@ -66,7 +72,7 @@ final class AppSettings {
     /// The settings as a JSON object, for the backend copy (no keys, no addresses).
     var snapshot: [String: Any] {
         ["appearance": appearance.rawValue, "notificationsEnabled": notificationsEnabled, "notifyFills": notifyFills,
-         "notifyPriceAlerts": notifyPriceAlerts, "defaultLeverage": defaultLeverage, "slippageBps": slippageBps]
+         "notifyPriceAlerts": notifyPriceAlerts, "notifyMargin": notifyMargin, "defaultLeverage": defaultLeverage, "slippageBps": slippageBps]
     }
 
     /// Applies a backend copy of the settings (a fresh device after sign-in). The copy is checked first
@@ -78,6 +84,7 @@ final class AppSettings {
         if let v = restored.notificationsEnabled { notificationsEnabled = v }
         if let v = restored.notifyFills { notifyFills = v }
         if let v = restored.notifyPriceAlerts { notifyPriceAlerts = v }
+        if let v = restored.notifyMargin { notifyMargin = v }
         if let v = restored.defaultLeverage { defaultLeverage = v }
         if let v = restored.slippageBps { slippageBps = v }
     }
@@ -85,55 +92,57 @@ final class AppSettings {
 
 /// Face ID / Touch ID gate used before signing when the user turns on the app lock.
 enum BiometricGate {
+    /// What the device's owner check asks for (`BiometricPromptKind`): the prompt's name and its icon both come from it,
+    /// so the icon never depends on translated text.
+    typealias PromptKind = BiometricPromptKind
+
     /// Whether the device can do biometric auth at all (so we don't offer a toggle that can never work).
     static var isAvailable: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) }
 
-    /// "Face ID", "Touch ID", or a generic name for the copy in Security.
+    /// "Face ID", "Touch ID", or a generic name for the copy in Security, in the app's language.
     static var typeName: String {
         let context = LAContext()
         _ = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
-        switch context.biometryType {
-        case .faceID: return "Face ID"
-        case .touchID: return "Touch ID"
-        case .opticID: return "Optic ID"
-        default: return "Biometrics"
-        }
+        let kind = PromptKind(biometricsAvailable: true, biometry: context.biometryType)
+        return kind == .passcode ? tr("Biometrics") : kind.name
     }
 
-    /// What this device's passkey prompt asks for, in copy like "Confirm with Face ID" and "Face ID required: …":
-    /// "Face ID", "Touch ID" or "Optic ID", and "Passcode" when no biometrics are enrolled (a passkey then takes the
-    /// device passcode). Read once per launch.
-    static let promptName: String = {
+    /// What this device's passkey prompt asks for: Face ID, Touch ID or Optic ID, and the passcode when no biometrics
+    /// are enrolled (a passkey then takes the device passcode). Read once per launch.
+    static let promptKind: PromptKind = {
         let context = LAContext()
-        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else { return "Passcode" }
-        switch context.biometryType {
-        case .faceID: return "Face ID"
-        case .touchID: return "Touch ID"
-        case .opticID: return "Optic ID"
-        default: return "Passcode"
-        }
+        let available = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+        return PromptKind(biometricsAvailable: available, biometry: context.biometryType)
     }()
 
-    /// The SF Symbol for `promptName`.
-    static let promptSymbol: String = {
-        switch promptName {
-        case "Face ID": return "faceid"
-        case "Touch ID": return "touchid"
-        case "Optic ID": return "opticid"
-        default: return "lock"
-        }
-    }()
+    /// The prompt's name in copy like "Confirm with Face ID" and "Face ID required: …": Apple's names as they are, and
+    /// "Passcode" in the app's language.
+    static var promptName: String { promptKind.name }
+
+    /// The SF Symbol for the prompt, from its kind: never from its name, which is translated.
+    static var promptSymbol: String { promptKind.symbol }
 
     /// Whether the device can verify its owner at all — biometrics or the device passcode.
     static var canAuthenticateOwner: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) }
 
     /// Verifies the device owner before a sensitive action: Face ID / Touch ID, falling back to the device passcode
     /// (after a biometric lockout, or when no biometrics are enrolled). FAILS CLOSED — if the owner can't be verified
-    /// at all (no passcode set) or verification fails, it returns false and the action must not proceed.
+    /// at all (no passcode set) or verification fails, it returns false and the action must not proceed. `reason` is
+    /// written in the code ("Confirm order"), and iOS shows it in the prompt in the app's language.
     @MainActor
-    static func authenticate(reason: String) async -> Bool {
+    static func authenticate(reason: LocalizedStringResource) async -> Bool {
+        await authenticate(reason: tr(reason))
+    }
+
+    /// The same check for a reason that is already in the app's language (a `tr("…")`), shown as it is. It is generic
+    /// and disfavoured, so a reason written as a literal still takes the one above and is looked up as a key: a plain
+    /// `String` overload, even disfavoured, would take every literal and show it untranslated.
+    @MainActor
+    @_disfavoredOverload
+    static func authenticate<S: StringProtocol>(reason verbatim: S) async -> Bool {
         let context = LAContext()
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else { return false }
+        let reason = String(verbatim)
         BiometricPrompt.shared.showing += 1
         defer { BiometricPrompt.shared.showing -= 1 }
         return await withCheckedContinuation { continuation in
@@ -211,7 +220,14 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
         }
     }
 
-    var label: String { rawValue.capitalized }
+    /// The mode's name on the Appearance sheet and in Profile, in the app's language.
+    var label: String {
+        switch self {
+        case .system: tr(LocalizedStringResource("System", comment: "Follows the device's own setting: on Appearance its light or dark look, on the Language screen and menu its language [tight]"))
+        case .light: tr(LocalizedStringResource("Light", comment: "Appearance: the light look [tight]"))
+        case .dark: tr(LocalizedStringResource("Dark", comment: "Appearance: the dark look [tight]"))
+        }
+    }
     var symbol: String {
         switch self {
         case .system: "circle.lefthalf.filled"

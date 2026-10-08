@@ -22,9 +22,9 @@ extension Mera {
 
         public var errorDescription: String? {
             switch self {
-            case .sessionEnded: return "Your passkey session ended before this finished. Nothing was signed; try again."
-            case .noUtilityOutput: return "This passkey hasn’t unlocked DyorHQ’s trading key yet. Try again to confirm with your passkey."
-            case .malformedOutput: return "The passkey returned an output DyorHQ can’t use."
+            case .sessionEnded: return L10n.tr("Your passkey session ended before this finished. Nothing was signed; try again.")
+            case .noUtilityOutput: return L10n.tr("This passkey hasn’t unlocked DyorHQ’s trading key yet. Try again to confirm with your passkey.")
+            case .malformedOutput: return L10n.tr("The passkey returned an output DyorHQ can’t use.")
             }
         }
     }

@@ -66,6 +66,7 @@ struct DyorListing: Hashable, Sendable {
         }
     }
 
+    // not localized: identifiers (`PriceInfo.source`), never shown; `PriceInfo.sourceLine` names the venue
     static let curveLabel = "DyorHQ curve"
     static let mondayLabel = "Monday Trade"
     static let v4Label = "Uniswap v4"

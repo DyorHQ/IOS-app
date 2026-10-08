@@ -77,14 +77,16 @@ struct MomentDetailView: View {
     private var headerSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 12) {
-                MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: info.moment.creator)
-                    .frame(maxWidth: .infinity)
+                // The art fills a box the row's width decides: drawn straight in a flexible frame, a filled image wider than
+                // 240 pt tall allows widened the whole header past the row, cutting off the name and the badge at the left.
+                Color(.tertiarySystemFill)
                     .frame(height: 240)
+                    .overlay { MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: info.moment.creator) }
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(info.name).font(.title2.weight(.semibold)).lineLimit(2)
-                        Text("$\(info.symbol)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                        Text(verbatim: "$\(info.symbol)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                     }
                     MomentStateBadge(info: info, now: now)
                     HStack(spacing: 6) {
@@ -104,13 +106,13 @@ struct MomentDetailView: View {
             Gauge(value: min(1, Double(info.progressBps) / 10_000)) {
                 Text("Graduation")
             } currentValueLabel: {
-                Text("\(info.progressBps / 100)%")
+                Text(verbatim: "\(info.progressBps / 100)%")
             }
             .gaugeStyle(.accessoryLinearCapacity)
             .tint(.brand)
-            LabeledContent("Reserve", value: "\(MomentsFormat.usdcCents(info.ledger.reserve)) of \(MomentsFormat.usdcCents(m.threshold))")
+            LabeledContent("Reserve", value: tr("\(MomentsFormat.usdcCents(info.ledger.reserve)) of \(MomentsFormat.usdcCents(m.threshold))"))
             if info.state == .collecting, now < m.deadline {
-                LabeledContent("Still needed", value: "\(MomentsFormat.usdcCents(info.reserveRemaining)) · about \(info.collectsToGraduate) \(info.collectsToGraduate == 1 ? "collect" : "collects")")
+                LabeledContent("Still needed", value: tr("\(MomentsFormat.usdcCents(info.reserveRemaining)) · about \(info.collectsToGraduate) collects"))
                 LabeledContent("Window closes", value: MomentsFormat.date(m.deadline))
             }
         } footer: {
@@ -122,31 +124,32 @@ struct MomentDetailView: View {
         Section {
             HStack(spacing: 0) {
                 if info.graduated, let pool = info.pool {
-                    stat("Coin price", MomentsFormat.coinPrice(pool.usdcPerCoin), spoken: MomentsFormat.coinPriceSpoken(pool.usdcPerCoin))
+                    stat(Text("Coin price", comment: "[tight] Moment stat: the coin's price"), MomentsFormat.coinPrice(pool.usdcPerCoin), spoken: MomentsFormat.coinPriceSpoken(pool.usdcPerCoin))
                     Divider().frame(height: 34)
-                    stat("FDV", MomentsFormat.fdv(pool.fdvUSD))
+                    stat(Text("FDV", comment: "[tight] Fully diluted valuation: a stat on a Moment's page and on its card"), MomentsFormat.fdv(pool.fdvUSD))
                     Divider().frame(height: 34)
-                    stat("Since open", pool.changeSinceOpen.map { NumberStyle.percent($0) } ?? "—")
+                    stat(Text("Since open", comment: "[tight] Moment stat: the price change since the pool opened"), pool.changeSinceOpen.map { NumberStyle.percent($0) } ?? "—")
                 } else {
-                    stat("Per edition", MomentsFormat.usdc(m.price))
+                    stat(Text("Per edition", comment: "[tight] The price of one edition: a stat on a Moment's page and on its card"), MomentsFormat.usdc(m.price))
                     Divider().frame(height: 34)
                     // The pool opens at the collect price, so this is fixed at publish — the coin's valuation on day one.
-                    stat("Graduation FDV", MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: m.threshold, reserveBps: m.reserveBps, creatorAllocBps: m.creatorAllocBps)))
+                    stat(Text("Graduation FDV", comment: "[tight] Moment stat: the fully diluted valuation the coin graduates at"), MomentsFormat.fdv(MomentsMath.graduationFDV(threshold: m.threshold, reserveBps: m.reserveBps, creatorAllocBps: m.creatorAllocBps)))
                     Divider().frame(height: 34)
-                    stat("Editions", "\(info.editions)")
+                    stat(Text("Editions", comment: "[tight] How many editions of a Moment were collected: a stat on the Moment's page and on its card"), "\(info.editions)")
                     Divider().frame(height: 34)
-                    stat("Collects", "\(info.ledger.collects)")
+                    stat(Text("Collects", comment: "[tight] Moment stat: how many collects there were (a noun)"), "\(info.ledger.collects)")
                 }
             }
         }
     }
 
-    /// `spoken` is what VoiceOver reads for `value` when the two differ (a subscripted price, `PriceFormat.spoken`).
-    private func stat(_ label: String, _ value: String, spoken: String? = nil) -> some View {
+    /// `label` is a `Text` so its key carries a translator's note; `spoken` is what VoiceOver reads for `value` when the
+    /// two differ (a subscripted price, `PriceFormat.spoken`).
+    private func stat(_ label: Text, _ value: String, spoken: String? = nil) -> some View {
         VStack(spacing: 3) {
             Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
                 .accessibilityLabel(spoken ?? value)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+            label.font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
     }
@@ -157,14 +160,15 @@ struct MomentDetailView: View {
                 HStack {
                     Text("Editions")
                     Spacer()
-                    Text("\(quantity)").monospacedDigit().fontWeight(.semibold)
+                    Text(verbatim: "\(quantity)").monospacedDigit().fontWeight(.semibold)
                 }
             }
             if let quote {
+                let editions = Int(clamping: quote.editions)
                 LabeledContent("You pay") { Text(MomentsFormat.usdc(quote.gross)).monospacedDigit().fontWeight(.semibold) }
-                LabeledContent("You get") { Text("\(quote.editions) \(quote.editions == 1 ? "edition" : "editions") · \(MomentsFormat.coins(quote.entitlement)) $\(info.symbol)").monospacedDigit().multilineTextAlignment(.trailing) }
+                LabeledContent("You get") { Text("\(editions) editions · \(MomentsFormat.coins(quote.entitlement)) $\(info.symbol)").monospacedDigit().multilineTextAlignment(.trailing) }
                 if quote.terminal {
-                    Label("This collect completes the Moment: it takes only what the reserve still needs (\(MomentsFormat.usdc(quote.gross)) for \(quote.editions) \(quote.editions == 1 ? "edition" : "editions")) and graduates the coin in the same transaction.", systemImage: "sparkles")
+                    Label("This collect completes the Moment: it takes only what the reserve still needs (\(MomentsFormat.usdc(quote.gross)) for \(editions) editions) and graduates the coin in the same transaction.", systemImage: "sparkles")
                         .font(.footnote).foregroundStyle(Color.brand)
                 }
             } else if let quoteReason {
@@ -180,7 +184,7 @@ struct MomentDetailView: View {
                     Haptics.tap()
                     action = .collect
                 } label: {
-                    Label(quote?.terminal == true ? "Collect and Graduate" : "Collect \(quantity) \(quantity == 1 ? "Edition" : "Editions")", systemImage: "camera.aperture")
+                    Label(quote?.terminal == true ? "Collect and Graduate" : "Collect \(quantity) Editions", systemImage: "camera.aperture")
                         .fontWeight(.semibold)
                 }
                 .disabled(quote == nil || insufficient)
@@ -188,7 +192,7 @@ struct MomentDetailView: View {
                 Text(session.address == nil ? "Sign in to collect." : "You are watching this address. Sign in to collect.").font(.footnote).foregroundStyle(.secondary)
             }
         } header: {
-            Text("Collect")
+            Text("Collect", comment: "Collect (buy) editions of this Moment, a verb: the section header on the Moment's page and its button")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Paid in USDC: \(NumberStyle.basisPoints(m.reserveBps)) reserve, \(NumberStyle.basisPoints(m.creatorBps)) creator, \(NumberStyle.basisPoints(m.platformBps)) DyorHQ. Your NFT appears on OpenSea as soon as it settles.")
@@ -219,7 +223,7 @@ struct MomentDetailView: View {
             Text("The window closed before the threshold; the reserve was wound down. Editions stay with their collectors.")
                 .font(.footnote).foregroundStyle(.secondary)
         } header: {
-            Text("Expired")
+            Text("Expired", comment: "[tight] The Moment expired before graduating: a badge, a status and a section header")
         }
     }
 
@@ -231,7 +235,7 @@ struct MomentDetailView: View {
                 .font(.footnote).foregroundStyle(.secondary)
             Button("Expire Moment", systemImage: "xmark.circle") { Haptics.tap(); action = .expire }.disabled(!session.canSign)
         } header: {
-            Text("Window Closed")
+            Text("Window Closed", comment: "Section header: the collect window has closed (not a screen window)")
         }
     }
 
@@ -240,12 +244,12 @@ struct MomentDetailView: View {
             if account.nftBalance > 0 {
                 LabeledContent("Editions", value: account.nftIds.isEmpty ? "\(account.nftBalance)" : account.nftIds.prefix(6).map { "#\($0)" }.joined(separator: ", ") + (account.nftIds.count > 6 ? " +\(account.nftIds.count - 6)" : ""))
                 ForEach(account.nftIds.prefix(3), id: \.self) { id in
-                    Link(destination: OpenSea.item(contract: m.nft, tokenId: id)) { Label("View #\(id) on OpenSea", systemImage: "sailboat") }
+                    Link(destination: OpenSea.item(contract: m.nft, tokenId: id)) { Label("View #\(String(id)) on OpenSea", systemImage: "sailboat") }
                 }
             }
             if account.entitlement > 0 { LabeledContent("Coins owed", value: "\(MomentsFormat.coins(account.entitlement)) $\(info.symbol)") }
             if info.graduated {
-                LabeledContent("Claimable now") { Text("\(MomentsFormat.coins(account.claimable)) $\(info.symbol)").monospacedDigit().fontWeight(account.claimable > 0 ? .semibold : .regular).foregroundStyle(account.claimable > 0 ? Color.brand : .primary) }
+                LabeledContent("Claimable now") { Text(verbatim: "\(MomentsFormat.coins(account.claimable)) $\(info.symbol)").monospacedDigit().fontWeight(account.claimable > 0 ? .semibold : .regular).foregroundStyle(account.claimable > 0 ? Color.brand : .primary) }
                 LabeledContent("Claimed", value: "\(MomentsFormat.coins(account.claimed)) $\(info.symbol)")
                 LabeledContent("Vested", value: "\(MomentsMath.collectorVestedBps(graduatedAt: info.pool?.graduatedAt ?? 0, now: now) / 100)%")
                 if account.claimable > 0 {
@@ -257,7 +261,7 @@ struct MomentDetailView: View {
                 if let pool = info.pool { LabeledContent("Value") { USDText(value: MomentsMath.coins(account.coinBalance) * pool.usdcPerCoin) } }
             }
         } header: {
-            Text("Your Position")
+            Text("Your Position", comment: "Section header: the wallet's editions and coins of this Moment")
         } footer: {
             // Where a collector's coins vest and are claimed.
             VStack(alignment: .leading, spacing: 4) {
@@ -279,7 +283,7 @@ struct MomentDetailView: View {
                     Button("Withdraw Pool Fees", systemImage: "banknote") { Haptics.tap(); action = .creatorFees }.disabled(!session.canSign)
                 }
                 if let account {
-                    LabeledContent("Allocation claimable") { Text("\(MomentsFormat.coins(account.claimableCreator)) $\(info.symbol)").monospacedDigit() }
+                    LabeledContent("Allocation claimable") { Text(verbatim: "\(MomentsFormat.coins(account.claimableCreator)) $\(info.symbol)").monospacedDigit() }
                     LabeledContent("Allocation vested", value: "\(MomentsMath.creatorVestedBps(graduatedAt: info.pool?.graduatedAt ?? 0, now: now) / 100)%")
                 }
             }
@@ -317,8 +321,8 @@ struct MomentDetailView: View {
             LabeledContent("Opened at") { Text(MomentsFormat.coinPrice(opened)).accessibilityLabel(MomentsFormat.coinPriceSpoken(opened)) }
             LabeledContent("Graduated", value: MomentsFormat.date(pool.graduatedAt))
             LabeledContent("Seeded with", value: "\(MomentsFormat.usdc(pool.reserveSeed)) + \(MomentsFormat.coins(pool.poolCoins)) $\(info.symbol)")
-            LabeledContent("Position", value: "Full range · locked forever")
-            LabeledContent("Fees accrued", value: "creator \(MomentsFormat.usdc(pool.creatorFees)) · DyorHQ \(MomentsFormat.usdc(pool.platformFees)) · buyback \(MomentsFormat.usdc(pool.buybackFees))")
+            LabeledContent("Position", value: tr("Full range · locked forever"))
+            LabeledContent("Fees accrued", value: tr("creator \(MomentsFormat.usdc(pool.creatorFees)) · DyorHQ \(MomentsFormat.usdc(pool.platformFees)) · buyback \(MomentsFormat.usdc(pool.buybackFees))"))
             LabeledContent("Buyback budget", value: MomentsFormat.usdc(pool.buybackBudget))
             // v2: each round adds at most 0.5% of the position as liquidity; the rest waits in the locker for later rounds.
             if let held = pool.heldForLaterRounds, held > 0 {
@@ -341,7 +345,7 @@ struct MomentDetailView: View {
                 Label("Past cohort · trading closed", systemImage: "lock").foregroundStyle(.secondary)
             }
         } header: {
-            Text("Pool")
+            Text("Pool", comment: "Section header: the coin's liquidity pool")
         } footer: {
             Text("Liquidity locked forever in Uniswap v4. Every trade pays 1.5%: pool, creator, DyorHQ and buybacks.")
         }
@@ -351,12 +355,12 @@ struct MomentDetailView: View {
         Section("Holders") {
             LabeledContent("Edition holders", value: nftHolders.map { "\($0.holders)" } ?? "—")
             if let top = nftHolders?.topHolder, let count = nftHolders?.topCount, count > 0 {
-                LabeledContent("Largest", value: "\(top.short) · \(count) \(count == 1 ? "edition" : "editions")")
+                LabeledContent("Largest", value: tr("\(top.short) · \(count) editions"))
             }
             if info.graduated {
                 LabeledContent("Coin holders", value: holderStats.map { "\($0.holders)" } ?? "—")
                 if let stats = holderStats, stats.holders > 0 {
-                    LabeledContent("Top wallet", value: "\(stats.topHolder?.short ?? "—") · \(NumberStyle.basisPoints(stats.topHolderBps)) of circulating")
+                    LabeledContent("Top wallet", value: tr("\(stats.topHolder?.short ?? "—") · \(NumberStyle.basisPoints(stats.topHolderBps)) of circulating"))
                     LabeledContent("In the pool", value: NumberStyle.basisPoints(stats.poolBps))
                 }
             }
@@ -367,13 +371,13 @@ struct MomentDetailView: View {
         Section {
             AddressRow(title: "Creator", address: m.creator)
             LabeledContent("Published", value: MomentsFormat.date(m.publishedAt))
-            LabeledContent("Collect window", value: "until \(MomentsFormat.date(m.deadline))")
-            LabeledContent("Split", value: "\(NumberStyle.basisPoints(m.reserveBps)) reserve · \(NumberStyle.basisPoints(m.creatorBps)) creator · \(NumberStyle.basisPoints(m.platformBps)) DyorHQ")
+            LabeledContent("Collect window", value: tr("until \(MomentsFormat.date(m.deadline))"))
+            LabeledContent("Split", value: tr("\(NumberStyle.basisPoints(m.reserveBps)) reserve · \(NumberStyle.basisPoints(m.creatorBps)) creator · \(NumberStyle.basisPoints(m.platformBps)) DyorHQ"))
             LabeledContent("Creator allocation", value: NumberStyle.basisPoints(m.creatorAllocBps))
             LabeledContent("NFT royalty", value: NumberStyle.basisPoints(m.royaltyBps))
             LabeledContent("Supply", value: "\(MomentsFormat.coins(MomentsConstants.supply)) $\(info.symbol)")
             if let detail {
-                LabeledContent("Owed to collectors", value: "\(MomentsFormat.coins(detail.supply.entitlements)) · \(detail.supply.collects) collects")
+                LabeledContent("Owed to collectors", value: tr("\(MomentsFormat.coins(detail.supply.entitlements)) · \(detail.supply.collects) collects"))
                 LabeledContent("Minted so far", value: MomentsFormat.coins(detail.coinTotalSupply))
             }
             if !info.provenance.mediaHash.isEmpty, info.provenance.mediaHash.contains(where: { $0 != 0 }) {
@@ -400,7 +404,8 @@ struct MomentDetailView: View {
         switch which {
         case .collect:
             ConfirmationSheet(
-                title: "Collect \(info.symbol)", confirmTitle: quote?.terminal == true ? "Collect and Graduate" : "Collect",
+                title: "Collect \(info.symbol)",
+                confirmTitle: quote?.terminal == true ? "Collect and Graduate" : LocalizedStringResource("Collect", comment: "Collect (buy) editions of this Moment, a verb: the section header on the Moment's page and its button"),
                 build: {
                     // Every account: an exact USDC approval of the collect contract, then collect. Nothing is signed when
                     // the sheet opens — the Permit2 path signed its transfer here, before Confirm and App Lock (IOST-6) —
@@ -410,74 +415,75 @@ struct MomentDetailView: View {
                 },
                 onDone: { finished() },
                 onCompleted: { hash in
-                    Activity.record(ActivityRecord(kind: .moment, title: "Collected \(info.name)", subtitle: "\(quantity) \(quantity == 1 ? "edition" : "editions") · \(MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))", hash: hash, section: "moments", usd: MomentsMath.usdc(quote?.gross ?? m.price * BigUInt(quantity)), reference: m.id.description), owner: session.address)
+                    // Recorded in the language in use; `section` is an identifier, never translated.
+                    Activity.record(ActivityRecord(kind: .moment, title: tr("Collected \(info.name)"), subtitle: tr("\(quantity) editions · \(MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))"), hash: hash, section: "moments", usd: MomentsMath.usdc(quote?.gross ?? m.price * BigUInt(quantity)), reference: m.id.description), owner: session.address)
                 },
                 // The settled sheet's View control opens the newest edition on OpenSea, where the NFT now lives.
                 onView: { _ in openURL(OpenSea.item(contract: m.nft, tokenId: BigUInt((detail?.supply.collects ?? 0) + quantity))) },
                 intent: .momentsCollect(pay: .init(token: env.config.moments.usdc, amount: collectGross), usd: MomentsMath.usdc(collectGross))
             ) {
-                DetailRow("Moment", "\(info.name) ($\(info.symbol))")
-                DetailRow("Editions", "\(quantity)")
+                DetailRow("Moment", verbatim: "\(info.name) ($\(info.symbol))")
+                DetailRow("Editions", verbatim: "\(quantity)")
                 DetailRow("You pay", MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))
-                DetailRow("Coins owed", "\(MomentsFormat.coins(quote?.entitlement ?? 0)) $\(info.symbol)")
+                DetailRow("Coins owed", verbatim: "\(MomentsFormat.coins(quote?.entitlement ?? 0)) $\(info.symbol)")
                 DetailRow("Your NFT", "On OpenSea once it settles")
                 if quote?.terminal == true { DetailRow("Graduates", "Yes, in this transaction", tint: .brand) }
             }
         case .claim:
             ConfirmationSheet(title: "Claim \(info.symbol)", confirmTitle: "Claim", build: { await env.moments.claimPlan(momentId: m.id, symbol: info.symbol) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: "Claimed $\(info.symbol)", subtitle: "\(MomentsFormat.coins(account?.claimable ?? 0)) vested coins", hash: hash, section: "moments", reference: m.id.description), owner: session.address) },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: tr("Claimed $\(info.symbol)"), subtitle: tr("\(MomentsFormat.coins(account?.claimable ?? 0)) vested coins"), hash: hash, section: "moments", reference: m.id.description), owner: session.address) },
                               intent: .momentsClaim) {
-                DetailRow("Claimable", "\(MomentsFormat.coins(account?.claimable ?? 0)) $\(info.symbol)")
+                DetailRow("Claimable", verbatim: "\(MomentsFormat.coins(account?.claimable ?? 0)) $\(info.symbol)")
             }
         case .creatorProceeds:
             ConfirmationSheet(title: "Withdraw Proceeds", confirmTitle: "Withdraw", build: { await env.moments.withdrawCreatorProceedsPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) proceeds", subtitle: "\(MomentsFormat.usdc(account?.creatorProceeds ?? 0)) creator proceeds", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorProceeds ?? 0), reference: m.id.description), owner: session.address) },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: tr("Collected $\(info.symbol) proceeds"), subtitle: tr("\(MomentsFormat.usdc(account?.creatorProceeds ?? 0)) creator proceeds"), hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorProceeds ?? 0), reference: m.id.description), owner: session.address) },
                               intent: .momentsWithdraw) {
                 DetailRow("Proceeds", MomentsFormat.usdc(account?.creatorProceeds ?? 0))
             }
         case .creatorFees:
             ConfirmationSheet(title: "Withdraw Pool Fees", confirmTitle: "Withdraw", build: { await env.moments.withdrawCreatorFeesPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected $\(info.symbol) pool fees", subtitle: "\(MomentsFormat.usdc(account?.creatorFees ?? 0)) trading fees", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorFees ?? 0), reference: m.id.description), owner: session.address) },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: tr("Collected $\(info.symbol) pool fees"), subtitle: tr("\(MomentsFormat.usdc(account?.creatorFees ?? 0)) trading fees"), hash: hash, section: "moments", usd: MomentsMath.usdc(account?.creatorFees ?? 0), reference: m.id.description), owner: session.address) },
                               intent: .momentsWithdraw) {
                 DetailRow("Pool fees", MomentsFormat.usdc(account?.creatorFees ?? 0))
             }
         case .platformProceeds:
             ConfirmationSheet(title: "Withdraw Platform Proceeds", confirmTitle: "Withdraw", build: { await env.moments.withdrawPlatformProceedsPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected platform proceeds", subtitle: "\(MomentsFormat.usdc(account?.platformProceeds ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.platformProceeds ?? 0), reference: m.id.description), owner: session.address) },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: tr("Collected platform proceeds"), subtitle: "\(MomentsFormat.usdc(account?.platformProceeds ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.platformProceeds ?? 0), reference: m.id.description), owner: session.address) },
                               intent: .alwaysAsks(.withdrawElsewhere)) {
                 DetailRow("Proceeds", MomentsFormat.usdc(account?.platformProceeds ?? 0))
             }
         case .platformFees:
             ConfirmationSheet(title: "Withdraw Platform Fees", confirmTitle: "Withdraw", build: { await env.moments.withdrawPlatformFeesPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected platform pool fees", subtitle: "\(MomentsFormat.usdc(account?.platformFees ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.platformFees ?? 0), reference: m.id.description), owner: session.address) },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: tr("Collected platform pool fees"), subtitle: "\(MomentsFormat.usdc(account?.platformFees ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.platformFees ?? 0), reference: m.id.description), owner: session.address) },
                               intent: .alwaysAsks(.withdrawElsewhere)) {
                 DetailRow("Pool fees", MomentsFormat.usdc(account?.platformFees ?? 0))
             }
         case .treasuryProceeds:
             ConfirmationSheet(title: "Withdraw Treasury Share", confirmTitle: "Withdraw", build: { await env.moments.withdrawTreasuryProceedsPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: "Collected treasury share", subtitle: "\(MomentsFormat.usdc(account?.treasuryProceeds ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.treasuryProceeds ?? 0), reference: m.id.description), owner: session.address) },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: tr("Collected treasury share"), subtitle: "\(MomentsFormat.usdc(account?.treasuryProceeds ?? 0)) · $\(info.symbol)", hash: hash, section: "moments", usd: MomentsMath.usdc(account?.treasuryProceeds ?? 0), reference: m.id.description), owner: session.address) },
                               intent: .alwaysAsks(.withdrawElsewhere)) {
                 DetailRow("Treasury share", MomentsFormat.usdc(account?.treasuryProceeds ?? 0))
             }
         case .retry:
             ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Retry", build: { await env.moments.retryGraduationPlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Graduated $\(info.symbol)", subtitle: "\(MomentsFormat.usdcCents(info.ledger.reserve)) reserve into a locked pool", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: tr("Graduated $\(info.symbol)"), subtitle: tr("\(MomentsFormat.usdcCents(info.ledger.reserve)) reserve into a locked pool"), hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
                 DetailRow("Reserve", MomentsFormat.usdcCents(info.ledger.reserve))
                 DetailRow("Pool", "\(MomentsFormat.usdcCents(info.ledger.reserve)) + coins, locked")
             }
         case .expire:
-            ConfirmationSheet(title: "Expire Moment", confirmTitle: "Expire", build: { await env.moments.expirePlan(momentId: m.id) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Expired \(info.name)", subtitle: "\(MomentsFormat.usdcCents(info.ledger.reserve)) reserve wound down", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
+            ConfirmationSheet(title: "Expire Moment", confirmTitle: LocalizedStringResource("Expire", comment: "Button: wind the Moment down (a verb)"), build: { await env.moments.expirePlan(momentId: m.id) }, onDone: { finished() },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: tr("Expired \(info.name)"), subtitle: tr("\(MomentsFormat.usdcCents(info.ledger.reserve)) reserve wound down"), hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
                 DetailRow("Reserve", MomentsFormat.usdcCents(info.ledger.reserve))
                 DetailRow("To creator", NumberStyle.basisPoints(m.expiryCreatorBps))
                 DetailRow("To treasury", NumberStyle.basisPoints(MomentsConstants.bps - m.expiryCreatorBps))
             }
         case .buyback:
-            ConfirmationSheet(title: "Run Buyback", confirmTitle: "Run", build: { await env.moments.buybackPlan(momentId: m.id, minCoinOut: 0) }, onDone: { finished() },
-                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: "Ran $\(info.symbol) buyback", subtitle: "\(MomentsFormat.usdc(info.pool?.buybackBudget ?? 0)) into the pool", hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
+            ConfirmationSheet(title: "Run Buyback", confirmTitle: LocalizedStringResource("Run", comment: "Button: run the buyback (a verb)"), build: { await env.moments.buybackPlan(momentId: m.id, minCoinOut: 0) }, onDone: { finished() },
+                              onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: tr("Ran $\(info.symbol) buyback"), subtitle: tr("\(MomentsFormat.usdc(info.pool?.buybackBudget ?? 0)) into the pool"), hash: hash, section: "moments", reference: m.id.description), owner: session.address) }) {
                 DetailRow("Budget", MomentsFormat.usdc(info.pool?.buybackBudget ?? 0))
-                DetailRow("Spends", "half on coins, half paired as liquidity")
-                DetailRow("Impact cap", "1%")
+                DetailRow(Text("Spends", comment: "Review row: what the buyback spends its budget on"), Text("half on coins, half paired as liquidity"))
+                DetailRow("Impact cap", verbatim: "1%")
                 if info.pool?.heldForLaterRounds != nil {
                     // v2's guards: a round runs at most hourly, and not when the price moved over 2% within the block.
                     DetailRow("Price check", "refused if the price moved over 2% this block")

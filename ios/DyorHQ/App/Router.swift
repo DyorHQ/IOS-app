@@ -24,7 +24,14 @@ extension View {
 enum TradeMode: String, CaseIterable, Identifiable {
     case swap, perps
     var id: String { rawValue }
-    var label: String { self == .swap ? "Swap" : "Perps" }
+    /// The mode's name on the Trade tab's switch, in the app's language. The swap side has a key of its own, "Swap" in
+    /// English: the key "Swap" is the swap review's button, a verb, and one key is one translation.
+    var label: String {
+        switch self {
+        case .swap: tr(LocalizedStringResource("tradeMode.swap", defaultValue: "Swap", comment: "The Trade tab's switch to its spot-swap screen: the screen's name, a noun [tight]"))
+        case .perps: tr(LocalizedStringResource("Perps", comment: "Perpetual futures [tight]"))
+        }
+    }
 }
 
 /// Screens that live outside the tab bar: opened from the side menu (or the home header) as full-screen covers with
@@ -87,7 +94,7 @@ final class Router {
             pendingLink = link
             notificationRouteArrivedLast = false
         } else if MomentLink.isOurs(url) {
-            linkNotice = "That link isn't a Moment."
+            linkNotice = tr("That link isn't a Moment.")
         }
     }
 
@@ -98,12 +105,14 @@ final class Router {
         notificationRouteArrivedLast = true
     }
 
-    /// Opens the waiting banner's screen: the menu and whatever is presented close, as for a Moment link.
+    /// Opens the waiting banner's screen: the menu and whatever is presented close, as for a Moment link. A Perps alert
+    /// opens its market, named by its record in the center (`NotificationHub.item`), which the gate has checked is the
+    /// account signed in.
     func deliverPendingNotificationRoute() {
         guard let tap = pendingNotificationRoute else { return }
         pendingNotificationRoute = nil
         menuOpen = false
-        open(route: tap.route)
+        open(route: tap.route, reference: tap.item.flatMap { NotificationHub.shared.item($0)?.reference })
     }
 
     /// Runs `work` — an approved send or a deletion that no review sheet covers — holding Moment links until it ends.
@@ -178,18 +187,22 @@ final class Router {
 
     /// Follows a tapped row of the notification center to its screen.
     func open(_ notification: AppNotification) {
-        open(route: notification.route)
+        open(route: notification.route, reference: notification.reference)
     }
 
-    /// Follows a tapped notification, a row of the center or a banner, to its screen. `.none` opens nothing.
-    func open(route: NotificationRoute) {
+    /// Follows a tapped notification, a row of the center or a banner, to its screen. `.none` opens nothing. A Perps
+    /// alert's `reference` names its market (`PerpAlertText.reference`), which then opens; any other reference opens
+    /// Perps as it was.
+    func open(route: NotificationRoute, reference: String? = nil) {
         guard route != .none else { return }
         presented = nil
         switch route {
         case .none: break
         case .home: tab = .home
         case .trade: tradeMode = .swap; tab = .trade
-        case .perps: tradeMode = .perps; tab = .trade
+        case .perps:
+            if let market = PerpAlertText.market(reference: reference) { pendingPerpMarket = market }
+            tradeMode = .perps; tab = .trade
         case .launch: tab = .launch
         case .moments: tab = .moments
         case .portfolio: presented = .portfolio
@@ -216,20 +229,22 @@ final class Router {
 enum VolumePeriod: String, CaseIterable, Identifiable {
     case day, week, month, all
     var id: String { rawValue }
+    /// The period's name in the app's language.
     var label: String {
         switch self {
-        case .day: return "24h"
-        case .week: return "7 days"
-        case .month: return "30 days"
-        case .all: return "All"
+        case .day: return tr(LocalizedStringResource("24h", comment: "A reporting period: the last 24 hours [tight]"))
+        case .week: return tr(LocalizedStringResource("7 days", comment: "A reporting period: the last 7 days [tight]"))
+        case .month: return tr(LocalizedStringResource("30 days", comment: "A reporting period: the last 30 days [tight]"))
+        case .all: return tr(LocalizedStringResource("volumePeriod.all", defaultValue: "All", comment: "A reporting period: all time [tight]"))
         }
     }
+    /// The period's short name, for a chip, in the app's language.
     var shortLabel: String {
         switch self {
-        case .day: return "24h"
-        case .week: return "7D"
-        case .month: return "30D"
-        case .all: return "All"
+        case .day: return tr(LocalizedStringResource("24h", comment: "A reporting period: the last 24 hours [tight]"))
+        case .week: return tr(LocalizedStringResource("7D", comment: "A reporting period on a chip: the last 7 days [tight]"))
+        case .month: return tr(LocalizedStringResource("30D", comment: "A reporting period on a chip: the last 30 days [tight]"))
+        case .all: return tr(LocalizedStringResource("volumePeriod.all", defaultValue: "All", comment: "A reporting period: all time [tight]"))
         }
     }
     /// Wall-clock length; nil for "All".
@@ -261,16 +276,17 @@ enum MenuItem: String, CaseIterable, Identifiable {
     case home, spot, perps, launch, moments, news, portfolio, help
     var id: String { rawValue }
 
+    /// The section's name in the menu, in the app's language.
     var title: String {
         switch self {
-        case .home: return "Home"
-        case .spot: return "Spot"
-        case .perps: return "Perps"
-        case .launch: return "Launch"
-        case .moments: return "Moments"
-        case .news: return "News"
-        case .portfolio: return "Portfolio"
-        case .help: return "Get Help"
+        case .home: return tr(LocalizedStringResource("Home", comment: "The Home tab's name, a noun"))
+        case .spot: return tr(LocalizedStringResource("Spot", comment: "Spot, as against perpetual futures (Perps): the wallet's own tokens, and trading them by swaps [tight]"))
+        case .perps: return tr(LocalizedStringResource("Perps", comment: "Perpetual futures [tight]"))
+        case .launch: return tr(LocalizedStringResource("Launch", comment: "A noun: the Launch tab, the launchpad's coins [tight]"))
+        case .moments: return tr(LocalizedStringResource("Moments", comment: "The Moments feature's name [tight]"))
+        case .news: return tr("News")
+        case .portfolio: return tr("Portfolio")
+        case .help: return tr("Get Help")
         }
     }
 
@@ -287,16 +303,17 @@ enum MenuItem: String, CaseIterable, Identifiable {
         }
     }
 
+    /// What the section holds, under its name in the menu, in the app's language.
     var subtitle: String {
         switch self {
-        case .home: return "Balances and markets"
-        case .spot: return "Swap across every Monad venue"
-        case .perps: return "Perpetuals on Perpl"
-        case .launch: return "Launch and trade new coins"
-        case .moments: return "Collect moments, graduate coins"
-        case .news: return "Crypto headlines"
-        case .portfolio: return "Volume, fees and P&L across DyorHQ"
-        case .help: return "Support and community"
+        case .home: return tr("Balances and markets")
+        case .spot: return tr("Swap across every Monad venue")
+        case .perps: return tr("Perpetuals on Perpl")
+        case .launch: return tr("Launch and trade new coins")
+        case .moments: return tr("Collect moments, graduate coins")
+        case .news: return tr("Crypto headlines")
+        case .portfolio: return tr("Volume, fees and P&L across DyorHQ")
+        case .help: return tr("Support and community")
         }
     }
 }

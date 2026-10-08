@@ -13,7 +13,17 @@ struct PerpsPortfolioView: View {
     @State private var portfolio = PerpsPortfolioModel()
     @State private var tab: HistoryTab = .fills
 
-    enum HistoryTab: String, CaseIterable, Identifiable { case fills = "Fills", closed = "Closed"; var id: String { rawValue } }
+    // The raw values are identifiers; each tab's name on screen is its `title`.
+    enum HistoryTab: String, CaseIterable, Identifiable {
+        case fills = "Fills", closed = "Closed" // not localized: identifiers
+        var id: String { rawValue }
+        var title: Text {
+            switch self {
+            case .fills: Text("Fills", comment: "A tab of the Perps portfolio: the account's executed trades (a noun). [tight]")
+            case .closed: Text("Closed", comment: "A tab of the Perps portfolio: the account's closed positions. [tight]")
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -27,7 +37,7 @@ struct PerpsPortfolioView: View {
                 .padding(.vertical, 12)
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Portfolio")
+            .navigationTitle(tr("Portfolio"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .refreshable { await portfolio.load(env: env, key: perplTrading.key, markets: model.markets) }
@@ -83,7 +93,7 @@ struct PerpsPortfolioView: View {
         }
     }
 
-    private func statTile(_ label: String, _ value: String, tint: Color = .primary) -> some View {
+    private func statTile(_ label: LocalizedStringKey, _ value: String, tint: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(tint).contentTransition(.numericText())
@@ -93,7 +103,7 @@ struct PerpsPortfolioView: View {
         .cardBackground()
     }
 
-    private func miniStat(_ label: String, _ value: String, tint: Color = .primary, alignment: HorizontalAlignment = .leading) -> some View {
+    private func miniStat(_ label: LocalizedStringKey, _ value: String, tint: Color = .primary, alignment: HorizontalAlignment = .leading) -> some View {
         VStack(alignment: alignment, spacing: 2) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
             Text(value).font(.subheadline.weight(.medium).monospacedDigit()).foregroundStyle(tint)
@@ -105,7 +115,7 @@ struct PerpsPortfolioView: View {
     private var historyCard: some View {
         VStack(spacing: 12) {
             Picker("History", selection: $tab) {
-                ForEach(HistoryTab.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(HistoryTab.allCases) { $0.title.tag($0) }
             }
             .pickerStyle(.segmented)
 
@@ -144,10 +154,10 @@ struct PerpsPortfolioView: View {
     private func fillRow(_ fill: PerplFill) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(fill.side == .buy ? "Buy" : "Sell") \(fill.symbol)")
+                (fill.side == .buy ? Text("Buy \(fill.symbol)") : Text("Sell \(fill.symbol)"))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(fill.side == .buy ? Color.positive : Color.negative)
-                Text("\(NumberStyle.number(fill.size, maximumFractionDigits: 4)) @ \(NumberStyle.number(fill.price))")
+                Text(verbatim: "\(NumberStyle.number(fill.size, maximumFractionDigits: 4)) @ \(NumberStyle.number(fill.price))")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer()
@@ -177,10 +187,10 @@ struct PerpsPortfolioView: View {
     private func closedRow(_ rec: PerplPositionRecord) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(rec.side == .long ? "Long" : "Short") \(rec.symbol)")
+                (rec.side == .long ? Text("Long \(rec.symbol)") : Text("Short \(rec.symbol)"))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(rec.side == .long ? Color.positive : Color.negative)
-                Text("Entry \(NumberStyle.number(rec.entry))\(rec.exit.map { " → \(NumberStyle.number($0))" } ?? "")")
+                (rec.exit.map { Text("Entry \(NumberStyle.number(rec.entry)) → \(NumberStyle.number($0))") } ?? Text("Entry \(NumberStyle.number(rec.entry))"))
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer()
@@ -195,7 +205,7 @@ struct PerpsPortfolioView: View {
         .padding(.vertical, 9)
     }
 
-    private func emptyRow(_ text: String) -> some View {
+    private func emptyRow(_ text: LocalizedStringKey) -> some View {
         Text(text).font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 24)
     }
 
@@ -229,11 +239,11 @@ final class PerpsPortfolioModel {
     }
 
     func load(env: AppEnvironment, key: PerplApiKey?, markets: [PerpMarket]) async {
-        guard let key else { error = "Enable one-click trading in Profile to see your Perpl history."; return }
+        guard let key else { error = tr("Enable one-click trading in Profile to see your Perpl history."); return }
         loading = fills.isEmpty && records.isEmpty
         error = nil
         let markets = markets.isEmpty ? ((try? await env.perpl.markets()) ?? []) : markets
-        guard !markets.isEmpty else { error = "Couldn't load markets."; loading = false; return }
+        guard !markets.isEmpty else { error = tr("Couldn't load markets."); loading = false; return }
         do {
             let fillResult = try await Self.page(maxPages: maxPages) { try await env.perpl.fills(key: key, markets: markets, count: 100, cursor: $0) }
             let posResult = try await Self.page(maxPages: maxPages) { try await env.perpl.positionHistory(key: key, markets: markets, count: 100, cursor: $0) }

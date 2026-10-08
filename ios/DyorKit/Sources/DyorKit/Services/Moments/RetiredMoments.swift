@@ -175,11 +175,11 @@ public struct RetiredMoments: Sendable {
     static func plan(_ action: RetiredMomentAction, momentId: BigUInt, symbol: String, addresses: MomentsAddresses) -> [TransactionStep] {
         switch action {
         case .claim:
-            return [.call(TransactionRequest(to: addresses.vesting, data: MomentsABI.calldata(MomentsABI.Vesting.claim, [.uint(momentId)])), label: "Claim \(symbol)")]
+            return [.call(TransactionRequest(to: addresses.vesting, data: MomentsABI.calldata(MomentsABI.Vesting.claim, [.uint(momentId)])), label: L10n.string(LocalizedStringResource("Claim \(symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the symbol of a Moment's coin, whose vested coins are claimed.")))]
         case .withdrawCreatorProceeds:
-            return [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawCreator, [.uint(momentId)])), label: "Withdraw creator proceeds")]
+            return [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawCreator, [.uint(momentId)])), label: L10n.tr("Withdraw creator proceeds"))]
         case .withdrawCreatorFees:
-            return [.call(TransactionRequest(to: addresses.hook, data: MomentsABI.calldata(MomentsABI.Hook.withdrawCreator, [.uint(momentId)])), label: "Withdraw creator fees")]
+            return [.call(TransactionRequest(to: addresses.hook, data: MomentsABI.calldata(MomentsABI.Hook.withdrawCreator, [.uint(momentId)])), label: L10n.tr("Withdraw creator fees"))]
         }
     }
 

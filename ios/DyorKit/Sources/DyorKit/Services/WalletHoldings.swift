@@ -110,14 +110,15 @@ public enum WalletHoldings {
     }
 
     /// The held tokens a search matches, in `held` order: a pasted address matches that contract only; other text
-    /// matches the symbol or name, or — starting with 0x — the start of the contract address.
+    /// matches the symbol or name as the list shows it (`displayName`), or — starting with 0x — the start of the
+    /// contract address.
     public static func matching(_ held: [HeldToken], query: String) -> [HeldToken] {
         let text = Address.cleanedInput(query).text
         guard !text.isEmpty else { return held }
         if let address = Address(text) { return held.filter { $0.token.address == address } }
         let hex = text.lowercased()
         return held.filter { item in
-            item.token.symbol.localizedCaseInsensitiveContains(text) || item.token.name.localizedCaseInsensitiveContains(text)
+            item.token.symbol.localizedCaseInsensitiveContains(text) || item.token.displayName.localizedCaseInsensitiveContains(text)
                 || (hex.hasPrefix("0x") && hex.count >= 4 && item.token.address.hex.hasPrefix(hex))
         }
     }
@@ -653,10 +654,20 @@ public enum WalletHoldings {
         return (unpriced.filter { noPool.contains($0.address) }, unpriced.filter { !noPool.contains($0.address) })
     }
 
-    /// Symbols as a list in words: "cbBTC", "cbBTC and LBTC", "cbBTC, LBTC and rETH".
+    /// Symbols as a list in words, in the app's language as a whole: in English "cbBTC", "cbBTC and LBTC", "cbBTC, LBTC
+    /// and rETH", as it has always read whatever the region; every other language joins them its own way
+    /// (`ListFormatter`: "cbBTC, LBTC et rETH", "cbBTC、LBTC和rETH").
     public static func symbolList(_ tokens: [Token]) -> String {
         let symbols = tokens.map(\.symbol)
         guard let last = symbols.last else { return "" }
-        return symbols.count == 1 ? last : symbols.dropLast().joined(separator: ", ") + " and " + last
+        guard symbols.count > 1 else { return last }
+        let locale = L10n.locale
+        if locale.language.languageCode == .english {
+            // not localized: English as it has always read; ListFormatter would put a comma before "and" in the US
+            return symbols.dropLast().joined(separator: ", ") + " and " + last
+        }
+        let list = ListFormatter()
+        list.locale = locale
+        return list.string(from: symbols) ?? symbols.joined(separator: ", ")
     }
 }

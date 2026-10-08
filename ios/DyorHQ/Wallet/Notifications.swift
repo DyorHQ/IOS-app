@@ -3,10 +3,10 @@ import DyorKit
 import Foundation
 import UserNotifications
 
-/// On-device notifications for completed actions and triggered price alerts, via the system UserNotifications
-/// framework. There is no push server (that would need APNs): these are local notifications, posted by the app while
-/// it runs — in the foreground, or in the few seconds before iOS suspends it. While the app is suspended or closed
-/// nothing is noticed, so nothing is posted.
+/// On-device notifications for completed actions, triggered price alerts and Perps margin warnings, via the system
+/// UserNotifications framework. There is no push server (that would need APNs): these are local notifications, posted by
+/// the app while it runs — in the foreground, or in the few seconds before iOS suspends it. While the app is suspended or
+/// closed nothing is noticed, so nothing is posted: alerts arrive while DyorHQ is open (`AlertCenter`).
 @MainActor
 enum Notifications {
     /// Installs the delegate that lets our notifications appear while the app is in the foreground, and hears a tap on
@@ -43,30 +43,38 @@ enum Notifications {
         await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
+    /// The title and body are in the app's language when posted, and stay in it in the notification center.
     static func swapped(_ amountIn: BigUInt, _ tokenIn: Token, _ amountOut: BigUInt, _ tokenOut: Token) {
-        post(kind: .swap, title: "Swap complete",
-             body: "Swapped \(NumberStyle.units(amountIn, decimals: tokenIn.decimals, compact: true)) \(tokenIn.symbol) → \(NumberStyle.units(amountOut, decimals: tokenOut.decimals, compact: true)) \(tokenOut.symbol)", route: .trade)
+        let paid = "\(NumberStyle.units(amountIn, decimals: tokenIn.decimals, compact: true)) \(tokenIn.symbol)"
+        let got = "\(NumberStyle.units(amountOut, decimals: tokenOut.decimals, compact: true)) \(tokenOut.symbol)"
+        post(kind: .swap, title: tr("Swap complete"), body: tr("Swapped \(paid) → \(got)"), route: .trade)
     }
 
     /// A perp order the app sent or saw fill. `notice` says which: `PerpOrderNotice(acknowledged:)` for Perpl's
     /// acknowledgement of an order ("Order submitted" for a market order, "Order placed" for a limit order), `.filled`
-    /// only for a position read that saw the fill.
-    static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String) {
-        post(kind: .perp, title: notice.title, body: "\(side) \(market)", route: .perps)
+    /// only for a position read that saw the fill (the app-wide watcher, `AlertCenter`). With `perpId`, a tap opens that
+    /// market. `side` is the side's name in the app's language ("Long"), followed by the market's name.
+    static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String, perpId: Int? = nil) {
+        post(kind: .perp, title: notice.title, body: "\(side) \(market)", route: .perps, reference: perpId.map { PerpAlertText.reference(perpId: $0) })
     }
 
+    /// `label` is the action's name in the app's language.
     static func transactionConfirmed(_ label: String) {
-        post(kind: .transaction, title: "Confirmed", body: "\(label) confirmed on Monad.")
+        post(kind: .transaction, title: tr("Confirmed"), body: tr("\(label) confirmed on Monad."))
     }
 
-    /// A completed cross-chain bridge — recorded in the notification center like a swap.
+    /// A completed cross-chain bridge — recorded in the notification center like a swap. The chains' names are never
+    /// translated.
     static func bridge(amount: String, from: String, to: String) {
-        post(kind: .swap, title: "Bridge complete", body: "\(amount) bridged from \(from) to \(to).", route: .home)
+        post(kind: .swap, title: tr("Bridge complete"), body: tr("\(amount) bridged from \(from) to \(to)."), route: .home)
     }
 
     static func priceAlert(symbol: String, above: Bool, target: Double, price: Double) {
-        post(kind: .priceAlert, title: "Price alert: \(symbol)",
-             body: "\(symbol) is now \(PriceFormat.usdPrice(price)) — \(above ? "above" : "below") your \(PriceFormat.usdPrice(target)) target.", route: .home)
+        let now = PriceFormat.usdPrice(price)
+        let goal = PriceFormat.usdPrice(target)
+        post(kind: .priceAlert, title: tr("Price alert: \(symbol)"),
+             body: above ? tr("\(symbol) is now \(now) — above your \(goal) target.") : tr("\(symbol) is now \(now) — below your \(goal) target."),
+             route: .home)
     }
 
     /// Records the notification in the in-app center and delivers it as a system notification (when permitted).

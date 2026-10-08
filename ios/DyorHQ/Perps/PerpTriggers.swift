@@ -8,7 +8,8 @@ import Foundation
 struct PlacedTrigger: Codable, Identifiable, Hashable {
     enum Kind: String, Codable {
         case takeProfit, stopLoss
-        var label: String { self == .takeProfit ? "Take Profit" : "Stop Loss" }
+        /// The kind's name, in the app's language.
+        var label: String { self == .takeProfit ? tr("Take Profit") : tr("Stop Loss") }
         init(_ kind: PerplTriggerKind) { self = kind == .takeProfit ? .takeProfit : .stopLoss }
     }
 
@@ -78,5 +79,30 @@ enum TriggerStore {
         let kept = list.filter { openPerpIds.contains($0.perpId) || now.timeIntervalSince($0.placedAt) < settleGrace }
         if kept.count != list.count { save(kept, owner: owner) }
         return kept
+    }
+}
+
+/// Perps text built in code, in the app's language: a position's side with its size, a trigger with its price, and the
+/// word for a figure that can't be computed. Numbers keep the app's one style (`NumberStyle`).
+enum PositionText {
+    /// "Long 0.5 BTC" or "Short 0.5 BTC".
+    static func amount(isLong: Bool, size: Double, asset: String) -> String {
+        let amount = "\(NumberStyle.number(size)) \(asset)"
+        return isLong
+            ? tr(LocalizedStringResource("Long \(amount)", comment: "A long position or order on what follows: “Long 0.5 BTC”, “Long BTC”, “Long BTC-PERP”."))
+            : tr(LocalizedStringResource("Short \(amount)", comment: "A short position or order on what follows: “Short 0.5 BTC”, “Short BTC”, “Short BTC-PERP”."))
+    }
+
+    /// "TP 72,000" or "SL 61,500": a take-profit or stop-loss at its price, in a summary line.
+    static func trigger(_ takeProfit: Bool, at price: Double) -> String {
+        let at = NumberStyle.number(price)
+        return takeProfit
+            ? tr(LocalizedStringResource("TP \(at)", comment: "A take-profit (TP) at its price, in a summary line. [tight]"))
+            : tr(LocalizedStringResource("SL \(at)", comment: "A stop-loss (SL) at its price, in a summary line. [tight]"))
+    }
+
+    /// A liquidation price that can't be computed: the market's maintenance margin couldn't be read.
+    static var unknown: String {
+        tr(LocalizedStringResource("Unknown", comment: "A liquidation price that can't be computed. [tight]"))
     }
 }
