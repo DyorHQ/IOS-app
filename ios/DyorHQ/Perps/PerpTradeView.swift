@@ -2636,7 +2636,7 @@ struct AuthedOrderSheet: View {
                     Text("Review Order · Perpl")
                 } footer: {
                     if let triggerNote, takeProfit != nil || stopLoss != nil {
-                        Text(verbatim: triggerNote + " " + tr("Signed and forwarded by your Perpl API key over the trading connection."))
+                        Paragraph(verbatim: WordWrap.sentences(triggerNote, tr("Signed and forwarded by your Perpl API key over the trading connection.")))
                     } else {
                         Paragraph("Signed and forwarded by your Perpl API key over the trading connection.")
                     }
@@ -2751,9 +2751,9 @@ struct AuthedOrderSheet: View {
             onSent()
             var message = tr("Order status unknown — Perpl didn't confirm this order, so it may have been placed. Check Open Orders and Positions before placing it again.")
             switch (takeProfit != nil, stopLoss != nil) {
-            case (true, true): message += " " + tr("Its take-profit and stop-loss were not sent: if the order is open, set them with TP/SL on the position.")
-            case (true, false): message += " " + tr("Its take-profit was not sent: if the order is open, set it with TP/SL on the position.")
-            case (false, true): message += " " + tr("Its stop-loss was not sent: if the order is open, set it with TP/SL on the position.")
+            case (true, true): message = WordWrap.sentences(message, tr("Its take-profit and stop-loss were not sent: if the order is open, set them with TP/SL on the position."))
+            case (true, false): message = WordWrap.sentences(message, tr("Its take-profit was not sent: if the order is open, set it with TP/SL on the position."))
+            case (false, true): message = WordWrap.sentences(message, tr("Its stop-loss was not sent: if the order is open, set it with TP/SL on the position."))
             case (false, false): break
             }
             phase = .unknown(message)
@@ -2792,7 +2792,7 @@ struct AuthedOrderSheet: View {
         case (false, false):
             break
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " ")
+        return parts.isEmpty ? nil : WordWrap.sentences(parts)
     }
 }
 

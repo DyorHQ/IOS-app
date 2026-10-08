@@ -598,7 +598,9 @@ struct LaunchDetailView: View {
     }
 
     /// Creator fees and holder-fee-sharing transparency, mirroring Pons: everyone sees the fee mode, the creator can
-    /// claim their escrowed fees here. Fee-sharing coins route creator fees to holders instead.
+    /// claim their escrowed fees here. From v1 the escrow pays each fee straight to the fee recipient, and holds only one
+    /// it couldn't send; before v1 it holds every fee until claimed. Fee-sharing coins route creator fees to holders
+    /// instead.
     private var feesSection: some View {
         Section {
             LabeledContent("Fee mode", value: launch.holderFeeSharing ? tr("Shared with holders") : tr("To creator"))
@@ -611,6 +613,9 @@ struct LaunchDetailView: View {
                             .monospacedDigit().fontWeight(.semibold).foregroundStyle(Color.brand)
                     }
                     Button("Claim Creator Fees", systemImage: "banknote") { Haptics.tap(); showCreatorClaim = true }.disabled(!session.canSign)
+                } else if launch.generation.pushesFees {
+                    // The escrow sends each fee straight to the fee recipient: it keeps only a payment that couldn't be sent.
+                    Paragraph("Nothing to claim — fees are paid straight to the fee recipient.").font(.caption).foregroundStyle(.secondary)
                 } else {
                     Paragraph("Nothing to claim yet — fees accrue as people trade your coin.").font(.caption).foregroundStyle(.secondary)
                 }
@@ -619,11 +624,13 @@ struct LaunchDetailView: View {
             Text("Creator Fees")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: (launch.holderFeeSharing
+                Paragraph(verbatim: WordWrap.sentences(launch.holderFeeSharing
                     ? tr("This coin routes its creator fees to holders — each holder claims their pro-rata share (see Your Holdings, or My Launchpad).")
-                    : tr("The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset."))
+                    : launch.generation.pushesFees
+                    ? tr("The creator earns their share of trading fees plus the creator tax, paid straight to the fee recipient. A payment that can't be sent waits in the fee escrow to be claimed; one claim sweeps those across all your launches paired in this asset.")
+                    : tr("The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset."),
                     // A Monday Trade pool has no hook: its 1% fee is harvested to DyorHQ, with no creator tax or share in it.
-                    + (launch.graduationVenue == .monday ? " " + tr("These come from curve trades only: once it graduates on Monday Trade, the pool's 1% fee goes to DyorHQ.") : ""))
+                    launch.graduationVenue == .monday ? tr("These come from curve trades only: once it graduates on Monday Trade, the pool's 1% fee goes to DyorHQ.") : ""))
                 LearnMoreLink(.launchpadFeesAndRewards)
             }
         }

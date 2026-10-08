@@ -64,23 +64,85 @@ public struct WalletFeeClaim: Identifiable, Sendable, Hashable {
     }
 }
 
+/// A creator fee an escrow sent straight to the wallet (`Paid` / `PaidToken`). The escrow pushes every fee to its
+/// recipient as it is credited — a curve trade, a pool-fee sweep — and books a claimable balance only when that send
+/// fails, so most creator fees reach the wallet this way, with no claim. `token == .zero` is native MON.
+public struct WalletFeePayment: Identifiable, Sendable, Hashable {
+    public let hash: Data
+    public let block: UInt64
+    public let logIndex: Int
+    public let time: Date
+    public let token: Address
+    public let amount: BigUInt
+    public var id: String { "\(hash.hexString)-\(logIndex)" }
+
+    public init(hash: Data, block: UInt64, logIndex: Int, time: Date, token: Address, amount: BigUInt) {
+        self.hash = hash
+        self.block = block
+        self.logIndex = logIndex
+        self.time = time
+        self.token = token
+        self.amount = amount
+    }
+}
+
 public struct LaunchpadWalletHistory: Sendable, Hashable {
     public let fills: [WalletCurveFill]
     public let claims: [WalletFeeClaim]
-    public init(fills: [WalletCurveFill], claims: [WalletFeeClaim]) {
+    /// Creator fees paid straight to the wallet, newest first.
+    public let payments: [WalletFeePayment]
+    public init(fills: [WalletCurveFill], claims: [WalletFeeClaim], payments: [WalletFeePayment] = []) {
         self.fills = fills
         self.claims = claims
+        self.payments = payments
     }
     public static let empty = LaunchpadWalletHistory(fills: [], claims: [])
+}
+
+/// What a wallet has earned in launchpad fees, from the chain: creator fees the escrows paid straight to it, creator fees
+/// it claimed from an escrow, and holder rewards it claimed from fee sharing, on every stack (the live one and every
+/// retired one). Amounts are raw, per asset: native MON is `.zero`, a token its address. Holder rewards are keyed by the
+/// launch coin whose fees were shared and paid in that coin's pair asset, which the caller resolves. What is still
+/// claimable is read from the escrows' balances (`escrowReads`), not here.
+public struct LaunchpadFeeIncome: Sendable, Hashable {
+    /// Creator fees paid straight to the wallet (`Paid`, `PaidToken`).
+    public let paid: [Address: BigUInt]
+    /// Creator fees claimed from an escrow (`Claimed`, `ClaimedToken`).
+    public let claimed: [Address: BigUInt]
+    /// Holder rewards claimed (`HolderFeeSharing.Claimed`), by launch coin.
+    public let rewardsClaimed: [Address: BigUInt]
+    /// Every escrow and fee-sharing contract was read to the head. False: some of the history may be missing, so the
+    /// totals are not shown as complete.
+    public let complete: Bool
+
+    public init(paid: [Address: BigUInt], claimed: [Address: BigUInt], rewardsClaimed: [Address: BigUInt], complete: Bool) {
+        self.paid = paid
+        self.claimed = claimed
+        self.rewardsClaimed = rewardsClaimed
+        self.complete = complete
+    }
+
+    /// Creator fees that reached the wallet, per asset: paid straight to it, plus claimed.
+    public var creatorFeesReceived: [Address: BigUInt] { paid.merging(claimed, uniquingKeysWith: +) }
 }
 
 extension LaunchpadABI.Events {
     static let escrowClaimed = "Claimed(address,uint256)"
     static let escrowClaimedToken = "ClaimedToken(address,address,uint256)"
+    static let escrowPaid = "Paid(address,uint256)"
+    static let escrowPaidToken = "PaidToken(address,address,uint256)"
     static let sharingClaimed = "Claimed(address,address,uint256)"
     static let escrowClaimedTopic = ABI.eventTopic(escrowClaimed)
     static let escrowClaimedTokenTopic = ABI.eventTopic(escrowClaimedToken)
+    static let escrowPaidTopic = ABI.eventTopic(escrowPaid)
+    static let escrowPaidTokenTopic = ABI.eventTopic(escrowPaidToken)
     static let sharingClaimedTopic = ABI.eventTopic(sharingClaimed)
+}
+
+public extension LaunchpadAddresses {
+    /// The block the first launchpad's escrow was deployed in (0xad3d's, 103,542,521; the other stacks' came later):
+    /// no DyorHQ escrow or fee sharing emitted anything before it, so a wallet's fee history is read from here.
+    static let feeHistoryStart: UInt64 = 103_542_521
 }
 
 public extension LaunchpadService {
@@ -99,10 +161,77 @@ public extension LaunchpadService {
         async let sells = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.sellTopic, word], fromBlock: from, toBlock: anchor.number)
         async let escrowNative = logs(from: escrows, topics: [LaunchpadABI.Events.escrowClaimedTopic, word], fromBlock: from, toBlock: anchor.number)
         async let escrowToken = logs(from: escrows, topics: [LaunchpadABI.Events.escrowClaimedTokenTopic, word], fromBlock: from, toBlock: anchor.number)
+        async let escrowPaid = logs(from: escrows, topics: [LaunchpadABI.Events.escrowPaidTopic, word], fromBlock: from, toBlock: anchor.number)
+        async let escrowPaidToken = logs(from: escrows, topics: [LaunchpadABI.Events.escrowPaidTokenTopic, word], fromBlock: from, toBlock: anchor.number)
         async let sharing = logs(from: sharings, topics: [LaunchpadABI.Events.sharingClaimedTopic, nil, word], fromBlock: from, toBlock: anchor.number)
         let (buyLogs, sellLogs, escrowNativeLogs, escrowTokenLogs, sharingLogs) = await (buys, sells, escrowNative, escrowToken, sharing)
-        return Self.walletHistory(buys: buyLogs, sells: sellLogs, escrowNative: escrowNativeLogs, escrowToken: escrowTokenLogs, sharing: sharingLogs, anchor: anchor,
-                                  secondsPerBlock: secondsPerBlock, curves: curves)
+        let (paidLogs, paidTokenLogs) = await (escrowPaid, escrowPaidToken)
+        return Self.walletHistory(buys: buyLogs, sells: sellLogs, escrowNative: escrowNativeLogs, escrowToken: escrowTokenLogs, sharing: sharingLogs,
+                                  paid: paidLogs, paidToken: paidTokenLogs, anchor: anchor, secondsPerBlock: secondsPerBlock, curves: curves)
+    }
+
+    /// Everything the wallet has received in launchpad fees, from the first escrow's deployment to the head
+    /// (`LaunchpadFeeIncome`). One wallet-filtered read per contract: every event an escrow emits names its recipient
+    /// first, so a single scan per escrow finds the fees it paid the wallet and those the wallet claimed.
+    func feeIncome(wallet: Address) async -> LaunchpadFeeIncome {
+        guard !stacks.isEmpty, let head = try? await logsRPC.blockNumber() else {
+            return LaunchpadFeeIncome(paid: [:], claimed: [:], rewardsClaimed: [:], complete: false)
+        }
+        let from = LaunchpadAddresses.feeHistoryStart
+        let word = wallet.data.leftPadded(to: 32)
+        let rpc = logsRPC
+        let escrows = Self.unique(stacks.map(\.escrow))
+        let sharings = Self.unique(stacks.map(\.holderFeeSharing))
+        let reads = await withTaskGroup(of: (escrow: Bool, logs: [Log], complete: Bool).self) { group in
+            for escrow in escrows {
+                group.addTask {
+                    let report = await rpc.chunkedLogsReport(address: escrow, topics: [nil, word], fromBlock: from, toBlock: head)
+                    return (true, report.logs, report.complete)
+                }
+            }
+            for sharing in sharings {
+                group.addTask {
+                    let report = await rpc.chunkedLogsReport(address: sharing, topics: [LaunchpadABI.Events.sharingClaimedTopic, nil, word], fromBlock: from, toBlock: head)
+                    return (false, report.logs, report.complete)
+                }
+            }
+            var out: [(escrow: Bool, logs: [Log], complete: Bool)] = []
+            for await read in group { out.append(read) }
+            return out
+        }
+        let income = Self.feeIncome(escrowLogs: reads.filter(\.escrow).flatMap(\.logs), sharingLogs: reads.filter { !$0.escrow }.flatMap(\.logs))
+        let complete = reads.count == escrows.count + sharings.count && reads.allSatisfy(\.complete) && !Task.isCancelled
+        return LaunchpadFeeIncome(paid: income.paid, claimed: income.claimed, rewardsClaimed: income.rewardsClaimed, complete: complete)
+    }
+
+    /// Pure half of `feeIncome`: the escrow logs naming the wallet as their recipient (any event) and the fee-sharing
+    /// `Claimed` logs naming it as the account, summed per asset. A log read twice counts once; an escrow log that is not
+    /// a payment or a claim (`Credited`: booked as claimable, which the balance read shows) counts nowhere.
+    nonisolated static func feeIncome(escrowLogs: [Log], sharingLogs: [Log]) -> LaunchpadFeeIncome {
+        var paid: [Address: BigUInt] = [:], claimed: [Address: BigUInt] = [:], rewards: [Address: BigUInt] = [:]
+        var seen = Set<String>()
+        func fresh(_ log: Log) -> Bool { seen.insert("\(log.address.hex)-\(log.transactionHash.hexString)-\(log.logIndex)").inserted }
+        for log in escrowLogs {
+            guard let topic = log.topics.first, let words = try? ABI.decode(log.data, "uint256"), words.count == 1 else { continue }
+            switch topic {
+            case LaunchpadABI.Events.escrowPaidTopic where log.topics.count == 2:
+                if fresh(log) { paid[.zero, default: 0] += words[0].uint }
+            case LaunchpadABI.Events.escrowPaidTokenTopic where log.topics.count == 3:
+                if let token = log.indexedAddress(1), fresh(log) { paid[token, default: 0] += words[0].uint }
+            case LaunchpadABI.Events.escrowClaimedTopic where log.topics.count == 2:
+                if fresh(log) { claimed[.zero, default: 0] += words[0].uint }
+            case LaunchpadABI.Events.escrowClaimedTokenTopic where log.topics.count == 3:
+                if let token = log.indexedAddress(1), fresh(log) { claimed[token, default: 0] += words[0].uint }
+            default:
+                continue
+            }
+        }
+        for log in sharingLogs where log.topics.first == LaunchpadABI.Events.sharingClaimedTopic && log.topics.count == 3 {
+            // `Claimed(address indexed token, address indexed account, uint256 amount)`: `token` is the launch coin.
+            guard let launchToken = log.indexedAddress(0), let words = try? ABI.decode(log.data, "uint256"), words.count == 1, fresh(log) else { continue }
+            rewards[launchToken, default: 0] += words[0].uint
+        }
+        return LaunchpadFeeIncome(paid: paid, claimed: claimed, rewardsClaimed: rewards, complete: true)
     }
 
     /// `chunkedLogs` over each of `contracts`, merged.
@@ -123,8 +252,8 @@ public extension LaunchpadService {
     }
 
     /// Pure half of `walletHistory`, each row's time estimated from `anchor` at `secondsPerBlock`.
-    nonisolated static func walletHistory(buys: [Log], sells: [Log], escrowNative: [Log], escrowToken: [Log], sharing: [Log], anchor: BlockHeader, secondsPerBlock: Double,
-                                          curves: Set<Address>) -> LaunchpadWalletHistory {
+    nonisolated static func walletHistory(buys: [Log], sells: [Log], escrowNative: [Log], escrowToken: [Log], sharing: [Log], paid: [Log] = [], paidToken: [Log] = [],
+                                          anchor: BlockHeader, secondsPerBlock: Double, curves: Set<Address>) -> LaunchpadWalletHistory {
         func when(_ log: Log) -> Date { Date(timeIntervalSince1970: TimeInterval(time(anchor: anchor, block: log.blockNumber, secondsPerBlock: secondsPerBlock))) }
         var fills: [WalletCurveFill] = []
         for log in buys where curves.contains(log.address) {
@@ -149,9 +278,19 @@ public extension LaunchpadService {
             guard log.topics.count == 3, let launchToken = log.indexedAddress(0), let words = try? ABI.decode(log.data, "uint256"), words.count == 1 else { continue }
             claims.append(WalletFeeClaim(hash: log.transactionHash, block: log.blockNumber, logIndex: log.logIndex, time: when(log), kind: .holderRewards, token: .zero, launchToken: launchToken, amount: words[0].uint))
         }
+        var payments: [WalletFeePayment] = []
+        for log in paid {
+            guard log.topics.count == 2, let words = try? ABI.decode(log.data, "uint256"), words.count == 1 else { continue }
+            payments.append(WalletFeePayment(hash: log.transactionHash, block: log.blockNumber, logIndex: log.logIndex, time: when(log), token: .zero, amount: words[0].uint))
+        }
+        for log in paidToken {
+            guard log.topics.count == 3, let token = log.indexedAddress(1), let words = try? ABI.decode(log.data, "uint256"), words.count == 1 else { continue }
+            payments.append(WalletFeePayment(hash: log.transactionHash, block: log.blockNumber, logIndex: log.logIndex, time: when(log), token: token, amount: words[0].uint))
+        }
         return LaunchpadWalletHistory(
             fills: fills.sorted { a, b in a.block == b.block ? a.logIndex > b.logIndex : a.block > b.block },
-            claims: claims.sorted { a, b in a.block == b.block ? a.logIndex > b.logIndex : a.block > b.block }
+            claims: claims.sorted { a, b in a.block == b.block ? a.logIndex > b.logIndex : a.block > b.block },
+            payments: payments.sorted { a, b in a.block == b.block ? a.logIndex > b.logIndex : a.block > b.block }
         )
     }
 }

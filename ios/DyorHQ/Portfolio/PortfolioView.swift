@@ -108,7 +108,7 @@ struct PortfolioView: View {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                 metric("Fees paid", usd(totals.fees), tint: .primary)
                 metric("P&L", signed(totals.pnl) + (totals.pnlComplete ? "" : "*"), tint: totals.pnl < 0 ? .negative : totals.pnl > 0 ? .positive : .primary)
-                metric("Claimed fees", usd(totals.claimedFees), tint: totals.claimedFees > 0 ? .positive : .primary)
+                metric("Fees received", usd(totals.claimedFees), tint: totals.claimedFees > 0 ? .positive : .primary)
                 metric("Trades", "\(totals.trades)", tint: .primary)
             }
             if model.loading, model.hasLoaded {
@@ -213,7 +213,7 @@ struct PortfolioView: View {
                 small("Volume", usd(stats.volume))
                 small("Fees", usd(stats.fees))
                 small("P&L", signed(stats.pnl) + (stats.pnlComplete ? "" : "*"), tint: stats.pnl < 0 ? .negative : stats.pnl > 0 ? .positive : .primary)
-                small(section == .perps ? "Trades" : "Claimed", section == .perps ? "\(stats.trades)" : usd(stats.claimedFees), tint: section != .perps && stats.claimedFees > 0 ? .positive : .primary)
+                small(section == .perps ? "Trades" : "Received", section == .perps ? "\(stats.trades)" : usd(stats.claimedFees), tint: section != .perps && stats.claimedFees > 0 ? .positive : .primary)
             }
             if section == .perps, let note = model.perpsNote {
                 Paragraph(note).font(.caption2).foregroundStyle(.secondary)

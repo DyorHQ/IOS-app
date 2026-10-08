@@ -9651,34 +9651,6 @@
         }
       }
     },
-    "Claimable Fees" : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Comisiones reclamables"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Frais à réclamer"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "수령 가능 수수료"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "可领取手续费"
-          }
-        }
-      }
-    },
     "Claimable now" : {
       "comment" : "[tight] My Moments tile: vested coins to claim",
       "localizations" : {
@@ -9901,34 +9873,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已领取创作者费用"
-          }
-        }
-      }
-    },
-    "Claimed fees" : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Comisiones reclamadas"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Frais réclamés"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "수령한 수수료"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已领取手续费"
           }
         }
       }
@@ -13193,34 +13137,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "创作者费用（上次读取）"
-          }
-        }
-      }
-    },
-    "Creator fees accrue per pair asset. Claim each one, or Claim All." : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Las comisiones del creador se acumulan por activo del par. Reclama cada una o toca Reclamar todo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Les frais du créateur s'accumulent par actif de la paire. Réclamez-les un par un, ou utilisez « Tout réclamer »."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "크리에이터 수수료는 페어 자산별로 적립돼요. 각각 수령하거나 ‘모두 수령’을 누르세요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "创作者费用按配对资产分别累积。逐一领取，或选择“全部领取”。"
           }
         }
       }
@@ -16702,6 +16618,62 @@
         }
       }
     },
+    "Fees received" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisiones recibidas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais reçus"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받은 수수료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收手续费"
+          }
+        }
+      }
+    },
+    "Fees received couldn't be read just now." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer las comisiones recibidas en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire les frais reçus pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 받은 수수료를 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取已收手续费。"
+          }
+        }
+      }
+    },
     "Fees wait in the hook until they're swept." : {
       "localizations" : {
         "es" : {
@@ -17176,6 +17148,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "来源"
+          }
+        }
+      }
+    },
+    "From collectors" : {
+      "comment" : "[tight] My Moments tile: the creator's share of the collects of the Moments it published, in USDC",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De coleccionistas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Des collectionneurs"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수집 수익금"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自收藏者"
           }
         }
       }
@@ -26430,30 +26431,30 @@
         }
       }
     },
-    "Nothing to claim yet." : {
+    "Nothing to claim — fees are paid straight to the fee recipient." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aún no hay nada que reclamar."
+            "value" : "Nada que reclamar: las comisiones se pagan directamente al destinatario de las comisiones."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Rien à réclamer pour l'instant."
+            "value" : "Rien à réclamer — les frais sont versés directement au bénéficiaire des frais."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "아직 수령할 항목이 없어요."
+            "value" : "수령할 항목이 없어요 — 수수료는 수수료 수령인에게 바로 지급돼요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "暂无可领取。"
+            "value" : "无可领取：手续费会直接支付给手续费接收方。"
           }
         }
       }
@@ -28517,6 +28518,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "暂时无法读取你的部分 Launchpad 数据，因此某些币或手续费可能缺失。下拉刷新。"
+          }
+        }
+      }
+    },
+    "Part of your proceeds couldn't be read just now. Pull to refresh." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer parte de tus ingresos en este momento. Desliza hacia abajo para actualizar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une partie de vos recettes n'a pas pu être lue pour le moment. Tirez pour actualiser."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 수익금의 일부를 읽지 못했어요. 당겨서 새로 고침하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的部分收益。下拉刷新。"
           }
         }
       }
@@ -32338,6 +32367,35 @@
         }
       }
     },
+    "Received" : {
+      "comment" : "[tight] Fees or proceeds that reached the wallet: paid straight to it, or claimed. A tile on My Launchpad and Portfolio",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recibido"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reçu"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받은 금액"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收到"
+          }
+        }
+      }
+    },
     "Received %@" : {
       "localizations" : {
         "es" : {
@@ -32362,6 +32420,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已收到 %@"
+          }
+        }
+      }
+    },
+    "Received creator fees" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recibiste comisiones del creador"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais du créateur reçus"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "크리에이터 수수료 받음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收到创作者费用"
+          }
+        }
+      }
+    },
+    "Received: creator fees paid straight to your wallet, and the fees and rewards you claimed. Claimable: creator fees held in the fee escrow, and holder rewards. Creator fees from a graduated pool show here once they're swept. Dollar values are at today's prices." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recibido: comisiones del creador pagadas directamente a tu billetera, y las comisiones y recompensas que reclamaste. Reclamable: comisiones del creador retenidas en el depósito de comisiones (escrow) y recompensas para holders. Las comisiones del creador de un pool graduado aparecen aquí cuando se recolectan. Los valores en dólares se calculan a precios de hoy."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reçu : frais du créateur versés directement sur votre portefeuille, et frais et récompenses que vous avez réclamés. À réclamer : frais du créateur détenus dans le séquestre des frais, et récompenses des détenteurs. Les frais du créateur d'un pool gradué apparaissent ici une fois collectés. Les valeurs en dollars sont calculées aux prix actuels."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받은 금액: 지갑으로 바로 지급된 크리에이터 수수료와, 내가 수령한 수수료 및 보상이에요. 수령 가능: 수수료 에스크로에 보관된 크리에이터 수수료와 홀더 보상이에요. 졸업한 풀의 크리에이터 수수료는 회수된 후에 여기에 표시돼요. 달러 금액은 현재 가격 기준이에요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收到：直接支付到你钱包的创作者费用，以及你已领取的手续费和奖励。可领取：手续费托管中保留的创作者费用，以及持有者奖励。已毕业池子的创作者费用在归集后才会显示在这里。美元价值按今天的价格计算。"
           }
         }
       }
@@ -39867,6 +39981,34 @@
         }
       }
     },
+    "The creator earns their share of trading fees plus the creator tax, paid straight to the fee recipient. A payment that can't be sent waits in the fee escrow to be claimed; one claim sweeps those across all your launches paired in this asset." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El creador gana su parte de las comisiones de trading más el impuesto del creador, que se pagan directamente al destinatario de las comisiones. Un pago que no se puede enviar queda en el depósito de comisiones (escrow) para reclamarlo; un solo reclamo recolecta esos pagos de todos tus lanzamientos emparejados con este activo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le créateur perçoit sa part des frais de trading plus la taxe du créateur, le tout versé directement au bénéficiaire des frais. Un paiement qui ne peut pas être envoyé attend dans le séquestre des frais d'être réclamé ; il suffit de réclamer une fois pour collecter ces paiements sur tous vos lancements appariés à cet actif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "크리에이터는 거래 수수료 중 자기 몫과 크리에이터 세금을 받으며, 이는 수수료 수령인에게 바로 지급돼요. 보낼 수 없는 지급액은 수수료 에스크로에서 수령을 기다려요. 한 번 수령하면 이 자산과 페어인 모든 런칭의 해당 금액이 회수돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创作者可获得其交易手续费份额以及创作者税，这些费用会直接支付给手续费接收方。无法发送的款项会留在手续费托管中等待领取；一次领取即可归集你所有以该资产配对的发射中的这些款项。"
+          }
+        }
+      }
+    },
     "The creator earns their share of trading fees plus the creator tax; they accrue in the fee escrow and can be claimed any time. One claim sweeps fees across all your launches paired in this asset." : {
       "localizations" : {
         "es" : {
@@ -43017,6 +43159,35 @@
         }
       }
     },
+    "Total fees" : {
+      "comment" : "My Launchpad's full-width tile: every fee the wallet earned on the launchpad, received and claimable",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisiones totales"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Total des frais"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "총 수수료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手续费总额"
+          }
+        }
+      }
+    },
     "Total volume %@" : {
       "localizations" : {
         "es" : {
@@ -43323,6 +43494,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "毕业后的交易手续费"
+          }
+        }
+      }
+    },
+    "Trading fees" : {
+      "comment" : "[tight] My Moments tile: the creator's share of a graduated Moment's pool trading fees, in USDC",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisiones de trading"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais de trading"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "거래 수수료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交易手续费"
           }
         }
       }
@@ -43697,6 +43897,35 @@
     },
     "USD" : {
       "shouldTranslate" : false
+    },
+    "Unclaimed" : {
+      "comment" : "[tight] My Moments tile: USDC the Moments' contracts still hold for their creator, to withdraw",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin reclamar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non réclamé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "미수령"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未领取"
+          }
+        }
+      }
     },
     "Uniswap v4 fallback" : {
       "localizations" : {
@@ -47817,6 +48046,34 @@
         }
       }
     },
+    "Your USDC from the Moments you published, in every cohort: your share of each collect, and of trading fees once a Moment graduates. Withdraw what is unclaimed on each Moment's page." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tus USDC de los Moments que publicaste, en todas las cohortes: tu parte de cada compra y de las comisiones de trading una vez que un Moment se gradúa. Retira lo que no hayas reclamado en la página de cada Moment."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vos USDC issus des Moments que vous avez publiés, dans toutes les cohortes : votre part de chaque achat, et des frais de trading une fois le Moment gradué. Retirez ce qui n'est pas réclamé sur la page de chaque Moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 기수에서 내가 게시한 Moment로 얻은 USDC예요. 각 수집 금액 중 내 몫과, Moment가 졸업한 뒤 거래 수수료 중 내 몫이에요. 미수령 금액은 각 Moment 페이지에서 출금하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你在所有批次中发布的 Moment 为你带来的 USDC：每次收藏的分成，以及 Moment 毕业后交易手续费的分成。在各 Moment 的页面提取未领取的部分。"
+          }
+        }
+      }
+    },
     "Your account was created before our email-wallet security upgrade. Choose a new password: it becomes a new wallet that can’t be guessed offline, and we’ll email a code to confirm it’s you. Your previous wallet (%@) has no MON or token balance left." : {
       "localizations" : {
         "es" : {
@@ -48496,6 +48753,34 @@
         }
       }
     },
+    "Your proceeds couldn't be read just now: %@" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer tus ingresos en este momento: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire vos recettes pour le moment : %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 수익금을 읽지 못했어요: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的收益：%@"
+          }
+        }
+      }
+    },
     "Your recovery phrase hides in %lld seconds. Choose Keep Showing for more time." : {
       "localizations" : {
         "en" : {
@@ -48936,6 +49221,35 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "after graduation" : {
+      "comment" : "[tight] My Moments tile, under the amount of Trading fees",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "tras la graduación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "après la graduation"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 후"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毕业后"
           }
         }
       }
@@ -49828,6 +50142,35 @@
         }
       }
     },
+    "on each Moment's page" : {
+      "comment" : "[tight] My Moments tile, under the amount of Unclaimed: where it is withdrawn",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en cada Moment"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sur chaque Moment"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "각 Moment 페이지에서"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在各 Moment 页面"
+          }
+        }
+      }
+    },
     "or continue with" : {
       "comment" : "Sign-in screen: a divider above the other sign-in methods (Apple, Google, a passkey)",
       "localizations" : {
@@ -50564,13 +50907,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "se libera en desbloqueos mensuales"
+            "value" : "se libera mes a mes"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "se débloque aux paliers mensuels"
+            "value" : "se débloque chaque mois"
           }
         },
         "ko" : {
@@ -50735,6 +51078,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全部"
+          }
+        }
+      }
+    },
+    "your share of collects" : {
+      "comment" : "[tight] My Moments tile, under the amount of From collectors",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "tu parte de las compras"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "votre part des achats"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수집 금액 중 내 몫"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的收藏分成"
           }
         }
       }

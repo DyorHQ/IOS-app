@@ -32,6 +32,36 @@ final class WordWrapTests: XCTestCase {
         XCTAssertEqual(WordWrap.lines(of: "Face  ID"), [["Face", "ID"]], "two spaces are not the name")
     }
 
+    /// Two sentences join with a space, but none after a Chinese full stop: "。 " let a line start with "。".
+    func testSentencesJoinAsTheLanguageWritesThem() {
+        XCTAssertEqual(WordWrap.sentences("Fees are paid.", "These come from curve trades only."), "Fees are paid. These come from curve trades only.")
+        XCTAssertEqual(WordWrap.sentences("이 수수료는 지급돼요.", "커브 거래에서만 발생해요."), "이 수수료는 지급돼요. 커브 거래에서만 발생해요.")
+        XCTAssertEqual(WordWrap.sentences("Frais versés\u{202F};", "il suffit"), "Frais versés\u{202F}; il suffit", "a French semicolon keeps its space")
+        XCTAssertEqual(WordWrap.sentences("这些款项。", "这些仅来自曲线交易。"), "这些款项。这些仅来自曲线交易。")
+        XCTAssertEqual(WordWrap.sentences("等待领取；", "一次领取"), "等待领取；一次领取")
+        XCTAssertEqual(WordWrap.sentences("Paid straight.", ""), "Paid straight.", "nothing to add, no space")
+        XCTAssertEqual(WordWrap.sentences("", "Only this."), "Only this.")
+        // Any number of them, in order: the Perps order sheet's warnings.
+        XCTAssertEqual(WordWrap.sentences(["Position opened.", "Order status unknown.", "Check Open Orders."]),
+                       "Position opened. Order status unknown. Check Open Orders.")
+        XCTAssertEqual(WordWrap.sentences(["已开仓。", "订单状态未知。"]), "已开仓。订单状态未知。")
+        XCTAssertEqual(WordWrap.sentences(["Sent.", "", "Check."]), "Sent. Check.", "an empty one adds nothing")
+        XCTAssertEqual(WordWrap.sentences(["Only this."]), "Only this.")
+        XCTAssertEqual(WordWrap.sentences([]), "")
+    }
+
+    /// The app joins two translated sentences with `WordWrap.sentences`, never with a plain space: `" " + tr(…)` puts a
+    /// space after a Chinese "。", and a line can then start with "。".
+    func testTheAppNeverJoinsTranslatedSentencesWithAPlainSpace() throws {
+        var found: [String] = []
+        for (path, text) in try FormattedTextIsolationTests.appSources() {
+            for (index, line) in text.components(separatedBy: "\n").enumerated() where line.contains("\" \" + tr(") {
+                found.append("\(path):\(index + 1)")
+            }
+        }
+        XCTAssertEqual(found, [], "join translated sentences with WordWrap.sentences")
+    }
+
     /// A word keeps its attributes: a bold or linked word stays so, and the words read back as the text.
     func testWordsKeepTheirAttributes() throws {
         let text = try AttributedString(markdown: "**중요:** [자세히 보기](https://dyorhq.fun) 확인", options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))

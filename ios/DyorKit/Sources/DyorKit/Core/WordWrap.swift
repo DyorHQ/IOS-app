@@ -16,6 +16,23 @@ public enum WordWrap {
     /// Names that stay on one line: Apple's, never split ("Face / ID").
     static let unbroken = ["Face ID", "Touch ID", "Optic ID"]
 
+    /// Two translated sentences as one paragraph: a space between them, as most languages write it, but none after a
+    /// full-width stop ("。", "？"), where Chinese puts none; with one, a line can start with the stop. Either one empty
+    /// leaves the other as it is.
+    public static func sentences(_ first: String, _ second: String) -> String {
+        guard let last = first.last, !second.isEmpty else { return first + second }
+        return first + (fullWidthStops.contains(last) ? "" : " ") + second
+    }
+
+    /// Any number of translated sentences as one paragraph, in order, each joined to the text before it as
+    /// `sentences(_:_:)` joins two.
+    public static func sentences(_ parts: [String]) -> String {
+        parts.reduce("") { sentences($0, $1) }
+    }
+
+    /// The full-width punctuation a Chinese sentence or clause ends with.
+    static let fullWidthStops: Set<Character> = ["。", "！", "？", "；", "：", "）", "」", "』", "】"]
+
     /// `text` as lines, cut at its newlines, of words, cut at its spaces (U+0020). A word keeps its attributes (a bold
     /// or linked word stays so) and anything else that isn't a space or a newline: a no-break space joins two words
     /// into one, as it does in `Text`, and so does the space in a name that stays whole (`unbroken`). Spaces in a row,

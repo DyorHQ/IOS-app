@@ -55,6 +55,9 @@ public struct LaunchpadAddresses: Sendable, Hashable {
 
         /// The factory returns the 16-field record.
         public var legacyRecord: Bool { self == .legacy }
+        /// The fee escrow sends each fee straight to its recipient (`Paid`) and books a balance to claim only when that
+        /// send fails (`Credited`); before v1 it books every fee to claim. Read from each stack's escrow code on mainnet.
+        public var pushesFees: Bool { self >= .v1 }
         /// The fee-sharing contract has `queuedRewards` (audit fix H-1).
         public var hasQueuedRewards: Bool { self >= .v1 }
         /// The factory has `graduateFallback` (audit fix H-3). The app never sends it, on any generation (owner decision

@@ -15,6 +15,9 @@ struct MomentsPortfolioView: View {
     @State private var error: String?
     @State private var showClaimAll = false
     @State private var past = PastMomentsModel()
+    /// The USDC the wallet earned from the Moments it published, in every cohort (`MomentsService.creatorEarnings`).
+    @State private var earnings: MomentsCreatorEarnings?
+    @State private var earningsError: String?
 
     var body: some View {
         NavigationStack {
@@ -40,6 +43,7 @@ struct MomentsPortfolioView: View {
                     } footer: {
                         Paragraph("Coins across every Moment. Vesting unlocks at the monthly cliffs.")
                     }
+                    proceedsSection
                     if portfolio.rows.isEmpty {
                         if past.positions.isEmpty {
                             ContentUnavailableView {
@@ -59,8 +63,10 @@ struct MomentsPortfolioView: View {
                     }
                 } else if let error {
                     InlineError(message: error)
+                    proceedsSection
                 } else {
                     HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading your Moments…").foregroundStyle(.secondary) }
+                    proceedsSection
                 }
                 if !past.positions.isEmpty || past.error != nil || past.incomplete != nil {
                     Section {
@@ -107,10 +113,89 @@ struct MomentsPortfolioView: View {
         .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+    /// Proceeds, for a wallet that published a Moment in any cohort: its share of every collect (From collectors) and of
+    /// trading fees after graduation, split into what it withdrew (Claimed) and what the contracts still hold for it
+    /// (Unclaimed, withdrawn on each Moment's page). Both pairs add up to the same USDC.
+    @ViewBuilder private var proceedsSection: some View {
+        if let earnings, !earnings.complete {
+            // A cohort's publishes or withdrawals couldn't be read to the head: no total is shown in part.
+            Section {
+                InlineError(message: "Part of your proceeds couldn't be read just now. Pull to refresh.")
+            } header: {
+                Text("Proceeds")
+            }
+        } else if let earnings, !earnings.moments.isEmpty {
+            Section {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    usdcTile(Text("From collectors", comment: "[tight] My Moments tile: the creator's share of the collects of the Moments it published, in USDC"), earnings.fromCollectors,
+                             Text("your share of collects", comment: "[tight] My Moments tile, under the amount of From collectors"))
+                    usdcTile(Text("Trading fees", comment: "[tight] My Moments tile: the creator's share of a graduated Moment's pool trading fees, in USDC"), earnings.tradingFees,
+                             Text("after graduation", comment: "[tight] My Moments tile, under the amount of Trading fees"))
+                    usdcTile(Text("Claimed", comment: "[tight] Already claimed: coins on My Moments and a Moment's page, fees and rewards on Portfolio"), earnings.claimed,
+                             Text("already in your wallet", comment: "[tight] My Moments tile, under the amount"))
+                    usdcTile(Text("Unclaimed", comment: "[tight] My Moments tile: USDC the Moments' contracts still hold for their creator, to withdraw"), earnings.unclaimed,
+                             Text("on each Moment's page", comment: "[tight] My Moments tile, under the amount of Unclaimed: where it is withdrawn"),
+                             tint: earnings.unclaimed > 0 ? .brand : .primary)
+                }
+                .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+            } header: {
+                Text("Proceeds")
+            } footer: {
+                Paragraph("Your USDC from the Moments you published, in every cohort: your share of each collect, and of trading fees once a Moment graduates. Withdraw what is unclaimed on each Moment's page.")
+            }
+        } else if let earningsError {
+            Section {
+                InlineError(message: earningsError)
+            } header: {
+                Text("Proceeds")
+            }
+        }
+    }
+
+    /// A USDC amount's tile, rounded to the cent, in the coin tiles' style.
+    private func usdcTile(_ title: Text, _ units: BigUInt, _ subtitle: Text, tint: Color = .primary) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            title.font(.caption).foregroundStyle(.secondary)
+            Text(verbatim: MomentsFormat.usdcCents(units)).font(.headline).monospacedDigit().foregroundStyle(tint)
+            subtitle.font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
     private func load() async {
         async let live: () = loadLive()
         async let pastLoad: () = past.load(env: env, address: session.address, force: true)
-        _ = await (live, pastLoad)
+        async let earningsLoad: () = loadEarnings()
+        _ = await (live, pastLoad, earningsLoad)
+    }
+
+    /// The proceeds of every cohort, read together: the live cohort's and each retired one's. A cohort that can't be read
+    /// leaves nothing shown in part: the section says it couldn't be read.
+    private func loadEarnings() async {
+        guard let address = session.address else { earnings = nil; earningsError = nil; return }
+        let cohorts = env.retiredMoments
+        do {
+            async let live = env.moments.creatorEarnings(account: address)
+            let retired = try await withThrowingTaskGroup(of: MomentsCreatorEarnings.self) { group in
+                for cohort in cohorts { group.addTask { try await cohort.creatorEarnings(account: address) } }
+                var all = MomentsCreatorEarnings.none
+                for try await read in group { all = all + read }
+                return all
+            }
+            let all = try await live + retired
+            guard session.address == address else { return }
+            earnings = all
+            earningsError = nil
+        } catch is CancellationError {
+            return
+        } catch {
+            guard session.address == address else { return }
+            earnings = nil
+            earningsError = tr("Your proceeds couldn't be read just now: \(describe(error))")
+        }
     }
 
     private func loadLive() async {
