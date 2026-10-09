@@ -204,3 +204,37 @@ Deno.test("next(maxPriority) hands out only work that urgent; giveBack puts an i
   assertEquals(p.kindCounts().global, before);
   assertEquals(p.next(true, 3), deep);
 });
+
+Deno.test("hasWork: whether work is left, handing nothing out (the deep pass not started, no count moved); next skips held priorities", () => {
+  const ws = () => [wallet(1, { in: covered(H - 199_999), out: covered(H - 199_999), deep: true }), wallet(2, { in: covered(0), out: covered(0), deep: true })];
+  const p = new Planner(state(ws()), H, defs, opts(), NOW);
+  // Only deep work (wallet 1 below its window), before the deep pass has started.
+  assertEquals([p.hasWork([0]), p.hasWork([1]), p.hasWork([2]), p.hasWork([3]), p.hasWork()], [false, false, false, true, true]);
+  assertEquals([p.counts(), p.kindCounts().deep, p.stats().planned], [{ 0: 0, 1: 0, 2: 0, 3: 0 }, 0, 0]);
+  // Held: nothing of that priority is handed out; the planner keeps it.
+  assertEquals(p.next(true, 3, new Set([3])), null);
+  assertEquals(p.hasWork([3]), true);
+  // What next() hands out afterwards is what a planner never asked would hand out.
+  const ref = new Planner(state(ws()), H, defs, opts(), NOW);
+  const first = p.next(true)!;
+  assertEquals(first, ref.next(true));
+  assertEquals([first.priority, first.wallets, p.stats().planned], [3, [W(1)], 1]);
+  // Started: a pass's next item is looked at, not taken (the same item comes next).
+  assertEquals(p.hasWork([3]), true);
+  const second = p.next(true)!;
+  assertEquals(second, ref.next(true));
+  // Given back or re-queued work is left too; drained, nothing is.
+  p.giveBack(second);
+  assertEquals(p.hasWork([3]), true);
+  drain(p);
+  assertEquals(p.hasWork(), false);
+  p.requeue({ ...first, attempts: 1 }, false);
+  assertEquals([p.hasWork([2]), p.hasWork([3])], [false, true]);
+  // No deep work: complete to genesis, or no activity; a hole due for a retry inside the deep band is deep work.
+  const done = new Planner(state([wallet(3, { in: covered(0), out: covered(0), deep: true }), wallet(4, { in: covered(H - 199_999), out: covered(H - 199_999) })]), H, defs, opts(), NOW);
+  assertEquals(done.hasWork(), false);
+  const holed = new Planner(state([wallet(5, { in: [[0, 999], [1_001, H]], out: covered(0), holesIn: [[1_000, 1_000]], holesCheckedAt: NOW - 7 * HOUR, deep: true })]), H, defs, opts(), NOW);
+  assertEquals(holed.hasWork([3]), true);
+  assertEquals(drain(holed).map((i) => [i.priority, i.kind, i.from, i.to]), [[3, "holes", 1_000, 1_000]]);
+  assertEquals(holed.hasWork(), false);
+});

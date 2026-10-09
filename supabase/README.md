@@ -192,8 +192,15 @@ the piece is split there, and a key capped at fewer blocks halves its span to th
 tier's 10-block refusal turns its log reads off for a day, a spent month turns it off until 00:00 UTC, and an HTTP
 401/403 sidelines it at once; its own error texts are never stored. No keyed URL is ever logged, stored or put in an
 error: log lines, error lines and run summaries pass through `redact.ts`, and no Error object reaches `console.*`. Work waiting for a busy or resting endpoint is parked while the others go on (the follow
-continues on the clamping endpoints while `rpc2` rests), and an endpoint that refuses every request (a revoked key, a
-spent quota, a firewall) is sidelined for 15 minutes without turning its pieces into holes. `MONAD_LOGS_ENDPOINTS`
+continues on the clamping endpoints while `rpc2` rests); a sidelined endpoint, one off for the day or one without log
+reads rests the same way, until its time is up (a refusing one is self-tested again once back). Work none of its
+endpoints can start before the run's read deadline (deep history while `rpc2` rests or is sidelined past it) stays
+parked too — the run stops `deadline`, not `done`, and the next run plans that work again (`counts.leftParked`). Work of
+a priority no endpoint may take at all (every span too narrow for it, as when `rpc2` teaches a span below 10,000 blocks
+for a day, or every daily budget too full) stays in the planner, held (`counts.held`): the run reads everything else and
+stops `blocked`, not `done`. `rpc2`'s HTTP 429 is a JSON-RPC error; its Retry-After is honoured (up to 60 s). An
+endpoint that refuses every request (a revoked key, a spent quota, a firewall) is sidelined for 15 minutes without
+turning its pieces into holes. `MONAD_LOGS_ENDPOINTS`
 (optional JSON) replaces them (an array) or adds to them (`{"mode": "append", "endpoints": [...], "overrides":
 {"rpc2": {"rps": 4, "inFlight": 8}, "alchemy": {"span": 10000}}}`; an override of `alchemy` without
 `ALCHEMY_MONAD_RPC` is ignored); an invalid value falls back to the defaults (with `alchemy`) and a log line naming the

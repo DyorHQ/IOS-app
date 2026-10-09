@@ -4,8 +4,9 @@
 // cut), both fed to the run's CPU meter.
 export type Call = { method: string; params: unknown[] };
 export type CallResult = { ok: true; result: unknown } | { ok: false; code?: number; message: string };
+// `retryAfter`: a non-2xx JSON-RPC answer's Retry-After header (rpc2 answers HTTP 429 with a JSON-RPC error), as sent.
 export type Exchange =
-  | { kind: "answered"; results: CallResult[]; bytes: number; parseMs: number; status: number }
+  | { kind: "answered"; results: CallResult[]; bytes: number; parseMs: number; status: number; retryAfter?: string }
   | { kind: "http"; status: number; headers: Headers; body: string; bytes: number } // non-2xx and not JSON-RPC; body ≤ 2 KB kept
   | { kind: "unanswered"; reason: "timeout" | "network" | "malformed" | "tooLarge"; bytes: number };
 
@@ -98,7 +99,10 @@ export async function exchange(fetchFn: typeof fetch, url: string, calls: Call[]
     try { parsed = JSON.parse(text); } catch { parsedOk = false; }
     const parseMs = Math.max(0, cpuNow() - started);
     const results = parsedOk ? mapResults(parsed, calls.length) : null;
-    if (results) return { kind: "answered", results, bytes, parseMs, status: res.status };
+    if (results) {
+      const retryAfter = res.ok ? null : res.headers.get("retry-after");
+      return { kind: "answered", results, bytes, parseMs, status: res.status, ...(retryAfter ? { retryAfter } : {}) };
+    }
     if (!res.ok) return { kind: "http", status: res.status, headers: res.headers, body: text.slice(0, KEEP_BODY), bytes };
     return { kind: "unanswered", reason: "malformed", bytes };
   } finally {

@@ -1,7 +1,7 @@
 // deno test --no-config --node-modules-dir=none -A supabase/functions/history-indexer/
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { alchemyEndpoint, DEFAULT_ENDPOINTS, type Endpoint } from "./endpoints.ts";
-import { ByteBudget, EndpointState, followRank, minSpanFor, pickEndpoint, SIDELINE_MS } from "./pacing.ts";
+import { ByteBudget, EndpointState, followRank, minSpanFor, pickEndpoint, SIDELINE_MS, takesPriority } from "./pacing.ts";
 
 const T0 = Date.parse("2026-10-08T12:00:00Z");
 const ep = (label: string, over: Partial<Endpoint> = {}): Endpoint => ({ ...DEFAULT_ENDPOINTS.find((e) => e.label === label)!, ...over });
@@ -149,9 +149,10 @@ Deno.test("pickEndpoint: priority order, spans, straddle, waits and nothing", ()
   assertEquals("state" in window! && [window.state.label, window.upTo], ["rpc4", H - 10_001]);
   const follow = pickEndpoint(states, { from: H - 1_199, to: H, priority: 0 }, T0, H, T0 + 60_000);
   assertEquals("state" in follow! && [follow.state.label, follow.upTo], ["rpc4", H - 600]);
-  // Entirely above head − lag: only rpc2, which is pacing — wait for it; past the deadline → nothing this run.
+  // Entirely above head − lag: only rpc2, which is pacing — wait for it; its next start past the deadline → too late
+  // for this run (kept for the next one); no refusing endpoint at all → nothing this run.
   assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 60_000), { waitUntil: T0 + 500 });
-  assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 100), null);
+  assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 100), { late: true });
   rpc2.markClamps(T0);
   assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 60_000), null);
   void rpc4;
@@ -208,14 +209,20 @@ Deno.test("strikes: only the first in a row counts against the piece; three in a
   assertEquals(t.strike(T0), false);
 });
 
-Deno.test("pickEndpoint: a sidelined endpoint takes nothing; a refusing one still to be verified is waited for", () => {
+Deno.test("pickEndpoint: a sidelined endpoint takes nothing until it is back; a refusing one still to be verified is waited for", () => {
   const states = DEFAULT_ENDPOINTS.map((e) => new EndpointState({ ...e }, undefined, T0));
   const [rpc2, rpc4] = states;
   for (let k = 0; k < 4; k++) rpc2.finished(T0, { kind: "refused" });
-  assertEquals(pickEndpoint(states, { from: 1_000_000, to: 1_009_999, priority: 3 }, T0, H, T0 + 60_000), null);
+  // Sidelined for 15 min, past this run's read deadline: deep work and the head are late for the run (left to the next
+  // one), never given up; work another endpoint can do goes to it.
+  assertEquals(pickEndpoint(states, { from: 1_000_000, to: 1_009_999, priority: 3 }, T0, H, T0 + 60_000), { late: true });
   const window = pickEndpoint(states, { from: H - 20_000, to: H - 10_001, priority: 2 }, T0, H, T0 + 60_000);
   assertEquals("state" in window! && window.state.label, "rpc4");
-  assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 60_000), null);
+  assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 60_000), { late: true });
+  // Back before the read deadline: waited for, then taken.
+  assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + SIDELINE_MS + 60_000), { waitUntil: T0 + SIDELINE_MS });
+  const back = pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0 + SIDELINE_MS, H, T0 + SIDELINE_MS + 60_000);
+  assertEquals(back && "state" in back && back.state.label, "rpc2");
   // rpc2 rested at the run's start: its self-test is deferred. Until it passes, rpc2 is clamping, and a piece at the
   // head waits for it instead of being given up.
   const fresh = DEFAULT_ENDPOINTS.map((e) => new EndpointState({ ...e }, undefined, T0));
@@ -225,13 +232,111 @@ Deno.test("pickEndpoint: a sidelined endpoint takes nothing; a refusing one stil
   assertEquals(f2.straddle(T0), "clamps");
   assertEquals(pickEndpoint(fresh, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 60_000), { waitUntil: T0 + 30_000 });
   assertEquals(pickEndpoint(fresh, { from: H - 100, to: H, priority: 0, refusingOnly: true }, T0, H, T0 + 60_000), { waitUntil: T0 + 30_000 });
-  assertEquals(pickEndpoint(fresh, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 20_000), null); // past the deadline
+  assertEquals(pickEndpoint(fresh, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 20_000), { late: true }); // past the deadline
   // Below head − lag the clamping endpoints take it meanwhile.
   const low = pickEndpoint(fresh, { from: H - 1_199, to: H - 600, priority: 0 }, T0, H, T0 + 60_000);
   assertEquals("state" in low! && low.state.label, "rpc4");
   f2.markVerified();
   assertEquals(f2.straddle(T0), "refuses");
   void rpc4;
+});
+
+Deno.test("pickEndpoint: too late this run is not never — an endpoint resting past the read deadline leaves the item to the next run", () => {
+  const fresh = (over: Partial<Endpoint> = {}) => DEFAULT_ENDPOINTS.map((e) => new EndpointState({ ...e, ...(e.label === "rpc2" ? over : {}) }, undefined, T0));
+  const deep = { from: 1_000_000, to: 1_009_999, priority: 3 as const };
+  const window = { from: H - 20_000, to: H - 10_001, priority: 2 as const };
+  const follow = { from: H - 100, to: H, priority: 0 as const };
+  // rpc2, the only endpoint wide enough for deep work (and the only one for the head), throttled four times in a row:
+  // it rests 16 s. A start before the read deadline is waited for; one at or past it is late — never null, which
+  // would settle the item as unreadable (dropped) and pull the next one from the planner.
+  const states = fresh();
+  const [rpc2] = states;
+  for (let k = 0; k < 4; k++) { rpc2.started(T0); rpc2.finished(T0, { kind: "throttled" }); }
+  assertEquals(rpc2.restUntil, T0 + 16_000);
+  assertEquals(pickEndpoint(states, deep, T0, H, T0 + 20_000), { waitUntil: T0 + 16_000 });
+  assertEquals(pickEndpoint(states, deep, T0, H, T0 + 16_000), { late: true });
+  assertEquals(pickEndpoint(states, deep, T0 + 5_000, H, T0 + 10_000), { late: true });
+  assertEquals(pickEndpoint(states, follow, T0, H, T0 + 10_000), { late: true });
+  // Work another endpoint can do now still goes to it.
+  const w = pickEndpoint(states, window, T0, H, T0 + 10_000);
+  assertEquals(w && "state" in w && w.state.label, "rpc4");
+  // Paced (not resting) past the deadline: late too.
+  const paced = fresh();
+  paced[0].started(T0);                                   // 2 requests/s: the next start at T0 + 500
+  assertEquals(pickEndpoint(paced, deep, T0, H, T0 + 400), { late: true });
+  // At its in-flight cap rpc2 frees when a request finishes, perhaps before the deadline: a wait, never late — also
+  // when the other endpoints able to take the item rest past the deadline.
+  const capped = fresh();
+  for (let k = 0; k < 4; k++) capped[0].started(T0);
+  assertEquals(pickEndpoint(capped, deep, T0, H, T0 + 100), { waitUntil: Number.POSITIVE_INFINITY });
+  for (const s of capped.slice(1)) s.finished(T0, { kind: "throttled", retryAfterMs: 30_000 });
+  assertEquals(pickEndpoint(capped, window, T0, H, T0 + 10_000), { waitUntil: Number.POSITIVE_INFINITY });
+  assertEquals(pickEndpoint(capped, window, T0, H, T0 + 60_000), { waitUntil: T0 + 30_000 });
+  // A sideline, a day off (spent) or a day without log reads is a rest with an end: waited for when it ends before the
+  // read deadline, late when it ends at or past it — never null. A sideline the last run remembered, ending 20 s into
+  // this one (the run then waits for it, rather than drop its deep plan item by item).
+  const remembered = DEFAULT_ENDPOINTS.map((e) => new EndpointState({ ...e }, e.label === "rpc2" ? { sidelinedUntil: T0 + 20_000 } : undefined, T0));
+  assertEquals(remembered[0].sidelined(T0), true);
+  assertEquals(pickEndpoint(remembered, deep, T0, H, T0 + 210_000), { waitUntil: T0 + 20_000 });
+  assertEquals(pickEndpoint(remembered, follow, T0, H, T0 + 210_000), { waitUntil: T0 + 20_000 });
+  assertEquals(pickEndpoint(remembered, deep, T0, H, T0 + 20_000), { late: true });
+  const r = pickEndpoint(remembered, deep, T0 + 20_000, H, T0 + 210_000);
+  assertEquals(r && "state" in r && r.state.label, "rpc2");
+  const spent = fresh();
+  spent[0].finished(T0, { kind: "spent" });                               // off until 00:00 UTC
+  assertEquals(pickEndpoint(spent, deep, T0, H, T0 + 10_000), { late: true });
+  const midnight = Date.parse("2026-10-09T00:00:00Z");
+  assertEquals(pickEndpoint(spent, deep, midnight - 5_000, H, midnight + 60_000), { waitUntil: midnight });
+  const noLogs = fresh();
+  noLogs[0].finished(T0, { kind: "noLogs" });
+  assertEquals(pickEndpoint(noLogs, deep, T0, H, T0 + 10_000), { late: true });
+  // At its in-flight cap but sidelined past the deadline: a freed slot would not help — late.
+  const cappedOff = fresh();
+  for (let k = 0; k < 4; k++) cappedOff[0].started(T0);
+  for (let k = 0; k < 4; k++) cappedOff[0].note(T0, { kind: "refused" });
+  assertEquals([cappedOff[0].inFlight, cappedOff[0].sidelined(T0)], [4, true]);
+  assertEquals(pickEndpoint(cappedOff, deep, T0, H, T0 + 10_000), { late: true });
+  // Structural: no endpoint may take it this run at all — null, resting or not: its priority (takesPriority: spans,
+  // daily budgets; the run holds the priority back), or the item itself (the straddle rule; the run settles it: a
+  // straddle wait at the head).
+  const narrow = fresh();
+  narrow[0].finished(T0, { kind: "span", span: 5_000, tried: 10_000 });   // below minSpanFor(3)
+  assertEquals(pickEndpoint(narrow, deep, T0, H, T0 + 10_000), null);
+  const budget = fresh({ maxPerDay: 10, rps: 50 });
+  for (let k = 0; k < 8; k++) { budget[0].started(T0 + k * 100); budget[0].finished(T0 + k * 100, { kind: "answered" }); }
+  assertEquals(pickEndpoint(budget, deep, T0 + 1_000, H, T0 + 10_000), null);  // 80 % used: no deep work today
+  const clamping = fresh();
+  clamping[0].markClamps(T0);
+  clamping[0].finished(T0, { kind: "throttled", retryAfterMs: 30_000 });
+  assertEquals(pickEndpoint(clamping, follow, T0, H, T0 + 10_000), null);     // no refusing endpoint for the head
+});
+
+Deno.test("takesPriority: whether any endpoint's span and daily budget allow a priority at all (rests, sidelines and days off do not count)", () => {
+  const fresh = (over: Partial<Endpoint> = {}) => DEFAULT_ENDPOINTS.map((e) => new EndpointState({ ...e, ...(e.label === "rpc2" ? over : {}) }, undefined, T0));
+  assertEquals([0, 1, 2, 3].map((p) => takesPriority(fresh(), p as 0, T0)), [true, true, true, true]);
+  // rpc2 taught a span below 10,000 blocks ("invalid block range params": half the piece), remembered for a day: no
+  // endpoint takes deep work until then; the 1,000-block endpoints still take the rest.
+  const narrow = fresh();
+  narrow[0].finished(T0, { kind: "span", tried: 10_000 });
+  assertEquals(narrow[0].currentSpan(), 5_000);
+  assertEquals([0, 1, 2, 3].map((p) => takesPriority(narrow, p as 0, T0)), [true, true, true, false]);
+  const nextRun = DEFAULT_ENDPOINTS.map((e) => new EndpointState({ ...e }, e.label === "rpc2" ? narrow[0].memory(T0 + 60_000) : undefined, T0 + 60_000));
+  assertEquals(takesPriority(nextRun, 3, T0 + 60_000), false);
+  // "up to a 10000 block range" for a 10,000-block piece: 9,999, just as narrow for deep work.
+  const nines = fresh();
+  nines[0].finished(T0, { kind: "span", span: 10_000, tried: 10_000 });
+  assertEquals([nines[0].currentSpan(), takesPriority(nines, 3, T0)], [9_999, false]);
+  // A daily budget at 80 %: deep work and global gaps wait for 00:00 UTC.
+  const budget = fresh({ maxPerDay: 10, rps: 50 });
+  for (let k = 0; k < 8; k++) { budget[0].started(T0 + k * 100); budget[0].finished(T0 + k * 100, { kind: "answered" }); }
+  assertEquals(takesPriority(budget, 3, T0 + 1_000), false);
+  assertEquals(takesPriority(budget, 3, Date.parse("2026-10-09T00:00:00Z")), true);
+  // Resting, sidelined, off or without log reads: still able to take it (pickEndpoint waits for it, or leaves it late).
+  const off = fresh();
+  for (let k = 0; k < 4; k++) off[0].finished(T0, { kind: "refused" });
+  off[0].finished(T0, { kind: "spent" });
+  off[0].finished(T0, { kind: "noLogs" });
+  assertEquals(takesPriority(off, 3, T0), true);
 });
 
 Deno.test("bytes in flight: reservations ≤ 12 MiB, at most one single block (8 MiB) at a time", () => {

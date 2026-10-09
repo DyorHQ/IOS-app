@@ -7,12 +7,12 @@
 // not answered — throttled, timed out, too dense, refused past the head — is re-queued, split, recorded as a hole, or
 // left as a gap for the next run; it is never claimed.
 import { type CommitArgs, CommitSlow, DbDown, DefsChanged, type HistoryDb, LeaseLost, Refused, Retryable, type RunSummary } from "./db.ts";
-import { classifyCallError, classifyHttp, type Endpoint, endpointRefusal, isKeyed } from "./endpoints.ts";
+import { classifyCallError, classifyHttp, type Endpoint, endpointRefusal, isKeyed, retryAfterMs } from "./endpoints.ts";
 import { locateFirstTx, type NonceSource, reverifyFirstTx } from "./firsttx.ts";
 import { Coalescer, type Fragment } from "./coalesce.ts";
 import { type CpuMeter, type DbCall, type Finish, finishReserveMs, IsolateCpu, lookupReads } from "./cpu.ts";
 import { checkAnswer, type CompactLog, compactBytes, fillTimestamps, splitForCommit } from "./logs.ts";
-import { ByteBudget, EndpointState, followRank, minSpanFor, type Outcome, pickEndpoint, type Priority } from "./pacing.ts";
+import { ByteBudget, EndpointState, followRank, minSpanFor, type Outcome, pickEndpoint, type Priority, takesPriority } from "./pacing.ts";
 import { DEFAULT_PLAN, type IndexerState, type PlanOptions, Planner, type WalletState, type WorkItem } from "./planner.ts";
 import { type Redact, scrubUrls } from "./redact.ts";
 import { type Call, type CallResult, exchange, type Exchange } from "./rpc.ts";
@@ -91,6 +91,7 @@ export type Deps = {
 };
 
 type ItemCounts = { follow: number; global: number; window: number; deep: number; holes: number };
+const PRIORITY_KIND: Record<Priority, string> = { 0: "follow", 1: "global", 2: "window", 3: "deep" };
 
 // The run's counters, turned into the summary at release (§10): counts only, no wallet address, no URL.
 class Counters {
@@ -100,6 +101,8 @@ class Counters {
   refused: Record<string, number> = {};
   sidelined: string[] = [];
   failed = 0; invalid = 0; dense = 0; timeouts = 0; pastHead = 0; straddleWaits = 0; dropped = 0;
+  // Priorities no endpoint could take during the run (takesPriority: spans, daily budgets), by kind: held back, not read.
+  held: string[] = [];
   commits = 0; commitSlow = 0; commitRetries = 0; logs = 0; inserted: Record<string, number> = {}; trimmed = 0;
   holesMarked = 0; holesCleared = 0; capped = 0;
   // `cut`: lookups a stop ended before their answer (their reads wasted; a "cpu" stop lets the ones in progress finish).
@@ -171,7 +174,9 @@ class Run {
   private readonly bytes: ByteBudget;
   // The look-ahead (§10): items taken from the planner that wait for an endpoint, offered again most urgent first on
   // every step, so one busy or resting endpoint never holds back work another endpoint could do now (§14). At most
-  // `parkItems` of P1–P3 (the follow is never limited; it is bounded by the wallets).
+  // `parkItems` of P1–P3 (the follow is never limited; it is bounded by the wallets). An item no endpoint can start
+  // before the read deadline stays here to the end of the run (pickEndpoint: late): left unread, it is a gap the next
+  // run plans again, and it keeps the run's stop at "deadline" (finish).
   private parked: WorkItem[] = [];
   private readonly probing = new Set<EndpointState>();
   private readonly probes = new Map<EndpointState, number>();
@@ -515,7 +520,7 @@ class Run {
     const keyed = this.keyed.has(s.label);
     if (ex.kind === "unanswered") return ex.reason === "timeout" ? { kind: "timeout" } : ex.reason === "tooLarge" ? { kind: "answered" } : { kind: "unanswered" };
     if (ex.kind === "http") {
-      const v = classifyHttp(ex.status, ex.headers, ex.body, Date.now(), keyed);
+      const v = classifyHttp(ex.status, ex.headers, ex.body, this.now(), keyed);
       if (v.kind === "throttled") { this.c.throttled[s.label] = (this.c.throttled[s.label] ?? 0) + 1; return v; }
       if (v.kind === "batchRefused") return s.bare() ? { kind: "unanswered" } : { kind: "batchRefused" };
       if (v.kind === "unanswered") return { kind: "unanswered" };
@@ -532,9 +537,10 @@ class Run {
       const refusal = errors.map((e) => endpointRefusal(e.message)).find((r) => r !== null);
       if (refusal) return this.offOutcome(s, refusal, ex.status);
     }
+    // A throttle answered in JSON-RPC (rpc2's HTTP 429 carries a JSON-RPC error) keeps the answer's Retry-After.
     if (errors.some(throttleError)) {
       this.c.throttled[s.label] = (this.c.throttled[s.label] ?? 0) + 1;
-      return { kind: "throttled" };
+      return { kind: "throttled", retryAfterMs: retryAfterMs(ex.retryAfter ?? null, this.now()) };
     }
     if (errors.length === ex.results.length && ex.results.length > 1 && errors.every((e) => /internal error/i.test(e.message))) {
       return { kind: "unanswered" };
@@ -561,11 +567,16 @@ class Run {
   // until it is first ready (the read loop sends it), and until then it is used as clamping — a piece that needs a
   // refusing endpoint waits for it (pickEndpoint). A probe without a verdict is tried again when the endpoint is next
   // ready, `probeAttempts` in all; then the endpoint is clamping for the rest of the run.
+  // A refusing endpoint sidelined, off or without log reads at the start may be back before the reads end (pickEndpoint
+  // waits for it): it is clamping until its probe, sent once it is back, passes.
   private async selfTest() {
     for (const s of this.states) {
       const now = this.now();
-      if (s.sidelined(now)) { this.c.straddle[s.label] = "sidelined"; continue; }
-      if (s.logsOff(now)) { this.c.straddle[s.label] = "nologs"; continue; }
+      if (s.sidelined(now) || s.logsOff(now)) {
+        this.c.straddle[s.label] = s.sidelined(now) ? "sidelined" : "nologs";
+        if (s.straddle(now) === "refuses") s.deferProbe();
+        continue;
+      }
       if (s.straddle(now) !== "refuses") { this.c.straddle[s.label] = "clamps"; continue; }
       if (s.nextStartAt(now) > now + this.o.headReadyMs) {
         s.deferProbe();
@@ -660,9 +671,13 @@ class Run {
       this.startProbes();
       if (this.requestsInFlight >= o.maxInFlightTotal) { await this.wait(1_000); continue; }
       const step = this.step();
-      if (step === "sent" || step === "stop") continue;
+      if (step === "sent" || step === "stop" || step === "more") continue;
       if (step === "idle") {
-        if (this.requestsInFlight === 0 && !this.firstTxBusy && this.probing.size === 0) { this.setStop("done"); return; }
+        const committing = this.commitNewWindows();
+        if (this.requestsInFlight === 0 && !this.firstTxBusy && this.probing.size === 0 && !committing) {
+          this.setStop(this.heldLeft() ? "blocked" : "done");
+          return;
+        }
         await this.wait(1_000);
         continue;
       }
@@ -673,17 +688,33 @@ class Run {
 
   // One step of the read loop: top up the look-ahead from the planner, then send its most urgent item that an endpoint
   // can take now (items of a priority in the order the planner gave them: newest first). An item whose endpoints are
-  // all busy or resting stays parked and the next one is tried — never a stall behind one endpoint (§14).
-  private step(): "sent" | "stop" | "idle" | "bytes" | { waitUntil: number } {
+  // all busy or resting stays parked and the next one is tried — never a stall behind one endpoint (§14). An item none
+  // of whose endpoints can start before the read deadline (late: deep work while rpc2, the only public endpoint wide
+  // enough for it, rests or is sidelined past the deadline) stays parked too, until the reads end: it holds its place in
+  // the look-ahead, so no further planner item is pulled for it, and the run stops "deadline" with work left, not "done".
+  // An item whose priority no endpoint may take at all any more (a span narrowed during the run: takesPriority) goes
+  // back to the planner, which hands out no more of it (topUp). Only an item no endpoint can take for itself (the
+  // straddle rule) is settled (unreadable) — at most `parkItems` in one step ("more": the read loop checks its budgets
+  // before the next) — and only then is the look-ahead topped up again within the step.
+  private step(): "sent" | "stop" | "idle" | "bytes" | "more" | { waitUntil: number } {
+    let settled = 0;
     for (;;) {
       this.topUp();
       if (this.parked.length === 0) return "idle";
       const now = this.now();
       let wait = Number.POSITIVE_INFINITY;
-      let unreadable = false, bytes = false;
+      let room = false, bytes = false;
       for (const item of this.byUrgency(this.parked)) {
         const pick = pickEndpoint(this.states, item, now, this.head!, this.readDeadline);
-        if (pick === null) { this.unpark(item); this.unreadable(item); unreadable = true; continue; }
+        if (pick === null) {
+          this.unpark(item);
+          room = true;
+          if (!takesPriority(this.states, item.priority, now)) { this.planner!.giveBack(item); continue; } // held from now on
+          this.unreadable(item);
+          if (++settled >= this.o.parkItems) return "more";
+          continue;
+        }
+        if ("late" in pick) { wait = Math.min(wait, this.readDeadline); continue; } // stays parked; wake at the deadline
         if ("waitUntil" in pick) { wait = Math.min(wait, pick.waitUntil); continue; }
         // The request, its pieces' commits and its bytes must fit the CPU budget too (cpu.ts): else the stop is "cpu".
         if (!this.cpuLeft(this.dispatchShare(item, pick.state))) return "stop";
@@ -692,22 +723,55 @@ class Run {
         this.parked.splice(at, 0, item); // no bytes for it now: it keeps its place
         bytes = true;
       }
-      if (unreadable) continue; // room again: top up and try once more
+      if (room) continue; // room again: top up and try once more
       return bytes && wait === Number.POSITIVE_INFINITY ? "bytes" : { waitUntil: wait };
     }
   }
 
   // Fills the look-ahead from the planner: up to `parkItems` P1–P3 items (and every follow item); once full, only items
-  // more urgent than its least urgent one, which then goes back to the planner.
+  // more urgent than its least urgent one, which then goes back to the planner. Nothing of a held priority.
   private topUp() {
     const planner = this.planner!;
+    const held = this.heldPriorities(this.now());
     for (;;) {
       const counted = this.parked.filter((i) => i.priority > 0);
       const max = counted.length < this.o.parkItems ? 3 : Math.max(...counted.map((i) => i.priority)) - 1;
-      const item = this.sync(() => planner.next(planner.pendingNewWindows() === 0, max as Priority));
+      const item = this.sync(() => planner.next(planner.pendingNewWindows() === 0, max as Priority, held));
       if (!item) return;
       this.park(item);
     }
+  }
+
+  // The priorities no endpoint may take now (takesPriority: every span too narrow, or every daily budget too full, for
+  // them; e.g. deep work after rpc2 taught a span below 10,000 blocks, remembered for a day): held back — their items
+  // stay in the planner, none is handed out only to be given up, and the read loop ends "blocked", not "done", while any
+  // are left. Worked out again on every top-up (a budget frees at 00:00 UTC), and named in the summary (`counts.held`).
+  private heldPriorities(now: number): Set<Priority> {
+    const held = new Set<Priority>();
+    for (const p of [0, 1, 2, 3] as Priority[]) {
+      if (takesPriority(this.states, p, now)) continue;
+      held.add(p);
+      if (!this.c.held.includes(PRIORITY_KIND[p])) this.c.held.push(PRIORITY_KIND[p]);
+    }
+    return held;
+  }
+
+  // Work of a held priority left in the planner.
+  private heldLeft(): boolean {
+    const held = [...this.heldPriorities(this.now())];
+    return held.length > 0 && this.sync(() => this.planner!.hasWork(held));
+  }
+
+  // New wallets' windows hold the deep pass back until their last piece is committed (planner.pendingNewWindows), and a
+  // coalesced piece waits up to `coalesceMs` for its neighbours. With nothing else to read, they go to the commits now
+  // and the read loop waits for them, rather than end its reads with the deep pass never started. True while they are
+  // being committed.
+  private commitNewWindows(): boolean {
+    if (this.planner!.pendingNewWindows() === 0) return false;
+    if (this.pending.size === 0 && this.jobs.length === 0 && this.commitsInFlight === 0) return false;
+    for (const f of this.pending.drain()) this.flush(f);
+    this.pumpCommits();
+    return true;
   }
 
   private park(item: WorkItem) {
@@ -731,7 +795,8 @@ class Run {
     return [...items].sort((a, b) => a.priority - b.priority);
   }
 
-  // No endpoint can take the item this run: past the head on clamping endpoints only (the next run), or dropped.
+  // No endpoint can take the item this run at all (pickEndpoint null: not merely too late, which stays parked): past
+  // the head on clamping endpoints only (the next run), or dropped.
   private unreadable(item: WorkItem) {
     if (item.to > this.head! - this.maxLag()) this.c.straddleWaits++;
     else this.c.dropped++;
@@ -1287,7 +1352,11 @@ class Run {
     } catch (err) {
       this.fail(err);
     }
-    if (this.stop === "deadline" && this.planner && this.parked.length === 0 && this.planner.next(true) === null) this.stop = "done";
+    // "deadline" with nothing left is "done": no item parked (a parked one — late for an endpoint resting past the read
+    // deadline, or waiting for one — is work left) and none in the planner (re-queued or given-back pieces, a pass not
+    // finished or not started, a held priority's). Planner.hasWork hands nothing out (the summary's counts stay as they
+    // are), and its CPU is metered.
+    if (this.stop === "deadline" && this.planner && this.parked.length === 0 && !this.sync(() => this.planner!.hasWork())) this.stop = "done";
     const stop = this.stop ?? "done";
     deps.onRelease?.(stop);
     const db = this.db("release"); // counted before the summary, so the summary's estimate includes it
@@ -1310,6 +1379,10 @@ class Run {
     const kinds = this.planner?.kindCounts() as ItemCounts | undefined;
     const r429: Record<string, number> = {}, usedToday: Record<string, number> = {};
     for (const s of this.states) { r429[s.label] = Math.round(s.ratio429() * 10_000) / 10_000; usedToday[s.label] = s.usedToday(now); }
+    // The look-ahead when the reads ended: items late for (or waiting on) a busy, resting or sidelined endpoint — left for
+    // the next run, never settled.
+    const leftParked: ItemCounts = { follow: 0, global: 0, window: 0, deep: 0, holes: 0 };
+    for (const i of this.parked) leftParked[i.kind]++;
     return {
       v: 2, version: this.deps.version, head: this.head, ms: now - this.started, syncMs: Math.round(this.cpu.syncMs),
       cpuEstimateMs: Math.round(this.cpu.estimateMs()), cpuIsolateMs: Math.round(this.isolate.spentMs()),
@@ -1319,7 +1392,7 @@ class Run {
         requests: c.requests, throttled: c.throttled, refused: c.refused, sidelined: c.sidelined, r429, usedToday,
         failed: c.failed, invalid: c.invalid, dense: c.dense,
         timeouts: c.timeouts, pastHead: c.pastHead, straddleWaits: c.straddleWaits, dropped: c.dropped,
-        items: kinds ?? { follow: 0, global: 0, window: 0, deep: 0, holes: 0 },
+        items: kinds ?? { follow: 0, global: 0, window: 0, deep: 0, holes: 0 }, leftParked, held: c.held,
         commits: c.commits, commitSlow: c.commitSlow, commitRetries: c.commitRetries, logs: c.logs, inserted: c.inserted,
         trimmed: c.trimmed, holesMarked: c.holesMarked, holesCleared: c.holesCleared, capped: c.capped, firstTx: c.firstTx,
         wallets: { active: this.wallets.active, planned: stats?.planned ?? 0, skipped: this.wallets.skipped, new: stats?.new ?? 0,

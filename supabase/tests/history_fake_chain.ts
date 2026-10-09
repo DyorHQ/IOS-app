@@ -77,7 +77,9 @@ export type FakeBehaviour = {
   headLag?: number;                     // its node is this far behind the chain's head
   archive: boolean;
   arrays: "ok" | "403" | "internal";    // a JSON-RPC array: answered, HTTP 403, or every item "Internal error"
-  throttleEvery?: number;               // HTTP 429 with Retry-After: 2 on every Nth request
+  throttleEvery?: number;               // HTTP 429 (a JSON-RPC error, as rpc2 answers) on every Nth request
+  throttleLogReads?: boolean;           // that 429 for every eth_getLogs request but the straddle self-test's
+  throttleRetryAfter?: number;          // that 429's Retry-After, in seconds (default 2)
   behindEvery?: { n: number; lag: number; kind: "refuses" | "clamps" }; // every Nth request reaches a node behind
   lieOnce?: number;                     // on its Nth eth_getLogs answer, add a log outside the range asked
   latency: (logs: number) => number;    // virtual milliseconds
@@ -134,9 +136,11 @@ export class FakeNetwork {
       const g = b.gatewayError;
       if (g && rec.pieces.some((p) => p.from <= g.to && p.to >= g.from)) return this.reply(rec, g.status, "<html><body>502 Bad Gateway</body></html>");
       if (array && b.arrays === "403") return this.reply(rec, 403, "Restricted JSON RPC method");
-      if (b.throttleEvery && n % b.throttleEvery === 0) {
+      const logRead = rec.pieces.length > 0 && rec.pieces.every((p) => !p.nothing);
+      if ((b.throttleEvery && n % b.throttleEvery === 0) || (b.throttleLogReads && logRead)) {
         rec.throttled = true;
-        return this.reply(rec, 429, JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: 429, message: "Too Many Requests" } }), { "Retry-After": "2" });
+        return this.reply(rec, 429, JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: 429, message: "Too Many Requests" } }),
+                          { "Retry-After": String(b.throttleRetryAfter ?? 2) });
       }
       const behind = b.behindEvery && n % b.behindEvery.n === 0 ? b.behindEvery : null;
       const nodeHead = this.chain.head - (behind?.lag ?? b.headLag ?? 0);

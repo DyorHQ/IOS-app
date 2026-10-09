@@ -48,6 +48,8 @@ export const DEFAULT_PLAN: PlanOptions = {
   tiers: { hotMs: 3_600_000, warmMs: 86_400_000, warmLag: 1_000, coldLag: 6_000 },
 };
 
+const NONE: ReadonlySet<Priority> = new Set();
+
 type Cov = { covered: Range[]; holes: Range[]; holesDue: boolean; planned: Range[]; capFloor: number; retried: Set<string> };
 type WalletPlan = { state: WalletState; scans: Record<WalletScanId, Cov>; fresh: boolean; followed: Set<WalletScanId>; handed: boolean };
 
@@ -193,10 +195,11 @@ export class Planner {
 
   // ── Output ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  // The next item, at most `maxPriority` (the run's look-ahead is full of less urgent work: only more urgent work).
-  next(allowDeep: boolean, maxPriority: Priority = 3): WorkItem | null {
-    const at = this.front.findIndex((i) => i.priority <= maxPriority);
-    const item = at >= 0 ? this.front.splice(at, 1)[0] : this.pull(allowDeep, maxPriority);
+  // The next item, at most `maxPriority` (the run's look-ahead is full of less urgent work: only more urgent work), and
+  // of none of the `held` priorities (no endpoint may take them this run: run.ts).
+  next(allowDeep: boolean, maxPriority: Priority = 3, held: ReadonlySet<Priority> = NONE): WorkItem | null {
+    const at = this.front.findIndex((i) => i.priority <= maxPriority && !held.has(i.priority));
+    const item = at >= 0 ? this.front.splice(at, 1)[0] : this.pull(allowDeep, maxPriority, held);
     if (item) {
       this.handedOut[item.priority]++;
       if (item.attempts === 0 && !item.alone) this.kinds[item.kind]++;
@@ -213,9 +216,24 @@ export class Planner {
     this.queued[item.priority].unshift(item);
   }
 
-  private pull(allowDeep: boolean, maxPriority: Priority): WorkItem | null {
+  // Whether any work of these priorities is left: re-queued or given back, or still to come from a pass (the deep pass
+  // included before it has started). Unlike next(), it hands nothing out: no wallet is marked planned, no count moves,
+  // and the deep pass is not started (a pass's next item may be computed ahead, as pendingNewWindows does; next() then
+  // returns that same item).
+  hasWork(priorities: readonly Priority[] = [0, 1, 2, 3]): boolean {
+    if (this.front.some((i) => priorities.includes(i.priority))) return true;
+    for (const p of priorities) {
+      if (this.queued[p].length > 0) return true;
+      if (this.sources[p].some((s) => s.peek() !== null)) return true;
+      if (p === 3 && !this.deepStarted && this.deepWork(this.order)) return true;
+    }
+    return false;
+  }
+
+  private pull(allowDeep: boolean, maxPriority: Priority, held: ReadonlySet<Priority>): WorkItem | null {
     for (const priority of [0, 1, 2, 3] as Priority[]) {
       if (priority > maxPriority) return null;
+      if (held.has(priority)) continue;
       if (priority === 3) {
         if (!allowDeep) return null;
         if (!this.deepStarted) {
@@ -386,6 +404,25 @@ export class Planner {
 
   private deepPass(plans: readonly WalletPlan[]): Generator<WorkItem> {
     return this.alternate(WALLET_SCANS.map((s) => this.walk(s as WalletScanId, plans.filter((p) => p.state.deep), "deep")));
+  }
+
+  // Whether deepPass(plans) would yield anything, without walking it: a deep wallet with a gap in its deep band (walk's
+  // entries), or a hole due for a retry inside it (walk's last loop).
+  private deepWork(plans: readonly WalletPlan[]): boolean {
+    for (const p of plans) {
+      if (!p.state.deep) continue;
+      for (const scan of WALLET_SCANS as WalletScanId[]) {
+        const cov = p.scans[scan];
+        const r = this.band(p, scan, "deep");
+        if (r && gapsNewestFirst(r, [...cov.covered, ...cov.planned, ...cov.holes]).length > 0) return true;
+        const all = cov.holesDue ? this.band(p, scan, "deep", false) : null;
+        if (all && cov.holes.some((h) => {
+          const from = Math.max(h[0], all[0]), to = Math.min(h[1], all[1]);
+          return from <= to && !cov.retried.has(`${from}-${to}`);
+        })) return true;
+      }
+    }
+    return false;
   }
 
   private *alternate(gens: Generator<WorkItem>[]): Generator<WorkItem> {
