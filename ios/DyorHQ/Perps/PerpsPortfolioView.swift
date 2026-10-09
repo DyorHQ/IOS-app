@@ -12,6 +12,11 @@ struct PerpsPortfolioView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var portfolio = PerpsPortfolioModel()
     @State private var tab: HistoryTab = .fills
+    /// When the history was last read, and the read the live stream asked for while one was too recent.
+    @State private var historyReadAt: Date = .distantPast
+    @State private var historyReload: Task<Void, Never>?
+    /// The live stream's fills read the history again at most this often (each read is several signed pages).
+    private static let historySpacing: TimeInterval = 5
 
     // The raw values are identifiers; each tab's name on screen is its `title`.
     enum HistoryTab: String, CaseIterable, Identifiable {
@@ -40,8 +45,26 @@ struct PerpsPortfolioView: View {
             .navigationTitle(tr("Portfolio"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .refreshable { await portfolio.load(env: env, key: perplTrading.key, markets: model.markets) }
-            .task { await portfolio.load(env: env, key: perplTrading.key, markets: model.markets) }
+            .refreshable { await loadHistory() }
+            .task { await loadHistory() }
+            // A fill or a position change on the live trading stream: the history reads again (at most every 5 s).
+            .onChange(of: perplTrading.historyRevision) { _, _ in reloadHistorySoon() }
+        }
+    }
+
+    private func loadHistory() async {
+        historyReadAt = Date()
+        await portfolio.load(env: env, key: perplTrading.key, markets: model.markets)
+    }
+
+    /// One read for any number of the stream's requests: now, or 5 s after the last read.
+    private func reloadHistorySoon() {
+        guard historyReload == nil else { return }
+        let wait = Self.historySpacing - Date().timeIntervalSince(historyReadAt)
+        historyReload = Task { @MainActor in
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            await loadHistory()
+            historyReload = nil
         }
     }
 

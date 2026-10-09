@@ -1,10 +1,12 @@
 import Foundation
 
-/// Switches the owner can turn off from the backend, without a new build: the optional `flags` object of the public,
+/// Switches the owner can flip from the backend, without a new build: the optional `flags` object of the public,
 /// read-only `app_config` row 'ios' (`{"min_build": 16, "flags": {"dyorVenuePrices": false}}`), read with the minimum
-/// build (`SupabaseClient.iosAppConfig`, by the app's `UpdateGate`). Every switch is on unless the row says `false` for
-/// it: a row without `flags`, a switch left out, and a value that isn't JSON true or false (a string, a number, null,
-/// an object) all leave it on. So shipping writes nothing to production, and a typo in the row can't turn a feature off.
+/// build (`SupabaseClient.iosAppConfig`, by the app's `UpdateGate`). All five switches are kill switches
+/// (`dyorVenuePrices`, `dyorBadges`, `serverHistory`, `perpsLiveOutcome`, `perpsApiActions`): each is on unless the row
+/// says JSON `false` for it. A row without `flags`, a switch left out, and a value that isn't JSON true or false (a
+/// string, a number, null, an object) all leave it on. So shipping writes nothing to production, and a typo in the row
+/// can't turn a feature off.
 ///
 /// The server's history of a wallet (`serverHistory`) follows the same rule, by the owner's decision (2026-10-09): the
 /// owner asked for it, the server has an instant switch of its own (`history_read` answering `serving: false`, which the
@@ -26,18 +28,29 @@ public struct RemoteFlags: Equatable, Sendable {
     /// The owner's history epoch: every entry that took the server's history in under a lower one is read again from
     /// nothing (`HistoryStore.apply(epoch:)`), whether `serverHistory` is on or off. 0 until the owner raises it.
     public let historyEpoch: Int
+    /// The one-click order sheet shows Perpl's real outcome (filled, resting, not filled…) instead of ending at the
+    /// gateway's acknowledgement. Off (JSON `false`): today's acknowledgement sheet (`placeLegacy`), and Close / Add
+    /// Margin / Cancel Order go on-chain. Requests already sent keep the mode of their tap.
+    public let perpsLiveOutcome: Bool
+    /// Close / Add Margin / Cancel Order go over the trading connection when one-click is live. Off (JSON `false`): they
+    /// go on-chain; the order sheet is unaffected. Requests already sent keep the mode of their tap.
+    public let perpsApiActions: Bool
 
-    /// Every switch on, and the epoch 0: what the app uses until the row is read, and for a row that says nothing.
+    /// Every switch on, and the epoch 0: what the app uses until the row is read (or the last values read are restored),
+    /// and for a row that says nothing.
     public static let on = RemoteFlags()
 
     /// The highest history epoch read as given: past it (or below 0, or not a whole number), the row says 0.
     public static let largestEpoch = Int(Int32.max)
 
-    public init(dyorVenuePrices: Bool = true, dyorBadges: Bool = true, serverHistory: Bool = true, historyEpoch: Int = 0) {
+    public init(dyorVenuePrices: Bool = true, dyorBadges: Bool = true, serverHistory: Bool = true, historyEpoch: Int = 0,
+                perpsLiveOutcome: Bool = true, perpsApiActions: Bool = true) {
         self.dyorVenuePrices = dyorVenuePrices
         self.dyorBadges = dyorBadges
         self.serverHistory = serverHistory
         self.historyEpoch = historyEpoch
+        self.perpsLiveOutcome = perpsLiveOutcome
+        self.perpsApiActions = perpsApiActions
     }
 
     /// The switches in PostgREST's answer to `app_config?key=eq.ios&select=value` (`[{"value": {...}}]`). Anything that
@@ -46,10 +59,11 @@ public struct RemoteFlags: Equatable, Sendable {
         guard let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], rows.count == 1,
               let value = rows[0]["value"] as? [String: Any], let flags = value["flags"] as? [String: Any] else { return .on }
         return RemoteFlags(dyorVenuePrices: flag(flags["dyorVenuePrices"]), dyorBadges: flag(flags["dyorBadges"]), serverHistory: flag(flags["serverHistory"]),
-                           historyEpoch: epoch(flags["historyEpoch"]))
+                           historyEpoch: epoch(flags["historyEpoch"]),
+                           perpsLiveOutcome: flag(flags["perpsLiveOutcome"]), perpsApiActions: flag(flags["perpsApiActions"]))
     }
 
-    /// A switch's value: false only for JSON `false`; on for everything else.
+    /// A kill switch's value: false only for JSON `false`; on for everything else.
     private static func flag(_ value: Any?) -> Bool {
         guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return true }
         return number.boolValue

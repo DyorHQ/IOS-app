@@ -84,6 +84,76 @@ final class RemoteFlagsTests: XCTestCase {
         }
     }
 
+    /// The two Perps switches (p4 spec C) are kill switches like the others: the live order outcome and Close / Add Margin
+    /// / Cancel Order over the trading connection are on unless the row says JSON `false`, each on its own. A missing
+    /// row, a missing key, a string, a number, null, an object or an array leave them on. The app hands both to the Perps
+    /// trading model, keeps the last values read across launches, and reads them back once, when the model starts.
+    func testThePerpsSwitchesAreKillSwitches() throws {
+        XCTAssertTrue(RemoteFlags.on.perpsLiveOutcome)
+        XCTAssertTrue(RemoteFlags.on.perpsApiActions)
+        XCTAssertEqual(RemoteFlags.on, RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: true, perpsApiActions: true))
+        for body in [#"[]"#, #"[{"value":{"min_build":16}}]"#, #"[{"value":{"flags":{}}}]"#, #"[{"value":{"flags":{"dyorBadges":false}}}]"#, "not json"] {
+            XCTAssertTrue(parse(body).perpsLiveOutcome, body)
+            XCTAssertTrue(parse(body).perpsApiActions, body)
+        }
+        let names = ["dyorVenuePrices", "dyorBadges", "perpsLiveOutcome", "perpsApiActions"]
+        for name in names {
+            for value in [#""true""#, "true", "1", "0", "null", "{}", "[]", #""yes""#, #""false""#] {
+                XCTAssertEqual(parse(#"[{"value":{"flags":{"\#(name)":\#(value)}}}]"#), .on, "\(name): \(value)")
+            }
+        }
+        // False only for JSON `false`, and each on its own: turning one off leaves the other three on.
+        let off = names.map { parse(#"[{"value":{"flags":{"\#($0)":false}}}]"#) }
+        XCTAssertEqual(off[0], RemoteFlags(dyorVenuePrices: false, dyorBadges: true, perpsLiveOutcome: true, perpsApiActions: true))
+        XCTAssertEqual(off[1], RemoteFlags(dyorVenuePrices: true, dyorBadges: false, perpsLiveOutcome: true, perpsApiActions: true))
+        XCTAssertEqual(off[2], RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: false, perpsApiActions: true))
+        XCTAssertEqual(off[3], RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: true, perpsApiActions: false))
+        XCTAssertEqual(parse(#"[{"value":{"flags":{"perpsLiveOutcome":true,"perpsApiActions":false}}}]"#),
+                       RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: true, perpsApiActions: false))
+        XCTAssertEqual(parse(#"[{"value":{"min_build":16,"flags":{"dyorBadges":false,"perpsLiveOutcome":false}}}]"#),
+                       RemoteFlags(dyorVenuePrices: true, dyorBadges: false, perpsLiveOutcome: false, perpsApiActions: true))
+        XCTAssertEqual(parse(#"[{"value":{"flags":{"perpsLiveOutcome":false,"perpsApiActions":false}}}]"#),
+                       RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: false, perpsApiActions: false))
+        let kit = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/DyorKit/Services/Supabase/RemoteFlags.swift"), encoding: .utf8)
+        XCTAssertFalse(kit.contains("optIn"), "no opt-in reading left")
+        XCTAssertEqual(kit.components(separatedBy: ": flag(flags[").count - 1, 5, "all five read as kill switches: the two DyorHQ ones, the server's history, the two Perps ones")
+
+        // The app hands both to the Perps trading model and saves them, in the one place every check that read the row
+        // applies its switches; a failed check calls nothing (`testTheAppAppliesTheSwitches`).
+        let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
+        let apply = try XCTUnwrap(environment.range(of: "func apply(_ flags: RemoteFlags) {")).upperBound
+        let body = String(environment[apply...].prefix(400))
+        for part in ["perplTrading.liveOutcomes = flags.perpsLiveOutcome", "perplTrading.apiActions = flags.perpsApiActions", "PerpsSwitchStore.save(flags)"] {
+            XCTAssertTrue(body.contains(part), part)
+        }
+        let app = try ["App/AppEnvironment.swift", "App/UpdateGate.swift", "App/RootView.swift", "Wallet/PerplTrading.swift", "Perps/PerpTradeView.swift"]
+            .map { try DocsLinksTests.appSource($0) }.joined(separator: "\n")
+        XCTAssertEqual(app.components(separatedBy: "PerpsSwitchStore.save(").count - 1, 1, "saved only from a check that read the row")
+
+        // The model starts from a launch argument (DEBUG only), else the last values read, else on; and a forced value
+        // holds against the row in DEBUG.
+        let trading = try DocsLinksTests.appSource("Wallet/PerplTrading.swift")
+        for part in ["@ObservationIgnored var liveOutcomes = PerplTrading.debugSwitch(\"perpsLiveOutcome\") ?? PerpsSwitchStore.last?.perpsLiveOutcome ?? RemoteFlags.on.perpsLiveOutcome {",
+                     "didSet { if let forced = Self.debugSwitch(\"perpsLiveOutcome\"), liveOutcomes != forced { liveOutcomes = forced } }",
+                     "@ObservationIgnored var apiActions = PerplTrading.debugSwitch(\"perpsApiActions\") ?? PerpsSwitchStore.last?.perpsApiActions ?? RemoteFlags.on.perpsApiActions {",
+                     "didSet { if let forced = Self.debugSwitch(\"perpsApiActions\"), apiActions != forced { apiActions = forced } }",
+                     "#if DEBUG\n        UserDefaults.standard.object(forKey: name) == nil ? nil : UserDefaults.standard.bool(forKey: name)\n        #else\n        nil\n        #endif"] {
+            XCTAssertTrue(trading.contains(part), part)
+        }
+        XCTAssertFalse(trading.contains("debugForcesLiveOutcomes"))
+        XCTAssertEqual(app.components(separatedBy: "PerpsSwitchStore.last").count - 1, 2, "read once, when the model starts")
+        // The store: two Bools under one key, nil until a check has read the row.
+        let store = try XCTUnwrap(trading.range(of: "enum PerpsSwitchStore {"))
+        let storeText = String(trading[store.lowerBound...].prefix(1600))
+        for part in ["static let key = \"perps.switches.v1\"", "static var last: Switches? { read(from: .standard) }",
+                     "guard let stored = defaults.dictionary(forKey: key), let live = stored[liveOutcomeKey] as? Bool,",
+                     "let api = stored[apiActionsKey] as? Bool else { return nil }",
+                     "defaults.set([liveOutcomeKey: flags.perpsLiveOutcome, apiActionsKey: flags.perpsApiActions], forKey: key)"] {
+            XCTAssertTrue(storeText.contains(part), part)
+        }
+    }
+
     /// The minimum build and the switches come from one read of the row, and a malformed minimum doesn't hide the switches.
     func testOneReadGivesTheMinimumAndTheSwitches() async throws {
         WalletAuthCapture.replies = [(200, #"[{"value":{"min_build":16,"message":"","flags":{"dyorVenuePrices":false}}}]"#)]

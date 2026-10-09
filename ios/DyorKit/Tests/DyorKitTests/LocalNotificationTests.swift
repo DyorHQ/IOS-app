@@ -65,17 +65,26 @@ final class LocalNotificationTests: XCTestCase {
         }
     }
 
-    /// The app posts the notice from the order's kind at acknowledgement and `.filled` only from the app-wide watcher's
-    /// position read (`AlertCenter.checkPerps`, build 17 N2), and the old `filled:` flag (which made a market order say
-    /// "Order filled" at acknowledgement) is gone.
-    func testTheAppPostsTheNoticeByKind() throws {
+    /// The app posts an order's notice from evidence or, with the live outcome off, from the acknowledgement: the
+    /// order's own notice comes from what Perpl reported it did (`PerpOrderNotice(evidence:)`, posted by the order
+    /// tracker, filed under the account the order was sent for and a banner only when it isn't on screen), the switch-off
+    /// sheet's from the order's kind at acknowledgement, and `.filled` from the app-wide watcher's position read
+    /// (`AlertCenter.checkPerps`, build 17 N2). The old `filled:` flag (which made a market order say "Order filled" at
+    /// acknowledgement) is gone, and an acknowledgement never becomes a fill.
+    func testTheAppPostsTheNoticeFromEvidenceOrAck() throws {
         let notifications = try appSource("Wallet/Notifications.swift")
-        XCTAssertTrue(notifications.contains("static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String, perpId: Int? = nil) {"))
-        XCTAssertTrue(notifications.contains("post(kind: .perp, title: notice.title,"))
+        XCTAssertTrue(notifications.contains("static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String, perpId: Int? = nil, owner: Address? = nil, deliver: Bool = true) {"))
+        XCTAssertTrue(squeeze(notifications).contains("post(kind: .perp, title: notice.title, body: \"\\(side) \\(market)\", route: .perps, reference: perpId.map { PerpAlertText.reference(perpId: $0) }, deliver: deliver, owner: owner)"))
         XCTAssertFalse(notifications.contains("\"Order filled\""), "the titles live in PerpOrderNotice")
 
         let trade = try appSource("Perps/PerpTradeView.swift")
-        XCTAssertTrue(trade.contains("Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side:"))
+        let legacy = try function("private func placeLegacy(approval: MeraSession.StepUp? = nil) async {", in: trade)
+        XCTAssertTrue(legacy.contains("Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side:"), "the switch-off sheet")
+        let live = try function("private func place(approval: MeraSession.StepUp? = nil) async {", in: trade)
+        XCTAssertFalse(live.contains("Notifications."), "the live sheet posts nothing at the acknowledgement")
+        let tracker = try appSource("Wallet/PerplOrderTracker.swift")
+        XCTAssertTrue(squeeze(tracker).contains("Notifications.perpOrder(notice, side: sideName, market: \"\\(asset)-PERP\", perpId: marketId, owner: owner, deliver: deliverBanner)"))
+        XCTAssertTrue(squeeze(tracker).contains("let deliverBanner = banner && owner == boundOwner"), "a banner only for the account signed in")
         let fills = try appSource("Notifications/AlertCenter.swift")
         let detect = try function("private func checkPerps(", in: fills)
         XCTAssertTrue(detect.contains("Notifications.perpOrder(.filled, side:"), "the fill notice comes from the watcher's position read")
@@ -86,10 +95,32 @@ final class LocalNotificationTests: XCTestCase {
             let calls = text.components(separatedBy: "Notifications.perpOrder(").dropFirst()
             for call in calls {
                 let notice = call.prefix { $0 != "," }
-                XCTAssertTrue(notice == "PerpOrderNotice(acknowledged: input.kind)" || (notice == ".filled" && path == "Notifications/AlertCenter.swift"),
+                XCTAssertTrue((notice == "PerpOrderNotice(acknowledged: input.kind)" && path == "Perps/PerpTradeView.swift")
+                              || (notice == "notice" && path == "Wallet/PerplOrderTracker.swift")
+                              || (notice == ".filled" && path == "Notifications/AlertCenter.swift"),
                               "\(path): perpOrder(\(notice), …)")
             }
         }
+        XCTAssertEqual(try appSource("Perps/PerpTradeView.swift").components(separatedBy: "Notifications.perpOrder(").count - 1, 1, "the switch-off sheet only")
+        XCTAssertEqual(tracker.components(separatedBy: "Notifications.perpOrder(").count - 1, 1)
+        // A close from the position's Close sheet names the POSITION (p4 spec #16); margin over the trading connection
+        // posts from PerplTrading only, when no sheet shows its result.
+        XCTAssertTrue(notifications.contains("static func perpClose(title: String, position: String, perpId: Int, owner: Address?, deliver: Bool) {"))
+        XCTAssertTrue(notifications.contains("static func perpMargin(title: String, body: String, perpId: Int, owner: Address?, deliver: Bool) {"))
+        for (path, text) in try appSources() {
+            let close = text.components(separatedBy: "Notifications.perpClose(").count - 1
+            XCTAssertEqual(close, path == "Wallet/PerplOrderTracker.swift" ? 1 : 0, path)
+            if text.contains("Notifications.perpMargin(") { XCTAssertEqual(path, "Wallet/PerplTrading.swift") }
+        }
+        let announce = try XCTUnwrap(tracker.range(of: "case .announce(let notice, let banner):"))
+        let announceBody = String(tracker[announce.upperBound...].prefix(1800))
+        let ownerGuard = try XCTUnwrap(announceBody.range(of: "if order.owner == nil { break }"))
+        let firstPost = try XCTUnwrap(announceBody.range(of: "Notifications."))
+        XCTAssertLessThan(ownerGuard.lowerBound, firstPost.lowerBound, "an order with no account posts nothing")
+        XCTAssertTrue(squeeze(announceBody).contains("let position = PerpAlertText.positionName(asset: asset, side: order.closes ?? order.side.opposite)"))
+        // The notice from evidence: never from an acknowledgement, never for what didn't fill.
+        let evidence = try kitSource("Services/Notifications/PerpOrderNotice.swift")
+        XCTAssertTrue(squeeze(evidence).contains("case .filled, .observed: self = .filled case .partlyFilled: self = .partlyFilled case .resting: self = .placed case .notFilled, .expired: self = .notFilled case .failed: self = .failed case .cancelled, .armed, .triggered, .unconfirmed: return nil"))
     }
 
     // MARK: - The delegate, at launch

@@ -273,11 +273,17 @@ final class RPCStub: URLProtocol {
     nonisolated(unsafe) static var gasPrice: String? = "0x17bfac7c00" // 102 gwei
     /// A small simulated chain for running whole plans; nil keeps the fixed answers the transport tests rely on.
     nonisolated(unsafe) static var chain: SimulatedChain?
+    /// Receipts by transaction hash (lowercased hex): `eth_getTransactionReceipt` answers them, after `nullReceiptReads`
+    /// null answers (a node that hasn't seen the block yet). A hash with none fails as before.
+    nonisolated(unsafe) static var receipts: [String: JSON] = [:]
+    nonisolated(unsafe) static var nullReceiptReads = 0
+    nonisolated(unsafe) static var receiptReads = 0
 
     static func reset() {
         status = [:]; transportFailure = []; hosts = []; requestSizes = []; sendError = nil; knownTransactions = []; itemBudget = [:]; failFirst = [:]
         statusError = [:]; statusBody = [:]
         baseFee = nil; tip = nil; gasPrice = "0x17bfac7c00"; chain = nil
+        receipts = [:]; nullReceiptReads = 0; receiptReads = 0
     }
 
     static func session() -> URLSession {
@@ -351,6 +357,12 @@ final class RPCStub: URLProtocol {
         case "eth_getTransactionByHash":
             let asked = call["params"].array?.first?.string ?? ""
             return knownTransactions.contains(asked) ? result(.object(["hash": .string(asked)])) : result(.null)
+        case "eth_getTransactionReceipt":
+            let asked = (call["params"].array?.first?.string ?? "").lowercased()
+            guard let receipt = receipts[asked] else { return failure("method not found") }
+            receiptReads += 1
+            if nullReceiptReads > 0 { nullReceiptReads -= 1; return result(.null) }
+            return result(receipt)
         default: return failure("method not found")
         }
     }

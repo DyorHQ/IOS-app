@@ -191,7 +191,10 @@ final class PerpsWalletStringsTests: XCTestCase {
         }
         let trade = try Self.source("DyorHQ/Perps/PerpTradeView.swift")
         XCTAssertTrue(trade.contains("ForEach(ChartDataTab.allCases) { $0.title.tag($0) }"))
-        XCTAssertTrue(trade.contains("tab.title\n"))
+        // The bottom tabs (Positions / Orders / Assets / Trade History): the shown title and the reserved selected width are
+        // both the written key (p4 spec E).
+        XCTAssertTrue(trade.contains("tab.title.font(.subheadline.weight(active ? .semibold : .regular))"))
+        XCTAssertTrue(trade.contains("tab.title.font(.subheadline.weight(.semibold)).hidden()"))
         XCTAssertTrue(trade.contains("priceType.title.font("))
         XCTAssertTrue(try Self.source("DyorHQ/Perps/PerpsPortfolioView.swift").contains("ForEach(HistoryTab.allCases) { $0.title.tag($0) }"))
     }
@@ -295,6 +298,11 @@ final class PerpsWalletStringsTests: XCTestCase {
         let trade = try Self.source("DyorHQ/Perps/PerpTradeView.swift")
         XCTAssertFalse(trade.contains("side: input.side == .long ? \"Long\" : \"Short\""))
         XCTAssertTrue(Self.squeezed(trade).contains("Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side: side, market: \"\\(market.asset)-PERP\", perpId: market.id)"))
+        // The live outcome's notice names the side the same way, from the order the tracker follows.
+        let tracker = Self.squeezed(try Self.source("DyorHQ/Wallet/PerplOrderTracker.swift"))
+        XCTAssertTrue(tracker.contains("Notifications.perpOrder(notice, side: sideName, market: \"\\(asset)-PERP\", perpId: marketId, owner: owner, deliver: deliverBanner)"))
+        XCTAssertTrue(tracker.contains(#"let sideName = order.side == .long ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]")) : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]"))"#))
+        XCTAssertTrue(tracker.contains(#"let title = order.side == .long ? tr("Long \(perp)") : tr("Short \(perp)")"#), "the Activity row's title, as the sheets write it")
         let notifications = try Self.source("DyorHQ/Wallet/Notifications.swift")
         XCTAssertTrue(notifications.contains("post(kind: .swap, title: tr(\"Swap complete\"), body: tr(\"Swapped \\(paid) → \\(got)\"), route: .trade)"))
         XCTAssertTrue(notifications.contains("title: tr(\"Bridge complete\")"))
@@ -375,6 +383,8 @@ final class PerpsWalletStringsTests: XCTestCase {
         .init("%lld stop losses are live. A new one replaces all of them.", one: ["stop loss is live"], notOne: ["losses", "them"]),
         .init("Cancel %lld Triggers", one: ["Trigger"], notOne: ["Triggers"]),
         .init(sameForOne: "Cancelled %lld TP/SL"),
+        .init(sameForOne: "Cancelled %lld TP/SL."),
+        .init(sameForOne: "Cancelling %lld TP/SL on %@…"),
         .init(sameForOne: "%lld percent"),
         .init(sameForOne: "%lld times"),
         .init(sameForOne: "Maximum leverage, %lld times"),

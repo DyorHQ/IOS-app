@@ -43,6 +43,8 @@ struct PerpsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top, spacing: 0) { TradeModeSwitcher() }
             .task(id: session.address) { await model.poll(env: env, address: session.address) }
+            // An order's result just came in on the trading stream: the chain is read again now, not at the next poll.
+            .onChange(of: env.perplTrading.streamRevision) { _, _ in Task { await model.reloadSoon(env: env, address: session.address) } }
             .onChange(of: router.pendingPerpMarket) { _, id in
                 if let id { selectedId = id; router.pendingPerpMarket = nil }
             }
@@ -65,6 +67,9 @@ final class PerpsModel {
     private(set) var context: [Int: MarketContext] = [:]
     private(set) var account: PerpAccount?
     private(set) var positions: [PerpPosition] = []
+    /// When `positions` was last read from the chain: an order compares the position it finds afterwards with this one
+    /// (`PerplPositionEvidence`), and only a recent read counts.
+    private(set) var positionsReadAt: Date?
     private(set) var orders: [PerpOrder] = []
     /// App-placed TP/SL the user set, reconciled against open positions/orders each poll (Perpl has no read-back API).
     private(set) var triggers: [PlacedTrigger] = []
@@ -88,6 +93,15 @@ final class PerpsModel {
     private var diffOwner: Address?
     /// The app-wide watcher, told when the user closes a position from here.
     @ObservationIgnored private var alerts: AlertCenter?
+    /// Loads overlap (the poll, a reload the stream asked for, a sheet's Done): each is numbered, and a read is applied
+    /// only if no later load's was already, so an older read finishing late never overwrites a newer one, never raises
+    /// the fill signal again and never reports a false ending.
+    @ObservationIgnored private var loadGeneration = 0
+    @ObservationIgnored private var appliedPositionsGeneration = 0
+    @ObservationIgnored private var appliedOrdersGeneration = 0
+    /// The reload the trading stream asked for, and whether another was asked for while it ran.
+    @ObservationIgnored private var reloadTask: Task<Void, Never>?
+    @ObservationIgnored private var reloadPending = false
 
     var unrealizedTotal: Double { positions.reduce(0) { $0 + $1.unrealized } }
     var equity: Double? { account.map { Amount.units($0.balance, decimals: 6) + unrealizedTotal } }
@@ -113,9 +127,27 @@ final class PerpsModel {
     /// A close noted as sent never left the device: the position's disappearance is news again.
     func forgetUserClose(_ perpId: Int) { alerts?.forgetUserClose(perpId) }
 
+    /// A reload the trading stream asked for (an order's result came in): one at a time, and one more if asked again
+    /// meanwhile. The poll keeps reading every 8 s as before.
+    func reloadSoon(env: AppEnvironment, address: Address?) async {
+        guard reloadTask == nil else { reloadPending = true; return }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            repeat {
+                self.reloadPending = false
+                await self.load(env: env, address: address)
+            } while self.reloadPending && !Task.isCancelled
+            self.reloadTask = nil
+        }
+        reloadTask = task
+        await task.value
+    }
+
     func load(env: AppEnvironment, address: Address?) async {
         perpl = env.perpl
         alerts = env.alerts
+        loadGeneration &+= 1
+        let generation = loadGeneration
         loading = true
         defer { loading = false }
         async let ctx = env.perpl.context()
@@ -137,18 +169,31 @@ final class PerpsModel {
                     async let p = env.perpl.positions(acct, markets: fetched)
                     async let o = env.perpl.openOrders(acct, markets: fetched)
                     // A failed read returns nil (keep the last good list); only diff for fills on a successful read.
-                    if let fresh = try? await p {
+                    if let fresh = try? await p, generation > appliedPositionsGeneration {
+                        appliedPositionsGeneration = generation
                         detectChanges(fresh, stillOpen: Set(acct.positionPerpIds), trading: env.perplTrading)
                         positions = fresh
+                        let readAt = Date()
+                        positionsReadAt = readAt
+                        // Margin sent over the trading connection whose result wasn't confirmed: the chain's word on it.
+                        env.perplTrading.marginPositionsRead(fresh, at: readAt, owner: address)
                     }
-                    if let freshOrders = try? await o { orders = freshOrders }
+                    if let freshOrders = try? await o, generation > appliedOrdersGeneration {
+                        appliedOrdersGeneration = generation
+                        orders = freshOrders
+                        // Only a successful chain read forgets an order Perpl's list showed gone.
+                        env.perplTrading.chainOrdersRead(freshOrders)
+                    }
                     // Reconcile the app's recorded TP/SL: a trigger lives while its market has a position or a resting
                     // entry, so a fired/closed trigger drops off instead of lingering — pruned only while Perpl's live
                     // list can confirm it (offline, an echo may be the only trace of a trigger still armed).
                     let openPerpIds = Set(positions.map(\.perpId)).union(orders.map(\.perpId))
                     triggers = TriggerStore.reconcile(owner: address, openPerpIds: openPerpIds, verified: env.perplTrading.ordersAreLive)
-                } else {
+                } else if generation > appliedPositionsGeneration {
+                    appliedPositionsGeneration = generation
+                    appliedOrdersGeneration = generation
                     positions = []
+                    positionsReadAt = Date()
                     orders = []
                     triggers = TriggerStore.reconcile(owner: address, openPerpIds: [], verified: env.perplTrading.ordersAreLive)
                     watch = PerpPositionWatch()

@@ -11,10 +11,10 @@ import SwiftUI
 /// every ten minutes. Fails open: a failed or unreadable check blocks nothing, and a block already seen this run stays
 /// until a check says otherwise.
 ///
-/// The same read carries the owner's remote switches (`RemoteFlags`: DyorHQ venue prices, DyorHQ labels, the server's
-/// history), each on unless the row turns it off, and the history epoch (0 unless the row raises it); a check that reads
-/// the row hands them to `onFlags` (`AppEnvironment.apply(_:)`: the epoch resets what the server's history added under a
-/// lower one, whether that switch is on or off), and one that fails keeps them.
+/// The same read carries the owner's remote switches (`RemoteFlags`: DyorHQ venue prices, DyorHQ labels, the Perps live
+/// outcome and API actions, the server's history), each on unless the row turns it off, and the history epoch (0 unless
+/// the row raises it); a check that reads the row hands them to `onFlags` (`AppEnvironment.apply(_:)`: the epoch resets
+/// what the server's history added under a lower one, whether that switch is on or off), and one that fails keeps them.
 @Observable
 @MainActor
 final class UpdateGate {

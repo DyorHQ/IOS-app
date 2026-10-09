@@ -147,6 +147,9 @@ final class MeraSession {
     struct StepUpRequired: LocalizedError, Equatable {
         enum Reason: Equatable {
             case locked, unpriced, overActionCap, overSessionCap, cancelOrder, reduceOnlyClose
+            /// An action outside the session's scope that always asks (`Mera.AlwaysAsk.unlisted`): adding margin over the
+            /// trading connection, as the wallet transaction asks for it.
+            case unlisted
         }
         let reason: Reason
 
@@ -159,6 +162,7 @@ final class MeraSession {
             case .overSessionCap: return Mera.SigningPolicy.Reason.overSessionCap.summary
             case .cancelOrder: return Mera.AlwaysAsk.cancelOrder.summary
             case .reduceOnlyClose: return Mera.AlwaysAsk.closePosition.summary
+            case .unlisted: return Mera.AlwaysAsk.unlisted.summary
             }
         }
         var errorDescription: String? {

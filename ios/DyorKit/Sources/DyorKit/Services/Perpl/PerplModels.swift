@@ -113,7 +113,7 @@ public struct PerpAccount: Hashable, Sendable {
     }
 }
 
-public struct PerpPosition: Identifiable, Hashable, Sendable {
+public struct PerpPosition: Identifiable, Hashable, Sendable, Codable {
     public var id: Int { perpId }
     public let perpId: Int
     public let symbol: String
@@ -193,9 +193,12 @@ public struct MarketContext: Identifiable, Hashable, Sendable {
     /// (2,580 s per 8,571 blocks on 2026-09-08). 0 when the context didn't report it (`PerplFunding.secondsToNextSettlement`).
     public let fundingIntervalSeconds: Int
     public let fundingIntervalBlocks: Int
+    /// Perpl's window for an order to execute, in blocks (`order_ttl_blocks`, 20 on 2026-10-08): an order sent with
+    /// `lb: 0` gets this window. Nil when the context didn't report it (`PerplOutcomeDeadline` then counts 20).
+    public let orderTTLBlocks: Int?
 
     public init(id: Int, name: String, priceDecimals: Int, sizeDecimals: Int, mark: Double, last: Double, prev24h: Double, volume24h: Double, openInterest: Double, fundingRate: Double, isOpen: Bool,
-                fundingIntervalSeconds: Int = 0, fundingIntervalBlocks: Int = 0) {
+                fundingIntervalSeconds: Int = 0, fundingIntervalBlocks: Int = 0, orderTTLBlocks: Int? = nil) {
         self.id = id
         self.name = name
         self.priceDecimals = priceDecimals
@@ -209,6 +212,7 @@ public struct MarketContext: Identifiable, Hashable, Sendable {
         self.isOpen = isOpen
         self.fundingIntervalSeconds = fundingIntervalSeconds
         self.fundingIntervalBlocks = fundingIntervalBlocks
+        self.orderTTLBlocks = orderTTLBlocks
     }
 }
 

@@ -37,7 +37,8 @@ final class AppAlertsWiringTests: XCTestCase {
         XCTAssertTrue(bind.contains("switch loop.bind(owner) { case .keep: return case .stop: stopRun() case .start(let run): stopRun() guard let owner else { return } task = Task { [weak self] in await self?.watch(run: run, owner: owner) }"))
         let stop = try function("private func stopRun() {", in: raw)
         XCTAssertTrue(stop.contains("task?.cancel() task = nil sleeper?.task.cancel()"))
-        for field in ["positions = PerpPositionWatch()", "risk = PerpRiskWatch()", "pendingEndings = [:]", "userCloses = PerpUserCloses()", "firedPriceAlerts = []"] {
+        for field in ["positions = PerpPositionWatch()", "risk = PerpRiskWatch()", "pendingEndings = [:]", "userCloses = PerpUserCloses()", "firedPriceAlerts = []",
+                      "expectedFills = PerpExpectedFills()", "pendingFills = [:]"] {
             XCTAssertTrue(stop.contains(field), "a new run starts with nothing of the last one's: \(field)")
         }
         let watch = try function("private func watch(run: Int, owner: Address) async {", in: raw)
@@ -82,7 +83,14 @@ final class AppAlertsWiringTests: XCTestCase {
     func testPerpsWiring() throws {
         let raw = try DocsLinksTests.appSource("Notifications/AlertCenter.swift")
         let perps = try function("private func checkPerps(run: Int, owner: Address) async {", in: raw)
-        XCTAssertTrue(perps.contains("if preferences.postsFills { for position in changes.filled { Notifications.perpOrder(.filled,"))
+        // One notice per fill: a growth an order sent from here announced itself is quiet, one an order still waiting for
+        // its result may explain waits for it, anything else is the watcher's (`PerpExpectedFills`, real-time spec I5).
+        XCTAssertTrue(perps.contains("if preferences.postsFills { // Growths that waited for an order's own result: past its deadline they are the watcher's to announce. postPendingFills(now: now) for position in changes.filled {"))
+        XCTAssertTrue(perps.contains("let growth = changes.growth[position.perpId] ?? position.size switch expectedFills.decide(perpId: position.perpId, side: position.side, growth: growth, tolerance: lotTolerance(position.perpId), now: now) { case .quiet: continue case .wait: holdFill(position, growth: growth, now: now); continue case .announce: expectedFills.watcherAnnounced(perpId: position.perpId, side: position.side, at: now) } Notifications.perpOrder(.filled,"))
+        let reconsider = try function("func reconsiderFills() {", in: raw)
+        XCTAssertTrue(reconsider.contains("guard !pendingFills.isEmpty, preferences?.postsFills == true, signedIn() != nil else { return } postPendingFills(now: Date())"), "decided at once, no read")
+        let pending = try function("private func postPendingFills(now: Date) {", in: raw)
+        XCTAssertTrue(pending.contains("case .wait: continue case .quiet: pendingFills[perpId] = nil case .announce: pendingFills[perpId] = nil expectedFills.watcherAnnounced(perpId: perpId, side: side, at: now) Notifications.perpOrder(.filled,"))
         XCTAssertTrue(perps.contains("explainedByStream: env.perplTrading.endingExplained(marketId: perpId), streamLive: env.perplTrading.positionsAreLive"))
         XCTAssertTrue(perps.contains("if notice == .wait { continue } pendingEndings[perpId] = nil"))
         // A close is any order that closes the position: reduce-only, or on its other side (Perpl nets them).
@@ -108,7 +116,11 @@ final class AppAlertsWiringTests: XCTestCase {
         XCTAssertTrue(ticket.contains("reviewCloses = PerpCloseOrder.closes(orderSide: side, reduceOnly: ticket.effectiveReduceOnly, held: position?.side)"))
         XCTAssertEqual(ticket.components(separatedBy: "if let reviewCloses { model.noteUserClose(market.id, closing: reviewCloses) }").count - 1, 2,
                        "the one-click sheet and the on-chain sheet")
-        XCTAssertTrue(ticket.contains("onSending: { model.noteUserClose(market.id, closing: position.side) }"))
+        // Only a close of the whole position (the 100% chip) notes a close of it; a partial one never does (p4 spec #5).
+        XCTAssertTrue(ticket.contains("onSending: { whole in if whole { model.noteUserClose(market.id, closing: position.side) } }"))
+        let closeSheet = String(ticket[try XCTUnwrap(ticket.range(of: "struct ClosePositionSheet: View {")).lowerBound..<(try XCTUnwrap(ticket.range(of: "struct AddMarginSheet: View {"))).lowerBound])
+        XCTAssertEqual(closeSheet.components(separatedBy: "onSending(percent == 100)").count - 1, 2, "both on-chain sites: at the start and at the receipt")
+        XCTAssertFalse(closeSheet.contains("onSending()"), "never a bare note")
         XCTAssertFalse(ticket.contains("if ticket.effectiveReduceOnly { model.noteUserClose"))
         XCTAssertEqual(ticket.components(separatedBy: "model.noteUserClose(").count - 1, 3)
 
