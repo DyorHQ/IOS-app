@@ -77,7 +77,9 @@ export type FakeBehaviour = {
   headLag?: number;                     // its node is this far behind the chain's head
   archive: boolean;
   arrays: "ok" | "403" | "internal";    // a JSON-RPC array: answered, HTTP 403, or every item "Internal error"
-  throttleEvery?: number;               // HTTP 429 with Retry-After: 2 on every Nth request
+  throttleEvery?: number;               // HTTP 429 (a JSON-RPC error, as rpc2 answers) on every Nth request
+  throttleLogReads?: boolean;           // that 429 for every eth_getLogs request but the straddle self-test's
+  throttleRetryAfter?: number;          // that 429's Retry-After, in seconds (default 2)
   behindEvery?: { n: number; lag: number; kind: "refuses" | "clamps" }; // every Nth request reaches a node behind
   lieOnce?: number;                     // on its Nth eth_getLogs answer, add a log outside the range asked
   latency: (logs: number) => number;    // virtual milliseconds
@@ -90,7 +92,12 @@ export type FakeBehaviour = {
   throwFetch?: string;                  // every request: fetch throws a TypeError with this message
 };
 
-export type Recorded = { label: string; at: number; end?: number; status: number; pieces: { from: number; to: number; nothing: boolean }[];
+// `pieces`: the request's eth_getLogs calls, in order — the range, the filter's topics, whether it is the straddle
+// self-test's filter (`nothing`), and whether a list of logs for it was delivered (`answered`: not refused, throttled,
+// failed or cut off by the client's timeout; the client may still reject it). `bytes`: the size of the reply's body (0
+// when none was sent), streamed to the client in one chunk.
+export type Recorded = { label: string; at: number; end?: number; status: number; bytes: number;
+                         pieces: { from: number; to: number; nothing: boolean; topics: (string[] | null)[]; answered: boolean }[];
                          array: boolean; throttled: boolean; methods: string[] };
 
 export class FakeNetwork {
@@ -113,11 +120,12 @@ export class FakeNetwork {
     const body = JSON.parse(String(init?.body));
     const array = Array.isArray(body);
     const calls: { id: number; method: string; params: unknown[] }[] = array ? body : [body];
-    const rec: Recorded = { label, at: this.clock.now(), status: 200, array, throttled: false, methods: calls.map((c) => c.method),
+    const rec: Recorded = { label, at: this.clock.now(), status: 200, bytes: 0, array, throttled: false, methods: calls.map((c) => c.method),
                             pieces: calls.filter((c) => c.method === "eth_getLogs").map((c) => {
                               const f = c.params[0] as Record<string, unknown>;
                               return { from: parseInt(String(f.fromBlock), 16), to: parseInt(String(f.toBlock), 16),
-                                       nothing: JSON.stringify(f.topics ?? []).includes("f".repeat(64)) };
+                                       nothing: JSON.stringify(f.topics ?? []).includes("f".repeat(64)),
+                                       topics: (f.topics ?? []) as (string[] | null)[], answered: false };
                             }) };
     this.records.push(rec);
     this.inFlight[label] = (this.inFlight[label] ?? 0) + 1;
@@ -128,9 +136,11 @@ export class FakeNetwork {
       const g = b.gatewayError;
       if (g && rec.pieces.some((p) => p.from <= g.to && p.to >= g.from)) return this.reply(rec, g.status, "<html><body>502 Bad Gateway</body></html>");
       if (array && b.arrays === "403") return this.reply(rec, 403, "Restricted JSON RPC method");
-      if (b.throttleEvery && n % b.throttleEvery === 0) {
+      const logRead = rec.pieces.length > 0 && rec.pieces.every((p) => !p.nothing);
+      if ((b.throttleEvery && n % b.throttleEvery === 0) || (b.throttleLogReads && logRead)) {
         rec.throttled = true;
-        return this.reply(rec, 429, JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: 429, message: "Too Many Requests" } }), { "Retry-After": "2" });
+        return this.reply(rec, 429, JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: 429, message: "Too Many Requests" } }),
+                          { "Retry-After": String(b.throttleRetryAfter ?? 2) });
       }
       const behind = b.behindEvery && n % b.behindEvery.n === 0 ? b.behindEvery : null;
       const nodeHead = this.chain.head - (behind?.lag ?? b.headLag ?? 0);
@@ -144,6 +154,8 @@ export class FakeNetwork {
         return { jsonrpc: "2.0", id: c.id, ...r };
       });
       await this.wait(b.latency(logCount), init?.signal ?? undefined);
+      let k = 0;
+      calls.forEach((c, i) => { if (c.method === "eth_getLogs") rec.pieces[k++].answered = Array.isArray((answers[i] as { result?: unknown }).result); });
       return this.reply(rec, status, JSON.stringify(array ? answers : answers[0]));
     } finally {
       this.inFlight[label]--;
@@ -213,6 +225,7 @@ export class FakeNetwork {
   private reply(rec: Recorded, status: number, text: string, headers: Record<string, string> = {}): Response {
     rec.status = status;
     const bytes = new TextEncoder().encode(text);
+    rec.bytes = bytes.byteLength;
     return new Response(new ReadableStream({ start(c) { c.enqueue(bytes); c.close(); } }), { status, headers });
   }
 }

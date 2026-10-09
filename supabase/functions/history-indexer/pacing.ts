@@ -107,6 +107,9 @@ export class EndpointState {
   sidelined(now: number): boolean { return this.sidelinedUntil > now || this.offUntil > now; }
   // No log pieces (its plan refuses eth_getLogs ranges); head and nonce reads still go to it.
   logsOff(now: number): boolean { return this.logsOffUntil > now; }
+  // When it may take log pieces again: `now`, or the end of its sideline, its day off or its day without log reads —
+  // each a rest with an end, like a Retry-After (pickEndpoint), never a reason to give its work up for the run.
+  logsAvailableAt(now: number): number { return Math.max(now, this.sidelinedUntil, this.offUntil, this.logsOffUntil); }
   currentSpan(): number { return this.span; }
   currentBatch(): number { return Math.max(1, Math.min(this.liveBatch, this.batch)); }
   bare(): boolean { return this.batch === 1; }
@@ -290,37 +293,48 @@ export function followRank(e: Pick<Endpoint, "priority" | "followPriority">): nu
   return e.followPriority ?? e.priority;
 }
 
+// Whether some endpoint may take work of `priority` this run at all, whatever the item: its span is wide enough and its
+// daily budget lets the priority through. Within a run a span only narrows (a learned one is kept for a day) and a
+// budget only fills (until 00:00 UTC), so when none may, every item of the priority is null (pickEndpoint) until then:
+// the run holds the priority back (run.ts) instead of taking its whole plan from the planner only to give it up.
+// A sideline, a day off or a day without log reads is a rest (logsAvailableAt), not a reason here.
+export function takesPriority(states: readonly EndpointState[], priority: Priority, now: number): boolean {
+  return states.some((s) => s.currentSpan() >= minSpanFor(priority) && s.budgetAllows(now, priority));
+}
+
 // The endpoint to send `item` to now (in priority order — the follow's order for P0), with the highest block it may
-// read; or the time to wait for (before `deadline`); or null when no endpoint can ever take it this run (the straddle
-// rule with no refusing endpoint, spans, daily budgets, sidelined endpoints, endpoints without log reads). An endpoint
-// whose straddle self-test is still to come counts as a refusing one to wait for.
+// read. Else, when endpoints able to take it exist: the time to wait for — the earliest start before `deadline` (the
+// run's read deadline), or +Infinity when none starts before it but one is at its in-flight cap (that frees when a
+// request finishes) — or { late: true } when none can start before the deadline (each rests, is sidelined, off or
+// without log reads, or is paced past it): too late for this run, which is not unreadable — the run keeps the item until
+// its reads end, and the next run plans it again.
+// Else null: no endpoint can take it this run at all (spans and daily budgets — takesPriority —, or the straddle rule
+// with no refusing endpoint). An endpoint whose straddle self-test is still to come counts as a refusing one to wait for.
 export function pickEndpoint(states: readonly EndpointState[],
                              item: { from: number; to: number; priority: Priority; refusingOnly?: boolean },
                              now: number, head: number, deadline: number)
-  : { state: EndpointState; upTo: number } | { waitUntil: number } | null {
+  : { state: EndpointState; upTo: number } | { waitUntil: number } | { late: true } | null {
   let wait = Number.POSITIVE_INFINITY;
   let eligible = false;
+  let capped = false;                 // an eligible endpoint at its in-flight cap: it may free before the deadline
   const rank = (s: EndpointState) => (item.priority === 0 ? followRank(s.endpoint) : s.endpoint.priority);
   for (const s of [...states].sort((a, b) => rank(a) - rank(b))) {
-    if (s.sidelined(now) || s.logsOff(now)) continue;
     if (s.currentSpan() < minSpanFor(item.priority)) continue;
     if (!s.budgetAllows(now, item.priority)) continue;
     const top = item.refusingOnly && s.straddle(now) !== "refuses" ? null : s.highestAllowed(now, item.from, head);
-    if (top === null) {
-      if (s.verifying) {
-        eligible = true;
-        wait = Math.min(wait, Math.max(s.nextStartAt(now), now + VERIFY_RECHECK_MS));
-      }
-      continue;
-    }
+    if (top === null && !s.verifying) continue;
     eligible = true;
-    const at = s.nextStartAt(now);
+    const pace = s.nextStartAt(now);
+    const available = s.logsAvailableAt(now);
+    if (pace === Number.POSITIVE_INFINITY && available < deadline) capped = true;
+    const at = Math.max(pace, available);
+    if (top === null) { wait = Math.min(wait, Math.max(at, now + VERIFY_RECHECK_MS)); continue; }
     if (at <= now) return { state: s, upTo: Math.min(item.to, top) };
     wait = Math.min(wait, at);
   }
   if (!eligible) return null;
-  if (wait === Number.POSITIVE_INFINITY) return { waitUntil: Number.POSITIVE_INFINITY }; // in-flight caps: wait for one
-  return wait < deadline ? { waitUntil: wait } : null;
+  if (wait < deadline) return { waitUntil: wait };
+  return capped ? { waitUntil: Number.POSITIVE_INFINITY } : { late: true };
 }
 
 // In-flight response bytes (§10.3): each request reserves min(3 MiB — or the endpoint's own responseCap —, max(256 KiB,

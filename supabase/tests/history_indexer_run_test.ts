@@ -2,9 +2,11 @@
 // (history_fake_chain.ts) and a real PGlite database with migration 32 (history_pglite_db.ts). Checks the invariant
 // after every commit (every log of a covered range is stored; nothing is covered that was not answered), the served
 // history against the chain, holes instead of caps for spam and slow ranges, the straddle rule, pacing, the run's
-// stops (defs, paused, two runs at once, slow commits), and broken endpoints (one resting at the start, one refusing
-// everything, one failing every call, logs without blockTimestamp, a gateway error). Nothing here touches the network
-// or a real project.
+// stops (defs, paused, two runs at once, slow commits), broken endpoints (one resting at the start, one refusing
+// everything, one failing every call, logs without blockTimestamp, a gateway error), the only endpoint for deep work
+// resting or sidelined past the read deadline or too narrow for it (late items stay parked for the next run, a held
+// priority stays in the planner: no drain), and a new wallet's window committed before the deep pass. Nothing here
+// touches the network or a real project.
 //
 //   deno test -A --no-config --node-modules-dir=none supabase/tests/history_indexer_run_test.ts   (10–15 minutes)
 import type { PGlite } from "npm:@electric-sql/pglite@0.5.8";
@@ -12,10 +14,11 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { alchemyEndpoint, type Endpoint } from "../functions/history-indexer/endpoints.ts";
 import { redactor } from "../functions/history-indexer/redact.ts";
 import { SIDELINE_AFTER, STRIKES_TO_REFUSAL } from "../functions/history-indexer/pacing.ts";
-import { type Deps, runIndexer } from "../functions/history-indexer/run.ts";
+import { IsolateCpu } from "../functions/history-indexer/cpu.ts";
+import { DEFAULT_RUN_OPTIONS, type Deps, runIndexer } from "../functions/history-indexer/run.ts";
 import { merge, type Range, subtract } from "../functions/history-indexer/ranges.ts";
 import { FakeChain, type FakeBehaviour, type FakeLog, FakeNetwork, pad } from "./history_fake_chain.ts";
-import { as, historyDatabase, one, pgliteDb, type PgliteDbOptions, VirtualClock } from "./history_pglite_db.ts";
+import { as, type CountingDb, historyDatabase, one, pgliteDb, type PgliteDbOptions, VirtualClock } from "./history_pglite_db.ts";
 
 // deno-lint-ignore no-explicit-any
 type Any = any;
@@ -194,7 +197,10 @@ async function checkCommit(db: PGlite, chain: FakeChain, args: { scan: string; f
 export const violations: string[] = [];
 const committed: { scan: string; from: number; to: number; wallets: string[] | null }[] = [];
 
-const TEST_OPTIONS = { maxParsedBytes: 256 * 1_048_576, maxLogs: 1_000_000, firstTxPerRun: 60, firstTxConcurrency: 4, plan: { window: WINDOW } };
+// The CPU budget is off here (its own test below sets it): these runs read whole worlds, and their exchanges (the
+// nonce reads of 60 first-transaction lookups alone) would reach the default 1,000 ms estimate.
+const TEST_OPTIONS = { maxParsedBytes: 256 * 1_048_576, maxLogs: 1_000_000, cpuBudgetMs: 1e9, firstTxPerRun: 60, firstTxConcurrency: 4,
+                       plan: { window: WINDOW } };
 
 export function deps(db: PGlite, clock: VirtualClock, net: FakeNetwork, chain: FakeChain, extra: Partial<Deps> = {},
               dbOptions: PgliteDbOptions = {}, check = true): Deps & { commits: number } {
@@ -283,7 +289,8 @@ Deno.test({ name: "history-indexer: runs converge on the fake chain, keeping the
         const summary = await runIndexer(d, {});
         summaries.push(summary);
         const c = summary.counts as Any;
-        console.log(`  run ${run}: ${summary.stop} in ${summary.ms} ms (virtual), requests ${JSON.stringify(c.requests)}, commits ${c.commits}, ` +
+        console.log(`  run ${run}: ${summary.stop} in ${summary.ms} ms (virtual), cpuEstimateMs ${summary.cpuEstimateMs}, db ${JSON.stringify(c.db)}, ` +
+                    `requests ${JSON.stringify(c.requests)}, commits ${c.commits}, ` +
                     `logs ${c.logs}, items ${JSON.stringify(c.items)}, firstTx ${JSON.stringify(c.firstTx)}, holes ${c.holesMarked}, ` +
                     `dense ${c.dense}, timeouts ${c.timeouts}, pastHead ${c.pastHead}, invalid ${c.invalid}, errors ${JSON.stringify(summary.errors)}`);
         assertEquals(violations, [], "the invariant after every commit");
@@ -656,6 +663,460 @@ Deno.test({ name: "history-indexer: broken endpoints — resting at the start, r
       await db.close();
     }
   });
+});
+
+// ── Too late this run is not never; never this run is held, not drained ──────────────────────────────────────────
+
+// Production, 2026-10-09 (33ce79b): deep pieces can go only to rpc2 (span ≥ 10,000). Whenever rpc2 rested past the read
+// deadline, every deep item was taken for unreadable: dropped and settled, the next pulled from the planner, dropped …
+// — 14,000–16,000 deep items handed out and ~13,000–14,500 dropped per run while rpc2 sent ~260 requests, all of it
+// planner CPU, and the run reported "done" with the whole deep backfill left. The same drain followed from rpc2
+// sidelined (a run starting in the last minutes of a sideline: none of the deep plan read though rpc2 was back seconds
+// later), and from rpc2 teaching a span below 10,000 blocks (remembered for a day: every run for a day). Now: a rest, a
+// sideline, a day off or a day without log reads leaves the item parked — waited for when it ends before the read
+// deadline, late (left for the next run, stop "deadline") when not; a priority no endpoint may take at all (a span, a
+// daily budget) is held back in the planner (stop "blocked"). rpc2's 429 is a JSON-RPC error: its Retry-After is kept.
+Deno.test({ name: "history-indexer: the only endpoint for deep work rests, is sidelined or too narrow — nothing drained or dropped; late work stays parked (deadline), a held priority stays planned (blocked)", sanitizeOps: false, sanitizeResources: false }, async (t) => {
+  violations.length = 0;
+  committed.length = 0;
+  const world = smallWorld();
+  const { chain } = world;
+  const db = await setUp(world);
+  const clock = new VirtualClock(Date.parse("2026-10-09T12:00:00Z"));
+  const net = new FakeNetwork(chain, clock, BEHAVIOUR);
+  const windowLow = H - WINDOW + 1;
+  const isDeep = (p: { from: number; to: number; nothing: boolean }) => !p.nothing && p.to < windowLow;
+  const answered = (records: { pieces: { from: number; to: number; nothing: boolean; answered: boolean }[] }[]) =>
+    records.flatMap((r) => r.pieces).filter((p) => p.answered);
+  // The wallets with on-chain activity (a first transaction): the only ones with deep work.
+  const deepWallets = world.enrolled.filter((w) => chain.firstTx.has(w));
+  // The endpoints: "wide" (rpc2-like), the only one able to take deep work, and "narrow" (1,000 blocks: rpc4-like).
+  const endpoints = () => ENDPOINTS.filter((e) => e.label === "wide" || e.label === "narrow").map((e) => ({ ...e }));
+  const remember = (endpointMemory: Any) => db.query("update public.history_indexer_state set endpoints = $1::jsonb where id", [JSON.stringify(endpointMemory)]);
+  const lastStop = async () => (await one<Any>(db, "select stop from public.history_indexer_runs order by started_at desc limit 1")).stop;
+  const log = (name: string, s: Any, extra = "") =>
+    console.log(`  ${name}: ${s.stop} in ${s.ms} ms (virtual), items ${JSON.stringify(s.counts.items)}, leftParked ${JSON.stringify(s.counts.leftParked)}, ` +
+                `held ${JSON.stringify(s.counts.held)}, dropped ${s.counts.dropped}, straddleWaits ${s.counts.straddleWaits}, ` +
+                `requests ${JSON.stringify(s.counts.requests)}${extra}`);
+  try {
+    await t.step("set-up: the windows, the global scans and the first transactions — nothing below the window yet", async () => {
+      const shallow = { ...TEST_OPTIONS, plan: { window: WINDOW, floorOverride: { "transfers-in": windowLow, "transfers-out": windowLow } } };
+      for (let run = 0; run < 8; run++) {
+        const s = await runIndexer(deps(db, clock, net, chain, { options: shallow }), {});
+        assertEquals(violations, []);
+        assert(["done", "deadline"].includes(String(s.stop)), String(s.stop));
+        if (s.stop === "done") break;
+        assert(run < 7, "the small world's windows converge");
+        clock.t += 30_000;
+      }
+      assertEquals(net.records.flatMap((r) => r.pieces).filter(isDeep), [], "nothing deep was read");
+      const found = await one<Any>(db, "select count(*)::int n from public.history_wallets where first_tx_state = 'found'");
+      assertEquals(found.n, deepWallets.length);
+    });
+
+    await t.step("rpc2 taught a span below 10,000 blocks (remembered for a day): deep work held — none handed out, dropped or read; the reads end at once, stop blocked", async () => {
+      clock.t += 30_000;
+      await remember({ wide: { span: 5_000, spanUntil: clock.now() + 86_400_000 } });
+      const held = new FakeNetwork(chain, clock, BEHAVIOUR);
+      const summary: Any = await runIndexer(deps(db, clock, held, chain, { endpoints: endpoints(), options: { ...TEST_OPTIONS, workMs: 90_000 } }), {});
+      const c = summary.counts;
+      log("held", summary);
+      assertEquals(violations, []);
+      assertEquals(summary.stop, "blocked", "deep work is left, and no endpoint may take it: neither done nor a wait for the deadline");
+      assertEquals(c.held, ["deep"]);
+      assertEquals([c.items.deep, c.dropped, c.straddleWaits], [0, 0, 0], "no deep item handed out, dropped or settled");
+      assertEquals(held.records.flatMap((r) => r.pieces).filter(isDeep), [], "nothing deep was sent");
+      assert(summary.ms < 20_000, `the reads ended at once: ${summary.ms} ms`);
+      assertEquals(await lastStop(), "blocked");
+      const m = (await one<Any>(db, "select endpoints from public.history_indexer_state")).endpoints;
+      assertEquals(m.wide.span, 5_000, "the span stays remembered");
+      await remember({});
+    });
+
+    await t.step("rpc2's JSON-RPC 429 with Retry-After 60 s, the read deadline 60 s in: honoured — rpc2 rests past the deadline; no drain, nothing dropped, stop deadline", async () => {
+      clock.t += 30_000;
+      // Its 10th request is answered HTTP 429 with a JSON-RPC error and Retry-After 60, as rpc2 answers, a few seconds into
+      // the run: it rests past the read deadline (workMs 90 s, read margin 30 s). The plan: ~400 deep items (200 aligned
+      // pieces per wallet scan, the deep wallets sharing each).
+      const behaviour: Record<string, FakeBehaviour> = {
+        ...BEHAVIOUR, wide: { ...BEHAVIOUR.wide, throttleEvery: 10, throttleRetryAfter: 60, behindEvery: undefined },
+      };
+      const late = new FakeNetwork(chain, clock, behaviour);
+      const started = clock.now();
+      const summary: Any = await runIndexer(deps(db, clock, late, chain, { endpoints: endpoints(), options: { ...TEST_OPTIONS, workMs: 90_000 } }), {});
+      const c = summary.counts;
+      const wide = late.records.filter((r) => r.label === "wide");
+      const throttled = wide.find((r) => r.throttled);
+      const sent = late.records.flatMap((r) => r.pieces).filter(isDeep).length;
+      log("late (Retry-After 60)", summary, `, deep pieces sent ${sent}`);
+      assertEquals(violations, []);
+      assert(throttled !== undefined && throttled.at - started < 30_000, "rpc2 was throttled early in the run");
+      assert(!wide.some((r) => r.at > throttled!.at), "and rested for its Retry-After: to the end of the reads");
+      assert(sent > 0, "deep pieces were read before the rest");
+      assertEquals(summary.stop, "deadline", "work is left: not done");
+      assertEquals([c.dropped, c.straddleWaits], [0, 0], "a deep item too late for this run is neither dropped nor settled");
+      // No drain: the deep items handed out are those sent and those parked (the look-ahead's parkItems), not the plan.
+      assert(c.items.deep <= sent + DEFAULT_RUN_OPTIONS.parkItems, `${c.items.deep} deep items handed out for ${sent} sent`);
+      assert(c.leftParked.deep > 0, "the late deep items are in the summary");
+      // The run waited for its read deadline instead of ending at once.
+      assert(summary.ms >= 60_000 - 5_000, `${summary.ms} ms`);
+      assertEquals(await lastStop(), "deadline");
+    });
+
+    const H2 = H + 2_000;
+    const W2 = WINDOW + 20_000;
+    await t.step("rpc2 throttled on every log read (Retry-After 2: rests 2 → 4 → 8 → 16 s, the last past the read deadline), with follow and window work: the follow below head − lag and the windows go to narrow, the follow's top and the deep work wait for rpc2 — nothing dropped or settled, stop deadline", async () => {
+      clock.t += 30_000;
+      await remember({});
+      // 2,000 new blocks to follow, and a window 20,000 blocks wider: work for narrow while rpc2 rests.
+      chain.head = H2;
+      const behaviour: Record<string, FakeBehaviour> = {
+        ...BEHAVIOUR, wide: { ...BEHAVIOUR.wide, throttleEvery: undefined, throttleLogReads: true, behindEvery: undefined },
+      };
+      const late = new FakeNetwork(chain, clock, behaviour);
+      const started = clock.now();
+      const summary: Any = await runIndexer(deps(db, clock, late, chain, {
+        endpoints: endpoints(), options: { ...TEST_OPTIONS, workMs: 60_000, plan: { window: W2 } },
+      }), {});
+      const c = summary.counts;
+      const readDeadline = started + 60_000 - DEFAULT_RUN_OPTIONS.readMarginMs;
+      const wideReads = late.records.filter((r) => r.label === "wide" && r.pieces.some((p) => !p.nothing));
+      const narrow = late.records.filter((r) => r.label === "narrow");
+      log("late (back-off)", summary, `, wide log reads at ${JSON.stringify(wideReads.map((r) => r.at - started))}`);
+      assertEquals(violations, []);
+      assertEquals(summary.head, H2);
+      assert(wideReads.length >= 4 && wideReads.every((r) => r.throttled), `${wideReads.length} log reads to rpc2, every one throttled`);
+      // Its back-off: 2, 4, 8, then 16 s, the last ending past the read deadline.
+      const gaps = wideReads.slice(1).map((r, k) => r.at - wideReads[k].at);
+      assert(gaps.slice(0, 3).every((g, k) => g >= [2_000, 4_000, 8_000][k]), JSON.stringify(gaps));
+      assert(wideReads[wideReads.length - 1].at + 16_000 >= readDeadline, "rpc2's last rest ended past the read deadline");
+      assertEquals(answered(wideReads), [], "rpc2 read nothing");
+      // The follow below head − lag went to narrow (up to head − lag exactly); its top waited for rpc2: late, parked —
+      // never a straddle wait.
+      assert(answered(narrow).some((p) => p.to === H2 - LAG), "narrow read the follow up to head − lag");
+      assert(!answered(narrow).some((p) => p.to > H2 - LAG), "and nothing above it");
+      assertEquals([c.dropped, c.straddleWaits], [0, 0], "nothing dropped, nothing settled at the head");
+      assert(c.leftParked.follow > 0, `the follow's top is left for the next run: ${JSON.stringify(c.leftParked)}`);
+      // The windows went on while late deep items sat in the look-ahead (work more urgent than theirs displaces them).
+      // No drain: the deep items handed out are those parked and those rpc2 was sent (and gave back, throttled).
+      const deepSent = wideReads.flatMap((r) => r.pieces).filter((p) => p.to < H2 - W2 + 1).length;
+      assert(c.leftParked.deep > 0 && c.items.deep <= DEFAULT_RUN_OPTIONS.parkItems + deepSent, `${JSON.stringify(c.items)}, ${deepSent} deep pieces sent`);
+      assertEquals(answered(late.records).filter((p) => p.to < H2 - W2 + 1), [], "nothing deep was read");
+      for (const w of world.enrolled) {
+        const r = (await as<Any>(db, "anon", null, "select public.history_read($1, null, null, null, true) r", [w]))[0].r;
+        for (const scan of ["transfers-in", "transfers-out"]) {
+          const doc = r.scans[scan];
+          assertEquals(subtract([[Math.max(doc.capFloor ?? 0, H2 - W2 + 1), H2 - LAG]], merge([...doc.covered, ...doc.holes])), [],
+                       `${w} ${scan}: the wider window and the follow below head − lag are covered`);
+        }
+      }
+      assertEquals(summary.stop, "deadline");
+      assertEquals(await lastStop(), "deadline");
+    });
+
+    await t.step("rpc2 remembered sidelined for 10 s more: the deep work and the follow's top wait for it; back, it is self-tested, then reads them — nothing dropped", async () => {
+      clock.t += 30_000;
+      const started = clock.now();
+      await remember({ wide: { sidelinedUntil: started + 10_000 } });
+      const back = new FakeNetwork(chain, clock, BEHAVIOUR);
+      const summary: Any = await runIndexer(deps(db, clock, back, chain, { endpoints: endpoints(), options: { ...TEST_OPTIONS, workMs: 90_000 } }), {});
+      const c = summary.counts;
+      const wide = back.records.filter((r) => r.label === "wide");
+      const deep = answered(wide).filter((p) => p.to < windowLow);
+      log("sidelined, then back", summary, `, deep pieces read ${deep.length}, straddle ${JSON.stringify(summary.straddle)}`);
+      assertEquals(violations, []);
+      assert(wide.length > 0, "rpc2 was used once back");
+      assert(wide[0].at >= started + 10_000, "nothing went to rpc2 while it was sidelined");
+      assert(wide[0].pieces.length === 1 && wide[0].pieces[0].nothing, "back, it was self-tested first");
+      assertEquals(summary.straddle.wide, "refuses");
+      assert(deep.length > 0, "then it read deep pieces");
+      assert(answered(wide).some((p) => p.to === H2), "and the follow's top");
+      assertEquals([c.dropped, c.straddleWaits], [0, 0]);
+      assert(["done", "deadline"].includes(String(summary.stop)), String(summary.stop));
+    });
+
+    await t.step("the next runs read what is left; every deep wallet is then covered to genesis, and served as the chain has it", async () => {
+      for (let run = 0; run < 8; run++) {
+        clock.t += 30_000;
+        const s = await runIndexer(deps(db, clock, net, chain), {});
+        assertEquals(violations, []);
+        assert(["done", "deadline"].includes(String(s.stop)), String(s.stop));
+        if (s.stop === "done") break;
+        assert(run < 7, "the deep backlog drains");
+      }
+      for (const w of deepWallets) {
+        const r = (await as<Any>(db, "anon", null, "select public.history_read($1, null, null, null, true) r", [w]))[0].r;
+        for (const scan of ["transfers-in", "transfers-out"]) {
+          const doc = r.scans[scan];
+          assertEquals(subtract([[doc.capFloor ?? 0, H2]], merge([...doc.covered, ...doc.holes])), [], `${w} ${scan}: covered to genesis`);
+        }
+      }
+      await assertServedMatchesChain(db, chain, world.enrolled);
+    });
+  } finally {
+    clock.stop();
+    await db.close();
+  }
+});
+
+// A new wallet's window holds the deep pass back until its last piece is committed (planner.pendingNewWindows), and its
+// last pieces wait in the coalescer for their neighbours (up to coalesceMs). With nothing else left to read, the reads
+// used to end right there — "done", the deep pass never started that run.
+Deno.test({ name: "history-indexer: a new wallet's window read, its last pieces still coalescing — the reads commit them and go on to the deep pass", sanitizeOps: false, sanitizeResources: false }, async (t) => {
+  violations.length = 0;
+  committed.length = 0;
+  const world = smallWorld();
+  const { chain } = world;
+  const db = await setUp(world);
+  const clock = new VirtualClock(Date.parse("2026-10-09T12:00:00Z"));
+  const net = new FakeNetwork(chain, clock, BEHAVIOUR);
+  const windowLow = H - WINDOW + 1;
+  try {
+    await t.step("set-up: the windows, the global scans and the first transactions — nothing below the window yet", async () => {
+      const shallow = { ...TEST_OPTIONS, plan: { window: WINDOW, floorOverride: { "transfers-in": windowLow, "transfers-out": windowLow } } };
+      for (let run = 0; run < 8; run++) {
+        const s = await runIndexer(deps(db, clock, net, chain, { options: shallow }), {});
+        assertEquals(violations, []);
+        if (s.stop === "done") break;
+        assert(run < 7, "the small world's windows converge");
+        clock.t += 30_000;
+      }
+    });
+
+    await t.step("a new wallet (no activity) joins: its window is read and committed, then the deep pass of the others starts in the same run", async () => {
+      const fresh = addr(0x2fff);
+      await db.query("insert into public.profiles (wallet) values ($1)", [fresh]);
+      clock.t += 30_000;
+      const from = net.records.length;
+      const summary: Any = await runIndexer(deps(db, clock, net, chain), {});
+      const c = summary.counts;
+      const pieces = net.records.slice(from).flatMap((r) => r.pieces).filter((p) => p.answered && !p.nothing);
+      const deep = pieces.filter((p) => p.to < windowLow);
+      console.log(`  new window: ${summary.stop} in ${summary.ms} ms (virtual), items ${JSON.stringify(c.items)}, deep pieces read ${deep.length}, ` +
+                  `wallets ${JSON.stringify(c.wallets)}, commits ${c.commits}`);
+      assertEquals(violations, []);
+      assertEquals(c.wallets.new, 1);
+      assert(c.items.window > 0, "the new wallet's window was read");
+      assert(deep.length > 0, "and the deep pass started in the same run");
+      assert(["done", "deadline"].includes(String(summary.stop)), String(summary.stop));
+      const r = (await as<Any>(db, "anon", null, "select public.history_read($1, null, null, null, true) r", [fresh]))[0].r;
+      for (const scan of ["transfers-in", "transfers-out"]) {
+        assertEquals(subtract([[windowLow, H]], merge([...r.scans[scan].covered, ...r.scans[scan].holes])), [], `${scan}: the new window`);
+      }
+    });
+  } finally {
+    clock.stop();
+    await db.close();
+  }
+});
+
+// ── The CPU budget (D21) ──────────────────────────────────────────────────────────────────────────────────────────
+
+// The scan (and, for a wallet scan, the sorted wallets) of an eth_getLogs piece the fake network recorded, by its
+// filter's topics.
+function pieceScan(topics: (string[] | null)[]): { scan: string; wallets: string[] | null } | null {
+  const t0 = topics[0] ?? [];
+  if (t0.includes(CURVEBUY)) return { scan: "launchpad", wallets: null };
+  if (t0.includes(SHARING_CLAIMED)) return { scan: "fee-sharing", wallets: null };
+  if (t0.includes(COLLECTED)) return { scan: "moments", wallets: null };
+  if (!t0.includes(TRANSFER)) return null;
+  const words = topics[1] ?? topics[2];
+  if (!words) return null;
+  return { scan: topics[1] ? "transfers-out" : "transfers-in", wallets: words.map((w) => "0x" + w.slice(26)).sort() };
+}
+
+const sum = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
+
+// What a run's summary should say it spent, from its own counts (cpu.ts): syncMs, each RPC request and database call
+// at its price, every streamed byte.
+function estimateOf(summary: Any, o: { rpcCpuMs: number; dbCpuMs: number; bytesPerMs: number }): number {
+  const c = summary.counts;
+  return summary.syncMs + o.rpcCpuMs * sum(c.requests) + o.dbCpuMs * sum(c.db) + c.bytes.streamed / o.bytesPerMs;
+}
+
+Deno.test({ name: "history-indexer: the CPU budget — per isolate, every exchange and byte priced, lookups whole, commits only what was read whole", sanitizeOps: false, sanitizeResources: false }, async (t) => {
+  violations.length = 0;
+  committed.length = 0;
+  const world = smallWorld(true);
+  const { chain } = world;
+  const db = await setUp(world);
+  const clock = new VirtualClock(Date.parse("2026-10-09T12:00:00Z"));
+  const net = new FakeNetwork(chain, clock, BEHAVIOUR);
+  // A CPU clock that moves: every timed section measures 0.025 ms, so syncMs is measured, not only the commits' estimate.
+  let cpuClock = 0;
+  const cpuNow = () => (cpuClock += 0.025);
+  const P = DEFAULT_RUN_OPTIONS;
+  const budget = 250;
+  const CPU_OPTIONS = { ...TEST_OPTIONS, cpuBudgetMs: budget, minRunCpuMs: 100 };
+  const isolate = new IsolateCpu(0);         // one isolate for the first runs
+  const rows = async () => (await one<Any>(db, "select count(*)::int n from public.history_indexer_runs")).n as number;
+  const nonceReads = (records: typeof net.records) => records.filter((r) => r.methods.includes("eth_getTransactionCount"));
+  let first: Any = null;
+  try {
+    await t.step("a budget of 250 ms: stop cpu; the estimate counts every request, database call and streamed byte; the isolate stays within it", async () => {
+      const d = deps(db, clock, net, chain, { cpuNow, isolateCpu: isolate, options: CPU_OPTIONS });
+      const summary: Any = first = await runIndexer(d, {});
+      const c = summary.counts;
+      console.log(`  cpu run: ${summary.stop} in ${summary.ms} ms (virtual), cpuEstimateMs ${summary.cpuEstimateMs}, cpuIsolateMs ${summary.cpuIsolateMs}, ` +
+                  `syncMs ${summary.syncMs}, bytes ${JSON.stringify(c.bytes)}, db ${JSON.stringify(c.db)}, requests ${JSON.stringify(c.requests)}, ` +
+                  `commits ${c.commits}, logs ${c.logs}, firstTx ${JSON.stringify(c.firstTx)}, errors ${JSON.stringify(summary.errors)}`);
+      assertEquals(summary.stop, "cpu");
+      assertEquals(violations, [], "every committed range holds exactly the chain's logs");
+      assert(c.commits > 0 && c.logs > 0, "it committed what it read");
+      // Every database call, every RPC request and every byte the network sent is in the estimate, at its price.
+      const calls = (d.db as CountingDb).calls;
+      assertEquals(c.db, { lease: calls.history_lease ?? 0, state: calls.history_state ?? 0, commit: calls.history_commit ?? 0,
+                           markHole: calls.history_mark_hole ?? 0, setFirstTx: calls.history_set_first_tx ?? 0, release: calls.history_release ?? 0 });
+      assertEquals(c.db.release, 1);
+      assertEquals(sum(c.requests), net.records.length, "every request the network saw is counted");
+      assertEquals(c.bytes.streamed, net.records.reduce((n, r) => n + r.bytes, 0), "every byte the network sent is counted");
+      assert(summary.syncMs > 0, "measured with a moving CPU clock");
+      assert(Math.abs(summary.cpuEstimateMs - estimateOf(summary, P)) <= 1, `${summary.cpuEstimateMs} vs ${estimateOf(summary, P)}`);
+      // The isolate did nothing else; the reserve held: finishing (the requests in flight and their bytes, the coalesced
+      // ranges' commits, the lookups, the release) fit the budget, and no read started past it.
+      assert(Math.abs(summary.cpuIsolateMs - summary.cpuEstimateMs) <= 1);
+      assert(isolate.spentMs() <= budget, `${isolate.spentMs()} > ${budget}`);
+      // First-transaction lookups ran, within their share of the budget, and none was cut off half done.
+      const reads = nonceReads(net.records).length;
+      assert(reads > 0, "first-transaction lookups ran");
+      assert(reads * P.rpcCpuMs <= P.firstTxCpuShare * budget, `${reads} nonce reads for a share of ${P.firstTxCpuShare * budget} ms`);
+      assertEquals([c.firstTx.cut, c.firstTx.failed], [0, 0]);
+      assert(c.firstTx.found + c.firstTx.none + c.firstTx.same + c.firstTx.unconfirmed > 0);
+      // Never a range it did not read whole: each commit's range lies within the pieces of that scan and wallet list that
+      // were answered with a list of logs.
+      const answered = new Map<string, Range[]>();
+      for (const r of net.records) {
+        for (const p of r.pieces) {
+          const s = p.answered && !p.nothing ? pieceScan(p.topics) : null;
+          if (!s) continue;
+          const k = `${s.scan}|${(s.wallets ?? []).join(",")}`;
+          answered.set(k, [...(answered.get(k) ?? []), [p.from, p.to]]);
+        }
+      }
+      assertEquals(committed.length, c.commits);
+      for (const m of committed) {
+        const k = `${m.scan}|${[...(m.wallets ?? [])].sort().join(",")}`;
+        assertEquals(subtract([[m.from, m.to]], merge(answered.get(k) ?? [])), [], `${m.scan} [${m.from}, ${m.to}] was answered whole`);
+      }
+      // Released with the real summary.
+      const row = await one<Any>(db, "select stop, released_at, summary from public.history_indexer_runs order by started_at desc limit 1");
+      assertEquals(row.stop, "cpu");
+      assert(row.released_at !== null);
+      assertEquals([row.summary.cpuEstimateMs, row.summary.cpuIsolateMs, row.summary.counts.commits, row.summary.counts.db, row.summary.counts.bytes],
+                   [summary.cpuEstimateMs, summary.cpuIsolateMs, c.commits, c.db, c.bytes]);
+      const lease = await one<Any>(db, "select lease_until <= clock_timestamp() free from public.history_indexer_state");
+      assertEquals(lease.free, true, "the lease is released");
+      await assertServedMatchesChain(db, chain, touchedWallets(chain));
+    });
+
+    await t.step("coalescing: more than 10 answered pieces to a commit — one range per key, 10 pieces at most, never got there", () => {
+      // The pieces that reached the coalescer: answered with a list of logs, less those rejected (invalid, too dense).
+      const pieces = net.records.reduce((n, r) => n + r.pieces.filter((p) => p.answered && !p.nothing).length, 0) -
+        first.counts.invalid - first.counts.dense;
+      const commits = committed.length;
+      console.log(`  coalescing: ${pieces} coalesced pieces, ${commits} commits`);
+      // The old coalescing flushed a range at 10 pieces: at least one commit per 10 pieces, whatever their order.
+      assert(commits * 10 < pieces, `${commits} commits for ${pieces} pieces`);
+    });
+
+    await t.step("a second run in the same isolate takes no lease once less than minRunCpuMs is left", async () => {
+      clock.t += 30_000;
+      const spent = isolate.spentMs();
+      assert(Math.abs(spent - first.cpuIsolateMs) <= 1, `the isolate holds the first run's ${first.cpuIsolateMs} ms: ${spent}`);
+      assert(budget - spent < CPU_OPTIONS.minRunCpuMs, `room ${budget - spent}`);
+      const before = { rows: await rows(), records: net.records.length };
+      const d = deps(db, clock, net, chain, { cpuNow, isolateCpu: isolate, options: CPU_OPTIONS });
+      const summary = await runIndexer(d, {});
+      assertEquals(summary, { v: 2, stop: "cpu" });
+      assertEquals((d.db as CountingDb).calls, {}, "not even the lease");
+      assertEquals([await rows(), net.records.length], [before.rows, before.records]);
+      assertEquals(isolate.spentMs(), spent);
+    });
+
+    await t.step("with room for one, it starts from what the first spent: the isolate stays within the budget", async () => {
+      const spent = isolate.spentMs();
+      const room = budget - spent;
+      console.log(`  room after the first run: ${room.toFixed(1)} ms`);
+      assert(room >= 5, `${room}`);
+      const d = deps(db, clock, net, chain, { cpuNow, isolateCpu: isolate,
+                                              options: { ...CPU_OPTIONS, minRunCpuMs: Math.floor(room) } });
+      const summary: Any = await runIndexer(d, {});
+      console.log(`  second run: ${summary.stop}, cpuEstimateMs ${summary.cpuEstimateMs}, cpuIsolateMs ${summary.cpuIsolateMs}, ` +
+                  `requests ${JSON.stringify(summary.counts.requests)}, db ${JSON.stringify(summary.counts.db)}`);
+      assertEquals(violations, []);
+      assertEquals(summary.stop, "cpu");
+      assert(summary.cpuEstimateMs <= Math.ceil(room), `${summary.cpuEstimateMs} > ${room}`);
+      assert(Math.abs(summary.cpuIsolateMs - isolate.spentMs()) <= 1);
+      assert(isolate.spentMs() <= budget, `the isolate: ${isolate.spentMs()} > ${budget}`);
+    });
+
+    await t.step("a lookup in progress at a cpu stop finishes its reserved reads, and the isolate stays within the budget", async () => {
+      clock.t += 30_000;
+      // One wallet with transactions left to look up (a whole bisection, ~28 reads); every other one checked just now.
+      const target = world.enrolled.find((w) => chain.firstTx.has(w))!;
+      await db.query(`update public.history_wallets set first_tx_state = 'none', first_tx_block = null, first_tx_head = $1,
+                        first_tx_checked_at = $2, first_tx_source = 'wide' where wallet <> $3`, [H, new Date(clock.t).toISOString(), target]);
+      await db.query(`update public.history_wallets set first_tx_state = 'unknown', first_tx_block = null, first_tx_head = null,
+                        first_tx_checked_at = null, first_tx_source = null where wallet = $1`, [target]);
+      // An isolate that has spent all but 80 ms: the lookup starts (it fits its share and the room), and the log reads
+      // stop after a dispatch or two, long before its ~28 sequential reads are done.
+      const busy = new IsolateCpu(budget - 80);
+      const from = net.records.length;
+      const d = deps(db, clock, net, chain, { cpuNow, isolateCpu: busy, options: { ...CPU_OPTIONS, minRunCpuMs: 50 } });
+      const summary: Any = await runIndexer(d, {});
+      const c = summary.counts;
+      const records = net.records.slice(from);
+      const reads = nonceReads(records);
+      const logReads = records.filter((r) => r.methods.includes("eth_getLogs") && r.pieces.some((p) => !p.nothing));
+      const lastLogRead = Math.max(...logReads.map((r) => r.at));
+      console.log(`  busy isolate: ${summary.stop}, cpuEstimateMs ${summary.cpuEstimateMs}, cpuIsolateMs ${summary.cpuIsolateMs}, ` +
+                  `nonce reads ${reads.length} (${reads.filter((r) => r.at > lastLogRead).length} after the last log read), firstTx ${JSON.stringify(c.firstTx)}`);
+      assertEquals(violations, []);
+      assertEquals(summary.stop, "cpu");
+      assert(logReads.length > 0, "the run read logs");
+      assert(reads.filter((r) => r.at > lastLogRead).length >= 5, "the lookup read on after the log reads stopped");
+      assertEquals([c.firstTx.cut, c.firstTx.failed], [0, 0], "none was cut off");
+      assertEquals(c.firstTx.found, 1, "the lookup finished: its block confirmed and stored");
+      assertEquals((await one<Any>(db, "select first_tx_block::bigint::int b from public.history_wallets where wallet = $1", [target])).b,
+                   chain.firstTx.get(target));
+      assert(busy.spentMs() <= budget, `${busy.spentMs()} > ${budget}`);
+      assert(Math.abs(summary.cpuIsolateMs - busy.spentMs()) <= 1);
+    });
+
+    await t.step("answers cut off at the response cap cost their streamed bytes, though never parsed", async () => {
+      clock.t += 30_000;
+      const from = net.records.length;
+      const prices = { rpcCpuMs: P.rpcCpuMs, dbCpuMs: P.dbCpuMs, bytesPerMs: 1_000 }; // bytes made visible: 1 ms a kB
+      const d = deps(db, clock, net, chain, { cpuNow, isolateCpu: new IsolateCpu(0),
+                                              options: { ...CPU_OPTIONS, responseCap: 256, ...prices } });
+      const summary: Any = await runIndexer(d, {});
+      const c = summary.counts;
+      const records = net.records.slice(from);
+      console.log(`  cut-off answers: ${summary.stop}, cpuEstimateMs ${summary.cpuEstimateMs}, bytes ${JSON.stringify(c.bytes)}, dense ${c.dense}, ` +
+                  `requests ${JSON.stringify(c.requests)}`);
+      assertEquals(violations, []);
+      assert(c.dense > 0, "answers past the cap");
+      assertEquals(c.bytes.streamed, records.reduce((n, r) => n + r.bytes, 0), "every byte the network sent, cut off or not");
+      assert(c.bytes.streamed - c.bytes.parsed > 256, `unparsed: ${c.bytes.streamed - c.bytes.parsed}`);
+      assert(Math.abs(summary.cpuEstimateMs - estimateOf(summary, prices)) <= 1, `${summary.cpuEstimateMs} vs ${estimateOf(summary, prices)}`);
+      assert(summary.cpuIsolateMs <= budget, `${summary.cpuIsolateMs} > ${budget}`);
+    });
+
+    await t.step("later runs (the default budget off) pick up where it stopped; the served history equals the chain", async () => {
+      for (let run = 0; run < 8; run++) {
+        clock.t += 30_000;
+        const s = await runIndexer(deps(db, clock, net, chain), {});
+        assertEquals(violations, []);
+        assert(["done", "deadline"].includes(String(s.stop)), String(s.stop));
+        if (s.stop === "done") break;
+        assert(run < 7, "the small world converges");
+      }
+      await assertServedMatchesChain(db, chain, world.enrolled);
+    });
+  } finally {
+    clock.stop();
+    await db.close();
+  }
 });
 
 // ── A keyed Alchemy endpoint (ALCHEMY_MONAD_RPC) ────────────────────────────────────────────────────────────────

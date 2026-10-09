@@ -80,7 +80,7 @@ root (the CLI bundles `functions/_shared/`). Never run `supabase config push` fr
 | `pin-media` | true | a wallet session, verified in code too | `edge_rate_gate` per wallet, network and overall; 20 s budget |
 | `aurora-proxy` | true | a wallet session, verified in code too; quotes only to and from that wallet | `edge_rate_gate` per wallet and network |
 | `waitlist` (not deployed) | false | nothing (CORS: dyorhq.fun, www.dyorhq.fun; honeypot) | `edge_rate_gate` per network (IPv6 /48) and overall |
-| `history-indexer` (not deployed) | false | the `x-history-cron` header equal to the Vault secret `history_cron_secret` (its SHA-256 compared in constant time with `history_cron_digest()`, fetched at most once a minute per isolate; or the optional `HISTORY_CRON_SECRET`); called only by pg_cron → pg_net | one run at a time (a database lease); ≤ 240 s per run; per RPC endpoint ≤ 4 requests/s (`rpc2` 2 at launch); a header never reaches the database, so callers without it cost no query |
+| `history-indexer` (not deployed) | false | the `x-history-cron` header equal to the Vault secret `history_cron_secret` (its SHA-256 compared in constant time with `history_cron_digest()`, fetched at most once a minute per isolate; or the optional `HISTORY_CRON_SECRET`); called only by pg_cron → pg_net | one run at a time (a database lease); ≤ 240 s per run and ≤ 1,000 ms of estimated CPU per isolate (half the platform's 2,000 ms); per RPC endpoint ≤ 4 requests/s (`rpc2` 2 at launch); a header never reaches the database, so callers without it cost no query |
 
 Secrets (names only): `APP_JWT_SECRET` or `APP_JWT_SIGNING_JWK` (wallet-auth; pin-media and aurora-proxy read
 `APP_JWT_SECRET` to verify HS256 sessions — secrets are project-wide), `PRIVY_APP_SECRET` (+ optional `PRIVY_APP_ID`),
@@ -192,13 +192,29 @@ the piece is split there, and a key capped at fewer blocks halves its span to th
 tier's 10-block refusal turns its log reads off for a day, a spent month turns it off until 00:00 UTC, and an HTTP
 401/403 sidelines it at once; its own error texts are never stored. No keyed URL is ever logged, stored or put in an
 error: log lines, error lines and run summaries pass through `redact.ts`, and no Error object reaches `console.*`. Work waiting for a busy or resting endpoint is parked while the others go on (the follow
-continues on the clamping endpoints while `rpc2` rests), and an endpoint that refuses every request (a revoked key, a
-spent quota, a firewall) is sidelined for 15 minutes without turning its pieces into holes. `MONAD_LOGS_ENDPOINTS`
+continues on the clamping endpoints while `rpc2` rests); a sidelined endpoint, one off for the day or one without log
+reads rests the same way, until its time is up (a refusing one is self-tested again once back). Work none of its
+endpoints can start before the run's read deadline (deep history while `rpc2` rests or is sidelined past it) stays
+parked too — the run stops `deadline`, not `done`, and the next run plans that work again (`counts.leftParked`). Work of
+a priority no endpoint may take at all (every span too narrow for it, as when `rpc2` teaches a span below 10,000 blocks
+for a day, or every daily budget too full) stays in the planner, held (`counts.held`): the run reads everything else and
+stops `blocked`, not `done`. `rpc2`'s HTTP 429 is a JSON-RPC error; its Retry-After is honoured (up to 60 s). An
+endpoint that refuses every request (a revoked key, a spent quota, a firewall) is sidelined for 15 minutes without
+turning its pieces into holes. `MONAD_LOGS_ENDPOINTS`
 (optional JSON) replaces them (an array) or adds to them (`{"mode": "append", "endpoints": [...], "overrides":
 {"rpc2": {"rps": 4, "inFlight": 8}, "alchemy": {"span": 10000}}}`; an override of `alchemy` without
 `ALCHEMY_MONAD_RPC` is ignored); an invalid value falls back to the defaults (with `alchemy`) and a log line naming the
 field, never the URL. Too dense is split (range, then
-wallets, then single blocks) and finally a hole — never a cap. Each run writes one summary line (counts only) and a
+wallets, then single blocks) and finally a hole — never a cap. Adjacent answered pieces of a scan (and wallet list) are
+joined into one commit, up to 40 pieces or 2,000 logs, in whatever order they answer. **CPU:** the platform stops an
+isolate at 2,000 ms of CPU, counting everything it did — its start, the cron ticks it answered, every run in it — and
+an RPC request costs ~1.5 ms of it, a database call ~0.4 ms (fitted to two runs on 2026-10-09), while a run can time
+only its own parsing. So each isolate keeps one estimate (its start, its requests, and each run's parsing + 1.6 ms per
+RPC request + 0.5 ms per database call + the bytes it streamed, cut-off answers included); a run starts only with
+≥ 300 ms of 1,000 left, and stops new reads (stop `cpu`) once the estimate plus what finishing still costs reaches
+1,000 ms — it then commits what it read and releases as usual. First-transaction lookups take at most a quarter of it,
+and one in progress finishes its reads (`run.ts` D21, `cpu.ts`; the summary's `cpuEstimateMs`, `cpuIsolateMs`,
+`counts.db` and `counts.bytes` sit next to the platform's `cpu_time_used`). Each run writes one summary line (counts only) and a
 `history_indexer_runs` row. `index.ts` is the only file touching the runtime; `run.ts` is the loop; every other module
 is pure, with a `*_test.ts` beside it. `print_scans.ts` prints the bundled definitions in the format of migration 32's
 "Verify after apply" query. `version.ts` holds a placeholder that the deployed copy replaces with the commit's short SHA

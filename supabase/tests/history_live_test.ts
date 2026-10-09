@@ -89,10 +89,11 @@ Deno.test({ name: "history-indexer live: probes and end to end on public Monad R
         db: pgliteDb(db), endpoints: DEFAULT_ENDPOINTS.map((e) => ({ ...e })), fetch, now: Date.now, cpuNow: () => performance.now(), sleep,
         setTimer: (ms, fn) => { const h = setTimeout(fn, ms); return () => clearTimeout(h); },
         random: Math.random, log: () => {}, isolateStartedAt: Date.now(), version: "live",
-        options: { syncBudgetMs: 60_000, maxParsedBytes: 256 * 1_048_576, maxLogs: 1_000_000 },
+        options: { syncBudgetMs: 60_000, cpuBudgetMs: 1e9, maxParsedBytes: 256 * 1_048_576, maxLogs: 1_000_000 }, // no platform CPU meter here
       }, {});
       const c = summary.counts as Any;
-      console.log(`  run ${run}: ${summary.stop}, ${summary.ms} ms, requests ${JSON.stringify(c.requests)}, logs ${c.logs}, commits ${c.commits}, ` +
+      console.log(`  run ${run}: ${summary.stop}, ${summary.ms} ms, cpuEstimateMs ${summary.cpuEstimateMs}, requests ${JSON.stringify(c.requests)}, ` +
+                  `db ${JSON.stringify(c.db)}, logs ${c.logs}, commits ${c.commits}, ` +
                   `firstTx ${JSON.stringify(c.firstTx)}, errors ${JSON.stringify(summary.errors)}`);
       assert(!["db", "error", "lease", "defs"].includes(String(summary.stop)), String(summary.stop));
       const items = Object.values(c.items as Record<string, number>).reduce((a, b) => a + b, 0);

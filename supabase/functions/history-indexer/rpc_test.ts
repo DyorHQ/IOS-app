@@ -94,3 +94,15 @@ Deno.test("mapResults: duplicates and unknown ids are not an answer", () => {
   assertEquals(mapResults({ id: 7, result: 5 }, 1), null);
   assertEquals(mapResults("x", 1), null);
 });
+
+Deno.test("exchange: a non-2xx JSON-RPC answer keeps its Retry-After (rpc2's HTTP 429 is a JSON-RPC error); a 200 has none", async () => {
+  const g = stub(() => json({ jsonrpc: "2.0", id: null, error: { code: 429, message: "Too Many Requests" } }, 429, { "Retry-After": "60" }));
+  const out = await exchange(g.fn, "https://x.test", calls, opts);
+  assertEquals(out.kind === "answered" && [out.status, out.retryAfter, out.results.map((r) => !r.ok && r.code)], [429, "60", [429, 429]]);
+  const ok = stub(() => json([{ jsonrpc: "2.0", id: 1, result: "0x1" }, { jsonrpc: "2.0", id: 2, result: [] }], 200, { "Retry-After": "5" }));
+  const answered = await exchange(ok.fn, "https://x.test", calls, opts);
+  assertEquals(answered.kind === "answered" && "retryAfter" in answered, false);
+  const none = stub(() => json({ jsonrpc: "2.0", id: null, error: { code: -32005, message: "rate limit" } }, 429));
+  const bare = await exchange(none.fn, "https://x.test", calls, opts);
+  assertEquals(bare.kind === "answered" && "retryAfter" in bare, false);
+});
