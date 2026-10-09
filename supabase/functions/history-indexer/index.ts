@@ -22,12 +22,17 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { CronGate, type DigestFetch, plausibleToken, vaultDigest } from "./auth.ts";
 import { type HistoryDb, postgrestDb, type RunSummary } from "./db.ts";
 import { alchemyEndpoint, type Endpoint, endpointsFromEnv, isKeyed } from "./endpoints.ts";
+import { IsolateCpu, ISOLATE_START_CPU_MS, REQUEST_CPU_MS } from "./cpu.ts";
 import { type Redact, redactor } from "./redact.ts";
-import { runIndexer } from "./run.ts";
+import { DEFAULT_RUN_OPTIONS, isolateHasRoom, runIndexer } from "./run.ts";
 import { VERSION } from "./version.ts";
 
 const ISOLATE_STARTED = Date.now();
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
+
+// The platform's CPU limit is the isolate's, not a run's (cpu.ts): one estimate per isolate — its start, every request
+// it answers, every Vault digest fetch, and each run in it — which every run here reads and adds to.
+const isolateCpu = new IsolateCpu(ISOLATE_START_CPU_MS);
 
 // The run this isolate is doing, so the shutdown handler can release it (best effort) and a second tick reaching the
 // same isolate does not start another.
@@ -74,6 +79,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 const setTimer = (ms: number, fn: () => void) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); };
 
 Deno.serve(async (req) => {
+  isolateCpu.charge(REQUEST_CPU_MS);
   if (req.method !== "POST") return reply(405);
   const presented = req.headers.get("x-history-cron");
   if (!plausibleToken(presented)) return reply(403); // the cheap check, before anything else
@@ -81,7 +87,11 @@ Deno.serve(async (req) => {
   if (!url || !key || typeof EdgeRuntime === "undefined") return reply(503);
   if (!client) {
     const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-    client = { db: postgrestDb(supabase), fetchDigest: vaultDigest(supabase) };
+    const fetchDigest = vaultDigest(supabase);
+    client = {
+      db: postgrestDb(supabase),
+      fetchDigest: () => { isolateCpu.charge(DEFAULT_RUN_OPTIONS.dbCpuMs); return fetchDigest(); }, // a database call
+    };
   }
   const now = Date.now();
   const verdict = await gate.authorize(presented, Deno.env.get("HISTORY_CRON_SECRET"), client.fetchDigest, now);
@@ -95,13 +105,15 @@ Deno.serve(async (req) => {
   if (verdict !== "ok") return reply(403);
   await req.body?.cancel();
   if (current && !current.released) return reply(202, { accepted: false });
+  // This isolate has spent its CPU on earlier runs and ticks: no run here (the run would check again before its lease).
+  if (!isolateHasRoom(isolateCpu)) return reply(202, { accepted: false });
   const { endpoints, redact } = configure();
   const db = client.db;
   signal.shutdown = undefined;
   EdgeRuntime.waitUntil(
     runIndexer({
       db, endpoints, fetch, now: Date.now, cpuNow: () => performance.now(), sleep, setTimer, random: Math.random, redact,
-      log: (line) => console.log(redact(line)), isolateStartedAt: ISOLATE_STARTED, version: VERSION,
+      log: (line) => console.log(redact(line)), isolateStartedAt: ISOLATE_STARTED, version: VERSION, isolateCpu,
       onLease: (owner) => { current = { owner, released: false, db }; },
       onRelease: () => { if (current) current.released = true; },
     }, signal).catch((err) => console.error(redact(`history-indexer: run failed: ${String((err as Error)?.message ?? err)}`).slice(0, 240))),

@@ -1,11 +1,12 @@
 // One JSON-RPC exchange: a batch (or, for an endpoint that refuses arrays, a bare object), read as a stream with a byte
 // cap so a dense answer (a busy address returned 259k logs in one batch) is cut off long before it costs the isolate's
-// memory or CPU. `parseMs` is the JSON.parse time, fed to the run's CPU meter.
+// memory or CPU. `parseMs` is the JSON.parse time and `bytes` what was streamed (every kind: a tooLarge answer up to its
+// cut), both fed to the run's CPU meter.
 export type Call = { method: string; params: unknown[] };
 export type CallResult = { ok: true; result: unknown } | { ok: false; code?: number; message: string };
 export type Exchange =
   | { kind: "answered"; results: CallResult[]; bytes: number; parseMs: number; status: number }
-  | { kind: "http"; status: number; headers: Headers; body: string } // non-2xx and not JSON-RPC; body ≤ 2 KB
+  | { kind: "http"; status: number; headers: Headers; body: string; bytes: number } // non-2xx and not JSON-RPC; body ≤ 2 KB kept
   | { kind: "unanswered"; reason: "timeout" | "network" | "malformed" | "tooLarge"; bytes: number };
 
 // `setTimer` (default setTimeout) arms the timeout and returns its cancel: tests pass a virtual clock's.
@@ -98,7 +99,7 @@ export async function exchange(fetchFn: typeof fetch, url: string, calls: Call[]
     const parseMs = Math.max(0, cpuNow() - started);
     const results = parsedOk ? mapResults(parsed, calls.length) : null;
     if (results) return { kind: "answered", results, bytes, parseMs, status: res.status };
-    if (!res.ok) return { kind: "http", status: res.status, headers: res.headers, body: text.slice(0, KEEP_BODY) };
+    if (!res.ok) return { kind: "http", status: res.status, headers: res.headers, body: text.slice(0, KEEP_BODY), bytes };
     return { kind: "unanswered", reason: "malformed", bytes };
   } finally {
     cancelTimer();

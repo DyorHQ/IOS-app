@@ -90,7 +90,12 @@ export type FakeBehaviour = {
   throwFetch?: string;                  // every request: fetch throws a TypeError with this message
 };
 
-export type Recorded = { label: string; at: number; end?: number; status: number; pieces: { from: number; to: number; nothing: boolean }[];
+// `pieces`: the request's eth_getLogs calls, in order — the range, the filter's topics, whether it is the straddle
+// self-test's filter (`nothing`), and whether a list of logs for it was delivered (`answered`: not refused, throttled,
+// failed or cut off by the client's timeout; the client may still reject it). `bytes`: the size of the reply's body (0
+// when none was sent), streamed to the client in one chunk.
+export type Recorded = { label: string; at: number; end?: number; status: number; bytes: number;
+                         pieces: { from: number; to: number; nothing: boolean; topics: (string[] | null)[]; answered: boolean }[];
                          array: boolean; throttled: boolean; methods: string[] };
 
 export class FakeNetwork {
@@ -113,11 +118,12 @@ export class FakeNetwork {
     const body = JSON.parse(String(init?.body));
     const array = Array.isArray(body);
     const calls: { id: number; method: string; params: unknown[] }[] = array ? body : [body];
-    const rec: Recorded = { label, at: this.clock.now(), status: 200, array, throttled: false, methods: calls.map((c) => c.method),
+    const rec: Recorded = { label, at: this.clock.now(), status: 200, bytes: 0, array, throttled: false, methods: calls.map((c) => c.method),
                             pieces: calls.filter((c) => c.method === "eth_getLogs").map((c) => {
                               const f = c.params[0] as Record<string, unknown>;
                               return { from: parseInt(String(f.fromBlock), 16), to: parseInt(String(f.toBlock), 16),
-                                       nothing: JSON.stringify(f.topics ?? []).includes("f".repeat(64)) };
+                                       nothing: JSON.stringify(f.topics ?? []).includes("f".repeat(64)),
+                                       topics: (f.topics ?? []) as (string[] | null)[], answered: false };
                             }) };
     this.records.push(rec);
     this.inFlight[label] = (this.inFlight[label] ?? 0) + 1;
@@ -144,6 +150,8 @@ export class FakeNetwork {
         return { jsonrpc: "2.0", id: c.id, ...r };
       });
       await this.wait(b.latency(logCount), init?.signal ?? undefined);
+      let k = 0;
+      calls.forEach((c, i) => { if (c.method === "eth_getLogs") rec.pieces[k++].answered = Array.isArray((answers[i] as { result?: unknown }).result); });
       return this.reply(rec, status, JSON.stringify(array ? answers : answers[0]));
     } finally {
       this.inFlight[label]--;
@@ -213,6 +221,7 @@ export class FakeNetwork {
   private reply(rec: Recorded, status: number, text: string, headers: Record<string, string> = {}): Response {
     rec.status = status;
     const bytes = new TextEncoder().encode(text);
+    rec.bytes = bytes.byteLength;
     return new Response(new ReadableStream({ start(c) { c.enqueue(bytes); c.close(); } }), { status, headers });
   }
 }

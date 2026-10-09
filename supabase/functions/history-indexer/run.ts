@@ -9,6 +9,8 @@
 import { type CommitArgs, CommitSlow, DbDown, DefsChanged, type HistoryDb, LeaseLost, Refused, Retryable, type RunSummary } from "./db.ts";
 import { classifyCallError, classifyHttp, type Endpoint, endpointRefusal, isKeyed } from "./endpoints.ts";
 import { locateFirstTx, type NonceSource, reverifyFirstTx } from "./firsttx.ts";
+import { Coalescer, type Fragment } from "./coalesce.ts";
+import { type CpuMeter, type DbCall, type Finish, finishReserveMs, IsolateCpu, lookupReads } from "./cpu.ts";
 import { checkAnswer, type CompactLog, compactBytes, fillTimestamps, splitForCommit } from "./logs.ts";
 import { ByteBudget, EndpointState, followRank, minSpanFor, type Outcome, pickEndpoint, type Priority } from "./pacing.ts";
 import { DEFAULT_PLAN, type IndexerState, type PlanOptions, Planner, type WalletState, type WorkItem } from "./planner.ts";
@@ -22,28 +24,64 @@ export type RunOptions = {
   workMs: number; isolateMaxMs: number; minRunMs: number; readMarginMs: number; slowReadMarginMs: number;
   leaseSeconds: number; renewMs: number; maxWallets: number; stateRefreshMs: number; jitterMs: number;
   requestTimeoutMs: number; responseCap: number; singleBlockCap: number; maxInFlightTotal: number; inFlightReserve: number;
-  maxParsedBytes: number; maxLogs: number; syncBudgetMs: number; denseLogs: number; singleBlockLogs: number;
+  maxParsedBytes: number; maxLogs: number; syncBudgetMs: number;
+  cpuBudgetMs: number; minRunCpuMs: number; rpcCpuMs: number; dbCpuMs: number; bytesPerMs: number;
+  denseLogs: number; singleBlockLogs: number;
   commitLogs: number; minCommitLogs: number; commitConcurrency: number; backpressureLogs: number; backpressureCommits: number;
-  coalesceItems: number; coalesceMs: number; firstTxPerRun: number; firstTxConcurrency: number; firstTxPauseMs: number;
+  coalesceItems: number; coalesceMs: number;
+  firstTxPerRun: number; firstTxConcurrency: number; firstTxPauseMs: number; firstTxCpuShare: number;
   maxAttempts: number; maxPastHead: number; parkItems: number; headReadyMs: number; probeAttempts: number; plan: PlanOptions;
 };
 
-// The starting budgets (D21): `maxInFlightTotal`, `maxParsedBytes`, `maxLogs` and `syncBudgetMs` start low until deployed
-// runs show the platform's cpu_time_used below half of the 2,000 ms limit.
+// The budgets (D21). The platform stops an isolate at 2,000 ms of CPU ("shutdown cpu"), counting everything the isolate
+// did: its start, the cron ticks it answered, and every run in it. `cpuBudgetMs` is half of that, for the isolate, by an
+// estimate (cpu.ts): the isolate's start and requests, plus each of its runs' `syncMs` + `rpcCpuMs` × every RPC request
+// (log reads, head reads, probes, nonce and block-timestamp reads) + `dbCpuMs` × every database call (lease, state,
+// commit, markHole, setFirstTx, release) + its streamed bytes / `bytesPerMs`. A run takes the lease only when at least
+// `minRunCpuMs` of the budget is left in its isolate (index.ts answers "accepted: false" otherwise), and stops its own
+// reads (stop "cpu") once the isolate's estimate plus what finishing the run still costs (cpu.ts finishReserveMs: the
+// requests in flight and their bytes, the coalesced ranges' commits, the lookups in progress, the release) reaches the
+// budget. The summary records the run's estimate and the isolate's (`cpuEstimateMs`, `cpuIsolateMs`, `counts.db`,
+// `counts.bytes`) to compare with the platform's cpu_time_used.
+//   Measured 2026-10-09 (version 33ce79b, Edge runtime 1.77 / Deno 2.1.4, eu-west-1): the first two deployed runs were
+// stopped by the platform for CPU after 155 s and 177 s, at cpu_time_used 1,815 and 1,809 ms. Their summaries: syncMs 71
+// and 98 (the run's own meter saw ~5 % of the platform's CPU) for 828 and 880 RPC requests and 1,203 and 917 commits:
+// ~1.53 ms per RPC request and ~0.39 ms per database call, so `rpcCpuMs` 1.6 and `dbCpuMs` 0.5 (cpu.ts). The other half
+// of the limit is the margin for the estimate's error.
+//   Commits were most of those exchanges: coalescing kept one range per key and flushed it whenever a piece arrived out
+// of order (several endpoints read one scan at once), and joined at most 10 pieces. It now keeps any number of
+// fragments per key and joins up to `coalesceItems` 40 (coalesce.ts).
+//   First-transaction lookups (§13) are ~30 sequential nonce reads each (two thirds of the measured runs' requests):
+// together they may take at most `firstTxCpuShare` of the budget, a lookup starts only when the whole of it fits, and
+// one in progress may finish its reads past a "cpu" stop (they are reserved), so no lookup is cut off half done.
+//   `maxInFlightTotal`, `maxParsedBytes`, `maxLogs` and `syncBudgetMs` stay at their starting values until deployed
+// runs show the platform's cpu_time_used below half of the limit.
 export const DEFAULT_RUN_OPTIONS: RunOptions = {
   workMs: 240_000, isolateMaxMs: 340_000, minRunMs: 40_000, readMarginMs: 30_000, slowReadMarginMs: 45_000,
   leaseSeconds: 300, renewMs: 60_000, maxWallets: 2_000, stateRefreshMs: 30_000, jitterMs: 5_000,
   requestTimeoutMs: 15_000, responseCap: 3 * MiB, singleBlockCap: 8 * MiB, maxInFlightTotal: 6, inFlightReserve: 12 * MiB,
-  maxParsedBytes: 8 * MiB, maxLogs: 20_000, syncBudgetMs: 1_000, denseLogs: 10_000, singleBlockLogs: 5_000,
+  maxParsedBytes: 8 * MiB, maxLogs: 20_000, syncBudgetMs: 1_000,
+  cpuBudgetMs: 1_000, minRunCpuMs: 300, rpcCpuMs: 1.6, dbCpuMs: 0.5, bytesPerMs: 150_000,
+  denseLogs: 10_000, singleBlockLogs: 5_000,
   commitLogs: 2_000, minCommitLogs: 500, commitConcurrency: 2, backpressureLogs: 8_000, backpressureCommits: 4,
-  coalesceItems: 10, coalesceMs: 15_000, firstTxPerRun: 20, firstTxConcurrency: 2, firstTxPauseMs: 2_000,
+  coalesceItems: 40, coalesceMs: 15_000,
+  firstTxPerRun: 20, firstTxConcurrency: 2, firstTxPauseMs: 2_000, firstTxCpuShare: 0.25,
   maxAttempts: 3, maxPastHead: 3, parkItems: 32, headReadyMs: 2_000, probeAttempts: 3, plan: DEFAULT_PLAN,
 };
+
+// Whether an isolate that has spent `isolate` has room for a run to start: `minRunCpuMs` of the budget left (the lease,
+// the state, the head reads, a first follow and the release, with something to read). index.ts asks before it starts
+// a run; the run asks again before it takes the lease.
+export function isolateHasRoom(isolate: IsolateCpu, o: Pick<RunOptions, "cpuBudgetMs" | "minRunCpuMs"> = DEFAULT_RUN_OPTIONS): boolean {
+  return isolate.spentMs() + o.minRunCpuMs <= o.cpuBudgetMs;
+}
 
 export type Deps = {
   db: HistoryDb; endpoints: Endpoint[]; fetch: typeof fetch; now: () => number; cpuNow: () => number;
   sleep: (ms: number) => Promise<void>; random: () => number; log: (line: string) => void;
   isolateStartedAt: number; version: string;
+  // The isolate's CPU estimate (cpu.ts), one per isolate (index.ts), shared by every run in it; default: a fresh one at 0.
+  isolateCpu?: IsolateCpu;
   onLease?: (owner: string) => void; onRelease?: (stop: string) => void;
   setTimer?: (ms: number, fn: () => void) => () => void;    // a cancellable timer (default: from `sleep`)
   // Applied to every error line, log line and the run summary (redact.ts: the keyed endpoints' URLs → their labels);
@@ -64,17 +102,27 @@ class Counters {
   failed = 0; invalid = 0; dense = 0; timeouts = 0; pastHead = 0; straddleWaits = 0; dropped = 0;
   commits = 0; commitSlow = 0; commitRetries = 0; logs = 0; inserted: Record<string, number> = {}; trimmed = 0;
   holesMarked = 0; holesCleared = 0; capped = 0;
-  firstTx = { found: 0, none: 0, same: 0, failed: 0, unconfirmed: 0, movedEarlier: 0 };
+  // `cut`: lookups a stop ended before their answer (their reads wasted; a "cpu" stop lets the ones in progress finish).
+  firstTx = { found: 0, none: 0, same: 0, failed: 0, unconfirmed: 0, movedEarlier: 0, cut: 0 };
   straddle: Record<string, string> = {};
   globalHoles: { scan: string; from: number; to: number }[] = [];
   errors: string[] = [];
   error(line: string) { if (this.errors.length < 5) this.errors.push(this.redact(line).replace(/0x[0-9a-fA-F]{40,}/g, "0x…").slice(0, 120)); }
 }
 
-type Pending = { scan: ScanId; defVersion: number; wallets: string[] | null; from: number; to: number; logs: CompactLog[];
-                 pieces: number; firstAt: number; items: WorkItem[] };
+// What every piece of one coalescing key shares (the key: scan, definition, sorted wallet list).
+type CommitKey = { scan: ScanId; defVersion: number; wallets: string[] | null };
 type Job = { scan: ScanId; defVersion: number; wallets: string[] | null; from: number; to: number; logs: CompactLog[];
              slowRetried: boolean; retries: number; group: { remaining: number; items: WorkItem[] } };
+
+// A first-transaction lookup in progress: the reads reserved for it (cpu.ts lookupReads), those it has made, and whether
+// a stop ended it.
+type Lookup = { allowance: number; reads: number; cut: boolean };
+
+// The share of a read the CPU check counts before it is sent (cpu.ts Finish): a log read's request, pieces and bytes; a
+// small read's request and 64 KiB.
+type Extra = Partial<Pick<Finish, "requests" | "pieces" | "bytes" | "lookupReads" | "lookups">>;
+const SMALL_READ: Extra = { requests: 1, bytes: 65_536 };
 
 class Stop extends Error { constructor(readonly reason: string) { super(reason); } }
 
@@ -114,10 +162,12 @@ class Run {
   private lastRefresh = 0;
   private stateCursor: string | null = null;
   private wallets = { active: 0, skipped: 0, refreshed: 0 };
-  private syncMs = 0;
+  private readonly isolate: IsolateCpu;
+  private readonly cpu: CpuMeter;  // this run's part of the isolate's estimate
   private parsedBytes = 0;
   private logsSeen = 0;
   private requestsInFlight = 0;
+  private piecesInFlight = 0;     // eth_getLogs pieces in the requests in flight (the CPU reserve)
   private readonly bytes: ByteBudget;
   // The look-ahead (§10): items taken from the planner that wait for an endpoint, offered again most urgent first on
   // every step, so one busy or resting endpoint never holds back work another endpoint could do now (§14). At most
@@ -125,7 +175,7 @@ class Run {
   private parked: WorkItem[] = [];
   private readonly probing = new Set<EndpointState>();
   private readonly probes = new Map<EndpointState, number>();
-  private readonly pending = new Map<string, Pending>();
+  private readonly pending: Coalescer<CommitKey, WorkItem>;
   private readonly jobs: Job[] = [];
   private commitsInFlight = 0;
   private readonly globalCommitting = new Set<ScanId>();
@@ -144,6 +194,9 @@ class Run {
     this.keyed = new Set(deps.endpoints.filter(isKeyed).map((e) => e.label));
     this.bytes = new ByteBudget(this.o.inFlightReserve, this.o.responseCap, this.o.singleBlockCap);
     this.commitLogs = this.o.commitLogs;
+    this.isolate = deps.isolateCpu ?? new IsolateCpu();
+    this.cpu = this.isolate.meter({ rpcCpuMs: this.o.rpcCpuMs, dbCpuMs: this.o.dbCpuMs, bytesPerMs: this.o.bytesPerMs });
+    this.pending = new Coalescer(this.o.coalesceItems, this.o.coalesceMs);
   }
 
   private now() { return this.deps.now(); }
@@ -175,18 +228,52 @@ class Run {
 
   private sync<T>(fn: () => T): T {
     const t = this.deps.cpuNow();
-    try { return fn(); } finally { this.syncMs += Math.max(0, this.deps.cpuNow() - t); }
+    try { return fn(); } finally { this.cpu.syncMs += Math.max(0, this.deps.cpuNow() - t); }
   }
 
   private setStop(reason: string) { if (!this.stop) this.stop = reason; }
+
+  // A database call, counted for the CPU estimate (D21) when it is made.
+  private db(call: DbCall): HistoryDb {
+    this.cpu.db[call]++;
+    return this.deps.db;
+  }
+
+  // The CPU budget left for more reads: the budget less the isolate's estimate (its start, its requests, its earlier runs
+  // and this one), less what finishing this run still costs (cpu.ts finishReserveMs), less `extra` (the read about to be
+  // decided).
+  private cpuRoom(extra: Extra = {}): number {
+    let lookupReads = 0;
+    for (const l of this.lookups) lookupReads += Math.max(0, l.allowance - l.reads);
+    const reserve = finishReserveMs({
+      commits: this.pending.commits(this.commitLogs) + this.jobs.length,
+      pieces: this.piecesInFlight + (extra.pieces ?? 0),
+      bytes: this.bytes.inUse() + (extra.bytes ?? 0),
+      requests: extra.requests ?? 0,
+      lookupReads: lookupReads + (extra.lookupReads ?? 0),
+      lookups: this.lookups.size + (extra.lookups ?? 0),
+      commitLogs: this.commitLogs,
+    }, this.cpu.prices);
+    return this.o.cpuBudgetMs - this.isolate.spentMs() - reserve;
+  }
+
+  // Whether the CPU budget leaves room for more reads (and for `extra`). When it does not, the stop is "cpu": the read
+  // loop, the deferred probes and the first-transaction workers start nothing more (a lookup in progress finishes).
+  private cpuLeft(extra: Extra = {}): boolean {
+    if (this.cpuRoom(extra) > 0) return true;
+    this.setStop("cpu");
+    return false;
+  }
 
   // ── The run ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
   async go(): Promise<RunSummary> {
     const { deps, o } = this;
+    // The isolate has spent its CPU (earlier runs, the ticks it answered): no lease, nothing to log; a fresh isolate runs.
+    if (!isolateHasRoom(this.isolate, o)) return { v: 2, stop: "cpu" };
     let lease;
     try {
-      lease = await deps.db.lease(this.owner, o.leaseSeconds, deps.version);
+      lease = await this.db("lease").lease(this.owner, o.leaseSeconds, deps.version);
     } catch (err) {
       this.setStop("db");
       this.c.error(`lease: ${(err as Error)?.message ?? err}`);
@@ -237,7 +324,7 @@ class Run {
     this.readDeadline = this.deadline - o.readMarginMs;
     await deps.sleep(Math.floor(deps.random() * o.jitterMs));
 
-    const state = await deps.db.state(this.owner, o.maxWallets);
+    const state = await this.db("state").state(this.owner, o.maxWallets);
     this.lastRefresh = this.now();
     this.stateCursor = new Date(state.now).toISOString();
     this.wallets.active = state.active;
@@ -331,9 +418,12 @@ class Run {
   // One request through an endpoint's pace (waiting for it), with the outcome noted for pacing. A sidelined endpoint
   // sends nothing: the answer is "unanswered" and nothing is noted. `bypassCap`: past the run's in-flight cap (the
   // block-timestamp reads of a request that already holds a slot, which must never wait on the slots of others).
-  private async call(s: EndpointState, calls: Call[], maxBytes: number, bypassCap = false): Promise<Exchange> {
-    if (!(await this.paced(s, bypassCap))) return { kind: "unanswered", reason: "network", bytes: 0 };
+  // `lookup`: a first-transaction lookup's nonce read, counted against its reserved reads.
+  private async call(s: EndpointState, calls: Call[], maxBytes: number, bypassCap = false, lookup?: Lookup): Promise<Exchange> {
+    if (!(await this.paced(s, bypassCap, lookup))) return { kind: "unanswered", reason: "network", bytes: 0 };
+    if (lookup) lookup.reads++;
     this.c.requests[s.label] = (this.c.requests[s.label] ?? 0) + 1;
+    this.cpu.requests++;
     let ex: Exchange = { kind: "unanswered", reason: "network", bytes: 0 };
     try {
       ex = await this.send(s, calls, maxBytes);
@@ -346,10 +436,17 @@ class Run {
     return ex;
   }
 
-  // Waits for the endpoint's pace and a slot, then takes both (started, counted in flight); false: it is sidelined.
-  private async paced(s: EndpointState, bypassCap = false): Promise<boolean> {
+  // Waits for the endpoint's pace and a slot, then takes both (started, counted in flight); false: it is sidelined. A
+  // stop (the CPU budget's included: head reads, probes, nonce and block-timestamp reads) sends nothing more — but for
+  // a lookup in progress after a "cpu" stop, within the reads reserved for it (cpu.ts), until the run's finish cuts it.
+  private async paced(s: EndpointState, bypassCap = false, lookup?: Lookup): Promise<boolean> {
     for (;;) {
-      if (this.stop) throw new Stop(this.stop);
+      const reserved = lookup !== undefined && lookup.reads < lookup.allowance; // already in the reserve
+      if (!this.stop) this.cpuLeft(reserved ? {} : SMALL_READ);
+      if (this.stop && !(reserved && this.stop === "cpu" && !this.lookupsCut)) {
+        if (lookup) lookup.cut = true;
+        throw new Stop(this.stop);
+      }
       const now = this.now();
       if (s.sidelined(now)) return false;
       const at = s.nextStartAt(now);
@@ -360,7 +457,10 @@ class Run {
         this.requestsInFlight++;
         return true;
       }
-      if (now >= this.deadline) throw new Stop("deadline");
+      if (now >= this.deadline) {
+        if (lookup) lookup.cut = true;
+        throw new Stop("deadline");
+      }
       // A full in-flight cap frees when a request finishes (which wakes every waiter); a pace or a rest has a time.
       await this.wait(full || at === Number.POSITIVE_INFINITY ? 1_000 : Math.max(1, at - now));
     }
@@ -399,7 +499,10 @@ class Run {
       timeoutMs: this.o.requestTimeoutMs, maxBytes, bare: s.bare() && calls.length === 1, cpuNow: this.deps.cpuNow,
       setTimer: (ms, fn) => this.timer(ms, fn),
     });
-    if (ex.kind === "answered") { this.syncMs += ex.parseMs; this.parsedBytes += ex.bytes; }
+    // Every exchange's streamed bytes cost CPU (cpu.ts), answered or not: a tooLarge answer was streamed and inflated up
+    // to the cap. Only parsed ones count toward `maxParsedBytes`.
+    this.cpu.streamedBytes += ex.bytes;
+    if (ex.kind === "answered") { this.cpu.syncMs += ex.parseMs; this.parsedBytes += ex.bytes; }
     return ex;
   }
 
@@ -541,11 +644,14 @@ class Run {
       if (this.signal.shutdown) throw new Stop(`shutdown:${this.signal.shutdown}`.slice(0, 40));
       const now = this.now();
       if (now >= this.readDeadline) { this.setStop("deadline"); return; }
-      if (this.syncMs >= o.syncBudgetMs) { this.setStop("cpu"); return; }
+      if (this.cpu.syncMs >= o.syncBudgetMs) { this.setStop("cpu"); return; }
+      if (!this.cpuLeft()) return;
       if (this.parsedBytes >= o.maxParsedBytes || this.logsSeen >= o.maxLogs) { this.setStop("budget"); return; }
       await this.renewIfDue(false);
       await this.refreshIfDue();
       this.flushDue(now);
+      // Too many logs waiting: the largest coalesced fragment goes to the commits now rather than when it is full or old.
+      if (this.uncommitted > o.backpressureLogs && this.jobs.length === 0) { const f = this.pending.largest(); if (f) this.flush(f); }
       this.pumpCommits();
       if (this.uncommitted > o.backpressureLogs || this.jobs.length + this.commitsInFlight > o.backpressureCommits) {
         await this.wait(1_000);
@@ -554,7 +660,7 @@ class Run {
       this.startProbes();
       if (this.requestsInFlight >= o.maxInFlightTotal) { await this.wait(1_000); continue; }
       const step = this.step();
-      if (step === "sent") continue;
+      if (step === "sent" || step === "stop") continue;
       if (step === "idle") {
         if (this.requestsInFlight === 0 && !this.firstTxBusy && this.probing.size === 0) { this.setStop("done"); return; }
         await this.wait(1_000);
@@ -568,7 +674,7 @@ class Run {
   // One step of the read loop: top up the look-ahead from the planner, then send its most urgent item that an endpoint
   // can take now (items of a priority in the order the planner gave them: newest first). An item whose endpoints are
   // all busy or resting stays parked and the next one is tried — never a stall behind one endpoint (§14).
-  private step(): "sent" | "idle" | "bytes" | { waitUntil: number } {
+  private step(): "sent" | "stop" | "idle" | "bytes" | { waitUntil: number } {
     for (;;) {
       this.topUp();
       if (this.parked.length === 0) return "idle";
@@ -579,6 +685,8 @@ class Run {
         const pick = pickEndpoint(this.states, item, now, this.head!, this.readDeadline);
         if (pick === null) { this.unpark(item); this.unreadable(item); unreadable = true; continue; }
         if ("waitUntil" in pick) { wait = Math.min(wait, pick.waitUntil); continue; }
+        // The request, its pieces' commits and its bytes must fit the CPU budget too (cpu.ts): else the stop is "cpu".
+        if (!this.cpuLeft(this.dispatchShare(item, pick.state))) return "stop";
         const at = this.unpark(item);
         if (this.dispatch(item, pick.state, pick.upTo)) return "sent";
         this.parked.splice(at, 0, item); // no bytes for it now: it keeps its place
@@ -641,6 +749,12 @@ class Run {
   private responseCap(item: WorkItem, s: EndpointState): number {
     return item.single ? this.o.singleBlockCap : Math.min(s.endpoint.responseCap ?? this.o.responseCap, this.o.inFlightReserve);
   }
+  // What sending `item` on `s` adds to the CPU reserve at most: one request, a full batch of pieces, the bytes dispatch
+  // would reserve for it.
+  private dispatchShare(item: WorkItem, s: EndpointState): Extra {
+    return { requests: 1, pieces: item.alone || item.single ? 1 : s.currentBatch(),
+             bytes: this.bytes.reservation(this.byteKind(item, s), !!item.single, this.responseCap(item, s)) };
+  }
 
   // Cuts `item` to what `s` may read, fills a batch from the look-ahead, reserves bytes, and sends it (asynchronously).
   // False (and nothing changed) when the bytes cannot be reserved now.
@@ -687,13 +801,16 @@ class Run {
     const calls = this.sync(() => pieces.map((p) => ({ method: "eth_getLogs", params: [filterFor(this.defs.get(p.scan)!, p.from, p.to, p.wallets)] })));
     s.started(this.now());
     this.c.requests[s.label] = (this.c.requests[s.label] ?? 0) + 1;
+    this.cpu.requests++;
     this.requestsInFlight++;
+    this.piecesInFlight += pieces.length;
     let noted = false;
     this.send(s, calls, maxBytes)
       .then((ex) => { noted = true; return this.answered(s, pieces, ex); })
       .catch((err) => { if (!noted) s.finished(this.now(), { kind: "unanswered" }); this.fail(err); })
       .finally(() => {
         this.requestsInFlight--;
+        this.piecesInFlight -= pieces.length;
         this.bytes.release(reserved, !!first.single);
         this.wake();
       });
@@ -850,13 +967,13 @@ class Run {
     const global = GLOBAL_SCANS.includes(p.scan);
     try {
       if (global) {
-        await this.deps.db.markHole(this.owner, p.scan, p.defVersion, null, p.from, p.to);
+        await this.db("markHole").markHole(this.owner, p.scan, p.defVersion, null, p.from, p.to);
         planner.holed(p.scan, null, [p.from, p.to]);
         if (this.c.globalHoles.length < 20) this.c.globalHoles.push({ scan: p.scan, from: p.from, to: p.to });
         this.c.holesMarked++;
       } else {
         for (const w of p.wallets) {
-          await this.deps.db.markHole(this.owner, p.scan, p.defVersion, w, p.from, p.to);
+          await this.db("markHole").markHole(this.owner, p.scan, p.defVersion, w, p.from, p.to);
           planner.holed(p.scan, w, [p.from, p.to]);
           this.c.holesMarked++;
         }
@@ -893,41 +1010,27 @@ class Run {
     return `${p.scan}|${p.defVersion}|${[...p.wallets].sort().join(",")}`;
   }
 
+  // An answered piece joins the adjacent fragments of its key (coalesce.ts); a fragment full of pieces or logs goes to the
+  // commits at once, any other when it is `coalesceMs` old, under back-pressure, or at the end of the run.
   private coalesce(p: WorkItem, logs: CompactLog[]) {
-    const k = this.key(p);
-    const cur = this.pending.get(k);
-    if (cur && (p.to + 1 === cur.from || cur.to + 1 === p.from)) {
-      cur.from = Math.min(cur.from, p.from);
-      cur.to = Math.max(cur.to, p.to);
-      cur.logs = cur.logs.concat(logs);
-      cur.pieces++;
-      cur.items.push(p);
-    } else {
-      if (cur) this.flush(k);
-      const wallets = GLOBAL_SCANS.includes(p.scan) ? null : [...p.wallets].sort();
-      this.pending.set(k, { scan: p.scan, defVersion: p.defVersion, wallets, from: p.from, to: p.to, logs: [...logs], pieces: 1,
-                            firstAt: this.now(), items: [p] });
-    }
+    const meta: CommitKey = { scan: p.scan, defVersion: p.defVersion, wallets: GLOBAL_SCANS.includes(p.scan) ? null : [...p.wallets].sort() };
     this.uncommitted += logs.length;
-    const now = this.pending.get(k)!;
-    if (now.logs.length >= this.commitLogs || now.pieces >= this.o.coalesceItems) this.flush(k);
+    for (const f of this.pending.add(this.key(p), meta, p.from, p.to, logs, p, this.now(), this.commitLogs)) this.flush(f);
     this.pumpCommits();
   }
 
   private flushDue(now: number) {
-    for (const [k, p] of this.pending) if (now - p.firstAt >= this.o.coalesceMs) this.flush(k);
+    for (const f of this.pending.due(now)) this.flush(f);
   }
 
-  private flush(k: string) {
-    const p = this.pending.get(k);
-    if (!p) return;
-    this.pending.delete(k);
-    const sorted = p.logs.sort((a, b) => a.b - b.b || a.i - b.i);
-    const parts = splitForCommit(sorted, p.from, p.to, this.commitLogs);
-    const group = { remaining: parts.length, items: p.items };
+  // A fragment into commit jobs of ≤ commitLogs logs each, cut at block boundaries, together covering exactly its range.
+  private flush(f: Fragment<CommitKey, WorkItem>) {
+    const { scan, defVersion, wallets } = f.meta;
+    const sorted = f.logs.sort((a, b) => a.b - b.b || a.i - b.i);
+    const parts = splitForCommit(sorted, f.from, f.to, this.commitLogs);
+    const group = { remaining: parts.length, items: f.items };
     for (const part of parts.reverse()) {  // newest first
-      this.jobs.push({ scan: p.scan, defVersion: p.defVersion, wallets: p.wallets, from: part.from, to: part.to, logs: part.logs,
-                       slowRetried: false, retries: 0, group });
+      this.jobs.push({ scan, defVersion, wallets, from: part.from, to: part.to, logs: part.logs, slowRetried: false, retries: 0, group });
     }
   }
 
@@ -960,8 +1063,8 @@ class Run {
     const started = this.now();
     let done = true;
     try {
-      this.syncMs += compactBytes(job.logs) / 200_000; // the payload's JSON.stringify inside the client, at ~200 MB/s
-      const answer = await this.deps.db.commit(args);
+      this.cpu.syncMs += compactBytes(job.logs) / 200_000; // the payload's JSON.stringify inside the client, at ~200 MB/s
+      const answer = await this.db("commit").commit(args);
       this.commitTimes.push(this.now() - started);
       if (this.commitTimes.length > 50) this.commitTimes.shift();
       if (this.p95() > 2_000) this.readDeadline = Math.min(this.readDeadline, this.deadline - this.o.slowReadMarginMs);
@@ -1018,7 +1121,7 @@ class Run {
     const now = this.now();
     if (!final && now - this.lastRenew < this.o.renewMs) return;
     if (final && this.leaseUntil - now > 30_000) return;
-    const lease = await this.deps.db.lease(this.owner, this.o.leaseSeconds, this.deps.version);
+    const lease = await this.db("lease").lease(this.owner, this.o.leaseSeconds, this.deps.version);
     if (!lease.ok) throw new LeaseLost("the lease was taken", lease.paused);
     this.lastRenew = this.now();
     this.leaseUntil = this.lastRenew + this.o.leaseSeconds * 1_000;
@@ -1027,7 +1130,7 @@ class Run {
   private async refreshIfDue() {
     if (this.now() - this.lastRefresh < this.o.stateRefreshMs || !this.stateCursor) return;
     this.lastRefresh = this.now();
-    const fresh: IndexerState = await this.deps.db.state(this.owner, this.o.maxWallets, this.stateCursor);
+    const fresh: IndexerState = await this.db("state").state(this.owner, this.o.maxWallets, this.stateCursor);
     this.stateCursor = new Date(fresh.now).toISOString();
     if (fresh.wallets.length === 0) return;
     this.wallets.refreshed += fresh.wallets.length;
@@ -1040,10 +1143,25 @@ class Run {
   private firstTxQueue: WalletState[] = [];
   private firstTxActive = 0;
   private firstTxStarted = 0;
+  private firstTxDone = false;          // every worker has returned: no lookup starts any more this run
+  private readonly lookups = new Set<Lookup>();
+  private lookupsCut = false;           // the finish stopped waiting: a lookup in progress stops at its next read too
   private loopDone = false;
   // Wallets waiting for, or in, a first-transaction lookup this run (the read loop is not done while there are any).
   private get firstTxBusy(): boolean {
-    return this.firstTxActive > 0 || (this.firstTxQueue.length > 0 && this.firstTxStarted < this.o.firstTxPerRun);
+    return this.firstTxActive > 0 || (!this.firstTxDone && this.firstTxQueue.length > 0 && this.firstTxStarted < this.o.firstTxPerRun);
+  }
+
+  // The reads one lookup may make (reserved for it while it runs), and what that costs with its setFirstTx.
+  private lookupAllowance(): number { return lookupReads(this.head ?? 0); }
+  private lookupCostMs(): number { return this.lookupAllowance() * this.o.rpcCpuMs + this.o.dbCpuMs; }
+
+  // Whether one more lookup may start: the lookups of this run, each priced whole, stay within `firstTxCpuShare` of
+  // the budget, and the whole of it fits in what the budget has left (so it is never cut off half done).
+  private lookupFits(): boolean {
+    const cost = this.lookupCostMs();
+    if ((this.firstTxStarted + 1) * cost > this.o.firstTxCpuShare * this.o.cpuBudgetMs) return false;
+    return this.cpuRoom({ lookupReads: this.lookupAllowance(), lookups: 1 }) > 0;
   }
 
   private needsFirstTx(w: WalletState, now: number): boolean {
@@ -1060,12 +1178,14 @@ class Run {
     const workers: Promise<void>[] = [];
     for (let k = 0; k < this.o.firstTxConcurrency; k++) workers.push(this.firstTxLoop());
     await Promise.all(workers);
+    this.firstTxDone = true;
     this.wake();
   }
 
   private async firstTxLoop() {
     for (;;) {
-      if (this.stop || this.now() >= this.readDeadline || this.firstTxStarted >= this.o.firstTxPerRun) return;
+      if (this.stop || !this.cpuLeft() || this.now() >= this.readDeadline || this.firstTxStarted >= this.o.firstTxPerRun) return;
+      if (this.firstTxQueue.length > 0 && !this.lookupFits()) return; // its share spent, or no room for a whole one
       const w = this.firstTxQueue.shift();
       if (!w) {
         if (this.loopDone) return;
@@ -1074,13 +1194,16 @@ class Run {
       }
       this.firstTxStarted++;
       this.firstTxActive++;
+      const lookup: Lookup = { allowance: this.lookupAllowance(), reads: 0, cut: false };
+      this.lookups.add(lookup);
       try {
-        await this.firstTxOf(w);
+        await this.firstTxOf(w, lookup);
       } catch (err) {
-        if (err instanceof Stop) return;
+        if (err instanceof Stop) { this.c.firstTx.cut++; return; }
         if (err instanceof LeaseLost || err instanceof DefsChanged || err instanceof DbDown) { this.fail(err); return; }
         this.c.firstTx.failed++;
       } finally {
+        this.lookups.delete(lookup);
         this.firstTxActive--;
         this.wake();
       }
@@ -1089,13 +1212,13 @@ class Run {
 
   // The archive endpoints in the order nonce reads try them: the wide logs endpoints (span ≥ 10,000) last; one whose
   // log reads are off (its plan) still answers nonces, one whose daily budget is spent does not.
-  private nonceSources(wallet: string): NonceSource[] {
+  private nonceSources(wallet: string, lookup: Lookup): NonceSource[] {
     const archive = this.states.filter((s) => s.endpoint.archive && !s.sidelined(this.now()) && s.budgetAllows(this.now(), 0))
       .sort((a, b) => (a.endpoint.span >= 10_000 ? 1 : 0) - (b.endpoint.span >= 10_000 ? 1 : 0) || a.endpoint.priority - b.endpoint.priority);
     return archive.map((s) => ({
       label: s.label,
       nonceAt: async (block: number) => {
-        const ex = await this.call(s, [{ method: "eth_getTransactionCount", params: [wallet, hex(block)] }], 65_536);
+        const ex = await this.call(s, [{ method: "eth_getTransactionCount", params: [wallet, hex(block)] }], 65_536, false, lookup);
         if (ex.kind !== "answered" || !ex.results[0].ok) throw new Error("no nonce");
         const n = quantity(ex.results[0].result);
         if (n === null) throw new Error("malformed nonce");
@@ -1104,9 +1227,9 @@ class Run {
     }));
   }
 
-  private async firstTxOf(w: WalletState) {
+  private async firstTxOf(w: WalletState, lookup: Lookup) {
     const H = this.head!;
-    const sources = this.nonceSources(w.wallet);
+    const sources = this.nonceSources(w.wallet, lookup);
     if (sources.length === 0) return;
     const opts = { sleep: (ms: number) => this.deps.sleep(ms), pauseMs: this.o.firstTxPauseMs };
     const f = w.firstTx;
@@ -1115,22 +1238,22 @@ class Run {
       : await locateFirstTx(sources, H, f.state === "none" && f.head !== null && f.head < H ? { ...opts, zeroAt: f.head } : opts);
     switch (result.state) {
       case "found":
-        if (await this.deps.db.setFirstTx(this.owner, w.wallet, "found", result.block, H, result.source)) {
+        if (await this.db("setFirstTx").setFirstTx(this.owner, w.wallet, "found", result.block, H, result.source)) {
           this.c.firstTx.found++;
           if (result.movedEarlier) this.c.firstTx.movedEarlier++;
         }
         this.planner?.markDeep(w.wallet);
         break;
       case "same":
-        await this.deps.db.setFirstTx(this.owner, w.wallet, "found", f.block!, H, f.source ?? sources[0].label);
+        await this.db("setFirstTx").setFirstTx(this.owner, w.wallet, "found", f.block!, H, f.source ?? sources[0].label);
         this.c.firstTx.same++;
         break;
       case "none":
-        await this.deps.db.setFirstTx(this.owner, w.wallet, "none", null, H, sources[0].label);
+        await this.db("setFirstTx").setFirstTx(this.owner, w.wallet, "none", null, H, sources[0].label);
         this.c.firstTx.none++;
         break;
       case "unconfirmed": this.c.firstTx.unconfirmed++; break;
-      case "failed": this.c.firstTx.failed++; break;
+      case "failed": if (lookup.cut) this.c.firstTx.cut++; else this.c.firstTx.failed++; break; // cut: a stop refused its read
     }
   }
 
@@ -1141,12 +1264,18 @@ class Run {
     try {
       // No new reads: let the requests in flight answer (each has its own timeout), then commit what they brought.
       while (this.requestsInFlight > 0 && this.now() < this.deadline + this.o.requestTimeoutMs) await this.wait(1_000);
-      // The first-transaction workers stop at their next read once a stop is set; wait for them (bounded), so nothing
-      // of this run is written after its release.
+      // The first-transaction workers stop at their next read once a stop is set — after a "cpu" stop, a lookup in
+      // progress first finishes the reads reserved for it (up to a minute, within the deadline), and is then cut too.
+      // Wait for them (bounded), so nothing of this run is written after its release.
       if (!this.stop) this.stop = "done";
-      if (this.firstTxWorker) await Promise.race([this.firstTxWorker, this.deps.sleep(this.o.requestTimeoutMs)]);
+      if (this.firstTxWorker) {
+        const finishing = this.stop === "cpu" ? Math.min(60_000, this.deadline - this.now()) - this.o.requestTimeoutMs : 0;
+        if (finishing > 0 && !this.firstTxDone) await Promise.race([this.firstTxWorker, this.deps.sleep(finishing)]);
+        this.lookupsCut = true;
+        if (!this.firstTxDone) await Promise.race([this.firstTxWorker, this.deps.sleep(this.o.requestTimeoutMs)]);
+      }
       if (!this.stopsCommits() && this.planner) {
-        for (const k of [...this.pending.keys()]) this.flush(k);
+        for (const f of this.pending.drain()) this.flush(f);
         if (this.jobs.length > 0) await this.renewIfDue(true);
         this.pumpCommits();
         while ((this.jobs.length > 0 || this.commitsInFlight > 0) && !this.stopsCommits() && this.now() < this.deadline + 30_000) {
@@ -1161,10 +1290,11 @@ class Run {
     if (this.stop === "deadline" && this.planner && this.parked.length === 0 && this.planner.next(true) === null) this.stop = "done";
     const stop = this.stop ?? "done";
     deps.onRelease?.(stop);
+    const db = this.db("release"); // counted before the summary, so the summary's estimate includes it
     const summary = this.redacted(this.summary());
     this.final = summary;
     try {
-      await deps.db.release(this.owner, this.head, this.headTimestamp, summary,
+      await db.release(this.owner, this.head, this.headTimestamp, summary,
                             Object.fromEntries(this.states.map((s) => [s.label, s.memory(this.now())])), stop);
     } catch (err) {
       this.c.error(`release: ${(err as Error).message}`);
@@ -1181,9 +1311,11 @@ class Run {
     const r429: Record<string, number> = {}, usedToday: Record<string, number> = {};
     for (const s of this.states) { r429[s.label] = Math.round(s.ratio429() * 10_000) / 10_000; usedToday[s.label] = s.usedToday(now); }
     return {
-      v: 2, version: this.deps.version, head: this.head, ms: now - this.started, syncMs: Math.round(this.syncMs),
+      v: 2, version: this.deps.version, head: this.head, ms: now - this.started, syncMs: Math.round(this.cpu.syncMs),
+      cpuEstimateMs: Math.round(this.cpu.estimateMs()), cpuIsolateMs: Math.round(this.isolate.spentMs()),
       stop: this.stop ?? "done", align: this.align || this.o.plan.align,
       counts: {
+        db: { ...this.cpu.db }, bytes: { streamed: this.cpu.streamedBytes, parsed: this.parsedBytes },
         requests: c.requests, throttled: c.throttled, refused: c.refused, sidelined: c.sidelined, r429, usedToday,
         failed: c.failed, invalid: c.invalid, dense: c.dense,
         timeouts: c.timeouts, pastHead: c.pastHead, straddleWaits: c.straddleWaits, dropped: c.dropped,
