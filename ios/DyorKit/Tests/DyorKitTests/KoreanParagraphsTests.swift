@@ -119,6 +119,42 @@ final class KoreanParagraphsTests: XCTestCase {
         XCTAssertTrue(sheet.contains("Label { Paragraph(verbatim: message) } icon: { Image(systemName: \"exclamationmark.triangle.fill\") }"))
     }
 
+    /// Close Position, Add Margin and Cancel Order sent over the trading connection wrap by word in Korean too (p4 spec §9.3,
+    /// I28): their failure, sending and waiting lines are paragraphs, their results go through the outcome views, and no line
+    /// is a label with a `String` or `Text` title, or held to a line limit or a scale factor.
+    func testTheAPIActionSheetsWrapByWord() throws {
+        let trade = try DocsLinksTests.appSource("Perps/PerpTradeView.swift")
+        func slice(_ text: String, from start: String, to end: String) throws -> String {
+            let from = try XCTUnwrap(text.range(of: start), start)
+            let to = try XCTUnwrap(text.range(of: end, range: from.upperBound..<text.endIndex), end)
+            return String(text[from.lowerBound..<to.lowerBound])
+        }
+        let stringTitle = #"(?<![\w.])Label\(\s*(Text\(|"|[a-z]\w*\s*,)"#
+        let close = try slice(trade, from: "struct ClosePositionSheet: View {", to: "struct AddMarginSheet: View {")
+        let margin = try slice(trade, from: "struct AddMarginSheet: View {", to: "struct AuthedOrderSheet: View {")
+        for (name, sheet) in [("ClosePositionSheet", close), ("AddMarginSheet", margin)] {
+            XCTAssertTrue(sheet.contains("Paragraph(verbatim: failureLine)"), name)
+            XCTAssertTrue(sheet.contains("Paragraph(verbatim: PerpOrderCopy.sending)"), name)
+            XCTAssertTrue(sheet.contains("PerpOrderStatusBar("), name)
+            XCTAssertTrue(sheet.contains("PerpOrderOutcomeSection("), name)
+            XCTAssertNil(sheet.range(of: stringTitle, options: .regularExpression), "\(name): no label with a String or Text title")
+            XCTAssertFalse(sheet.contains("Label(message, systemImage:"), name)
+            XCTAssertFalse(sheet.contains("Text(failureLine") || sheet.contains("Text(verbatim: failureLine"), name)
+            XCTAssertFalse(sheet.contains(".lineLimit("), "\(name): no line limit")
+            XCTAssertFalse(sheet.contains(".minimumScaleFactor("), "\(name): no scale factor")
+        }
+        XCTAssertTrue(margin.contains("Paragraph(verbatim: PerpActionCopy.marginCanClose)"))
+        XCTAssertTrue(close.contains("Paragraph(verbatim: perplTrading.nothingSentLine(for: route))"), "the wallet's line after a refusal for forwarding")
+
+        let sheets = try DocsLinksTests.appSource("Perps/PerpTriggerSheets.swift")
+        let cancel = try slice(sheets, from: "struct CancelOrderSheet: View {", to: "private struct CancelTriggerRow: View {")
+        XCTAssertTrue(cancel.contains("Paragraph(verbatim: failureLine)"))
+        XCTAssertTrue(cancel.contains("Label { Paragraph(verbatim: line.text) }"))
+        XCTAssertNil(cancel.range(of: stringTitle, options: .regularExpression), "no label with a String or Text title")
+        XCTAssertFalse(cancel.contains("Text(failureLine") || cancel.contains("Text(verbatim: failureLine") || cancel.contains("Text(verbatim: line.text"))
+        XCTAssertFalse(cancel.contains(".lineLimit(") || cancel.contains(".minimumScaleFactor("))
+    }
+
     /// The TP/SL sheets' outcome and progress lines, and the Orders tab's TP/SL warnings, wrap by word in Korean (real-time
     /// spec I28): a paragraph in a label made for one, never a label with a `String` title.
     func testTheTPSLLinesWrapByWord() throws {

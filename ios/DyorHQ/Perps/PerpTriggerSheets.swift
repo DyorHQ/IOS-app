@@ -345,6 +345,9 @@ struct CancelTriggersSheet: View {
     @State private var failure: String?
     /// Bumped as each wait ends, for its haptic.
     @State private var waits = 0
+    #if DEBUG && targetEnvironment(simulator)
+    @Environment(\.perpsDemoAutoConfirm) private var demoAutoConfirm
+    #endif
 
     /// A row's state: ready to cancel, its cancel on its way, or what Perpl's live list showed of it.
     enum RowState: Equatable {
@@ -456,6 +459,15 @@ struct CancelTriggersSheet: View {
         .presentationDetents([.medium, .large])
         .presentationBackground(Color(.systemGroupedBackground))
         .sensoryFeedback(trigger: waits) { _, _ in feedback }
+        #if DEBUG && targetEnvironment(simulator)
+        // The scripted Perps demo only (`PerpsDemo`): with Run, this sheet's own confirm 2 s after it appears (App Lock
+        // still asks).
+        .task {
+            guard perplTrading.isDemo, let demoAutoConfirm else { return }
+            try? await Task.sleep(for: demoAutoConfirm)
+            if !sent, !busy { await apply() }
+        }
+        #endif
     }
 
     private func close() {
@@ -518,6 +530,295 @@ struct CancelTriggersSheet: View {
             settled = wasSettled
             failure = describe(error)
             busy = false
+        }
+    }
+}
+
+/// Cancels a resting order over the trading connection (p4 spec A.4.2), when one-click is live for the account at the tap
+/// and Perpl's live list names the chain's order by its smart contract order id. Its row says, as it happens, what Perpl
+/// did with the cancel: cancelling, then cancelled once it has left Perpl's live list — or still live (Perpl refused it),
+/// filled or expired first, already gone, or not confirmed in time. Nothing reads as cancelled before Perpl's list shows
+/// it. Once the cancel is out the sheet can be closed: PerplTrading finishes the wait, and records a confirmed cancel.
+struct CancelOrderSheet: View {
+    let market: PerpMarket
+    /// The order as the chain lists it: its words.
+    let order: PerpOrder
+    /// The stream's order the tap matched (by `scid`), the request it belonged to then, and the account: fixed at the tap.
+    let target: PerplOpenOrder
+    let tapRq: Int?
+    let account: PerplTrading.ActionAccount
+    let onDone: () -> Void
+
+    @Environment(PerplTrading.self) private var perplTrading
+    @Environment(AppSettings.self) private var settings
+    @Environment(Session.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    @State private var apiPhase: APIPhase = .review
+    /// The one line under a not-sent failure, or under a refusal at the gateway (nil: refused on the device).
+    @State private var failureLine: String?
+    /// The acks are in: the sheet can be closed while Perpl's list confirms the cancel.
+    @State private var sent = false
+    /// The wait for Perpl's list is over.
+    @State private var settled = false
+    @State private var announced: String?
+    #if DEBUG && targetEnvironment(simulator)
+    @Environment(\.perpsDemoAutoConfirm) private var demoAutoConfirm
+    #endif
+
+    enum APIPhase: Equatable {
+        case review, authorizing, cancelling
+        case result(PerplCancelResult)
+        case failed(String)
+        var isFailed: Bool { if case .failed = self { return true }; return false }
+    }
+
+    /// "Buy 0.001 at 78,000": the same words as the wallet's cancel sheet.
+    private var what: String {
+        let size = NumberStyle.number(order.size)
+        let price = NumberStyle.number(order.price)
+        return order.side == .buy ? tr("Buy \(size) at \(price)") : tr("Sell \(size) at \(price)")
+    }
+
+    private var result: PerplCancelResult? { if case .result(let result) = apiPhase { return result }; return nil }
+
+    /// Try Again only after the wait, only when the cancel was refused or not confirmed, and only while Perpl's live list
+    /// still has the order — never one that left it. Not after the gateway refused it (`failureLine`): the trading route
+    /// rests on this socket, and the reopened sheet sends it from the wallet.
+    private var canRetry: Bool {
+        guard settled, failureLine == nil, perplTrading.ordersAreLive, perplTrading.openOrders.contains(where: { $0.id == target.id }) else { return false }
+        switch result {
+        case .refused?, .notConfirmed?: return true
+        default: return false
+        }
+    }
+
+    /// What the cancel's result says, as a whole sentence.
+    private var line: TriggerSheetLine? {
+        switch result {
+        case .cancelled?: return TriggerSheetLine(text: PerpActionCopy.orderWasCancelled, tone: .success)
+        case .refused(let why)?:
+            // Perpl's generic "couldn't cancel it" would say it twice.
+            let text = why == PerplOrderReason(status: 7, reason: 45).message ? PerpActionCopy.orderCouldntCancelGeneric : PerpActionCopy.orderCouldntCancel(why)
+            return TriggerSheetLine(text: text, tone: .failure)
+        case .firedFirst?: return TriggerSheetLine(text: PerpActionCopy.orderFilledBeforeCancel, tone: .warning)
+        case .expiredFirst?: return TriggerSheetLine(text: PerpActionCopy.orderHadExpired, tone: .neutral)
+        case .alreadyGone?: return TriggerSheetLine(text: PerpActionCopy.orderWasAlreadyGone, tone: .neutral)
+        case .notConfirmed?: return settled ? TriggerSheetLine(text: PerpActionCopy.orderCancelNotConfirmed, tone: .warning) : nil
+        case nil: return nil
+        }
+    }
+
+    /// The result, felt: cancelled a success, still live an error, anything else a warning.
+    private var feedback: SensoryFeedback? {
+        switch result {
+        case .cancelled?: return .success
+        case .refused?: return .error
+        case .firedFirst?, .expiredFirst?, .alreadyGone?: return .warning
+        case .notConfirmed?: return settled ? .warning : nil
+        case nil: return nil
+        }
+    }
+
+    // A Moment link waits while this review is on screen (RootView's link gate).
+    var body: some View { reviewContent.holdsMomentLinks() }
+
+    @ViewBuilder private var reviewContent: some View {
+        NavigationStack {
+            List {
+                Section {
+                    DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: order.symbol))
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Order").foregroundStyle(.secondary)
+                            Text(verbatim: what).monospacedDigit()
+                        }
+                        .opacity(apiPhase == .cancelling ? 0.5 : 1)
+                        Spacer(minLength: 8)
+                        rowState.font(.footnote.weight(.semibold)).multilineTextAlignment(.trailing)
+                    }
+                    .font(.subheadline)
+                    .accessibilityElement(children: .combine)
+                } footer: {
+                    Paragraph("Signed and forwarded by your Perpl API key over the trading connection.")
+                }
+                if session.isPasskeyAccount, apiPhase == .review || apiPhase.isFailed || canRetry {
+                    Section { SessionScopeBadge(assessment: .faceID(Mera.AlwaysAsk.cancelOrder.summary)) }
+                }
+                if let line {
+                    Section {
+                        Label { Paragraph(verbatim: line.text) } icon: {
+                            Image(systemName: PerpOutcomeTone.symbol(line.tone)).foregroundStyle(PerpOutcomeTone.color(line.tone))
+                        }
+                        .modifier(ParagraphLabel())
+                        .font(.footnote)
+                        // A refusal at the gateway: nothing was forwarded, and the reopened sheet says how it will be sent.
+                        if let failureLine, case .refused? = result { Paragraph(verbatim: failureLine).font(.footnote).foregroundStyle(.secondary) }
+                    }
+                }
+                if canRetry {
+                    Section {
+                        Button("Try Again") { confirm() }.buttonStyle(.bordered)
+                    }
+                    .listRowBackground(Color.clear)
+                }
+                if case .failed(let message) = apiPhase {
+                    Section {
+                        InlineError(message: message)
+                        if let failureLine { Paragraph(verbatim: failureLine).font(.footnote).foregroundStyle(.secondary) }
+                    }
+                    .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle(tr("Cancel Order"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(settled ? "Done" : "Close") { close() }.disabled(apiPhase == .authorizing || (apiPhase == .cancelling && !sent))
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if apiPhase == .review || apiPhase.isFailed || apiPhase == .authorizing {
+                    if !session.canSign {
+                        Paragraph(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            .padding().frame(maxWidth: .infinity).background(.bar)
+                    } else {
+                        PrimaryButton(title: session.isPasskeyAccount ? "Confirm with \(BiometricGate.promptName)" : "Cancel Order", isBusy: apiPhase == .authorizing,
+                                      foreground: .onStatus) {
+                            confirm()
+                        }
+                        .tint(.negative)
+                        .padding().frame(maxWidth: .infinity).background(.bar)
+                    }
+                }
+            }
+            .interactiveDismissDisabled(apiPhase == .authorizing || (apiPhase == .cancelling && !sent))
+            // A cancel Perpl's list confirms flips its row at once, before the wait ends (the sending socket's list only, I9).
+            .onChange(of: perplTrading.openOrders) { _, _ in
+                guard apiPhase == .cancelling, let confirmed = perplTrading.cancelLiveResult(target.id) else { return }
+                withAnimation { apiPhase = .result(confirmed) }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(Color(.systemGroupedBackground))
+        .sensoryFeedback(trigger: line?.text) { _, _ in feedback }
+        .onChange(of: line?.text) { _, text in
+            guard let text, text != announced else { return }
+            announced = text
+            AccessibilityNotification.Announcement(text).post()
+        }
+        #if DEBUG && targetEnvironment(simulator)
+        // The scripted Perps demo only (`PerpsDemo`): with Run, this sheet's own confirm 2 s after it appears (App Lock
+        // still asks).
+        .task {
+            guard perplTrading.isDemo, let demoAutoConfirm else { return }
+            try? await Task.sleep(for: demoAutoConfirm)
+            confirm()
+        }
+        #endif
+    }
+
+    /// The row's state, in words, with an icon that says the same (each agreeing with "order").
+    @ViewBuilder private var rowState: some View {
+        switch apiPhase {
+        case .review, .authorizing, .failed:
+            EmptyView()
+        case .cancelling:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text(verbatim: PerpTriggerCopy.rowCancelling)
+            }
+            .foregroundStyle(.secondary)
+        case .result(let result):
+            switch result {
+            case .cancelled:
+                Label { Text(verbatim: PerpActionCopy.orderCancelled) } icon: { Image(systemName: "checkmark.circle.fill") }.foregroundStyle(Color.positive)
+            case .refused:
+                Label { Text(verbatim: PerpActionCopy.orderStillLive) } icon: { Image(systemName: "exclamationmark.triangle.fill") }.foregroundStyle(Color.negative)
+            case .firedFirst:
+                Label { Text(verbatim: PerpActionCopy.orderFilledFirst) } icon: { Image(systemName: "bolt.fill") }.foregroundStyle(Color.attention)
+            case .expiredFirst:
+                Text(verbatim: PerpActionCopy.orderExpiredFirst).foregroundStyle(.secondary)
+            case .alreadyGone:
+                Text(verbatim: PerpActionCopy.orderAlreadyGone).foregroundStyle(.secondary)
+            case .notConfirmed:
+                if settled {
+                    Label { Text(verbatim: PerpActionCopy.orderNotConfirmed) } icon: { Image(systemName: "questionmark.circle") }.foregroundStyle(Color.attention)
+                } else {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text(verbatim: PerpTriggerCopy.rowCancelling)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func close() {
+        dismiss()
+        if sent { onDone() }
+    }
+
+    /// The confirm (A.3.1), Try Again included: ignored unless nothing is under way, and busy at once, before the App Lock
+    /// prompt — a double tap can never send a second cancel.
+    private func confirm() {
+        guard apiPhase == .review || apiPhase.isFailed || canRetry else { return }
+        apiPhase = .authorizing
+        failureLine = nil
+        settled = false
+        Task { await cancel() }
+    }
+
+    /// App Lock as the wallet's cancel sheet asks it (it fails closed without a device passcode), then a passkey account's
+    /// step-up — every run asks again (MERA-PLAN §3) — then PerplTrading sends the cancel and follows it to Perpl's list.
+    private func cancel(approval: MeraSession.StepUp? = nil) async {
+        if approval == nil, settings.appLockApplies(to: session.account) {
+            guard BiometricGate.canAuthenticateOwner else {
+                apiPhase = .failed(tr("App Lock needs a device passcode. Set one in iOS Settings, then try again."))
+                return
+            }
+            // The wallet's cancel sheet's own prompt: "Confirm Cancel Order".
+            let action = tr("Cancel Order")
+            guard await BiometricGate.authenticate(reason: "Confirm \(action)") else { apiPhase = .review; return }
+        }
+        apiPhase = .cancelling
+        do {
+            let outcome = try await perplTrading.cancelResting(target, tapRq: tapRq, chainOrder: PerplTrading.ChainOrderKey(order), account: account,
+                                                               title: tr("Cancelled \(order.symbol) order"), subtitle: what, approval: approval) { acks in
+                // The cancel is out: the sheet can be closed while Perpl's list confirms it.
+                sent = true
+                if let decided = acks[target.id] {
+                    // The gateway refused it: nothing was forwarded (the route already rests on this socket: the wallet's line).
+                    if decided != .notConfirmed { failureLine = perplTrading.nothingSentLine(for: account) }
+                    withAnimation { apiPhase = .result(decided) }
+                }
+                // Perpl's list may have confirmed it already, before its ack was in.
+                if let confirmed = perplTrading.cancelLiveResult(target.id) { withAnimation { apiPhase = .result(confirmed) } }
+            }
+            sent = true
+            // Perpl refused it because one-click is off on Perpl (OrderForwardingNotAllowed): no Try Again on this route, the
+            // reopened sheet sends it from the wallet.
+            if case .refused = outcome, perplTrading.cancelRefusedForForwarding(target.id) { failureLine = perplTrading.nothingSentLine(for: account) }
+            withAnimation { apiPhase = .result(outcome) }
+            settled = true
+        } catch is MeraSession.StepUpRequired where approval == nil {
+            do {
+                let approval = try await session.mera.stepUp()
+                await cancel(approval: approval)
+            } catch where isUserCancellation(error) {
+                failureLine = perplTrading.nothingSentLine(for: account)
+                apiPhase = .failed(tr("Nothing was cancelled."))
+            } catch {
+                failureLine = perplTrading.nothingSentLine(for: account)
+                apiPhase = .failed(describe(error))
+            }
+        } catch {
+            // Nothing was sent. Refused on the device, or Perpl's list isn't there yet to check the order against: the message
+            // says why and what to do, and nothing else needs saying.
+            let onDevice = (error as? PerplTradeError)?.isInvalidOrder == true || error is PerplTrading.OrdersNotChecked
+            failureLine = onDevice ? nil : perplTrading.nothingSentLine(for: account)
+            apiPhase = .failed(describe(error))
         }
     }
 }

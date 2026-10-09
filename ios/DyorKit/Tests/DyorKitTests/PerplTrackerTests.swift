@@ -436,6 +436,39 @@ final class PerplTrackerTests: XCTestCase {
         XCTAssertEqual(read.takeProfit?.armedWithoutPosition, false)
     }
 
+    /// A close from the position's Close sheet (p4 spec A.4.1) is stored with its purpose, a record stored before it
+    /// existed reads as a ticket order, and its result is decided exactly as a reduce-only order's: no expected growth, the
+    /// noted close voided when nothing executed.
+    func testACloseIsTrackedAsAReduceOnlyOrderWithItsPurpose() throws {
+        var close = order(expectedGrowth: nil, closes: .long, reduceOnly: true)
+        close.purpose = .close(wholePosition: true)
+        XCTAssertTrue(close.isClose)
+        XCTAssertEqual(try JSONDecoder().decode(PerplTrackedOrder.self, from: JSONEncoder().encode(close)), close)
+        var partial = close
+        partial.purpose = .close(wholePosition: false)
+        XCTAssertEqual(try JSONDecoder().decode(PerplTrackedOrder.self, from: JSONEncoder().encode(partial)).purpose, .close(wholePosition: false))
+
+        var legacy = try XCTUnwrap(try JSONSerialization.jsonObject(with: JSONEncoder().encode(close)) as? [String: Any])
+        legacy["purpose"] = nil
+        let read = try JSONDecoder().decode(PerplTrackedOrder.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(read.purpose)
+        XCTAssertFalse(read.isClose)
+
+        for outcome: PerplOrderOutcome in [.filled(fill(100)), .partlyFilled(fill(40), rest: .cancelled(reason(16))), .notFilled(reason(16)),
+                                           .failed(reason(44, status: 7, fr: 6)), .resting(orderId: 90), .unconfirmed(.timedOut)] {
+            var asClose = close
+            var asReduceOnly = order(expectedGrowth: nil, closes: .long, reduceOnly: true)
+            let closeEffects = PerplTracker.settleEntry(&asClose, outcome, now: now, notify: true, appActive: true, watcherAnnouncedSinceSent: false)
+            let reduceEffects = PerplTracker.settleEntry(&asReduceOnly, outcome, now: now, notify: true, appActive: true, watcherAnnouncedSinceSent: false)
+            XCTAssertEqual(closeEffects, reduceEffects, "\(outcome)")
+        }
+        var nothing = close
+        XCTAssertTrue(PerplTracker.settleEntry(&nothing, .notFilled(reason(16)), now: now, notify: true, appActive: true, watcherAnnouncedSinceSent: false)
+                        .contains(.voidUserClose))
+        // Its result is said of the position.
+        XCTAssertEqual(PerplOutcomeText.close(.notFilled(reason(16)), close.textContext).headline, PerplOutcomeText.notClosedHeadline)
+    }
+
     // MARK: 5b Finality, attribution and correction
 
     /// A decided result is final: a lagging history or a late report never replaces a fill (no refund, no voided close,

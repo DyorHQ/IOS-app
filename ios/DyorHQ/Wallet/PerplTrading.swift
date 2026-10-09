@@ -86,18 +86,32 @@ final class PerplTrading: MeraSessionLifecycle {
     /// The highest request id this device wrote per Perpl account (persisted, not a secret): every new socket starts
     /// above it, so an order never reuses the id of one the previous socket sent that Perpl hasn't forwarded yet.
     private let requestIds = PerplRequestIdStore()
-    /// The owner's rollout switch for showing Perpl's real order outcome (`RemoteFlags.perpsLiveOutcome`), set by
-    /// `AppEnvironment.apply`. Off: today's one-click sheet. Read once, at the tap that sends an order. A DEBUG build run
-    /// with `-perpsLiveOutcome YES` forces it on for simulator QA.
-    @ObservationIgnored var liveOutcomes = PerplTrading.debugForcesLiveOutcomes {
-        didSet { if Self.debugForcesLiveOutcomes { liveOutcomes = true } }
+    /// The owner's kill switch for showing Perpl's real order outcome (`RemoteFlags.perpsLiveOutcome`, on unless the row
+    /// says JSON `false`), set by `AppEnvironment.apply`. Off: today's acknowledgement sheet (`placeLegacy`), and Close /
+    /// Add Margin / Cancel Order go on-chain. Read once, at the tap that sends an order or opens a sheet: a request
+    /// already sent keeps the mode of its tap. Until a check of this launch reads the row, the last values read
+    /// (`PerpsSwitchStore`) decide, so an OFF the owner engaged survives a relaunch or an offline start; with none
+    /// stored, it is on. A DEBUG build run with `-perpsLiveOutcome YES|NO` forces it for simulator QA.
+    @ObservationIgnored var liveOutcomes = PerplTrading.debugSwitch("perpsLiveOutcome") ?? PerpsSwitchStore.last?.perpsLiveOutcome ?? RemoteFlags.on.perpsLiveOutcome {
+        didSet { if let forced = Self.debugSwitch("perpsLiveOutcome"), liveOutcomes != forced { liveOutcomes = forced } }
     }
 
-    private static var debugForcesLiveOutcomes: Bool {
+    /// The owner's kill switch for Close / Add Margin / Cancel Order over the trading connection
+    /// (`RemoteFlags.perpsApiActions`, on unless the row says JSON `false`), set by `AppEnvironment.apply`. Off: they go
+    /// on-chain, as before; the order sheet is unaffected. Read at the tap that opens the sheet: a request already sent
+    /// keeps the path of its tap. Restored from `PerpsSwitchStore` like `liveOutcomes`. A DEBUG build run with
+    /// `-perpsApiActions YES|NO` forces it for simulator QA.
+    @ObservationIgnored var apiActions = PerplTrading.debugSwitch("perpsApiActions") ?? PerpsSwitchStore.last?.perpsApiActions ?? RemoteFlags.on.perpsApiActions {
+        didSet { if let forced = Self.debugSwitch("perpsApiActions"), apiActions != forced { apiActions = forced } }
+    }
+
+    /// DEBUG builds only: `-perpsLiveOutcome YES|NO` / `-perpsApiActions YES|NO` force a switch for simulator QA; absent,
+    /// the row (or its last persisted value) decides. Always nil in Release.
+    private static func debugSwitch(_ name: String) -> Bool? {
         #if DEBUG
-        UserDefaults.standard.bool(forKey: "perpsLiveOutcome") // not localized: a launch argument's name
+        UserDefaults.standard.object(forKey: name) == nil ? nil : UserDefaults.standard.bool(forKey: name)
         #else
-        false
+        nil
         #endif
     }
 
@@ -200,8 +214,9 @@ final class PerplTrading: MeraSessionLifecycle {
     }
 
     var isReady: Bool { status == .connected }
-    /// A key is enrolled for this wallet: loaded, or — for a passkey account whose session is locked — its token only.
-    var isEnrolled: Bool { key != nil || storedToken != nil }
+    /// A key is enrolled for this wallet: loaded, or — for a passkey account whose session is locked — its token only. (The
+    /// DEBUG scripted demo's session, which has neither, stands for an enrolled one: `demoSession`.)
+    var isEnrolled: Bool { key != nil || storedToken != nil || demoSession }
     /// The signed-in account id from the trading WS (same value the on-chain account reports).
     var accountId: Int? { client?.accountId }
     /// The most recent failure, for callers that need to say why an authenticated action couldn't run.
@@ -212,6 +227,8 @@ final class PerplTrading: MeraSessionLifecycle {
     /// `openOrders` is Perpl's current, complete list: the socket is signed in (one-click on or not) and has sent its
     /// open-orders snapshot. Otherwise the TP/SL on screen can't be verified (security audit GT-3).
     var ordersAreLive: Bool { client?.signedIn == true && client?.hasOrdersSnapshot == true }
+    /// The request an order on the live socket's list belongs to (its own report named it), or nil.
+    func requestId(for key: PerplOpenOrder.Key) -> Int? { client?.requestId(for: key) }
     /// The account's open positions as the live trading socket reports them — the position id a TP/SL links to.
     /// Empty when the socket isn't live, or before its positions snapshot.
     var livePositions: [PerplLivePosition] { client?.hasPositionsSnapshot == true ? client?.positions ?? [] : [] }
@@ -238,6 +255,9 @@ final class PerplTrading: MeraSessionLifecycle {
             boundToPasskey = passkey
             keyRejected = false
             forwardingGrantedOnChain = false
+            // A refusal of the trading route belongs to the account it was for.
+            apiBlocked = nil
+            lastSignedInAt = .distantPast
             resetProtection()
             resetRetry()
         }
@@ -490,6 +510,34 @@ final class PerplTrading: MeraSessionLifecycle {
         status = .connecting
         startCensusLog()
         let client = PerplTradeClient(key: key, chainId: Monad.chainId)
+        wire(client)
+        self.client = client
+        do {
+            try await client.connect()
+            // Disconnected while signing in (a wallet change, or a passkey session that ended): the catch below closes
+            // this socket too, rather than leaving it signed in with nobody holding it.
+            guard self.client === client else { throw PerplTradeError.notSignedIn }
+            keyRejected = false
+            resetRetry()
+            // A new socket: a refusal of the trading route recorded before it no longer stands (`apiRefusedSinceSignIn`).
+            lastSignedInAt = Date()
+            syncStatus()
+        } catch {
+            client.disconnect()
+            // Report only if this attempt is still current — a deliberate disconnect() or a newer connect has already
+            // moved status on, and a stale failure must not overwrite it.
+            guard self.client === client else { throw error }
+            self.client = nil
+            noteFailure(client.lastClose)
+            status = .failed(describe(error))
+            throw error
+        }
+    }
+
+    /// Hands the client's reports to this session: status, the device's request-id high-water mark, the open orders, the
+    /// snapshots' clean-up and reconcile, order outcomes, reloads, TP/SL events and the drop. Every callback checks what it
+    /// must of the client it came from, so a superseded or draining socket never touches the live one's state.
+    private func wire(_ client: PerplTradeClient) {
         // Both callbacks check the client is still the current one, so a superseded socket can't touch status.
         client.onAccountUpdate = { [weak self, weak client] in
             guard let self, let client else { return }
@@ -556,25 +604,6 @@ final class PerplTrading: MeraSessionLifecycle {
             guard let self, let client, self.client === client else { return }
             self.socketDropped(client.lastClose)
         }
-        self.client = client
-        do {
-            try await client.connect()
-            // Disconnected while signing in (a wallet change, or a passkey session that ended): the catch below closes
-            // this socket too, rather than leaving it signed in with nobody holding it.
-            guard self.client === client else { throw PerplTradeError.notSignedIn }
-            keyRejected = false
-            resetRetry()
-            syncStatus()
-        } catch {
-            client.disconnect()
-            // Report only if this attempt is still current — a deliberate disconnect() or a newer connect has already
-            // moved status on, and a stale failure must not overwrite it.
-            guard self.client === client else { throw error }
-            self.client = nil
-            noteFailure(client.lastClose)
-            status = .failed(describe(error))
-            throw error
-        }
     }
 
     /// Derives `status` from the live client's signed-in + forwarding state. Idempotent; safe to call repeatedly.
@@ -586,6 +615,10 @@ final class PerplTrading: MeraSessionLifecycle {
     private func syncStatus() {
         guard let client else { return }
         if client.signedIn {
+            // What this socket itself reports (never the on-chain grant, which can run ahead of the `fw` echo): a locked
+            // passkey account's Close / Add Margin may go over the trading connection after its step-up only when it was on.
+            // Never the scripted demo's (DEBUG): its account is no one's.
+            if let id = client.accountId, !demoSession { PerplForwardingMemory.record(client.forwardingEnabled, chainId: Monad.chainId, accountId: id) }
             // Forwarding is on if the WS says so OR we confirmed the on-chain grant this session (the WS can lag it).
             status = (client.forwardingEnabled || forwardingGrantedOnChain) ? .connected : .needsForwarding
         } else if status != .connecting {
@@ -687,7 +720,8 @@ final class PerplTrading: MeraSessionLifecycle {
             frames.append(PerplOrders.stopLoss(side: input.side, price: stopLoss, size: input.size, market: input.market, accountId: accountId, linkedPositionId: nil))
         }
         // The entry's id is reserved here, with no `await` before its write (`place` below): the triggers link to it with
-        // `tr` and get their own ids as they are written, so ids rise in write order.
+        // `tr` and get their own ids as they are written, so ids rise in write order. `tr`, never a later re-link to the
+        // position (`lp`): see the reasons at the same step in `submitBracket`.
         let entryRq = client.reserveRequestId()
         frames[0].requestId = entryRq
         for index in frames.indices.dropFirst() { frames[index].linkedRequestId = entryRq }
@@ -695,22 +729,6 @@ final class PerplTrading: MeraSessionLifecycle {
         do { ack = try await client.place(frames) } catch let error as PerplTradeError where !error.outcomeUnknown { mera?.refund(charge); throw error }
         if !ack.accepted, !ack.outcomeUnknown { mera?.refund(charge) }
         return ack
-    }
-
-    /// Cancels a resting order over the authenticated path (no wallet signature) — for recycling / cancelling an order.
-    /// A passkey account's cancel always needs a step-up `approval` (MERA-PLAN §3).
-    @discardableResult
-    func cancel(perpId: Int, orderId: Int, env: AppEnvironment, approval: MeraSession.StepUp? = nil) async throws -> PerplOrderAck {
-        if boundToPasskey {
-            guard let mera else { throw PerplTradeError.notSignedIn }
-            try mera.requireStepUp(approval, for: .cancelOrder)
-        }
-        let done = operation("Perpl cancel")
-        defer { done() }
-        await ensureConnected()
-        let client = try liveClient()
-        guard let accountId = client.accountId else { throw PerplTradeError.notSignedIn }
-        return try await client.place([PerplOrders.cancel(perpId: perpId, orderId: orderId, accountId: accountId, head: 0)])
     }
 
     /// Cancels open orders or keeper triggers (TP/SL) from the live list, as ONE action: a passkey account's single
@@ -736,14 +754,23 @@ final class PerplTrading: MeraSessionLifecycle {
     /// One operation holds background time across the sends and the wait (GL-1), so a sheet closed meanwhile loses
     /// nothing: this device's TP/SL records of what left the list go, and the Activity row counts the CONFIRMED cancels
     /// only, here. `onAcks` runs once every cancel is out, with the results the acks already decide (a refused ack).
+    /// `check`: the caller's last word on the socket that will send them, after the step-up and before anything is sent
+    /// (it throws to refuse, or returns false: nothing is sent and no result is returned). It reads that socket's own list,
+    /// so a socket that just signed in is given `PerplTimeouts.ordersSnapshot` to send it first.
     func cancelAndConfirm(orders: [PerplOpenOrder], approval: MeraSession.StepUp? = nil,
-                          onAcks: @MainActor ([PerplOpenOrder.Key: CancelResult]) -> Void = { _ in }) async throws -> [PerplOpenOrder.Key: CancelResult] {
+                          onAcks: @MainActor ([PerplOpenOrder.Key: CancelResult]) -> Void = { _ in },
+                          check: (@MainActor (PerplTradeClient) throws -> Bool)? = nil) async throws -> [PerplOpenOrder.Key: CancelResult] {
         guard !orders.isEmpty else { return [:] }
         try requireCancelApproval(approval)
         let done = operation("Perpl cancel")
         defer { done() }
         await ensureConnected()
         let client = try liveClient()
+        if let check {
+            let deadline = Date().addingTimeInterval(PerplTimeouts.ordersSnapshot)
+            while client.signedIn, !client.hasOrdersSnapshot, Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
+            if try !check(client) { return [:] }
+        }
         let owner = boundOwner
         let (acks, noted) = try await sendCancels(orders, on: client)
         var results: [PerplOpenOrder.Key: CancelResult] = [:]
@@ -827,7 +854,8 @@ final class PerplTrading: MeraSessionLifecycle {
                 TriggerStore.remove(perpId: order.marketId, kind: order.isStopLoss ? .stopLoss : .takeProfit, positionLong: order.protectsLong, owner: owner)
             }
             if case .refused = result, cancelsPending[order.id]?.at == noted { cancelsPending[order.id] = nil }
-            if result == .cancelled { cancelled[order.marketId, default: 0] += 1 }
+            // A resting order's cancel has its own row (`cancelResting`): this one counts TP/SL only.
+            if result == .cancelled, order.isTrigger { cancelled[order.marketId, default: 0] += 1 }
         }
         guard let owner else { return }
         for (marketId, count) in cancelled.sorted(by: { $0.key < $1.key }) {
@@ -883,7 +911,9 @@ final class PerplTrading: MeraSessionLifecycle {
     }
 
     /// Sets, moves or removes the take-profit / stop-loss of an open position (security audit GT-1). Each new trigger
-    /// is linked to the position (`lp`), so Perpl cancels it when the position closes, and closes the position's whole
+    /// is linked to the position (`lp`), so Perpl cancels it when the position closes (documented for a close or an
+    /// inversion only; any other ending is left to the chain-checked clean-up, which matches by market and side, not by
+    /// link — and the ticket's own TP/SL stay `tr`-linked, see `submitBracket`), and closes the position's whole
     /// size as the stream reports it now — a fixed size, which the sheet says (GT-5). Moving a trigger is
     /// cancel-then-place: the new one is sent only once every trigger it replaces was admitted for cancellation AND
     /// has left Perpl's live list (an admitted cancel can still fail on-chain), so a refused, unanswered or unconfirmed
@@ -1036,20 +1066,6 @@ final class PerplTrading: MeraSessionLifecycle {
         return listed
     }
 
-    /// Reduce-only market close of a position over the authenticated path. `side` is the POSITION's side; the close
-    /// order is submitted on the opposite side (matches PerplService.closePositionPlan) so it actually reduces. A
-    /// passkey account's close always needs a step-up `approval` (MERA-PLAN §3; `submit` checks it).
-    @discardableResult
-    func closePosition(market: PerpMarket, side: PositionSide, size: Double, slippageBps: Int, env: AppEnvironment,
-                       approval: MeraSession.StepUp? = nil) async throws -> PerplOrderAck {
-        // Asked for before connecting; `submit` spends the approval.
-        if boundToPasskey, approval == nil { throw MeraSession.StepUpRequired(reason: .reduceOnlyClose) }
-        await ensureConnected()
-        guard let accountId = client?.accountId else { throw PerplTradeError.notSignedIn }
-        let input = OrderInput(market: market, side: side.opposite, kind: .market, size: size, leverage: 1, reduceOnly: true, slippageBps: slippageBps)
-        return try await submit(input: input, accountId: accountId, takeProfit: nil, stopLoss: nil, env: env, approval: approval)
-    }
-
     /// The per-frame acceptance of a bracket placement, so an automated caller can refuse to record a level whose
     /// take-profit or stop-loss trigger was rejected (which would leave a position unprotected).
     struct BracketResult {
@@ -1080,15 +1096,20 @@ final class PerplTrading: MeraSessionLifecycle {
     struct EntryUnanswered: LocalizedError {
         let underlying: PerplTradeError
         let tracking: PerplOrderTracking
+        /// The order as it was written (a close's size is fixed right before the write: `submitClose`).
+        let input: OrderInput
         var errorDescription: String? { underlying.errorDescription }
     }
 
     /// Places a bracket (entry + linked TP/SL) and reports whether the entry AND each requested trigger were
     /// individually accepted — unlike `submit`, which returns only the entry ack. A passkey account's bracket must fit
     /// its live session (`authorize`) or carry a step-up `approval`. `onChainPositions` / `onChainOrders`: the account's
-    /// positions and orders as the Exchange last reported them, for `checkOpening`.
+    /// positions and orders as the Exchange last reported them, for `checkOpening`. `beforeWrite`: the caller's last check
+    /// on the socket that will write the entry, run right before the write with no `await` after it (it throws to refuse,
+    /// as not sent), and the order to write instead when its terms must be fixed there (`submitClose`'s size).
     func submitBracket(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int,
-                       approval: MeraSession.StepUp? = nil, onChainPositions: [PerpPosition], onChainOrders: [PerpOrder]) async throws -> BracketResult {
+                       approval: MeraSession.StepUp? = nil, onChainPositions: [PerpPosition], onChainOrders: [PerpOrder],
+                       beforeWrite: @MainActor (PerplTradeClient) throws -> OrderInput? = { _ in nil }) async throws -> BracketResult {
         try Self.checkTriggers(input: input, takeProfit: takeProfit, stopLoss: stopLoss)
         let charge = try authorize(input, approval: approval)
         // The entry and its stop-loss go out one after the other: leaving the app between them must not freeze or close
@@ -1097,10 +1118,12 @@ final class PerplTrading: MeraSessionLifecycle {
         defer { done() }
         await ensureConnected()
         let client: PerplTradeClient
+        var input = input
         do {
             client = try liveClient()
             try await checkOpening(input, withTriggers: takeProfit != nil || stopLoss != nil, on: client,
                                    onChainPositions: onChainPositions, onChainOrders: onChainOrders)
+            if let fixed = try beforeWrite(client) { input = fixed }
         } catch {
             mera?.refund(charge)
             throw error
@@ -1119,6 +1142,24 @@ final class PerplTrading: MeraSessionLifecycle {
             labels.append("sl")
         }
         // The entry carries its own id (its triggers link to it with `tr`); each trigger gets its id as it is written.
+        //
+        // Why the ticket's TP/SL stay linked to the entry request (`tr`) and are never re-linked to the position (`lp`)
+        // once it fills (phase 4 item B, decided NOT to build; reviewed against api-docs@25ab6e2c, perpl-docs@3800e3fe):
+        // - Perpl documents `lp` triggers as cancelled when the position is "closed or inverted" only. PositionStatus also
+        //   has Liquidated, Deleveraged and Unwound, and nothing says an `lp` trigger goes away on those endings.
+        // - A trigger's link can't be changed in place (`Change`, t:7, amends price, size and expiry only), and no meaning
+        //   is documented for one trigger carrying both `tr` and `lp`. A re-link is therefore a second trigger plus a
+        //   cancel of the first: cancel-first leaves the position without its stop until the new one is armed (st 8 can
+        //   be slow or never come), and place-first leaves two live stops until the removal is confirmed, which GT-1
+        //   forbids (a refused, unanswered or unconfirmed cancel must never leave two stops behind). No order meets both.
+        // - Place-first also needs two free slots under `max_account_trigger_orders` (16) per bracket, and no doc says
+        //   whether a trigger whose cancel is in flight still counts.
+        // - Every cancel asks a passkey account for a step-up (MERA-PLAN §3), so an automatic re-link would prompt out of
+        //   the blue; and a limit entry has no position until it fills, maybe while the app is closed.
+        // So `tr` linking stays, backed by the chain-checked clean-up (`cancelLeftovers`, GT-2), the reconnect sweep
+        // (`sweepLeftovers`), the Leftover TP/SL sheet and `checkOpening`'s refusal on leftovers. The position's own TP/SL
+        // sheet (`changeTriggers`) links with `lp`, unchanged. Reopen only if Perpl documents `lp` cancellation on
+        // liquidation/deleverage/unwind AND an atomic re-link (or `tr` + `lp` on one trigger).
         let entryRq = client.reserveRequestId()
         frames[0].requestId = entryRq
         for index in frames.indices.dropFirst() { frames[index].linkedRequestId = entryRq }
@@ -1138,7 +1179,8 @@ final class PerplTrading: MeraSessionLifecycle {
             // Written and never answered: it may be live (no refund, never resent). Followed to whatever Perpl or the
             // chain shows it did.
             throw EntryUnanswered(underlying: error, tracking: PerplOrderTracking(client: client, accountId: accountId, entry: entrySent(), entryRq: entryRq,
-                                                                                  entryAck: nil, takeProfit: nil, stopLoss: nil, charge: charge))
+                                                                                  entryAck: nil, takeProfit: nil, stopLoss: nil, charge: charge),
+                                  input: input)
         }
         func ack(_ label: String) -> PerplOrderAck? {
             guard let i = labels.firstIndex(of: label), i < acks.count else { return nil }
@@ -1247,6 +1289,644 @@ final class PerplTrading: MeraSessionLifecycle {
         if let connectTask { _ = try? await connectTask.value; return }
         guard Date() >= retryAfter else { return }
         try? await openSocket()
+    }
+
+    // MARK: Close, Cancel Order and Add Margin over the trading connection (p4 spec A)
+
+    /// The account a Close / Add Margin / Cancel Order tap is for, fixed at the tap: what the request is refused for (as not
+    /// sent) if the bound wallet or the socket's account changed before the write, and whose Activity / notices it is.
+    struct ActionAccount: Equatable {
+        let owner: Address?
+        let accountId: Int
+        let passkey: Bool
+    }
+
+    /// The trading socket a transport or permission refusal came from (`noteAPIRefusal`): Close / Add Margin / Cancel
+    /// Order go on-chain again until a new socket replaces it.
+    struct APIBlock {
+        weak var client: PerplTradeClient?
+        let at: Date
+    }
+
+    /// A socket held weakly, by what it sent.
+    struct WeakClient {
+        weak var client: PerplTradeClient?
+    }
+
+    @ObservationIgnored private(set) var apiBlocked: APIBlock?
+    /// When the live socket last signed in (`performConnect`).
+    @ObservationIgnored private var lastSignedInAt: Date = .distantPast
+    /// The trading route was refused since the last sign-in — on a socket, or with none to send on (a connect that failed
+    /// after a step-up): until a new socket signs in, Close and Add Margin don't go to it unless one is live.
+    private var apiRefusedSinceSignIn: Bool { apiBlocked.map { $0.at >= lastSignedInAt } ?? false }
+    /// The socket each close from the position's Close sheet was sent on: what says whether it ended the position.
+    @ObservationIgnored private var closeClients: [UUID: WeakClient] = [:]
+
+    /// Close, Add Margin and Cancel Order can go to Perpl over the live trading connection for `account` now: both owner
+    /// switches on, this socket signed in for that account, forwarding on AS THE SOCKET REPORTS IT (what `admit` enforces;
+    /// never `forwardingGrantedOnChain`, which can run ahead of the `fw` echo), and no transport or permission refusal on
+    /// this socket since (`apiBlocked`).
+    func apiActionsLive(for account: ActionAccount) -> Bool {
+        liveOutcomes && apiActions && isReady && client?.forwardingEnabled == true
+            && client?.accountId == account.accountId && boundOwner == account.owner && boundToPasskey == account.passkey
+            && !(apiBlocked?.client === client && client != nil)
+    }
+
+    /// A passkey account with no live socket (session locked, or its socket down): Close and Add Margin may still go over the
+    /// API, because the step-up they always ask for opens the session (and the socket follows it), when its last socket reported
+    /// forwarding on (`PerplForwardingMemory`). Never a cancel: the cancel's target comes from the live list.
+    ///
+    /// Only while the socket can come back for it: its last connect didn't fail (a rejected key, the connection cap, a failed
+    /// connect), no back-off is pending (the connect after the step-up would wait it out and send nothing), and the route
+    /// wasn't refused since the last sign-in, on a socket or with none (`apiRefusedSinceSignIn`). Otherwise the Face ID the
+    /// step-up costs would be spent on a request that can't go out, and the wallet's path is the one that can.
+    func apiActionsAfterUnlock(for account: ActionAccount) -> Bool {
+        liveOutcomes && apiActions && boundToPasskey && account.passkey && boundOwner == account.owner
+            && storedToken != nil && !keyRejected && !isReady
+            && PerplForwardingMemory.lastKnown(chainId: Monad.chainId, accountId: account.accountId) == true
+            && failureMessage == nil && Date() >= retryAfter && !apiRefusedSinceSignIn
+    }
+
+    /// The trading connection refused to take an action (nothing was sent, the gateway refused it, forwarding is off, or
+    /// Perpl answered OrderForwardingNotAllowed): Close / Add Margin / Cancel Order go on-chain while this socket lasts.
+    func noteAPIRefusal(on client: PerplTradeClient?) {
+        apiBlocked = APIBlock(client: client, at: Date())
+    }
+
+    /// The one line under a not-sent failure on Close / Add Margin / Cancel Order sent over the trading connection: the
+    /// wallet's when reopening the sheet will send it on-chain for sure — this live socket refused the route, a switch is
+    /// off, there is no key, forwarding is known off, or there is no live socket and none will be tried for it (its connect
+    /// failed, a back-off is pending, or the route was refused since the last sign-in: `apiActionsAfterUnlock`) — else a
+    /// plain "try again" (a dropped socket is back in seconds).
+    func nothingSentLine(for account: ActionAccount) -> String {
+        let live = client?.signedIn == true
+        let blocked = live && apiBlocked?.client === client
+        let forwardingOff = live && client?.forwardingEnabled == false
+        let rememberedOff = !live && PerplForwardingMemory.lastKnown(chainId: Monad.chainId, accountId: account.accountId) == false
+        let down = !live && (failureMessage != nil || Date() < retryAfter || apiRefusedSinceSignIn)
+        let onChain = !liveOutcomes || !apiActions || !isEnrolled || blocked || forwardingOff || rememberedOff || down
+        return onChain ? PerpActionCopy.nothingSentWallet : PerpActionCopy.nothingSent
+    }
+
+    /// The account at the tap is still the one this socket acts for, and the one bound: otherwise refused as not sent.
+    private func requireAction(_ account: ActionAccount, on client: PerplTradeClient) throws {
+        if let owner = account.owner { try requireBound(to: owner, passkey: account.passkey) }
+        guard boundOwner == account.owner, boundToPasskey == account.passkey, client.accountId == account.accountId else {
+            throw PerplTradeError.unavailable(tr("You switched accounts while this was in progress. Nothing was applied to the account you're signed in to now."))
+        }
+    }
+
+    /// A close the position's Close sheet asks for, as it stood at the confirm: the position as the chain reported it, the
+    /// size chip (25 / 50 / 75 / 100), and the order's terms.
+    struct CloseRequest {
+        let market: PerpMarket
+        let position: PerpPosition
+        let percent: Int
+        let kind: OrderKind
+        let limitPrice: Double?
+        let postOnly: Bool
+        /// A market close's slippage (the sheet's "1%").
+        static let slippageBps = 100
+    }
+
+    /// A reduce-only close of `request.position` over the trading connection (MERA-PLAN §3: a passkey account's always asks
+    /// first). The size is fixed here, right before the write (A.1): a fraction of the chain size, or for 100% the live
+    /// stream's size when it lists the position (else the chain's). `onWriting(whole)` runs right before the frame is
+    /// written. Returns the bracket result and the exact input sent (for `track` and the outcome's wording).
+    func submitClose(_ request: CloseRequest, account: ActionAccount, env: AppEnvironment, approval: MeraSession.StepUp?,
+                     onWriting: @MainActor (_ whole: Bool) -> Void) async throws -> (BracketResult, OrderInput) {
+        let whole = request.percent >= 100
+        let chainSize = PerplService.closeFractionSize(positionSize: request.position.size, lotDecimals: request.market.lotDecimals, percent: request.percent) ?? 0
+        let input = PerplService.closeInput(market: request.market, position: request.position, size: chainSize, slippageBps: CloseRequest.slippageBps,
+                                            kind: request.kind, limitPrice: request.limitPrice, postOnly: request.postOnly)
+        // Refused on the device before any step-up: a size or price that rounds to nothing.
+        if let problem = PerplOrders.problem(PerplOrders.entry(input, accountId: account.accountId, head: 0)) { throw PerplTradeError.invalidOrder(problem) }
+        var sent = input
+        var writer: PerplTradeClient?
+        do {
+            let result = try await submitBracket(input: input, accountId: account.accountId, takeProfit: nil, stopLoss: nil, env: env, ttlBlocks: 100,
+                                                  approval: approval, onChainPositions: [], onChainOrders: [], beforeWrite: { client in
+                writer = client
+                // The account at the tap, on the socket that writes it; then its size, as that socket reports it now.
+                try self.requireAction(account, on: client)
+                sent = Self.closeInput(request, input: input, on: client)
+                onWriting(whole)
+                return sent
+            })
+            // Perpl's gateway refused it: nothing was forwarded, and this socket won't take the route again.
+            if !result.entry { noteAPIRefusal(on: writer ?? client) }
+            return (result, sent)
+        } catch let error as PerplTradeError where !error.outcomeUnknown {
+            if !error.isInvalidOrder { noteAPIRefusal(on: writer ?? client) }
+            throw error
+        }
+    }
+
+    /// The close to write on `client`: for 100%, the size of the position its live list shows on that side, when the list
+    /// is whole and not suspect (Perpl clamps a close to the position anyway, websocket.md); otherwise as the sheet sized it.
+    private static func closeInput(_ request: CloseRequest, input: OrderInput, on client: PerplTradeClient) -> OrderInput {
+        guard request.percent >= 100, client.hasPositionsSnapshot, !client.streamSuspect,
+              let live = client.positions.first(where: { $0.marketId == request.market.id && $0.isLong == (request.position.side == .long) && $0.isOpen }) else { return input }
+        var fresh = input
+        fresh.size = Double(live.sizeRaw) / pow(10, Double(request.market.lotDecimals))
+        return fresh
+    }
+
+    /// Whether a close sent from the Close sheet ended the position, by Perpl's evidence on the socket that sent it: true
+    /// when a position report carrying this close's own request id said it closed, or the live list (whole, not suspect)
+    /// shows no position on that side any more; false when the list still shows that side open after a report that named
+    /// this close; nil when nothing says (the 100% chip decides the words).
+    private func positionEnded(of order: PerplTrackedOrder) -> Bool? {
+        guard order.isClose, case .api(_, let rq) = order.source, let client = closeClients[order.id]?.client else { return nil }
+        if client.positionClosed(byRequest: rq) { return true }
+        guard client.signedIn, client.hasPositionsSnapshot, !client.streamSuspect else { return nil }
+        let side = order.closes ?? order.side.opposite
+        let open = client.positions.contains { $0.marketId == order.marketId && $0.isLong == (side == .long) && $0.isOpen }
+        if !open { return true }
+        return client.sawPositionChange(rq: rq) ? false : nil
+    }
+
+    /// An on-chain resting order, by its market and id AND its terms: the Exchange gives an order id again, and an order
+    /// that holds a recycled id with other terms is never the old one.
+    struct ChainOrderKey: Hashable {
+        let perpId: Int
+        let orderId: Int
+        let side: OrderSide
+        let price: Double
+        let size: Double
+        init(_ order: PerpOrder) { perpId = order.perpId; orderId = order.orderId; side = order.side; price = order.price; size = order.size }
+    }
+
+    /// The on-chain orders Perpl's live list showed gone after a cancel from this device, and how, until a chain read no
+    /// longer lists them (or `goneWindow`): their card says so instead of offering a cancel.
+    private(set) var goneChainOrders: [ChainOrderKey: (result: CancelResult, at: Date)] = [:]
+    static let goneWindow: TimeInterval = 120
+    /// How long the stream's word that an order's smart contract order id left its list (no cancel from this device) stands
+    /// for a chain order with that id: a chain read trailing the stream, not a later order the Exchange gave the id again.
+    static let scidGoneWindow: TimeInterval = 30
+
+    /// How an on-chain order Perpl's live list showed gone ended, and whose word it is: the order card's wording, and
+    /// whether its tap may still open the wallet's cancel.
+    struct ChainOrderGone: Equatable {
+        let result: CancelResult
+        /// A cancel from this device decided it (`goneChainOrders`): the "… first" words. Otherwise the stream saw the order
+        /// leave on its own (filled, expired, failed, or cancelled elsewhere), and says only that.
+        let byCancel: Bool
+    }
+
+    /// Cancels `target` over the trading connection after checking, on the socket that will send it, that it is still the
+    /// order the user saw (same scid, type and request: A.1); otherwise `.alreadyGone`, nothing sent. Then as
+    /// `cancelAndConfirm`. Only that socket's whole list, not suspect, can say so: without one, nothing is sent
+    /// (`OrdersNotChecked`, not a refusal of the route).
+    func cancelResting(_ target: PerplOpenOrder, tapRq: Int?, chainOrder: ChainOrderKey, account: ActionAccount, title: String,
+                       subtitle: String, approval: MeraSession.StepUp?,
+                       onAcks: @MainActor ([PerplOpenOrder.Key: CancelResult]) -> Void) async throws -> CancelResult {
+        // 1 (`cancelAndConfirm`'s first step): MERA-PLAN §3, a passkey account's cancel always asks. 2–3, on the socket that
+        // will send it: the account at the tap, and still the order the user saw — the same smart contract order id, type
+        // and request (not the price: a Change made elsewhere amends the same order). Otherwise nothing is sent.
+        var sender: PerplTradeClient?
+        var listedGone = false
+        let stillTheOrder: @MainActor (PerplTradeClient) throws -> Bool = { client in
+            try self.requireAction(account, on: client)
+            // A list without its snapshot, or one that may have missed an update, can't say the order is gone.
+            guard client.signedIn, client.hasOrdersSnapshot, !client.streamSuspect else { throw OrdersNotChecked() }
+            sender = client
+            guard let listed = client.openOrders.first(where: { $0.id == target.id }), listed.contractOrderId == target.contractOrderId,
+                  listed.typeRaw == target.typeRaw, client.requestId(for: target.id) == tapRq else { listedGone = true; return false }
+            return true
+        }
+        var refusedAtGateway = false
+        let results: [PerplOpenOrder.Key: CancelResult]
+        do {
+            // 4. One cancel, followed on the socket that sent it until its list confirms it (`PerplTimeouts.removal`).
+            results = try await cancelAndConfirm(orders: [target], approval: approval, onAcks: { acks in
+                // A result the ack already decides is the gateway's refusal (code ≠ 0: nothing was forwarded): the route rests
+                // on this socket before the sheet words it (`nothingSentLine`).
+                if let decided = acks[target.id], decided != .notConfirmed {
+                    refusedAtGateway = true
+                    self.noteAPIRefusal(on: sender ?? self.client)
+                }
+                onAcks(acks)
+            }, check: stillTheOrder)
+        } catch let error as PerplTradeError where !error.outcomeUnknown {
+            if !error.isInvalidOrder { noteAPIRefusal(on: client) }
+            throw error
+        }
+        guard let result = results[target.id] else {
+            // Not the order the user saw any more, by that socket's whole list: it left Perpl's list (or its id now names
+            // another order). Nothing sent.
+            guard listedGone else { return .notConfirmed }
+            let gone = CancelResult.alreadyGone
+            goneChainOrders[chainOrder] = (gone, Date())
+            return gone
+        }
+        // 5. Done here, so a closed sheet loses nothing. Perpl answered OrderForwardingNotAllowed: the route rests on the
+        // socket that sent it (the gateway's refusal already did, above).
+        if !refusedAtGateway, cancelRefusedForForwarding(target.id) { noteAPIRefusal(on: cancelRequests[target.id]?.client ?? sender ?? client) }
+        if result == .cancelled, let owner = account.owner {
+            Activity.record(ActivityRecord(kind: .perp, title: title, subtitle: subtitle, hash: nil, section: "perps"), owner: owner)
+        }
+        if result.isGone { goneChainOrders[chainOrder] = (result, Date()) }
+        return result
+    }
+
+    /// The order a Cancel Order sheet was about to cancel can't be checked on the socket that would send it: its open orders
+    /// haven't arrived, or it may have missed an update. Nothing was sent, and the trading route isn't refused: the list is
+    /// back in a moment.
+    struct OrdersNotChecked: LocalizedError {
+        var errorDescription: String? {
+            tr(LocalizedStringResource("Perpl hasn't sent your open orders yet, so this order can't be checked. Nothing was sent. Try again in a moment.",
+                                       comment: "Cancel Order sent over one-click trading: the order can't be checked against Perpl's live list yet (it is still arriving), so the cancel wasn't sent."))
+        }
+    }
+
+    /// Perpl refused the cancel of `key` because order forwarding is off (OrderForwardingNotAllowed, sr 34), on the socket
+    /// that sent it: the Cancel Order sheet then says the reopened sheet sends it from the wallet.
+    func cancelRefusedForForwarding(_ key: PerplOpenOrder.Key) -> Bool {
+        guard let request = cancelRequests[key], let sender = request.client, let sent = sender.sentRequest(rq: request.rq),
+              case .failed(let reason)? = sender.outcome(rq: request.rq, sent: sent, final: false) else { return false }
+        return reason.reason == 34
+    }
+
+    /// The chain order Perpl's live list already showed gone this session: a cancel from this device confirmed (`goneChainOrders`,
+    /// by the order's terms, kept until a chain read no longer lists it, or 120 s), or — while the stream is live with its
+    /// snapshot and not suspect — its scid left the list with a terminal status in the last `scidGoneWindow`
+    /// (`client.lastTerminalStatus(marketId:contractOrderId:)`, A.5.1). Never while the live list lists an order with that
+    /// smart contract order id (one the Exchange gave the id again included).
+    func chainOrderGone(_ order: PerpOrder) -> ChainOrderGone? {
+        if ordersAreLive, let client, client.openOrders.contains(where: { $0.marketId == order.perpId && $0.contractOrderId == order.orderId }) { return nil }
+        if let gone = goneChainOrders[ChainOrderKey(order)], Date().timeIntervalSince(gone.at) < Self.goneWindow { return ChainOrderGone(result: gone.result, byCancel: true) }
+        guard ordersAreLive, !streamSuspect, let client, let left = client.lastTerminalStatus(marketId: order.perpId, contractOrderId: order.orderId),
+              Date().timeIntervalSince(left.at) < Self.scidGoneWindow else { return nil }
+        return ChainOrderGone(result: CancelResult.left(withStatus: left.status), byCancel: false)
+    }
+
+    /// After each chain read: forgets the gone orders the chain no longer lists.
+    func chainOrdersRead(_ orders: [PerpOrder]) {
+        guard !goneChainOrders.isEmpty else { return }
+        let listed = Set(orders.map(ChainOrderKey.init))
+        let now = Date()
+        let kept = goneChainOrders.filter { listed.contains($0.key) && now.timeIntervalSince($0.value.at) < Self.goneWindow }
+        if kept.count != goneChainOrders.count { goneChainOrders = kept }
+    }
+
+    // MARK: Add margin over the trading connection (p4 spec A.4.3)
+
+    enum MarginResult: Equatable {
+        /// Perpl's evidence that it went in: the collateral the position gained (or the amount sent, when its success
+        /// came without a measure, or the chain showed it).
+        case added(amountCNS: BigUInt)
+        /// Perpl refused it, in its words. `atGateway`: the gateway refused the frame, so nothing was forwarded (and the
+        /// trading route rests on this socket); else a final refusal on the stream.
+        case refused(String, atGateway: Bool)
+        /// Neither in time: it may still be added.
+        case notConfirmed
+    }
+
+    /// A margin request whose result wasn't confirmed, or which Perpl refused a moment ago: checked again on its socket's
+    /// reports, the Perps screens' chain reads and the reconcile (memory only: a killed app leaves its honest row).
+    struct PendingMargin {
+        weak var client: PerplTradeClient?
+        let rq: Int
+        let id: UUID
+        /// Its entry in `marginRequests`.
+        let token: UUID
+        let account: ActionAccount
+        let market: PerpMarket
+        let symbol: String
+        let amountCNS: BigUInt
+        let amount: Double
+        let before: PerpPosition?
+        /// When `before` was read on the chain (nil: unknown, the position the tap showed).
+        let beforeAt: Date?
+        let writtenAt: Date
+        var result: MarginResult
+    }
+
+    @ObservationIgnored private var pendingMargins: [UUID: PendingMargin] = [:] {
+        didSet {
+            // One that leaves the re-check list can't move the collateral any more: its result is in, or it was given up on.
+            for (id, entry) in oldValue where pendingMargins[id] == nil { releaseMarginRequest(entry.token) }
+        }
+    }
+    /// Every margin request this device made, from its tap until an hour after its result stopped being able to change,
+    /// whatever it was: another one on the same market makes a growth without a request id, or the chain's margin, ambiguous
+    /// (`PerplMarginEvidence.otherMargin`), so one deposit is never credited to two requests.
+    @ObservationIgnored private var marginRequests: [UUID: PerplMarginEvidence.Request] = [:]
+    /// Margin requests (by `token`) the chain can no longer tell apart: the position's side or size changed since their
+    /// "before" (a fill moves the collateral too). Their rows stay "not confirmed" unless Perpl's own report says otherwise.
+    @ObservationIgnored private var marginChainExcluded: Set<UUID> = []
+    /// The margin sheets on screen, by their request's row id: a result they show posts no notice.
+    @ObservationIgnored private var marginPresented: Set<UUID> = []
+    /// Each margin request's result as it stands (a re-check may change it), by its row id: what its sheet shows.
+    private(set) var marginResults: [UUID: MarginResult] = [:]
+    static let pendingMarginCapacity = 16
+    static let pendingNotConfirmedKept: TimeInterval = 3600, pendingRefusedKept: TimeInterval = 60
+
+    /// The margin sheet showing request `id` is (or is no longer) on screen.
+    func setMarginPresented(_ id: UUID, _ presented: Bool) {
+        if presented { marginPresented.insert(id) } else { marginPresented.remove(id) }
+    }
+
+    /// This market's position for `account` read on the chain now, and when (the margin's "before").
+    func readPosition(market: PerpMarket, for account: ActionAccount) async -> (position: PerpPosition?, at: Date)? {
+        guard let owner = account.owner ?? demoReadOwner, let read = readPositions, let positions = try? await read(owner, [market]) else { return nil }
+        return (positions.first { $0.perpId == market.id }, Date())
+    }
+
+    /// More than the account has free on `client`, when both balances are known (saturating: a locked balance above the
+    /// balance leaves nothing free, never a trap).
+    private static func overAvailable(_ amountCNS: BigUInt, on client: PerplTradeClient) -> Bool {
+        guard let balance = client.balanceCNS, let locked = client.lockedBalanceCNS else { return false }
+        let available = balance > locked ? balance - locked : 0
+        return amountCNS > available
+    }
+
+    /// Adds `amount` AUSD to `account`'s open position on `market` over the trading connection (MERA-PLAN §3: a passkey
+    /// account's always asks first). One `t:6` request, never resent. Perpl's answer is read on the socket that sent it (its
+    /// final report on the request, or the position's collateral under that request), the chain is read at 2, 5 and 10 s, for
+    /// `PerplTimeouts.marginEvidence`; what is still open then is re-checked later (`pendingMargins`). Its Activity row and,
+    /// when no sheet shows it, its notice are posted here. `onSent(id, acknowledged)`: the frame was written (Perpl took it,
+    /// or never answered); `id` is the request's `marginActivityID`, for `setMarginPresented`.
+    /// `beforeAt`: when `before` was read on the chain (nil: unknown).
+    func addMargin(market: PerpMarket, amount: Double, account: ActionAccount, before: PerpPosition?, approval: MeraSession.StepUp?,
+                   beforeAt: Date? = nil, onSent: @MainActor (_ id: UUID, _ acknowledged: Bool) -> Void) async throws -> MarginResult {
+        // 1. On the device, before any step-up: an amount that rounds to zero, or more than the account has free.
+        let amountCNS = PerplService.toCNS(amount)
+        if let problem = PerplOrders.problem(PerplOrders.addMargin(perpId: market.id, amountCNS: amountCNS, accountId: account.accountId)) {
+            throw PerplTradeError.invalidOrder(problem)
+        }
+        if let client, Self.overAvailable(amountCNS, on: client) { throw PerplTradeError.invalidOrder(PerpActionCopy.marginOverAvailable) }
+        // 2. Moving margin is outside a passkey session's scope: it always asks, as the wallet transaction does.
+        if boundToPasskey {
+            guard let mera else { throw PerplTradeError.notSignedIn }
+            try mera.requireStepUp(approval, for: .unlisted)
+        }
+        // 3. One operation from the connect to the last read of the evidence (GL-1).
+        let done = operation("Perpl margin") // not localized: the task's name
+        defer { done() }
+        // From here this request may move the market's collateral, until its result can't change (`marginRequests`). One that
+        // provably moved nothing (never written, or refused at the gateway) is forgotten at once.
+        let token = UUID()
+        marginRequests[token] = PerplMarginEvidence.Request(marketId: market.id, startedAt: Date())
+        var movedNothing = true
+        defer { if movedNothing { marginRequests[token] = nil } }
+        await ensureConnected()
+        let client: PerplTradeClient
+        do {
+            client = try liveClient()
+            try requireAction(account, on: client)
+            if Self.overAvailable(amountCNS, on: client) { throw PerplTradeError.invalidOrder(PerpActionCopy.marginOverAvailable) }
+        } catch let error as PerplTradeError {
+            if !error.isInvalidOrder { noteAPIRefusal(on: self.client) }
+            throw error
+        }
+        // 4. The one write. It throws only when nothing was written.
+        let acks: [PerplOrderAck]
+        do {
+            acks = try await client.sendEach([PerplOrders.addMargin(perpId: market.id, amountCNS: amountCNS, accountId: account.accountId)])
+        } catch {
+            noteAPIRefusal(on: client)
+            throw error
+        }
+        movedNothing = false
+        guard let ack = acks.first else { return .notConfirmed }
+        // 5. The gateway refused it: no report follows (websocket.md), nothing moved, and the route rests on this socket.
+        if !ack.accepted, !ack.outcomeUnknown {
+            movedNothing = true
+            noteAPIRefusal(on: client)
+            return .refused(Self.sentence(ack.error) ?? PerpActionCopy.marginRefused, atGateway: true)
+        }
+        // 6. Written: Perpl took it, or never answered (it may still add it).
+        guard let rq = ack.requestId else { return .notConfirmed }
+        let writtenAt = client.sentRequest(rq: rq)?.writtenAt ?? ack.receivedAt
+        let id = PerplOrderTracker.marginActivityID(accountId: account.accountId, rq: rq, sentAt: writtenAt)
+        onSent(id, ack.accepted)
+        var pending = PendingMargin(client: client, rq: rq, id: id, token: token, account: account, market: market, symbol: before?.symbol ?? market.asset,
+                                    amountCNS: amountCNS, amount: amount, before: before, beforeAt: before == nil ? nil : beforeAt, writtenAt: writtenAt,
+                                    result: .notConfirmed)
+        // 7–8. Perpl's evidence on the socket that sent it, and the chain's.
+        pending.result = await marginEvidence(pending, on: client)
+        settleMargin(pending, first: true)
+        return marginResults[id] ?? pending.result
+    }
+
+    /// Steps 7 and 8 of `addMargin`: every 250 ms while the sending socket is signed in, its own report on the request or
+    /// the position's collateral (under the request, or — on a quiet market — grown by exactly the amount without it); the
+    /// chain at 2, 5 and 10 s after the write; the first evidence wins. At the end, a provisional refusal with the socket
+    /// signed in throughout is final; anything else undecided is "not confirmed".
+    private func marginEvidence(_ pending: PendingMargin, on client: PerplTradeClient) async -> MarginResult {
+        let deadline = pending.writtenAt.addingTimeInterval(PerplTimeouts.marginEvidence)
+        var polls = [2.0, 5.0, 10.0].map { pending.writtenAt.addingTimeInterval($0) }
+        let chain = MarginChainRead()
+        while Date() < deadline.addingTimeInterval(5) {
+            if client.signedIn, let decided = streamMarginResult(pending, on: client) { return decided }
+            if chain.added { return .added(amountCNS: pending.amountCNS) }
+            if !chain.reading, let next = polls.first, Date() >= next {
+                polls.removeFirst()
+                if let owner = pending.account.owner ?? demoReadOwner, let before = pending.before, let read = readPositions {
+                    chain.reading = true
+                    Task { @MainActor in
+                        defer { chain.reading = false }
+                        guard let positions = try? await read(owner, [pending.market]) else { return }
+                        if self.chainShowsMargin(positions, pending, before: before) { chain.added = true }
+                    }
+                }
+            }
+            if Date() >= deadline, polls.isEmpty, !chain.reading { break }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        if chain.added { return .added(amountCNS: pending.amountCNS) }
+        switch client.collateralOutcome(rq: pending.rq, final: client.continuityHeld(since: pending.writtenAt)) {
+        case .added(let delta)?: return .added(amountCNS: delta ?? pending.amountCNS)
+        case .refused(let reason)?:
+            if reason.reason == 34 { noteAPIRefusal(on: client) }
+            return .refused(reason.message, atGateway: false)
+        case nil: return .notConfirmed
+        }
+    }
+
+    /// One chain read of the margin's position in flight (`marginEvidence`).
+    @MainActor private final class MarginChainRead {
+        var reading = false
+        var added = false
+    }
+
+    /// What the sending socket's reports say of a margin request now: its own success or final refusal, the position's
+    /// collateral grown under it, or — while no other margin request on that market could have moved it (one being sent,
+    /// waited for or re-checked, or decided since this one was written, whichever list it is in) and no order of this
+    /// device's there could have — the position's collateral grown by exactly the amount with its size unchanged, without
+    /// the request id.
+    private func streamMarginResult(_ pending: PendingMargin, on client: PerplTradeClient) -> MarginResult? {
+        switch client.collateralOutcome(rq: pending.rq, final: false) {
+        case .added(let delta)?: return .added(amountCNS: delta ?? pending.amountCNS)
+        case .refused(let reason)?:
+            if reason.reason == 34 { noteAPIRefusal(on: client) }
+            return .refused(reason.message, atGateway: false)
+        case nil: break
+        }
+        guard let side = pending.before?.side,
+              let pid = client.positions.first(where: { $0.marketId == pending.market.id && $0.isLong == (side == .long) && $0.isOpen })?.pid else { return nil }
+        let otherMargin = PerplMarginEvidence.otherMargin(than: pending.token, on: pending.market.id, since: pending.writtenAt, among: marginRequests)
+        let otherOrder = ordersMoved(on: pending.market.id, since: pending.writtenAt)
+        guard !otherMargin, !otherOrder, client.collateralGrowthWithoutRequest(pid: pid, amountCNS: pending.amountCNS, since: pending.writtenAt) else { return nil }
+        return .added(amountCNS: pending.amountCNS)
+    }
+
+    /// The chain's position shows this margin request went in, and only it could have: the position's side and size as they
+    /// were before (else the chain can't tell it any more: `marginChainExcluded`), its collateral grown by the amount to the
+    /// cent, no other margin request on that market that could have moved it since its "before" was read, and no order of
+    /// this device's on that market since then (A.4.3 step 7.3, R.1.6, R.1.7).
+    private func chainShowsMargin(_ positions: [PerpPosition], _ pending: PendingMargin, before: PerpPosition) -> Bool {
+        let lotDecimals = pending.market.lotDecimals
+        if PerplMarginEvidence.sizeMoved(in: positions, before: before, lotDecimals: lotDecimals) { marginChainExcluded.insert(pending.token) }
+        guard !marginChainExcluded.contains(pending.token),
+              PerplMarginEvidence.chainShows(positions, before: before, amount: pending.amount, lotDecimals: lotDecimals),
+              !PerplMarginEvidence.otherMargin(than: pending.token, on: pending.market.id, since: pending.beforeAt, among: marginRequests),
+              !ordersMoved(on: pending.market.id, since: (pending.beforeAt ?? pending.writtenAt).addingTimeInterval(-PerplMarginEvidence.chainLag)) else { return false }
+        return true
+    }
+
+    /// This device sent an order on `marketId` after `since`, or follows one there now: a fill moves the position's collateral.
+    private func ordersMoved(on marketId: Int, since: Date) -> Bool {
+        orders.orders.contains { $0.marketId == marketId && $0.sentAt > since } || following.contains { orders.order($0)?.marketId == marketId }
+    }
+
+    /// A margin request's result can't change any more: from now, its collateral is part of every later request's "before".
+    private func releaseMarginRequest(_ token: UUID) {
+        if marginRequests[token] != nil, marginRequests[token]?.settledAt == nil { marginRequests[token]?.settledAt = Date() }
+    }
+
+    /// A margin request's result, carried out once each time it changes: its Activity row under the request's id (added:
+    /// the amount, with its notification, as the wallet's row; not confirmed: no volume, no notification; not added, after
+    /// all: the row rewritten), its notice when no sheet shows it, and the re-check list. `first`: the result of the wait
+    /// itself (a refusal then writes no row).
+    private func settleMargin(_ pending: PendingMargin, first: Bool) {
+        let previous = marginResults[pending.id]
+        guard previous != pending.result || first else { return }
+        marginResults[pending.id] = pending.result
+        if marginResults.count > 64, let stale = marginResults.keys.first(where: { pendingMargins[$0] == nil && !marginPresented.contains($0) && $0 != pending.id }) {
+            marginResults[stale] = nil
+        }
+        let owner = pending.account.owner
+        let shown = marginPresented.contains(pending.id)
+        switch pending.result {
+        case .added(let cns):
+            pendingMargins[pending.id] = nil
+            releaseMarginRequest(pending.token)
+            recordMarginAdded(pending, cns: cns)
+        case .notConfirmed:
+            keepPending(pending)
+            var row = ActivityRecord(kind: .deposit, title: PerpActionCopy.addMarginTitle(pending.symbol),
+                                     subtitle: PerpActionCopy.marginNotConfirmedSubtitle(NumberStyle.number(pending.amount)), hash: nil, section: "perps")
+            row.id = pending.id
+            Activity.record(row, owner: owner, notify: false)
+            if !shown { postMarginNotice(PerpActionCopy.marginNotConfirmed, body: PerpActionCopy.marginCheck, pending) }
+        case .refused(let why, _):
+            if first {
+                // A final refusal on the stream: no row; checked again for a minute (a growth under it contradicts it).
+                keepPending(pending)
+            } else {
+                // Refused after it was "not confirmed": its row says so, and the notice.
+                pendingMargins[pending.id] = nil
+                var row = ActivityRecord(kind: .deposit, title: PerpActionCopy.addMarginTitle(pending.symbol),
+                                         subtitle: PerpActionCopy.marginNotAddedSubtitle(NumberStyle.number(pending.amount)), hash: nil, section: "perps")
+                row.id = pending.id
+                Activity.record(row, owner: owner, notify: false)
+            }
+            if !shown { postMarginNotice(PerpActionCopy.marginNotAdded, body: why, pending) }
+        }
+    }
+
+    /// The margin went in: the same row as the wallet's Add Margin (a deposit in Perps, with the amount as its `usd`), under
+    /// the request's id, with its own notification.
+    private func recordMarginAdded(_ pending: PendingMargin, cns: BigUInt) {
+        let added = Amount.units(cns, decimals: 6)
+        var row = ActivityRecord(kind: .deposit, title: tr("Added \(pending.symbol) margin"), subtitle: "\(NumberStyle.number(added)) AUSD", hash: nil,
+                                 section: "perps", usd: added)
+        row.id = pending.id
+        Activity.record(row, owner: pending.account.owner)
+    }
+
+    private func postMarginNotice(_ title: String, body: String, _ pending: PendingMargin) {
+        #if DEBUG && targetEnvironment(simulator)
+        // The scripted demo's margin has no account: the notice it would post goes to its "Would notify" list instead.
+        if pending.account.owner == nil, isDemo, !marginPresented.contains(pending.id) { debugNotices.append((title, body)) }
+        #endif
+        guard let owner = pending.account.owner, !marginPresented.contains(pending.id) else { return }
+        Notifications.perpMargin(title: title, body: body, perpId: pending.market.id, owner: owner, deliver: owner == boundOwner)
+    }
+
+    private func keepPending(_ pending: PendingMargin) {
+        pendingMargins[pending.id] = pending
+        prunePendingMargins()
+    }
+
+    private func prunePendingMargins() {
+        let now = Date()
+        pendingMargins = pendingMargins.filter { _, entry in
+            switch entry.result {
+            case .notConfirmed: return now.timeIntervalSince(entry.writtenAt) < Self.pendingNotConfirmedKept
+            case .refused: return now.timeIntervalSince(entry.writtenAt) < Self.pendingRefusedKept
+            case .added: return false
+            }
+        }
+        if pendingMargins.count > Self.pendingMarginCapacity {
+            let keep = Set(pendingMargins.values.sorted { $0.writtenAt > $1.writtenAt }.prefix(Self.pendingMarginCapacity).map(\.id))
+            pendingMargins = pendingMargins.filter { keep.contains($0.key) }
+        }
+        // A request is remembered an hour after its result stopped being able to change (one never decided: an hour and ten
+        // minutes after its tap), longer than any request it could make ambiguous is re-checked.
+        let kept = marginRequests.filter { _, request in
+            request.settledAt.map { now.timeIntervalSince($0) < Self.pendingNotConfirmedKept }
+                ?? (now.timeIntervalSince(request.startedAt) < Self.pendingNotConfirmedKept + 600)
+        }
+        if kept.count != marginRequests.count { marginRequests = kept }
+        if !marginChainExcluded.isEmpty { marginChainExcluded.formIntersection(marginRequests.keys) }
+    }
+
+    /// A report on `client`: each margin request it sent that is still open, decided again from it. Added (a refused one
+    /// included: a growth under it contradicts the refusal, and the evidence wins); not added only from a FINAL refusal of
+    /// one that wasn't confirmed.
+    private func recheckMargins(on client: PerplTradeClient) {
+        guard !pendingMargins.isEmpty else { return }
+        prunePendingMargins()
+        for var entry in pendingMargins.values where entry.client === client {
+            guard let decided = streamMarginResult(entry, on: client) else { continue }
+            switch (entry.result, decided) {
+            case (_, .added):
+                entry.result = decided
+                settleMargin(entry, first: false)
+            case (.notConfirmed, .refused):
+                entry.result = decided
+                settleMargin(entry, first: false)
+            default:
+                continue
+            }
+        }
+    }
+
+    /// The Perps screens read the account's positions on the chain (`at`, for `owner`): a margin that wasn't confirmed and
+    /// shows in its position now went in — when only it could have moved it (`chainShowsMargin`). Each credit is decided
+    /// before the next is looked at, so two requests are never credited with one deposit.
+    func marginPositionsRead(_ positions: [PerpPosition], at: Date, owner: Address?) {
+        guard !pendingMargins.isEmpty else { return }
+        prunePendingMargins()
+        for id in pendingMargins.values.sorted(by: { $0.writtenAt < $1.writtenAt }).map(\.id) {
+            guard var entry = pendingMargins[id], entry.result == .notConfirmed, entry.account.owner == owner, owner != nil, at > entry.writtenAt,
+                  let before = entry.before, chainShowsMargin(positions, entry, before: before) else { continue }
+            entry.result = .added(amountCNS: entry.amountCNS)
+            settleMargin(entry, first: false)
+        }
+    }
+
+    /// The reconcile: one chain read per margin of `owner` that wasn't confirmed.
+    private func recheckMarginsOnChain(owner: Address) async {
+        prunePendingMargins()
+        for entry in pendingMargins.values where entry.result == .notConfirmed && entry.account.owner == owner {
+            guard let read = readPositions, let positions = try? await read(owner, [entry.market]) else { continue }
+            marginPositionsRead(positions, at: Date(), owner: owner)
+        }
     }
 
     // MARK: Protection events (security audit GT-2, GT-9)
@@ -1590,7 +2270,8 @@ final class PerplTrading: MeraSessionLifecycle {
     @discardableResult
     func track(_ t: PerplOrderTracking, input: OrderInput, takeProfit: Double?, stopLoss: Double?, closes: PositionSide?,
                held: (side: PositionSide, size: Double)?, ttlBlocks: Int?, before: PerpPosition?, beforeReadAt: Date?,
-               restingOnSide: Bool, echoes: [PerplTriggerKind: UUID] = [:], expectation: OrderExpectation? = nil) -> UUID {
+               restingOnSide: Bool, echoes: [PerplTriggerKind: UUID] = [:], expectation: OrderExpectation? = nil,
+               purpose: PerplTrackedOrder.Purpose? = nil) -> UUID {
         let sentAt = t.entry.writtenAt
         let id = PerplOrderTracker.activityID(accountId: t.accountId, rq: t.entryRq, sentAt: sentAt)
         let deadline = PerplOutcomeDeadline(ackHead: t.entryAck?.head, ttlBlocks: ttlBlocks, ackAt: t.entryAck?.receivedAt ?? t.entry.writtenAt)
@@ -1610,6 +2291,13 @@ final class PerplTrading: MeraSessionLifecycle {
             sentAt: sentAt, deadline: deadline, before: before, beforeReadAt: beforeReadAt, restingOnSide: restingOnSide,
             takeProfit: child(.takeProfit, takeProfit, t.takeProfit), stopLoss: child(.stopLoss, stopLoss, t.stopLoss))
         order.expectedSince = expectation?.since
+        // A close from the position's Close sheet: its result is said of the position, and its socket says whether the
+        // position ended (`positionEnded(of:)`).
+        order.purpose = purpose
+        if purpose != nil {
+            closeClients[id] = WeakClient(client: t.client)
+            if closeClients.count > 64 { closeClients = closeClients.filter { $0.value.client != nil && orders.order($0.key) != nil } }
+        }
         orders.add(order)
         if let charge = t.charge { charges[id] = charge }
         // The wait made before the send is taken over under the order's own id, with its own deadline (no await between:
@@ -1739,6 +2427,9 @@ final class PerplTrading: MeraSessionLifecycle {
         guard !effects.isEmpty else { return }
         orders.update(order)
         apply(effects, to: order)
+        // A close from the position's Close sheet that Perpl refused because order forwarding is off (OrderForwardingNotAllowed,
+        // sr 34): the trading route rests on the socket that sent it (A.2), as for Add Margin and Cancel Order.
+        if order.purpose != nil, case .failed(let reason) = outcome, reason.reason == 34 { noteAPIRefusal(on: closeClients[id]?.client) }
         if outcome.executedNothing, !following.contains(id) {
             Task { await self.checkLeftTriggers(id, sentOn: nil) }
         }
@@ -1754,7 +2445,8 @@ final class PerplTrading: MeraSessionLifecycle {
     /// The effects the tracker doesn't carry out itself.
     private func apply(_ effects: [PerplTrackerEffect], to order: PerplTrackedOrder) {
         let id = order.id
-        orders.apply(effects, order: order, boundOwner: boundOwner) { effect in
+        let ended = order.isClose ? positionEnded(of: order) : nil
+        orders.apply(effects, order: order, boundOwner: boundOwner, positionEnded: ended) { effect in
             switch effect {
             case .noteAnnounced(let growth): fillAnnounced(id, growth)
             case .releaseExpectation: releaseFill(id)
@@ -1794,6 +2486,8 @@ final class PerplTrading: MeraSessionLifecycle {
                 settleChild(order.id, kind: kind, outcome)
             }
         }
+        // Margin sent from here whose result wasn't confirmed (or was refused a moment ago): its socket's late word.
+        recheckMargins(on: client)
     }
 
     /// An order not confirmed at its deadline: read again at once, then after each report on the account (at most every
@@ -1916,6 +2610,8 @@ final class PerplTrading: MeraSessionLifecycle {
                 finishReconciling(id)
             }
         }
+        // Margin sent from here whose result wasn't confirmed: the chain, once per pending request.
+        await recheckMarginsOnChain(owner: owner)
     }
 
     /// The reconcile is done with `id`: out of the store, and never read by it again in this process.
@@ -2031,6 +2727,44 @@ final class PerplTrading: MeraSessionLifecycle {
         return outcome
     }
 
+    // MARK: The scripted demo (DEBUG + Simulator only)
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// The scripted Perps demo's session (`PerpsDemo`, p4 spec D): a client that never connects (`debugScripted()`) is
+    /// adopted by an instance of its own — never the app's, never bound to a wallet or a passkey, with no key — and wired as
+    /// a live socket would be. Its request ids are never written to the device's store.
+    func debugAdopt(_ client: PerplTradeClient) {
+        precondition(client.isDebugScripted && key == nil && boundAddress == nil, "only a scripted client, on an instance bound to no one")
+        wire(client)
+        client.onRequestIdIssued = nil
+        self.client = client
+        orders.debugNotice = { [weak self] title, body in self?.debugNotices.append((title, body)) }
+        syncStatus()
+    }
+
+    /// Lets the demo's client go: its counts never reach the owner's census, and nothing is flushed.
+    func debugRelease() {
+        _ = client?.drainCensus()
+        client?.disconnect()
+        client = nil
+        openOrders = []
+    }
+
+    /// This instance is the scripted demo's.
+    var isDemo: Bool { client?.isDebugScripted == true }
+    /// The fixed address the demo's position reads use (its stub reads nothing else): never an account.
+    var demoReadOwner: Address? { isDemo ? PerpsDemo.readAddress : nil }
+    private var demoSession: Bool { isDemo }
+    /// The title and body of every notice the demo's orders and margin would post, posted nowhere.
+    @ObservationIgnored private(set) var debugNotices: [(title: String, body: String)] = []
+    /// A margin sheet of the demo's shows its request's result now (its request was written): the demo may close it.
+    var debugMarginPresented: Bool { !marginPresented.isEmpty }
+    #else
+    /// Nil outside the DEBUG demo.
+    var demoReadOwner: Address? { nil }
+    private var demoSession: Bool { false }
+    #endif
+
     // MARK: Stream census (counts only)
 
     private static let log = Logger(subsystem: "fun.dyorhq.app", category: "perpl") // not localized: a log category
@@ -2078,9 +2812,63 @@ final class PerplTrading: MeraSessionLifecycle {
     }
 }
 
+/// Whether the last trading socket of a Perpl account reported one-click trading (order forwarding) on: a public flag,
+/// never a key, in UserDefaults ("perpl.forwarding.v1.<chain>.<account>"). Written from what the socket reports, never from
+/// the on-chain grant. A passkey account whose session is locked sends Close / Add Margin over the trading connection after
+/// its step-up only when it was on (`PerplTrading.apiActionsAfterUnlock`).
+enum PerplForwardingMemory {
+    static func key(chainId: Int, accountId: Int) -> String { "perpl.forwarding.v1.\(chainId).\(accountId)" } // not localized: a storage key
+
+    /// Nil when no socket of the account was ever signed in on this device.
+    static func lastKnown(chainId: Int, accountId: Int, defaults: UserDefaults = .standard) -> Bool? {
+        let key = key(chainId: chainId, accountId: accountId)
+        return defaults.object(forKey: key) == nil ? nil : defaults.bool(forKey: key)
+    }
+
+    static func record(_ forwarding: Bool, chainId: Int, accountId: Int, defaults: UserDefaults = .standard) {
+        defaults.set(forwarding, forKey: key(chainId: chainId, accountId: accountId))
+    }
+}
+
+/// The owner's two Perps kill switches (`RemoteFlags.perpsLiveOutcome`, `.perpsApiActions`) as the last check that read
+/// `app_config` 'ios' found them: two Bools in UserDefaults ("perps.switches.v1"), never a secret. Saved each time a
+/// check reads the row (`AppEnvironment.apply`); a failed check saves nothing and changes nothing (`UpdateGate` fails
+/// open). Read once, when `PerplTrading` starts: before the first check of a launch the app uses the last values read,
+/// so an OFF the owner engaged holds across a relaunch and an offline start until a check reads otherwise. Nothing
+/// stored: both on (`RemoteFlags.on`).
+enum PerpsSwitchStore {
+    struct Switches: Equatable {
+        let perpsLiveOutcome: Bool
+        let perpsApiActions: Bool
+    }
+
+    static let key = "perps.switches.v1" // not localized: a storage key
+    private static let liveOutcomeKey = "perpsLiveOutcome" // not localized: a storage key
+    private static let apiActionsKey = "perpsApiActions" // not localized: a storage key
+
+    /// The last values read on this device; nil before the first check that read the row (or for a value that isn't
+    /// the two Bools).
+    static var last: Switches? { read(from: .standard) }
+
+    static func read(from defaults: UserDefaults) -> Switches? {
+        guard let stored = defaults.dictionary(forKey: key), let live = stored[liveOutcomeKey] as? Bool,
+              let api = stored[apiActionsKey] as? Bool else { return nil }
+        return Switches(perpsLiveOutcome: live, perpsApiActions: api)
+    }
+
+    static func save(_ flags: RemoteFlags, defaults: UserDefaults = .standard) {
+        defaults.set([liveOutcomeKey: flags.perpsLiveOutcome, apiActionsKey: flags.perpsApiActions], forKey: key)
+    }
+}
+
+extension PerplTradeError {
+    /// Refused on the device (the frame wouldn't do what the sheet says): never a reason to stop using the connection.
+    var isInvalidOrder: Bool { if case .invalidOrder = self { return true }; return false }
+}
+
 /// The trading stream's census (`PerplStreamCensus`), merged across sockets and launches, in UserDefaults: counts only,
 /// nothing secret and nothing that names an order or an account. The owner reads it from a TestFlight device's log to
-/// decide the live-outcome switch on data.
+/// judge the Perps kill switches (live outcome, API actions) on data, and turn either off.
 struct PerplCensusStore {
     private static let key = "perpl.census.v1" // not localized: a storage key
     private let defaults: UserDefaults

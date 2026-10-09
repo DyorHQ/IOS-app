@@ -209,11 +209,16 @@ final class AppEnvironment {
 
     /// Applies the owner's remote switches (`RemoteFlags`, from `UpdateGate`'s read of `app_config` 'ios'): DyorHQ venue
     /// prices on the price service (off: priced like any token, as build 16 did), the DyorHQ labels on the coins model
-    /// (off: build 16's labels), and the opt-in live order outcome on Perps (off: today's one-click sheet; an order
-    /// already sent keeps the mode of its tap). Nothing is written anywhere; the next check applies the row again.
+    /// (off: build 16's labels), and on Perps the live order outcome (off: today's acknowledgement sheet, and Close / Add
+    /// Margin / Cancel Order go on-chain) and the API actions (off: Close / Add Margin / Cancel Order go on-chain), each
+    /// on unless the row says false; the last values read of the two Perps switches are kept across launches
+    /// (`PerpsSwitchStore`). A request already sent keeps the mode of its tap. Nothing is written to the backend; the next
+    /// check applies the row again.
     func apply(_ flags: RemoteFlags) {
         dyorCoins.showsDyorBadges = flags.dyorBadges
         perplTrading.liveOutcomes = flags.perpsLiveOutcome
+        perplTrading.apiActions = flags.perpsApiActions
+        PerpsSwitchStore.save(flags)
         let previous = venueSwitch
         venueSwitch = Task { [prices] in
             await previous?.value

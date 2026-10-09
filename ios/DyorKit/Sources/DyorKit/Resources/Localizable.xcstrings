@@ -5548,6 +5548,35 @@
         }
       }
     },
+    "Perpl accepted the close for forwarding but hasn't reported what happened to it yet. Your positions are reloading: check them before closing again." : {
+      "comment" : "The result of a Perps close the app sent, under 'Result not confirmed yet' in the close sheet and the trade screen's status row: Perpl took the close but its result didn't arrive in time.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl aceptó el cierre para reenviarlo, pero aún no ha informado de lo que pasó con él. Tus posiciones se están recargando: revísalas antes de volver a cerrar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl a accepté la clôture pour la transmettre, mais n'a pas encore indiqué ce qu'il en est advenu. Vos positions se rechargent : vérifiez-les avant de clôturer à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 종료 주문을 전달용으로 받았지만 결과를 아직 알리지 않았습니다. 포지션을 다시 불러오는 중입니다. 다시 종료하기 전에 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 已接受该平仓并准备转发，但尚未报告其结果。正在重新加载你的仓位：再次平仓前先查看它们。"
+          }
+        }
+      }
+    },
     "Perpl accepted the order for forwarding but hasn't reported what happened to it yet. Your positions and orders are reloading: check them before placing it again." : {
       "comment" : "The result of a Perps order the app sent, under 'Result not confirmed yet' in the order sheet and the trade screen's status row: Perpl took the order but its result didn't arrive in time.",
       "localizations" : {
@@ -6231,6 +6260,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Perpl 拒绝了此交易密钥。移除下方的 API 密钥，然后重新连接以注册新的密钥。"
+          }
+        }
+      }
+    },
+    "Perpl reported a different order under this close's request number, so its result can't be shown. Check Positions before closing again." : {
+      "comment" : "The result of a Perps close the app sent, under 'Result not confirmed yet' in the close sheet and the trade screen's status row: what Perpl reported under the close's request number doesn't match the close sent. Positions is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl informó de otra orden con el número de solicitud de este cierre, así que no se puede mostrar su resultado. Revisa Posiciones antes de volver a cerrar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl a signalé un autre ordre sous le numéro de requête de cette clôture : son résultat ne peut donc pas être affiché. Vérifiez Positions avant de clôturer à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 이 종료 주문의 요청 번호로 다른 주문을 보고해 결과를 표시할 수 없습니다. 다시 종료하기 전에 포지션을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 以此次平仓的请求编号报告了另一个订单，因此无法显示其结果。再次平仓前，先查看“仓位”。"
           }
         }
       }
@@ -8958,6 +9016,35 @@
         }
       }
     },
+    "The connection to Perpl dropped before it reported the close's result. Your positions are reloading: check them before closing again." : {
+      "comment" : "The result of a Perps close the app sent, under 'Result not confirmed yet' in the close sheet and the trade screen's status row: the trading connection closed before Perpl reported the close's result.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La conexión con Perpl se cortó antes de que informara del resultado del cierre. Tus posiciones se están recargando: revísalas antes de volver a cerrar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La connexion à Perpl a été coupée avant qu'il n'indique le résultat de la clôture. Vos positions se rechargent : vérifiez-les avant de clôturer à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 종료 결과를 알리기 전에 연결이 끊어졌습니다. 포지션을 다시 불러오는 중입니다. 다시 종료하기 전에 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与 Perpl 的连接在其报告平仓结果前断开。正在重新加载你的仓位：再次平仓前先查看它们。"
+          }
+        }
+      }
+    },
     "The connection to Perpl dropped before it reported the result. Your positions and orders are reloading: check them before placing it again." : {
       "comment" : "The result of a Perps order the app sent, under 'Result not confirmed yet' in the order sheet and the trade screen's status row: the trading connection closed before Perpl reported the result.",
       "localizations" : {
@@ -9381,6 +9468,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "暂时无法读取强平价格，因此无法对照它检查此止损。稍后重试。"
+          }
+        }
+      }
+    },
+    "The margin amount rounds to zero." : {
+      "comment" : "Add Margin's error: the amount entered is below the smallest unit of AUSD, so nothing was sent.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El importe del margen se redondea a cero."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le montant de la marge est arrondi à zéro."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "증거금 금액이 0으로 반올림됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保证金金额会被舍入为零。"
           }
         }
       }

@@ -633,4 +633,23 @@ final class DyorKitStringsTests: XCTestCase {
             XCTAssertTrue(complete, "no English one and other plural forms in DyorKit's catalog: \(key)")
         }
     }
+
+    /// A close the app sent that Perpl took but didn't report in time is said of the close (p4 spec #26): check the
+    /// positions before closing again — never the order's "before placing it again". The order keeps its own sentences.
+    func testAnUnconfirmedCloseIsSaidOfTheClose() {
+        let c = PerplOutcomeText.Context(asset: "BTC", priceDecimals: 1, lotDecimals: 5, requestedSize: 0.002, limitPrice: nil, isMarket: true,
+                                         reducesPosition: true, slippageBps: 100, acknowledged: true)
+        let expected: [(PerplOrderOutcome.Unconfirmed, String)] = [
+            (.timedOut, "Perpl accepted the close for forwarding but hasn't reported what happened to it yet. Your positions are reloading: check them before closing again."),
+            (.connectionLost, "The connection to Perpl dropped before it reported the close's result. Your positions are reloading: check them before closing again."),
+            (.foreignReport, "Perpl reported a different order under this close's request number, so its result can't be shown. Check Positions before closing again."),
+        ]
+        for (why, sentence) in expected {
+            let close = PerplOutcomeText.close(.unconfirmed(why), c)
+            XCTAssertEqual(close.detail, sentence)
+            XCTAssertFalse(close.detail?.contains("placing it again") ?? true)
+            XCTAssertTrue(PerplOutcomeText.order(.unconfirmed(why), c).detail?.contains("placing it again") ?? false, "the order keeps its own")
+        }
+        XCTAssertEqual(PerplOutcomeText.notClosedHeadline, "Not closed")
+    }
 }

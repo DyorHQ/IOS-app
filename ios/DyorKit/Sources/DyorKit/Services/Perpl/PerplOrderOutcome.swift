@@ -1,3 +1,4 @@
+import BigInt
 import Foundation
 
 /* What Perpl actually did with an order the app sent: the authenticated stream's order, fill and position events
@@ -327,7 +328,8 @@ public enum PerplOrderOutcome: Sendable, Equatable, Codable {
 /// The per-request reducer, keyed by (accountId, rq), applying Perpl's client-side deduplication: the first non-failure
 /// status is definitive and later failures are ignored; a failure counts only while every message received is one.
 public struct PerplOrderLedger: Sendable {
-    public enum Kind: Sendable, Equatable, Codable { case entry(ioc: Bool, sizeRaw: Int), trigger, cancel }
+    /// `collateral`: an IncreasePositionCollateral request (add margin), whose reports never touch an order's (I8).
+    public enum Kind: Sendable, Equatable, Codable { case entry(ioc: Bool, sizeRaw: Int), trigger, cancel, collateral }
     /// Perpl's "head ≥ lb, no status, no reconnect ⇒ not executed" rule is NOT applied in this build: mt:100 on the
     /// trading socket hasn't been observed to be one heartbeat per block continuing the mt:19 `sn` (census).
     public static let concludesExpiryFromHeartbeat = false
@@ -418,6 +420,15 @@ public struct PerplOrderLedger: Sendable {
                 target = (PerplOpenOrder.Key(marketId: market, oid: oid), status)
             }
             return (changed, target)
+        }
+        let writtenAsCollateral = event.requestId.map { sent[RequestKey(account: account, rq: $0)]?.kind == .collateral } ?? false
+        if event.typeRaw == 6 || writtenAsCollateral {
+            // An IncreasePositionCollateral request's own report: attached to its own request only, never joined, mapped or
+            // drained by an order id it may carry, so it can't be read as an order's (I8, as a cancel's). One without a
+            // request id names nothing of its own: dropped.
+            guard let rq = event.requestId else { return ([], nil) }
+            attach(event, to: RequestKey(account: account, rq: rq), carriedRq: true, isCancel: false, keepsOrderId: false, at: now)
+            return ([rq], nil)
         }
         if let rq = event.requestId {
             return (join(event, to: RequestKey(account: account, rq: rq), carriedRq: true, account: account, at: now), nil)
@@ -528,10 +539,28 @@ public struct PerplOrderLedger: Sendable {
         guard let entry = entries[RequestKey(account: sent.accountId, rq: rq)] else { return nil }
         if Self.isForeign(entry, sent: sent) { return .unconfirmed(.foreignReport) }
         switch sent.kind {
+        case .collateral: return nil // never an order's outcome: `collateralOutcome`
         case .cancel: return Self.cancelOutcome(entry)
         case .trigger: return Self.triggerOutcome(entry, final: final)
         case .entry(let ioc, let size): return Self.entryOutcome(entry, ioc: ioc, sizeRaw: size, final: final)
         }
+    }
+
+    /// What Perpl did with the IncreasePositionCollateral request `rq` (add margin), from its reports, in this order (p4
+    /// spec A.4.3): the position's collateral grown under its own request id (`grown`, from the client's mt:27 reading)
+    /// is added, whatever else was said; nothing seen, or a first report of another request, is undecided; a terminal
+    /// success (Filled 4, Executed 10) is added; Canceled 5 or Expired 6 — which a request that never matches may also
+    /// report for "processed" — or a removal without a failure is undecided, never refused; a failure while nothing else
+    /// arrived is refused when it is final at once, or at the evidence wait's end with the socket signed in throughout
+    /// (`final`). INFERRED and failing safe: nothing undecided ever reads as added or as refused.
+    public func collateralOutcome(rq: Int, sent: PerplSentRequest, final: Bool, grown: BigUInt?) -> PerplCollateralOutcome? {
+        if let grown, grown > 0 { return .added(deltaCNS: grown) }
+        guard let entry = entries[RequestKey(account: sent.accountId, rq: rq)] else { return nil }
+        if Self.isForeign(entry, sent: sent) { return nil }
+        if entry.sawNonFailure, entry.status == 4 || entry.status == 10 { return .added(deltaCNS: nil) }
+        if entry.status == 5 || entry.status == 6 || (entry.removed && entry.firstFailure == nil) { return nil }
+        if !entry.sawNonFailure, let failure = entry.firstFailure, failure.isFinalAtOnce || final { return .refused(failure) }
+        return nil
     }
 
     /// The failure Perpl reported while nothing else has arrived, and which a later report may still replace.
@@ -650,8 +679,9 @@ public struct PerplOrderLedger: Sendable {
         if bufferedFills.count > Self.bufferCapacity { bufferedFills.removeFirst(bufferedFills.count - Self.bufferCapacity) }
     }
 
-    /// Merges one event into its request under the deduplication rule.
-    private mutating func attach(_ event: PerplOrderEvent, to key: RequestKey, carriedRq: Bool, isCancel: Bool, at now: Date) {
+    /// Merges one event into its request under the deduplication rule. `keepsOrderId` false (a margin request's report):
+    /// an order id it carries is never taken as its own, so no order key can ever map to it.
+    private mutating func attach(_ event: PerplOrderEvent, to key: RequestKey, carriedRq: Bool, isCancel: Bool, keepsOrderId: Bool = true, at now: Date) {
         var entry = entries[key] ?? Entry(updatedAt: now)
         entry.updatedAt = now
         entry.events += 1
@@ -663,7 +693,7 @@ public struct PerplOrderLedger: Sendable {
             entry.firstCarriedRq = carriedRq
         }
         if let market = event.marketId { entry.marketId = market }
-        if let oid = event.orderId, !isCancel { entry.orderId = oid }
+        if let oid = event.orderId, !isCancel, keepsOrderId { entry.orderId = oid }
         if let os = event.originalSizeRaw { entry.originalSize = os }
         let status = event.status
         if status == 7 {
@@ -827,6 +857,77 @@ public enum PerplTimeouts {
     public static let triggerOutcome: TimeInterval = 5      // changeTriggers' one combined st-8 wait
     public static let outcomeWallClock: TimeInterval = 12   // PerplOutcomeDeadline
     public static let drainAcks: TimeInterval = 8, drainOperation: TimeInterval = 20   // PerplTrading.drain
+    /// PerplTrading.addMargin's wait for Perpl's evidence after the write (the ack's 8 s plus this stays under the drain).
+    public static let marginEvidence: TimeInterval = 10
+    /// PerplTrading.cancelAndConfirm's wait, before anything is sent, for a socket that just signed in to send its open
+    /// orders (the check of the order the user saw reads them); with the ack's 8 s and the removal's 10 s it fits the drain.
+    public static let ordersSnapshot: TimeInterval = 2
+}
+
+/// What Perpl did with an IncreasePositionCollateral request (add margin), from its reports: added — by the position's
+/// collateral grown under the request (the measured delta), or by the request's own terminal success (nil: not measured)
+/// — or refused with Perpl's reason. Nothing else is ever read as either.
+public enum PerplCollateralOutcome: Sendable, Equatable {
+    case added(deltaCNS: BigUInt?)
+    case refused(PerplOrderReason)
+}
+
+/// What a position read on the chain, or a growth the stream reported without the request's id, may say of an add-margin
+/// request (p4 spec A.4.3, R.1.6, R.1.7). A position's collateral also moves with fills and with every other margin request,
+/// so only an unambiguous change is this request's: the same size as before, the collateral grown by the amount (to the
+/// cent), and no other margin request on that market that could have moved it. Anything else leaves the request "not
+/// confirmed", which is honest; it never credits one deposit to two requests.
+public enum PerplMarginEvidence {
+    /// How far a chain read may trail Perpl's own report of a change.
+    public static let chainLag: TimeInterval = 5
+    /// The collateral grown by the amount sent, give or take a cent.
+    public static let tolerance = 0.01
+
+    /// The chain's position on `before`'s market and side holds exactly this request: its size unchanged (within half a lot:
+    /// a fill moves the collateral too) and its collateral `amount` above `before`'s, to the cent.
+    public static func chainShows(_ positions: [PerpPosition], before: PerpPosition, amount: Double, lotDecimals: Int) -> Bool {
+        guard let after = positions.first(where: { $0.perpId == before.perpId }), after.side == before.side,
+              !sizeMoved(after, before: before, lotDecimals: lotDecimals) else { return false }
+        return abs(after.margin - before.margin - amount) <= tolerance + 1e-9
+    }
+
+    /// The chain lists the position on `before`'s market with another side or size: an order moved it since `before`, so the
+    /// chain can never again tell this request's collateral apart. A read without that market's position says nothing.
+    public static func sizeMoved(in positions: [PerpPosition], before: PerpPosition, lotDecimals: Int) -> Bool {
+        guard let after = positions.first(where: { $0.perpId == before.perpId }) else { return false }
+        return after.side != before.side || sizeMoved(after, before: before, lotDecimals: lotDecimals)
+    }
+
+    private static func sizeMoved(_ after: PerpPosition, before: PerpPosition, lotDecimals: Int) -> Bool {
+        abs(after.size - before.size) >= pow(10, -Double(lotDecimals)) / 2
+    }
+
+    /// One margin request this device made, as far as telling its collateral from another's goes: its market, when it was
+    /// tapped, and when its result stopped being able to move the position's collateral (nil while it is being sent,
+    /// waited for or re-checked).
+    public struct Request: Sendable, Equatable {
+        public let marketId: Int
+        public let startedAt: Date
+        public var settledAt: Date?
+
+        public init(marketId: Int, startedAt: Date, settledAt: Date? = nil) {
+            self.marketId = marketId
+            self.startedAt = startedAt
+            self.settledAt = settledAt
+        }
+    }
+
+    /// Another margin request on `marketId` than `id` could have moved the collateral since `since` (when this request's
+    /// "before" was read, or its write; nil: unknown, so any other one counts): one still being sent, waited for or
+    /// re-checked, or one whose result came in after `since` (a chain read trails by up to `chainLag`). In flight or in
+    /// either list, written before this one or after: it is the same collateral.
+    public static func otherMargin(than id: UUID, on marketId: Int, since: Date?, among requests: [UUID: Request]) -> Bool {
+        requests.contains { key, request in
+            guard key != id, request.marketId == marketId else { return false }
+            guard let settled = request.settledAt, let since else { return true }
+            return settled > since.addingTimeInterval(-chainLag)
+        }
+    }
 }
 
 /// When an outcome wait gives up: the first of (ack head + max(ttl, 20) + 5) by the trading heartbeat, or 12 s from the
@@ -985,8 +1086,8 @@ public enum PerplPositionEvidence {
     }
 }
 
-/// What the authenticated stream actually does, counted (no ids, no amounts), so the owner can decide the rollout switch
-/// on data. Every field answers an open question of the real-time spec.
+/// What the authenticated stream actually does, counted (no ids, no amounts), so the owner can judge the Perps kill
+/// switches on data. Every field answers an open question of the real-time spec.
 public struct PerplStreamCensus: Codable, Sendable, Equatable {
     public var requestsWritten = 0
     public var firstEventCarriedRq = 0, firstEventLackedRq = 0, noEventWithin12s = 0
@@ -997,8 +1098,56 @@ public struct PerplStreamCensus: Codable, Sendable, Equatable {
     public var zeroFillIocTriggersCancelled = 0, zeroFillIocTriggersStillListed = 0
     public var removedWithoutStatus = 0, foreignReports = 0, otherAccountUpdates = 0
     public var heartbeatsInOrder = 0, heartbeatGaps = 0, heartbeatUnseeded = 0, heartbeatStale = 0, firstBeatContinuedSnapshot = 0
+    /// Add-margin requests (p4 spec A.5): written; their first report by status (4/10, 5/6, 7); an mt:27 that carried
+    /// one's request id; and a collateral growth that came without it while one waited.
+    public var marginWritten = 0, marginSt4or10 = 0, marginSt5or6 = 0, marginSt7 = 0, marginPositionWithRq = 0, marginGrowthWithoutRq = 0
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case requestsWritten, firstEventCarriedRq, firstEventLackedRq, noEventWithin12s, outcomesDecidedByStream, outcomesTimedOut
+        case oidEqualsScid, oidDiffersFromScid, scidMissing, cancelOwnEvents, cancelTargetOwnRemovals, cancelRemovedOnlyByOwnEvent
+        case failureThenNonFailure, failuresCarryingLog, zeroFillIocTriggersCancelled, zeroFillIocTriggersStillListed
+        case removedWithoutStatus, foreignReports, otherAccountUpdates
+        case heartbeatsInOrder, heartbeatGaps, heartbeatUnseeded, heartbeatStale, firstBeatContinuedSnapshot
+        case marginWritten, marginSt4or10, marginSt5or6, marginSt7, marginPositionWithRq, marginGrowthWithoutRq
+    }
+
+    /// A census stored by an earlier build (without the fields added since) reads with those at 0 and its counts kept.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func count(_ key: CodingKeys) throws -> Int { try c.decodeIfPresent(Int.self, forKey: key) ?? 0 }
+        requestsWritten = try count(.requestsWritten)
+        firstEventCarriedRq = try count(.firstEventCarriedRq)
+        firstEventLackedRq = try count(.firstEventLackedRq)
+        noEventWithin12s = try count(.noEventWithin12s)
+        outcomesDecidedByStream = try count(.outcomesDecidedByStream)
+        outcomesTimedOut = try count(.outcomesTimedOut)
+        oidEqualsScid = try count(.oidEqualsScid)
+        oidDiffersFromScid = try count(.oidDiffersFromScid)
+        scidMissing = try count(.scidMissing)
+        cancelOwnEvents = try count(.cancelOwnEvents)
+        cancelTargetOwnRemovals = try count(.cancelTargetOwnRemovals)
+        cancelRemovedOnlyByOwnEvent = try count(.cancelRemovedOnlyByOwnEvent)
+        failureThenNonFailure = try count(.failureThenNonFailure)
+        failuresCarryingLog = try count(.failuresCarryingLog)
+        zeroFillIocTriggersCancelled = try count(.zeroFillIocTriggersCancelled)
+        zeroFillIocTriggersStillListed = try count(.zeroFillIocTriggersStillListed)
+        removedWithoutStatus = try count(.removedWithoutStatus)
+        foreignReports = try count(.foreignReports)
+        otherAccountUpdates = try count(.otherAccountUpdates)
+        heartbeatsInOrder = try count(.heartbeatsInOrder)
+        heartbeatGaps = try count(.heartbeatGaps)
+        heartbeatUnseeded = try count(.heartbeatUnseeded)
+        heartbeatStale = try count(.heartbeatStale)
+        firstBeatContinuedSnapshot = try count(.firstBeatContinuedSnapshot)
+        marginWritten = try count(.marginWritten)
+        marginSt4or10 = try count(.marginSt4or10)
+        marginSt5or6 = try count(.marginSt5or6)
+        marginSt7 = try count(.marginSt7)
+        marginPositionWithRq = try count(.marginPositionWithRq)
+        marginGrowthWithoutRq = try count(.marginGrowthWithoutRq)
+    }
 
     public mutating func merge(_ other: PerplStreamCensus) {
         requestsWritten += other.requestsWritten
@@ -1025,6 +1174,12 @@ public struct PerplStreamCensus: Codable, Sendable, Equatable {
         heartbeatUnseeded += other.heartbeatUnseeded
         heartbeatStale += other.heartbeatStale
         firstBeatContinuedSnapshot += other.firstBeatContinuedSnapshot
+        marginWritten += other.marginWritten
+        marginSt4or10 += other.marginSt4or10
+        marginSt5or6 += other.marginSt5or6
+        marginSt7 += other.marginSt7
+        marginPositionWithRq += other.marginPositionWithRq
+        marginGrowthWithoutRq += other.marginGrowthWithoutRq
     }
 
     /// One line, counts only, for the device log (Console.app, subsystem fun.dyorhq.app, category perpl). Not shown to
@@ -1037,6 +1192,7 @@ public struct PerplStreamCensus: Codable, Sendable, Equatable {
         parts.append("failThenOk=\(failureThenNonFailure) failLog=\(failuresCarryingLog) iocZeroTr=\(zeroFillIocTriggersCancelled)/\(zeroFillIocTriggersStillListed)") // not localized: a log line
         parts.append("rNoSt=\(removedWithoutStatus) foreign=\(foreignReports) otherAcct=\(otherAccountUpdates)") // not localized: a log line
         parts.append("hb=\(heartbeatsInOrder)/\(heartbeatGaps)/\(heartbeatUnseeded)/\(heartbeatStale) cont=\(firstBeatContinuedSnapshot)") // not localized: a log line
+        parts.append("margin=\(marginWritten)/\(marginSt4or10)/\(marginSt5or6)/\(marginSt7)/\(marginPositionWithRq)/\(marginGrowthWithoutRq)") // not localized: a log line
         return parts.joined(separator: " ")
     }
 }

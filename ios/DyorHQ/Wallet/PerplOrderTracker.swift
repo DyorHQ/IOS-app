@@ -22,6 +22,10 @@ final class PerplOrderTracker {
     @ObservationIgnored private(set) var loadedFromDisk: Set<UUID> = []
     /// How many settled orders are kept in memory besides those still waiting or able to change.
     static let settledKept = 20
+    #if DEBUG && targetEnvironment(simulator)
+    /// The scripted demo's "Would notify" list (`PerplTrading.debugAdopt`): the notice an order with no account would post.
+    @ObservationIgnored var debugNotice: ((_ title: String, _ body: String) -> Void)?
+    #endif
 
     func order(_ id: UUID) -> PerplTrackedOrder? { orders.first { $0.id == id } }
 
@@ -114,24 +118,42 @@ final class PerplOrderTracker {
     /// Carries out `effects` for `order`: its own notice (filed under the account it was sent for, and a banner only
     /// while that account is the one signed in), its one Activity row, and its trigger echoes. Everything else is
     /// `PerplTrading`'s (`perform`): the expected fill, the passkey refund, the noted close, the reload, the watcher.
-    func apply(_ effects: [PerplTrackerEffect], order: PerplTrackedOrder, boundOwner: Address?, perform: (PerplTrackerEffect) -> Void) {
+    /// `positionEnded`: for a close sent from the position's Close sheet, whether Perpl's evidence says it ended the
+    /// position (true), left part of it open (false), or can't say (nil: the 100% chip decides the words).
+    func apply(_ effects: [PerplTrackerEffect], order: PerplTrackedOrder, boundOwner: Address?, positionEnded: Bool? = nil,
+               perform: (PerplTrackerEffect) -> Void) {
         for effect in effects {
             switch effect {
             case .announce(let notice, let banner):
                 let owner = order.owner
+                #if DEBUG && targetEnvironment(simulator)
+                if order.owner == nil, let debugNotice {
+                    let words = Self.debugNoticeWords(notice, order, positionEnded: positionEnded)
+                    debugNotice(words.title, words.body)
+                }
+                #endif
+                // An order with no account posts nothing (only the DEBUG demo's have none).
+                if order.owner == nil { break }
                 let asset = order.asset
                 let marketId = order.marketId
+                let deliverBanner = banner && owner == boundOwner
+                if order.isClose {
+                    // A close names the POSITION it closed ("BTC-PERP long"), never the order's own side.
+                    let position = PerpAlertText.positionName(asset: asset, side: order.closes ?? order.side.opposite)
+                    Notifications.perpClose(title: Self.closeNoticeTitle(notice, order, positionEnded: positionEnded), position: position, perpId: marketId,
+                                            owner: owner, deliver: deliverBanner)
+                    break
+                }
                 let sideName = order.side == .long
                     ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]"))
                     : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]"))
-                let deliverBanner = banner && owner == boundOwner
                 Notifications.perpOrder(notice, side: sideName, market: "\(asset)-PERP", perpId: marketId, owner: owner, deliver: deliverBanner)
             case .recordActivity(let outcome):
                 if case .onChain(let hash) = order.source {
                     // A wallet-signed order's row is its transaction's: the same hash replaces the row written at the receipt.
                     Self.record(outcome, order, kindName: Self.kindName(order), hash: hash, id: nil, owner: order.owner)
                 } else {
-                    Self.record(outcome, order, kindName: Self.kindName(order), hash: nil, id: order.id, owner: order.owner)
+                    Self.record(outcome, order, kindName: Self.kindName(order), hash: nil, id: order.id, owner: order.owner, positionEnded: positionEnded)
                 }
             case .removeTriggerEcho(_, let echo):
                 // This order's own echo only: another order's take-profit or stop-loss on that side is still live (GT-1).
@@ -140,6 +162,44 @@ final class PerplOrderTracker {
                 perform(effect)
             }
         }
+    }
+
+    /// A close's notice title, from what Perpl reported: closed or partly closed (by `positionEnded`, else the 100% chip),
+    /// a close order placed on the book, or not closed.
+    static func closeNoticeTitle(_ notice: PerpOrderNotice, _ order: PerplTrackedOrder, positionEnded: Bool?) -> String {
+        switch notice {
+        case .filled:
+            return closedWhole(order, positionEnded: positionEnded) ? tr("Closed \(order.asset)") : PerpOnChainCopy.partlyClosedTitle(order.asset)
+        case .partlyFilled:
+            return PerpOnChainCopy.partlyClosedTitle(order.asset)
+        case .placed:
+            return tr("Close order placed")
+        case .notFilled, .failed:
+            return PerplOutcomeText.notClosedHeadline
+        case .submitted:
+            return PerpOnChainCopy.closeTitle(order.asset)
+        }
+    }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// The title and body `.announce` would post for `order` (the scripted demo's "Would notify" list): a close's names the
+    /// position, an order's its side and market.
+    static func debugNoticeWords(_ notice: PerpOrderNotice, _ order: PerplTrackedOrder, positionEnded: Bool?) -> (title: String, body: String) {
+        if order.isClose {
+            return (closeNoticeTitle(notice, order, positionEnded: positionEnded), PerpAlertText.positionName(asset: order.asset, side: order.closes ?? order.side.opposite))
+        }
+        let side = order.side == .long
+            ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]"))
+            : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]"))
+        return (notice.title, "\(side) \(order.asset)-PERP")
+    }
+    #endif
+
+    /// A filled close ended the position: Perpl's evidence when there is some, else whether the 100% chip sent it.
+    private static func closedWhole(_ order: PerplTrackedOrder, positionEnded: Bool?) -> Bool {
+        if let positionEnded { return positionEnded }
+        if case .close(let whole)? = order.purpose { return whole }
+        return false
     }
 
     /// The order's type, as its Activity row names it.
@@ -161,21 +221,35 @@ final class PerplOrderTracker {
         return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
     }
 
+    /// The id of an add-margin request's one Activity row, sent over the trading connection: the first 16 bytes of
+    /// keccak("perpl-margin:<account>:<rq>:<sent ms>"), so a later result rewrites the same row.
+    static func marginActivityID(accountId: Int, rq: Int, sentAt: Date) -> UUID {
+        let ms = Int((sentAt.timeIntervalSince1970 * 1000).rounded())
+        let digest = Keccak.hash256(Data("perpl-margin:\(accountId):\(rq):\(ms)".utf8)) // not localized: an identifier's seed
+        let b = Array(digest.prefix(16))
+        return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
+    }
+
     /// The order's one Activity row (`notify: false`: the order's own notice is posted on its own). API orders pass
     /// `hash: nil` and their `activityID`, so the row is written again under the same id as more is known; an on-chain
     /// order passes its hash. `usd` is only ever what filled, at the price it filled at (`volumeUSD`), or a growth on the
     /// chain only this order can explain: never the size ordered, never the mark. Nothing executed: no row of its own —
     /// only the rewrite of the row a growth on the chain wrote earlier (`PerplTracker.settleEntry` asks for it then), which
     /// says nothing filled and takes its volume back.
-    static func record(_ outcome: PerplOrderOutcome, _ order: PerplTrackedOrder, kindName: String, hash: Data?, id: UUID?, owner: Address?) {
+    ///
+    /// A close sent from the position's Close sheet (`order.isClose`) is said of the position: only its title and
+    /// subtitle differ (closed or partly closed — by `positionEnded`, else the 100% chip — a close order placed, or a
+    /// close whose result isn't confirmed); its volume is the same as any order's.
+    static func record(_ outcome: PerplOrderOutcome, _ order: PerplTrackedOrder, kindName: String, hash: Data?, id: UUID?, owner: Address?,
+                       positionEnded: Bool? = nil) {
         let perp = "\(order.asset)-PERP"
-        let title = order.side == .long ? tr("Long \(perp)") : tr("Short \(perp)")
+        var title = order.side == .long ? tr("Long \(perp)") : tr("Short \(perp)")
         let c = order.textContext
         let ordered = PerplOutcomeText.amount(order.requestedSize, c)
         func price(_ value: Double) -> String { NumberStyle.number(value, maximumFractionDigits: order.priceDecimals) }
         var usd: Double?
         var fee: Double?
-        let subtitle: String
+        var subtitle: String
         switch outcome {
         case .filled(let fill):
             let filled = PerplOutcomeText.amount(fill.size(lotDecimals: order.lotDecimals), c)
@@ -219,9 +293,34 @@ final class PerplOrderTracker {
         case .armed, .triggered:
             return
         }
+        if order.isClose { (title, subtitle) = closeWords(outcome, order, positionEnded: positionEnded, fallback: subtitle) }
         var row = ActivityRecord(kind: .perp, title: title, subtitle: subtitle, hash: hash, time: order.sentAt, section: "perps", usd: usd, feeUsd: fee)
         if let id { row.id = id }
         Activity.record(row, owner: owner, notify: false)
+    }
+
+    /// A close's row words (`record`): closed or partly closed with what closed at its price, a close order placed on the
+    /// book, or the close's title over `fallback` (not confirmed, or nothing filled).
+    private static func closeWords(_ outcome: PerplOrderOutcome, _ order: PerplTrackedOrder, positionEnded: Bool?, fallback: String) -> (String, String) {
+        let c = order.textContext
+        func price(_ value: Double) -> String { NumberStyle.number(value, maximumFractionDigits: order.priceDecimals) }
+        switch outcome {
+        case .filled(let fill):
+            let closed = PerplOutcomeText.amount(fill.size(lotDecimals: order.lotDecimals), c)
+            let title = closedWhole(order, positionEnded: positionEnded) ? tr("Closed \(order.asset)") : PerpOnChainCopy.partlyClosedTitle(order.asset)
+            guard let p = fill.price(priceDecimals: order.priceDecimals), p > 0 else { return (title, closed) }
+            return (title, PerpOnChainCopy.closedAt(closed, price: price(p)))
+        case .partlyFilled(let fill, _):
+            let closed = PerplOutcomeText.amount(fill.size(lotDecimals: order.lotDecimals), c)
+            let whole = PerplOutcomeText.amount(Double(fill.requestedSizeRaw) / pow(10, Double(order.lotDecimals)), c)
+            guard let p = fill.price(priceDecimals: order.priceDecimals), p > 0 else { return (PerpOnChainCopy.partlyClosedTitle(order.asset), closed) }
+            return (PerpOnChainCopy.partlyClosedTitle(order.asset), PerpOnChainCopy.partlyClosedAt(closed, of: whole, price: price(p)))
+        case .resting:
+            let limit = tr(LocalizedStringResource("Limit", comment: "Order type: rests at the price you set until it fills. [tight]"))
+            return (tr("Close order placed"), "\(PerplOutcomeText.amount(order.requestedSize, c)) · \(limit)")
+        default:
+            return (PerpOnChainCopy.closeTitle(order.asset), fallback)
+        }
     }
 
     /// A wallet-signed order's row the moment its transaction confirms (GL-3), before its receipt is read: no volume,

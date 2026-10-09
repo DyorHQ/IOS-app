@@ -110,6 +110,20 @@ public struct PerplTrackedOrder: Sendable, Equatable, Codable, Identifiable {
     /// Sent from the wallet as a transaction (`.onChain`): its result is read from the receipt, not from Perpl's stream.
     public var isOnChain: Bool { if case .onChain = source { return true }; return false }
 
+    /// Why the order was sent, when it isn't the ticket's: `close` — the position's Close sheet sent it over the trading
+    /// connection (`wholePosition`: the 100% chip, sent with the freshest size). Its result is said of the position, and
+    /// its notice names the position. Otherwise it behaves as any reduce-only order: no expected growth, and a noted close
+    /// voided when nothing executed.
+    public enum Purpose: Sendable, Equatable, Codable {
+        case close(wholePosition: Bool)
+    }
+
+    /// Nil: a ticket order (and every record stored before this existed).
+    public var purpose: Purpose?
+
+    /// The Close sheet sent it.
+    public var isClose: Bool { if case .close? = purpose { return true }; return false }
+
     public var entry: PerplOrderOutcome?
     /// A failure Perpl reported that a later report may still replace (shown under the waiting status only).
     public var provisional: PerplOrderReason?

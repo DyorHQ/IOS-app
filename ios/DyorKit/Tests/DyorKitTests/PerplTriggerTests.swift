@@ -185,6 +185,43 @@ final class PerplTriggerTests: XCTestCase {
         XCTAssertEqual(c.positions.first?.sizeRaw, 9)
     }
 
+    #if DEBUG
+    /// The scripted demo's client (p4 spec D, #13): only `debugScripted()` makes one, it can't route anywhere, and its drop
+    /// is a dropped socket's — signed out, every outcome wait ended as "connection lost", the owner told.
+    func testTheDemoClientIsScriptedAndDropsAsASocketWould() async throws {
+        XCTAssertFalse(client().isDebugScripted, "a client built with a key is never scripted")
+        let demo = PerplTradeClient.debugScripted()
+        XCTAssertTrue(demo.isDebugScripted)
+        var written: [String] = []
+        demo.debugAttach { written.append($0) }
+        XCTAssertTrue(written.isEmpty)
+        demo.debugReceive(#"{"mt":19,"sn":9,"as":[{"id":10,"lfr":5,"fw":true}]}"#)
+        XCTAssertTrue(demo.signedIn)
+        var dropped = 0
+        demo.onDisconnect = { dropped += 1 }
+        let send = Task { try await demo.sendEach([cancelFrame()]) }
+        await until { written.count == 1 }
+        demo.debugReceive(#"{"mt":3,"cid":1,"status":{"code":0}}"#)
+        let sendAcks = try await send.value
+        let rq = try XCTUnwrap(sendAcks.first?.requestId)
+        let sent = try XCTUnwrap(demo.sentRequest(rq: rq))
+        let wait = Task { await demo.awaitOutcome(rq: rq, sent: sent, deadline: PerplOutcomeDeadline(ackHead: nil, ttlBlocks: nil, ackAt: Date(), cap: 60)) }
+        await until { demo.hasRequestsInFlight }
+        XCTAssertTrue(demo.hasRequestsInFlight, "the outcome is waited for")
+        demo.debugDrop()
+        XCTAssertFalse(demo.signedIn)
+        XCTAssertEqual(dropped, 1)
+        XCTAssertEqual(demo.lastClose?.code, 1001)
+        let outcome = await wait.value
+        XCTAssertEqual(outcome, .unconfirmed(.connectionLost))
+        XCTAssertFalse(demo.hasRequestsInFlight)
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/DyorKit/Services/Perpl/PerplTradeClient.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("precondition(!isDebugScripted, \"a scripted demo client never connects\")"))
+        XCTAssertTrue(source.contains("URL(string: \"wss://perps-demo.invalid\")!"))
+    }
+    #endif
+
     func testNothingInFlightOnAFreshClient() async {
         let c = client()
         XCTAssertFalse(c.hasRequestsInFlight)
@@ -752,5 +789,176 @@ final class PerplTriggerTests: XCTestCase {
         XCTAssertFalse(PerplTriggerRules.onlyReduces(side: .short, size: 0.3, positionSide: nil, positionSize: 0))
         XCTAssertEqual(PerplTriggerRules.Problem.reducesPosition(.long).message(market: btc()),
                        "This order only reduces your long, so its take-profit and stop-loss would have no short to close and would stay armed for your next short here. Set them with TP/SL on the position instead.")
+    }
+
+    // MARK: Close, cancel and add margin over the trading connection (p4 spec A)
+
+    private func listed(oid: Int, scid: Int?, type: Int = 1, price: Int = 780000, market: Int = 1, tp: Int? = nil) -> PerplOpenOrder {
+        PerplOpenOrder(oid: oid, marketId: market, typeRaw: type, statusRaw: 2, priceRaw: price, sizeRaw: 100, filledRaw: 0, triggerPriceRaw: tp,
+                       triggerConditionRaw: tp == nil ? nil : 4, linkedPositionId: nil, leverageHundredths: 500, contractOrderId: scid)
+    }
+
+    /// The stream's order for an on-chain resting order is found by Perpl's smart contract order id only, and only when
+    /// every term matches: else the cancel stays a wallet transaction.
+    func testTheStreamOrderOfAChainOrderMatchesByItsContractId() {
+        let chain = PerpOrder(perpId: 1, orderId: 31, symbol: "BTC", type: .openLong, side: .buy, price: 78000, size: 0.001, leverage: 5, expiryBlock: 0, reduceOnly: false)
+        XCTAssertEqual(PerplOpenOrder.streamOrder(for: chain, in: [listed(oid: 31, scid: 31)], priceDecimals: 1)?.oid, 31)
+        XCTAssertEqual(PerplOpenOrder.streamOrder(for: chain, in: [listed(oid: 77, scid: 31)], priceDecimals: 1)?.oid, 77, "by scid, never by oid")
+        XCTAssertNil(PerplOpenOrder.streamOrder(for: chain, in: [listed(oid: 31, scid: nil)], priceDecimals: 1), "no scid")
+        XCTAssertNil(PerplOpenOrder.streamOrder(for: chain, in: [listed(oid: 31, scid: 31, type: 2)], priceDecimals: 1), "another type")
+        XCTAssertNil(PerplOpenOrder.streamOrder(for: chain, in: [listed(oid: 31, scid: 31, price: 780001)], priceDecimals: 1), "another price")
+        XCTAssertNil(PerplOpenOrder.streamOrder(for: chain, in: [listed(oid: 31, scid: 31, market: 2)], priceDecimals: 1), "another market")
+        XCTAssertNil(PerplOpenOrder.streamOrder(for: chain, in: [listed(oid: 31, scid: 31, tp: 750000)], priceDecimals: 1), "a trigger")
+        XCTAssertNil(PerplOpenOrder.streamOrder(for: chain, in: [listed(oid: 31, scid: 31), listed(oid: 32, scid: 31)], priceDecimals: 1), "two matches")
+        XCTAssertNil(PerplOpenOrder.streamOrder(for: chain, in: [], priceDecimals: 1))
+    }
+
+    /// The smart contract order id rides each order (a partial update keeps it), and how the order left the list is kept by
+    /// it too: what tells an on-chain order's card it is gone.
+    func testTheContractOrderIdAndHowTheOrderLeft() {
+        let c = client()
+        signIn(c)
+        c.handle(frame(["mt": 23, "d": [["oid": 31, "scid": 31, "rq": 480, "mkt": 1, "t": 1, "st": 2, "p": 780000, "os": 100, "fs": 0, "lv": 500]]]))
+        XCTAssertEqual(c.openOrders.first?.contractOrderId, 31)
+        c.handle(frame(["mt": 24, "d": [["oid": 31, "mkt": 1, "fs": 40, "st": 3]]]))
+        XCTAssertEqual(c.openOrders.first?.contractOrderId, 31, "a partial update keeps it")
+        XCTAssertNil(c.lastTerminalStatus(marketId: 1, contractOrderId: 31))
+        c.handle(frame(["mt": 24, "d": [["oid": 31, "mkt": 1, "st": 4, "fs": 100, "r": true]]]))
+        XCTAssertTrue(c.openOrders.isEmpty)
+        XCTAssertEqual(c.lastTerminalStatus(marketId: 1, contractOrderId: 31)?.status, 4)
+        // When it was seen: the Exchange gives the id again, so the app weighs how recent the record is.
+        XCTAssertLessThan(abs(c.lastTerminalStatus(marketId: 1, contractOrderId: 31)?.at.timeIntervalSinceNow ?? .infinity), 5)
+        XCTAssertNil(c.lastTerminalStatus(marketId: 2, contractOrderId: 31))
+        // An order without one is never named by it.
+        c.handle(frame(["mt": 24, "d": [["oid": 40, "mkt": 1, "t": 1, "st": 2, "p": 780000, "os": 100]]]))
+        c.handle(frame(["mt": 24, "d": [["oid": 40, "mkt": 1, "st": 5, "r": true]]]))
+        XCTAssertNil(c.lastTerminalStatus(marketId: 1, contractOrderId: 40))
+    }
+
+    /// Sends one add-margin request of 10 AUSD on `c` and acks it as frame `sn`: its request id.
+    private func sendMargin(_ c: PerplTradeClient, _ wire: Wire, sn: Int) async throws -> Int {
+        let sending = Task { try await c.sendEach([PerplOrders.addMargin(perpId: 1, amountCNS: 10_000_000, accountId: 10)]) }
+        await until { wire.frames.count == sn }
+        ack(c, sn: sn)
+        let acks = try await sending.value
+        return try XCTUnwrap(acks.first?.requestId)
+    }
+
+    /// An add-margin request on the stream (p4 spec A.4.3, #4): its own report never enters the live list nor takes an
+    /// order's request; Canceled alone decides nothing; the position's collateral grown under its own request id is
+    /// Perpl's word that it went in, by the measured amount.
+    func testAMarginRequestOnTheStream() async throws {
+        let c = client()
+        let wire = signIn(c)
+        c.handle(frame(["mt": 23, "d": [["oid": 31, "scid": 31, "rq": 480, "mkt": 1, "t": 1, "st": 2, "p": 780000, "os": 100, "fs": 0, "lv": 500]]]))
+        c.handle(frame(["mt": 26, "d": [["pid": 7, "mkt": 1, "sd": 1, "s": 200, "st": 1, "c": "32000000"]]]))
+        let rq = try await sendMargin(c, wire, sn: 1)
+        XCTAssertEqual(wire.frames.first?["t"] as? Int, 6)
+        XCTAssertEqual(wire.frames.first?["a"] as? String, "10000000")
+        XCTAssertEqual(c.sentRequest(rq: rq)?.kind, .collateral)
+        let orderKey = PerplOpenOrder.Key(marketId: 1, oid: 31)
+        c.handle(frame(["mt": 24, "d": [["rq": rq, "mkt": 1, "oid": 31, "t": 6, "st": 5]]]))
+        XCTAssertEqual(c.openOrders.map(\.oid), [31], "a t:6 report never enters the list")
+        XCTAssertEqual(c.openOrders.first?.typeRaw, 1)
+        XCTAssertEqual(c.requestId(for: orderKey), 480, "nor takes the order's request")
+        XCTAssertNil(c.collateralOutcome(rq: rq, final: false))
+        XCTAssertNil(c.collateralOutcome(rq: rq, final: true), "Canceled alone is never refused")
+        XCTAssertNil(c.outcome(rq: rq, sent: try XCTUnwrap(c.sentRequest(rq: rq)), final: true), "never an order's outcome")
+        XCTAssertFalse(c.sawPositionChange(rq: rq))
+        c.handle(frame(["mt": 27, "d": [["pid": 7, "rq": rq, "st": 1, "c": "42000000"]]]))
+        XCTAssertEqual(c.collateralAdded(rq: rq), 10_000_000)
+        XCTAssertEqual(c.collateralOutcome(rq: rq, final: false), .added(deltaCNS: 10_000_000))
+        XCTAssertTrue(c.sawPositionChange(rq: rq))
+        // The order's own later fill still belongs to the order.
+        c.handle(frame(["mt": 24, "d": [["oid": 31, "mkt": 1, "st": 4, "fs": 100, "r": true]]]))
+        XCTAssertEqual(c.lastTerminalStatus(marketId: 1, contractOrderId: 31)?.status, 4)
+        let census = c.drainCensus()
+        XCTAssertEqual(census.marginWritten, 1)
+        XCTAssertEqual(census.marginSt5or6, 1)
+        XCTAssertEqual(census.marginPositionWithRq, 1)
+        XCTAssertEqual(census.firstEventCarriedRq + census.firstEventLackedRq, 0, "a margin report never counts as an order's first event")
+        XCTAssertEqual(census.foreignReports, 0)
+        XCTAssertEqual(census.oidEqualsScid + census.oidDiffersFromScid + census.scidMissing, 0)
+        XCTAssertEqual(census.cancelOwnEvents, 0)
+    }
+
+    /// A margin refusal is final at once (sr 36 with fr 2, sr 34) or only at the end with continuity (sr 15); a collateral
+    /// growth without the request id counts only as exactly the amount, with the size unchanged, after the write.
+    func testAMarginRefusalAndAGrowthWithoutItsRequestId() async throws {
+        let c = client()
+        let wire = signIn(c)
+        c.handle(frame(["mt": 26, "d": [["pid": 7, "mkt": 1, "sd": 1, "s": 200, "st": 1, "c": "32000000"],
+                                        ["pid": 8, "mkt": 2, "sd": 1, "s": 50, "st": 1, "c": "5000000"]]]))
+        let refused = try await sendMargin(c, wire, sn: 1)
+        c.handle(frame(["mt": 24, "d": [["rq": refused, "mkt": 1, "t": 6, "st": 7, "sr": 36, "fr": 2]]]))
+        XCTAssertEqual(c.collateralOutcome(rq: refused, final: false), .refused(PerplOrderReason(status: 7, reason: 36, failure: 2)))
+        let provisional = try await sendMargin(c, wire, sn: 2)
+        c.handle(frame(["mt": 24, "d": [["rq": provisional, "mkt": 1, "t": 6, "st": 7, "sr": 15]]]))
+        XCTAssertNil(c.collateralOutcome(rq: provisional, final: false))
+        XCTAssertEqual(c.collateralOutcome(rq: provisional, final: true), .refused(PerplOrderReason(status: 7, reason: 15)))
+        let since = Date()
+        c.handle(frame(["mt": 27, "d": [["pid": 7, "st": 1, "c": "42000000"]]]))
+        XCTAssertTrue(c.collateralGrowthWithoutRequest(pid: 7, amountCNS: 10_000_000, since: since))
+        XCTAssertFalse(c.collateralGrowthWithoutRequest(pid: 7, amountCNS: 9_990_000, since: since), "exactly the amount")
+        XCTAssertFalse(c.collateralGrowthWithoutRequest(pid: 7, amountCNS: 10_000_000, since: Date().addingTimeInterval(60)), "older than the write")
+        c.handle(frame(["mt": 27, "d": [["pid": 8, "st": 1, "s": 60, "c": "15000000"]]]))
+        XCTAssertFalse(c.collateralGrowthWithoutRequest(pid: 8, amountCNS: 10_000_000, since: since), "the size changed: a fill's collateral")
+        XCTAssertNil(c.collateralAdded(rq: provisional), "a growth without its request id is never its own")
+        let census = c.drainCensus()
+        XCTAssertEqual(census.marginWritten, 2)
+        XCTAssertEqual(census.marginSt7, 2)
+        XCTAssertEqual(census.marginGrowthWithoutRq, 1)
+    }
+
+    /// A close ended the position only by a closed report carrying its own request id (#7): never by the request id a
+    /// position carried from an earlier report.
+    func testACloseEndsThePositionOnlyByItsOwnReport() {
+        let c = client()
+        signIn(c)
+        c.handle(frame(["mt": 26, "d": [["pid": 7, "mkt": 1, "sd": 1, "s": 200, "st": 1], ["pid": 8, "mkt": 1, "sd": 2, "s": 50, "st": 1]]]))
+        c.handle(frame(["mt": 27, "d": [["pid": 7, "rq": 12, "st": 2, "s": 0]]]))
+        XCTAssertTrue(c.positionClosed(byRequest: 12))
+        c.handle(frame(["mt": 27, "d": [["pid": 8, "rq": 20, "st": 1, "s": 40]]]))
+        c.handle(frame(["mt": 27, "d": [["pid": 8, "st": 2, "s": 0]]]))
+        XCTAssertFalse(c.positionClosed(byRequest: 20), "never the request it carried before")
+        // Another account's report ends nothing of this one.
+        c.handle(frame(["mt": 27, "d": [["pid": 9, "acc": 11, "mkt": 1, "sd": 1, "rq": 30, "st": 2, "s": 0]]]))
+        XCTAssertFalse(c.positionClosed(byRequest: 30))
+    }
+
+    /// A close over the trading connection is a reduce-only order under its reserved request id, decided as any order is;
+    /// a resting order's cancel names it by the stream's own order id and is confirmed by the sending socket's list.
+    func testACloseAndACancelOverTheConnection() async throws {
+        let c = client()
+        let wire = signIn(c)
+        let position = PerpPosition(perpId: 1, symbol: "BTC", side: .long, size: 0.002, entry: 80000, mark: 81650, margin: 32, unrealized: 0, premium: 0,
+                                    leverage: 5, liquidation: nil, notional: 0)
+        var close = PerplOrders.entry(PerplService.closeInput(market: btc(), position: position, size: 0.002, slippageBps: 100), accountId: 10, head: 0)
+        let reserved = c.reserveRequestId()
+        close.requestId = reserved
+        let placing = Task { try await c.placeAll([close]) }
+        await until { wire.frames.count == 1 }
+        ack(c, sn: 1)
+        let closeAcks = try await placing.value
+        XCTAssertEqual(closeAcks.first?.accepted, true)
+        XCTAssertEqual(wire.frames.first?["t"] as? Int, 3)
+        XCTAssertEqual(wire.frames.first?["rq"] as? Int, reserved)
+        XCTAssertEqual(wire.frames.first?["s"] as? Int, 200)
+        let sent = try XCTUnwrap(c.sentRequest(rq: reserved))
+        XCTAssertEqual(sent.kind, .entry(ioc: true, sizeRaw: 200))
+        c.handle(frame(["mt": 24, "d": [["rq": reserved, "mkt": 1, "oid": 90, "t": 3, "st": 4, "os": 200, "fs": 200, "fp": 816100, "f": "56310", "r": true]]]))
+        XCTAssertEqual(c.outcome(rq: reserved, sent: sent, final: false),
+                       .filled(PerplFillSummary(filledSizeRaw: 200, requestedSizeRaw: 200, priceRaw: 816100, feeCNS: "56310", txid: nil)))
+
+        c.handle(frame(["mt": 23, "d": [["oid": 31, "scid": 31, "rq": 480, "mkt": 1, "t": 1, "st": 2, "p": 780000, "os": 100, "lv": 500]]]))
+        let cancelling = Task { try await c.sendEach([PerplOrders.cancel(perpId: 1, orderId: 31, accountId: 10, head: 0)]) }
+        await until { wire.frames.count == 2 }
+        XCTAssertEqual(wire.frames.last?["oid"] as? Int, 31)
+        ack(c, sn: 2)
+        let cancelAcks = try await cancelling.value
+        let cancelRq = try XCTUnwrap(cancelAcks.first?.requestId)
+        c.handle(frame(["mt": 24, "d": [["oid": 31, "mkt": 1, "st": 5, "sr": 28, "r": true]]]))
+        XCTAssertEqual(c.cancelResult(of: PerplOpenOrder.Key(marketId: 1, oid: 31), cancelRq: cancelRq), .cancelled)
+        XCTAssertEqual(c.lastTerminalStatus(marketId: 1, contractOrderId: 31)?.status, 5)
     }
 }

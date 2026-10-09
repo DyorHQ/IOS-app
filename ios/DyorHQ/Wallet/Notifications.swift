@@ -62,6 +62,21 @@ enum Notifications {
                                     reference: perpId.map { PerpAlertText.reference(perpId: $0) }, deliver: deliver, owner: owner)
     }
 
+    /// A close sent over the trading connection from the position's Close sheet, from what Perpl reported it did
+    /// (`PerplOrderTracker`): `title` says what happened ("Closed BTC", "Not closed"), `position` names the POSITION it
+    /// closed ("BTC-PERP long"), never the order's side. Filed under `owner`; `deliver` false files it without a banner.
+    static func perpClose(title: String, position: String, perpId: Int, owner: Address?, deliver: Bool) {
+        NotificationHub.shared.post(kind: .perp, title: title, body: position, route: .perps,
+                                    reference: PerpAlertText.reference(perpId: perpId), deliver: deliver, owner: owner)
+    }
+
+    /// Margin sent over the trading connection whose result no sheet showed (`PerplTrading.addMargin`): refused, or not
+    /// confirmed in time. An added margin's notice is its Activity row's own.
+    static func perpMargin(title: String, body: String, perpId: Int, owner: Address?, deliver: Bool) {
+        NotificationHub.shared.post(kind: .perp, title: title, body: body, route: .perps,
+                                    reference: PerpAlertText.reference(perpId: perpId), deliver: deliver, owner: owner)
+    }
+
     /// `label` is the action's name in the app's language.
     static func transactionConfirmed(_ label: String) {
         post(kind: .transaction, title: tr("Confirmed"), body: tr("\(label) confirmed on Monad."))

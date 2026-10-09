@@ -11,8 +11,9 @@ import SwiftUI
 /// every ten minutes. Fails open: a failed or unreadable check blocks nothing, and a block already seen this run stays
 /// until a check says otherwise.
 ///
-/// The same read carries the owner's remote switches (`RemoteFlags`: DyorHQ venue prices, DyorHQ labels), each on
-/// unless the row turns it off; a check that reads the row hands them to `onFlags`, and one that fails keeps them.
+/// The same read carries the owner's remote switches (`RemoteFlags`: DyorHQ venue prices, DyorHQ labels, the Perps live
+/// outcome and API actions), each on unless the row turns it off; a check that reads the row hands them to `onFlags`,
+/// and one that fails keeps them.
 @Observable
 @MainActor
 final class UpdateGate {

@@ -173,11 +173,16 @@ final class PerpsModel {
                         appliedPositionsGeneration = generation
                         detectChanges(fresh, stillOpen: Set(acct.positionPerpIds), trading: env.perplTrading)
                         positions = fresh
-                        positionsReadAt = Date()
+                        let readAt = Date()
+                        positionsReadAt = readAt
+                        // Margin sent over the trading connection whose result wasn't confirmed: the chain's word on it.
+                        env.perplTrading.marginPositionsRead(fresh, at: readAt, owner: address)
                     }
                     if let freshOrders = try? await o, generation > appliedOrdersGeneration {
                         appliedOrdersGeneration = generation
                         orders = freshOrders
+                        // Only a successful chain read forgets an order Perpl's list showed gone.
+                        env.perplTrading.chainOrdersRead(freshOrders)
                     }
                     // Reconcile the app's recorded TP/SL: a trigger lives while its market has a position or a resting
                     // entry, so a fired/closed trigger drops off instead of lingering — pruned only while Perpl's live

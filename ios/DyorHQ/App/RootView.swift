@@ -9,6 +9,10 @@ struct RootView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Router.self) private var router
+    #if DEBUG && targetEnvironment(simulator)
+    /// `-PerpsDemo [scenario]`: the scripted Perps demo, over whatever the session shows (DEBUG + Simulator only).
+    @State private var perpsDemo = PerpsDemo.requested
+    #endif
 
     var body: some View {
         Group {
@@ -181,6 +185,9 @@ struct RootView: View {
         }
         // The DyorHQ coin registry: read at start, then every 5 minutes while the app is in the foreground.
         .task(id: scenePhase == .active) { if scenePhase == .active { await env.dyorCoins.keepFresh() } }
+        #if DEBUG && targetEnvironment(simulator)
+        .fullScreenCover(isPresented: $perpsDemo) { PerpsDemoView() }
+        #endif
     }
 }
 

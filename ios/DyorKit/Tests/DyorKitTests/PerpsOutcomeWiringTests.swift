@@ -56,7 +56,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
 
     func testAnOrdersRowCarriesVolumeOnlyFromWhatFilled() throws {
         let tracker = try DocsLinksTests.appSource("Wallet/PerplOrderTracker.swift")
-        let record = try function("static func record(_ outcome: PerplOrderOutcome, _ order: PerplTrackedOrder, kindName: String, hash: Data?, id: UUID?, owner: Address?) {", in: tracker)
+        let record = try function("static func record(_ outcome: PerplOrderOutcome, _ order: PerplTrackedOrder, kindName: String, hash: Data?, id: UUID?, owner: Address?,", in: tracker)
         let assignments = record.components(separatedBy: "usd = ").dropFirst().map { String($0.prefix { $0 != "\n" }) }
         XCTAssertEqual(assignments.count, 3)
         for assignment in assignments {
@@ -73,11 +73,15 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         XCTAssertFalse(nothingBranch.contains("usd"), "the rewrite carries no volume")
         XCTAssertTrue(nothingBranch.contains("nothing filled"))
         XCTAssertTrue(squeeze(record).contains("Activity.record(row, owner: owner, notify: false)"))
+        // A close from the position's Close sheet changes the words only (p4 spec A.6.3): its helper sets no volume.
+        XCTAssertTrue(squeeze(record).contains("if order.isClose { (title, subtitle) = closeWords(outcome, order, positionEnded: positionEnded, fallback: subtitle) }"))
+        let closeWords = try function("private static func closeWords(", in: tracker)
+        XCTAssertFalse(closeWords.contains("usd"), "a close's words never carry volume")
         // The tracker asks for that rewrite only when a growth's row is replaced.
         let kitTracker = try kitSource("Services/Perpl/PerplTracker.swift")
         XCTAssertTrue(squeeze(kitTracker).contains("case .notFilled, .failed, .expired, .cancelled: // The row a growth on the chain wrote (with its volume) is written again: nothing filled, no volume. if previousObserved, order.recordedFillRaw == 0 { effects.append(.recordActivity(outcome)) }"))
         // API rows: no hash, the order's own id (never the relayer's batch transaction).
-        XCTAssertTrue(squeeze(tracker).contains("Self.record(outcome, order, kindName: Self.kindName(order), hash: nil, id: order.id, owner: order.owner)"))
+        XCTAssertTrue(squeeze(tracker).contains("Self.record(outcome, order, kindName: Self.kindName(order), hash: nil, id: order.id, owner: order.owner, positionEnded: positionEnded)"))
         XCTAssertFalse(tracker.contains("txid"), "never at.txid")
         let trading = try DocsLinksTests.appSource("Wallet/PerplTrading.swift")
         XCTAssertTrue(squeeze(trading).contains("let id = PerplOrderTracker.activityID(accountId: t.accountId, rq: t.entryRq, sentAt: sentAt)"))
@@ -115,8 +119,11 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         XCTAssertFalse(reconcile.contains("notify: true"))
         let root = squeeze(try DocsLinksTests.appSource("App/RootView.swift"))
         XCTAssertTrue(root.contains("await env.perplTrading.ensureConnected() // Orders sent before the app left the foreground (or before it was closed) whose result never came: // read from the stream, Perpl's history and the chain, with no notice. await env.perplTrading.reconcileLoadedOrders()"))
-        // The switch comes from the owner's row only.
-        XCTAssertTrue(squeeze(try DocsLinksTests.appSource("App/AppEnvironment.swift")).contains("perplTrading.liveOutcomes = flags.perpsLiveOutcome"))
+        // The switch comes from the owner's row (a kill switch: on unless it says JSON false), or until a check of this
+        // launch reads it, from the last values read; a launch argument forces it in DEBUG builds only.
+        XCTAssertTrue(squeeze(try DocsLinksTests.appSource("App/AppEnvironment.swift")).contains("perplTrading.liveOutcomes = flags.perpsLiveOutcome perplTrading.apiActions = flags.perpsApiActions PerpsSwitchStore.save(flags)"))
+        XCTAssertTrue(squeeze(trading).contains("@ObservationIgnored var liveOutcomes = PerplTrading.debugSwitch(\"perpsLiveOutcome\") ?? PerpsSwitchStore.last?.perpsLiveOutcome ?? RemoteFlags.on.perpsLiveOutcome {"))
+        XCTAssertTrue(RemoteFlags.on.perpsLiveOutcome)
         // The Perps screens read the chain again the moment a result is in.
         XCTAssertTrue(squeeze(try DocsLinksTests.appSource("Perps/PerpsView.swift")).contains(".onChange(of: env.perplTrading.streamRevision) { _, _ in Task { await model.reloadSoon(env: env, address: session.address) } }"))
     }
@@ -157,8 +164,8 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         XCTAssertTrue(confirm.contains("guard let result = client.cancelResult(of: key, cancelRq: rq) else { continue }"), "the sending socket's list")
         XCTAssertTrue(confirm.contains("let deadline = Date().addingTimeInterval(PerplTimeouts.removal)"))
         XCTAssertTrue(confirm.contains("for key in awaiting.keys { results[key] = .notConfirmed }"), "never called done in doubt")
-        XCTAssertTrue(squeeze(try function("private func settleCancels(", in: trading)).contains("if result == .cancelled { cancelled[order.marketId, default: 0] += 1 }"),
-                      "the Activity row counts the confirmed cancels only")
+        XCTAssertTrue(squeeze(try function("private func settleCancels(", in: trading)).contains("if result == .cancelled, order.isTrigger { cancelled[order.marketId, default: 0] += 1 }"),
+                      "the Activity row counts the confirmed TP/SL cancels only (a resting order's has its own row: cancelResting)")
         let live = squeeze(try function("func cancelLiveResult(", in: trading))
         XCTAssertTrue(live.contains("guard ordersAreLive, let client, let request = cancelRequests[key], request.client === client,"))
         XCTAssertTrue(live.contains("client.lastTerminalStatus(of: key) != nil"))
@@ -242,7 +249,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         XCTAssertTrue(squeeze(tracker).contains("if order.isOnChain { return order.entry.map(PerplTracker.isUnconfirmed) ?? true }"), "stored until its receipt is read")
 
         // Close: a provisional row with no volume, then what it filled at its price; nothing filled voids the noted close.
-        let close = squeeze(try function("private func readResult(_ hash: Data) {", in: String(trade[try XCTUnwrap(trade.range(of: "private struct ClosePositionSheet: View {")).lowerBound...])))
+        let close = squeeze(try function("private func readResult(_ hash: Data) {", in: String(trade[try XCTUnwrap(trade.range(of: "struct ClosePositionSheet: View {")).lowerBound...])))
         XCTAssertTrue(close.contains("let outcome = accountId.flatMap { PerplReceipt.orderOutcome(requests, accountId: $0, descId: descId.map { BigUInt($0) }) }"))
         XCTAssertTrue(close.contains("usd: outcome?.volumeUSD(priceDecimals: context.priceDecimals, lotDecimals: context.lotDecimals),"))
         XCTAssertEqual(close.components(separatedBy: "usd:").count - 1, 4, "the fill's volume; nil for resting, nothing filled and unread")

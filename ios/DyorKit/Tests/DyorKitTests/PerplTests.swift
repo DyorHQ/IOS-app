@@ -561,6 +561,37 @@ final class PerplTests: XCTestCase {
         XCTAssertEqual(shortDesc[2].uint, BigUInt(PerpOrderType.closeShort.rawValue), "closing a short buys reduce-only")
         XCTAssertEqual(shortDesc[4].uint, BigUInt(exactly: PerplExchange.jsRound(mon.mark * (1 + 0.01) * 1e6)))
         XCTAssertEqual(shortDesc[11].uint, 100, "leverage never drops below 1x")
+
+        // Part of it (the Close sheet's size chips): the same close for that size.
+        let half = descTuple(in: service.closePositionPlan(market: mon, position: long, slippageBps: 250, size: 21018)[0].request!.data)
+        XCTAssertEqual(half[5].uint, 21018)
+        XCTAssertEqual(half[2].uint, BigUInt(PerpOrderType.closeLong.rawValue))
+        XCTAssertEqual(half[11].uint, 1100)
+    }
+
+    /// The Close sheet's 25 / 50 / 75% chips close whole lots only (p4 spec #6): the position's lots × percent / 100,
+    /// rounded down — so the size reviewed is the size sent — and nothing when that is less than one lot.
+    func testCloseFractionSizesAreWholeLots() {
+        XCTAssertEqual(PerplService.closeFractionSize(positionSize: 0.00054, lotDecimals: 5, percent: 50), 0.00027)
+        XCTAssertEqual(PerplService.closeFractionSize(positionSize: 0.00036, lotDecimals: 5, percent: 75), 0.00027)
+        XCTAssertEqual(PerplService.closeFractionSize(positionSize: 0.3, lotDecimals: 5, percent: 50), 0.15)
+        XCTAssertEqual(PerplService.closeFractionSize(positionSize: 0.3, lotDecimals: 5, percent: 25), 0.075)
+        XCTAssertEqual(PerplService.closeFractionSize(positionSize: 0.123, lotDecimals: 5, percent: 50), 0.0615)
+        XCTAssertNil(PerplService.closeFractionSize(positionSize: 0.00001, lotDecimals: 5, percent: 25))
+        XCTAssertEqual(PerplService.closeFractionSize(positionSize: 0.002, lotDecimals: 5, percent: 100), 0.002, "100% is the size as given")
+        XCTAssertNil(PerplService.closeFractionSize(positionSize: 0, lotDecimals: 5, percent: 50))
+        for lots in 1...2000 {
+            let size = Double(lots) / 100_000
+            for percent in [25, 50, 75] {
+                let part = lots * percent / 100
+                let chip = PerplService.closeFractionSize(positionSize: size, lotDecimals: 5, percent: percent)
+                if part == 0 {
+                    XCTAssertNil(chip, "\(lots) lots, \(percent)%")
+                } else {
+                    XCTAssertEqual(chip.map { Int(($0 * 100_000).rounded()) }, part, "\(lots) lots, \(percent)%")
+                }
+            }
+        }
     }
 
     // MARK: Context

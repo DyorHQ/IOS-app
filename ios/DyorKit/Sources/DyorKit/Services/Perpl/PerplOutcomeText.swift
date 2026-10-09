@@ -124,7 +124,8 @@ public struct PerplOutcomeText: Sendable, Equatable {
         }
     }
 
-    static var notClosedHeadline: String {
+    /// "Not closed": a close that executed nothing (the sheet's result line, and the close's notice title).
+    public static var notClosedHeadline: String {
         L10n.string(LocalizedStringResource("Not closed", bundle: L10n.kit, comment: "The result of a Perps close the app sent, shown in the close sheet's result line: none of it executed, the position is still open."))
     }
 
@@ -214,6 +215,16 @@ public struct PerplOutcomeText: Sendable, Equatable {
         case .unconfirmed(let why):
             // An order Perpl never answered: the sheet says why its result can't be known (GL-1), never "accepted".
             guard c.acknowledged else { return nil }
+            if close {
+                switch why {
+                case .timedOut:
+                    return L10n.string(LocalizedStringResource("Perpl accepted the close for forwarding but hasn't reported what happened to it yet. Your positions are reloading: check them before closing again.", bundle: L10n.kit, comment: "The result of a Perps close the app sent, under 'Result not confirmed yet' in the close sheet and the trade screen's status row: Perpl took the close but its result didn't arrive in time."))
+                case .connectionLost:
+                    return L10n.string(LocalizedStringResource("The connection to Perpl dropped before it reported the close's result. Your positions are reloading: check them before closing again.", bundle: L10n.kit, comment: "The result of a Perps close the app sent, under 'Result not confirmed yet' in the close sheet and the trade screen's status row: the trading connection closed before Perpl reported the close's result."))
+                case .foreignReport:
+                    return L10n.string(LocalizedStringResource("Perpl reported a different order under this close's request number, so its result can't be shown. Check Positions before closing again.", bundle: L10n.kit, comment: "The result of a Perps close the app sent, under 'Result not confirmed yet' in the close sheet and the trade screen's status row: what Perpl reported under the close's request number doesn't match the close sent. Positions is a tab of the Perps screen."))
+                }
+            }
             switch why {
             case .timedOut:
                 return L10n.string(LocalizedStringResource("Perpl accepted the order for forwarding but hasn't reported what happened to it yet. Your positions and orders are reloading: check them before placing it again.", bundle: L10n.kit, comment: "The result of a Perps order the app sent, under 'Result not confirmed yet' in the order sheet and the trade screen's status row: Perpl took the order but its result didn't arrive in time."))

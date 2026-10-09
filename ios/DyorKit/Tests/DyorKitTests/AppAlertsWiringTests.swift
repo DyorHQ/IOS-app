@@ -116,7 +116,11 @@ final class AppAlertsWiringTests: XCTestCase {
         XCTAssertTrue(ticket.contains("reviewCloses = PerpCloseOrder.closes(orderSide: side, reduceOnly: ticket.effectiveReduceOnly, held: position?.side)"))
         XCTAssertEqual(ticket.components(separatedBy: "if let reviewCloses { model.noteUserClose(market.id, closing: reviewCloses) }").count - 1, 2,
                        "the one-click sheet and the on-chain sheet")
-        XCTAssertTrue(ticket.contains("onSending: { model.noteUserClose(market.id, closing: position.side) }"))
+        // Only a close of the whole position (the 100% chip) notes a close of it; a partial one never does (p4 spec #5).
+        XCTAssertTrue(ticket.contains("onSending: { whole in if whole { model.noteUserClose(market.id, closing: position.side) } }"))
+        let closeSheet = String(ticket[try XCTUnwrap(ticket.range(of: "struct ClosePositionSheet: View {")).lowerBound..<(try XCTUnwrap(ticket.range(of: "struct AddMarginSheet: View {"))).lowerBound])
+        XCTAssertEqual(closeSheet.components(separatedBy: "onSending(percent == 100)").count - 1, 2, "both on-chain sites: at the start and at the receipt")
+        XCTAssertFalse(closeSheet.contains("onSending()"), "never a bare note")
         XCTAssertFalse(ticket.contains("if ticket.effectiveReduceOnly { model.noteUserClose"))
         XCTAssertEqual(ticket.components(separatedBy: "model.noteUserClose(").count - 1, 3)
 

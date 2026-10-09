@@ -233,6 +233,64 @@
         }
       }
     },
+    "%@ AUSD · not added" : {
+      "comment" : "Activity row subtitle under \"Add BTC margin\" once Perpl refused it after all. %@ the amount, formatted.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ AUSD · no se añadió"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ AUSD · non ajouté"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ AUSD · 추가되지 않음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ AUSD · 未追加"
+          }
+        }
+      }
+    },
+    "%@ AUSD · result not confirmed — check the position" : {
+      "comment" : "Activity row subtitle under \"Add BTC margin\". %@ the amount, formatted (\"25.5\"); AUSD is the collateral token.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ AUSD · resultado sin confirmar — revisa la posición"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ AUSD · résultat non confirmé — vérifiez la position"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ AUSD · 결과 미확인 — 포지션을 확인하세요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ AUSD · 结果未确认 — 查看该仓位"
+          }
+        }
+      }
+    },
     "%@ If you made this password with it shown (the eye button), iOS may have typed curly quotes or a long dash in it: hold the key down to type those." : {
       "localizations" : {
         "es" : {
@@ -5427,6 +5485,35 @@
         }
       }
     },
+    "Add %@ margin" : {
+      "comment" : "Activity row title for margin sent over the trading connection whose result is not confirmed, or which Perpl refused later. %@ the market's symbol (\"BTC\").",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir margen a %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajout de marge sur %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 증거금 추가 요청"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "追加 %@ 保证金"
+          }
+        }
+      }
+    },
     "Add Margin" : {
       "localizations" : {
         "es" : {
@@ -9768,6 +9855,35 @@
         }
       }
     },
+    "Check the position's margin before adding more: Perpl may still add it." : {
+      "comment" : "Detail under \"Margin not confirmed yet\", also that notification's body.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revisa el margen de la posición antes de añadir más: puede que Perpl aún lo añada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifiez la marge de la position avant d'en ajouter : Perpl peut encore l'ajouter."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "더 추가하기 전에 포지션의 증거금을 확인하십시오. Perpl이 아직 추가할 수도 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再次追加前，先查看该仓位的保证金：Perpl 仍可能完成追加。"
+          }
+        }
+      }
+    },
     "Check this is the address you expect before importing." : {
       "localizations" : {
         "es" : {
@@ -10982,6 +11098,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "平仓已发送 · 结果未读取"
+          }
+        }
+      }
+    },
+    "Close status unknown — Perpl didn't confirm this close, so it may have gone through. Check Positions before closing again." : {
+      "comment" : "Close Position sheet and the Perps status row: the close was sent but Perpl never answered it. Positions is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estado del cierre desconocido: Perpl no confirmó este cierre, así que puede que se haya ejecutado. Revisa Posiciones antes de volver a cerrar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Statut de la clôture inconnu — Perpl n'a pas confirmé cette clôture, elle a donc peut-être été exécutée. Vérifiez Positions avant de clôturer à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종료 상태를 알 수 없습니다 — Perpl이 이 종료 주문을 확인하지 않아 이미 처리되었을 수 있습니다. 다시 종료하기 전에 포지션을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "平仓状态未知：Perpl 未确认此次平仓，因此它可能已经执行。再次平仓前，先查看“仓位”。"
           }
         }
       }
@@ -13268,6 +13413,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法从该视频中读取画面。"
+          }
+        }
+      }
+    },
+    "Couldn't cancel the order: %@ It is still live." : {
+      "comment" : "Cancel Order sheet: Perpl refused the cancel; %@ Perpl's reason, one or two whole sentences.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo cancelar la orden: %@ Sigue activa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d'annuler l'ordre : %@ Il est toujours actif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주문을 취소하지 못했습니다: %@ 주문은 아직 활성 상태입니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法取消该委托：%@ 它仍然有效。"
           }
         }
       }
@@ -23459,6 +23633,64 @@
         }
       }
     },
+    "Margin not added" : {
+      "comment" : "Add Margin's result headline, also a notification title: Perpl refused to add the margin; the position's margin is unchanged.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Margen no añadido"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marge non ajoutée"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "증거금이 추가되지 않음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未追加保证金"
+          }
+        }
+      }
+    },
+    "Margin not confirmed yet" : {
+      "comment" : "Add Margin's result headline, also a notification title: Perpl hasn't confirmed the margin in time; it may still be added.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Margen aún sin confirmar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marge pas encore confirmée"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "증거금이 아직 확인되지 않음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保证金尚未确认"
+          }
+        }
+      }
+    },
     "Mark" : {
       "comment" : "A position's mark price, a stat (a noun) [tight]",
       "localizations" : {
@@ -27024,6 +27256,35 @@
         }
       }
     },
+    "Not confirmed yet: Perpl hasn't removed the order. Check Orders: it may still be live." : {
+      "comment" : "Cancel Order sheet: the cancel was sent but Perpl's list didn't confirm it in time. Orders is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún sin confirmar: Perpl no ha retirado la orden. Revisa Órdenes: puede que siga activa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas encore confirmé : Perpl n'a pas retiré l'ordre. Vérifiez l'onglet Ordres : il est peut-être encore actif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 확인되지 않았습니다. Perpl이 주문을 아직 제거하지 않았습니다. ‘주문’ 탭을 확인하십시오. 주문이 아직 활성 상태일 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未确认：Perpl 尚未移除该委托。查看“委托”：它可能仍然有效。"
+          }
+        }
+      }
+    },
     "Not confirmed yet: Perpl hasn't removed the stop-loss at %@ (%@). Check Orders: it may still be live." : {
       "comment" : "The TP/SL cancel sheet: the cancel was sent but Perpl's live list didn't confirm it in time, so the stop-loss may still be active. Orders is a tab of the Perps screen. The first value: its trigger price; the second: the size it closes with the asset (0.001 BTC).",
       "localizations" : {
@@ -27718,6 +27979,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未删除任何内容：移除 DyorHQ 在 Privy 创建的邮箱登录方式失败（%1$@）。几分钟后重试，或联系 %2$@。"
+          }
+        }
+      }
+    },
+    "Nothing was sent. Close this and try again." : {
+      "comment" : "Under an error on Close Position / Add Margin / Cancel Order sent over one-click trading: nothing left the device; reopening the sheet sends it again.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se envió nada. Cierra esto y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rien n'a été envoyé. Fermez ceci et réessayez."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아무것도 전송되지 않았습니다. 이 창을 닫고 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未发送任何内容。关闭此页面后重试。"
+          }
+        }
+      }
+    },
+    "Nothing was sent. Close this and try again: it will be sent from your wallet." : {
+      "comment" : "Under an error on Close Position / Add Margin / Cancel Order: Perpl's trading connection can't take it now, so reopening the sheet sends it as a wallet transaction.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se envió nada. Cierra esto y vuelve a intentarlo: se enviará desde tu billetera."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rien n'a été envoyé. Fermez ceci et réessayez : l'envoi se fera depuis votre portefeuille."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아무것도 전송되지 않았습니다. 이 창을 닫고 다시 시도하십시오. 지갑에서 전송됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未发送任何内容。关闭此页面后重试：将改为从你的钱包发送。"
           }
         }
       }
@@ -30826,6 +31145,35 @@
         }
       }
     },
+    "Perpl couldn't cancel the order. It is still live." : {
+      "comment" : "Cancel Order sheet: Perpl refused the cancel without a specific reason.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl no pudo cancelar la orden. Sigue activa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl n'a pas pu annuler l'ordre. Il est toujours actif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 주문을 취소하지 못했습니다. 주문은 아직 활성 상태입니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 无法取消该委托。它仍然有效。"
+          }
+        }
+      }
+    },
     "Perpl didn't accept the stop-loss. If the order fills, set it with TP/SL on the position." : {
       "comment" : "A Perps order sheet's and trade screen's warning while the order's result isn't in yet: Perpl refused its stop-loss. TP/SL is the position's button for setting it.",
       "localizations" : {
@@ -31169,6 +31517,35 @@
         }
       }
     },
+    "Perpl hasn't sent your open orders yet, so this order can't be checked. Nothing was sent. Try again in a moment." : {
+      "comment" : "Cancel Order sent over one-click trading: the order can't be checked against Perpl's live list yet (it is still arriving), so the cancel wasn't sent.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl aún no ha enviado tus órdenes abiertas, así que no se puede comprobar esta orden. No se envió nada. Vuelve a intentarlo en un momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl n'a pas encore envoyé vos ordres ouverts : cet ordre ne peut donc pas être vérifié. Rien n'a été envoyé. Réessayez dans un instant."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 아직 미체결 주문을 보내지 않아 이 주문을 확인할 수 없습니다. 아무것도 전송되지 않았습니다. 잠시 후 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 尚未发送你的当前委托，因此无法检查此委托。未发送任何内容。稍后重试。"
+          }
+        }
+      }
+    },
     "Perpl history: %@" : {
       "localizations" : {
         "es" : {
@@ -31305,6 +31682,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Perpl 拒绝了取消请求。"
+          }
+        }
+      }
+    },
+    "Perpl refused to add the margin." : {
+      "comment" : "Add Margin's error when Perpl refused the request without giving a reason.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl rechazó añadir el margen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl a refusé d'ajouter la marge."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 증거금 추가를 거부했습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 拒绝了追加保证金。"
           }
         }
       }
@@ -41474,6 +41880,35 @@
         }
       }
     },
+    "That's more than the available balance on your Perpl account, so nothing was sent." : {
+      "comment" : "Add Margin's error: the amount is above what the Perpl account has free right now.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es más que el saldo disponible en tu cuenta de Perpl, así que no se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "C'est plus que le solde disponible sur votre compte Perpl : rien n'a donc été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 계정의 사용 가능 잔액보다 많아 아무것도 전송되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这超过了你 Perpl 账户的可用余额，因此未发送任何内容。"
+          }
+        }
+      }
+    },
     "That's the %@ token contract itself. Tokens sent to it are almost always lost for good." : {
       "localizations" : {
         "es" : {
@@ -42638,6 +43073,64 @@
         }
       }
     },
+    "The order filled before the cancel landed." : {
+      "comment" : "Cancel Order sheet: it filled before Perpl processed the cancel.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La orden se ejecutó antes de que se procesara la cancelación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'ordre a été exécuté avant que l'annulation ne soit traitée."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "취소가 처리되기 전에 주문이 체결되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该委托在取消生效前已成交。"
+          }
+        }
+      }
+    },
+    "The order had already expired." : {
+      "comment" : "Cancel Order sheet: it had expired before Perpl processed the cancel.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La orden ya había expirado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'ordre avait déjà expiré."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주문은 이미 만료되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该委托已过期。"
+          }
+        }
+      }
+    },
     "The order is on the book, but Perpl didn't accept the stop-loss. Set it with TP/SL on the position once the order fills." : {
       "comment" : "A Perps order sheet's warning: the limit order rests on the order book; Perpl refused its stop-loss.",
       "localizations" : {
@@ -42721,6 +43214,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "订单已挂单，但 Perpl 未接受止盈。订单成交后，在仓位上通过“止盈/止损”设置止盈。"
+          }
+        }
+      }
+    },
+    "The order was already gone." : {
+      "comment" : "Cancel Order sheet: the order was no longer on Perpl when the cancel would have gone out; nothing was sent, or nothing was there to cancel.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La orden ya no existía."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'ordre n'existait déjà plus."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주문은 이미 없어진 상태였습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该委托已不存在。"
+          }
+        }
+      }
+    },
+    "The order was cancelled." : {
+      "comment" : "Cancel Order sheet: Perpl's live list confirms the resting order was cancelled.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La orden se canceló."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'ordre a été annulé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주문이 취소되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该委托已取消。"
           }
         }
       }
@@ -49433,6 +49984,35 @@
         }
       }
     },
+    "You can close this. The result will show as a notification and in Activity." : {
+      "comment" : "Under Add Margin's waiting status: the sheet can be closed; the margin's result arrives as a notification and an Activity row.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puedes cerrar esto. El resultado aparecerá como notificación y en Actividad."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous pouvez fermer ceci. Le résultat s'affichera en notification et dans Activité."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 창을 닫아도 돼요. 결과는 알림과 활동에 표시돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你可以关闭此页面。结果将以通知形式显示，并出现在“动态”中。"
+          }
+        }
+      }
+    },
     "You can close this. The result will show on the %@ screen." : {
       "comment" : "Under the Perps order sheet's waiting status. The value: the market's name (“BTC-PERP”), whose trade screen shows the order's result.",
       "localizations" : {
@@ -51957,6 +52537,222 @@
         }
       }
     },
+    "cancelRow.order.alreadyGone" : {
+      "comment" : "[tight] As above: the ORDER was no longer on Perpl when the cancel arrived.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Already gone"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya no existía"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Déjà disparu"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미 없음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已不存在"
+          }
+        }
+      }
+    },
+    "cancelRow.order.cancelled" : {
+      "comment" : "[tight] Cancel Order sheet row and the Orders tab's order card: Perpl's live list confirms the resting ORDER was cancelled (an adjective agreeing with \"order\"; Spanish: orden, feminine).",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancelled"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Annulé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "취소됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消"
+          }
+        }
+      }
+    },
+    "cancelRow.order.expiredFirst" : {
+      "comment" : "[tight] As above: the ORDER had expired before the cancel arrived.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Expired first"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expiró antes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expiré avant"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "먼저 만료됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已先过期"
+          }
+        }
+      }
+    },
+    "cancelRow.order.filledFirst" : {
+      "comment" : "[tight] Cancel Order sheet row and the order card: the limit ORDER filled before the cancel arrived.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Filled first"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se ejecutó antes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécuté avant"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "먼저 체결됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已先成交"
+          }
+        }
+      }
+    },
+    "cancelRow.order.notConfirmed" : {
+      "comment" : "[tight] As above: Perpl hasn't confirmed the cancel in time; the ORDER may still be active.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not confirmed"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin confirmar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non confirmé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확인 안 됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未确认"
+          }
+        }
+      }
+    },
+    "cancelRow.order.stillLive" : {
+      "comment" : "[tight] Cancel Order sheet row: Perpl refused the cancel, so the ORDER is still active (agreeing with \"order\").",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Still live"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sigue activa"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toujours actif"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 활성"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍有效"
+          }
+        }
+      }
+    },
     "cancelRow.stillLive" : {
       "comment" : "[tight] A take-profit / stop-loss row's state in the TP/SL cancel sheet: Perpl refused the cancel, so the order is still active.",
       "extractionState" : "extracted_with_value",
@@ -52907,6 +53703,114 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "或使用以下方式继续"
+          }
+        }
+      }
+    },
+    "orderCard.expired" : {
+      "comment" : "[tight] As above: Perpl's live list shows the resting ORDER expired.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Expired"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expirada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expiré"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "만료됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已过期"
+          }
+        }
+      }
+    },
+    "orderCard.filled" : {
+      "comment" : "[tight] The Orders tab's order card, in place of its Cancel button: Perpl's live list shows the resting limit ORDER filled (no cancel was sent from this device). An adjective agreeing with \"order\" (Spanish: orden, feminine).",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Filled"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ejecutada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécuté"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "체결됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已成交"
+          }
+        }
+      }
+    },
+    "orderCard.gone" : {
+      "comment" : "[tight] As above: the resting ORDER is no longer on Perpl's live list (it failed or was removed there).",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Gone"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya no está"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disparu"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사라짐"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已消失"
           }
         }
       }

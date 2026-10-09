@@ -78,6 +78,15 @@ struct PerpTradeView: View {
     @State private var closingPosition: PerpPosition?
     @State private var addingMargin: PerpPosition?
     @State private var cancellingOrder: PerpOrder?
+    /// The path Close / Add Margin take, fixed at the tap that opens the sheet (p4 spec A.2): the account they go over the
+    /// trading connection for, or nil for the wallet transaction. Never switched afterwards.
+    @State private var closeRoute: PerplTrading.ActionAccount?
+    @State private var marginRoute: PerplTrading.ActionAccount?
+    /// The resting order a Cancel tap goes to Perpl's API for, fixed at the tap: the stream's order the chain's matches by
+    /// its smart contract order id, the request it belonged to then, and the account — nil target: the wallet's cancel.
+    @State private var cancelTarget: PerplOpenOrder?
+    @State private var cancelTapRq: Int?
+    @State private var cancelAccount: PerplTrading.ActionAccount?
     @State private var editingTriggers: PerpPosition?
     @State private var cancellingTriggers: TriggerCancelRequest?
 
@@ -122,6 +131,18 @@ struct PerpTradeView: View {
     }
 
     private var position: PerpPosition? { model.positions.first { $0.perpId == market.id } }
+
+    /// The account this screen acts for, at the tap.
+    private var actionAccount: PerplTrading.ActionAccount? {
+        guard session.canSign, let id = model.account?.accountId else { return nil }
+        return .init(owner: session.address, accountId: id, passkey: session.isPasskeyAccount)
+    }
+
+    /// The API route for Close / Add Margin (nil: the wallet transaction, as before). Decided at the tap that opens the sheet.
+    private var apiRoute: PerplTrading.ActionAccount? {
+        guard let account = actionAccount else { return nil }
+        return perplTrading.apiActionsLive(for: account) || perplTrading.apiActionsAfterUnlock(for: account) ? account : nil
+    }
     private var live: PerplLiveState? { feed.state }
     private var mark: Double { live?.mark ?? market.mark }
     private var change24h: Double? { live?.change24h ?? model.change24h(for: market) }
@@ -231,16 +252,26 @@ struct PerpTradeView: View {
         .sheet(isPresented: $showPortfolio) { PerpsPortfolioView(model: model) }
         .sheet(item: $closingPosition) { position in
             ClosePositionSheet(market: market, position: position, mark: mark, accountId: model.account?.accountId, leftoverTriggers: triggersProtecting(position),
-                               onSending: { model.noteUserClose(market.id, closing: position.side) }, onNotSent: { model.forgetUserClose(market.id) },
+                               route: closeRoute,
+                               onSending: { whole in if whole { model.noteUserClose(market.id, closing: position.side) } }, onNotSent: { model.forgetUserClose(market.id) },
                                onSettled: { Task { await model.reloadSoon(env: env, address: session.address) } }) {
                 Task { await model.load(env: env, address: session.address) }
             }
         }
         .sheet(item: $addingMargin) { position in
-            AddMarginSheet(market: market, position: position, available: availableMargin, accountId: model.account?.accountId,
+            AddMarginSheet(market: market, position: position, available: availableMargin, accountId: model.account?.accountId, route: marginRoute,
                            onSettled: { Task { await model.reloadSoon(env: env, address: session.address) } }) { Task { await model.load(env: env, address: session.address) } }
         }
-        .sheet(item: $cancellingOrder) { order in cancelOrderSheet(order) }
+        .sheet(item: $cancellingOrder) { order in
+            // The path of the tap: Perpl's API for the stream order it matched, else the wallet's cancel as before.
+            if let target = cancelTarget, let account = cancelAccount {
+                CancelOrderSheet(market: market, order: order, target: target, tapRq: cancelTapRq, account: account) {
+                    Task { await model.load(env: env, address: session.address) }
+                }
+            } else {
+                cancelOrderSheet(order)
+            }
+        }
         .sheet(item: $editingTriggers) { position in
             PositionTriggersSheet(market: market, position: position, mark: mark) { Task { await model.load(env: env, address: session.address) } }
         }
@@ -775,7 +806,8 @@ struct PerpTradeView: View {
             case .positions:
                 if let position {
                     PositionCard(position: position, liveMark: mark, triggers: triggerRows(for: market).filter { $0.positionLong == (position.side == .long) },
-                                 onClose: { closingPosition = position }, onAddMargin: { addingMargin = position }, onTriggers: { editingTriggers = position })
+                                 onClose: { closeRoute = apiRoute; closingPosition = position }, onAddMargin: { marginRoute = apiRoute; addingMargin = position },
+                                 onTriggers: { editingTriggers = position })
                 }
                 else { emptyRow("No open positions") }
                 orphanBanner
@@ -786,7 +818,11 @@ struct PerpTradeView: View {
                 orphanBanner
                 if orders.isEmpty, rows.isEmpty { emptyRow("No open orders") }
                 else {
-                    ForEach(orders) { order in OrderCard(order: order, mark: mark, onCancel: { cancellingOrder = order }) }
+                    ForEach(orders) { order in
+                        let streamKey = PerplOpenOrder.streamOrder(for: order, in: perplTrading.openOrders, priceDecimals: market.priceDecimals)?.id
+                        OrderCard(order: order, mark: mark, cancelling: streamKey.map { perplTrading.cancellingKeys.contains($0) } ?? false,
+                                  gone: perplTrading.chainOrderGone(order), onCancel: { tapCancel(order) })
+                    }
                     ForEach(rows) { row in
                         TriggerCard(row: row, mark: mark, cancelling: row.order.map { perplTrading.cancellingKeys.contains($0.id) } ?? false) {
                             guard let order = row.order else { return }
@@ -809,27 +845,47 @@ struct PerpTradeView: View {
         }
     }
 
-    /// Scrolling underline tabs like Miracle's Positions / Orders / Assets / Trade History.
+    /// Positions / Orders / Assets / Trade History as underline tabs: each title on one line at its own width, the selected one
+    /// semibold without moving the others (each reserves its semibold width). When they don't all fit (a longer translation,
+    /// a large text size), the row scrolls sideways instead of wrapping, keeping the selected tab in view.
     private var segmentedTabs: some View {
-        HStack(spacing: 0) {
-            ForEach(BottomTab.allCases) { tab in
-                let active = bottomTab == tab
-                Button {
-                    if bottomTab != tab { Haptics.selection(); withAnimation(.easeInOut(duration: 0.15)) { bottomTab = tab } }
-                } label: {
-                    tab.title
-                        .font(.subheadline.weight(active ? .semibold : .regular))
-                        .foregroundStyle(active ? Color.primary : Color.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .overlay(alignment: .bottom) {
-                            Capsule().fill(active ? Color.brand : .clear).frame(height: 2.5)
-                        }
-                        .contentShape(Rectangle())
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 0) {
+                ForEach(BottomTab.allCases) { tab in
+                    tabButton(tab)
+                    if tab != BottomTab.allCases.last { Spacer(minLength: 12) }
                 }
-                .buttonStyle(.plain)
+            }
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 20) { ForEach(BottomTab.allCases) { tabButton($0).id($0) } }
+                }
+                .onAppear { proxy.scrollTo(bottomTab, anchor: .center) }
+                .onChange(of: bottomTab) { _, tab in withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(tab, anchor: .center) } }
             }
         }
+    }
+
+    private func tabButton(_ tab: BottomTab) -> some View {
+        let active = bottomTab == tab
+        return Button {
+            if bottomTab != tab { Haptics.selection(); withAnimation(.easeInOut(duration: 0.15)) { bottomTab = tab } }
+        } label: {
+            ZStack {
+                tab.title.font(.subheadline.weight(.semibold)).hidden()   // the selected width, always reserved
+                tab.title.font(.subheadline.weight(active ? .semibold : .regular))
+                    .foregroundStyle(active ? Color.primary : Color.secondary)
+            }
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.vertical, 9)
+            .overlay(alignment: .bottom) { Capsule().fill(active ? Color.brand : .clear).frame(height: 2.5) }
+            .padding(.horizontal, 4)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(active ? .isSelected : [])
     }
 
     /// Says when the TP/SL list can't be verified (security audit GT-3): the trading stream isn't live, so rows are
@@ -1101,6 +1157,40 @@ struct PerpTradeView: View {
     private var orderIntent: Mera.Intent {
         let input = reviewedInput
         return input.reduceOnly ? .alwaysAsks(.closePosition) : .perplOrder(usd: Mera.SpendingCaps.notionalUSD(of: input), order: .init(input))
+    }
+
+    /// A Cancel tap on a resting order. Perpl's live list already showed a cancel from this device took it: no sheet, and
+    /// the chain is read again. The stream's word alone that it left (no cancel from here) never refuses the wallet's
+    /// cancel: the chain is read again, and if it still lists the order its wallet sheet opens.
+    /// Otherwise the path is fixed here (A.2): Perpl's API when one-click is live for this account, its list is live and
+    /// not suspect, and the stream's order matches the chain's by its smart contract order id; else the wallet's cancel.
+    private func tapCancel(_ order: PerpOrder) {
+        if let gone = perplTrading.chainOrderGone(order) {
+            if gone.byCancel { Haptics.warning() }
+            Task {
+                await model.load(env: env, address: session.address)
+                guard !gone.byCancel else { return }
+                guard let fresh = model.orders.first(where: { PerplTrading.ChainOrderKey($0) == PerplTrading.ChainOrderKey(order) }) else {
+                    Haptics.warning()
+                    return
+                }
+                cancelTarget = nil
+                cancelTapRq = nil
+                cancelAccount = nil
+                cancellingOrder = fresh
+            }
+            return
+        }
+        if let account = actionAccount, perplTrading.apiActionsLive(for: account), perplTrading.ordersAreLive, !perplTrading.streamSuspect {
+            cancelTarget = PerplOpenOrder.streamOrder(for: order, in: perplTrading.openOrders, priceDecimals: market.priceDecimals)
+            cancelTapRq = cancelTarget.flatMap { perplTrading.requestId(for: $0.id) }
+            cancelAccount = account
+        } else {
+            cancelTarget = nil
+            cancelTapRq = nil
+            cancelAccount = nil
+        }
+        cancellingOrder = order
     }
 
     private func cancelOrderSheet(_ order: PerpOrder) -> some View {
@@ -2183,7 +2273,7 @@ extension TradesTape {
 
 // MARK: - Position & order cards
 
-private struct PositionCard: View {
+struct PositionCard: View {
     let position: PerpPosition
     let liveMark: Double
     /// The TP/SL closing this position's side, as the Orders list shows them.
@@ -2269,10 +2359,14 @@ private struct MiniStat: View {
     }
 }
 
-/// A resting on-chain order (limit / reduce-only limit), with its side, price, size, leverage and distance from mark.
-private struct OrderCard: View {
+/// A resting on-chain order (limit / reduce-only limit), with its side, price, size, leverage and distance from mark —
+/// "Cancelling…" instead of its Cancel while a cancel sent over the trading connection is on its way, and how it left
+/// once Perpl's live list showed it gone (`gone`), with no Cancel then.
+struct OrderCard: View {
     let order: PerpOrder
     let mark: Double
+    var cancelling = false
+    var gone: PerplTrading.ChainOrderGone? = nil
     let onCancel: () -> Void
 
     private var typeLabel: String {
@@ -2290,7 +2384,19 @@ private struct OrderCard: View {
                     .background(order.side == .buy ? Color.positive : Color.negative, in: Capsule())
                 Text(typeLabel).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Cancel", action: onCancel).buttonStyle(.bordered).controlSize(.small).tint(.negative)
+                if let gone {
+                    // A cancel from this device: what became of it ("Filled first"). Otherwise the order left on its own.
+                    Text(verbatim: gone.byCancel ? PerpActionCopy.orderState(gone.result) : PerpActionCopy.orderLeft(gone.result))
+                        .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                } else if cancelling {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.mini)
+                        Text(verbatim: PerpTriggerCopy.rowCancelling)
+                    }
+                    .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Button("Cancel", action: onCancel).buttonStyle(.bordered).controlSize(.small).tint(.negative)
+                }
             }
             HStack(alignment: .top) {
                 MiniStat(label: "Price", value: NumberStyle.number(order.price))
@@ -2302,6 +2408,7 @@ private struct OrderCard: View {
                 if let d = distance { MiniStat(label: "Distance", value: String(format: "%+.2f%%", d), tint: d >= 0 ? .positive : .negative) }
             }
         }
+        .opacity(cancelling || gone != nil ? 0.6 : 1)
         .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -2356,7 +2463,7 @@ struct TriggerRow: Identifiable {
 
 /// A take-profit / stop-loss (keeper-managed trigger), labelled by where it comes from, with a Cancel for a live one —
 /// dimmed and "Cancelling…" instead while a cancel sent for it is on its way (a second tap would send a second).
-private struct TriggerCard: View {
+struct TriggerCard: View {
     let row: TriggerRow
     let mark: Double
     var cancelling = false
@@ -2412,11 +2519,13 @@ struct TriggerCancelRequest: Identifiable {
     let note: LocalizedStringResource?
 }
 
-/// Closes a position at market or with a resting reduce-only limit order (optionally post-only). Once its transaction
-/// confirms, what it did is read from the receipt — closed in full or in part, resting on the book, or nothing filled —
-/// and said before Done (the transaction alone only says it ran: a market close with nothing within its slippage
-/// confirms too).
-private struct ClosePositionSheet: View {
+/// Closes a position at market or with a resting reduce-only limit order (optionally post-only), all of it or 25 / 50 /
+/// 75%. Sent as a wallet transaction, what it did is read from its receipt once it confirms — closed in full or in part,
+/// resting on the book, or nothing filled — and said before Done (the transaction alone only says it ran: a market close
+/// with nothing within its slippage confirms too). With one-click live for the account at the tap (`route`), it goes to
+/// Perpl over the trading connection instead and its result is followed on Perpl's stream (p4 spec A.4.1): the same words,
+/// as they happen, whether the sheet stays open or not.
+struct ClosePositionSheet: View {
     let market: PerpMarket
     let position: PerpPosition
     let mark: Double
@@ -2424,10 +2533,13 @@ private struct ClosePositionSheet: View {
     var accountId: Int?
     /// The live TP/SL closing this position's side, to say what happens to them (security audit GT-2).
     var leftoverTriggers: [PerplOpenOrder] = []
-    /// The close is about to be sent, and — if it then fails before anything left the device, or its transaction
-    /// filled nothing — it didn't close: so the positions poll knows the position's disappearance is expected from the
-    /// moment it could happen (GT-9), not only once Done is tapped, and is news again when nothing closed.
-    var onSending: () -> Void = {}
+    /// The trading connection's route for this close, fixed at the tap that opened the sheet; nil: the wallet transaction.
+    var route: PerplTrading.ActionAccount? = nil
+    /// The close is about to be sent (`whole`: the 100% chip), and — if it then fails before anything left the device, or
+    /// it filled nothing — it didn't close: so the positions poll knows the position's disappearance is expected from the
+    /// moment it could happen (GT-9), not only once Done is tapped, and is news again when nothing closed. A partial close
+    /// never notes a close of the position.
+    var onSending: (_ whole: Bool) -> Void = { _ in }
     var onNotSent: () -> Void = {}
     /// The close's result was read: the caller reads the position again at once.
     var onSettled: () -> Void = {}
@@ -2437,11 +2549,14 @@ private struct ClosePositionSheet: View {
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
+    @Environment(PerplTrading.self) private var perplTrading
     @Environment(\.dismiss) private var dismiss
     @State private var run = TransactionRun()
     @State private var kind: OrderKind = .market
     @State private var limitText = ""
     @State private var postOnly = false
+    /// The size chip: 25, 50, 75 or 100 (% of the position as the chain reports it).
+    @State private var percent = 100
     /// The desc id the plan sent signs (what finds the close in its receipt), fixed at the tap.
     @State private var sentDescId: UInt64?
     /// What the close did, once read from its receipt; nil while it is read.
@@ -2449,6 +2564,24 @@ private struct ClosePositionSheet: View {
     /// The receipt is being read now, and Done is held for the first moments of it (`ReceiptResultBar.doneHold`).
     @State private var reading = false
     @State private var holdingDone = false
+    /// The trading connection's close (`route`): where it is, from the confirm to Perpl's result.
+    @State private var apiPhase: APIPhase = .review
+    /// The one line under a not-sent failure (nil: refused on the device).
+    @State private var failureLine: String?
+    /// When the close started waiting for Perpl (the "you can close this" line shows after 3 s).
+    @State private var waitingSince: Date?
+    /// The result headline VoiceOver last announced.
+    @State private var announcedHeadline: String?
+    #if DEBUG && targetEnvironment(simulator)
+    @Environment(\.perpsDemoAutoConfirm) private var demoAutoConfirm
+    @Environment(\.perpsDemoTerms) private var demoTerms
+    @Environment(\.perpsDemoTryAgain) private var demoTryAgain
+    #endif
+
+    enum APIPhase: Equatable {
+        case review, authorizing, sending, tracking(UUID), failed(String)
+        var isFailed: Bool { if case .failed = self { return true }; return false }
+    }
 
     private var isLimit: Bool { kind == .limit }
     private var limitPrice: Double? { limitText.perpDouble }
@@ -2459,10 +2592,51 @@ private struct ClosePositionSheet: View {
         if let offTick = OrderTicket.offTickProblem(price: limitPrice, market: market) { return offTick }
         return OrderTicket.throughMarkProblem(price: limitPrice, side: position.side == .long ? .short : .long, mark: mark, market: market)
     }
-    private var canConfirm: Bool { session.canSign && !run.isRunning && (!isLimit || (limitPrice ?? 0) > 0) && limitProblem == nil }
+    /// The size the chip closes, at the market's lot precision (nil: less than one lot).
+    private func chipSize(_ percent: Int) -> Double? {
+        PerplService.closeFractionSize(positionSize: position.size, lotDecimals: market.lotDecimals, percent: percent)
+    }
+    private var sentSize: Double { chipSize(percent) ?? position.size }
+    private var canConfirm: Bool { session.canSign && !run.isRunning && (!isLimit || (limitPrice ?? 0) > 0) && limitProblem == nil && chipSize(percent) != nil }
 
     private var steps: [TransactionStep] {
-        env.perpl.closePositionPlan(market: market, position: position, slippageBps: 100, kind: kind, limitPrice: limitPrice, postOnly: postOnly)
+        env.perpl.closePositionPlan(market: market, position: position, slippageBps: Self.slippageBps, kind: kind, limitPrice: limitPrice, postOnly: postOnly, size: sentSize)
+    }
+
+    /// The close this sheet follows over the trading connection.
+    private var tracked: PerplTrackedOrder? {
+        if case .tracking(let id) = apiPhase { return perplTrading.orders.order(id) }
+        return nil
+    }
+    private var isTracking: Bool { if case .tracking = apiPhase { return true }; return false }
+    /// Perpl's final word that the close executed nothing: Try Again, with the terms editable again.
+    private var executedNothing: Bool { tracked?.entry?.executedNothing == true }
+    /// Perpl refused the close because order forwarding is off (OrderForwardingNotAllowed, sr 34): the trading route rests,
+    /// so no Try Again here — the reopened sheet sends it from the wallet, and the sheet says so.
+    private var refusedForForwarding: Bool {
+        if case .failed(let reason)? = tracked?.entry { return reason.reason == 34 }
+        return false
+    }
+    /// The result is in and isn't "not confirmed": Done, not Close.
+    private var isDecided: Bool { tracked?.entry.map { !PerplTracker.isUnconfirmed($0) } ?? false }
+    /// The terms can't change: a close is being confirmed, sent or followed (until Perpl says it executed nothing), or the
+    /// wallet's is signing or done.
+    private var termsLocked: Bool {
+        switch apiPhase {
+        case .authorizing, .sending: return true
+        case .tracking: return !executedNothing || refusedForForwarding
+        case .review, .failed: return run.isRunning || run.isDone || run.sentSomething
+        }
+    }
+    /// The close's result in words, a close Perpl never answered saying it may have gone through.
+    private func closeText(_ order: PerplTrackedOrder, _ entry: PerplOrderOutcome) -> PerplOutcomeText {
+        let words = PerplOutcomeText.close(entry, order.textContext)
+        guard PerplTracker.isUnconfirmed(entry), !order.acknowledged else { return words }
+        return PerplOutcomeText(headline: words.headline, detail: PerpActionCopy.closeUnknown, tone: words.tone)
+    }
+    private var trackedHeadline: String? {
+        guard let order = tracked, let entry = order.entry else { return nil }
+        return PerplOutcomeText.close(entry, order.textContext).headline
     }
 
     // A Moment link waits while this review is on screen (RootView's link gate).
@@ -2476,28 +2650,44 @@ private struct ClosePositionSheet: View {
                     DetailRow("Mark price", NumberStyle.number(mark))
                     DetailRow("Unrealized", PriceFormat.usdValue(position.unrealized, signed: true), tint: position.unrealized < 0 ? .negative : .positive)
                 }
-                Section("Close order") {
+                Section {
                     Picker("Type", selection: $kind) {
                         Text("Market", comment: "Order type: a market order, which fills at once at the market price. [tight]").tag(OrderKind.market)
                         Text("Limit", comment: "Order type: rests at the price you set until it fills. [tight]").tag(OrderKind.limit)
                     }
                     .pickerStyle(.segmented)
+                    .disabled(termsLocked)
+                    HStack(spacing: 8) {
+                        ForEach([25, 50, 75, 100], id: \.self) { chip in
+                            Button { percent = chip } label: { Text(verbatim: "\(chip)%") }
+                                .buttonStyle(.bordered).controlSize(.small).frame(maxWidth: .infinity)
+                                .tint(percent == chip ? Color.brand : Color.secondary)
+                                .disabled(termsLocked || chipSize(chip) == nil)
+                                .accessibilityAddTraits(percent == chip ? .isSelected : [])
+                        }
+                    }
+                    DetailRow("Size", verbatim: PositionText.amount(isLong: position.side == .long, size: sentSize, asset: position.symbol))
                     if isLimit {
                         HStack {
                             Text("Limit price").foregroundStyle(.secondary)
                             Spacer()
                             TextField(NumberStyle.number(mark), text: $limitText)
                                 .keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
+                                .disabled(termsLocked)
                         }
                         // The price this close signs, read back from the typed text (audit F4).
                         if let limitPrice, limitPrice > 0 { DetailRow("Limit at", NumberStyle.number(limitPrice, maximumFractionDigits: market.priceDecimals)) }
                         if let limitProblem { Paragraph(limitProblem).font(.footnote).foregroundStyle(Color.attention) }
-                        Toggle("Post only (maker)", isOn: $postOnly)
+                        Toggle("Post only (maker)", isOn: $postOnly).disabled(termsLocked)
                         Paragraph("Rests as a reduce-only limit at your price until it fills. It won't reduce your position until then.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         DetailRow("Order", "Market, reduce-only, 1% slippage")
                     }
+                } header: {
+                    Text("Close order")
+                } footer: {
+                    if route != nil { Paragraph("Signed and forwarded by your Perpl API key over the trading connection.") }
                 }
                 if !leftoverTriggers.isEmpty {
                     Section("Take-profit / stop-loss") {
@@ -2510,18 +2700,34 @@ private struct ClosePositionSheet: View {
                 if case .failed(let message) = run.phase {
                     Section { InlineError(message: message) }.listRowBackground(Color.clear)
                 }
+                if let order = tracked, let entry = order.entry {
+                    PerpOrderOutcomeSection(text: closeText(order, entry))
+                }
+                if case .failed(let message) = apiPhase {
+                    Section {
+                        InlineError(message: message)
+                        if let failureLine { Paragraph(verbatim: failureLine).font(.footnote).foregroundStyle(.secondary) }
+                    }
+                    .listRowBackground(Color.clear)
+                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle(tr("Close Position"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(run.isDone ? "Done" : "Cancel") { finish() }.disabled(run.isRunning || holdingDone)
+                    if isTracking {
+                        Button(isDecided ? "Done" : "Close") { finish() }
+                    } else {
+                        Button(run.isDone ? "Done" : "Cancel") { finish() }.disabled(run.isRunning || holdingDone || apiPhase == .authorizing || apiPhase == .sending)
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 8) {
-                    if run.isDone {
+                    if let route {
+                        apiBar(route)
+                    } else if run.isDone {
                         // What the close did, read from its receipt (Done held for the first moments of the read).
                         ReceiptResultBar(settled: settled, reading: reading, holdingDone: holdingDone) { finish() }
                     } else if case .failed = run.phase, run.sentSomething {
@@ -2536,7 +2742,7 @@ private struct ClosePositionSheet: View {
                         PrimaryButton(title: session.isPasskeyAccount ? "Confirm with \(BiometricGate.promptName)" : (isLimit ? "Place Limit Close" : "Close at Market"), isBusy: run.isRunning, isDisabled: !canConfirm) {
                             Task {
                                 if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm close")) { return }
-                                onSending()
+                                onSending(percent == 100)
                                 // The plan built once: the desc id read back from its receipt is the one it signs.
                                 let plan = steps
                                 sentDescId = PerplReceipt.descId(ofPlan: plan)
@@ -2547,17 +2753,18 @@ private struct ClosePositionSheet: View {
                 }
                 .padding().frame(maxWidth: .infinity).background(.bar)
             }
-            .interactiveDismissDisabled(run.isRunning || holdingDone)
+            .interactiveDismissDisabled(run.isRunning || holdingDone || apiPhase == .sending || apiPhase == .authorizing)
         }
         .presentationDetents([.medium, .large])
         .presentationBackground(Color(.systemGroupedBackground))
         // The result's tone, once read: a full close is a success, a partial one or nothing closed is not.
         .sensoryFeedback(trigger: settled?.tone) { _, tone in tone.flatMap(PerpOutcomeTone.feedback) }
+        .sensoryFeedback(trigger: tracked?.entry?.tone) { _, tone in tone.flatMap(PerpOutcomeTone.feedback) }
         // Recorded when the close settles, not when the sheet is dismissed: a settled sheet can be swiped away.
         .onChange(of: run.phase) { _, phase in
             switch phase {
             case .done(let hash):
-                onSending() // settled: expected from now on, whenever the poll next reads
+                onSending(percent == 100) // settled: expected from now on, whenever the poll next reads
                 // At the receipt (GL-3): the close was sent and its result isn't read yet. No volume until a fill is read.
                 Activity.record(ActivityRecord(kind: .perp, title: PerpOnChainCopy.closeTitle(position.symbol), subtitle: PerpOnChainCopy.closeSent, hash: hash,
                                                section: "perps", usd: nil), owner: session.address, notify: false)
@@ -2568,17 +2775,200 @@ private struct ClosePositionSheet: View {
                 break
             }
         }
+        // The close over the trading connection: its result as Perpl reports it — the positions are read again, a close
+        // that executed nothing is news again — and every new headline is announced.
+        .onChange(of: tracked?.entry) { _, entry in
+            guard let entry, !PerplTracker.isUnconfirmed(entry) else { return }
+            onSettled()
+            if entry.executedNothing { onNotSent() }
+        }
+        .onChange(of: trackedHeadline) { _, headline in
+            guard let headline, headline != announcedHeadline else { return }
+            announcedHeadline = headline
+            AccessibilityNotification.Announcement(headline).post()
+        }
+        .onDisappear {
+            if case .tracking(let id) = apiPhase { perplTrading.orders.setPresented(id, false) }
+        }
+        #if DEBUG && targetEnvironment(simulator)
+        // The scripted Perps demo only (`PerpsDemo`): its terms, and with Run this sheet's own confirm 2 s after it appears
+        // (App Lock still asks); its Try Again when the script says.
+        .task {
+            guard perplTrading.isDemo else { return }
+            if let demoTerms {
+                percent = demoTerms.percent
+                kind = demoTerms.limitText == nil ? .market : .limit
+                limitText = demoTerms.limitText ?? ""
+                postOnly = demoTerms.postOnly
+            }
+            guard let demoAutoConfirm, let route else { return }
+            try? await Task.sleep(for: demoAutoConfirm)
+            confirmAPI(route)
+        }
+        .onChange(of: demoTryAgain) { _, _ in
+            if perplTrading.isDemo, let route { tryAgain(route) }
+        }
+        #endif
+    }
+
+    /// Where the close button was, on the trading connection's path: the button (again after a failure before anything
+    /// was sent), "Sending to Perpl…", then the live status — waiting, its result with Done (and Try Again when Perpl
+    /// said it executed nothing), or "not confirmed" with Close.
+    @ViewBuilder private func apiBar(_ route: PerplTrading.ActionAccount) -> some View {
+        switch apiPhase {
+        case .review, .failed, .authorizing:
+            if !session.canSign {
+                Paragraph(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            } else {
+                if session.isPasskeyAccount { SessionScopeBadge(assessment: .faceID(Mera.AlwaysAsk.closePosition.summary)) }
+                PrimaryButton(title: session.isPasskeyAccount ? "Confirm with \(BiometricGate.promptName)" : (isLimit ? "Place Limit Close" : "Close at Market"),
+                              isBusy: apiPhase == .authorizing, isDisabled: !canConfirm) {
+                    confirmAPI(route)
+                }
+            }
+        case .sending:
+            HStack(spacing: 10) {
+                ProgressView()
+                Paragraph(verbatim: PerpOrderCopy.sending).font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .tracking:
+            if let order = tracked {
+                if let entry = order.entry, !PerplTracker.isUnconfirmed(entry) {
+                    VStack(spacing: 8) {
+                        PerpOrderStatusBar(text: closeText(order, entry))
+                        if refusedForForwarding {
+                            // One-click is off on Perpl: this route can't take it, the wallet's can.
+                            Paragraph(verbatim: perplTrading.nothingSentLine(for: route)).font(.footnote).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+                        } else if entry.executedNothing {
+                            // Perpl's final word: nothing executed, so a new close can't double it (GL-1).
+                            PrimaryButton(title: "Try Again", systemImage: "arrow.clockwise", isDisabled: !canConfirm) { tryAgain(route) }
+                            Button("Done") { finish() }.font(.subheadline.weight(.semibold))
+                        } else {
+                            PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+                        }
+                    }
+                } else if let entry = order.entry {
+                    VStack(spacing: 8) {
+                        PerpOrderStatusBar(text: closeText(order, entry))
+                        PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
+                    }
+                } else {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        VStack(spacing: 8) {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Paragraph(verbatim: order.acknowledged ? PerpOrderCopy.waiting : PerpOrderCopy.stillListening).font(.subheadline.weight(.semibold))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            if let waitingSince, context.date.timeIntervalSince(waitingSince) >= 3 {
+                                Paragraph(verbatim: PerpOrderCopy.canClose(market: "\(market.asset)-PERP")).font(.footnote).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The confirm on the trading connection (A.3.1): ignored unless nothing is under way, and busy at once, before the
+    /// App Lock prompt — a double tap can never start a second close.
+    private func confirmAPI(_ route: PerplTrading.ActionAccount) {
+        guard apiPhase == .review || apiPhase.isFailed else { return }
+        apiPhase = .authorizing
+        failureLine = nil
+        Task { await closeOverAPI(route) }
+    }
+
+    /// Try Again after Perpl's final word that the close executed nothing: its result is marked seen (no status row for
+    /// it), then a new confirm — App Lock, a passkey account's new step-up, a new request.
+    private func tryAgain(_ route: PerplTrading.ActionAccount) {
+        guard case .tracking(let old) = apiPhase, executedNothing, !refusedForForwarding else { return }
+        perplTrading.orders.setPresented(old, false)
+        perplTrading.orders.dismissBanner(old)
+        apiPhase = .review
+        confirmAPI(route)
+    }
+
+    /// The close over the trading connection: App Lock (as the wallet's close asks it), then the passkey session held for
+    /// the send (GL-1), then `submitClose` — a passkey account's close always asks first (MERA-PLAN §3) — and Perpl's
+    /// result followed (`track`, whether this sheet stays open or not). Nothing is ever resent from here.
+    private func closeOverAPI(_ route: PerplTrading.ActionAccount, approval: MeraSession.StepUp? = nil) async {
+        if approval == nil, settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm close")) {
+            onNotSent()
+            apiPhase = .review
+            return
+        }
+        // A passkey session (and its trading socket) outlives leaving the app until this close is sent (GL-1).
+        session.mera.beginAction()
+        defer { session.mera.endAction() }
+        apiPhase = .sending
+        let request = PerplTrading.CloseRequest(market: market, position: position, percent: percent, kind: kind, limitPrice: isLimit ? limitPrice : nil,
+                                                postOnly: isLimit && postOnly)
+        let whole = percent == 100
+        let expectation = perplTrading.expectOrder(PerplService.closeInput(market: market, position: position, size: sentSize, slippageBps: Self.slippageBps),
+                                                   held: (position.side, position.size))
+        var followed = false
+        defer { if !followed { perplTrading.releaseOrderExpectation(expectation) } }
+        do {
+            let (result, sent) = try await perplTrading.submitClose(request, account: route, env: env, approval: approval, onWriting: { whole in onSending(whole) })
+            guard result.entry, let tracking = result.tracking else {
+                // Perpl's gateway refused it: nothing was forwarded.
+                onNotSent()
+                failureLine = perplTrading.nothingSentLine(for: route)
+                apiPhase = .failed(result.error ?? tr("Perpl rejected the order."))
+                return
+            }
+            let id = perplTrading.track(tracking, input: sent, takeProfit: nil, stopLoss: nil, closes: position.side, held: (position.side, position.size), ttlBlocks: 100,
+                                        before: position, beforeReadAt: nil, restingOnSide: false, expectation: expectation, purpose: .close(wholePosition: whole))
+            followed = true
+            perplTrading.orders.setPresented(id, true)
+            waitingSince = Date()
+            apiPhase = .tracking(id)
+        } catch is MeraSession.StepUpRequired where approval == nil {
+            // MERA-PLAN §3: one pinned passkey ceremony approves this close, then it is sent.
+            do {
+                let approval = try await session.mera.stepUp()
+                await closeOverAPI(route, approval: approval)
+            } catch where isUserCancellation(error) {
+                onNotSent()
+                failureLine = perplTrading.nothingSentLine(for: route)
+                apiPhase = .failed(TransactionRun.notSent)
+            } catch {
+                onNotSent()
+                failureLine = perplTrading.nothingSentLine(for: route)
+                apiPhase = .failed(describe(error))
+            }
+        } catch let unanswered as PerplTrading.EntryUnanswered {
+            // Written and never answered: it may have gone through. Followed like any order (I7), never resent.
+            let id = perplTrading.track(unanswered.tracking, input: unanswered.input, takeProfit: nil, stopLoss: nil, closes: position.side,
+                                        held: (position.side, position.size), ttlBlocks: 100, before: position, beforeReadAt: nil, restingOnSide: false,
+                                        expectation: expectation, purpose: .close(wholePosition: whole))
+            followed = true
+            perplTrading.orders.setPresented(id, true)
+            waitingSince = Date()
+            apiPhase = .tracking(id)
+        } catch {
+            onNotSent()
+            // Refused on the device: the message says why, and nothing else needs saying.
+            failureLine = (error as? PerplTradeError)?.isInvalidOrder == true ? nil : perplTrading.nothingSentLine(for: route)
+            apiPhase = .failed(describe(error))
+        }
     }
 
     /// What the close says of the position, from what it was sent as.
     private var closeContext: PerplOutcomeText.Context {
         PerplOutcomeText.Context(asset: market.asset, priceDecimals: market.priceDecimals, lotDecimals: market.lotDecimals,
-                                 requestedSize: position.size, limitPrice: isLimit ? limitPrice : nil, isMarket: !isLimit, reducesPosition: true,
+                                 requestedSize: sentSize, limitPrice: isLimit ? limitPrice : nil, isMarket: !isLimit, reducesPosition: true,
                                  slippageBps: Self.slippageBps, acknowledged: false)
     }
 
     /// The market close's slippage (`closePositionPlan`).
-    private static let slippageBps = 100
+    private static let slippageBps = PerplTrading.CloseRequest.slippageBps
 
     /// Reads the close's receipt in a task of its own (a dismissed sheet still upgrades its row), and records what it did:
     /// closed or partly closed with the volume that filled at the price it filled at, a close resting on the book (no
@@ -2594,7 +2984,8 @@ private struct ClosePositionSheet: View {
         let owner = session.address
         let symbol = position.symbol
         let context = closeContext
-        let ordered = PositionText.amount(isLong: position.side == .long, size: position.size, asset: position.symbol)
+        let ordered = PositionText.amount(isLong: position.side == .long, size: sentSize, asset: position.symbol)
+        let partOnly = percent < 100
         let accountId = accountId
         let descId = sentDescId
         let perpl = env.perpl
@@ -2617,7 +3008,8 @@ private struct ClosePositionSheet: View {
                 } else {
                     subtitle = closed
                 }
-                row = ActivityRecord(kind: .perp, title: partly ? PerpOnChainCopy.partlyClosedTitle(symbol) : tr("Closed \(symbol)"), subtitle: subtitle, hash: hash, section: "perps",
+                // Partly closed when the receipt says so, or the chip closed only part of the position.
+                row = ActivityRecord(kind: .perp, title: partly || partOnly ? PerpOnChainCopy.partlyClosedTitle(symbol) : tr("Closed \(symbol)"), subtitle: subtitle, hash: hash, section: "perps",
                                      usd: outcome?.volumeUSD(priceDecimals: context.priceDecimals, lotDecimals: context.lotDecimals),
                                      feeUsd: fill.feeUSD.flatMap { $0 > 0 ? $0 : nil })
             case .resting?:
@@ -2658,20 +3050,26 @@ private struct ClosePositionSheet: View {
     }
 
     private func finish() {
-        let done = run.isDone
+        // Done after a result (the wallet's or Perpl's): the screen behind reads the position again.
+        let done = run.isDone || isTracking
         dismiss()
         if done { onDone() }
     }
 }
 
-/// Adds AUSD collateral to an open position — lowering its leverage and pushing the liquidation price away. Once its
-/// transaction confirms, the margin the position received is read from the receipt and said before Done.
-private struct AddMarginSheet: View {
+/// Adds AUSD collateral to an open position — lowering its leverage and pushing the liquidation price away. Sent as a
+/// wallet transaction, the margin the position received is read from the receipt once it confirms, and said before Done.
+/// With one-click live for the account at the tap (`route`), it goes to Perpl over the trading connection instead, and
+/// its result is Perpl's evidence (p4 spec A.4.3): added, refused, or not confirmed in time — said in the sheet while it
+/// is open, else as a notification, and in Activity either way.
+struct AddMarginSheet: View {
     let market: PerpMarket
     let position: PerpPosition
     let available: Double
     /// The Perpl account the margin is added for: its own request is read from the receipt.
     var accountId: Int?
+    /// The trading connection's route for this margin, fixed at the tap that opened the sheet; nil: the wallet transaction.
+    var route: PerplTrading.ActionAccount? = nil
     /// The margin's result was read: the caller reads the position again at once.
     var onSettled: () -> Void = {}
     let onDone: () -> Void
@@ -2679,6 +3077,7 @@ private struct AddMarginSheet: View {
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
     @Environment(AppSettings.self) private var settings
+    @Environment(PerplTrading.self) private var perplTrading
     @Environment(\.dismiss) private var dismiss
     @State private var run = TransactionRun()
     @State private var amountText = ""
@@ -2689,6 +3088,28 @@ private struct AddMarginSheet: View {
     /// The receipt is being read now, and Done is held for the first moments of it (`ReceiptResultBar.doneHold`).
     @State private var reading = false
     @State private var holdingDone = false
+    /// The trading connection's margin (`route`): where it is, from the confirm to Perpl's evidence.
+    @State private var apiPhase: APIPhase = .review
+    /// The request's row id once it was written (its result, live, is `PerplTrading.marginResults[id]`).
+    @State private var marginId: UUID?
+    /// This market's position read when the sheet opened, and when: the margin's "before" (else the position tapped).
+    @State private var freshBefore: PerpPosition?
+    @State private var freshBeforeAt: Date?
+    /// The one line under a not-sent failure (nil: refused on the device).
+    @State private var failureLine: String?
+    @State private var announcedHeadline: String?
+    #if DEBUG && targetEnvironment(simulator)
+    @Environment(\.perpsDemoAutoConfirm) private var demoAutoConfirm
+    @Environment(\.perpsDemoTerms) private var demoTerms
+    #endif
+
+    enum APIPhase: Equatable {
+        case review, authorizing, sending
+        case waiting(id: UUID, since: Date, acknowledged: Bool)
+        case settled(PerplTrading.MarginResult)
+        case failed(String)
+        var isFailed: Bool { if case .failed = self { return true }; return false }
+    }
 
     private var amount: Double { amountText.perpDouble ?? 0 }
     private var overBalance: Bool { amount > available + 0.000001 }
@@ -2699,6 +3120,29 @@ private struct AddMarginSheet: View {
     private var projLiquidation: Double? {
         PerplService.liquidationPrice(side: position.side, entry: position.entry, size: position.size, margin: projMargin, premium: position.premium, maintenanceFraction: market.maintMarginFraction)
     }
+
+    /// The margin's result as it stands: a later check may have changed what the wait said.
+    private var apiResult: PerplTrading.MarginResult? {
+        guard case .settled(let result) = apiPhase else { return nil }
+        return marginId.flatMap { perplTrading.marginResults[$0] } ?? result
+    }
+
+    /// The result in words, with the tone its icon, colour and haptic follow.
+    private var apiText: PerplOutcomeText? {
+        switch apiResult {
+        case .added(let cns)?:
+            return PerplOutcomeText(headline: PerpOnChainCopy.marginAdded(NumberStyle.units(cns, decimals: 6)), detail: nil, tone: .success)
+        case .refused(let why, _)?:
+            return PerplOutcomeText(headline: PerpActionCopy.marginNotAdded, detail: why, tone: .failure)
+        case .notConfirmed?:
+            return PerplOutcomeText(headline: PerpActionCopy.marginNotConfirmed, detail: PerpActionCopy.marginCheck, tone: .warning)
+        case nil:
+            return nil
+        }
+    }
+
+    /// The terms can't change once the margin is on its way, or the wallet's is signing or done.
+    private var termsLocked: Bool { apiPhase != .review && !apiPhase.isFailed || run.isRunning || run.isDone || run.sentSomething }
 
     // A Moment link waits while this review is on screen (RootView's link gate).
     var body: some View { reviewContent.holdsMomentLinks() }
@@ -2711,11 +3155,12 @@ private struct AddMarginSheet: View {
                     DetailRow("Current margin", PriceFormat.usdValue(position.margin))
                     DetailRow("Available", PriceFormat.usdValue(available))
                 }
-                Section("Add margin") {
+                Section {
                     HStack {
                         Text("Amount").foregroundStyle(.secondary)
                         Spacer()
                         TextField("0" as String, text: $amountText).keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
+                            .disabled(termsLocked)
                         Text("AUSD").foregroundStyle(.secondary)
                     }
                     HStack(spacing: 8) {
@@ -2724,9 +3169,14 @@ private struct AddMarginSheet: View {
                                 frac == 1.0 ? Text("Max", comment: "The most allowed: a button or chip that fills in the whole balance, or the highest leverage or amount [tight]") : Text(verbatim: "\(Int(frac * 100))%")
                             }
                             .buttonStyle(.bordered).controlSize(.small).frame(maxWidth: .infinity)
+                            .disabled(termsLocked)
                         }
                     }
                     if overBalance { Text("More than your available balance.").font(.caption).foregroundStyle(.negative) }
+                } header: {
+                    Text("Add margin")
+                } footer: {
+                    if route != nil { Paragraph("Signed and forwarded by your Perpl API key over the trading connection.") }
                 }
                 if amount > 0, !overBalance {
                     Section("After") {
@@ -2740,18 +3190,37 @@ private struct AddMarginSheet: View {
                 if case .failed(let message) = run.phase {
                     Section { InlineError(message: message) }.listRowBackground(Color.clear)
                 }
+                if let apiText {
+                    PerpOrderOutcomeSection(text: apiText)
+                    // A refusal at the gateway: nothing was forwarded, and the reopened sheet says how it will be sent.
+                    if case .refused(_, true)? = apiResult, let failureLine {
+                        Section { Paragraph(verbatim: failureLine).font(.footnote).foregroundStyle(.secondary) }.listRowBackground(Color.clear)
+                    }
+                }
+                if case .failed(let message) = apiPhase {
+                    Section {
+                        InlineError(message: message)
+                        if let failureLine { Paragraph(verbatim: failureLine).font(.footnote).foregroundStyle(.secondary) }
+                    }
+                    .listRowBackground(Color.clear)
+                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle(tr("Add Margin"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(run.isDone ? "Done" : "Cancel") { finish() }.disabled(run.isRunning || holdingDone)
+                    // Once the request is written it can't be called back: "Close" (Perpl may still add it, and the result
+                    // comes as a notice), "Done" when it is in; "Cancel" only while nothing has been sent.
+                    Button(run.isDone || apiResult != nil ? "Done" : (marginId != nil || apiPhase == .sending ? "Close" : "Cancel")) { finish() }
+                        .disabled(run.isRunning || holdingDone || apiPhase == .authorizing || apiPhase == .sending)
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 8) {
-                    if run.isDone {
+                    if let route {
+                        apiBar(route)
+                    } else if run.isDone {
                         // The margin the position received, read from the receipt (Done held for the first moments).
                         ReceiptResultBar(settled: settled, reading: reading, holdingDone: holdingDone) { finish() }
                     } else if case .failed = run.phase, run.sentSomething {
@@ -2775,12 +3244,13 @@ private struct AddMarginSheet: View {
                 }
                 .padding().frame(maxWidth: .infinity).background(.bar)
             }
-            .interactiveDismissDisabled(run.isRunning || holdingDone)
+            .interactiveDismissDisabled(run.isRunning || holdingDone || apiPhase == .sending || apiPhase == .authorizing)
         }
         .presentationDetents([.medium, .large])
         .presentationBackground(Color(.systemGroupedBackground))
         // The result's tone, once read: the margin read back is a success; a receipt that can't be read is a warning.
         .sensoryFeedback(trigger: settled?.tone) { _, tone in tone.flatMap(PerpOutcomeTone.feedback) }
+        .sensoryFeedback(trigger: apiText?.tone) { _, tone in tone.flatMap(PerpOutcomeTone.feedback) }
         // Recorded when the margin settles, not when the sheet is dismissed: a settled sheet can be swiped away.
         .onChange(of: run.phase) { _, phase in
             if case .done(let hash) = phase {
@@ -2788,6 +3258,134 @@ private struct AddMarginSheet: View {
                 Activity.record(ActivityRecord(kind: .deposit, title: tr("Added \(position.symbol) margin"), subtitle: "\(NumberStyle.number(amount)) AUSD", hash: hash, section: "perps", usd: amount), owner: session.address)
                 readResult(hash)
             }
+        }
+        // Each new result headline over the trading connection, announced (not confirmed first, then added).
+        .onChange(of: apiText?.headline) { _, headline in
+            guard let headline, headline != announcedHeadline else { return }
+            announcedHeadline = headline
+            AccessibilityNotification.Announcement(headline).post()
+        }
+        .task {
+            // The market's position now: what the margin is compared with on the chain.
+            guard let route, let fresh = await perplTrading.readPosition(market: market, for: route) else { return }
+            freshBefore = fresh.position
+            freshBeforeAt = fresh.at
+        }
+        .onDisappear {
+            // A result decided from now on posts its notice (and its Activity row, either way).
+            if let marginId { perplTrading.setMarginPresented(marginId, false) }
+        }
+        #if DEBUG && targetEnvironment(simulator)
+        // The scripted Perps demo only (`PerpsDemo`): its amount, and with Run this sheet's own confirm 2 s after it appears
+        // (App Lock still asks).
+        .task {
+            guard perplTrading.isDemo else { return }
+            if let amount = demoTerms?.amountText { amountText = amount }
+            guard let demoAutoConfirm, let route else { return }
+            try? await Task.sleep(for: demoAutoConfirm)
+            confirmAPI(route)
+        }
+        #endif
+    }
+
+    /// Where the button was, on the trading connection's path: the button (again after a failure before anything was
+    /// sent), "Sending to Perpl…", "Waiting for Perpl…" (closable after 3 s: the result comes as a notification and in
+    /// Activity), then the result with Done.
+    @ViewBuilder private func apiBar(_ route: PerplTrading.ActionAccount) -> some View {
+        switch apiPhase {
+        case .review, .failed, .authorizing:
+            if !session.canSign {
+                Paragraph(SessionError.readOnly.localizedDescription).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            } else {
+                if session.isPasskeyAccount { SessionScopeBadge(assessment: .faceID(Mera.AlwaysAsk.unlisted.summary)) }
+                PrimaryButton(title: session.isPasskeyAccount ? "Confirm with \(BiometricGate.promptName)" : "Add Margin", isBusy: apiPhase == .authorizing, isDisabled: !canConfirm) {
+                    confirmAPI(route)
+                }
+            }
+        case .sending:
+            HStack(spacing: 10) {
+                ProgressView()
+                Paragraph(verbatim: PerpOrderCopy.sending).font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .waiting(_, let since, let acknowledged):
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                VStack(spacing: 8) {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Paragraph(verbatim: acknowledged ? PerpOrderCopy.waiting : PerpOrderCopy.stillListening).font(.subheadline.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if context.date.timeIntervalSince(since) >= 3 {
+                        Paragraph(verbatim: PerpActionCopy.marginCanClose).font(.footnote).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    PrimaryButton(title: "Close", systemImage: "xmark") { finish() }
+                }
+            }
+        case .settled:
+            VStack(spacing: 8) {
+                if let apiText { PerpOrderStatusBar(text: apiText) }
+                PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+            }
+        }
+    }
+
+    /// The confirm on the trading connection (A.3.1): ignored unless nothing is under way, and busy at once, before the
+    /// App Lock prompt — a double tap can never send a second request.
+    private func confirmAPI(_ route: PerplTrading.ActionAccount) {
+        guard apiPhase == .review || apiPhase.isFailed else { return }
+        apiPhase = .authorizing
+        failureLine = nil
+        Task { await addOverAPI(route) }
+    }
+
+    /// The margin over the trading connection: App Lock (as the wallet's margin asks it), the passkey session held for the
+    /// send (GL-1), the amount checks the device can make before any step-up, then `PerplTrading.addMargin` — a passkey
+    /// account's always asks first (MERA-PLAN §3) — which writes the row and, once this sheet is gone, the notice.
+    private func addOverAPI(_ route: PerplTrading.ActionAccount, approval: MeraSession.StepUp? = nil) async {
+        if approval == nil, settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm add margin")) {
+            apiPhase = .review
+            return
+        }
+        session.mera.beginAction()
+        defer { session.mera.endAction() }
+        // Refused on the device before any step-up: more than the account has free, or an amount that rounds to zero.
+        if overBalance {
+            apiPhase = .failed(PerpActionCopy.marginOverAvailable)
+            return
+        }
+        if let problem = PerplOrders.problem(PerplOrders.addMargin(perpId: market.id, amountCNS: PerplService.toCNS(amount), accountId: route.accountId)) {
+            apiPhase = .failed(problem)
+            return
+        }
+        apiPhase = .sending
+        do {
+            let result = try await perplTrading.addMargin(market: market, amount: amount, account: route, before: freshBefore ?? position, approval: approval,
+                                                          beforeAt: freshBefore != nil ? freshBeforeAt : nil) { id, acknowledged in
+                marginId = id
+                perplTrading.setMarginPresented(id, true)
+                apiPhase = .waiting(id: id, since: Date(), acknowledged: acknowledged)
+            }
+            if case .refused(_, true) = result { failureLine = perplTrading.nothingSentLine(for: route) }
+            apiPhase = .settled(result)
+            onSettled()
+        } catch is MeraSession.StepUpRequired where approval == nil {
+            // MERA-PLAN §3: one pinned passkey ceremony approves this margin, then it is sent.
+            do {
+                let approval = try await session.mera.stepUp()
+                await addOverAPI(route, approval: approval)
+            } catch where isUserCancellation(error) {
+                failureLine = perplTrading.nothingSentLine(for: route)
+                apiPhase = .failed(TransactionRun.notSent)
+            } catch {
+                failureLine = perplTrading.nothingSentLine(for: route)
+                apiPhase = .failed(describe(error))
+            }
+        } catch {
+            // Refused on the device: the message says why, and nothing else needs saying.
+            failureLine = (error as? PerplTradeError)?.isInvalidOrder == true ? nil : perplTrading.nothingSentLine(for: route)
+            apiPhase = .failed(describe(error))
         }
     }
 
@@ -2825,7 +3423,8 @@ private struct AddMarginSheet: View {
     }
 
     private func finish() {
-        let done = run.isDone
+        // Done after a result (the wallet's or Perpl's), or closed while Perpl's is awaited: the screen behind reads again.
+        let done = run.isDone || marginId != nil
         dismiss()
         if done { onDone() }
     }
@@ -2890,6 +3489,9 @@ struct AuthedOrderSheet: View {
     /// The result headline VoiceOver last announced: each new one is announced (not confirmed, then filled), once.
     @State private var announcedHeadline: String?
     @State private var leftoverCancel: TriggerCancelRequest?
+    #if DEBUG && targetEnvironment(simulator)
+    @Environment(\.perpsDemoAutoConfirm) private var demoAutoConfirm
+    #endif
 
     enum Phase: Equatable { case review, sending, tracking(UUID), failed(String), legacyDone, legacyDoneWarning(String), legacyUnknown(String) }
 
@@ -3054,6 +3656,15 @@ struct AuthedOrderSheet: View {
                 onDone(PerplTracker.clearsTicket(perplTrading.orders.order(id)?.entry))
             }
         }
+        #if DEBUG && targetEnvironment(simulator)
+        // The scripted Perps demo only (`PerpsDemo`): with Run, this sheet's own live confirm 2 s after it appears (App Lock
+        // still asks). Never the switch-off sheet, which writes Activity for the account on screen.
+        .task {
+            guard perplTrading.isDemo, live, let demoAutoConfirm else { return }
+            try? await Task.sleep(for: demoAutoConfirm)
+            if phase == .review { await place() }
+        }
+        #endif
     }
 
     /// Where the order button was: the live status, so it shows at the sheet's medium height.
@@ -3327,7 +3938,7 @@ struct AuthedOrderSheet: View {
             // KNOWN EXCEPTION to "volume only from what filled" (owner decision pending, real-time spec §8): with the live
             // outcome switched off, this path never learns whether the order filled, so its row carries the requested
             // notional at the mark, as it always has — an order that fills nothing still adds to platform_volume. It
-            // goes away when the owner turns `perpsLiveOutcome` on (the live path records only fills). Recording nil
+            // applies only while the owner's kill switch `perpsLiveOutcome` is off (the live path records only fills). Recording nil
             // here instead would drop all switch-off volume to zero, since the watcher's fill notice carries none.
             let perp = "\(market.asset)-PERP"
             let kind = input.kind == .market

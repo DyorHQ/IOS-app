@@ -191,7 +191,10 @@ final class PerpsWalletStringsTests: XCTestCase {
         }
         let trade = try Self.source("DyorHQ/Perps/PerpTradeView.swift")
         XCTAssertTrue(trade.contains("ForEach(ChartDataTab.allCases) { $0.title.tag($0) }"))
-        XCTAssertTrue(trade.contains("tab.title\n"))
+        // The bottom tabs (Positions / Orders / Assets / Trade History): the shown title and the reserved selected width are
+        // both the written key (p4 spec E).
+        XCTAssertTrue(trade.contains("tab.title.font(.subheadline.weight(active ? .semibold : .regular))"))
+        XCTAssertTrue(trade.contains("tab.title.font(.subheadline.weight(.semibold)).hidden()"))
         XCTAssertTrue(trade.contains("priceType.title.font("))
         XCTAssertTrue(try Self.source("DyorHQ/Perps/PerpsPortfolioView.swift").contains("ForEach(HistoryTab.allCases) { $0.title.tag($0) }"))
     }

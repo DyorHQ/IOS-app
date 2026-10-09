@@ -1,3 +1,4 @@
+import BigInt
 import XCTest
 @testable import DyorKit
 
@@ -452,8 +453,89 @@ final class PerplOrderOutcomeTests: XCTestCase {
         XCTAssertEqual(census.requestsWritten, 32)
         XCTAssertEqual(census.heartbeatGaps, 2)
         XCTAssertTrue(census.summary.hasPrefix("perpl census written=32 firstRq=31/0 none12s=0 decided=0 timedOut=0 oid=scid 0/0/0"))
-        XCTAssertTrue(census.summary.hasSuffix("hb=8211/2/0/0 cont=0"))
+        XCTAssertTrue(census.summary.hasSuffix("hb=8211/2/0/0 cont=0 margin=0/0/0/0/0/0"))
         XCTAssertEqual(try JSONDecoder().decode(PerplStreamCensus.self, from: JSONEncoder().encode(census)), census)
+    }
+
+    /// The add-margin counts (p4 spec A.5) merge and log like the others, and a census stored by an earlier build — with
+    /// none of the fields added since — still reads, its counts kept.
+    func testTheCensusCountsMarginAndReadsAnOlderOne() throws {
+        var census = PerplStreamCensus()
+        census.marginWritten = 3
+        census.marginSt4or10 = 1
+        census.marginSt5or6 = 1
+        var other = PerplStreamCensus()
+        other.marginSt7 = 1
+        other.marginPositionWithRq = 2
+        other.marginGrowthWithoutRq = 1
+        census.merge(other)
+        XCTAssertTrue(census.summary.hasSuffix(" margin=3/1/1/1/2/1"), census.summary)
+        XCTAssertEqual(try JSONDecoder().decode(PerplStreamCensus.self, from: JSONEncoder().encode(census)), census)
+        // Phases 0–3 stored this shape: no margin fields (and an older one fewer still).
+        let stored = #"{"requestsWritten":31,"firstEventCarriedRq":30,"heartbeatsInOrder":8211,"foreignReports":2}"#
+        let read = try JSONDecoder().decode(PerplStreamCensus.self, from: Data(stored.utf8))
+        XCTAssertEqual(read.requestsWritten, 31)
+        XCTAssertEqual(read.firstEventCarriedRq, 30)
+        XCTAssertEqual(read.heartbeatsInOrder, 8211)
+        XCTAssertEqual(read.foreignReports, 2)
+        XCTAssertEqual(read.marginWritten, 0)
+        XCTAssertEqual(read.heartbeatGaps, 0)
+    }
+
+    // MARK: Add margin (p4 spec A.4.3)
+
+    private let margin = PerplSentRequest(accountId: 10, marketId: 1, wireType: 6, lotLNS: 0, kind: .collateral, writtenAt: Date(timeIntervalSince1970: 1_800_000_000))
+
+    /// A margin request is never an order's outcome, and its reports never touch an order's: they attach to its own
+    /// request only, by its request id (one without is dropped), never mapping the order id they may carry (I8).
+    func testAMarginRequestIsIsolatedFromOrders() {
+        let order31 = PerplOpenOrder.Key(marketId: 1, oid: 31)
+        var book = PerplOrderLedger(account: 10)
+        book.noteSent(limit(), rq: 480)
+        book.noteSent(margin, rq: 500)
+        _ = book.apply(event(["rq": 480, "mkt": 1, "oid": 31, "t": 1, "st": 2, "os": 100]), at: now)
+        XCTAssertEqual(book.requestId(for: order31, accountId: 10), 480)
+        let applied = book.apply(event(["rq": 500, "mkt": 1, "oid": 31, "t": 6, "st": 10]), at: now)
+        XCTAssertEqual(applied.changed, [500])
+        XCTAssertNil(applied.cancelTarget)
+        XCTAssertEqual(book.requestId(for: order31, accountId: 10), 480, "the margin's report never takes the order's key")
+        XCTAssertNil(book.orderKey(rq: 500, accountId: 10))
+        XCTAssertNil(book.outcome(rq: 500, sent: margin, final: true), "never an order's outcome")
+        // A later fill of the order still joins the order.
+        XCTAssertEqual(book.apply(PerplFillEvent(marketId: 1, orderId: 31, accountId: 10, priceRaw: 800000, sizeRaw: 40, feeCNS: "1"), at: now), [480])
+        // A t:6 report without a request id names nothing of its own.
+        XCTAssertEqual(book.apply(event(["oid": 31, "mkt": 1, "t": 6, "st": 4]), at: now).changed, [])
+        XCTAssertEqual(book.requestId(for: order31, accountId: 10), 480)
+        // A position report naming the order (not the margin's request) never reads as the margin moving it.
+        _ = book.apply(PerplPositionEvent(json: ["pid": 7, "mkt": 1, "oid": 31, "s": 40])!, at: now)
+        XCTAssertFalse(book.sawPositionChange(rq: 500, accountId: 10))
+        XCTAssertTrue(book.sawPositionChange(rq: 480, accountId: 10))
+    }
+
+    /// The decision table (p4 spec A.4.3): growth under the request wins; a terminal success is added; Canceled or Expired
+    /// alone is undecided (never refused); a failure is refused when final at once, or at the end with continuity.
+    func testTheMarginOutcomeTable() {
+        func outcome(_ events: [[String: Any]], final: Bool = false, grown: BigUInt? = nil) -> PerplCollateralOutcome? {
+            var book = PerplOrderLedger(account: 10)
+            book.noteSent(margin, rq: 9)
+            for json in events { _ = book.apply(event(json), at: now) }
+            return book.collateralOutcome(rq: 9, sent: margin, final: final, grown: grown)
+        }
+        XCTAssertNil(outcome([]), "nothing seen")
+        XCTAssertEqual(outcome([["rq": 9, "t": 6, "st": 10]]), .added(deltaCNS: nil))
+        XCTAssertEqual(outcome([["rq": 9, "t": 6, "st": 4]]), .added(deltaCNS: nil))
+        XCTAssertNil(outcome([["rq": 9, "t": 6, "st": 5]]))
+        XCTAssertNil(outcome([["rq": 9, "t": 6, "st": 5]], final: true), "Canceled alone may mean processed: never refused")
+        XCTAssertNil(outcome([["rq": 9, "t": 6, "st": 6]], final: true))
+        XCTAssertEqual(outcome([["rq": 9, "t": 6, "st": 5]], grown: 10_000_000), .added(deltaCNS: 10_000_000))
+        XCTAssertEqual(outcome([["rq": 9, "t": 6, "st": 7, "sr": 36, "fr": 2]]), .refused(PerplOrderReason(status: 7, reason: 36, failure: 2)))
+        XCTAssertEqual(outcome([["rq": 9, "t": 6, "st": 7, "sr": 34]]), .refused(PerplOrderReason(status: 7, reason: 34)))
+        XCTAssertNil(outcome([["rq": 9, "t": 6, "st": 7, "sr": 15]]), "provisional")
+        XCTAssertEqual(outcome([["rq": 9, "t": 6, "st": 7, "sr": 15]], final: true), .refused(PerplOrderReason(status: 7, reason: 15)))
+        XCTAssertEqual(outcome([["rq": 9, "t": 6, "st": 7, "fr": 2]], final: true, grown: 10_000_000), .added(deltaCNS: 10_000_000), "growth wins")
+        XCTAssertNil(outcome([["rq": 9, "mkt": 2, "t": 6, "st": 10]]), "another request's report under this id")
+        XCTAssertNil(outcome([["rq": 9, "t": 6, "r": true]], final: true), "removed without a failure")
+        XCTAssertEqual(PerplOrderReason(status: 7, reason: 36, failure: 2).message, "There isn't enough available margin to add to this position.")
     }
 
     // MARK: 35 Every wait fits the drain
@@ -462,6 +544,9 @@ final class PerplOrderOutcomeTests: XCTestCase {
         XCTAssertLessThan(PerplTimeouts.removal + PerplTimeouts.triggerOutcome + 2, PerplTimeouts.drainOperation)
         XCTAssertLessThan(PerplTimeouts.outcomeWallClock, PerplTimeouts.drainOperation)
         XCTAssertEqual(PerplTimeouts.ack, PerplTimeouts.drainAcks)
+        XCTAssertLessThan(PerplTimeouts.ack + PerplTimeouts.marginEvidence, PerplTimeouts.drainOperation, "add margin's wait fits the drain")
+        XCTAssertLessThanOrEqual(PerplTimeouts.ordersSnapshot + PerplTimeouts.ack + PerplTimeouts.removal, PerplTimeouts.drainOperation,
+                                 "a resting order's cancel: the wait for its socket's list, its ack and its removal fit the drain")
         XCTAssertFalse(PerplOrderLedger.concludesExpiryFromHeartbeat, "no heartbeat-only \"not executed\" in this build")
     }
 }

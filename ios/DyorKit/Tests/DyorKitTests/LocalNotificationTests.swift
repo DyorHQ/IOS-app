@@ -103,6 +103,21 @@ final class LocalNotificationTests: XCTestCase {
         }
         XCTAssertEqual(try appSource("Perps/PerpTradeView.swift").components(separatedBy: "Notifications.perpOrder(").count - 1, 1, "the switch-off sheet only")
         XCTAssertEqual(tracker.components(separatedBy: "Notifications.perpOrder(").count - 1, 1)
+        // A close from the position's Close sheet names the POSITION (p4 spec #16); margin over the trading connection
+        // posts from PerplTrading only, when no sheet shows its result.
+        XCTAssertTrue(notifications.contains("static func perpClose(title: String, position: String, perpId: Int, owner: Address?, deliver: Bool) {"))
+        XCTAssertTrue(notifications.contains("static func perpMargin(title: String, body: String, perpId: Int, owner: Address?, deliver: Bool) {"))
+        for (path, text) in try appSources() {
+            let close = text.components(separatedBy: "Notifications.perpClose(").count - 1
+            XCTAssertEqual(close, path == "Wallet/PerplOrderTracker.swift" ? 1 : 0, path)
+            if text.contains("Notifications.perpMargin(") { XCTAssertEqual(path, "Wallet/PerplTrading.swift") }
+        }
+        let announce = try XCTUnwrap(tracker.range(of: "case .announce(let notice, let banner):"))
+        let announceBody = String(tracker[announce.upperBound...].prefix(1800))
+        let ownerGuard = try XCTUnwrap(announceBody.range(of: "if order.owner == nil { break }"))
+        let firstPost = try XCTUnwrap(announceBody.range(of: "Notifications."))
+        XCTAssertLessThan(ownerGuard.lowerBound, firstPost.lowerBound, "an order with no account posts nothing")
+        XCTAssertTrue(squeeze(announceBody).contains("let position = PerpAlertText.positionName(asset: asset, side: order.closes ?? order.side.opposite)"))
         // The notice from evidence: never from an acknowledgement, never for what didn't fill.
         let evidence = try kitSource("Services/Notifications/PerpOrderNotice.swift")
         XCTAssertTrue(squeeze(evidence).contains("case .filled, .observed: self = .filled case .partlyFilled: self = .partlyFilled case .resting: self = .placed case .notFilled, .expired: self = .notFilled case .failed: self = .failed case .cancelled, .armed, .triggered, .unconfirmed: return nil"))

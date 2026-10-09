@@ -31,16 +31,20 @@ public struct PerplOrderFrame: Sendable {
     public var requestId: Int?
     /// Post-only (`fl: 1`): a limit that must rest on the book as a maker, never fill at once as a taker.
     public var postOnly: Bool
+    /// `a`: the collateral an IncreasePositionCollateral request adds, a whole number of 6-decimal units (CNS), written as
+    /// a decimal string (types.md `OrderSpec.a`). Nil on every other frame.
+    public var amountCNS: BigUInt?
 
     public init(type: PerpOrderType, marketId: Int, accountId: Int, pricePNS: Int, lotLNS: Int, leverageHdths: Int,
                 slippageBps: Int? = nil, ioc: Bool, lastExecutionBlock: Int, triggerPricePNS: Int? = nil,
                 triggerCondition: TriggerCondition? = nil, linkedPositionId: Int? = nil, linkedRequestId: Int? = nil,
-                orderId: Int? = nil, requestId: Int? = nil, postOnly: Bool = false) {
+                orderId: Int? = nil, requestId: Int? = nil, postOnly: Bool = false, amountCNS: BigUInt? = nil) {
         self.type = type; self.marketId = marketId; self.accountId = accountId; self.pricePNS = pricePNS
         self.lotLNS = lotLNS; self.leverageHdths = leverageHdths; self.slippageBps = slippageBps; self.ioc = ioc
         self.lastExecutionBlock = lastExecutionBlock; self.triggerPricePNS = triggerPricePNS
         self.triggerCondition = triggerCondition; self.linkedPositionId = linkedPositionId
         self.linkedRequestId = linkedRequestId; self.orderId = orderId; self.requestId = requestId; self.postOnly = postOnly
+        self.amountCNS = amountCNS
     }
 
     /// The wire type `t` (1-indexed on the WS API; the enum is 0-indexed).
@@ -58,6 +62,7 @@ public struct PerplOrderFrame: Sendable {
         if let linkedPositionId { frame["lp"] = linkedPositionId }
         if let linkedRequestId { frame["tr"] = linkedRequestId }
         if let orderId { frame["oid"] = orderId }
+        if let amountCNS { frame["a"] = String(amountCNS) }
         return frame
     }
 }
@@ -121,13 +126,26 @@ public enum PerplOrders {
         PerplOrderFrame(type: .cancel, marketId: perpId, accountId: accountId, pricePNS: 0, lotLNS: 0, leverageHdths: 0, ioc: false, lastExecutionBlock: 0, orderId: orderId)
     }
 
+    /// Adds `amountCNS` (AUSD, 6-decimal units) of collateral to the account's open position on `perpId`: an
+    /// IncreasePositionCollateral request (`t: 6`), which never matches (websocket.md: `mnp` ignored), with `a` the amount
+    /// as a decimal string and `lb: 0` like every frame.
+    public static func addMargin(perpId: Int, amountCNS: BigUInt, accountId: Int) -> PerplOrderFrame {
+        PerplOrderFrame(type: .increasePositionCollateral, marketId: perpId, accountId: accountId, pricePNS: 0, lotLNS: 0, leverageHdths: 0,
+                        ioc: false, lastExecutionBlock: 0, amountCNS: amountCNS)
+    }
+
     /// Why `frame` must not be sent, or nil. The scaling above turns a price below one tick into 0, and on Perpl a
     /// 0 means something else: a trigger with `tp: 0` is a plain reduce-only market close that executes the moment it
     /// is admitted (a take-profit or stop-loss typed as "0" would close the position at once), and a resting order
     /// with `p: 0` is a market order. Checked for every frame before any is sent, so a bracket is refused whole.
     public static func problem(_ frame: PerplOrderFrame) -> String? {
         switch frame.type {
-        case .cancel, .change, .increasePositionCollateral:
+        case .cancel, .change:
+            return nil
+        case .increasePositionCollateral:
+            guard let amount = frame.amountCNS, amount > 0 else {
+                return L10n.string(LocalizedStringResource("The margin amount rounds to zero.", bundle: L10n.kit, comment: "Add Margin's error: the amount entered is below the smallest unit of AUSD, so nothing was sent."))
+            }
             return nil
         case .openLong, .openShort, .closeLong, .closeShort:
             if frame.lotLNS <= 0 { return L10n.tr("The order size rounds to zero on this market.") }
@@ -257,15 +275,19 @@ public struct PerplOpenOrder: Identifiable, Sendable, Hashable {
     public let triggerConditionRaw: Int? // `tpc`: 1/2 last-based (take-profit), 3/4 mark-based (stop-loss)
     public let linkedPositionId: Int?
     public let leverageHundredths: Int
+    /// Perpl's "Smart contract order ID" (`scid`, types.md `Order`): the id the Exchange contract knows the order by, so
+    /// the on-chain order a card shows can be matched to the stream's (`streamOrder`). Nil when Perpl didn't send one.
+    public let contractOrderId: Int?
     public var key: Key { Key(marketId: marketId, oid: oid) }
     public var id: Key { key }
 
     public init(oid: Int, marketId: Int, typeRaw: Int, statusRaw: Int, priceRaw: Int, sizeRaw: Int, filledRaw: Int,
-                triggerPriceRaw: Int?, triggerConditionRaw: Int?, linkedPositionId: Int?, leverageHundredths: Int) {
+                triggerPriceRaw: Int?, triggerConditionRaw: Int?, linkedPositionId: Int?, leverageHundredths: Int, contractOrderId: Int? = nil) {
         self.oid = oid; self.marketId = marketId; self.typeRaw = typeRaw; self.statusRaw = statusRaw
         self.priceRaw = priceRaw; self.sizeRaw = sizeRaw; self.filledRaw = filledRaw
         self.triggerPriceRaw = triggerPriceRaw; self.triggerConditionRaw = triggerConditionRaw
         self.linkedPositionId = linkedPositionId; self.leverageHundredths = leverageHundredths
+        self.contractOrderId = contractOrderId
     }
 
     /// A keeper trigger (take-profit / stop-loss) rather than a plain resting order.
@@ -285,6 +307,22 @@ public struct PerplOpenOrder: Identifiable, Sendable, Hashable {
     public var isRestingEntry: Bool { !isTrigger && (typeRaw == 1 || typeRaw == 2) }
     /// The side of the market this order acts on: the position a trigger closes, or the one an entry opens.
     public var side: PerplMarketSide { PerplMarketSide(marketId: marketId, isLong: isReduceOnly ? protectsLong : typeRaw == 1) }
+}
+
+extension PerplOpenOrder {
+    /// The stream's order for an on-chain resting order (`PerpOrder`), found only by Perpl's own "Smart contract order ID"
+    /// (`scid`): the same market, `scid` equal to the chain's order id, not a trigger, the same type (the stream's `t` is
+    /// the chain's 0-indexed type + 1) and the same price at the market's precision. Exactly one match, else nil — no
+    /// `scid`, or any term that differs, means the app can't name the order Perpl would cancel, so its cancel stays a
+    /// wallet transaction. Never matched by `oid`: whether `oid` equals `scid` is the census's open question.
+    public static func streamOrder(for chain: PerpOrder, in orders: [PerplOpenOrder], priceDecimals: Int) -> PerplOpenOrder? {
+        guard let price = Int(exactly: (chain.price * pow(10, Double(priceDecimals))).rounded()) else { return nil }
+        let matches = orders.filter { order in
+            order.marketId == chain.perpId && order.contractOrderId == chain.orderId && !order.isTrigger
+                && order.typeRaw == chain.type.rawValue + 1 && order.priceRaw == price
+        }
+        return matches.count == 1 ? matches.first : nil
+    }
 }
 
 /// One side of one market: a position there, or the entries and triggers that act on it.
@@ -451,6 +489,21 @@ public final class PerplTradeClient {
     /// The terminal status (and reason) each order last left the live list with (≤ 128, newest kept).
     @ObservationIgnored private var lastTerminal: [PerplOpenOrder.Key: (status: Int, reason: Int)] = [:]
     @ObservationIgnored private var lastTerminalOrder: [PerplOpenOrder.Key] = []
+    /// The same, by Perpl's smart contract order id (`scid`) for the orders that carried one (≤ 128, newest kept), with
+    /// when it was seen: how an on-chain order the stream knew left its list (`lastTerminalStatus(marketId:contractOrderId:)`).
+    /// The Exchange gives an id again, so a record speaks only of the order that held the id then.
+    @ObservationIgnored private var lastTerminalByScid: [PerplOpenOrder.Key: (status: Int, reason: Int, at: Date)] = [:]
+    @ObservationIgnored private var lastTerminalScidOrder: [PerplOpenOrder.Key] = []
+    /// The collateral a position gained in an mt:27 that carried the request id of an IncreasePositionCollateral request
+    /// this socket wrote, by that request id (6-decimal units, ≤ 64).
+    @ObservationIgnored private var collateralGrowth: [Int: BigUInt] = [:]
+    /// The collateral positions gained in mt:27 updates that carried no such request id, and whether their size stayed
+    /// the same (≤ 16, kept 60 s): `collateralGrowthWithoutRequest`.
+    @ObservationIgnored private var growthWithoutRequest: [(pid: Int, delta: BigUInt, sizeUnchanged: Bool, at: Date)] = []
+    /// Request ids an mt:27 named in the position's own `rq` while reporting it closed (`st 2`), ≤ 64: what says a close
+    /// sent from here ended the position (`positionClosed(byRequest:)`).
+    @ObservationIgnored private var closedByRequest: Set<Int> = []
+    @ObservationIgnored private var closedByRequestOrder: [Int] = []
     /// What was written per request id on this socket (≤ 256, newest kept).
     @ObservationIgnored private var sentRequests: [Int: PerplSentRequest] = [:]
     /// The highest request id written on this socket: a reserved id must be above it, so ids rise in write order.
@@ -468,6 +521,11 @@ public final class PerplTradeClient {
     @ObservationIgnored private var cancelsWritten: [Int: (key: PerplOpenOrder.Key, listed: Bool?)] = [:]
     /// Test seam: when set, frames are written here instead of the socket (and stand in for it in the guards).
     @ObservationIgnored var transport: ((String) -> Void)?
+    #if DEBUG
+    /// DEBUG builds only: this client is the scripted Perps demo's (`debugScripted()`), which never connects. Set once, by
+    /// `debugScripted()`; false for every client built with `init(key:)`.
+    @ObservationIgnored public private(set) var isDebugScripted = false
+    #endif
 
     /// Fired on the main actor after the existing state is updated: each mt:24's orders, mt:25's fills, mt:27's
     /// positions; any own-account 21/24/25/27; a heartbeat that isn't in order; each request id as it is written (for the
@@ -495,6 +553,8 @@ public final class PerplTradeClient {
         static let failThenOk = CensusMarks(rawValue: 1 << 3)
         static let foreign = CensusMarks(rawValue: 1 << 4)
         static let zeroFillChecked = CensusMarks(rawValue: 1 << 5)
+        static let margin = CensusMarks(rawValue: 1 << 6)
+        static let marginPosition = CensusMarks(rawValue: 1 << 7)
     }
 
     private let chainId: Int
@@ -520,6 +580,9 @@ public final class PerplTradeClient {
 
     /// Connects and signs in, resolving once the WalletSnapshot has seeded the account and request-id counter.
     public func connect(timeout: TimeInterval = 10) async throws {
+        #if DEBUG
+        precondition(!isDebugScripted, "a scripted demo client never connects")
+        #endif
         if self.task != nil { disconnect() } // one socket per client, ever
         lastClose = nil
         hasOrdersSnapshot = false
@@ -715,6 +778,44 @@ public final class PerplTradeClient {
     /// removal reads 5/28), 4/9/10 fired or filled, 6 expired, 7 failed.
     public func lastTerminalStatus(of key: PerplOpenOrder.Key) -> (status: Int, reason: Int)? { lastTerminal[key] }
 
+    /// The status (and reason) the order with Perpl's smart contract order id `contractOrderId` on `marketId` left this
+    /// socket's live list with, when it carried that id (`scid`), and when: how an on-chain resting order ended, as the
+    /// stream saw it. The Exchange reuses ids, so the caller weighs `at` (a later order may hold the id now).
+    public func lastTerminalStatus(marketId: Int, contractOrderId: Int) -> (status: Int, reason: Int, at: Date)? {
+        lastTerminalByScid[PerplOpenOrder.Key(marketId: marketId, oid: contractOrderId)]
+    }
+
+    // MARK: Margin and close evidence
+
+    /// The collateral (6-decimal units) a position gained in an mt:27 that carried `rq`, an IncreasePositionCollateral
+    /// request this socket wrote: Perpl's own word that the margin went in. Nil when none was seen.
+    public func collateralAdded(rq: Int) -> BigUInt? { collateralGrowth[rq] }
+
+    /// An mt:27 for position `pid` without a margin request's id raised its collateral by exactly `amountCNS` with its
+    /// size unchanged, after `since`: the margin went in, reported without its request id (the caller makes sure no other
+    /// margin request and no order of its own is in flight on that market).
+    public func collateralGrowthWithoutRequest(pid: Int, amountCNS: BigUInt, since: Date) -> Bool {
+        growthWithoutRequest.contains { $0.pid == pid && $0.delta == amountCNS && $0.sizeUnchanged && $0.at >= since }
+    }
+
+    /// What Perpl did with the IncreasePositionCollateral request `rq` this socket wrote, as far as its reports say:
+    /// added (its own success, or the position's collateral grown under it), refused (a final failure; `final`: the
+    /// evidence wait ended with the socket signed in throughout), or nil while undecided (`PerplOrderLedger.collateralOutcome`).
+    public func collateralOutcome(rq: Int, final: Bool) -> PerplCollateralOutcome? {
+        guard let sent = sentRequests[rq], sent.kind == .collateral else { return nil }
+        return ledger.collateralOutcome(rq: rq, sent: sent, final: final, grown: collateralAdded(rq: rq))
+    }
+
+    /// An mt:27 reported a position closed (`st 2`) carrying `rq` in that report itself — never inferred from a
+    /// position's earlier request id.
+    public func positionClosed(byRequest rq: Int) -> Bool { closedByRequest.contains(rq) }
+
+    /// An mt:27 named request `rq` (by its own `rq`, or by its order's market and id): a hint that it moved the position.
+    public func sawPositionChange(rq: Int) -> Bool {
+        guard let sent = sentRequests[rq] else { return false }
+        return ledger.sawPositionChange(rq: rq, accountId: sent.accountId)
+    }
+
     /// What became of `key`, whose cancel THIS socket wrote as `cancelRq`, as this socket's live list shows it now; nil
     /// while that can't be said yet (still listed and not refused, or gone with no report of how). Nil too when this
     /// socket didn't write that cancel for that order, or isn't signed in with its orders snapshot: a list emptied by a
@@ -843,6 +944,7 @@ public final class PerplTradeClient {
     /// Records what was written under `rq` (what its first event must match, census timing) and reports the id.
     private func noteWrite(_ frame: PerplOrderFrame, rq: Int) {
         let kind: PerplOrderLedger.Kind = frame.type == .cancel ? .cancel
+            : frame.type == .increasePositionCollateral ? .collateral
             : (frame.triggerPricePNS != nil ? .trigger : .entry(ioc: frame.ioc, sizeRaw: frame.lotLNS))
         let sent = PerplSentRequest(accountId: frame.accountId, marketId: frame.marketId, wireType: frame.wireType, lotLNS: frame.lotLNS,
                                     kind: kind, writtenAt: Date())
@@ -862,6 +964,7 @@ public final class PerplTradeClient {
             cancelsWritten[rq] = (target, hasOrdersSnapshot ? ordersByKey[target] != nil : nil)
         }
         census.requestsWritten += 1
+        if kind == .collateral { census.marginWritten += 1 }
         onRequestIdIssued?(rq)
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(12))
@@ -889,22 +992,27 @@ public final class PerplTradeClient {
                 case .failure(let failure):
                     // A deliberate disconnect() already tore down and reported; ignore the cancelled socket's echo.
                     guard socket === self.task else { return }
-                    let close = Self.closeInfo(socket, fallback: failure)
-                    self.lastClose = close
-                    self.task = nil
-                    self.signedIn = false
-                    self.error = close.message
-                    let error = PerplTradeError.closed(close.message)
-                    self.failConnect(error)
-                    for (_, c) in self.pending { c.resume(throwing: error) }
-                    self.pending.removeAll()
-                    self.pendingRq.removeAll()
-                    self.releaseWaiters()
-                    self.keepAlive?.cancel()
-                    self.onDisconnect?()
+                    self.socketFailed(Self.closeInfo(socket, fallback: failure))
                 }
             }
         }
+    }
+
+    /// The socket ended on its own (`close`, from the server's close frame or the transport): everything waiting on it
+    /// fails as "outcome unknown", every outcome wait ends as "connection lost", and the owner hears of it (`onDisconnect`).
+    private func socketFailed(_ close: PerplClose) {
+        lastClose = close
+        task = nil
+        signedIn = false
+        self.error = close.message
+        let closed = PerplTradeError.closed(close.message)
+        failConnect(closed)
+        for (_, c) in pending { c.resume(throwing: closed) }
+        pending.removeAll()
+        pendingRq.removeAll()
+        releaseWaiters()
+        keepAlive?.cancel()
+        onDisconnect?()
     }
 
     /// The server's close code + reason when it sent a close frame; otherwise a code-0 close carrying the transport's
@@ -966,8 +1074,9 @@ public final class PerplTradeClient {
             // A cancel request's own report that it went through removes its target, as cancelled — never as fired.
             // Its refusal (st 7) or a live status never touches the target.
             for target in targets where [4, 5, 10].contains(target.status) && ordersByKey[target.key] != nil {
+                let scid = ordersByKey[target.key]?.contractOrderId
                 ordersByKey[target.key] = nil
-                noteTerminal(target.key, status: 5, reason: 28)
+                noteTerminal(target.key, status: 5, reason: 28, scid: scid)
                 if cancelTargets.removeValue(forKey: target.key) != nil { census.cancelRemovedOnlyByOwnEvent += 1 }
             }
             publishOrders()
@@ -1000,6 +1109,8 @@ public final class PerplTradeClient {
             snapshotsMaybeComplete()
         case 27: // PositionsUpdate — upsert open positions, drop ended ones, and report each ending once
             let raws = (obj["d"] as? [[String: Any]]) ?? []
+            // Read against each position's collateral before `applyPosition` replaces it.
+            notePositionEvidence(raws, at: now)
             let ended = raws.compactMap(applyPosition)
             publishPositions()
             let events = raws.compactMap(PerplPositionEvent.init(json:))
@@ -1058,10 +1169,50 @@ public final class PerplTradeClient {
         return BigUInt(text, radix: 10)
     }
 
-    private func noteTerminal(_ key: PerplOpenOrder.Key, status: Int, reason: Int) {
+    private func noteTerminal(_ key: PerplOpenOrder.Key, status: Int, reason: Int, scid: Int? = nil) {
         if lastTerminal[key] == nil { lastTerminalOrder.append(key) }
         lastTerminal[key] = (status, reason)
         if lastTerminalOrder.count > 128 { lastTerminal[lastTerminalOrder.removeFirst()] = nil }
+        guard let scid else { return }
+        let byScid = PerplOpenOrder.Key(marketId: key.marketId, oid: scid)
+        if lastTerminalByScid[byScid] == nil { lastTerminalScidOrder.append(byScid) }
+        lastTerminalByScid[byScid] = (status, reason, Date())
+        if lastTerminalScidOrder.count > 128 { lastTerminalByScid[lastTerminalScidOrder.removeFirst()] = nil }
+    }
+
+    /// What an mt:27 says before `applyPosition` replaces each position (this account's only): the collateral a position
+    /// gained under an IncreasePositionCollateral request this socket wrote, named by the position's own `rq` (never an
+    /// earlier one it kept); the collateral one gained under no such request, and whether its size stayed the same; and
+    /// the requests named by a report of a position closed (`st 2`).
+    private func notePositionEvidence(_ raws: [[String: Any]], at now: Date) {
+        growthWithoutRequest.removeAll { now.timeIntervalSince($0.at) > 60 }
+        for raw in raws {
+            if let acc = Self.intValue(raw["acc"]), let accountId, acc != accountId { continue }
+            let rq = PerplJSON.id(raw["rq"])
+            let marginRq = rq.flatMap { sentRequests[$0]?.kind == .collateral ? $0 : nil }
+            if let marginRq, mark(marginRq, .marginPosition) { census.marginPositionWithRq += 1 }
+            if let rq, Self.intValue(raw["st"]) == 2, closedByRequest.insert(rq).inserted {
+                closedByRequestOrder.append(rq)
+                if closedByRequestOrder.count > 64 { closedByRequest.remove(closedByRequestOrder.removeFirst()) }
+            }
+            // The collateral it had and has now, both whole numbers of 6-decimal units.
+            guard let pid = Self.intValue(raw["pid"]), let previous = positionsByPid[pid],
+                  let before = previous.collateralCNS.flatMap({ BigUInt($0, radix: 10) }),
+                  let after = PerplJSON.amount(raw["c"]).flatMap({ BigUInt($0, radix: 10) }), after > before else { continue }
+            let delta = after - before
+            if let marginRq {
+                collateralGrowth[marginRq] = delta
+                if collateralGrowth.count > 64, let oldest = collateralGrowth.keys.min() { collateralGrowth[oldest] = nil }
+                continue
+            }
+            // An update that leaves out its size kept it.
+            let unchanged = Self.intValue(raw["s"]).map { $0 == previous.sizeRaw } ?? true
+            growthWithoutRequest.append((pid, delta, unchanged, now))
+            if growthWithoutRequest.count > 16 { growthWithoutRequest.removeFirst(growthWithoutRequest.count - 16) }
+            // Census: a margin request this socket wrote in the last minute whose growth came without its request id.
+            let waiting = sentRequests.contains { $0.value.kind == .collateral && now.timeIntervalSince($0.value.writtenAt) <= 60 && collateralGrowth[$0.key] == nil }
+            if unchanged, waiting { census.marginGrowthWithoutRq += 1 }
+        }
     }
 
     // MARK: Census (counts only)
@@ -1084,6 +1235,18 @@ public final class PerplTradeClient {
             if event.removed, event.status == nil { census.removedWithoutStatus += 1 }
             guard let rq = event.requestId, let sent = sentRequests[rq], event.accountId == nil || event.accountId == sent.accountId else { continue }
             if event.status == 7, event.logIndex != nil { census.failuresCarryingLog += 1 }
+            // A margin request's reports answer the margin questions only (never an order's: it may name an order id).
+            if sent.kind == .collateral || event.typeRaw == 6 {
+                if mark(rq, .margin) {
+                    switch event.status {
+                    case 4?, 10?: census.marginSt4or10 += 1
+                    case 5?, 6?: census.marginSt5or6 += 1
+                    case 7?: census.marginSt7 += 1
+                    default: break
+                    }
+                }
+                continue
+            }
             if event.orderId != nil, mark(rq, .scid) {
                 if event.contractOrderId == nil { census.scidMissing += 1 }
                 else if event.contractOrderId == event.orderId { census.oidEqualsScid += 1 }
@@ -1092,7 +1255,7 @@ public final class PerplTradeClient {
             if sent.kind == .cancel || event.isCancelRequest, mark(rq, .cancelOwn) { census.cancelOwnEvents += 1 }
         }
         for rq in changed {
-            guard let sent = sentRequests[rq], let entry = ledger.entry(rq: rq, accountId: sent.accountId) else { continue }
+            guard let sent = sentRequests[rq], sent.kind != .collateral, let entry = ledger.entry(rq: rq, accountId: sent.accountId) else { continue }
             if let carried = entry.firstCarriedRq, mark(rq, .firstEvent) {
                 if carried { census.firstEventCarriedRq += 1 } else { census.firstEventLackedRq += 1 }
             }
@@ -1107,7 +1270,7 @@ public final class PerplTradeClient {
                 }
             }
         }
-        for event in events where !event.isCancelRequest {
+        for event in events where !event.isCancelRequest && event.typeRaw != 6 && event.requestId.flatMap({ sentRequests[$0]?.kind }) != .collateral {
             // The target of one of this socket's cancels left on its own report.
             guard let market = event.marketId, let oid = event.orderId, event.removed || [4, 5, 6, 7, 10].contains(event.status ?? 0) else { continue }
             if cancelTargets.removeValue(forKey: PerplOpenOrder.Key(marketId: market, oid: oid)) != nil { census.cancelTargetOwnRemovals += 1 }
@@ -1172,9 +1335,12 @@ public final class PerplTradeClient {
     /// A cancel request's own report (`t` 5, or a request this socket wrote as a cancel — a partial update may omit `t`)
     /// carries its TARGET's id: merged here it would rewrite the target's type to Cancel, so the trigger would silently
     /// drop out of the TP/SL rows and the orphan checks. It never touches the list here; `handle` applies its one rule.
+    ///
+    /// An IncreasePositionCollateral request's report (`t` 6, or a request this socket wrote as one) is never an order on
+    /// the list either, for the same reason: it may name an order id it doesn't own.
     private func applyOrder(_ raw: [String: Any], announce: Bool) {
-        if Self.intValue(raw["t"]) == 5 { return }
-        if let rq = PerplJSON.id(raw["rq"]), sentRequests[rq]?.kind == .cancel { return }
+        if Self.intValue(raw["t"]) == 5 || Self.intValue(raw["t"]) == 6 { return }
+        if let rq = PerplJSON.id(raw["rq"]), sentRequests[rq]?.kind == .cancel || sentRequests[rq]?.kind == .collateral { return }
         guard let oid = Self.intValue(raw["oid"]) else { return }
         // Order ids are per market: an update is merged into the order with its market AND id. One that leaves out
         // its market belongs to the only order with that id, if there is exactly one; otherwise it can't be placed.
@@ -1208,7 +1374,8 @@ public final class PerplTradeClient {
             triggerPriceRaw: Self.intValue(raw["tp"]) ?? previous?.triggerPriceRaw,
             triggerConditionRaw: Self.intValue(raw["tpc"]) ?? previous?.triggerConditionRaw,
             linkedPositionId: Self.intValue(raw["lp"]) ?? previous?.linkedPositionId,
-            leverageHundredths: Self.intValue(raw["lv"]) ?? previous?.leverageHundredths ?? 0
+            leverageHundredths: Self.intValue(raw["lv"]) ?? previous?.leverageHundredths ?? 0,
+            contractOrderId: PerplJSON.id(raw["scid"]) ?? previous?.contractOrderId
         )
         if announce, order.isTrigger, let outcome = Self.triggerOutcome(status: status, reason: reason),
            announcedTriggers.insert("\(marketId)-\(oid)-\(Self.eventName(outcome))").inserted {
@@ -1216,7 +1383,7 @@ public final class PerplTradeClient {
         }
         guard !removed, [1, 2, 3, 8, 9].contains(status) else {
             // How it left (an `r: true` without `st` keeps the status it had), for a cancel's confirmation.
-            noteTerminal(key, status: status, reason: reason)
+            noteTerminal(key, status: status, reason: reason, scid: order.contractOrderId)
             ordersByKey[key] = nil
             return
         }
@@ -1303,3 +1470,38 @@ public final class PerplTradeClient {
         connectContinuation = nil
     }
 }
+
+#if DEBUG
+/// DEBUG builds only (the app's scripted Perps demo and its tests; never in a Release binary).
+extension PerplTradeClient {
+    /// A client that is never connected — no socket, no sign-in — whose URL can't route (`wss://perps-demo.invalid`) and
+    /// whose key is an all-zero placeholder nothing reads; `connect()` refuses to run on it (precondition). Frames go to
+    /// `debugAttach`'s `write`; `debugReceive` hands it a frame as if Perpl had sent it; `debugDrop` ends it as a dropped
+    /// socket would (`socketFailed`).
+    public static func debugScripted() -> PerplTradeClient {
+        // not localized: a placeholder key nothing signs with, and a host that can't resolve
+        let placeholder = PerplApiKey(token: "", secret: Data(repeating: 0, count: 32), address: "0x0000000000000000000000000000000000000000", scopeMask: 0)
+        let client = PerplTradeClient(key: placeholder, wsURL: URL(string: "wss://perps-demo.invalid")!, session: .shared)
+        client.isDebugScripted = true
+        return client
+    }
+
+    /// Every frame this client writes goes to `write` (as the socket would carry it), never to a network.
+    public func debugAttach(write: @escaping (String) -> Void) {
+        precondition(isDebugScripted && task == nil, "only a scripted demo client, which never has a socket")
+        transport = write
+    }
+
+    /// A frame as if Perpl had sent it on the socket.
+    public func debugReceive(_ text: String) {
+        precondition(isDebugScripted, "only a scripted demo client")
+        handle(Data(text.utf8))
+    }
+
+    /// Ends the scripted connection as a dropped socket would: Perpl's "server restarting" close (1001).
+    public func debugDrop() {
+        precondition(isDebugScripted, "only a scripted demo client")
+        socketFailed(PerplClose(code: 1001, reason: ""))
+    }
+}
+#endif

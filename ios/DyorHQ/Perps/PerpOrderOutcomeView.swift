@@ -161,12 +161,26 @@ struct PerpOrderStatusRow: View {
         guard PerplTracker.isUnconfirmed(entry) else { return text.detail }
         // A wallet-signed order whose receipt couldn't be read: what to check (Perpl has no report of it).
         if order.isOnChain { return PerpOnChainCopy.unreadable }
+        // A close Perpl never answered: it may have gone through (GL-1), so Positions is checked before closing again.
+        if !order.acknowledged, order.isClose { return PerpActionCopy.closeUnknown }
         if !order.acknowledged { return PerpOrderCopy.unknown(takeProfit: order.takeProfit != nil, stopLoss: order.stopLoss != nil) }
         return text.detail
     }
 
-    var body: some View {
+    /// The row's title: the order ("Long BTC-PERP"), or for a close sent from the position's Close sheet, the close
+    /// ("Close BTC").
+    private var title: String {
+        if order.isClose { return PerpOnChainCopy.closeTitle(order.asset) }
         let perp = "\(order.asset)-PERP"
+        return order.side == .long ? tr("Long \(perp)") : tr("Short \(perp)")
+    }
+
+    /// The result in words: a close's said of the position.
+    private func words(_ entry: PerplOrderOutcome) -> PerplOutcomeText {
+        order.isClose ? PerplOutcomeText.close(entry, order.textContext) : PerplOutcomeText.order(entry, order.textContext)
+    }
+
+    var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Group {
                 if let tone {
@@ -177,9 +191,9 @@ struct PerpOrderStatusRow: View {
             }
             .frame(width: 20)
             VStack(alignment: .leading, spacing: 3) {
-                Paragraph(verbatim: order.side == .long ? tr("Long \(perp)") : tr("Short \(perp)")).font(.subheadline.weight(.semibold))
+                Paragraph(verbatim: title).font(.subheadline.weight(.semibold))
                 if let entry = order.entry {
-                    let text = PerplOutcomeText.order(entry, order.textContext)
+                    let text = words(entry)
                     Paragraph(verbatim: text.headline).font(.footnote.weight(.medium))
                     if let detail = detail(entry, text) {
                         Paragraph(verbatim: detail).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -399,6 +413,155 @@ enum PerpOrderCopy {
         case (false, true): return tr(LocalizedStringResource("The order is on the book, but Perpl didn't accept the stop-loss. Set it with TP/SL on the position once the order fills.", comment: "A Perps order sheet's warning: the limit order rests on the order book; Perpl refused its stop-loss."))
         case (false, false): return nil
         }
+    }
+}
+
+/// The words of Close Position, Add Margin and Cancel Order sent over the trading connection (one-click), in the app's
+/// language: each a whole sentence or a short state with its own key.
+enum PerpActionCopy {
+    /// Under an error on one of the three sheets: nothing left the device; reopening sends it again (maybe over the
+    /// trading connection once it is back).
+    static var nothingSent: String {
+        tr(LocalizedStringResource("Nothing was sent. Close this and try again.", comment: "Under an error on Close Position / Add Margin / Cancel Order sent over one-click trading: nothing left the device; reopening the sheet sends it again."))
+    }
+
+    /// Under an error on one of the three sheets: Perpl's trading connection can't take it now, so the reopened sheet
+    /// sends it as a wallet transaction.
+    static var nothingSentWallet: String {
+        tr(LocalizedStringResource("Nothing was sent. Close this and try again: it will be sent from your wallet.", comment: "Under an error on Close Position / Add Margin / Cancel Order: Perpl's trading connection can't take it now, so reopening the sheet sends it as a wallet transaction."))
+    }
+
+    static var marginNotAdded: String {
+        tr(LocalizedStringResource("Margin not added", comment: "Add Margin's result headline, also a notification title: Perpl refused to add the margin; the position's margin is unchanged."))
+    }
+
+    static var marginNotConfirmed: String {
+        tr(LocalizedStringResource("Margin not confirmed yet", comment: "Add Margin's result headline, also a notification title: Perpl hasn't confirmed the margin in time; it may still be added."))
+    }
+
+    static var marginCheck: String {
+        tr(LocalizedStringResource("Check the position's margin before adding more: Perpl may still add it.", comment: "Detail under \"Margin not confirmed yet\", also that notification's body."))
+    }
+
+    static var marginRefused: String {
+        tr(LocalizedStringResource("Perpl refused to add the margin.", comment: "Add Margin's error when Perpl refused the request without giving a reason."))
+    }
+
+    static var marginOverAvailable: String {
+        tr(LocalizedStringResource("That's more than the available balance on your Perpl account, so nothing was sent.", comment: "Add Margin's error: the amount is above what the Perpl account has free right now."))
+    }
+
+    static var marginCanClose: String {
+        tr(LocalizedStringResource("You can close this. The result will show as a notification and in Activity.", comment: "Under Add Margin's waiting status: the sheet can be closed; the margin's result arrives as a notification and an Activity row."))
+    }
+
+    /// Activity row title for margin sent over the trading connection whose result is not confirmed, or refused later.
+    static func addMarginTitle(_ symbol: String) -> String {
+        tr(LocalizedStringResource("Add \(symbol) margin", comment: "Activity row title for margin sent over the trading connection whose result is not confirmed, or which Perpl refused later. %@ the market's symbol (\"BTC\")."))
+    }
+
+    static func marginNotConfirmedSubtitle(_ amount: String) -> String {
+        tr(LocalizedStringResource("\(amount) AUSD · result not confirmed — check the position", comment: "Activity row subtitle under \"Add BTC margin\". %@ the amount, formatted (\"25.5\"); AUSD is the collateral token."))
+    }
+
+    static func marginNotAddedSubtitle(_ amount: String) -> String {
+        tr(LocalizedStringResource("\(amount) AUSD · not added", comment: "Activity row subtitle under \"Add BTC margin\" once Perpl refused it after all. %@ the amount, formatted."))
+    }
+
+    static var closeUnknown: String {
+        tr(LocalizedStringResource("Close status unknown — Perpl didn't confirm this close, so it may have gone through. Check Positions before closing again.", comment: "Close Position sheet and the Perps status row: the close was sent but Perpl never answered it. Positions is a tab of the Perps screen."))
+    }
+
+    // MARK: A resting order's cancel row [tight]
+
+    static var orderCancelled: String {
+        tr(LocalizedStringResource("cancelRow.order.cancelled", defaultValue: "Cancelled", comment: "[tight] Cancel Order sheet row and the Orders tab's order card: Perpl's live list confirms the resting ORDER was cancelled (an adjective agreeing with \"order\"; Spanish: orden, feminine)."))
+    }
+
+    static var orderStillLive: String {
+        tr(LocalizedStringResource("cancelRow.order.stillLive", defaultValue: "Still live", comment: "[tight] Cancel Order sheet row: Perpl refused the cancel, so the ORDER is still active (agreeing with \"order\")."))
+    }
+
+    static var orderFilledFirst: String {
+        tr(LocalizedStringResource("cancelRow.order.filledFirst", defaultValue: "Filled first", comment: "[tight] Cancel Order sheet row and the order card: the limit ORDER filled before the cancel arrived."))
+    }
+
+    static var orderExpiredFirst: String {
+        tr(LocalizedStringResource("cancelRow.order.expiredFirst", defaultValue: "Expired first", comment: "[tight] As above: the ORDER had expired before the cancel arrived."))
+    }
+
+    static var orderAlreadyGone: String {
+        tr(LocalizedStringResource("cancelRow.order.alreadyGone", defaultValue: "Already gone", comment: "[tight] As above: the ORDER was no longer on Perpl when the cancel arrived."))
+    }
+
+    static var orderNotConfirmed: String {
+        tr(LocalizedStringResource("cancelRow.order.notConfirmed", defaultValue: "Not confirmed", comment: "[tight] As above: Perpl hasn't confirmed the cancel in time; the ORDER may still be active."))
+    }
+
+    /// A resting order's cancel, by what Perpl's list showed: the row's short state.
+    static func orderState(_ result: PerplCancelResult) -> String {
+        switch result {
+        case .cancelled: return orderCancelled
+        case .refused: return orderStillLive
+        case .firedFirst: return orderFilledFirst
+        case .expiredFirst: return orderExpiredFirst
+        case .alreadyGone: return orderAlreadyGone
+        case .notConfirmed: return orderNotConfirmed
+        }
+    }
+
+    // MARK: A resting order that left Perpl's list with no cancel from this device [tight]
+
+    static var orderFilled: String {
+        tr(LocalizedStringResource("orderCard.filled", defaultValue: "Filled", comment: "[tight] The Orders tab's order card, in place of its Cancel button: Perpl's live list shows the resting limit ORDER filled (no cancel was sent from this device). An adjective agreeing with \"order\" (Spanish: orden, feminine)."))
+    }
+
+    static var orderExpired: String {
+        tr(LocalizedStringResource("orderCard.expired", defaultValue: "Expired", comment: "[tight] As above: Perpl's live list shows the resting ORDER expired."))
+    }
+
+    static var orderGone: String {
+        tr(LocalizedStringResource("orderCard.gone", defaultValue: "Gone", comment: "[tight] As above: the resting ORDER is no longer on Perpl's live list (it failed or was removed there)."))
+    }
+
+    /// A resting order Perpl's list showed leave on its own: the card's short state, never words about a cancel.
+    static func orderLeft(_ result: PerplCancelResult) -> String {
+        switch result {
+        case .cancelled: return orderCancelled
+        case .firedFirst: return orderFilled
+        case .expiredFirst: return orderExpired
+        case .alreadyGone, .refused, .notConfirmed: return orderGone
+        }
+    }
+
+    // MARK: A resting order's cancel, in a sentence
+
+    static var orderWasCancelled: String {
+        tr(LocalizedStringResource("The order was cancelled.", comment: "Cancel Order sheet: Perpl's live list confirms the resting order was cancelled."))
+    }
+
+    static func orderCouldntCancel(_ why: String) -> String {
+        tr(LocalizedStringResource("Couldn't cancel the order: \(why) It is still live.", comment: "Cancel Order sheet: Perpl refused the cancel; %@ Perpl's reason, one or two whole sentences."))
+    }
+
+    static var orderCouldntCancelGeneric: String {
+        tr(LocalizedStringResource("Perpl couldn't cancel the order. It is still live.", comment: "Cancel Order sheet: Perpl refused the cancel without a specific reason."))
+    }
+
+    static var orderWasAlreadyGone: String {
+        tr(LocalizedStringResource("The order was already gone.", comment: "Cancel Order sheet: the order was no longer on Perpl when the cancel would have gone out; nothing was sent, or nothing was there to cancel."))
+    }
+
+    static var orderFilledBeforeCancel: String {
+        tr(LocalizedStringResource("The order filled before the cancel landed.", comment: "Cancel Order sheet: it filled before Perpl processed the cancel."))
+    }
+
+    static var orderHadExpired: String {
+        tr(LocalizedStringResource("The order had already expired.", comment: "Cancel Order sheet: it had expired before Perpl processed the cancel."))
+    }
+
+    static var orderCancelNotConfirmed: String {
+        tr(LocalizedStringResource("Not confirmed yet: Perpl hasn't removed the order. Check Orders: it may still be live.", comment: "Cancel Order sheet: the cancel was sent but Perpl's list didn't confirm it in time. Orders is a tab of the Perps screen."))
     }
 }
 
